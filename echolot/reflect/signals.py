@@ -62,6 +62,7 @@ _ENV_KINDS = [
     ("timeout", re.compile(r"timed out|timeout", re.I)),
 ]
 _DETECTOR_KEY = re.compile(r"\b(?:min|max)_[a-z_]+\s*:")
+_YAML_REDIRECT = re.compile(r">>?\s*[\"']?([^\s\"'<>|;&]+\.ya?ml)")
 
 
 def _short(path: str | None, keep: int = 3) -> str:
@@ -308,14 +309,19 @@ def conclusion_shape(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     project_cfg = Path(cfg.path).name if cfg and cfg.path else "echolot.yml"
     rows = []
+    seen: set[tuple[str, str, str]] = set()
     for c in f.echolot_calls:
         if c.sub not in ("analyze", "calibrate", "collect", "names"):
             continue
-        if not c.config:
+        if not c.config or not c.ran:
             continue
         p = c.config.strip("\"'")
         if Path(p).name != project_cfg or "/scratchpad/" in p or p.startswith("/tmp/") \
                 or "/T/" in p:
+            key = (c.ts, c.sub, p)
+            if key in seen:
+                continue
+            seen.add(key)
             rows.append({"ts": _t(c.ts), "agent": c.agent, "sub": c.sub, "config": p[-80:]})
     written = []
     for c in s.calls:
@@ -325,9 +331,15 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                             "config": c.path[-80:]})
     for c in s.bash():
         cmd = c.command or ""
-        if re.search(r"cat\s*>\s*\S+\.ya?ml", cmd) and project_cfg not in cmd:
-            written.append({"ts": _t(c.ts), "agent": c.agent, "sub": "Bash heredoc",
-                            "config": cmd[:100]})
+        # Any redirect into a yaml file that is not the project's: `cat >`
+        # heredocs, `sed … > /tmp/x.yml`, `>>` appends.
+        for m in _YAML_REDIRECT.finditer(cmd):
+            p = m.group(1)
+            if Path(p).name == project_cfg or (c.ts, "w", p) in seen:
+                continue
+            seen.add((c.ts, "w", p))
+            written.append({"ts": _t(c.ts), "agent": c.agent, "sub": "Bash redirect",
+                            "config": p[-80:]})
     if not rows and not written:
         return None
     return Signal("config_bypassed", "warn",
@@ -432,7 +444,7 @@ def echolot_failures(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     for c in f.echolot_calls:
         if c.is_help:
             continue
-        failed = c.traceback or c.is_error or (c.exit not in (0, None))
+        failed = c.traceback or c.is_error or c.shell_error or (c.exit not in (0, None))
         if not failed:
             continue
         # A recorded run with exit 0 outranks the transcript: the Bash call

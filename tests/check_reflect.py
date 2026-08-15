@@ -104,7 +104,8 @@ def build(root: Path, project: Path) -> Path:
     m.append(assistant(4, cwd, [{"type": "thinking", "thinking": "…"}], output_tokens=3))
     m.append(assistant(4.1, cwd, [{"type": "text", "text": "Checking the environment."}],
                        output_tokens=250))
-    bash(m, 5, cwd, "tu_doctor", "echolot doctor", "All 12 checks passed", dt=2.0)
+    # `2>&1` is not an argument; the reader must strip it
+    bash(m, 5, cwd, "tu_doctor", "echolot doctor 2>&1", "All 12 checks passed", dt=2.0)
     # a question with a recommended option, answered against the recommendation
     MSG[0] += 1
     m.append(assistant(10, cwd, [tool_use("tu_ask", "AskUserQuestion", {"questions": [{
@@ -138,6 +139,18 @@ def build(root: Path, project: Path) -> Path:
              f"Mechanism: sync IO\nSuggestion: move it\nConfidence: high\n"
              f"Cleanup: removed</result>\n</task-notification>"))
     m.append(user_text(950, cwd, "thanks, implement the fix"))
+    # two analyze calls in one Bash line against a config written on the
+    # spot: the first glob matches nothing (zsh skips that line, the tool
+    # still exits 0 because `echo done` ran), the second runs
+    bash(m, 960, cwd, "tu_an_pair",
+         "sed 's/^detectors:/off:/' echolot.yml > /tmp/frames.yml\n"
+         "echolot analyze out/before/*.perfetto-trace -c /tmp/frames.yml && cp .echolot/out/report.json /tmp/before.json\n"
+         "echolot analyze out/after/*.perfetto-trace -c /tmp/frames.yml && cp .echolot/out/report.json /tmp/after.json\n"
+         "echo done",
+         "(eval):2: no matches found: out/before/*.perfetto-trace\ndone", dt=27.0)
+    # Claude Code writes gitBranch "HEAD" outside a git repository; that is
+    # not a branch name and must not be reported as one
+    m[0]["gitBranch"] = "HEAD"
     (pdir / f"{SESSION}.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in m) + "\n", encoding="utf-8")
 
@@ -194,10 +207,26 @@ def check(report: dict) -> list[str]:
     # --- reader
     expect(src["model"] == "claude-fable-5", "model read from assistant rows")
     expect(src["agent_version"] == "2.1.0", "agent version read")
-    expect(len(report["echolot_calls"]) == 9, f"9 echolot calls, got {len(report['echolot_calls'])}")
-    subs = sorted(c["sub"] for c in report["echolot_calls"])
-    expect(subs.count("analyze") == 4 and subs.count("doctor") == 2 and subs.count("names") == 1,
+    expect(src["git_branch"] == "main", f"HEAD is not a branch: {src['git_branch']}")
+    calls = report["echolot_calls"]
+    expect(len(calls) == 11, f"11 echolot calls, got {len(calls)}")
+    subs = sorted(c["sub"] for c in calls)
+    expect(subs.count("analyze") == 6 and subs.count("doctor") == 2 and subs.count("names") == 1,
            f"subcommands: {subs}")
+    doc = next(c for c in calls if c["sub"] == "doctor" and c["agent"] == "main")
+    expect(doc["argv"] == "", f"redirect stripped from argv: {doc['argv']!r}")
+    # one Bash line, two invocations: the skipped one has no exit and no
+    # duration, the one that ran keeps the line's numbers and says it shares
+    pair = [c for c in calls if c["config"] == "/tmp/frames.yml"]
+    expect(len(pair) == 2 and all(c["shared"] == 2 for c in pair), f"pair of analyze calls: {pair}")
+    skipped = [c for c in pair if not c["ran"]]
+    ran = [c for c in pair if c["ran"]]
+    expect(len(skipped) == 1 and "before" in skipped[0]["argv"] and skipped[0]["exit"] is None
+           and skipped[0]["duration_s"] is None and skipped[0]["shell_error"],
+           f"the glob that missed names the skipped call: {skipped}")
+    expect(len(ran) == 1 and "after" in ran[0]["argv"] and ran[0]["exit"] == 0
+           and ran[0]["duration_s"] == 27.0 and not ran[0]["shell_error"],
+           f"the other one ran: {ran}")
     expect(len(report["questions"]) == 1, "one question")
     q = report["questions"][0]
     expect(q["recommended"] == "Cold start (Recommended)" and q["chosen"] == "Checkout",
@@ -217,10 +246,12 @@ def check(report: dict) -> list[str]:
     expect(e["interruptions"] == 1, "one interruption")
     expect([x["command"] for x in e["slash_commands"]] == ["/echolot", "/echolot-setup", "/echolot-hunt"],
            f"slash commands: {e['slash_commands']}")
+    expect(e["slash_before_first_call"] == 2, f"slash commands before the first call: {e}")
+    expect(e["slash_in_entry"] == 2, f"slash commands in the entry window: {e}")
     # streaming usage: max per message (250, not 3 and not 253), one count per
     # message id, main and subagent kept apart
     um = report["cost"]["usage_main"]
-    expect(um["output"] == 250 + 100 * 7, f"main output tokens: {um['output']}")
+    expect(um["output"] == 250 + 100 * 8, f"main output tokens: {um['output']}")
     us = report["cost"]["usage_subagents"]
     expect(us["output"] == 400 + 100 * 15, f"subagent output tokens: {us['output']}")
 
@@ -240,6 +271,14 @@ def check(report: dict) -> list[str]:
     x = sig.get("config_bypassed")
     expect(x and x["severity"] == "warn" and any(r["config"] == "/tmp/hunt.yml" for r in x["rows"]),
            f"config bypassed: {x}")
+    rows = x["rows"] if x else []
+    # the heredoc and the sed redirect are reported by the yaml path, not by
+    # the first hundred characters of the command
+    expect(sorted(r["config"] for r in rows if r["sub"] == "Bash redirect")
+           == ["/tmp/frames.yml", "/tmp/hunt.yml"], f"configs written from Bash: {rows}")
+    # the analyze that zsh skipped did not run on anything: one row, not two
+    expect(sum(1 for r in rows if r["sub"] == "analyze" and r["config"] == "/tmp/frames.yml") == 1,
+           f"skipped analyze not counted as a bypass: {rows}")
     x = sig.get("report_sliced_by_hand")
     expect(x and len(x["rows"]) == 2, f"report sliced by hand twice: {x}")
     x = sig.get("help_lookups")
@@ -249,6 +288,11 @@ def check(report: dict) -> list[str]:
     x = sig.get("echolot_failures")
     expect(x and x["severity"] == "info" and x["rows"][0]["where"] == "shell",
            f"shell failure classified: {x}")
+    # the skipped analyze is a shell failure too, even though the Bash tool
+    # itself reported success
+    expect(x and len(x["rows"]) == 2 and x["rows"][1]["sub"] == "analyze"
+           and x["rows"][1]["where"] == "shell" and x["rows"][1]["exit"] is None,
+           f"glob miss classified as shell failure: {x}")
     x = sig.get("retries")
     expect(x and x["rows"][0]["sub"] == "calibrate", f"calibrate retry: {x}")
     x = sig.get("agent_prompt_gaps")

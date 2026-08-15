@@ -182,11 +182,22 @@ def to_markdown(report: dict[str, Any]) -> str:
                     note.append(f"fired {len(facts['fired'])}")
                 if facts.get("failed"):
                     note.append(f"doctor failed {len(facts['failed'])}")
+            if not c.get("ran", True):
+                note.append("shell skipped it")
+            elif c.get("shared", 1) > 1:
+                note.append(f"{c['shared']} calls in one line")
+            dur = c.get("duration_s")
+            if dur is None:
+                dur_cell: Any = "—"
+            elif c.get("shared", 1) > 1:
+                dur_cell = f"≤{dur}"    # the line's time, not this call's
+            else:
+                dur_cell = dur
             rows.append({
                 "time": _t(c["ts"]), "agent": c["agent"],
                 "command": f"echolot {c['sub']} {c['argv']}"[:90],
                 "exit": "—" if c.get("exit") is None else c["exit"],
-                "s": c.get("duration_s") if c.get("duration_s") is not None else "—",
+                "s": dur_cell,
                 "out": c.get("output_chars", 0),
                 "note": ", ".join(note),
             })

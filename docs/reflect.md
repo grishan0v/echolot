@@ -102,7 +102,11 @@ opens a new round. If a project records traces some other way, the pattern in
 The exit code in a transcript is the Bash tool's, not echolot's: a `cd` into
 a path with spaces fails before the tool runs. Where the recorder has a line
 for the call, it wins; where it has none, the failure is marked as the
-shell's.
+shell's. Several `echolot` invocations in one Bash line share the line's exit
+code, duration and output; the report says so (`2 calls in one line`, `≤27 s`)
+rather than crediting each with the whole. When zsh reports a glob that
+matched nothing, the invocation carrying that glob is marked as skipped by the
+shell — it never ran, whatever the tool's exit code says.
 
 Token counts come from the transcript's usage fields, taken as the maximum
 per API response — the rows of one response are written as it streams and the

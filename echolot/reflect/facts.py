@@ -33,7 +33,11 @@ RE_HELP_FLAG = re.compile(r"(?:^|\s)(?:--help|-h)(?:\s|$)")
 
 _EXIT = re.compile(r"Exit code (\d+)")
 _SHELL_ERROR = re.compile(r"\(eval\):|\bcd:\d*:|no matches found|command not found: (?!echolot)")
-_REDIRECT = re.compile(r"\s+\d?[<>]\S*.*$")
+# zsh names the glob that matched nothing; that names the invocation that
+# never ran when several share one Bash line. Paths carry spaces (device
+# names do), so take the whole rest of the line.
+_GLOB_MISS = re.compile(r"no matches found: ([^\n]+)")
+_REDIRECT = re.compile(r"(?:^|\s+)\d?[<>]\S*.*$")
 _CONFIG_ARG = re.compile(r"(?:^|\s)(?:-c|--config)\s+(\S+)")
 _TRACE_CALL = re.compile(
     r"\btrace\s*\(\s*\"|Trace\.beginSection\s*\(|beginAsyncSection\s*\(|"
@@ -66,6 +70,8 @@ class EcholotCall:
     traceback: bool
     is_help: bool
     shell_error: bool = False     # the shell failed before echolot ran (cd, glob)
+    shared: int = 1               # echolot invocations in the same Bash call
+    ran: bool = True              # False when the shell skipped this one (glob miss)
     recorded: dict[str, Any] | None = None   # matched runs.jsonl entry
 
 
@@ -88,30 +94,86 @@ class Facts:
 
 # ------------------------------------------------------------ echolot calls
 
+def _glob_score(argv: str, missing: str) -> int:
+    """How much of the glob the shell could not expand appears in this argv.
+
+    zsh prints the glob after variable expansion; the argv still has `$BASE`
+    and its quotes. So compare on suffixes: the number of trailing path
+    segments of the missing glob that the (unquoted) argv contains. Two
+    invocations that differ only in a directory tie on the file name and
+    part on the directory.
+    """
+    plain = argv.replace('"', "").replace("'", "")
+    parts = missing.strip().split("/")
+    best = 0
+    for i in range(len(parts)):
+        suffix = "/".join(parts[len(parts) - 1 - i:])
+        if suffix and suffix in plain:
+            best = i + 1
+        else:
+            break
+    return best
+
+
+def _skipped_by_glob(argvs: list[str], missing: str) -> int | None:
+    """Index of the invocation the shell skipped, or None when it is unclear."""
+    scores = [_glob_score(a, missing) for a in argvs]
+    top = max(scores) if scores else 0
+    if top == 0 or scores.count(top) != 1:
+        return None
+    return scores.index(top)
+
+
 def echolot_calls(session: Session) -> list[EcholotCall]:
     out: list[EcholotCall] = []
     for c in session.bash():
         cmd = c.command or ""
-        for m in RE_ECHOLOT.finditer(cmd):
-            argv = _REDIRECT.sub("", (m.group(2) or "").strip())
+        head = c.output_head or ""
+        matches = list(RE_ECHOLOT.finditer(cmd))
+        exit_m = _EXIT.search(head)
+        shell_err = bool(_SHELL_ERROR.search(head))
+        glob_miss = _GLOB_MISS.search(head)
+        argvs = [_REDIRECT.sub("", m.group(2) or "").strip() for m in matches]
+        skipped = _skipped_by_glob(argvs, glob_miss.group(1)) if glob_miss else None
+        for i, m in enumerate(matches):
+            argv = argvs[i]
             cfg = _CONFIG_ARG.search(argv)
-            exit_m = _EXIT.search(c.output_head or "")
             sub = m.group(1)
             if sub.startswith("-"):
                 sub = "help"
             # Per invocation, not per Bash line: `echolot doctor; echolot
             # names --help` is one lookup, not two.
             is_help = sub in ("help", "explain") or bool(RE_HELP_FLAG.search(argv))
+            # One Bash line, several invocations: the tool's exit code,
+            # duration and output belong to the line, not to any one of
+            # them. A glob that matched nothing names the one zsh skipped;
+            # the rest ran and share the numbers.
+            ran = True
+            if skipped is not None:
+                ran = i != skipped
+            elif shell_err and c.is_error and len(matches) == 1:
+                ran = False
+            this_shell_err = shell_err and (not ran or c.is_error)
+            exit_code: int | None
+            if exit_m:
+                exit_code = int(exit_m.group(1))
+            elif not ran or c.is_error:
+                exit_code = None
+            else:
+                exit_code = 0
             out.append(EcholotCall(
                 ts=c.ts, agent=c.agent, sub=sub, argv=argv[:200],
                 command=cmd[:300], is_error=c.is_error,
-                exit=int(exit_m.group(1)) if exit_m else (0 if not c.is_error else None),
-                duration_s=c.duration_s, output_chars=c.output_chars,
-                output_head=c.output_head,
+                exit=exit_code,
+                duration_s=c.duration_s if ran else None,
+                output_chars=c.output_chars,
+                output_head=head,
                 config=cfg.group(1) if cfg else None,
-                traceback="Traceback (most recent call last)" in (c.output_head or ""),
+                traceback="Traceback (most recent call last)" in head,
                 is_help=is_help,
-                shell_error=bool(c.is_error and _SHELL_ERROR.search(c.output_head or "")),
+                shell_error=this_shell_err,
+                shared=len(matches),
+                ran=ran,
             ))
     out.sort(key=lambda e: ts_to_epoch(e.ts))
     return out
@@ -456,6 +518,10 @@ def entry(session: Session, calls: list[EcholotCall]) -> dict[str, Any]:
         "interruptions": sum(1 for t in session.turns if t.kind == "interrupt"),
         "interruptions_in_entry": sum(1 for t in before if t.kind == "interrupt"),
         "slash_in_entry": sum(1 for t in before if t.kind == "slash"),
+        "slash_before_first_call": sum(
+            1 for t in session.turns
+            if t.kind == "slash" and first_call is not None
+            and ts_to_epoch(t.ts) < first_call),
         "entry_seconds": (round(window_end - ts_to_epoch(session.started))
                           if work and session.started else None),
         "seconds_to_first_call": (

@@ -240,7 +240,10 @@ def _parse_rows(rows: Iterable[dict[str, Any]], session: Session, agent: str,
             session.cwd = row["cwd"]
         if session.agent_version is None and row.get("version"):
             session.agent_version = row["version"]
-        if session.git_branch is None and row.get("gitBranch"):
+        # Claude Code writes "HEAD" for a directory that is not a git
+        # repository (or a detached head); neither is a branch name.
+        if session.git_branch is None and row.get("gitBranch") \
+                and row["gitBranch"] != "HEAD":
             session.git_branch = row["gitBranch"]
 
         msg = row.get("message") or {}
