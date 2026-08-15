@@ -448,6 +448,29 @@ def _(report):
     assert sum(s.dynamic for s in stats.values()) == 1, stats
 
 
+@check("process mask: a wide match names a few alternatives, not hundreds")
+def _(report):
+    import contextlib
+    import io
+    from .main import _OTHERS_SHOWN, _resolve_process
+
+    class _FakeTP:
+        # 641 processes, as `*` gives on a real device: the chosen one plus
+        # six hundred others that must not become a fifteen-kilobyte line.
+        def query(self, sql):
+            return [{"upid": i, "pid": 1000 + i, "name": f"proc{i}",
+                     "slices": 1000 - i} for i in range(641)]
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        procs = _resolve_process(_FakeTP(), "*")
+    assert len(procs) == 641, "every candidate is still returned to the caller"
+    line = err.getvalue()
+    assert "matched 641 processes" in line, line
+    assert f"and {641 - 1 - _OTHERS_SHOWN} more" in line, line
+    assert len(line) < 400, f"the warning is {len(line)} chars long"
+
+
 @check("domains: no instrumentation is a report, not an empty output")
 def _(report):
     from . import domains as dm

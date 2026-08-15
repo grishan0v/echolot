@@ -39,6 +39,7 @@ from .tp import (
 
 SQL_DIR = Path(__file__).parent / "sql"
 DETECTOR_DIR = SQL_DIR / "detectors"
+_OTHERS_SHOWN = 5   # processes named besides the chosen one when a mask is wide
 
 
 def cmd_probe(args) -> int:
@@ -221,11 +222,18 @@ def _resolve_process(tp, glob: str) -> list[dict]:
             f"Look at the real names: echolot probe <trace>"
         )
     if len(rows) > 1:
-        others = ", ".join(f"{r['name']} ({r['slices']})" for r in rows[1:])
+        # A `*` on a real device matches six hundred processes; naming them
+        # all is a fifteen-kilobyte line into the agent's window. The next
+        # few by slice count are the ones that could have been meant.
+        shown = rows[1:1 + _OTHERS_SHOWN]
+        others = ", ".join(f"{r['name']} ({r['slices']})" for r in shown)
+        rest = len(rows) - 1 - len(shown)
+        if rest > 0:
+            others += f", … and {rest} more"
         print(
             f"[!] '{glob}' matched {len(rows)} processes. "
             f"Took {rows[0]['name']} ({rows[0]['slices']} slices). "
-            f"Others: {others}",
+            f"Others: {others}. Narrow it with --process or project.process.",
             file=sys.stderr,
         )
     return rows
@@ -267,10 +275,13 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
     window["process"] = procs[0]["name"]
     window["pid"] = procs[0]["pid"]
     if len(procs) > 1:
+        # Same cap as on stderr: a wide mask must not put hundreds of
+        # processes into report.json.
         window["process_alternatives"] = [
             {"name": p["name"], "pid": p["pid"], "slices": p["slices"]}
-            for p in procs[1:]
+            for p in procs[1:1 + _OTHERS_SHOWN]
         ]
+        window["process_alternatives_total"] = len(procs) - 1
     for key, glob in (("start", cfg.scenario_start), ("end", cfg.scenario_end)):
         if glob == NO_ANCHOR:
             window[f"{key}_anchor"] = None
@@ -384,17 +395,30 @@ def cmd_names(args) -> int:
     land on those names.
     """
     overrides, tp_bin = {}, args.tp_binary
+    process = args.process
     if args.config and Path(args.config).exists():
         try:
             cfg_names = Config.load(args.config, getattr(args, "local", None))
             overrides = cfg_names.detector_overrides
             tp_bin = _tp_binary(args, cfg_names)
+            # Without --process the fattest process wins, and on a real
+            # device that is surfaceflinger, not the app. When the config is
+            # right there, its process is the obvious default.
+            if process is None:
+                try:
+                    process = cfg_names.process
+                    print(f"[i] --process taken from {args.config}: {process}",
+                          file=sys.stderr)
+                except ConfigError:
+                    pass
         except ConfigError as e:
             print(f"config ignored: {e}", file=sys.stderr)
+    if process is None:
+        process = "*"
 
     with TraceSession(args.trace, tp_bin) as tp:
         try:
-            procs = _resolve_process(tp, args.process)
+            procs = _resolve_process(tp, process)
         except ConfigError as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
@@ -1064,9 +1088,12 @@ def build_parser() -> argparse.ArgumentParser:
     nm = sub.add_parser("names",
                         help="slice name inventory and mask coverage")
     nm.add_argument("trace")
-    nm.add_argument("--process", default="*", help="GLOB over the process name")
+    nm.add_argument("--process", default=None,
+                    help="GLOB over the process name (default: project.process "
+                         "from the config, else the process with most slices)")
     nm.add_argument("-c", "--config", default="echolot.yml",
-                    help="take overridden masks from the config, if present")
+                    help="take the process and overridden masks from the config, "
+                         "if present")
     nm.add_argument("--local", help="path to local.yml (defaults to alongside)")
     nm.add_argument("--top", type=int, default=15,
                     help="how many families to show per section")

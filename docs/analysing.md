@@ -28,7 +28,13 @@ guess them — you can look:
 
 ```bash
 echolot names trace.perfetto-trace --process 'com.example.*'
+echolot names trace.perfetto-trace          # next to echolot.yml: its process
 ```
+
+Without `--process` and without a config the process with the most slices is
+taken — on a real device that is `surfaceflinger`, not the app, and the
+command says so on stderr. With `echolot.yml` in the working directory
+`project.process` is the default, as it is for `analyze`.
 
 The command collapses names that differ only by numbers (`owner tid: 1234` and
 `owner tid: 5678` are one phenomenon — without this, a real trace yields

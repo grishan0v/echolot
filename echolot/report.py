@@ -144,6 +144,9 @@ def to_markdown(report: dict[str, Any]) -> str:
     alts = w.get("process_alternatives")
     if alts:
         names = ", ".join(f"`{a['name']}`" for a in alts)
+        total = w.get("process_alternatives_total") or len(alts)
+        if total > len(alts):
+            names += f" … and {total - len(alts)} more"
         out.append(
             f"> ⚠️ The mask matched more than one process. The largest by slice "
             f"count was taken; skipped: {names}. If this is the wrong one, "
