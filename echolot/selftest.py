@@ -657,7 +657,7 @@ def _(report):
         project = Path(tmp)
         assert layer_status(project) is None, "no layer yet must be None"
         with contextlib.redirect_stdout(io.StringIO()):
-            cmd_init(argparse.Namespace(into=str(project), force=False))
+            cmd_init(argparse.Namespace(into=str(project), force=False, no_doctor=True))
         assert (project / ".claude" / LAYER_MANIFEST).exists(), "init writes the manifest"
         st = layer_status(project)
         assert st and st["manifest"], st
@@ -685,14 +685,14 @@ def _(report):
         # init without --force keeps both edited files, restores the missing one
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            cmd_init(argparse.Namespace(into=str(project), force=False))
+            cmd_init(argparse.Namespace(into=str(project), force=False, no_doctor=True))
         assert "≠ .claude/skills/echolot/SKILL.md (already there and customised" in out.getvalue(), out.getvalue()
         assert "+ .claude/commands/echolot-hunt.md" in out.getvalue(), out.getvalue()
         assert "# ours" in skill.read_text(encoding="utf-8")
         # --force overwrites and says which one had local edits
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            cmd_init(argparse.Namespace(into=str(project), force=True))
+            cmd_init(argparse.Namespace(into=str(project), force=True, no_doctor=True))
         assert "! .claude/skills/echolot/SKILL.md" in out.getvalue(), out.getvalue()
         assert {r["state"] for r in layer_status(project)["rows"]} == {"current"}
 
@@ -703,6 +703,39 @@ def _(report):
         assert not st["manifest"]
         by = {r["file"]: r["state"] for r in st["rows"]}
         assert by["skills/echolot/SKILL.md"] == "differs", by
+
+
+@check("status: the next step follows the project's state, first visit to return")
+def _(report):
+    import argparse
+    import contextlib
+    import io
+    from .main import cmd_init, next_step, project_state
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        # nothing here yet: install the layer
+        assert next_step(project_state(project)).startswith("echolot init"), \
+            next_step(project_state(project))
+        with contextlib.redirect_stdout(io.StringIO()):
+            cmd_init(argparse.Namespace(into=str(project), force=False, no_doctor=True))
+        # layer, no config: build the config
+        assert "/echolot-setup" in next_step(project_state(project))
+        (project / "echolot.yml").write_text(
+            "project:\n  process: app\nscenario:\n  name: checkout\n", encoding="utf-8")
+        # config, no traces: hunt or collect
+        st = project_state(project)
+        assert st["config"]["scenario"] == "checkout" and st["config"]["thresholds"] == "built-in defaults", st["config"]
+        assert "collect" in next_step(st), next_step(st)
+        # traces present: hunt or analyze
+        (project / ".echolot" / "traces").mkdir(parents=True)
+        (project / ".echolot" / "traces" / "checkout_iter000.perfetto-trace").write_bytes(b"x")
+        st = project_state(project)
+        assert st["traces"]["count"] == 1 and "analyze" in next_step(st), next_step(st)
+        # a config that does not load is said, not swallowed
+        (project / "echolot.yml").write_text("project: [\n", encoding="utf-8")
+        st = project_state(project)
+        assert st["config"] and st["config"].get("error"), st["config"]
+        assert next_step(st).startswith("fix echolot.yml"), next_step(st)
 
 
 @check(".claude/ layer: the skill and the agent have frontmatter")

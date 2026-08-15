@@ -23,6 +23,22 @@ class ConfigError(Exception):
 NO_ANCHOR = "__echolot_no_anchor__"
 
 
+def _load_yaml(p: Path) -> Any:
+    """A file that does not parse is a config error, said with the line.
+
+    Left as yaml's own exception it came out of every command as a
+    traceback — for a missing colon in echolot.yml.
+    """
+    try:
+        with p.open(encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        where = f" (line {mark.line + 1}, column {mark.column + 1})" if mark else ""
+        problem = getattr(e, "problem", None) or str(e).splitlines()[0]
+        raise ConfigError(f"{p}: does not parse{where}: {problem}") from e
+
+
 def merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     """Recursive merge: values on the right override the ones on the left."""
     result = dict(base)
@@ -53,14 +69,14 @@ class Config:
         p = Path(path)
         if not p.exists():
             raise ConfigError(f"config not found: {p}")
-        with p.open(encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
+        raw = _load_yaml(p)
+        if not isinstance(raw, dict):
+            raise ConfigError(f"{p}: expected a mapping at the top level")
 
         local_path = Path(local) if local else p.parent / "local.yml"
         used_local = None
         if local_path.exists():
-            with local_path.open(encoding="utf-8") as f:
-                overlay = yaml.safe_load(f) or {}
+            overlay = _load_yaml(local_path)
             if not isinstance(overlay, dict):
                 raise ConfigError(f"{local_path}: expected a mapping")
             raw = merge(raw, overlay)

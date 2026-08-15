@@ -760,7 +760,11 @@ def _layer_line(project: Path) -> tuple[str, str]:
     if not needs:
         return "current", f"layer: current ({len(status['rows'])} files)"
     what = ", ".join(f"{v} {k}" for k, v in needs.items())
-    return "stale", f"layer: STALE — {what} → `echolot init --force`"
+    # stale and missing files `init` updates on its own; files that differ
+    # with no manifest to say why, or that were edited here, need --force.
+    if set(needs) <= {"stale", "missing"}:
+        return "stale", f"layer: STALE — {what} → `echolot init`"
+    return "differs", f"layer: STALE — {what} → `echolot init --force`"
 
 
 def _print_layer_status(project: Path) -> str | None:
@@ -796,6 +800,171 @@ def _print_layer_status(project: Path) -> str | None:
               "listed above and are\n    overwritten too — carry the edits "
               "over afterwards.")
     return "stale"
+
+
+# -------------------------------------------------------------- status
+
+def project_state(project: Path, config: str = "echolot.yml") -> dict:
+    """Where this project stands with echolot: the facts `status` and `init`
+    decide the next step from.
+
+    Everything here is read from disk and the run log; nothing runs.
+    """
+    st: dict = {"project": project}
+    st["layer_verdict"], st["layer_line"] = _layer_line(project)
+
+    cfg_path = project / config
+    st["config"] = None
+    if cfg_path.exists():
+        try:
+            cfg = Config.load(cfg_path)
+            calibrated = bool(cfg.detector_overrides)
+            st["config"] = {
+                "path": cfg_path, "scenario": cfg.scenario_name,
+                "process": cfg.get("project.process") or cfg.get("project.package"),
+                "thresholds": "from the config" if calibrated else "built-in defaults",
+                "local": cfg.local_path is not None,
+                "runner": str(cfg.runner.get("mode", "launch")) if cfg.runner else None,
+                "sha": cfg.sha,
+            }
+        except ConfigError as e:
+            st["config"] = {"path": cfg_path, "error": str(e)}
+
+    traces_dir = project / ".echolot" / "traces"
+    traces = [p for pat in ("*.perfetto-trace", "*.pftrace")
+              for p in traces_dir.glob(pat)] if traces_dir.is_dir() else []
+    st["traces"] = {"dir": traces_dir, "count": len(traces),
+                    "newest": max((p.stat().st_mtime for p in traces), default=None)}
+
+    st["report"] = None
+    rep = project / ".echolot" / "out" / "report.json"
+    if rep.exists():
+        try:
+            r = json.loads(rep.read_text(encoding="utf-8"))
+            s = r.get("summary") or {}
+            c = r.get("config") or {}
+            st["report"] = {
+                "path": rep, "generated_at": r.get("generated_at"),
+                "fired": s.get("detectors_fired"), "run": s.get("detectors_run"),
+                "runs": len(r.get("traces") or []) or 1,
+                "config_sha": c.get("sha"), "defaults": c.get("defaults"),
+            }
+        except (OSError, ValueError):
+            st["report"] = {"path": rep, "error": "unreadable"}
+
+    st["last_doctor"] = st["last_analyze"] = None
+    for run in recorder.read(project / recorder.LOG_FILE):
+        if run.get("cmd") == "doctor":
+            st["last_doctor"] = run
+        elif run.get("cmd") == "analyze":
+            st["last_analyze"] = run
+    return st
+
+
+def next_step(st: dict) -> str:
+    """One line: what to do next, from the state. Shared by status and init."""
+    if st["layer_verdict"] == "absent":
+        return "echolot init — installs the .claude/ layer; then /echolot-setup in Claude Code"
+    if st["layer_verdict"] == "stale":
+        return "echolot init — brings the .claude/ layer up to date (the agent reads it)"
+    if st["layer_verdict"] == "differs":
+        return ("echolot init --force — the .claude/ layer differs from the package's and "
+                "nothing says whether you edited it; --force overwrites, keep your edits with git")
+    d = st.get("last_doctor")
+    if d and d.get("facts", {}).get("failed"):
+        return "echolot doctor — the last self-check failed; no report is trustworthy until it passes"
+    cfg = st.get("config")
+    if not cfg:
+        return "/echolot-setup in Claude Code — builds echolot.yml from the repository and a probe trace"
+    if cfg.get("error"):
+        return f"fix echolot.yml — it does not load: {cfg['error']}"
+    if not st["traces"]["count"]:
+        return "/echolot-hunt in Claude Code (it captures traces), or: echolot collect -c echolot.yml -n 5"
+    return ("/echolot-hunt in Claude Code, or by hand: "
+            "echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml")
+
+
+def _ago(epoch: float | None) -> str:
+    if not epoch:
+        return "never"
+    delta = time.time() - epoch
+    if delta < 90:
+        return f"{int(delta)}s ago"
+    if delta < 5400:
+        return f"{int(delta // 60)}m ago"
+    if delta < 172800:
+        return f"{delta / 3600:.0f}h ago"
+    return f"{delta / 86400:.0f}d ago"
+
+
+def _iso_epoch(ts: str | None) -> float | None:
+    if not ts:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def cmd_status(args) -> int:
+    """`echolot` with nothing after it: where things stand, and the next step.
+
+    The tool can tell a first visit from a return: is the layer here and
+    current, is there a config, are there traces, when did doctor last pass.
+    That fork used to live in the README as prose; now the tool prints the
+    branch that applies. Two commands are all a person needs to know —
+    `echolot init` and `echolot` — and the agent knows the rest.
+    """
+    st = project_state(Path.cwd(), getattr(args, "config", "echolot.yml"))
+    info = toolchain_info(getattr(args, "tp_binary", None))
+    print(f"echolot {recorder.version()} · trace_processor "
+          f"{info.get('trace_processor') or 'unknown'} · {Path.cwd()}")
+
+    lines: list[tuple[str, str]] = []
+    lines.append(("layer", st["layer_line"].split(": ", 1)[1]))
+    cfg = st["config"]
+    if cfg is None:
+        lines.append(("config", "none — no echolot.yml here"))
+    elif cfg.get("error"):
+        lines.append(("config", f"echolot.yml does not load: {cfg['error']}"))
+    else:
+        bits = [f"scenario {cfg['scenario']}", f"thresholds {cfg['thresholds']}"]
+        if cfg.get("runner"):
+            bits.append(f"runner {cfg['runner']}")
+        if cfg.get("local"):
+            bits.append("local.yml applied")
+        lines.append(("config", "echolot.yml · " + " · ".join(bits)))
+    tr = st["traces"]
+    if tr["count"]:
+        lines.append(("traces", f"{tr['count']} in .echolot/traces, newest {_ago(tr['newest'])}"))
+    else:
+        lines.append(("traces", "none in .echolot/traces"))
+    rep = st["report"]
+    if rep and not rep.get("error"):
+        made = _ago(_iso_epoch(rep.get("generated_at")))
+        what = (f"{rep['fired']} of {rep['run']} detectors fired"
+                if rep.get("run") is not None else "")
+        note = ""
+        if rep.get("defaults"):
+            note = " · made with --defaults"
+        elif cfg and cfg.get("sha") and rep.get("config_sha") and rep["config_sha"] != cfg["sha"]:
+            note = " · made with an older config"
+        lines.append(("report", f".echolot/out/report.json, {made} · {rep['runs']} run(s) · {what}{note}"))
+    else:
+        lines.append(("report", "none yet"))
+    d = st["last_doctor"]
+    if d:
+        failed = (d.get("facts") or {}).get("failed") or []
+        lines.append(("doctor", f"{_ago(_iso_epoch(d.get('ts')))}, "
+                      + (f"{len(failed)} check(s) FAILED" if failed else "passed")))
+    else:
+        lines.append(("doctor", "never run here"))
+    width = max(len(k) for k, _ in lines)
+    for k, v in lines:
+        print(f"{k.ljust(width)}  {v}")
+    print(f"{'next'.ljust(width)}  {next_step(st)}")
+    return 0
 
 
 def cmd_domains(args) -> int:
@@ -887,8 +1056,11 @@ def cmd_init(args) -> int:
     up in the project is a copy you can edit and commit — for your modules,
     your paths, your style.
 
-    Existing files are left alone: a config may have been hand-tuned, and
-    silently overwriting it is worse than not delivering one file.
+    Idempotent, and the one command a person has to know. First time: the
+    layer goes in. Any later time: files untouched since install are brought
+    up to date, files the project edited are left alone unless `--force`,
+    and the environment is checked (`doctor -q`). It ends with the next step,
+    the same line `echolot` with no arguments prints.
     """
     target = Path(args.into)
     if not target.is_dir():
@@ -899,24 +1071,32 @@ def cmd_init(args) -> int:
     before = layer_status(target)
     states = {r["file"]: r["state"] for r in (before or {}).get("rows", [])}
 
-    written, same, kept, overwritten = [], [], [], []
+    written, updated, same, kept, overwritten = [], [], [], [], []
     installed: dict[str, str] = {}
     for src in layer_files():
         rel = str(src.relative_to(CLAUDE_DIR))
         dst = root / rel
+        state = states.get(rel)
         if dst.exists():
-            if states.get(rel) == "current":
+            if state == "current":
                 same.append(rel)
                 installed[rel] = _sha(src)
                 continue
-            if not args.force:
+            # Untouched since install and the template moved on: ours to
+            # update, no flag needed. Anything the project may have edited
+            # (customised, conflict, or differs with no manifest to tell)
+            # waits for --force.
+            if state == "stale":
+                updated.append(rel)
+            elif not args.force:
                 kept.append(rel)
                 continue
-            if states.get(rel) in ("customised", "conflict", "differs"):
+            else:
                 overwritten.append(rel)
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(src.read_bytes())
-        written.append(rel)
+        if rel not in updated:
+            written.append(rel)
         installed[rel] = _sha(src)
 
     for rel in written:
@@ -924,25 +1104,52 @@ def cmd_init(args) -> int:
         print(f"  {flag} .claude/{rel}" + (
             "  (was edited in the project — overwritten, carry the edits over)"
             if rel in overwritten else ""))
-    for rel in same:
-        print(f"  = .claude/{rel} (current)")
+    for rel in updated:
+        print(f"  ↑ .claude/{rel} (updated)")
+    if same and (written or updated or kept):
+        for rel in same:
+            print(f"  = .claude/{rel} (current)")
+    elif same:
+        print(f"  = {len(same)} files current")
     for rel in kept:
         print(f"  ≠ .claude/{rel} (already there and {states.get(rel, 'differs')}, "
               f"untouched)")
 
-    if written or same:
+    if written or updated or same:
         # Only what was verified against the template goes into the manifest;
         # a file left untouched keeps whatever the old manifest said about it.
         _write_manifest(root, installed)
 
-    if kept and not args.force:
-        print("\nNothing existing was overwritten. To update, use `--force`.")
-    if written and before is None:
-        print("\nDone. Next: /echolot-setup — build echolot.yml.")
-    elif written:
+    if kept:
+        print(f"\n{len(kept)} file(s) differ from the template and were kept. "
+              f"`echolot init --force` overwrites them; carry your edits over after.")
+    if before is None:
+        print("\nLayer installed.")
+    elif written or updated:
         print("\nLayer updated.")
-    recorder.note(written=len(written), kept=len(kept), overwritten=len(overwritten))
-    return 0
+    elif kept:
+        print(f"\nLayer current, apart from the {len(kept)} kept above.")
+    else:
+        print("\nLayer is current.")
+    recorder.note(written=len(written), updated=len(updated), kept=len(kept),
+                  overwritten=len(overwritten))
+
+    # The environment, briefly, and where to go from here. The doctor lines
+    # are the same three `doctor -q` prints; a failure is said and the exit
+    # code carries it, but the layer is installed regardless — a broken
+    # trace_processor is not a reason to leave the project without the skill.
+    if not getattr(args, "no_doctor", False):
+        print()
+        code = _doctor_quiet(args, toolchain_info(getattr(args, "tp_binary", None)),
+                             project=target)
+    else:
+        code = 0
+    if code:
+        print("\nnext  echolot doctor — the self-check failed (see above); until it "
+              "passes, no report from this environment can be trusted")
+    else:
+        print(f"\nnext  {next_step(project_state(target))}")
+    return code
 
 
 def cmd_calibrate(args) -> int:
@@ -1117,12 +1324,13 @@ def cmd_doctor(args) -> int:
     return 0
 
 
-def _doctor_quiet(args, info: dict) -> int:
+def _doctor_quiet(args, info: dict, project: Path | None = None) -> int:
     """`doctor -q`: three lines, and every failure. Same exit code.
 
     For a subagent, a CI step, a `| head`: the full report is six kilobytes
     of "ok" that a second reader in the same session pays for again. Here
-    the verdicts stay and the evidence goes.
+    the verdicts stay and the evidence goes. `init` calls it too, for the
+    project it just installed into.
     """
     import platform as py_platform
 
@@ -1131,12 +1339,12 @@ def _doctor_quiet(args, info: dict) -> int:
     print(f"echolot {recorder.version()} · trace_processor {tp}{src} · "
           f"perfetto {info.get('perfetto_package') or 'unknown'} · "
           f"python {py_platform.python_version()}")
-    layer, line = _layer_line(Path.cwd())
+    layer, line = _layer_line(project or Path.cwd())
     recorder.note(layer=layer)
     print(line)
     try:
         from . import selftest
-        results = selftest.run(args.tp_binary)
+        results = selftest.run(getattr(args, "tp_binary", None))
     except Exception as e:
         print(f"self-check: could not run — {e}")
         return 1
@@ -1382,8 +1590,15 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--tp-binary", default=argparse.SUPPRESS,
                         help=argparse.SUPPRESS)
 
-    sub = p.add_subparsers(dest="cmd", required=True, parser_class=(
+    # `echolot` alone is `echolot status`: where things stand, and the next
+    # step. The subcommand is not required so that the bare form works.
+    sub = p.add_subparsers(dest="cmd", required=False, parser_class=(
         lambda **kw: argparse.ArgumentParser(parents=[common], **kw)))
+    p.set_defaults(func=cmd_status, cmd="status")
+
+    stt = sub.add_parser("status", help="where this project stands, and the next step")
+    stt.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
+    stt.set_defaults(func=cmd_status)
 
     # Ordered by the working flow rather than by when things were written:
     # first make sure the environment computes correctly, then reconnaissance,
@@ -1431,10 +1646,17 @@ def build_parser() -> argparse.ArgumentParser:
     col.add_argument("--device", help="device serial, when there are several")
     col.set_defaults(func=cmd_collect)
 
-    ini = sub.add_parser("init", help="install the .claude/ layer into a project")
+    ini = sub.add_parser(
+        "init", help="install or update the .claude/ layer, check the environment",
+        description="The one command to know. First time: installs the .claude/ "
+                    "layer. Later: brings untouched files up to date, keeps the "
+                    "ones you edited, runs the environment check, and says what "
+                    "to do next.")
     ini.add_argument("--into", default=".", help="Android project root")
     ini.add_argument("--force", action="store_true",
-                     help="overwrite existing files")
+                     help="overwrite files the project has edited too")
+    ini.add_argument("--no-doctor", action="store_true",
+                     help="skip the environment check at the end")
     ini.set_defaults(func=cmd_init)
 
     cal = sub.add_parser(
