@@ -748,6 +748,54 @@ def env_friction(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 
 # ------------------------------------------------------------------ cost
 
+def code_read_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
+    """The subagent's window went to reading the app rather than the report.
+
+    Twenty-one `cat`/`sed -n`/`grep` calls over sources, forty percent of
+    everything that entered the window — in two hunts out of two. It reads
+    because the report points at system slices and threads and `domains`
+    has nothing to map them to; the reading is how it decides where to put
+    the first markers. Which is the tool's gap as much as the agent's habit.
+    """
+    rows = []
+    worst = 0
+    for h in f.hunts:
+        w = h.get("window") or {}
+        src = (w.get("by_activity") or {}).get("source reading") or {}
+        total = w.get("total_chars") or 0
+        if not src.get("calls") or not total:
+            continue
+        share = src.get("share", 0)
+        if share < 20 and src["calls"] < 10:
+            continue
+        worst = max(worst, share)
+        rows.append({
+            "agent": h["type"] or h["id"],
+            "source reads": src["calls"],
+            "chars": src["chars"],
+            "share of window": f"{share}%",
+            "before first instrumentation edit": w.get("source_reads_before_first_edit", 0),
+            "echolot calls": ((w.get("by_activity") or {}).get("echolot") or {}).get("calls", 0),
+        })
+    if not rows:
+        return None
+    severity = "warn" if worst >= 40 else "info"
+    return Signal("code_read_by_hand", severity,
+                  "the subagent read the application's source by hand, at length",
+                  "Chars of tool output by activity — what actually entered the "
+                  "window. Reading sources is where the loop's window goes when the "
+                  "report names system slices and threads and `domains` has no "
+                  "instrumentation to map them to: the agent reads to decide where "
+                  "the first markers go.",
+                  rows,
+                  "The bridge is missing on the tool's side: something that proposes "
+                  "the first instrumentation sites for a scenario (Application, the "
+                  "launcher Activity, setContent, the first ViewModel, Room) would "
+                  "replace most of these reads. Until then perf-hunter.md should say: "
+                  "instrument the skeleton first, read second, and never `cat` a "
+                  "whole file.")
+
+
 def long_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = [g for g in f.gaps if g["seconds"] >= 120]
     if not rows:
@@ -799,6 +847,7 @@ SIGNALS: list[Detector] = [
     retries,
     env_friction,
     # cost
+    code_read_by_hand,
     long_gaps,
     context_hogs,
 ]

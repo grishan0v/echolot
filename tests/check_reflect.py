@@ -211,6 +211,10 @@ def build(root: Path, project: Path) -> Path:
     bash(s, 220, cwd, "su_yml", "cat > /tmp/hunt.yml <<'EOF'\nproject:\n  process: app\nEOF", "")
     bash(s, 225, cwd, "su_an2", "echolot analyze out/*.perfetto-trace -c /tmp/hunt.yml",
          "# Marker Report", dt=25.0)
+    # the agent reads a source file whole before instrumenting: what feeds
+    # the window, by activity, must show it
+    bash(s, 298, cwd, "su_cat", f"cat {cwd}/app/src/main/kotlin/Foo.kt",
+         "class Foo {\n" + "    fun load() { /* … */ }\n" * 120 + "}\n")
     # temporary instrumentation: one inside allowed, one outside, one unprefixed
     edit(s, 300, cwd, "su_e1", f"{cwd}/app/src/main/kotlin/Foo.kt",
          "fun load() {", 'fun load() { trace("AGENTTMP_load") {')
@@ -312,7 +316,7 @@ def check(report: dict) -> list[str]:
     um = report["cost"]["usage_main"]
     expect(um["output"] == 250 + 100 * 14, f"main output tokens: {um['output']}")
     us = report["cost"]["usage_subagents"]
-    expect(us["output"] == 400 + 100 * 17, f"subagent output tokens: {us['output']}")
+    expect(us["output"] == 400 + 100 * 18, f"subagent output tokens: {us['output']}")
 
     # --- signals that must fire
     expect(sig.get("doctor_first", {}).get("severity") == "ok", "doctor_first ok")
@@ -383,6 +387,17 @@ def check(report: dict) -> list[str]:
     expect(x is not None, "entry fumbling (an interruption in the entry window)")
     x = sig.get("long_gaps")
     expect(x and any(r["seconds"] >= 300 for r in x["rows"]), f"the gradle wait is a gap: {x}")
+    # what fed the subagent's window: one source read, most of the chars,
+    # before the first instrumentation edit
+    w = h["window"]
+    src = w["by_activity"].get("source reading") or {}
+    expect(src.get("calls") == 1 and src.get("share", 0) >= 20
+           and w["source_reads_before_first_edit"] == 1
+           and w["by_activity"]["echolot"]["calls"] >= 4,
+           f"window mix: {w}")
+    x = sig.get("code_read_by_hand")
+    expect(x and x["rows"][0]["source reads"] == 1 and x["rows"][0]["agent"] == "perf-hunter",
+           f"code read by hand: {x}")
 
     # the config write through the python heredoc is seen: thresholds after
     # calibrate, from the shell

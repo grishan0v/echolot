@@ -404,6 +404,9 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
             "re_records": len(rerecords),
             "tools": tools,
             "usage": asdict(s.usage),
+            "window": window_mix(session, label,
+                                 (cfg.get("instrumentation.temp_prefix") if cfg else None)
+                                 or "AGENTTMP_"),
             "thinking_blocks": s.thinking_blocks,
             "conclusion_fields": fields_present,
             "confidence": conf.group(1).strip(" *:") if conf else None,
@@ -428,6 +431,77 @@ def _prompt_mentions(prompt: str) -> dict[str, bool]:
 
 # --------------------------------------------------------------------- cost
 
+_SOURCE_FILE = re.compile(r"\.(?:kt|java|kts|xml|toml|properties|gradle|json|proto)\b|/src/")
+_READ_VERB = re.compile(r"(?:^|[\s;&|(])(?:cat|sed\s+-n|head|tail|grep|rg|find|ls|wc|awk|less)\b")
+_BUILD = re.compile(r"gradlew|\badb\s|\bsleep\s+\d|emulator\b")
+_REPORT = re.compile(r"report\.(?:json|md)|\.echolot/out/")
+
+ACTIVITIES = ("echolot", "report reading", "source reading",
+              "instrumentation edit", "build/device", "other")
+
+
+def activity_of(c: Call, prefix: str = "AGENTTMP_") -> str:
+    """What one tool call was for — the buckets the window is split by.
+
+    Deliberately coarse; the question it answers is "did the agent reason
+    over the report or go read the app by hand", and for that a handful of
+    buckets is enough. `echolot` wins over everything else in the same
+    command, so a `names … | grep` is echolot, not reading.
+    """
+    if c.tool in ("Read",):
+        p = c.path or ""
+        if _REPORT.search(p):
+            return "report reading"
+        return "source reading" if _SOURCE_FILE.search(p) else "other"
+    if c.tool in ("Edit", "Write", "MultiEdit"):
+        return "instrumentation edit" if c.path and _SOURCE_FILE.search(c.path) else "other"
+    cmd = c.command
+    if cmd is None:
+        return "other"
+    if RE_ECHOLOT.search(strip_heredocs(cmd)):
+        return "echolot"
+    if _REPORT.search(cmd):
+        return "report reading"
+    if prefix in cmd and (_PY_WRITES.search(cmd) or _EDIT_VERB.search(cmd)):
+        return "instrumentation edit"
+    if _BUILD.search(cmd):
+        return "build/device"
+    if _SOURCE_FILE.search(cmd) and _READ_VERB.search(cmd):
+        return "source reading"
+    return "other"
+
+
+def window_mix(session: Session, agent: str, prefix: str = "AGENTTMP_") -> dict[str, Any]:
+    """What fed one agent's window, by activity: calls and tool-output chars.
+
+    Characters are what the transcript has exactly; tokens are roughly a
+    quarter of that for code and English, and the report says so rather
+    than pretending to know. `first_edit_ts` lets a signal separate reading
+    done to decide where to instrument from reading done instead of it.
+    """
+    mix: dict[str, dict[str, int]] = {a: {"calls": 0, "chars": 0} for a in ACTIVITIES}
+    calls = sorted(session.calls_of(agent), key=lambda c: ts_to_epoch(c.ts))
+    first_edit = None
+    reads_before_edit = 0
+    for c in calls:
+        a = activity_of(c, prefix)
+        mix[a]["calls"] += 1
+        mix[a]["chars"] += c.output_chars
+        if a == "instrumentation edit" and first_edit is None:
+            first_edit = c.ts
+        if a == "source reading" and first_edit is None:
+            reads_before_edit += 1
+    total = sum(v["chars"] for v in mix.values())
+    for v in mix.values():
+        v["share"] = round(100 * v["chars"] / total) if total else 0
+    return {
+        "by_activity": {a: v for a, v in mix.items() if v["calls"]},
+        "total_chars": total,
+        "source_reads_before_first_edit": reads_before_edit,
+        "first_edit_ts": first_edit,
+    }
+
+
 def cost(session: Session) -> dict[str, Any]:
     tools_main: dict[str, int] = {}
     tools_sub: dict[str, int] = {}
@@ -444,6 +518,7 @@ def cost(session: Session) -> dict[str, Any]:
         "duration_s": (round(session.duration_s()) if session.duration_s() else None),
         "usage_main": asdict(session.usage),
         "usage_subagents": sub_usage,
+        "window_main": window_mix(session, MAIN),
         "tools_main": dict(sorted(tools_main.items(), key=lambda kv: -kv[1])),
         "tools_subagents": dict(sorted(tools_sub.items(), key=lambda kv: -kv[1])),
         "thinking_blocks_main": session.thinking_blocks,

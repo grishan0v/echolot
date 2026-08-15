@@ -89,7 +89,11 @@ The ones that ship, by what they watch:
 - **failures** — echolot calls that failed, tracebacks apart from clean exits,
   shell failures apart from the tool's own; retries; tool errors outside
   echolot, by kind
-- **cost** — silences of two minutes or more; tool outputs over 8k characters
+- **cost** — silences of two minutes or more; tool outputs over 8k characters;
+  the subagent's window fed by reading sources by hand rather than by the
+  report (per activity: echolot, report reading, source reading,
+  instrumentation edits, builds — calls and characters, with the reads made
+  before the first marker was placed counted separately)
 
 ## What it cannot see, honestly
 

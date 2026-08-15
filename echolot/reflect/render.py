@@ -245,6 +245,9 @@ def to_markdown(report: dict[str, Any]) -> str:
             f"tokens out {u.get('output', 0):,} · in {u.get('input', 0):,} · cache read {u.get('cache_read', 0):,}",
             f"thinking blocks {h.get('thinking_blocks', 0)}",
         ]
+        mix = _mix_line(h.get("window") or {})
+        if mix:
+            facts.append(mix)
         for line in facts:
             out.append(f"- {line}")
         pm = h.get("prompt_mentions") or {}
@@ -305,6 +308,9 @@ def to_markdown(report: dict[str, Any]) -> str:
     if c.get("tools_subagents"):
         out.append("- tools, subagents: " + ", ".join(f"{k} {v}" for k, v in c["tools_subagents"].items()))
     out.append(f"- tool output in total: {c.get('tool_output_chars', 0):,} chars")
+    mix = _mix_line(c.get("window_main") or {})
+    if mix:
+        out.append(f"- main {mix}")
     if c.get("top_outputs"):
         out.append("")
         out.append("Largest tool outputs:")
@@ -379,6 +385,23 @@ def _oneline(text: Any, limit: int) -> str:
 
 def _t(ts: str | None) -> str:
     return ts[11:19] if ts and len(ts) >= 19 else (ts or "")
+
+
+def _mix_line(window: dict[str, Any]) -> str | None:
+    """`window fed by: source reading 21 calls · 59k chars (57%) · echolot …`
+
+    Chars of tool output per activity — exact; tokens are roughly a quarter
+    of that, said once at the end rather than pretended per bucket.
+    """
+    by = window.get("by_activity") or {}
+    if not by:
+        return None
+    parts = []
+    for name, v in sorted(by.items(), key=lambda kv: -kv[1]["chars"]):
+        parts.append(f"{name} {v['calls']} calls · {v['chars'] / 1000:.0f}k chars ({v['share']}%)")
+    total = window.get("total_chars", 0)
+    return (f"window fed by: " + " · ".join(parts)
+            + f" — {total / 1000:.0f}k chars ≈ {total / 4000:.0f}k tokens of tool output")
 
 
 def _dur(seconds: Any) -> str:
