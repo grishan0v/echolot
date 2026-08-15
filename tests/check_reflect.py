@@ -218,6 +218,12 @@ def build(root: Path, project: Path) -> Path:
          "fun run() {", 'fun run() { trace("AGENTTMP_bench") {')
     edit(s, 310, cwd, "su_e3", f"{cwd}/app/src/main/kotlin/Bar.kt",
          "fun draw() {", 'fun draw() { trace("draw_frame") {')
+    # and one edit made through the shell — a python heredoc, no Edit tool
+    bash(s, 312, cwd, "su_e_sh",
+         f"cd {cwd}/app/src/main/kotlin && python3 - <<'EOF'\n"
+         "p='Baz.kt'; s=open(p).read()\n"
+         "s=s.replace('fun init() {', 'fun init() { trace(\"AGENTTMP_init\") {')\n"
+         "open(p,'w').write(s)\nEOF", "")
     # re-record, then analyze again: round two
     bash(s, 320, cwd, "su_rec", "./gradlew :benchmark:connectedBenchmarkAndroidTest", "BUILD SUCCESSFUL", dt=300.0)
     bash(s, 640, cwd, "su_an3", "echolot analyze out/*.perfetto-trace -c echolot.yml",
@@ -227,7 +233,9 @@ def build(root: Path, project: Path) -> Path:
          'fun load() { trace("AGENTTMP_load") {', "fun load() {")
     edit(s, 705, cwd, "su_e5", f"{cwd}/benchmark/src/main/java/Bench.kt",
          'fun run() { trace("AGENTTMP_bench") {', "fun run() {")
-    bash(s, 710, cwd, "su_grep", "grep -rn AGENTTMP_ app/src benchmark/src", "")
+    bash(s, 707, cwd, "su_e_sh2",
+         f"cd {cwd}/app/src/main/kotlin && sed -i '' 's/ trace(\"AGENTTMP_init\") {{//' Baz.kt", "")
+    bash(s, 710, cwd, "su_grep", "grep -rn AGENTTMP_ app/src benchmark/src | wc -l", "0")
     MSG[0] += 1
     # a long conclusion, Cleanup and Confidence past the fourth kilobyte, the
     # suggestion under a Russian heading: every field must still be found
@@ -304,7 +312,7 @@ def check(report: dict) -> list[str]:
     um = report["cost"]["usage_main"]
     expect(um["output"] == 250 + 100 * 14, f"main output tokens: {um['output']}")
     us = report["cost"]["usage_subagents"]
-    expect(us["output"] == 400 + 100 * 15, f"subagent output tokens: {us['output']}")
+    expect(us["output"] == 400 + 100 * 17, f"subagent output tokens: {us['output']}")
 
     # --- signals that must fire
     expect(sig.get("doctor_first", {}).get("severity") == "ok", "doctor_first ok")
@@ -312,7 +320,13 @@ def check(report: dict) -> list[str]:
     expect(sig.get("loop_in_main_context", {}).get("severity") == "ok", "loop stayed in subagent")
     expect(sig.get("rounds_over_max", {}).get("severity") == "ok", "rounds within max")
     expect(sig.get("conclusion_shape", {}).get("severity") == "ok", "conclusion shape ok")
-    expect(sig.get("cleanup_balance", {}).get("severity") == "ok", f"cleanup ok: {sig.get('cleanup_balance')}")
+    x = sig.get("cleanup_balance")
+    expect(x and x["severity"] == "ok" and "through the shell" in x["why"]
+           and "found nothing" in x["why"], f"cleanup ok, shell edits counted: {x}")
+    inst = report["instrumentation"]
+    expect(inst["files"].get("app/src/main/kotlin/Baz.kt", {}).get("shell") == 2
+           and inst["shell_edits"] == 2 and inst["cleanup_grep_clean"] is True,
+           f"shell edits seen per file, grep verdict clean: {inst}")
     x = sig.get("edits_outside_allowed")
     expect(x and x["severity"] == "warn" and len(x["rows"]) == 2 and
            all("Bench.kt" in r["file"] for r in x["rows"]), f"edits outside allowed: {x}")

@@ -319,11 +319,19 @@ def milestones(session: Session, calls: list[EcholotCall]) -> list[dict[str, Any
                            MAIN, s.description or ""))
         if s.ended:
             marks.append(_mark(s.ended, f"agent {s.type or '?'} finished", MAIN))
+    first_added = None
     for c in session.calls:
         if c.tool in ("Edit", "Write") and _has_prefix_added(c):
-            marks.append(_mark(c.ts, "temporary instrumentation added", c.agent,
-                               _short(c.path)))
+            first_added = _mark(c.ts, "temporary instrumentation added", c.agent,
+                                _short(c.path))
             break
+    for e in shell_edits(session, "AGENTTMP_"):
+        if first_added is None or ts_to_epoch(e["ts"]) < ts_to_epoch(first_added["ts"]):
+            first_added = _mark(e["ts"], "temporary instrumentation added (shell)",
+                                e["agent"], ", ".join(_short(f) for f in e["files"][:2]))
+        break
+    if first_added:
+        marks.append(first_added)
     marks.sort(key=lambda m: ts_to_epoch(m["ts"]))
     return marks
 
@@ -470,6 +478,65 @@ def _has_prefix_removed(c: Call, prefix: str = "AGENTTMP_") -> bool:
     return prefix in old and prefix not in new
 
 
+_SRC_PATH = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:kt|java|kts))\b")
+_CD_INTO = re.compile(r"(?:^|[\s;&|])cd\s+([\"']?)([^\s;&|\"']+)\1")
+_EDIT_VERB = re.compile(r"(?:^|[\s;&|(])(?:sed\s+-[a-zA-Z]*i|perl\s+-[a-zA-Z]*i)\b")
+
+
+def shell_edits(session: Session, prefix: str) -> list[dict[str, Any]]:
+    """Source edits made through the shell that mention the prefix.
+
+    A python heredoc with `open(path, 'w').write(...)`, a `sed -i`: the
+    perf-hunter is given Edit, and still writes files this way — 45 Bash
+    calls, zero Edit, in one session, and the whole "Temporary
+    instrumentation" section went missing. Which files: every .kt/.java
+    path in the command, made relative to a leading `cd`. Whether the prefix
+    was added or removed cannot be told from an edit helper's arguments;
+    the grep after the last edit settles that.
+    """
+    out = []
+    for c in session.bash():
+        cmd = c.command or ""
+        if prefix not in cmd:
+            continue
+        if not (_PY_WRITES.search(cmd) or _EDIT_VERB.search(cmd)):
+            continue
+        base = ""
+        m = _CD_INTO.search(cmd)
+        if m:
+            base = m.group(2)
+        files = []
+        for p in dict.fromkeys(_SRC_PATH.findall(cmd)):
+            rel = p if p.startswith("/") or not base else base.rstrip("/") + "/" + p
+            rel = _relative(rel, session.cwd)
+            if _is_source(rel) and rel not in files:
+                files.append(rel)
+        out.append({"ts": c.ts, "agent": c.agent, "files": files,
+                    "command": cmd[:200]})
+    return out
+
+
+def _grep_verdict(output: str, prefix: str) -> bool | None:
+    """What the cleanup grep found: True = nothing, False = still there.
+
+    `grep -rn PREFIX … | wc -l` → "0"; an `echo "label: $(… | wc -l)"` →
+    ends with ": 0"; a bare grep with no matches exits 1 and prints nothing;
+    a match prints the line, prefix and all. Anything else: None, unknown.
+    """
+    lines = [ln for ln in output.splitlines() if ln.strip()]
+    if lines and lines[0].startswith("Exit code"):
+        lines = lines[1:]
+    if not lines:
+        return True
+    first = lines[0].strip()
+    m = re.search(r"(?:^|[\s:])(\d+)\s*$", first)
+    if m:
+        return int(m.group(1)) == 0
+    if prefix in first:
+        return False
+    return None
+
+
 def instrumentation(session: Session, cfg: Config | None) -> dict[str, Any]:
     prefix = (cfg.get("instrumentation.temp_prefix") if cfg else None) or "AGENTTMP_"
     allowed = list((cfg.get("instrumentation.allowed") if cfg else None) or [])
@@ -483,7 +550,7 @@ def instrumentation(session: Session, cfg: Config | None) -> dict[str, Any]:
         inp = c.input or {}
         new = str(inp.get("new_string") or inp.get("content") or "")
         old = str(inp.get("old_string") or "")
-        entry = per_file.setdefault(rel, {"added": 0, "removed": 0})
+        entry = per_file.setdefault(rel, {"added": 0, "removed": 0, "shell": 0})
         if prefix in new and prefix not in old:
             entry["added"] += 1
         elif prefix in old and prefix not in new:
@@ -500,31 +567,49 @@ def instrumentation(session: Session, cfg: Config | None) -> dict[str, Any]:
                 and (c.agent != MAIN or temporary):
             outside.append({"ts": c.ts, "file": rel, "agent": c.agent,
                             "temporary": temporary})
-    touched = {f: v for f, v in per_file.items() if v["added"] or v["removed"]}
+    # Edits made through the shell: counted per file, direction unknown.
+    shell = shell_edits(session, prefix)
+    for e in shell:
+        for rel in e["files"]:
+            entry = per_file.setdefault(rel, {"added": 0, "removed": 0, "shell": 0})
+            entry["shell"] += 1
+            if allowed and _is_source(rel) and not _under_any(rel, allowed):
+                outside.append({"ts": e["ts"], "file": rel, "agent": e["agent"],
+                                "temporary": True})
+    touched = {f: v for f, v in per_file.items()
+               if v["added"] or v["removed"] or v["shell"]}
     outside.sort(key=lambda r: ts_to_epoch(r["ts"]))
     # The cleanup grep must follow the last edit that touched the prefix —
     # not the last edit of the session, which may be a fix made much later.
-    last_edit = max((ts_to_epoch(c.ts) for c in session.edits()
-                     if prefix in str((c.input or {}).get("new_string", ""))
-                     or prefix in str((c.input or {}).get("old_string", ""))
-                     or prefix in str((c.input or {}).get("content", ""))),
-                    default=0.0)
-    final_grep = [
-        c for c in session.bash()
-        if "grep" in (c.command or "") and prefix in (c.command or "")
-        and ts_to_epoch(c.ts) >= last_edit
-    ]
+    last_edit = max(
+        [ts_to_epoch(c.ts) for c in session.edits()
+         if prefix in str((c.input or {}).get("new_string", ""))
+         or prefix in str((c.input or {}).get("old_string", ""))
+         or prefix in str((c.input or {}).get("content", ""))]
+        + [ts_to_epoch(e["ts"]) for e in shell],
+        default=0.0)
+    is_grep = lambda c: ("grep" in (c.command or "") and prefix in (c.command or "")
+                         and not _PY_WRITES.search(c.command or ""))
+    # Calls are stored main-first, then subagents: sort by time, the verdict
+    # is the latest grep's.
+    final_grep = sorted((c for c in session.bash()
+                         if is_grep(c) and ts_to_epoch(c.ts) >= last_edit),
+                        key=lambda c: ts_to_epoch(c.ts))
+    verdict = _grep_verdict(final_grep[-1].output_head or "", prefix) if final_grep else None
     return {
         "prefix": prefix,
         "allowed": allowed,
         "files": touched,
-        "unbalanced": {f: v for f, v in touched.items() if v["added"] != v["removed"]},
+        # Balance is judged on tool edits only; a file edited through the
+        # shell has no direction to balance, the grep verdict speaks for it.
+        "unbalanced": {f: v for f, v in touched.items()
+                       if v["added"] != v["removed"] and not v["shell"]},
+        "shell_edits": len(shell),
         "unprefixed_trace_calls": unprefixed,
         "edits_outside_allowed": outside,
         "cleanup_grep_after_last_edit": len(final_grep),
-        "grep_calls_total": sum(
-            1 for c in session.bash()
-            if "grep" in (c.command or "") and prefix in (c.command or "")),
+        "cleanup_grep_clean": verdict,
+        "grep_calls_total": sum(1 for c in session.bash() if is_grep(c)),
     }
 
 

@@ -271,12 +271,20 @@ def to_markdown(report: dict[str, Any]) -> str:
     if inst.get("files"):
         out.append("## Temporary instrumentation")
         out.append("")
-        out.append(_table([{"file": f, "added": v["added"], "removed": v["removed"]}
+        out.append(_table([{"file": f, "added": v["added"], "removed": v["removed"],
+                            "shell edits": v.get("shell", 0)}
                            for f, v in inst["files"].items()]))
         out.append("")
+        verdict = inst.get("cleanup_grep_clean")
+        found = ("found nothing" if verdict is True else
+                 "still found the prefix" if verdict is False else "result unclear")
         out.append(f"Prefix `{inst.get('prefix')}` · grep for it after the last edit: "
-                   f"{inst.get('cleanup_grep_after_last_edit', 0)} · "
-                   f"grep calls in total: {inst.get('grep_calls_total', 0)}")
+                   f"{inst.get('cleanup_grep_after_last_edit', 0)}"
+                   + (f" ({found})" if inst.get('cleanup_grep_after_last_edit') else "")
+                   + f" · grep calls in total: {inst.get('grep_calls_total', 0)}")
+        if inst.get("shell_edits"):
+            out.append(f"{inst['shell_edits']} edit(s) went through the shell (python, sed) — "
+                       f"no add/remove direction to balance; the grep verdict stands for them.")
         out.append("")
 
     # ---- cost

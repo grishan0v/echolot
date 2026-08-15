@@ -50,7 +50,9 @@ class Signal:
 Detector = Callable[[Session, Facts, "Config | None"], "Signal | None"]
 
 _BYPASS = [
-    ("gradle", re.compile(r"(?:\./)?gradlew\b.*\bconnected|gradlew\b.*[Bb]enchmark", re.S)),
+    # A gradle *run* of instrumented tests captures traces; `assembleBenchmark`
+    # only builds the APK and is not a capture.
+    ("gradle", re.compile(r"gradlew\b[^\n]*(?:\bconnected\w*|AndroidTest\b)")),
     ("adb", re.compile(r"\badb\s+(?:-s\s+\S+\s+)?shell\s+(?:perfetto|am\s+start|cmd\s+activity)")),
     ("perfetto", re.compile(r"(?:^|\s)perfetto\s+(?:-c|--txt|-o)")),
 ]
@@ -266,6 +268,8 @@ def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = [{"file": k, "added": v["added"], "removed": v["removed"]}
             for k, v in unbalanced.items()]
     grep_after = inst.get("cleanup_grep_after_last_edit", 0)
+    clean = inst.get("cleanup_grep_clean")
+    shell = inst.get("shell_edits", 0)
     if rows:
         return Signal("cleanup_balance", "warn",
                       "temporary instrumentation may have been left behind",
@@ -275,13 +279,30 @@ def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                       f"Run: grep -rn {inst['prefix']} <source_root>")
     if grep_after == 0:
         return Signal("cleanup_balance", "warn",
-                      "edits balance out, but no grep confirmed the cleanup",
+                      "edits balance out, but no grep confirmed the cleanup"
+                      if not shell else
+                      "instrumentation was edited through the shell and no grep "
+                      "confirmed the cleanup",
                       "perf-hunter.md asks for a grep after the last edit and a "
-                      "sentence about it in the conclusion.",
-                      [{"files": len(files), "grep_calls_total": inst.get("grep_calls_total", 0)}])
+                      "sentence about it in the conclusion." +
+                      (" Edits made with python or sed have no direction to balance; "
+                       "the grep is the only evidence." if shell else ""),
+                      [{"files": len(files), "shell_edits": shell,
+                        "grep_calls_total": inst.get("grep_calls_total", 0)}])
+    if clean is False:
+        return Signal("cleanup_balance", "warn",
+                      "the grep after the last edit still finds the prefix",
+                      "The agent checked and the marker was still there — or the "
+                      "check ran before the last removal.",
+                      [{"files": len(files), "shell_edits": shell}],
+                      f"Run: grep -rn {inst['prefix']} <source_root>")
+    how = (f"{len(files)} file(s), {shell} edit(s) through the shell"
+           if shell else f"{len(files)} file(s)")
+    what = ("found nothing" if clean else "ran")
     return Signal("cleanup_balance", "ok",
-                  "temporary instrumentation added and removed in equal measure",
-                  f"{len(files)} file(s); a grep for the prefix ran after the last edit.")
+                  "temporary instrumentation added and removed in equal measure"
+                  if not shell else "temporary instrumentation cleaned up",
+                  f"{how}; a grep for the prefix after the last edit {what}.")
 
 
 def conclusion_shape(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
@@ -403,8 +424,19 @@ def thresholds_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | Non
 
 # ---------------------------------------------------------- workarounds
 
+def _around(text: str, needle: str, width: int = 110) -> str:
+    """The stretch of a command around the interesting part, one line."""
+    flat = " ".join(text.split())
+    i = flat.find(needle)
+    if i < 0:
+        return flat[:width]
+    start = max(0, i - width // 3)
+    return ("…" if start else "") + flat[start:start + width]
+
+
 def report_sliced_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    rows = [{"ts": _t(c.ts), "agent": c.agent, "command": (c.command or "")[:110]}
+    rows = [{"ts": _t(c.ts), "agent": c.agent,
+             "command": _around(c.command or "", "report.json")}
             for c in s.bash() if RE_REPORT_BY_HAND.search(c.command or "")]
     if not rows:
         return None
@@ -419,7 +451,10 @@ def report_sliced_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | 
 
 
 def help_lookups(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    rows = [{"ts": _t(c.ts), "agent": c.agent, "command": c.command[:100]}
+    # The invocation itself, not the head of a Bash line it shared with a
+    # `cd` and a python one-liner.
+    rows = [{"ts": _t(c.ts), "agent": c.agent,
+             "command": f"echolot {c.sub} {c.argv}".strip()[:100]}
             for c in f.echolot_calls if c.is_help]
     if not rows:
         return None
