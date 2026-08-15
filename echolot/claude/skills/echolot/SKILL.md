@@ -29,10 +29,24 @@ echolot analyze <trace> -c echolot.yml
 ```
 
 `analyze` writes `.echolot/out/report.json` (for you) and `report.md` (for
-humans). Read the **json** — it has a stable schema.
+humans), next to the config. Read the **json** — it has a stable schema.
 
 No config? Go to `/echolot-setup`. No idea what is in the trace?
 `echolot probe <trace> --process '<package>*'`.
+
+Which door is which — three things with similar names:
+
+- `echolot init` (the CLI) installs or updates **this** layer in the project;
+  `doctor` says when the copy here is behind the package. `/echolot init`
+  means run that command, not build a config.
+- `/echolot-setup` builds `echolot.yml`.
+- `/echolot-hunt` finds the cause of one regression, in a subagent.
+
+**Silence is relative to the thresholds.** The report's `Config:` line and
+`detectors[].params_source` say whether the numbers are the shipped defaults
+or calibrated ones. Calibrated on the runs that hold the regression means the
+bar sits above it: look with `echolot analyze … --defaults` before calling a
+run clean.
 
 ## Reading the report
 

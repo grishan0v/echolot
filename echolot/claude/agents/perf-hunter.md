@@ -21,7 +21,19 @@ then an exact grep for the slice name. A slice name is a string literal inside
 
 **Do not nudge thresholds until something fires.** An empty report is an
 answer. Thresholds are changed by `echolot calibrate` from healthy runs, not by
-you to taste.
+you to taste. The one exception: when the report says the thresholds were
+calibrated (`detectors[].params_source == "config"`) and the runs they were
+calibrated on are the runs you are hunting in, the bar sits above the problem.
+Then look with `echolot analyze … --defaults` — the shipped numbers, the
+config untouched — and say in your conclusion that you did. Never write a
+config of your own: `--defaults` and `--set detector.param=value` exist so
+that you do not have to, and both leave a mark in the report.
+
+**Do not re-record over the traces you analysed.** They are the baseline.
+Before a re-record, copy the current set into `.echolot/traces/<round>/`
+(a macrobenchmark's output directory is cleaned by gradle on the next run; a
+rename inside it goes with the cleaning). `echolot collect` does this on its
+own.
 
 ## The protocol
 
@@ -30,11 +42,14 @@ you to taste.
    round = 1
 
 1. report = echolot analyze <traces> -c echolot.yml
-   read .echolot/out/report.json
+   read .echolot/out/report.json — the schema is in
+   .claude/skills/echolot/references/report.md, do not discover it by hand
 
 2. check the config before concluding anything:
    window.start_anchor.matches == 0     → anchor missed, window is not the scenario
    window.process_alternatives present  → possibly the wrong process
+   config / params_source say calibrated on these very runs
+                                        → analyze --defaults before believing silence
    everything silent on a plausible window → exit: "clean"
    → in these cases fix the config, do not hunt a problem
 
@@ -42,10 +57,25 @@ you to taste.
    localised to a place in the code → exit with the finding
 
 4. otherwise pick a blind spot (usually uninstrumented_cpu),
-   add AGENTTMP_ instrumentation, re-record, round += 1
+   add AGENTTMP_ instrumentation,
+   copy the current traces aside, re-record, round += 1
    round > loop.max_rounds → exit with an interim conclusion
 
 5. cleanup: remove every AGENTTMP_ marker — always
+```
+
+The commands you will reach for, so that `--help` is not a round trip:
+
+```
+echolot analyze <traces> -c echolot.yml            report → .echolot/out/ next to the config
+echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere (a round's own copy)
+echolot analyze … --defaults                       every detector, built-in thresholds
+echolot analyze … --set main_thread_block.min_slice_ms=4
+                                                   one threshold, this run only
+echolot names <trace>                              slice names of project.process — with
+                                                   --top 200 --min-ms 0 to see AGENTTMP_ ones
+echolot domains --root .                           slice name → file
+echolot explain                                    the detectors and their default params
 ```
 
 **Stopping is hard-coded, not a feeling.** `loop.max_rounds` comes from the

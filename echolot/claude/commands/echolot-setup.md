@@ -115,3 +115,17 @@ echolot calibrate run*.perfetto-trace -c echolot.yml
 
 The command prints a `detectors:` section with the reasoning attached. Show it
 to the human and explain what changed relative to the defaults.
+
+**Healthy means known-good, not merely current.** If the human came because
+something regressed, the traces you have are the regression: thresholds
+derived from them sit above the problem, and the hunt that follows reports a
+clean run. Ask before calibrating: *"Are these runs from a build you consider
+healthy? If not, I keep the defaults and calibrate later on a good build."*
+Leave the `detectors:` section out of the config until then. When the answer
+is unclear, do not calibrate — a config with defaults is honest, a config
+calibrated on the regression is a trap.
+
+Whoever hunts later can still see what the shipped numbers say without
+touching the config: `echolot analyze --defaults` (every detector, built-in
+thresholds) and `--set detector.param=value` (one threshold, one run). Both
+leave a mark in the report.

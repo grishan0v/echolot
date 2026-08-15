@@ -15,6 +15,25 @@ A loop on an invented config burns rounds for nothing.
 
 **Traces.** None? Capture them with `echolot collect -c echolot.yml -n 5`.
 
+**Thresholds.** Read `config` and `detectors[].params_source` in the last
+`report.json`, or the `Config:` line in `report.md`. If the thresholds were
+calibrated on the very runs that hold the regression, the report is clean by
+construction. Say so, and pass the agent `--defaults` for its first look.
+
+**The three facts.** Before calling the agent you must hold, in the human's
+words:
+
+1. what regressed and against what — "it was 3 s, now it is 7 s"
+2. which traces show it
+3. **after which change** — a commit, a dependency bump, a date, "since the
+   redesign of the tabs"
+
+Ask for the third one explicitly, with `AskUserQuestion`, even when the first
+two are clear. "Unknown" is an acceptable answer and goes into the prompt as
+such — an omitted one is not. The tool localises a **specific** regression
+well and searches for the unknown in general badly; without the change the
+agent hunts everything that looks expensive and comes back with a guess.
+
 ## The run
 
 Hand the work to the `perf-hunter` subagent. This is not a formality: the loop
@@ -27,10 +46,15 @@ Pass the agent:
 
 - the path to the trace (or several)
 - what regressed and against what: "it was 3 s, now it is 7 s"
-- if known, after which change
+- after which change — or the word "unknown", said explicitly
+- whether the config's thresholds are trustworthy for this hunt (see above),
+  and if not, that it should start with `analyze --defaults`
 
-That last one matters more than it seems. The tool localises a **specific**
-regression well and searches for the unknown in general badly.
+Do not re-record in the main context, and do not move the traces the agent
+is about to compare against. If a re-record is needed, it happens inside the
+loop, and the agent copies the current set into `.echolot/traces/<label>/`
+first — a benchmark's output directory is cleaned by gradle on the next run,
+and a rename inside it goes with the cleaning.
 
 ## What to show the human
 
