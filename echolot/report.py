@@ -184,6 +184,9 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.append(
         f"Detectors fired: **{s['detectors_fired']} of {s['detectors_run']}**"
     )
+    line = _config_line(report)
+    if line:
+        out.append(line)
     out.append("")
 
     if s["detectors_fired"] == 0:
@@ -205,7 +208,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
         out.append(_table(d["rows"]))
         out.append("")
-        out.append(f"<sub>detector `{d['id']}`, params: {d['params']}</sub>")
+        out.append(f"<sub>detector `{d['id']}`, params: {d['params']}"
+                   f"{_source_note(d)}</sub>")
         out.append("")
 
     quiet = [d["id"] for d in report["detectors"] if not d["rows"]]
@@ -220,6 +224,53 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
         out.append(f"<sub>{note}</sub>")
     return "\n".join(out)
+
+
+def _config_line(report: dict[str, Any]) -> str | None:
+    """Which config, and where the thresholds came from — one line.
+
+    A report against calibrated numbers and one against the shipped defaults
+    look identical otherwise, and the difference decides whether "silent"
+    means clean or means the bar was set above the problem.
+    """
+    cfg = report.get("config")
+    sources = {d.get("params_source", "default") for d in report["detectors"]}
+    if not cfg and sources == {"default"}:
+        return None
+    parts = []
+    if cfg and cfg.get("path"):
+        parts.append(f"`{cfg['path']}`" + (f" (sha {cfg['sha']})" if cfg.get("sha") else ""))
+    if cfg and cfg.get("local"):
+        parts.append(f"local `{cfg['local']}`")
+    if cfg and cfg.get("defaults"):
+        parts.append("thresholds: **built-in defaults** (`--defaults`, the config's "
+                     "detectors section ignored)")
+    else:
+        n_cfg = sum(1 for d in report["detectors"]
+                    if "config" in d.get("params_source", ""))
+        n_cli = sum(1 for d in report["detectors"]
+                    if "cli" in d.get("params_source", ""))
+        n_all = len(report["detectors"])
+        if n_cfg == 0 and n_cli == 0:
+            parts.append("thresholds: built-in defaults")
+        else:
+            bits = []
+            if n_cfg:
+                bits.append(f"from the config for {n_cfg} of {n_all} detectors")
+            if n_cli:
+                bits.append(f"`--set` on {n_cli}")
+            parts.append("thresholds: " + ", ".join(bits))
+    return "Config: " + " · ".join(parts)
+
+
+def _source_note(d: dict[str, Any]) -> str:
+    src = d.get("params_source", "default")
+    if src == "default":
+        return ""
+    note = f" — from the {src.replace('+', ' + ')}"
+    if d.get("defaults"):
+        note += f", defaults would be {d['defaults']}"
+    return note
 
 
 def _table(rows: list[dict[str, Any]]) -> str:

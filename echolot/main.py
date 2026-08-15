@@ -116,22 +116,77 @@ def _note_local(cfg: Config) -> None:
               file=sys.stderr)
 
 
-def analyze_trace(trace, cfg: Config, tp_binary: str | None = None) -> dict:
+def _out_dir(out: str, cfg: Config) -> Path:
+    """A relative -o is taken from the config's directory, not from cwd.
+
+    The agent runs analyze from wherever the traces are — a build directory
+    with a space in its name — and the report used to land there, in a
+    `.echolot/out` nobody would look for. The config is what names the
+    project; the report goes next to it. A side effect worth having: an ad-hoc
+    config in /tmp no longer overwrites the project's report.
+    """
+    p = Path(out)
+    if p.is_absolute() or cfg.path is None:
+        return p
+    return Path(cfg.path).resolve().parent / p
+
+
+def parse_set(values: list[str], detectors) -> dict[str, dict]:
+    """--set detector.param=value, repeatable, into per-detector overrides.
+
+    Values are read as YAML scalars so `16`, `4.5` and `binder*` arrive typed
+    the same way they would from the config. Unknown detectors and parameters
+    are refused with the list of valid ones: a silently ignored typo is worse
+    than no flag at all.
+    """
+    import yaml
+    known = {d.id: d for d in detectors}
+    out: dict[str, dict] = {}
+    for item in values:
+        key, sep, raw = item.partition("=")
+        det, dot, param = key.strip().partition(".")
+        if not sep or not dot or not det or not param:
+            raise ConfigError(f"--set expects detector.param=value, got '{item}'")
+        if det not in known:
+            raise ConfigError(
+                f"--set: no detector '{det}'. Known: {', '.join(sorted(known))}")
+        if param not in known[det].params:
+            raise ConfigError(
+                f"--set: {det} has no parameter '{param}'. "
+                f"It has: {', '.join(sorted(known[det].params))}")
+        out.setdefault(det, {})[param] = yaml.safe_load(raw.strip())
+    return out
+
+
+def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
+                  cli_overrides: dict[str, dict] | None = None,
+                  use_defaults: bool = False) -> dict:
     """The core of a run: trace + config → Marker Report.
 
     Separate from cmd_analyze because it has two callers: the command, which
     reads the config from a file and writes the report to disk, and the
     self-check, which keeps the config in memory and compares the result with
     expectations. Raises ConfigError.
+
+    Thresholds come from three places, in this order: the detector's own
+    defaults, the config's `detectors:` section, then `--set` from the command
+    line. `--defaults` drops the middle one — every detector, built-in numbers,
+    the config untouched. Each detector in the report says which of the three
+    it got (`params_source`), so a reader can tell calibrated numbers from
+    the shipped ones without opening the config.
     """
     detectors = load_detectors(DETECTOR_DIR)
-    enabled = cfg.enabled_detectors
+    cli_overrides = cli_overrides or {}
+    cfg_overrides = {} if use_defaults else cfg.detector_overrides
+    enabled = None if use_defaults else cfg.enabled_detectors
     if enabled is not None:
+        # A detector named on the command line is asked for explicitly, even
+        # when the config's list leaves it out.
+        enabled = set(enabled) | set(cli_overrides)
         detectors = [d for d in detectors if d.id in enabled]
     if not detectors:
         raise ConfigError("no detectors selected")
 
-    overrides = cfg.detector_overrides
     results = []
 
     with TraceSession(trace, tp_binary) as tp:
@@ -140,21 +195,33 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None) -> dict:
         window = _window_info(tp, cfg, procs)
 
         for d in detectors:
+            from_cfg = dict(cfg_overrides.get(d.id) or {})
+            from_cli = dict(cli_overrides.get(d.id) or {})
+            overrides = {**from_cfg, **from_cli}
+            source = "+".join(
+                s for s, on in (("config", bool(from_cfg)), ("cli", bool(from_cli))) if on
+            ) or "default"
             try:
-                sql, params = d.render(overrides.get(d.id))
+                sql, params = d.render(overrides)
                 rows = tp.query(sql)
                 err = None
             except Exception as e:  # SQL is version-fragile — never fail the run
                 rows, params, err = [], d.params, str(e)
                 print(f"[!] {d.id}: {e}", file=sys.stderr)
-            results.append({
+            entry = {
                 "id": d.id,
                 "title": d.title,
                 "why": d.why,
                 "params": params,
+                "params_source": source,
                 "rows": rows,
                 "error": err,
-            })
+            }
+            if source != "default":
+                # What the shipped numbers would have been — the reader can
+                # see how far calibration moved them without `explain`.
+                entry["defaults"] = {k: d.params[k] for k in overrides if k in d.params}
+            results.append(entry)
 
     return report_mod.build(str(trace), window, results,
                             toolchain=toolchain_info(tp_binary))
@@ -165,14 +232,32 @@ def cmd_analyze(args) -> int:
         cfg = Config.load(args.config, args.local)
         tp_binary = _tp_binary(args, cfg)
         _note_local(cfg)
+        cli_overrides = parse_set(args.set or [], load_detectors(DETECTOR_DIR))
+        if args.defaults:
+            print("[i] --defaults: the config's detectors section is ignored, "
+                  "every detector runs with its built-in thresholds",
+                  file=sys.stderr)
         # Repeats are merged by median: one outlier must not drag the
         # conclusion along, and the "Runs" column separates the reproducible
         # from the one-off.
-        reports = [analyze_trace(t, cfg, tp_binary) for t in args.traces]
+        reports = [analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
+                                 use_defaults=args.defaults)
+                   for t in args.traces]
         rep = report_mod.aggregate(reports)
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+    # Which config made this report. Without it the next reader of
+    # report.json cannot tell the project's run from one against an ad-hoc
+    # config in /tmp — they look the same.
+    rep["config"] = {
+        "path": str(Path(cfg.path).resolve()) if cfg.path else None,
+        "sha": cfg.sha,
+        "local": str(Path(cfg.local_path).resolve()) if cfg.local_path else None,
+        "defaults": bool(args.defaults),
+        "set": cli_overrides or None,
+    }
 
     w = rep.get("window") or {}
     recorder.note(
@@ -182,8 +267,13 @@ def cmd_analyze(args) -> int:
         start_anchor_matches=(w.get("start_anchor") or {}).get("matches"),
         process_alternatives=len(w.get("process_alternatives") or []),
     )
+    if args.defaults or cli_overrides:
+        recorder.note(
+            thresholds="defaults" if args.defaults else "config+cli",
+            overrides=sorted(f"{d}.{p}" for d, ps in cli_overrides.items() for p in ps),
+        )
 
-    out_dir = Path(args.out)
+    out_dir = _out_dir(args.out, cfg)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "report.json").write_text(
         report_mod.to_json(rep), encoding="utf-8")
@@ -598,7 +688,7 @@ def cmd_collect(args) -> int:
     section = cfg.runner
     package = cfg.get("project.package") or cfg.process
     iterations = args.iterations or int(section.get("iterations", 5))
-    out_dir = Path(args.out)
+    out_dir = _out_dir(args.out, cfg)
 
     policy = str(section.get("reset_policy", "force-stop"))
     if policy not in ("force-stop", "none"):
@@ -1133,12 +1223,29 @@ def build_parser() -> argparse.ArgumentParser:
                      help="below this many values no threshold is derived")
     cal.set_defaults(func=cmd_calibrate)
 
-    an = sub.add_parser("analyze", help="run the detectors")
+    an = sub.add_parser(
+        "analyze", help="run the detectors",
+        description="Run the detectors over one trace or repeats of one "
+                    "scenario and write the Marker Report. Thresholds: the "
+                    "detector's defaults, then the config's detectors section, "
+                    "then --set; --defaults skips the config's section.")
     an.add_argument("traces", nargs="+",
                     help="one trace, or repeats of one scenario")
-    an.add_argument("-c", "--config", default="echolot.yml")
+    an.add_argument("-c", "--config", default="echolot.yml",
+                    help="the project config (default: echolot.yml in cwd)")
     an.add_argument("--local", help="path to local.yml (defaults to alongside)")
-    an.add_argument("-o", "--out", default=".echolot/out")
+    an.add_argument("-o", "--out", default=".echolot/out",
+                    help="where report.md and report.json go; a relative path "
+                         "is taken from the config's directory (default: "
+                         ".echolot/out next to the config)")
+    an.add_argument("--set", action="append", default=[],
+                    metavar="DETECTOR.PARAM=VALUE",
+                    help="override one threshold for this run only, e.g. "
+                         "--set main_thread_block.min_slice_ms=16; repeatable")
+    an.add_argument("--defaults", action="store_true",
+                    help="ignore the config's detectors section: every detector, "
+                         "built-in thresholds. To see what the shipped numbers "
+                         "say without touching the config")
     an.set_defaults(func=cmd_analyze)
 
     ex = sub.add_parser("explain", help="list the detectors")

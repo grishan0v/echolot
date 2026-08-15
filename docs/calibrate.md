@@ -100,3 +100,17 @@ binder_txn total           84.3         30.5
 Thresholds moved threefold in both directions. One config with absolute
 numbers would have meant something completely different on those two machines —
 which is the entire argument for this command.
+
+## Calibrate on healthy runs, not on the runs under investigation
+
+The word "healthy" carries the whole method. Thresholds derived from the ten
+traces that hold the regression sit *above* the regression, and `analyze`
+against them reports a clean run — the bar was set on the problem. Calibrate
+on a build known to be good; when there is none, leave the defaults in place
+and hunt with those.
+
+To see what the shipped numbers would say without touching the config, run
+`analyze --defaults`; to move one threshold for one run,
+`analyze --set main_thread_block.min_slice_ms=16`. Both are recorded in the
+report (`config.defaults`, `config.set`, `detectors[].params_source`), so a
+report made that way is not mistaken for the project's.

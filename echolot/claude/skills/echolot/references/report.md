@@ -1,7 +1,15 @@
 # The Marker Report — what to read and how to read it
 
-`echolot analyze` writes two files into `.echolot/out/`: `report.json` for you
-and `report.md` for humans. One set of data, two formats.
+`echolot analyze` writes two files into `.echolot/out/` next to the config:
+`report.json` for you and `report.md` for humans. One set of data, two formats.
+A relative `-o` is taken from the config's directory, so running from a build
+folder full of traces still lands the report in the project.
+
+Two flags for one run only, no config edited: `--set detector.param=value`
+overrides one threshold; `--defaults` ignores the config's `detectors` section
+and runs every detector with its built-in numbers. Both leave a mark in the
+report (see `config` and `params_source` below), so a report made that way
+cannot be mistaken for the project's.
 
 ## The `report.json` schema
 
@@ -18,12 +26,29 @@ and `report.md` for humans. One set of data, two formats.
               "end_anchor":   { "glob": "…", "matches": 1 } },
   "summary": { "detectors_run": 6, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"] },
+  "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
+              "local": null, "defaults": false, "set": null },
   "detectors": [
     { "id": "…", "title": "…", "why": "…",
-      "params": { … }, "rows": [ … ], "error": null }
+      "params": { … }, "params_source": "config",
+      "defaults": { "min_slice_ms": 16 },
+      "rows": [ … ], "error": null }
   ]
 }
 ```
+
+**`config`** — which file made this report, and its content hash. Two
+reports with different `sha` were not made against the same thresholds;
+`defaults: true` means `--defaults` ran every detector with its built-in
+numbers, `set` lists what `--set` overrode for that run.
+
+**`detectors[].params_source`** — where this detector's thresholds came from:
+`default` (the numbers shipped in the .sql), `config` (calibrated or
+hand-set in `echolot.yml`), `cli` (`--set`), or `config+cli`. When it is not
+`default`, `defaults` holds the shipped values for the overridden parameters,
+so you can see how far the bar moved without running `explain`. A silent
+detector with calibrated thresholds means "nothing above the calibrated
+bar" — not necessarily "nothing above the default one".
 
 ## Check these before drawing conclusions
 

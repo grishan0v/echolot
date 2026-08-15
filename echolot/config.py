@@ -7,6 +7,7 @@ default declared in the detector's own .sql file.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,18 @@ class Config:
             raise ConfigError(f"local config not found: {local_path}")
 
         return cls(raw, p, used_local)
+
+    @property
+    def sha(self) -> str | None:
+        """A short content hash of the file: enough to tell two configs apart.
+
+        Goes into report.json and the run log, so a report can be matched to
+        the exact config that produced it — and an edited config shows as a
+        different one.
+        """
+        if self.path is None or not Path(self.path).exists():
+            return None
+        return hashlib.sha256(Path(self.path).read_bytes()).hexdigest()[:12]
 
     @property
     def tp_binary(self) -> str | None:

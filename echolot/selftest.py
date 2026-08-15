@@ -307,6 +307,73 @@ def _(report):
             )
 
 
+@check("thresholds: --set is typed and refuses what does not exist")
+def _(report):
+    from .main import DETECTOR_DIR, parse_set
+    from .tp import load_detectors
+    dets = load_detectors(DETECTOR_DIR)
+    got = parse_set(["main_thread_block.min_slice_ms=16",
+                     "binder_txn.name_glob=binder*",
+                     "gc_pressure.max_total_ms=4.5"], dets)
+    assert got == {"main_thread_block": {"min_slice_ms": 16},
+                   "binder_txn": {"name_glob": "binder*"},
+                   "gc_pressure": {"max_total_ms": 4.5}}, got
+    for bad in ("nope.min_slice_ms=1", "main_thread_block.nope=1", "garbage"):
+        try:
+            parse_set([bad], dets)
+        except ConfigError:
+            continue
+        raise AssertionError(f"--set accepted '{bad}'")
+
+
+@check("thresholds: the report says where each detector's numbers came from")
+def _(report):
+    from .main import analyze_trace
+    # every detector in the fixture run uses the shipped defaults
+    assert all(d["params_source"] == "default" for d in report["detectors"]), \
+        [(d["id"], d["params_source"]) for d in report["detectors"]]
+    assert not any("defaults" in d for d in report["detectors"])
+
+    cfg = Config({**FIXTURE_CONFIG,
+                  "detectors": {"main_thread_block": {"min_slice_ms": 40}}})
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        # the config lists one detector: only it runs, from the config
+        r = analyze_trace(trace, cfg)
+        assert [d["id"] for d in r["detectors"]] == ["main_thread_block"], r["summary"]
+        d = r["detectors"][0]
+        assert d["params_source"] == "config" and d["defaults"] == {"min_slice_ms": 16}, d
+        # --set on a detector the config leaves out brings it in, marked cli
+        r = analyze_trace(trace, cfg, cli_overrides={"gc_pressure": {"max_events": 1}})
+        by_id = {d["id"]: d for d in r["detectors"]}
+        assert set(by_id) == {"main_thread_block", "gc_pressure"}, set(by_id)
+        assert by_id["gc_pressure"]["params_source"] == "cli", by_id["gc_pressure"]
+        assert by_id["gc_pressure"]["params"]["max_events"] == 1
+        # --set on top of the config: cli wins, both are named
+        r = analyze_trace(trace, cfg,
+                          cli_overrides={"main_thread_block": {"min_slice_ms": 5}})
+        d = r["detectors"][0]
+        assert d["params_source"] == "config+cli" and d["params"]["min_slice_ms"] == 5, d
+        # --defaults: every detector, shipped numbers, the config's list ignored
+        r = analyze_trace(trace, cfg, use_defaults=True)
+        assert r["summary"]["detectors_run"] == 6, r["summary"]
+        assert all(d["params_source"] == "default" for d in r["detectors"])
+
+
+@check("analyze: a relative -o is taken from the config's directory")
+def _(report):
+    from .main import _out_dir
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        (root / "echolot.yml").write_text("project:\n  process: app\n", encoding="utf-8")
+        cfg = Config.load(root / "echolot.yml")
+        assert _out_dir(".echolot/out", cfg) == root / ".echolot" / "out"
+        assert _out_dir("/abs/elsewhere", cfg) == Path("/abs/elsewhere")
+        # an in-memory config has no directory: cwd it is, as before
+        assert _out_dir(".echolot/out", Config({})) == Path(".echolot/out")
+
+
 # --- local.yml -------------------------------------------------------------
 
 def _write_pair(root: Path, project: str, local: str | None) -> Path:
