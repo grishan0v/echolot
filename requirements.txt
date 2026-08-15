@@ -1,0 +1,4 @@
+# Dependencies are declared in pyproject.toml, together with the reasoning
+# behind the perfetto==0.57.2 pin. This file is only a convenient entry point
+# for local development, so the list does not live in two places and drift.
+-e .

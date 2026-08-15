@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "echolot"
+version = "0.1.0"
+description = "A deterministic layer between Perfetto traces and AI agents"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+
+dependencies = [
+    # The version is pinned exactly, and that is a necessity rather than hygiene.
+    #
+    # The perfetto package carries a manifest with a pinned trace_processor_shell
+    # version (0.57.2 → TP v56.1) and a SHA-256 per architecture. And
+    # trace_processor is not a utility you feed SQL to — it is a vocabulary: the
+    # strings 'Running', 'R' and 'binder transaction async' that the detectors
+    # match on are invented by it, not by the kernel and not by the app. A
+    # different TP version means different trace semantics with the SQL
+    # unchanged to the character.
+    #
+    # The manifest is rolled by a separate release tool with its own numbering;
+    # there is no contract that a patch release of the package keeps the same
+    # binary. So '~=' would not pin the thing the pin exists for — only '=='.
+    #
+    # Raising the version is fine and expected, but deliberately: raise the pin,
+    # run `echolot doctor`, and look at what the self-check says.
+    "perfetto==0.57.2",
+
+    # No pin needed here: PyYAML reads the config and does not affect trace
+    # semantics.
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+echolot = "echolot.main:main"
+
+[tool.setuptools]
+packages = ["echolot"]
+
+# Without this the installed package has no detectors: SQL_DIR points at
+# echolot/sql next to __file__, and a wheel ships only .py by default.
+[tool.setuptools.package-data]
+echolot = [
+    "sql/*.sql",
+    "sql/detectors/*.sql",
+    # The .claude/ layer — the template `echolot init` installs into a project.
+    "claude/*.json",
+    "claude/*/*.md",
+    "claude/*/*/*.md",
+    "claude/*/*/*/*.md",
+]

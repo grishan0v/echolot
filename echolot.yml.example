@@ -1,0 +1,128 @@
+# echolot — the contract between the engine and the project.
+# Copy to echolot.yml and fill in. Commit it.
+#
+# Machine-local things — device serials, a path to your own
+# trace_processor_shell — go into local.yml next to this file. That one stays
+# in .gitignore; the merge is recursive and local wins.
+#
+# Sections marked [read] are consumed by the code today. The rest are the
+# contract for parts still to come.
+
+# --- [read] ----------------------------------------------------------------
+project:
+  package: com.example.app
+  # A GLOB over process.name. If the app lives in several processes
+  # (:pushservice and friends), narrow this down — otherwise the largest one
+  # by slice count is taken and the choice is only reported, not decided.
+  process: com.example.app
+  source_root: app/src/main/kotlin
+
+# Scenario window bounds: a GLOB over the slice name.
+# Both are optional — without them the whole trace is the window.
+# `echolot probe <trace> --process '...'` suggests candidates.
+scenario:
+  name: coldStart
+  start:
+    name: "bindApplication"
+    _source: derived            # derived | confirmed_by_user | default
+    _evidence: "probe: top slices, 245 ms on main"
+  end:
+    # doFrame carries a vsync number that changes every run, hence the wildcard.
+    name: "Choreographer#doFrame*"
+    _source: confirmed_by_user
+    _evidence: "probe: first frame after bindApplication"
+  # NOT read by the code yet: it needs CI mode (`analyze` with an exit code
+  # driven by the budget), deferred to a later version. The field is still
+  # worth keeping — it records what the team considers acceptable.
+  budget_ms: 2500
+
+runner:
+  # launch  — we drive it: force-stop and launch the activity. Cold start.
+  # command — something else drives it, we record around it.
+  # gradle  — a macrobenchmark writes traces itself, we only collect them.
+  mode: launch
+  iterations: 5
+  duration_ms: 12000
+  # force-stop (cold) or none (warm). pm clear is deliberately unsupported:
+  # wiping data changes the scenario rather than repeating it.
+  reset_policy: force-stop
+  # activity: com.example.app/.MainActivity   # resolved automatically if absent
+  #
+  # mode: command
+  # command: >
+  #   adb shell am start -n com.example.app/.MainActivity &&
+  #   adb shell input swipe 500 1500 500 600 400
+  #
+  # mode: gradle
+  # gradle_task: ":benchmark:connectedBenchmarkBenchmarkAndroidTest"
+  # gradle_args: ["-Pandroid.testInstrumentationRunnerArguments.class=..."]
+
+# Detector thresholds. Values override the @param defaults in the .sql files.
+#
+# CAREFUL: listing keys means enabling ONLY those detectors. To adjust one
+# threshold without disabling the rest, list them all. An empty section, or no
+# section at all, means every detector found is enabled.
+#
+# Do not pick these numbers by hand — `echolot calibrate run*.perfetto-trace`
+# derives them from known-healthy runs and prints a ready section with the
+# reasoning attached. The values below are the shipped defaults.
+#
+# Parameters suffixed *_glob are masks over names. They live in the config
+# rather than in SQL because ART names GC and locks differently across Android
+# versions: adapting to a device must not require editing a query. What is
+# actually in the trace, and which masks land on it, is shown by
+#   echolot names <trace> --process '...'
+detectors:
+  main_thread_block:
+    min_slice_ms: 16
+  gc_pressure:
+    max_events: 15
+    max_total_ms: 120
+    # Matches on the END of the name: ART cycles are "Background young
+    # concurrent copying GC" and similar. A thread mask is deliberately absent
+    # — it dragged in TrimMaps and 305 LocalReferenceTable::Trim calls.
+    name_glob: "*GC"
+    # The other side: an allocation stalled waiting for the collector.
+    name_glob_alt: "waitWhileAllocating*"
+  monitor_contention:
+    min_block_ms: 8
+    max_total_ms: 50
+    # Narrowed against a live trace. Everything shaped "Lock contention on
+    # <something> lock" is a runtime-internal lock with no application code
+    # behind it — ClassLinker classes alone gave 129 on one cold start.
+    name_glob: "Lock contention on a monitor lock*"
+    name_glob_alt: "monitor contention with owner*"
+  binder_txn:
+    min_txn_ms: 10
+    max_total_ms: 50
+    name_glob: "binder transaction*"
+    # An async transaction does not block the sender — not the cost of sync IPC.
+    skip_glob: "*async*"
+  runnable_starvation:
+    min_runnable_ms: 20
+  uninstrumented_cpu:
+    min_running_ms: 50
+    max_covered_pct: 50
+
+# --- the contract for later (not read by the code yet) ---------------------
+
+# The slice-to-code map. Turns a marker into a hypothesis without scanning the
+# repository blindly. `echolot domains --root .` pre-fills it from the sources.
+domains:
+  - slice: "collection_mapping"
+    module: ":feature:collection"
+    hint: "CollectionMapper.kt — entity→domain"
+
+threads:
+  # comm is truncated to 15 characters, so write masks accordingly.
+  own: ["DefaultDispatch*", "OkHttp*"]
+  ignore: ["HeapTaskDaemon", "Jit thread pool", "FinalizerDaemon"]
+
+loop:
+  max_rounds: 3
+  on_exhausted: report          # an interim conclusion from the data at hand
+
+instrumentation:
+  allowed: ["app/src/main", "feature/*/src/main"]
+  temp_prefix: AGENTTMP_
+  cleanup: always               # on success and on running out of rounds alike

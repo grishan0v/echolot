@@ -1,0 +1,27 @@
+# environment
+.venv/
+__pycache__/
+*.py[cod]
+
+# package build
+build/
+dist/
+*.egg-info/
+
+# detector output
+.echolot/
+
+# the machine-local half of the config: device serials, path to the binary
+local.yml
+
+# working notes: for development, not for the repo
+echolot-vision.md
+TODO.md
+
+# traces are not committed — they run to gigabytes.
+# The self-check fixture belongs here too: it is rebuilt deterministically
+# from echolot/fixture.py on every `echolot doctor`.
+*.perfetto-trace
+*.pftrace
+
+.DS_Store
