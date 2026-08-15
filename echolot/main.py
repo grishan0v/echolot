@@ -868,26 +868,48 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     return st
 
 
-def next_step(st: dict) -> str:
-    """One line: what to do next, from the state. Shared by status and init."""
+# The next step as one word — what `/echolot` in Claude Code switches on —
+# and as the line a person reads. Both from the same decision.
+NEXT_KINDS = ("init", "init-force", "doctor", "setup", "fix-config", "hunt")
+
+
+def next_kind(st: dict) -> str:
     if st["layer_verdict"] == "absent":
-        return "echolot init — installs the .claude/ layer; then /echolot-setup in Claude Code"
+        return "init"
     if st["layer_verdict"] == "stale":
-        return "echolot init — brings the .claude/ layer up to date (the agent reads it)"
+        return "init"
     if st["layer_verdict"] == "differs":
-        return ("echolot init --force — the .claude/ layer differs from the package's and "
-                "nothing says whether you edited it; --force overwrites, keep your edits with git")
+        return "init-force"
     d = st.get("last_doctor")
     if d and d.get("facts", {}).get("failed"):
-        return "echolot doctor — the last self-check failed; no report is trustworthy until it passes"
+        return "doctor"
     cfg = st.get("config")
     if not cfg:
-        return "/echolot-setup in Claude Code — builds echolot.yml from the repository and a probe trace"
+        return "setup"
     if cfg.get("error"):
-        return f"fix echolot.yml — it does not load: {cfg['error']}"
+        return "fix-config"
+    return "hunt"
+
+
+def next_step(st: dict) -> str:
+    """One line: what to do next, from the state. Shared by status and init."""
+    kind = next_kind(st)
+    if kind == "init":
+        if st["layer_verdict"] == "absent":
+            return "echolot init — installs the .claude/ layer; then /echolot in Claude Code"
+        return "echolot init — brings the .claude/ layer up to date (the agent reads it)"
+    if kind == "init-force":
+        return ("echolot init --force — the .claude/ layer differs from the package's and "
+                "nothing says whether you edited it; --force overwrites, keep your edits with git")
+    if kind == "doctor":
+        return "echolot doctor — the last self-check failed; no report is trustworthy until it passes"
+    if kind == "setup":
+        return "/echolot in Claude Code — it will build echolot.yml from the repository and a probe trace"
+    if kind == "fix-config":
+        return f"fix echolot.yml — it does not load: {st['config']['error']}"
     if not st["traces"]["count"]:
-        return "/echolot-hunt in Claude Code (it captures traces), or: echolot collect -c echolot.yml -n 5"
-    return ("/echolot-hunt in Claude Code, or by hand: "
+        return "/echolot in Claude Code (the hunt captures traces), or: echolot collect -c echolot.yml -n 5"
+    return ("/echolot in Claude Code, or by hand: "
             "echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml")
 
 
@@ -924,6 +946,10 @@ def cmd_status(args) -> int:
     `echolot init` and `echolot` — and the agent knows the rest.
     """
     st = project_state(Path.cwd(), getattr(args, "config", "echolot.yml"))
+    if getattr(args, "next", False):
+        # One word for the skill to switch on; the prose is for people.
+        print(next_kind(st))
+        return 0
     info = toolchain_info(getattr(args, "tp_binary", None))
     print(f"echolot {recorder.version()} · trace_processor "
           f"{info.get('trace_processor') or 'unknown'} · {Path.cwd()}")
@@ -1605,6 +1631,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     stt = sub.add_parser("status", help="where this project stands, and the next step")
     stt.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
+    stt.add_argument("--next", action="store_true",
+                     help="print only the next step, one word: "
+                          + " | ".join(NEXT_KINDS) + " — what /echolot switches on")
     stt.set_defaults(func=cmd_status)
 
     # Ordered by the working flow rather than by when things were written:

@@ -10,15 +10,25 @@ Installs into the project the knowledge of how to use the tool:
 ```
 .claude/
 ├── skills/echolot/
-│   ├── SKILL.md              when to engage, how to read the report
+│   ├── SKILL.md              /echolot — the door: reads the state, routes; how to read the report
 │   └── references/           report, config, ART names, trace capture
 ├── agents/perf-hunter.md     subagent: the iterative loop
-├── commands/echolot-setup.md /echolot-setup — build the config
-├── commands/echolot-hunt.md  /echolot-hunt — find the cause
+├── commands/echolot-setup.md /echolot-setup — build the config (reached from /echolot)
+├── commands/echolot-hunt.md  /echolot-hunt — find the cause (reached from /echolot)
 ├── commands/echolot-reflect.md /echolot-reflect — how the session went, what to change in the tool
 ├── settings.json             permission to call echolot without asking
 └── echolot-layer.json        what init installed, file by file — for doctor
 ```
+
+`/echolot` is the one door. It runs `echolot` (the status command), shows
+it, and acts on the `next` line — `echolot status --next` gives it as one
+word: `init`, `init-force`, `doctor`, `setup`, `fix-config`, `hunt`. Setup
+and hunt are the two commands beside it, invoked through the Skill tool, so
+only the branch that applies enters the window; they remain callable
+directly for whoever knows where they are going. An argument wins over the
+state: `/echolot init` runs `echolot init` (not setup — a session once
+confused the two), `/echolot hunt <words>` starts a hunt with the words as
+the regression, free text about slowness means the same.
 
 The template ships **inside the package** rather than living in the application
 repository: knowledge of how to use the tool belongs to the tool. What lands in

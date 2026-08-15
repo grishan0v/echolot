@@ -34,11 +34,18 @@ echolot init
 ```
 
 That installs the `.claude/` layer — the skill, the `perf-hunter` agent, the
-`/echolot-setup` and `/echolot-hunt` commands — checks that this machine
-computes correctly, and ends with the next step. Then open Claude Code in the
-project and run `/echolot-setup`: the agent builds `echolot.yml` from the
-repository and a probe trace, asking you four questions along the way. From
-then on the door is `/echolot-hunt`.
+commands — checks that this machine computes correctly, and ends with the next
+step. Then open Claude Code in the project and type `/echolot`. That is the
+one door: it asks the tool where the project stands and takes the next step
+itself — the first time, that is building `echolot.yml` from the repository
+and a probe trace (four questions to you along the way); every time after,
+finding the cause of the regression you describe.
+
+```
+/echolot                              # reads the state, does what is next
+/echolot why is cold start slow       # hunt, with that as the question
+/echolot init · setup · hunt · reflect · doctor   # that thing, explicitly
+```
 
 ## Coming back
 
@@ -47,7 +54,7 @@ echolot
 ```
 
 Where things stand — layer, config, traces, last report, last `doctor` — and
-one line saying what to do next; usually `/echolot-hunt`. After updating the
+one line saying what to do next; usually `/echolot`. After updating the
 package, run `echolot init` again: it brings the layer up to date and leaves
 the files you edited alone.
 
@@ -99,7 +106,7 @@ collect     capture N traces of one scenario: launch | command | gradle
 doctor      environment + self-check on a synthetic trace + is the layer current; exit 0/1, -q for three lines
 ```
 
-**The agent**, through `/echolot-setup` and `/echolot-hunt` — you do not call
+**The agent**, behind `/echolot` — you do not call
 these:
 
 ```

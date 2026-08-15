@@ -95,8 +95,10 @@ def entry_fumbling(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         f"real work started" + (f" ({e['entry_seconds'] // 60} min in)"
                                  if e.get("entry_seconds") else "") + ".",
         rows,
-        "The entry point is not obvious: which of /echolot, /echolot-setup, "
-        "/echolot-hunt comes first should be one line in the skill.")
+        "/echolot is the one door: it runs `echolot`, reads `next` and goes to "
+        "init, setup or hunt itself. If the human still needed several tries, "
+        "see which command they typed first and whether the skill's routing "
+        "table covers it.")
 
 
 def agent_prompt_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None:

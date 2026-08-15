@@ -1,5 +1,5 @@
 ---
-description: Build echolot.yml for this project — repository scan, a probe trace, four questions
+description: Build echolot.yml for this project — repository scan, a probe trace, four questions. /echolot routes here when there is no config.
 ---
 
 Your job is to assemble `echolot.yml` in the project root.

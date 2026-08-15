@@ -1,6 +1,6 @@
 ---
 name: echolot
-description: Localise Android performance regressions from a Perfetto trace — from the metric down to a place in the code. Use when cold start regressed, scrolling stutters, TTI grew, a benchmark dropped, or there is a .perfetto-trace to analyse. Also for questions like "why is startup slow", "where does main thread time go", "what is burning CPU".
+description: The door to echolot — localise Android performance regressions from a Perfetto trace, from the metric down to a place in the code. /echolot with nothing after it reads the project's state and takes the next step (install the layer, build the config, or hunt); with an argument it does that. Use when cold start regressed, scrolling stutters, TTI grew, a benchmark dropped, or there is a .perfetto-trace to analyse. Also for questions like "why is startup slow", "where does main thread time go", "what is burning CPU".
 ---
 
 # echolot
@@ -21,26 +21,54 @@ If the report seems to be missing data, that is not a reason to open the trace.
 It is a reason to fix the config (anchors that did not match, the wrong
 process), to add instrumentation and re-record, or to add a detector.
 
+## `/echolot` is the door
+
+When you are invoked as `/echolot`, do not guess what the human wants from
+the state of the project — ask the tool. First:
+
+```bash
+echolot            # where things stand: layer, config, traces, report, doctor — and `next`
+```
+
+Show that output to the human as it is, then act on the `next` line
+(`echolot status --next` gives it as one word):
+
+| `next` | what you do |
+|---|---|
+| `init` / `init-force` | run `echolot init` (with `--force` when it says so), show the result; then run `echolot` again and continue from its new `next` |
+| `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
+| `setup` | invoke the `echolot-setup` skill (the Skill tool) — it builds `echolot.yml` |
+| `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |
+| `hunt` | invoke the `echolot-hunt` skill — it asks what regressed and runs perf-hunter |
+
+With an argument, the argument wins over the state:
+
+- `/echolot init` — run `echolot init`. Not setup: `init` installs or
+  updates **this** layer; the config is setup's job.
+- `/echolot setup` — the `echolot-setup` skill.
+- `/echolot hunt <words>` — the `echolot-hunt` skill, with the words as what
+  regressed. `/echolot <free text>` about slowness ("why is startup slow",
+  "the list stutters since the redesign") means the same.
+- `/echolot doctor`, `/echolot status`, `/echolot analyze …` — run that
+  command, show the output.
+- `/echolot reflect` — the `echolot-reflect` skill: how the last session
+  went, what to change in the tool.
+
+`/echolot-setup`, `/echolot-hunt` and `/echolot-reflect` still exist for
+whoever knows where they are going; `/echolot` is the door for everyone else.
+
 ## The order of work
 
 ```bash
-echolot doctor                  # does the environment compute correctly?
+echolot doctor -q               # does the environment compute correctly?
 echolot analyze <trace> -c echolot.yml
 ```
 
 `analyze` writes `.echolot/out/report.json` (for you) and `report.md` (for
 humans), next to the config. Read the **json** — it has a stable schema.
 
-No config? Go to `/echolot-setup`. No idea what is in the trace?
+No config? That is `next: setup`. No idea what is in the trace?
 `echolot probe <trace> --process '<package>*'`.
-
-Which door is which — three things with similar names:
-
-- `echolot init` (the CLI) installs or updates **this** layer in the project;
-  `doctor` says when the copy here is behind the package. `/echolot init`
-  means run that command, not build a config.
-- `/echolot-setup` builds `echolot.yml`.
-- `/echolot-hunt` finds the cause of one regression, in a subagent.
 
 **Silence is relative to the thresholds.** The report's `Config:` line and
 `detectors[].params_source` say whether the numbers are the shipped defaults
@@ -93,8 +121,8 @@ Thresholds are tied to a device and a scenario. When either changes, run
 `echolot calibrate` on healthy runs instead of nudging numbers by hand.
 
 When the question is about the tool rather than the app — "how did that
-session go, what should change in echolot" — that is `/echolot-reflect`, not
-this skill.
+session go, what should change in echolot" — that is `/echolot reflect`
+(the `echolot-reflect` skill), not a hunt.
 
 ## References
 

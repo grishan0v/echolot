@@ -1,5 +1,5 @@
 ---
-description: Find the cause of a performance regression — runs perf-hunter in its own context
+description: Find the cause of a performance regression — runs perf-hunter in its own context. /echolot routes here once the config exists.
 ---
 
 Find the cause of a performance regression.

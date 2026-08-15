@@ -710,22 +710,23 @@ def _(report):
     import argparse
     import contextlib
     import io
-    from .main import cmd_init, next_step, project_state
+    from .main import NEXT_KINDS, cmd_init, next_kind, next_step, project_state
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
         # nothing here yet: install the layer
-        assert next_step(project_state(project)).startswith("echolot init"), \
-            next_step(project_state(project))
+        st = project_state(project)
+        assert next_kind(st) == "init" and next_step(st).startswith("echolot init"), next_step(st)
         with contextlib.redirect_stdout(io.StringIO()):
             cmd_init(argparse.Namespace(into=str(project), force=False, no_doctor=True))
-        # layer, no config: build the config
-        assert "/echolot-setup" in next_step(project_state(project))
+        # layer, no config: build the config — /echolot does that
+        st = project_state(project)
+        assert next_kind(st) == "setup" and "/echolot" in next_step(st), next_step(st)
         (project / "echolot.yml").write_text(
             "project:\n  process: app\nscenario:\n  name: checkout\n", encoding="utf-8")
-        # config, no traces: hunt or collect
+        # config, no traces: hunt (it collects), or collect by hand
         st = project_state(project)
         assert st["config"]["scenario"] == "checkout" and st["config"]["thresholds"] == "built-in defaults", st["config"]
-        assert "collect" in next_step(st), next_step(st)
+        assert next_kind(st) == "hunt" and "collect" in next_step(st), next_step(st)
         # traces present: hunt or analyze
         (project / ".echolot" / "traces").mkdir(parents=True)
         (project / ".echolot" / "traces" / "checkout_iter000.perfetto-trace").write_bytes(b"x")
@@ -735,7 +736,9 @@ def _(report):
         (project / "echolot.yml").write_text("project: [\n", encoding="utf-8")
         st = project_state(project)
         assert st["config"] and st["config"].get("error"), st["config"]
-        assert next_step(st).startswith("fix echolot.yml"), next_step(st)
+        assert next_kind(st) == "fix-config" and next_step(st).startswith("fix echolot.yml"), next_step(st)
+        # every kind the skill switches on is one the decision can produce
+        assert set(NEXT_KINDS) >= {"init", "init-force", "doctor", "setup", "fix-config", "hunt"}
 
 
 @check(".claude/ layer: the skill and the agent have frontmatter")

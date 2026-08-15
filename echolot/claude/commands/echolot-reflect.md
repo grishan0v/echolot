@@ -1,5 +1,5 @@
 ---
-description: Reflect on how the last echolot session went and propose changes to the tool
+description: Reflect on how the last echolot session went and propose changes to the tool. Also /echolot reflect.
 ---
 
 Turn one agent session into a short list of concrete changes to echolot — to
