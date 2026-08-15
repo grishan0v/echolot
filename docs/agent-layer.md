@@ -23,17 +23,20 @@ Installs into the project the knowledge of how to use the tool:
 The template ships **inside the package** rather than living in the application
 repository: knowledge of how to use the tool belongs to the tool. What lands in
 the project is a copy — edit it for your modules and commit it. A repeated
-`init` leaves existing files alone; `--force` updates them.
+`init` brings up to date what you did not touch and leaves what you edited
+alone; `--force` overwrites those too.
 
 The copy goes stale the moment the package moves on, and nothing in the
 project would say so — a session ran with a `collect.md` that said "there is
 no runner yet" while the binary had one, and the agent drove gradle by hand.
-So `init` writes a small manifest of what it installed, and `doctor` compares
-the layer with the template on every run: `current`, `stale` (untouched
-since install, template moved on), `customised` (edited here, template did
-not move), `conflict` (both), `missing`. Stale is a line in doctor's output
-and `echolot init --force`, not a failed check — a project may have edited
-its copy on purpose, and the manifest is what lets doctor tell the two apart.
+So `init` writes a small manifest of what it installed, and `doctor` (and
+`echolot` with no arguments) compares the layer with the template: `current`,
+`stale` (untouched since install, template moved on), `customised` (edited
+here, template did not move), `conflict` (both), `missing`. Stale is a line
+in the output and `echolot init`, not a failed check — a project may have
+edited its copy on purpose, and the manifest is what lets the tool tell the
+two apart. A layer installed before the manifest existed can only be
+`differs`, and needs `--force`.
 
 ## Why a CLI and not an MCP server
 

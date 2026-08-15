@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """echolot — a deterministic layer between the trace and the agent.
 
-Commands:
-  doctor                      environment + self-check on a synthetic trace
-  init     --into <project>   install the .claude/ layer (skill, agent, commands)
+You:
+  echolot                     where this project stands, and the next step
+  init                        install or update the .claude/ layer; checks the
+                              environment; the one command to know
+  analyze  <trace...> -c cfg  run the detectors, build a Marker Report — for CI
+                              and for looking at traces by hand
   collect  -c cfg -n 5        capture N traces of one scenario from a device
-  domains  --root <repo>      slice-to-code map and instrumentation coverage
-  probe    <trace>            what is inside the trace at all (for setup)
+  doctor                      environment + self-check, exit 0/1; -q for three lines
+
+The agent (through /echolot-setup and /echolot-hunt in Claude Code):
+  probe    <trace>            what is inside the trace at all
   names    <trace>            how slices are named and what the masks see
+  domains  --root <repo>      slice-to-code map and instrumentation coverage
   calibrate <trace...>        thresholds from known-healthy runs
-  analyze  <trace> -c cfg     run the detectors, build a Marker Report
-  explain                     list the detectors and their parameters
+  explain                     the detectors and their parameters
+
+Improving the tool:
   reflect  [--last|--all]     the same kind of report over an agent session:
                               how the tool was used, where it got in the way
 """

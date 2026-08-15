@@ -9,9 +9,9 @@ Find the cause of a performance regression.
 **Environment.** `echolot doctor -q`. A non-zero exit means there is no point
 going further: no report from that environment can be trusted. Show what
 exactly failed. If the second line says the `.claude/` layer is stale, run
-`echolot init --force` before anything else — the agent you are about to
-launch reads that layer. Note the time: the agent is told doctor passed and
-when, so it does not run it again.
+the `echolot init` it names before anything else — the agent you are about
+to launch reads that layer. Note the time: the agent is told doctor passed
+and when, so it does not run it again.
 
 **Config.** No `echolot.yml` in the root? Go to `/echolot-setup` and come back.
 A loop on an invented config burns rounds for nothing.

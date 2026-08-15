@@ -26,23 +26,43 @@ pipx install git+https://github.com/grishan0v/echolot.git
 `trace_processor_shell` does not need installing — the `perfetto` package
 downloads and caches the binary on first use.
 
-## Start
+## First time
 
 ```bash
-echolot doctor                      # does this environment compute correctly?
 cd ~/StudioProjects/my-app
-echolot init                        # install the .claude/ layer
-cp echolot.yml.example echolot.yml  # or run /echolot-setup and let the agent fill it
-echolot collect -c echolot.yml -n 5 # capture 5 repeats of the scenario
-echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml
+echolot init
+```
+
+That installs the `.claude/` layer — the skill, the `perf-hunter` agent, the
+`/echolot-setup` and `/echolot-hunt` commands — checks that this machine
+computes correctly, and ends with the next step. Then open Claude Code in the
+project and run `/echolot-setup`: the agent builds `echolot.yml` from the
+repository and a probe trace, asking you four questions along the way. From
+then on the door is `/echolot-hunt`.
+
+## Coming back
+
+```bash
+echolot
+```
+
+Where things stand — layer, config, traces, last report, last `doctor` — and
+one line saying what to do next; usually `/echolot-hunt`. After updating the
+package, run `echolot init` again: it brings the layer up to date and leaves
+the files you edited alone.
+
+Without an agent, or in CI:
+
+```bash
+echolot collect -c echolot.yml -n 5                              # 5 repeats of the scenario
+echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml  # the report
+echolot doctor -q                                                # exit 0/1: does this environment compute correctly?
 ```
 
 The output is `.echolot/out/report.md` for humans and `report.json` for the
-agent.
-
-Start with `echolot doctor`: it builds a synthetic trace with problems planted
-in advance and checks the answers against them. Exit code 0/1, no device
-needed, one second — good both as a CI gate and as the agent's first move.
+agent. `doctor` builds a synthetic trace with problems planted in advance and
+checks the answers against them — no device, about a second — good both as a
+CI gate and as the agent's first move.
 
 ## What it looks for
 
@@ -66,17 +86,34 @@ is no registration in code.
 
 ## The commands
 
+Two are yours to remember — `init` and `echolot` with nothing after it. The
+rest split by who calls them.
+
+**You**
+
 ```
-doctor      environment + self-check on a synthetic trace + is the .claude/ layer current, exit 0/1; -q for three lines
-init        install the .claude/ layer into an Android project
+echolot     where this project stands, and the next step
+init        install or update the .claude/ layer; checks the environment
+analyze     run the detectors, build a Marker Report — CI, or traces by hand
 collect     capture N traces of one scenario: launch | command | gradle
-domains     slice-to-code map and instrumentation coverage
+doctor      environment + self-check on a synthetic trace + is the layer current; exit 0/1, -q for three lines
+```
+
+**The agent**, through `/echolot-setup` and `/echolot-hunt` — you do not call
+these:
+
+```
 probe       processes, threads by CPU, scenario anchor candidates
 names       slice name inventory and detector mask coverage
+domains     slice-to-code map and instrumentation coverage
 calibrate   thresholds derived from known-healthy runs
-analyze     run the detectors, build a Marker Report
 explain     list the detectors and their parameters
-reflect     the same kind of report over an agent session — for improving the tool
+```
+
+**Improving the tool**
+
+```
+reflect     the same kind of report over an agent session — how the tool was used, where it got in the way
 ```
 
 ## Where things live
