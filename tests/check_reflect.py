@@ -77,6 +77,15 @@ def bash(rows, t, cwd, uid, command, output, is_error=False, dt=1.0):
     rows.append(tool_result(t + dt, cwd, uid, output, is_error))
 
 
+def mcp_shell(rows, t, cwd, uid, code, output, dt=1.0):
+    """A shell command through an MCP tool — same command, other envelope."""
+    MSG[0] += 1
+    rows.append(assistant(t, cwd, [tool_use(
+        uid, "mcp__plugin_context-mode_context-mode__ctx_execute",
+        {"language": "shell", "code": code})]))
+    rows.append(tool_result(t + dt, cwd, uid, output))
+
+
 def edit(rows, t, cwd, uid, path, old, new):
     MSG[0] += 1
     rows.append(assistant(t, cwd, [tool_use(uid, "Edit", {
@@ -122,7 +131,7 @@ def build(root: Path, project: Path) -> Path:
          "Exit code 1\n(eval):cd:1: no such file or directory: out/SM-A515F - 13", is_error=True)
     bash(m, 95, cwd, "tu_cal2", 'echolot calibrate "out/SM-A515F - 13"/*.perfetto-trace -c echolot.yml',
          "thresholds written", dt=20.0)
-    bash(m, 120, cwd, "tu_an1", "echolot analyze out/*.perfetto-trace -c echolot.yml",
+    bash(m, 120, cwd, "tu_an1", "echolot analyze build/out/*.perfetto-trace -c echolot.yml",
          "# Marker Report\n…", dt=25.0)
     m.append(user_text(150, cwd, "<command-message>echolot-hunt</command-message>\n"
                                   "<command-name>/echolot-hunt</command-name>"))
@@ -148,6 +157,22 @@ def build(root: Path, project: Path) -> Path:
          "echolot analyze out/after/*.perfetto-trace -c /tmp/frames.yml && cp .echolot/out/report.json /tmp/after.json\n"
          "echo done",
          "(eval):2: no matches found: out/before/*.perfetto-trace\ndone", dt=27.0)
+    # a re-record through an MCP shell tool: the metrics json is copied, the
+    # trace directory is renamed inside the build tree (gradle cleans it),
+    # nothing copies the traces themselves → the baseline is lost
+    mcp_shell(m, 970, cwd, "tu_mv_rec",
+              'OUT="build/out"\n'
+              'mkdir -p /tmp/base && cp "$OUT/metrics.json" /tmp/base/\n'
+              'mv "$OUT" "${OUT}_before_fix"\n'
+              "./gradlew :benchmark:connectedBenchmarkAndroidTest > /tmp/run.log 2>&1",
+              "BUILD SUCCESSFUL", dt=600.0)
+    bash(m, 1580, cwd, "tu_an_after", "echolot analyze build/out/*.perfetto-trace -c echolot.yml",
+         "# Marker Report", dt=25.0)
+    # and one done right: the traces are copied out before re-recording
+    bash(m, 1610, cwd, "tu_keep",
+         "mkdir -p .echolot/traces/before && cp build/out/*.perfetto-trace .echolot/traces/before/", "")
+    bash(m, 1620, cwd, "tu_rec_ok", "./gradlew :benchmark:connectedBenchmarkAndroidTest",
+         "BUILD SUCCESSFUL", dt=600.0)
     # Claude Code writes gitBranch "HEAD" outside a git repository; that is
     # not a branch name and must not be reported as one
     m[0]["gitBranch"] = "HEAD"
@@ -209,9 +234,9 @@ def check(report: dict) -> list[str]:
     expect(src["agent_version"] == "2.1.0", "agent version read")
     expect(src["git_branch"] == "main", f"HEAD is not a branch: {src['git_branch']}")
     calls = report["echolot_calls"]
-    expect(len(calls) == 11, f"11 echolot calls, got {len(calls)}")
+    expect(len(calls) == 12, f"12 echolot calls, got {len(calls)}")
     subs = sorted(c["sub"] for c in calls)
-    expect(subs.count("analyze") == 6 and subs.count("doctor") == 2 and subs.count("names") == 1,
+    expect(subs.count("analyze") == 7 and subs.count("doctor") == 2 and subs.count("names") == 1,
            f"subcommands: {subs}")
     doc = next(c for c in calls if c["sub"] == "doctor" and c["agent"] == "main")
     expect(doc["argv"] == "", f"redirect stripped from argv: {doc['argv']!r}")
@@ -251,7 +276,7 @@ def check(report: dict) -> list[str]:
     # streaming usage: max per message (250, not 3 and not 253), one count per
     # message id, main and subagent kept apart
     um = report["cost"]["usage_main"]
-    expect(um["output"] == 250 + 100 * 8, f"main output tokens: {um['output']}")
+    expect(um["output"] == 250 + 100 * 12, f"main output tokens: {um['output']}")
     us = report["cost"]["usage_subagents"]
     expect(us["output"] == 400 + 100 * 15, f"subagent output tokens: {us['output']}")
 
@@ -285,6 +310,23 @@ def check(report: dict) -> list[str]:
     expect(x and len(x["rows"]) == 1, f"one help lookup: {x}")
     x = sig.get("bypass_tools")
     expect(x and x["rows"][0]["kind"] == "gradle", f"gradle bypass: {x}")
+    # the gradle run through the MCP shell tool counts too: 1 in the subagent,
+    # 2 in main (one MCP, one Bash)
+    expect(x and x["rows"][0]["count"] == 3 and "main" in x["rows"][0]["agents"],
+           f"MCP shell seen as shell: {x}")
+    x = sig.get("baseline_lost")
+    expect(x and x["severity"] == "warn" and len(x["rows"]) == 2, f"baseline lost twice: {x}")
+    if x and len(x["rows"]) == 2:
+        sub_row, main_row = x["rows"]
+        expect(sub_row["agent"].startswith("sub:") and "no copy" in sub_row["note"],
+               f"subagent re-recorded over the analyzed set: {sub_row}")
+        expect(main_row["agent"] == "main" and "inside the build tree" in main_row["note"]
+               and "build/out_before_fix" in main_row["note"]
+               and main_row["traces_before"] == "build/out",
+               f"main renamed the traces inside build/: {main_row}")
+        # the re-record after `cp *.perfetto-trace .echolot/traces/before/` is not a row
+        expect(all("12:27:00" not in r["ts"] for r in x["rows"]),
+               f"a copied-out baseline is not a loss: {x['rows']}")
     x = sig.get("echolot_failures")
     expect(x and x["severity"] == "info" and x["rows"][0]["where"] == "shell",
            f"shell failure classified: {x}")

@@ -188,6 +188,36 @@ def harvest(search_root: Path, since: float, out_dir: Path,
     return results
 
 
+def set_aside(out_dir: Path, name: str,
+              log: Callable[[str], None] = print) -> Path | None:
+    """Moves an existing set of `<name>_iter*` traces out of the way.
+
+    The set before a change is the baseline the whole hunt compares against,
+    and it is the first thing lost: a re-record writes the same file names.
+    So a previous set is never overwritten — it moves into a sibling
+    directory stamped with when it was recorded, and the log says where.
+    Returns that directory, or None when there was nothing to move.
+    """
+    import time
+
+    existing = sorted(out_dir.glob(f"{name}_iter*.perfetto-trace")) \
+        if out_dir.exists() else []
+    if not existing:
+        return None
+    newest = max(p.stat().st_mtime for p in existing)
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(newest))
+    aside = out_dir / f"{name}-{stamp}"
+    n = 1
+    while aside.exists():
+        n += 1
+        aside = out_dir / f"{name}-{stamp}-{n}"
+    aside.mkdir(parents=True)
+    for p in existing:
+        p.rename(aside / p.name)
+    log(f"previous run set aside: {len(existing)} trace(s) → {aside}/")
+    return aside
+
+
 def collect(package: str, out_dir: Path, iterations: int,
             section: dict | None = None,
             device: str | None = None,
@@ -198,6 +228,9 @@ def collect(package: str, out_dir: Path, iterations: int,
     launch  — we do: force-stop and launch the activity. Cold start.
     command — someone else's command; we record the trace around it.
     gradle  — the macrobenchmark writes traces itself, we only collect them.
+
+    Whatever the mode, a set already in out_dir is set aside first, never
+    overwritten: see set_aside.
     """
     import time
 
@@ -205,6 +238,7 @@ def collect(package: str, out_dir: Path, iterations: int,
     mode = str(section.get("mode", "launch"))
     duration_ms = int(section.get("duration_ms", 12000))
     reset = str(section.get("reset_policy", "force-stop"))
+    set_aside(out_dir, name, log)
 
     if mode == "gradle":
         task = section.get("gradle_task")

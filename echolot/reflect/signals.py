@@ -148,7 +148,7 @@ def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | 
     for c in s.bash():
         cmd = c.command or ""
         if RE_TRACE_OPEN.search(cmd):
-            rows.append({"ts": _t(c.ts), "agent": c.agent, "how": "Bash",
+            rows.append({"ts": _t(c.ts), "agent": c.agent, "how": c.tool,
                          "command": cmd[:120]})
     for c in s.calls:
         if c.tool == "Read" and c.path and RE_TRACE_LITERAL.search(c.path):
@@ -437,6 +437,158 @@ def bypass_tools(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                   "(gradle, for one), that is the item.")
 
 
+_PRESERVE = re.compile(r"(?:^|[\s;&|(])(?:cp|rsync|tar|zip|ditto)\s")
+_MOVE = re.compile(r"(?:^|[\s;&|(])mv\s+(?:-\S+\s+)*(\"[^\"]*\"|'[^']*'|\S+)\s+(\"[^\"]*\"|'[^']*'|\S+)")
+_TRACE_ARG = re.compile(r"(\"[^\"]*\"|'[^']*'|\S+)?[^\s\"']*\.(?:perfetto-trace|pftrace)\b")
+
+
+_ASSIGN = re.compile(r"(?m)^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\"[^\"]*\"|'[^']*'|\S+)")
+
+
+def _expand_vars(cmd: str, token: str) -> str:
+    """`$OUT` and `${OUT}` from assignments in the same command, one level.
+
+    Enough for the shape agents write — `OUT="…/SM-A515F - 13"` two lines
+    above `mv "$OUT" "${OUT}_before"` — without pretending to be a shell.
+    """
+    env = {m.group(1): m.group(2).strip("\"'") for m in _ASSIGN.finditer(cmd)}
+    for name, value in env.items():
+        token = token.replace("${" + name + "}", value).replace("$" + name, value)
+    return token
+
+
+def _trace_dir(argv: str) -> str | None:
+    """The directory the analyzed traces sat in, as far as the argv shows it.
+
+    `"build/…/SM-A515F - 13/"Foo_iter*.perfetto-trace` → `build/…/SM-A515F - 13`.
+    A `$VAR` or `"${traces[@]}"` gives nothing usable — None.
+    """
+    m = _TRACE_ARG.search(argv)
+    if not m:
+        return None
+    token = m.group(0).replace('"', "").replace("'", "")
+    if token.startswith("$"):
+        return None
+    d = token.rsplit("/", 1)[0] if "/" in token else ""
+    return d or None
+
+
+_SEGMENT = re.compile(r"\n|;|&&|\|\||\|")
+
+
+def _touches_traces(segment: str, dirs: list[str]) -> bool:
+    """Does this one shell command take the traces themselves as an argument?
+
+    A `.perfetto-trace` literal or glob does; so does one of the analyzed
+    directories taken whole (`cp -r "$OUT" …`, `$OUT/*`). `$OUT/metrics.json`
+    does not — that copies a file next to the traces, not the traces, and it
+    is exactly what a session did while believing the baseline was safe.
+    """
+    if RE_TRACE_LITERAL.search(segment):
+        return True
+    for d in dirs:
+        start = 0
+        while True:
+            i = segment.find(d, start)
+            if i < 0:
+                break
+            start = i + len(d)
+            # `out` inside `build/out` is another directory
+            if i > 0 and segment[i - 1] not in " \"'=":
+                continue
+            rest = segment[start:]
+            if not rest or rest[0] in " \"'":
+                return True
+            if rest[0] == "/":
+                tail = re.split(r"[\s\"']", rest[1:], 1)[0]
+                if not tail or "*" in tail:
+                    return True
+    return False
+
+
+def baseline_lost(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
+    """A re-record after an analyze, with no copy of the analyzed traces first.
+
+    The traces before a change are the baseline every after-the-fix
+    comparison stands on, and a re-record writes the same place: a
+    macrobenchmark's output directory is cleaned by gradle, `collect` writes
+    the same file names (it sets the old set aside now). A `cp`/`rsync`/`tar`
+    of the traces before re-recording, or `echolot collect`, counts as
+    preserved. A `mv` into the same build tree does not — gradle removes it.
+    """
+    calls = sorted(s.bash(), key=lambda c: ts_to_epoch(c.ts))
+    analyzed_dirs: list[str] = []      # from analyze calls seen so far
+    last_analyze_ts: str | None = None
+    preserved_since_analyze = False
+    moved_in_build: str | None = None
+    touched: str | None = None         # the analyzed dir the mv/cp named
+    rows = []
+    for c in calls:
+        cmd = c.command or ""
+        if RE_ECHOLOT.search(cmd) and re.search(r"echolot\s+analyze\b", cmd):
+            for m in RE_ECHOLOT.finditer(cmd):
+                if m.group(1) == "analyze":
+                    d = _trace_dir(m.group(2) or "")
+                    if d and d not in analyzed_dirs:
+                        analyzed_dirs.append(d)
+            last_analyze_ts = c.ts
+            preserved_since_analyze = False
+            moved_in_build = touched = None
+            continue
+        if last_analyze_ts is None:
+            continue
+        # One shell line at a time: `cp metrics.json /tmp && mv "$OUT" …`
+        # is a copy of something else and a move of the traces.
+        for raw_seg in _SEGMENT.split(cmd):
+            seg = _expand_vars(cmd, raw_seg.strip())
+            if not seg:
+                continue
+            if _PRESERVE.search(seg) and _touches_traces(seg, analyzed_dirs):
+                preserved_since_analyze = True
+            mv = _MOVE.search(seg)
+            if mv and _touches_traces(mv.group(1), analyzed_dirs):
+                src = mv.group(1).strip("\"'")
+                touched = next((d for d in analyzed_dirs if d in src), touched)
+                dst = mv.group(2).strip("\"'")
+                parents = {d.rsplit("/", 1)[0] for d in analyzed_dirs if "/" in d}
+                if "/build/" in dst or dst.startswith("build/") \
+                        or any(dst.startswith(p) for p in parents):
+                    moved_in_build = f"mv → {dst[-70:]} (inside the build tree)"
+                else:
+                    preserved_since_analyze = True
+        if RE_RE_RECORD.search(cmd):
+            if re.search(r"echolot\s+collect\b", cmd):
+                # collect sets the previous set aside itself
+                preserved_since_analyze = False
+                moved_in_build = touched = None
+                last_analyze_ts = None
+                continue
+            if not preserved_since_analyze:
+                before = touched or (analyzed_dirs[-1] if analyzed_dirs else "?")
+                rows.append({
+                    "ts": _t(c.ts), "agent": c.agent,
+                    "re_record": cmd.replace("\n", " ")[:90],
+                    "traces_before": before[-60:],
+                    "note": moved_in_build or "no copy of the previous traces first",
+                })
+            preserved_since_analyze = False
+            moved_in_build = touched = None
+            last_analyze_ts = None
+    if not rows:
+        return None
+    return Signal("baseline_lost", "warn",
+                  "traces were re-recorded without keeping the set analyzed before",
+                  "The traces from before a change are the baseline that every "
+                  "after-the-fix comparison stands on. A re-record writes the "
+                  "same place — gradle cleans the benchmark output directory, and "
+                  "a rename inside it goes with the cleaning. Nothing in the "
+                  "transcript copies them out first.",
+                  rows,
+                  "Record through `echolot collect` (it sets the previous set aside), "
+                  "or copy the traces into .echolot/traces/<label>/ before "
+                  "re-recording — the skill should say so.")
+
+
 # ------------------------------------------------------------- failures
 
 def echolot_failures(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
@@ -499,7 +651,7 @@ def env_friction(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     for c in s.calls:
         if not c.is_error:
             continue
-        if c.tool == "Bash" and RE_ECHOLOT.search(c.command or ""):
+        if c.command is not None and RE_ECHOLOT.search(c.command):
             continue   # echolot's own failures are a separate signal
         head = c.output_head or ""
         for kind, rx in _ENV_KINDS:
@@ -572,6 +724,7 @@ SIGNALS: list[Detector] = [
     conclusion_shape,
     config_bypassed,
     thresholds_by_hand,
+    baseline_lost,
     # workarounds
     report_sliced_by_hand,
     help_lookups,

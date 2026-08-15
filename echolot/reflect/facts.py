@@ -278,7 +278,7 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
     for s in session.subagents:
         label = f"sub:{s.id}"
         calls = session.calls_of(label)
-        bash = [c for c in calls if c.tool == "Bash"]
+        bash = session.bash(label)
         analyzes = [c for c in bash if re.search(r"echolot\s+analyze\b", c.command or "")]
         rerecords = [c for c in bash if RE_RE_RECORD.search(c.command or "")]
         # A round is an analyze that follows a re-record; the first analyze

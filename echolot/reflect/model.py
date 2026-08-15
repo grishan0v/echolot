@@ -113,8 +113,10 @@ class Session:
         return [c for c in self.calls if c.agent == agent]
 
     def bash(self, agent: str | None = None) -> list[Call]:
+        """Every call that ran a shell command — Bash and the MCP tools the
+        reader recognised as shells. `command` is what unites them."""
         return [c for c in self.calls
-                if c.tool == "Bash" and (agent is None or c.agent == agent)]
+                if c.command is not None and (agent is None or c.agent == agent)]
 
     def edits(self, agent: str | None = None) -> list[Call]:
         return [c for c in self.calls

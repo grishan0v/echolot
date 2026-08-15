@@ -81,7 +81,9 @@ The ones that ship, by what they watch:
   call carries the prefix; edits inside `instrumentation.allowed`; additions
   and removals of the prefix balance, with a grep afterwards; the conclusion
   has its six fields; analysis ran on the project's config and not one the
-  agent wrote; thresholds edited only after `calibrate`
+  agent wrote; thresholds edited only after `calibrate`; the traces analysed
+  before a re-record were copied out first (a `mv` inside the build tree does
+  not count — gradle cleans it)
 - **workarounds** — `report.json` cut up by hand; `--help` / `explain` mid-work;
   gradle / adb / perfetto driven directly instead of `collect`
 - **failures** — echolot calls that failed, tracebacks apart from clean exits,

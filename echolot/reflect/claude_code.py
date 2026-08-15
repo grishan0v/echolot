@@ -40,6 +40,10 @@ AGENT_NAME = "claude-code"
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 
 _ECHOLOT_CALL = re.compile(r"(?:^|[\s;&|(`$])echolot\s+([a-z-]+)")
+# MCP tools that run a shell command: the name says so, or the input does.
+_SHELL_TOOL = re.compile(
+    r"(?:^|__)(?:ctx_execute|ctx_batch_execute|bash|shell|sh|terminal|"
+    r"execute_command|run_command|run_shell_command|execute)$", re.I)
 _SLASH = re.compile(r"<command-name>\s*(/[^<\s]+)\s*</command-name>")
 _SLASH_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
 _TASK_ID = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
@@ -349,6 +353,16 @@ def _call_from_use(block: dict[str, Any], ts: str, agent: str) -> Call:
                 input=_clip_input(raw), agent=agent)
     if name == "Bash" and isinstance(raw, dict):
         call.command = clip(raw.get("command"), 2000)
+    elif isinstance(raw, dict) and _SHELL_TOOL.search(name):
+        # Shell through an MCP tool (a context-saving plugin, a sandbox): the
+        # same command, a different envelope. Without this the gradle runs and
+        # the mv of a trace directory in one session were invisible — they
+        # went through such a tool, and every shell-reading signal missed them.
+        code = raw.get("command") if isinstance(raw.get("command"), str) else None
+        if code is None and str(raw.get("language") or "").lower() in ("shell", "bash", "sh"):
+            code = raw.get("code")
+        if isinstance(code, str) and code.strip():
+            call.command = clip(code, 2000)
     if isinstance(raw, dict):
         p = raw.get("file_path") or raw.get("path") or raw.get("notebook_path")
         if p:

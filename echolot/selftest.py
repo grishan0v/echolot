@@ -307,6 +307,26 @@ def _(report):
             )
 
 
+@check("collect: a previous set of traces is set aside, never overwritten")
+def _(report):
+    from .runner import set_aside
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "traces"
+        assert set_aside(out, "run", log=lambda s: None) is None, "nothing to move yet"
+        out.mkdir()
+        for i in range(3):
+            (out / f"run_iter{i:03d}.perfetto-trace").write_bytes(b"x")
+        (out / "other_iter000.perfetto-trace").write_bytes(b"y")
+        said = []
+        aside = set_aside(out, "run", log=said.append)
+        assert aside and aside.parent == out and aside.name.startswith("run-"), aside
+        assert sorted(p.name for p in aside.iterdir()) == [
+            f"run_iter{i:03d}.perfetto-trace" for i in range(3)], list(aside.iterdir())
+        assert not list(out.glob("run_iter*.perfetto-trace")), "the old names are free again"
+        assert (out / "other_iter000.perfetto-trace").exists(), "another scenario is not touched"
+        assert said and "set aside" in said[0], said
+
+
 @check("thresholds: --set is typed and refuses what does not exist")
 def _(report):
     from .main import DETECTOR_DIR, parse_set
