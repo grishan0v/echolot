@@ -49,12 +49,16 @@ def _config_stamp(path: str | None) -> dict[str, Any] | None:
     return {"path": str(p), "sha": digest}
 
 
-def _version() -> str:
+def version() -> str:
+    """The installed package version, or "unknown" from a bare checkout."""
     try:
-        from importlib.metadata import version
-        return version("echolot")
+        from importlib.metadata import version as _v
+        return _v("echolot")
     except Exception:
         return "unknown"
+
+
+_version = version   # the name the rest of this module uses
 
 
 def record(args: Any, argv: list[str] | None, started: float,

@@ -16,13 +16,24 @@ Installs into the project the knowledge of how to use the tool:
 ├── commands/echolot-setup.md /echolot-setup — build the config
 ├── commands/echolot-hunt.md  /echolot-hunt — find the cause
 ├── commands/echolot-reflect.md /echolot-reflect — how the session went, what to change in the tool
-└── settings.json             permission to call echolot without asking
+├── settings.json             permission to call echolot without asking
+└── echolot-layer.json        what init installed, file by file — for doctor
 ```
 
 The template ships **inside the package** rather than living in the application
 repository: knowledge of how to use the tool belongs to the tool. What lands in
 the project is a copy — edit it for your modules and commit it. A repeated
 `init` leaves existing files alone; `--force` updates them.
+
+The copy goes stale the moment the package moves on, and nothing in the
+project would say so — a session ran with a `collect.md` that said "there is
+no runner yet" while the binary had one, and the agent drove gradle by hand.
+So `init` writes a small manifest of what it installed, and `doctor` compares
+the layer with the template on every run: `current`, `stale` (untouched
+since install, template moved on), `customised` (edited here, template did
+not move), `conflict` (both), `missing`. Stale is a line in doctor's output
+and `echolot init --force`, not a failed check — a project may have edited
+its copy on purpose, and the manifest is what lets doctor tell the two apart.
 
 ## Why a CLI and not an MCP server
 

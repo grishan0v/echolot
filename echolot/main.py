@@ -646,6 +646,125 @@ def _rows_out(head: list[str], body: list[list[str]]) -> None:
 
 
 CLAUDE_DIR = Path(__file__).parent / "claude"
+# What `init` installed, file by file: the manifest lets `doctor` tell a file
+# the project customised from one the package has since moved on from.
+LAYER_MANIFEST = "echolot-layer.json"
+
+
+def _sha(path: Path) -> str:
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def layer_files() -> list[Path]:
+    """The template, minus hidden files (macOS drops .DS_Store into it)."""
+    return [p for p in sorted(CLAUDE_DIR.rglob("*"))
+            if p.is_file() and not p.name.startswith(".")]
+
+
+def _read_manifest(root: Path) -> dict:
+    p = root / LAYER_MANIFEST
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_manifest(root: Path, files: dict[str, str]) -> None:
+    old = _read_manifest(root)
+    merged = dict(old.get("files") or {})
+    merged.update(files)
+    (root / LAYER_MANIFEST).write_text(json.dumps({
+        "echolot": recorder.version(),
+        "files": dict(sorted(merged.items())),
+    }, indent=2) + "\n", encoding="utf-8")
+
+
+def layer_status(project: Path) -> dict | None:
+    """The project's .claude/ layer against the package's template.
+
+    None when there is no layer here. Otherwise one row per template file:
+
+        current      identical to the template
+        stale        untouched since install, and the template has moved on
+        customised   edited in the project, the template has not moved
+        conflict     edited in the project AND the template has moved on
+        differs      not identical, and no manifest to say which of the two
+        missing      the template has it, the project does not
+
+    The manifest is what makes stale and customised distinguishable; a layer
+    installed before it existed can only be "differs".
+    """
+    root = project / ".claude"
+    if not (root / "skills" / "echolot" / "SKILL.md").exists():
+        return None
+    manifest = _read_manifest(root)
+    installed = manifest.get("files") or {}
+    rows = []
+    for src in layer_files():
+        rel = str(src.relative_to(CLAUDE_DIR))
+        dst = root / rel
+        t_sha = _sha(src)
+        if not dst.exists():
+            state = "missing"
+        else:
+            d_sha = _sha(dst)
+            if d_sha == t_sha:
+                state = "current"
+            elif rel in installed:
+                was = installed[rel]
+                if d_sha == was:
+                    state = "stale"
+                elif t_sha == was:
+                    state = "customised"
+                else:
+                    state = "conflict"
+            else:
+                state = "differs"
+        rows.append({"file": rel, "state": state})
+    return {
+        "rows": rows,
+        "manifest": bool(installed),
+        "installed_by": manifest.get("echolot"),
+    }
+
+
+def _print_layer_status(project: Path) -> str | None:
+    """The doctor section; returns the one-word verdict for the run log."""
+    status = layer_status(project)
+    print("\n## The .claude/ layer in this project\n")
+    if status is None:
+        print("  none installed here. `echolot init` puts the skill, the agent "
+              "and the commands into ./.claude/")
+        return "absent"
+    by_state: dict[str, list[str]] = {}
+    for r in status["rows"]:
+        by_state.setdefault(r["state"], []).append(r["file"])
+    total = len(status["rows"])
+    counts = ", ".join(f"{len(v)} {k}" for k, v in by_state.items())
+    print(f"  {total} template files: {counts}")
+    for state in ("stale", "conflict", "customised", "differs", "missing"):
+        for rel in by_state.get(state, []):
+            print(f"    {state:<10} {rel}")
+    if status["installed_by"]:
+        print(f"  installed by echolot {status['installed_by']}, "
+              f"this is {recorder.version()}")
+    needs_update = set(by_state) & {"stale", "conflict", "differs", "missing"}
+    if not needs_update:
+        print("  the layer is current.")
+        return "current"
+    if not status["manifest"]:
+        print("  installed before echolot kept a manifest, so a file that differs "
+              "cannot be told\n  customised from stale. `echolot init --force` "
+              "overwrites; keep the project's edits with git.")
+    else:
+        print("  → `echolot init --force` updates it. Customised files are "
+              "listed above and are\n    overwritten too — carry the edits "
+              "over afterwards.")
+    return "stale"
 
 
 def cmd_domains(args) -> int:
@@ -745,29 +864,53 @@ def cmd_init(args) -> int:
         print(f"no such directory: {target}", file=sys.stderr)
         return 2
 
-    written, skipped = [], []
-    for src in sorted(CLAUDE_DIR.rglob("*")):
-        # Hidden files are skipped: macOS drops .DS_Store straight into the
-        # template, and in someone else's repository it looks like our litter.
-        if src.is_dir() or src.name.startswith("."):
-            continue
-        dst = target / ".claude" / src.relative_to(CLAUDE_DIR)
-        if dst.exists() and not args.force:
-            skipped.append(dst)
-            continue
+    root = target / ".claude"
+    before = layer_status(target)
+    states = {r["file"]: r["state"] for r in (before or {}).get("rows", [])}
+
+    written, same, kept, overwritten = [], [], [], []
+    installed: dict[str, str] = {}
+    for src in layer_files():
+        rel = str(src.relative_to(CLAUDE_DIR))
+        dst = root / rel
+        if dst.exists():
+            if states.get(rel) == "current":
+                same.append(rel)
+                installed[rel] = _sha(src)
+                continue
+            if not args.force:
+                kept.append(rel)
+                continue
+            if states.get(rel) in ("customised", "conflict", "differs"):
+                overwritten.append(rel)
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(src.read_bytes())
-        written.append(dst)
+        written.append(rel)
+        installed[rel] = _sha(src)
 
-    for path in written:
-        print(f"  + {path.relative_to(target)}")
-    for path in skipped:
-        print(f"  = {path.relative_to(target)} (already there, untouched)")
+    for rel in written:
+        flag = "!" if rel in overwritten else "+"
+        print(f"  {flag} .claude/{rel}" + (
+            "  (was edited in the project — overwritten, carry the edits over)"
+            if rel in overwritten else ""))
+    for rel in same:
+        print(f"  = .claude/{rel} (current)")
+    for rel in kept:
+        print(f"  ≠ .claude/{rel} (already there and {states.get(rel, 'differs')}, "
+              f"untouched)")
 
-    if skipped and not args.force:
+    if written or same:
+        # Only what was verified against the template goes into the manifest;
+        # a file left untouched keeps whatever the old manifest said about it.
+        _write_manifest(root, installed)
+
+    if kept and not args.force:
         print("\nNothing existing was overwritten. To update, use `--force`.")
-    if written:
-        print(f"\nDone. Next: /echolot-setup — build echolot.yml.")
+    if written and before is None:
+        print("\nDone. Next: /echolot-setup — build echolot.yml.")
+    elif written:
+        print("\nLayer updated.")
+    recorder.note(written=len(written), kept=len(kept), overwritten=len(overwritten))
     return 0
 
 
@@ -922,6 +1065,13 @@ def cmd_doctor(args) -> int:
         print(f"  ok    {name}" if not why else f"  FAILS {name}\n          {why}")
     recorder.note(checks=len(results), failed=[name for name, _ in failed],
                   trace_processor=info.get("trace_processor"))
+
+    # Not a check that can fail: a project may have edited its copy on
+    # purpose. But a layer that says "there is no runner yet" while the
+    # binary has one sends the agent around the tool, and nothing else
+    # would say so.
+    layer = _print_layer_status(Path.cwd())
+    recorder.note(layer=layer)
 
     print()
     if failed:

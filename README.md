@@ -67,7 +67,7 @@ is no registration in code.
 ## The commands
 
 ```
-doctor      environment + self-check on a synthetic trace, exit 0/1
+doctor      environment + self-check on a synthetic trace + is the .claude/ layer current, exit 0/1
 init        install the .claude/ layer into an Android project
 collect     capture N traces of one scenario: launch | command | gradle
 domains     slice-to-code map and instrumentation coverage
@@ -111,7 +111,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 v0. Everything planned for it is in place except CI mode.
 
-The detectors were validated on a synthetic trace (35 checks in `doctor`) and
+The detectors were validated on a synthetic trace (41 checks in `doctor`) and
 on live traces from Android 14 (emulator) and Android 13 (Galaxy A51). The
 naming masks for GC, locks and binder were narrowed against those real traces,
 and every narrowing is pinned by a check.

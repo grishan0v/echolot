@@ -631,6 +631,64 @@ def _(report):
     _json.loads((CLAUDE_DIR / "settings.json").read_text(encoding="utf-8"))
 
 
+@check(".claude/ layer: doctor tells stale from customised from current")
+def _(report):
+    import argparse
+    import contextlib
+    import io
+    from .main import CLAUDE_DIR, LAYER_MANIFEST, cmd_init, layer_status, _write_manifest
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        assert layer_status(project) is None, "no layer yet must be None"
+        with contextlib.redirect_stdout(io.StringIO()):
+            cmd_init(argparse.Namespace(into=str(project), force=False))
+        assert (project / ".claude" / LAYER_MANIFEST).exists(), "init writes the manifest"
+        st = layer_status(project)
+        assert st and st["manifest"], st
+        assert {r["state"] for r in st["rows"]} == {"current"}, st["rows"]
+
+        skill = project / ".claude" / "skills" / "echolot" / "SKILL.md"
+        agent = project / ".claude" / "agents" / "perf-hunter.md"
+        # the project edits one file: customised, not stale
+        skill.write_text(skill.read_text(encoding="utf-8") + "\n# ours\n", encoding="utf-8")
+        # the template moves on for another. Stale means: the file equals
+        # what init wrote and the template no longer does — emulated by
+        # changing the installed copy and recording that as what init wrote.
+        from .main import _sha
+        agent.write_text(agent.read_text(encoding="utf-8") + "\n# older\n", encoding="utf-8")
+        _write_manifest(project / ".claude", {"agents/perf-hunter.md": _sha(agent)})
+        # and one file goes missing
+        (project / ".claude" / "commands" / "echolot-hunt.md").unlink()
+
+        by = {r["file"]: r["state"] for r in layer_status(project)["rows"]}
+        assert by["skills/echolot/SKILL.md"] == "customised", by
+        assert by["agents/perf-hunter.md"] == "stale", by
+        assert by["commands/echolot-hunt.md"] == "missing", by
+        assert by["settings.json"] == "current", by
+
+        # init without --force keeps both edited files, restores the missing one
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cmd_init(argparse.Namespace(into=str(project), force=False))
+        assert "≠ .claude/skills/echolot/SKILL.md (already there and customised" in out.getvalue(), out.getvalue()
+        assert "+ .claude/commands/echolot-hunt.md" in out.getvalue(), out.getvalue()
+        assert "# ours" in skill.read_text(encoding="utf-8")
+        # --force overwrites and says which one had local edits
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cmd_init(argparse.Namespace(into=str(project), force=True))
+        assert "! .claude/skills/echolot/SKILL.md" in out.getvalue(), out.getvalue()
+        assert {r["state"] for r in layer_status(project)["rows"]} == {"current"}
+
+        # a layer installed before the manifest existed: differs, not stale
+        (project / ".claude" / LAYER_MANIFEST).unlink()
+        skill.write_text("edited", encoding="utf-8")
+        st = layer_status(project)
+        assert not st["manifest"]
+        by = {r["file"]: r["state"] for r in st["rows"]}
+        assert by["skills/echolot/SKILL.md"] == "differs", by
+
+
 @check(".claude/ layer: the skill and the agent have frontmatter")
 def _(report):
     from .main import CLAUDE_DIR
