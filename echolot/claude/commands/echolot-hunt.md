@@ -6,9 +6,12 @@ Find the cause of a performance regression.
 
 ## Before calling the agent
 
-**Environment.** `echolot doctor`. A non-zero exit means there is no point
+**Environment.** `echolot doctor -q`. A non-zero exit means there is no point
 going further: no report from that environment can be trusted. Show what
-exactly failed.
+exactly failed. If the second line says the `.claude/` layer is stale, run
+`echolot init --force` before anything else — the agent you are about to
+launch reads that layer. Note the time: the agent is told doctor passed and
+when, so it does not run it again.
 
 **Config.** No `echolot.yml` in the root? Go to `/echolot-setup` and come back.
 A loop on an invented config burns rounds for nothing.
@@ -49,6 +52,18 @@ Pass the agent:
 - after which change — or the word "unknown", said explicitly
 - whether the config's thresholds are trustworthy for this hunt (see above),
   and if not, that it should start with `analyze --defaults`
+- that doctor passed, and at what time — so the agent skips its own run
+- whether the project has any instrumentation (`echolot domains --root .`
+  says). If it has none, say so and say what follows: the report will name
+  system slices and threads, and the agent's first move is a skeleton of
+  markers and one re-record — not reading the app to find where the time
+  goes.
+
+The window is the budget. In two hunts out of two the agent spent forty to
+sixty percent of it reading sources by hand; `echolot reflect` now shows the
+split (`window fed by:` in the Subagent section) and flags it. If it keeps
+happening, the fix is in the tool — a command that proposes the first
+instrumentation sites — not in more words here.
 
 Do not re-record in the main context, and do not move the traces the agent
 is about to compare against. If a re-record is needed, it happens inside the

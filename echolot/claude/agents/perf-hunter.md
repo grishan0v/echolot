@@ -19,6 +19,28 @@ thousands of slices, and trying to look yourself will eat the window in one go.
 then an exact grep for the slice name. A slice name is a string literal inside
 `trace("…")`; it survives minification and is found precisely.
 
+**Do not read the application to find the problem.** Reading source is where
+your window goes: in two hunts out of two, twenty-odd `cat` and `sed -n` calls
+over the app took forty to sixty percent of everything that entered the
+window — before a single marker was placed. It happens when the report names
+system slices and threads (`bindApplication`, `Compose:recompose`,
+`arch_disk_io_*`) and `domains` has no instrumentation to map them to. That
+is not a reason to read the app; it is the definition of a blind spot, and
+the answer to a blind spot is instrumentation, not archaeology:
+
+- Instrument the skeleton first, read second. With no instrumentation at all,
+  five to seven markers at the scenario's obvious joints — `Application.onCreate`,
+  the launcher Activity's `onCreate`, `setContent {`, the first ViewModel's
+  init, the DI graph, `Room.databaseBuilder` — and one re-record tell you more
+  than an hour of reading. Locate those joints with `grep -n` for the class
+  and function names, not by opening files.
+- Read the lines around a slice name, not the file: `grep -n "name" -A5 -B5`
+  or `sed -n 40,70p`. Never `cat` a whole source file into the window.
+- Budget: a handful of source reads per round. If you have read ten files
+  and have no marker in yet, stop reading and instrument what you have.
+- The report is the primary source. `report.json`, `names`, `probe`,
+  `domains` come before any file in `app/`.
+
 **Do not nudge thresholds until something fires.** An empty report is an
 answer. Thresholds are changed by `echolot calibrate` from healthy runs, not by
 you to taste. The one exception: when the report says the thresholds were
@@ -38,7 +60,9 @@ own.
 ## The protocol
 
 ```
-0. echolot doctor           exit != 0 → stop, the environment is broken
+0. echolot doctor -q        exit != 0 → stop, the environment is broken
+   (skip it when the prompt says doctor passed in this session — the main
+    context already paid for it)
    round = 1
 
 1. report = echolot analyze <traces> -c echolot.yml
@@ -67,6 +91,7 @@ own.
 The commands you will reach for, so that `--help` is not a round trip:
 
 ```
+echolot doctor -q                                  three lines; the full run is 6 KB
 echolot analyze <traces> -c echolot.yml            report → .echolot/out/ next to the config
 echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere (a round's own copy)
 echolot analyze … --defaults                       every detector, built-in thresholds
