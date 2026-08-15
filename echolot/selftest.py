@@ -348,37 +348,33 @@ def _(report):
 
 @check("thresholds: the report says where each detector's numbers came from")
 def _(report):
-    from .main import analyze_trace
+    from .main import plan_detectors
     # every detector in the fixture run uses the shipped defaults
     assert all(d["params_source"] == "default" for d in report["detectors"]), \
         [(d["id"], d["params_source"]) for d in report["detectors"]]
     assert not any("defaults" in d for d in report["detectors"])
 
+    # The rules, without a trace: which detectors, which overrides, from
+    # where. Four analyze runs here once cost doctor four seconds.
     cfg = Config({**FIXTURE_CONFIG,
                   "detectors": {"main_thread_block": {"min_slice_ms": 40}}})
-    with tempfile.TemporaryDirectory() as tmp:
-        trace = Path(tmp) / "fixture.perfetto-trace"
-        trace.write_bytes(fixture.build())
-        # the config lists one detector: only it runs, from the config
-        r = analyze_trace(trace, cfg)
-        assert [d["id"] for d in r["detectors"]] == ["main_thread_block"], r["summary"]
-        d = r["detectors"][0]
-        assert d["params_source"] == "config" and d["defaults"] == {"min_slice_ms": 16}, d
-        # --set on a detector the config leaves out brings it in, marked cli
-        r = analyze_trace(trace, cfg, cli_overrides={"gc_pressure": {"max_events": 1}})
-        by_id = {d["id"]: d for d in r["detectors"]}
-        assert set(by_id) == {"main_thread_block", "gc_pressure"}, set(by_id)
-        assert by_id["gc_pressure"]["params_source"] == "cli", by_id["gc_pressure"]
-        assert by_id["gc_pressure"]["params"]["max_events"] == 1
-        # --set on top of the config: cli wins, both are named
-        r = analyze_trace(trace, cfg,
-                          cli_overrides={"main_thread_block": {"min_slice_ms": 5}})
-        d = r["detectors"][0]
-        assert d["params_source"] == "config+cli" and d["params"]["min_slice_ms"] == 5, d
-        # --defaults: every detector, shipped numbers, the config's list ignored
-        r = analyze_trace(trace, cfg, use_defaults=True)
-        assert r["summary"]["detectors_run"] == 6, r["summary"]
-        assert all(d["params_source"] == "default" for d in r["detectors"])
+    plan = plan_detectors(cfg)
+    # the config lists one detector: only it runs, from the config
+    assert [d.id for d, _, _ in plan] == ["main_thread_block"], plan
+    d, over, src = plan[0]
+    assert src == "config" and over == {"min_slice_ms": 40} and d.params["min_slice_ms"] == 16
+    # --set on a detector the config leaves out brings it in, marked cli
+    plan = plan_detectors(cfg, cli_overrides={"gc_pressure": {"max_events": 1}})
+    by_id = {d.id: (over, src) for d, over, src in plan}
+    assert set(by_id) == {"main_thread_block", "gc_pressure"}, set(by_id)
+    assert by_id["gc_pressure"] == ({"max_events": 1}, "cli"), by_id
+    # --set on top of the config: cli wins, both are named
+    plan = plan_detectors(cfg, cli_overrides={"main_thread_block": {"min_slice_ms": 5}})
+    _, over, src = plan[0]
+    assert src == "config+cli" and over["min_slice_ms"] == 5, (over, src)
+    # --defaults: every detector, shipped numbers, the config's list ignored
+    plan = plan_detectors(cfg, use_defaults=True)
+    assert len(plan) == 6 and all(src == "default" and not over for _, over, src in plan), plan
 
 
 @check("analyze: a relative -o is taken from the config's directory")
@@ -779,12 +775,16 @@ def build_report(tp_binary: str | None = None) -> dict:
 
 def run(tp_binary: str | None = None) -> list[tuple[str, str | None]]:
     """[(check name, None if it passed else the mismatch text)]."""
+    from . import recorder
     report = build_report(tp_binary)
     out = []
-    for name, fn in CHECKS:
-        try:
-            fn(report)
-            out.append((name, None))
-        except AssertionError as e:
-            out.append((name, str(e)))
+    # Checks call commands of their own (`init` into a temp dir); their notes
+    # must not land in the log line of the doctor run that hosts them.
+    with recorder.isolated():
+        for name, fn in CHECKS:
+            try:
+                fn(report)
+                out.append((name, None))
+            except AssertionError as e:
+                out.append((name, str(e)))
     return out

@@ -38,6 +38,26 @@ def note(**facts: Any) -> None:
     _facts.update(facts)
 
 
+class isolated:
+    """A scope whose notes do not reach the run being recorded.
+
+    The self-check calls commands (`init` into a temp dir, for one), and
+    those note facts of their own; without this, `doctor`'s line in the log
+    carried `written: 2, overwritten: 1` from a temp directory that no
+    longer existed.
+    """
+
+    def __enter__(self):
+        self._saved = dict(_facts)
+        _facts.clear()
+        return self
+
+    def __exit__(self, *exc):
+        _facts.clear()
+        _facts.update(self._saved)
+        return False
+
+
 def _config_stamp(path: str | None) -> dict[str, Any] | None:
     """Path plus a short content hash: enough to tell two configs apart."""
     if not path:

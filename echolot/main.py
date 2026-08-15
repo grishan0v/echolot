@@ -158,6 +158,38 @@ def parse_set(values: list[str], detectors) -> dict[str, dict]:
     return out
 
 
+def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
+                   use_defaults: bool = False) -> list[tuple]:
+    """Which detectors run, with which overrides, from where.
+
+    Pure — no trace, no trace_processor — so the self-check can pin the
+    rules without spinning up a session per case. Returns
+    [(detector, overrides, source)] with source one of
+    default / config / cli / config+cli.
+    """
+    detectors = load_detectors(DETECTOR_DIR)
+    cli_overrides = cli_overrides or {}
+    cfg_overrides = {} if use_defaults else cfg.detector_overrides
+    enabled = None if use_defaults else cfg.enabled_detectors
+    if enabled is not None:
+        # A detector named on the command line is asked for explicitly, even
+        # when the config's list leaves it out.
+        enabled = set(enabled) | set(cli_overrides)
+        detectors = [d for d in detectors if d.id in enabled]
+    if not detectors:
+        raise ConfigError("no detectors selected")
+    plan = []
+    for d in detectors:
+        from_cfg = dict(cfg_overrides.get(d.id) or {})
+        from_cli = dict(cli_overrides.get(d.id) or {})
+        overrides = {**from_cfg, **from_cli}
+        source = "+".join(
+            s for s, on in (("config", bool(from_cfg)), ("cli", bool(from_cli))) if on
+        ) or "default"
+        plan.append((d, overrides, source))
+    return plan
+
+
 def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                   cli_overrides: dict[str, dict] | None = None,
                   use_defaults: bool = False) -> dict:
@@ -175,18 +207,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     it got (`params_source`), so a reader can tell calibrated numbers from
     the shipped ones without opening the config.
     """
-    detectors = load_detectors(DETECTOR_DIR)
-    cli_overrides = cli_overrides or {}
-    cfg_overrides = {} if use_defaults else cfg.detector_overrides
-    enabled = None if use_defaults else cfg.enabled_detectors
-    if enabled is not None:
-        # A detector named on the command line is asked for explicitly, even
-        # when the config's list leaves it out.
-        enabled = set(enabled) | set(cli_overrides)
-        detectors = [d for d in detectors if d.id in enabled]
-    if not detectors:
-        raise ConfigError("no detectors selected")
-
+    plan = plan_detectors(cfg, cli_overrides=cli_overrides, use_defaults=use_defaults)
     results = []
 
     with TraceSession(trace, tp_binary) as tp:
@@ -194,13 +215,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         _setup_context(tp, cfg, procs[0]["upid"])
         window = _window_info(tp, cfg, procs)
 
-        for d in detectors:
-            from_cfg = dict(cfg_overrides.get(d.id) or {})
-            from_cli = dict(cli_overrides.get(d.id) or {})
-            overrides = {**from_cfg, **from_cli}
-            source = "+".join(
-                s for s, on in (("config", bool(from_cfg)), ("cli", bool(from_cli))) if on
-            ) or "default"
+        for d, overrides, source in plan:
             try:
                 sql, params = d.render(overrides)
                 rows = tp.query(sql)
@@ -1050,6 +1065,14 @@ def cmd_doctor(args) -> int:
         if not args.tp_binary:
             print("  (the name is a SHA-256 prefix: contents verified on download)")
 
+    # Before the self-check, not after: agents run `doctor | head -30`, and
+    # forty lines of "ok" pushed this off the screen — a layer that said
+    # "there is no runner yet" while the binary had one went unnoticed for a
+    # whole session. Not a check that can fail: a project may have edited its
+    # copy on purpose.
+    layer = _print_layer_status(Path.cwd())
+    recorder.note(layer=layer)
+
     print("\n## Self-check on a synthetic trace\n")
     try:
         from . import selftest
@@ -1065,13 +1088,6 @@ def cmd_doctor(args) -> int:
         print(f"  ok    {name}" if not why else f"  FAILS {name}\n          {why}")
     recorder.note(checks=len(results), failed=[name for name, _ in failed],
                   trace_processor=info.get("trace_processor"))
-
-    # Not a check that can fail: a project may have edited its copy on
-    # purpose. But a layer that says "there is no runner yet" while the
-    # binary has one sends the agent around the tool, and nothing else
-    # would say so.
-    layer = _print_layer_status(Path.cwd())
-    recorder.note(layer=layer)
 
     print()
     if failed:
