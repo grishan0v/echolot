@@ -131,8 +131,26 @@ def build(root: Path, project: Path) -> Path:
          "Exit code 1\n(eval):cd:1: no such file or directory: out/SM-A515F - 13", is_error=True)
     bash(m, 95, cwd, "tu_cal2", 'echolot calibrate "out/SM-A515F - 13"/*.perfetto-trace -c echolot.yml',
          "thresholds written", dt=20.0)
+    # calibrate's output applied to echolot.yml through a python heredoc: a
+    # config write the reader must see, and a heredoc body that mentions
+    # `echolot calibrate` without running it
+    bash(m, 100, cwd, "tu_cfg_shell",
+         "python3 - <<'PY'\n"
+         "p='echolot.yml'; t=open(p).read()\n"
+         "t += '# thresholds: `echolot calibrate` on 5 healthy runs\\ndetectors:\\n"
+         "  main_thread_block:\\n    min_slice_ms: 40\\n'\n"
+         "open(p,'w').write(t)\n"
+         "PY\n"
+         "echo written", "written")
     bash(m, 120, cwd, "tu_an1", "echolot analyze build/out/*.perfetto-trace -c echolot.yml",
          "# Marker Report\n…", dt=25.0)
+    # the agent's own python fails after a clean analyze: a traceback in the
+    # output that is not echolot's
+    bash(m, 130, cwd, "tu_an_py",
+         "echolot analyze build/out/*.perfetto-trace -c echolot.yml >/dev/null; "
+         "python3 -c \"import json; r=json.load(open('.echolot/out/report.json')); r['detectors'].items()\"",
+         "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n"
+         "AttributeError: 'list' object has no attribute 'items'", dt=26.0)
     m.append(user_text(150, cwd, "<command-message>echolot-hunt</command-message>\n"
                                   "<command-name>/echolot-hunt</command-name>"))
     MSG[0] += 1
@@ -211,9 +229,12 @@ def build(root: Path, project: Path) -> Path:
          'fun run() { trace("AGENTTMP_bench") {', "fun run() {")
     bash(s, 710, cwd, "su_grep", "grep -rn AGENTTMP_ app/src benchmark/src", "")
     MSG[0] += 1
+    # a long conclusion, Cleanup and Confidence past the fourth kilobyte, the
+    # suggestion under a Russian heading: every field must still be found
     s.append(assistant(720, cwd, [{"type": "text", "text":
              "Place: Foo.kt:12\nEvidence: main_thread_block 120 ms\nMechanism: sync IO\n"
-             "Suggestion: move it\nConfidence: high\nCleanup: removed"}], output_tokens=400))
+             + "the mechanism, at length: the file is read on the main thread\n" * 80
+             + "## Что чинить\nmove it\nConfidence: high\nCleanup: removed"}], output_tokens=400))
     (pdir / SESSION / "subagents" / f"agent-{AGENT}.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in s) + "\n", encoding="utf-8")
     return pdir
@@ -234,10 +255,15 @@ def check(report: dict) -> list[str]:
     expect(src["agent_version"] == "2.1.0", "agent version read")
     expect(src["git_branch"] == "main", f"HEAD is not a branch: {src['git_branch']}")
     calls = report["echolot_calls"]
-    expect(len(calls) == 12, f"12 echolot calls, got {len(calls)}")
+    expect(len(calls) == 13, f"13 echolot calls, got {len(calls)}")
     subs = sorted(c["sub"] for c in calls)
-    expect(subs.count("analyze") == 7 and subs.count("doctor") == 2 and subs.count("names") == 1,
+    expect(subs.count("analyze") == 8 and subs.count("doctor") == 2 and subs.count("names") == 1,
            f"subcommands: {subs}")
+    # `echolot calibrate` inside a heredoc body is text, not a call
+    expect(subs.count("calibrate") == 2, f"heredoc mention not counted as a call: {subs}")
+    # the agent's own python traceback after a clean analyze is not echolot's
+    py = next(c for c in calls if "r['detectors'].items()" in c["command"])
+    expect(not py["traceback"] and py["exit"] == 0, f"inline python traceback not echolot's: {py}")
     doc = next(c for c in calls if c["sub"] == "doctor" and c["agent"] == "main")
     expect(doc["argv"] == "", f"redirect stripped from argv: {doc['argv']!r}")
     # one Bash line, two invocations: the skipped one has no exit and no
@@ -276,7 +302,7 @@ def check(report: dict) -> list[str]:
     # streaming usage: max per message (250, not 3 and not 253), one count per
     # message id, main and subagent kept apart
     um = report["cost"]["usage_main"]
-    expect(um["output"] == 250 + 100 * 12, f"main output tokens: {um['output']}")
+    expect(um["output"] == 250 + 100 * 14, f"main output tokens: {um['output']}")
     us = report["cost"]["usage_subagents"]
     expect(us["output"] == 400 + 100 * 15, f"subagent output tokens: {us['output']}")
 
@@ -305,7 +331,7 @@ def check(report: dict) -> list[str]:
     expect(sum(1 for r in rows if r["sub"] == "analyze" and r["config"] == "/tmp/frames.yml") == 1,
            f"skipped analyze not counted as a bypass: {rows}")
     x = sig.get("report_sliced_by_hand")
-    expect(x and len(x["rows"]) == 2, f"report sliced by hand twice: {x}")
+    expect(x and len(x["rows"]) == 3, f"report sliced by hand three times: {x}")
     x = sig.get("help_lookups")
     expect(x and len(x["rows"]) == 1, f"one help lookup: {x}")
     x = sig.get("bypass_tools")
@@ -344,8 +370,21 @@ def check(report: dict) -> list[str]:
     x = sig.get("long_gaps")
     expect(x and any(r["seconds"] >= 300 for r in x["rows"]), f"the gradle wait is a gap: {x}")
 
+    # the config write through the python heredoc is seen: thresholds after
+    # calibrate, from the shell
+    x = sig.get("thresholds_by_hand")
+    expect(x and x["severity"] == "info" and x["rows"][0]["tool"] == "shell",
+           f"shell-written thresholds after calibrate: {x}")
+    expect(any(m["label"] == "shell wrote echolot.yml" for m in report["timeline"]),
+           "config write from the shell is a milestone")
+    # the /tmp/hunt.yml analyze came after echolot.yml was written: a bypass,
+    # not a setup draft
+    x = sig.get("config_bypassed")
+    expect(x and all(r.get("phase") == "after setup" for r in x["rows"]),
+           f"config bypass phase: {x}")
+
     # --- signals that must stay quiet
-    for quiet in ("thresholds_by_hand", "context_hogs", "env_friction"):
+    for quiet in ("context_hogs", "env_friction"):
         expect(quiet not in sig, f"{quiet} must not fire: {sig.get(quiet)}")
     return fails
 

@@ -29,6 +29,7 @@ from .facts import (
     RE_TRACE_LITERAL,
     RE_TRACE_OPEN,
     Facts,
+    config_writes,
 )
 from .model import MAIN, Session, ts_to_epoch
 
@@ -322,12 +323,12 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
             if key in seen:
                 continue
             seen.add(key)
-            rows.append({"ts": _t(c.ts), "agent": c.agent, "sub": c.sub, "config": p[-80:]})
+            rows.append({"ts": c.ts, "agent": c.agent, "sub": c.sub, "config": p[-80:]})
     written = []
     for c in s.calls:
         if c.tool == "Write" and c.path and c.path.endswith((".yml", ".yaml")) \
                 and Path(c.path).name != project_cfg:
-            written.append({"ts": _t(c.ts), "agent": c.agent, "sub": "Write",
+            written.append({"ts": c.ts, "agent": c.agent, "sub": "Write",
                             "config": c.path[-80:]})
     for c in s.bash():
         cmd = c.command or ""
@@ -338,34 +339,55 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
             if Path(p).name == project_cfg or (c.ts, "w", p) in seen:
                 continue
             seen.add((c.ts, "w", p))
-            written.append({"ts": _t(c.ts), "agent": c.agent, "sub": "Bash redirect",
+            written.append({"ts": c.ts, "agent": c.agent, "sub": "Bash redirect",
                             "config": p[-80:]})
     if not rows and not written:
         return None
+    # Before the project config exists in this session, a draft in the
+    # scratchpad is how /echolot-setup verifies anchors — six candidates
+    # through analyze, then echolot.yml. That is the setup working, not a
+    # bypass. Only what happens after the config was written counts.
+    first_cfg = min((ts_to_epoch(w["ts"]) for w in config_writes(s, (project_cfg,))),
+                    default=None)
+    all_rows = rows + written
+    drafts = False
+    if first_cfg is not None:
+        for r in all_rows:
+            r["phase"] = "setup draft" if ts_to_epoch(r["ts"]) < first_cfg else "after setup"
+        drafts = all(r["phase"] == "setup draft" for r in all_rows)
+    for r in all_rows:
+        r["ts"] = _t(r["ts"])
+    if drafts:
+        return Signal("config_bypassed", "info",
+                      "draft configs were analyzed while the project config was "
+                      "being built",
+                      "Every analyze against a config of the agent's own happened "
+                      "before echolot.yml was written — /echolot-setup verifying "
+                      "anchor candidates on a draft. Expected; listed so a draft "
+                      "that outlives setup does not hide here.",
+                      all_rows,
+                      "A `--dry-run`-style window check on analyze would make the "
+                      "draft file unnecessary.")
     return Signal("config_bypassed", "warn",
                   "analysis ran on a config other than the project's",
                   "The agent wrote its own config or pointed -c elsewhere. Whatever "
                   "was in the project config — calibrated thresholds, anchors — was "
                   "not what produced the conclusion.",
-                  rows + written,
+                  all_rows,
                   "Ask why: if the project thresholds were unusable, that is a "
                   "calibrate problem, not a discipline problem.")
 
 
 def thresholds_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    edits = [c for c in s.edits() if c.path and Path(c.path).name in ("echolot.yml", "local.yml")]
-    touched = []
-    for c in edits:
-        new = str((c.input or {}).get("new_string") or (c.input or {}).get("content") or "")
-        if _DETECTOR_KEY.search(new):
-            touched.append(c)
+    touched = [w for w in config_writes(s) if _DETECTOR_KEY.search(w["text"])]
     if not touched:
         return None
     calibrates = [c for c in f.echolot_calls if c.sub == "calibrate"]
-    first_touch = ts_to_epoch(touched[0].ts)
+    first_touch = ts_to_epoch(touched[0]["ts"])
     applied = any(ts_to_epoch(c.ts) < first_touch for c in calibrates)
-    rows = [{"ts": _t(c.ts), "agent": c.agent, "file": Path(c.path).name, "tool": c.tool}
-            for c in touched]
+    rows = [{"ts": _t(w["ts"]), "agent": w["agent"], "file": w["file"],
+             "tool": w["tool"] if w["tool"] in ("Edit", "Write", "MultiEdit") else "shell"}
+            for w in touched]
     if applied:
         return Signal("thresholds_by_hand", "info",
                       "detector thresholds were written into the config after calibrate",
@@ -600,8 +622,9 @@ def echolot_failures(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         if not failed:
             continue
         # A recorded run with exit 0 outranks the transcript: the Bash call
-        # failed around echolot (a `| tail`, a `&&`), not inside it.
-        if c.recorded and c.recorded.get("exit") == 0 and not c.traceback:
+        # failed around echolot (a `| tail`, a `&&`, the agent's own python
+        # after it), not inside it. echolot does not exit 0 on a traceback.
+        if c.recorded and c.recorded.get("exit") == 0:
             continue
         where = "shell" if c.shell_error else "echolot"
         if c.recorded is None and f.runs and not c.traceback:
@@ -632,7 +655,14 @@ def retries(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     for a, b in zip(calls, calls[1:]):
         if a.sub != b.sub or a.agent != b.agent:
             continue
+        # `--help` then the real call is reading the manual, not a retry; two
+        # invocations in one shell line were written together, not one after
+        # the other failed.
+        if a.is_help or b.is_help or a.ts == b.ts:
+            continue
         a_failed = a.traceback or a.is_error or (a.exit not in (0, None))
+        if a.recorded and a.recorded.get("exit") == 0:
+            a_failed = False
         if a_failed and ts_to_epoch(b.ts) - ts_to_epoch(a.ts) <= 180:
             rows.append({"ts": _t(a.ts), "agent": a.agent, "sub": a.sub,
                          "first": a.argv[:80], "then": b.argv[:80],

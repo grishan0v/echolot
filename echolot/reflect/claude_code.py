@@ -38,6 +38,14 @@ from .model import MAIN, Ask, Call, Session, SubAgent, Turn, Usage, clip, ts_to_
 
 AGENT_NAME = "claude-code"
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+# The subagent's conclusion is kept nearly whole: the six fields are checked
+# against it, and Cleanup and Confidence come last. A 4000-character clip
+# once cut them off and reported them missing. Rendering clips it again.
+FINAL_TEXT_LIMIT = 12000
+# A shell command is kept long enough to see what a python heredoc does at
+# its end — `open(p, 'w').write(t)` forty lines down is the config being
+# written, and a 2000-character clip lost it.
+COMMAND_LIMIT = 8000
 
 _ECHOLOT_CALL = re.compile(r"(?:^|[\s;&|(`$])echolot\s+([a-z-]+)")
 # MCP tools that run a shell command: the name says so, or the input does.
@@ -343,7 +351,7 @@ def _parse_rows(rows: Iterable[dict[str, Any]], session: Session, agent: str,
     for u in per_msg.values():
         target.add(u)
     if sub is not None and last_assistant_text:
-        sub.final_text = clip(last_assistant_text, 4000)
+        sub.final_text = clip(last_assistant_text, FINAL_TEXT_LIMIT)
 
 
 def _call_from_use(block: dict[str, Any], ts: str, agent: str) -> Call:
@@ -352,7 +360,7 @@ def _call_from_use(block: dict[str, Any], ts: str, agent: str) -> Call:
     call = Call(id=str(block.get("id") or ""), ts=ts, tool=name,
                 input=_clip_input(raw), agent=agent)
     if name == "Bash" and isinstance(raw, dict):
-        call.command = clip(raw.get("command"), 2000)
+        call.command = clip(raw.get("command"), COMMAND_LIMIT)
     elif isinstance(raw, dict) and _SHELL_TOOL.search(name):
         # Shell through an MCP tool (a context-saving plugin, a sandbox): the
         # same command, a different envelope. Without this the gradle runs and
@@ -362,7 +370,7 @@ def _call_from_use(block: dict[str, Any], ts: str, agent: str) -> Call:
         if code is None and str(raw.get("language") or "").lower() in ("shell", "bash", "sh"):
             code = raw.get("code")
         if isinstance(code, str) and code.strip():
-            call.command = clip(code, 2000)
+            call.command = clip(code, COMMAND_LIMIT)
     if isinstance(raw, dict):
         p = raw.get("file_path") or raw.get("path") or raw.get("notebook_path")
         if p:
@@ -403,7 +411,7 @@ def _user_text(text: str, ts: str, row: dict[str, Any], session: Session,
             sub = _find_subagent(session, tid.group(1))
             if sub is not None:
                 if res:
-                    sub.final_text = clip(res.group(1).strip(), 4000)
+                    sub.final_text = clip(res.group(1).strip(), FINAL_TEXT_LIMIT)
                 sub.ended = ts
         return
     m = _SKILL_DIR.search(text)
@@ -455,10 +463,10 @@ def _agent_result(call: Call, text: str, tr: Any, ts: str, session: Session,
     if isinstance(tr, dict) and tr.get("agentId"):
         sub.id = str(tr["agentId"])
         if tr.get("status") and "async" not in str(tr["status"]):
-            sub.final_text = clip(text, 4000)
+            sub.final_text = clip(text, FINAL_TEXT_LIMIT)
             sub.ended = ts
     else:
         # A synchronous agent: the return value is the tool result itself and
         # the transcript, if any, is inline (isSidechain rows).
-        sub.final_text = clip(text, 4000)
+        sub.final_text = clip(text, FINAL_TEXT_LIMIT)
         sub.ended = ts

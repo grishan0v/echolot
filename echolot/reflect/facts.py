@@ -46,12 +46,23 @@ _CONCLUSION_FIELDS = {
     "place": r"\bPlace\b|Место",
     "evidence": r"\bEvidence\b|Улик|Доказательств",
     "mechanism": r"\bMechanism\b|Механизм",
-    "suggestion": r"\bSuggestion\b|Предложен|Что делать|Рекомендац",
+    "suggestion": r"\bSuggestion\b|\bFix\b|Предложен|Что делать|Что чинить|Что исправ|Рекоменд",
     "confidence": r"\bConfidence\b|Уверенност",
     "cleanup": r"\bCleanup\b|Уборк|Очистк",
 }
+# The value after "Confidence:", up to the end of the phrase — markdown
+# emphasis, a bracket or a full stop close it.
 _CONFIDENCE = re.compile(
-    r"(?:Confidence|Уверенность)\s*[:*]*\s*\**\s*([^\n.]{0,60})", re.I)
+    r"(?:Confidence|Уверенность)\s*[:*]*\s*\**\s*([^\n.*(]{0,60})", re.I)
+# A heredoc body is data, not commands: `cat > x.yml <<EOF … echolot calibrate …`
+# is a config being written, not calibrate being run.
+_HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n(?:.*?\n)?\s*\2[ \t]*(?=\n|$)", re.S)
+# A traceback whose first frame is the shell's inline python belongs to the
+# agent's one-liner, not to echolot.
+_TB_FIRST_FRAME = re.compile(r"Traceback \(most recent call last\):\s*File \"([^\"]*)\"")
+# Python in a shell command writing some file; which file is usually in a
+# variable, so this is paired with "the name is mentioned somewhere".
+_PY_WRITES = re.compile(r"open\([^)]*[\"'](?:w|a|r\+)[\"']|\.write_text\(|\.write\(", re.S)
 
 
 @dataclass
@@ -124,10 +135,47 @@ def _skipped_by_glob(argvs: list[str], missing: str) -> int | None:
     return scores.index(top)
 
 
+def strip_heredocs(cmd: str) -> str:
+    """The command with heredoc bodies removed, first lines kept.
+
+    What is between `<<EOF` and `EOF` is data — a config being written, a
+    python script — and an `echolot calibrate` mentioned in there is not a
+    call. Everything that scans for commands works on this view.
+    """
+    return _HEREDOC.sub(lambda m: m.group(0).split("\n", 1)[0] + "\n", cmd)
+
+
+def _is_echolot_traceback(head: str) -> bool:
+    """A traceback in the output, and not from the agent's inline python."""
+    if "Traceback (most recent call last)" not in head:
+        return False
+    first = _TB_FIRST_FRAME.search(head)
+    return not (first and first.group(1) in ("<stdin>", "<string>"))
+
+
+def writes_file(cmd: str, name: str) -> bool:
+    """Does this shell command write the named file (a name, or a path tail)?
+
+    A redirect into it, `sed -i` / `perl -pi` / `tee` / `cp` / `mv` with it as
+    an argument, or python that opens something for writing while the name
+    is mentioned in the same command (the path is usually in a variable by
+    then). Edit/Write-only reading missed all of these.
+    """
+    if name not in cmd:
+        return False
+    n = re.escape(name)
+    if re.search(r">>?\s*[\"']?[^\s\"'|;&]*" + n, cmd):
+        return True
+    if re.search(r"(?:^|[\s;&|(])(?:sed\s+-[a-zA-Z]*i\S*|perl\s+-[a-zA-Z]*i\S*|tee|cp|mv)\b"
+                 r"[^\n;|&]*" + n, cmd):
+        return True
+    return bool(_PY_WRITES.search(cmd))
+
+
 def echolot_calls(session: Session) -> list[EcholotCall]:
     out: list[EcholotCall] = []
     for c in session.bash():
-        cmd = c.command or ""
+        cmd = strip_heredocs(c.command or "")
         head = c.output_head or ""
         matches = list(RE_ECHOLOT.finditer(cmd))
         exit_m = _EXIT.search(head)
@@ -169,7 +217,7 @@ def echolot_calls(session: Session) -> list[EcholotCall]:
                 output_chars=c.output_chars,
                 output_head=head,
                 config=cfg.group(1) if cfg else None,
-                traceback="Traceback (most recent call last)" in head,
+                traceback=_is_echolot_traceback(head),
                 is_help=is_help,
                 shell_error=this_shell_err,
                 shared=len(matches),
@@ -213,6 +261,36 @@ def match_runs(calls: list[EcholotCall], runs: list[dict[str, Any]],
     return inside
 
 
+# ------------------------------------------------------------ config writes
+
+def config_writes(session: Session, names: tuple[str, ...] = ("echolot.yml", "local.yml")
+                  ) -> list[dict[str, Any]]:
+    """Every time the project config was written — by a tool or from the shell.
+
+    Write/Edit on the file is the obvious way; agents also do it with a
+    python heredoc, `sed -i`, or a redirect, and that used to be invisible.
+    Each entry: ts, agent, file, tool ("Bash" for the shell), text — the new
+    content or the command, for whoever wants to look for detector keys.
+    """
+    out = []
+    for c in session.calls:
+        if c.tool in ("Edit", "Write", "MultiEdit") and c.path \
+                and Path(c.path).name in names:
+            inp = c.input or {}
+            out.append({"ts": c.ts, "agent": c.agent, "file": Path(c.path).name,
+                        "tool": c.tool,
+                        "text": str(inp.get("new_string") or inp.get("content") or "")})
+            continue
+        if c.command is not None:
+            for name in names:
+                if writes_file(c.command, name):
+                    out.append({"ts": c.ts, "agent": c.agent, "file": name,
+                                "tool": c.tool, "text": c.command})
+                    break
+    out.sort(key=lambda e: ts_to_epoch(e["ts"]))
+    return out
+
+
 # --------------------------------------------------------------- milestones
 
 def _mark(ts: str, label: str, agent: str, detail: str = "") -> dict[str, Any]:
@@ -233,9 +311,9 @@ def milestones(session: Session, calls: list[EcholotCall]) -> list[dict[str, Any
         marks.append(_mark(c.ts, f"first echolot {sub}", c.agent, c.argv[:80]))
     for a in session.asks:
         marks.append(_mark(a.ts, "asked the human", a.agent, a.question[:80]))
-    for e in session.edits():
-        if e.path and Path(e.path).name in ("echolot.yml", "local.yml"):
-            marks.append(_mark(e.ts, f"{e.tool} {Path(e.path).name}", e.agent))
+    for w in config_writes(session):
+        how = w["tool"] if w["tool"] in ("Edit", "Write", "MultiEdit") else "shell wrote"
+        marks.append(_mark(w["ts"], f"{how} {w['file']}", w["agent"]))
     for s in session.subagents:
         marks.append(_mark(s.started or "", f"agent {s.type or '?'} launched",
                            MAIN, s.description or ""))
