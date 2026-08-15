@@ -22,11 +22,28 @@ echolot doctor
   binary: ~/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46
   (the name is a SHA-256 prefix: contents verified on download)
 
+## The .claude/ layer in this project
+
+  10 template files: 10 current
+  the layer is current.
+
 ## Self-check on a synthetic trace
 
   ok    scenario window built from the anchors: 1005 ms
   ...
-  All 35 checks passed — the pipeline computes correctly.
+  All 42 checks passed — the pipeline computes correctly.
+```
+
+`doctor -q` is the same run in three lines — environment, layer verdict,
+self-check tally — plus every failure, with the same exit code. It is for a
+subagent that has to confirm the environment before it starts, a CI step, or
+anyone piping into `head`; the full output is six kilobytes of "ok" that a
+second reader in the same session would pay for again.
+
+```
+echolot 0.1.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
+layer: STALE — 8 differs, 1 missing → `echolot init --force`
+self-check: 42 of 42 passed
 ```
 
 Exit code 0/1. No device needed, one second — good both as a CI gate and as

@@ -67,7 +67,7 @@ is no registration in code.
 ## The commands
 
 ```
-doctor      environment + self-check on a synthetic trace + is the .claude/ layer current, exit 0/1
+doctor      environment + self-check on a synthetic trace + is the .claude/ layer current, exit 0/1; -q for three lines
 init        install the .claude/ layer into an Android project
 collect     capture N traces of one scenario: launch | command | gradle
 domains     slice-to-code map and instrumentation coverage

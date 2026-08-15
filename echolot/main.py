@@ -747,6 +747,22 @@ def layer_status(project: Path) -> dict | None:
     }
 
 
+def _layer_line(project: Path) -> tuple[str, str]:
+    """(verdict, one line) about the project's .claude/ layer — for -q."""
+    status = layer_status(project)
+    if status is None:
+        return "absent", "layer: none installed here (`echolot init`)"
+    by_state: dict[str, int] = {}
+    for r in status["rows"]:
+        by_state[r["state"]] = by_state.get(r["state"], 0) + 1
+    needs = {k: v for k, v in by_state.items()
+             if k in ("stale", "conflict", "differs", "missing")}
+    if not needs:
+        return "current", f"layer: current ({len(status['rows'])} files)"
+    what = ", ".join(f"{v} {k}" for k, v in needs.items())
+    return "stale", f"layer: STALE — {what} → `echolot init --force`"
+
+
 def _print_layer_status(project: Path) -> str | None:
     """The doctor section; returns the one-word verdict for the run log."""
     status = layer_status(project)
@@ -1046,6 +1062,9 @@ def cmd_doctor(args) -> int:
     info = toolchain_info(args.tp_binary)
     binary = resolve_binary_path(args.tp_binary)
 
+    if getattr(args, "quiet", False):
+        return _doctor_quiet(args, info)
+
     print("## Environment\n")
     facts = [
         ("python", py_platform.python_version()),
@@ -1095,6 +1114,42 @@ def cmd_doctor(args) -> int:
               f"Reports from this environment cannot be trusted.")
         return 1
     print(f"All {len(results)} checks passed — the pipeline computes correctly.")
+    return 0
+
+
+def _doctor_quiet(args, info: dict) -> int:
+    """`doctor -q`: three lines, and every failure. Same exit code.
+
+    For a subagent, a CI step, a `| head`: the full report is six kilobytes
+    of "ok" that a second reader in the same session pays for again. Here
+    the verdicts stay and the evidence goes.
+    """
+    import platform as py_platform
+
+    tp = info.get("trace_processor") or "unknown"
+    src = " (custom binary)" if info.get("source") == "--tp-binary" else ""
+    print(f"echolot {recorder.version()} · trace_processor {tp}{src} · "
+          f"perfetto {info.get('perfetto_package') or 'unknown'} · "
+          f"python {py_platform.python_version()}")
+    layer, line = _layer_line(Path.cwd())
+    recorder.note(layer=layer)
+    print(line)
+    try:
+        from . import selftest
+        results = selftest.run(args.tp_binary)
+    except Exception as e:
+        print(f"self-check: could not run — {e}")
+        return 1
+    failed = [(name, why) for name, why in results if why]
+    recorder.note(checks=len(results), failed=[name for name, _ in failed],
+                  trace_processor=info.get("trace_processor"))
+    if failed:
+        print(f"self-check: {len(failed)} of {len(results)} FAIL — reports from "
+              f"this environment cannot be trusted")
+        for name, why in failed:
+            print(f"  FAILS {name}\n          {why}")
+        return 1
+    print(f"self-check: {len(results)} of {len(results)} passed")
     return 0
 
 
@@ -1334,6 +1389,9 @@ def build_parser() -> argparse.ArgumentParser:
     # first make sure the environment computes correctly, then reconnaissance,
     # then analysis.
     dr = sub.add_parser("doctor", help="check the environment and self-check")
+    dr.add_argument("-q", "--quiet", action="store_true",
+                    help="three lines and the failures, same exit code — for "
+                         "subagents and CI")
     dr.set_defaults(func=cmd_doctor)
 
     pr = sub.add_parser("probe", help="reconnaissance over a trace")
