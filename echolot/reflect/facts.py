@@ -1,0 +1,506 @@
+"""Derived facts over a normalised session.
+
+Everything here is a pure function of the `Session` (plus the config and the
+recorder log): the echolot invocations as a table, the milestones of the
+protocol, the number of hunt rounds, the cost, the balance of temporary
+instrumentation per file. Signals and the report both read from here, so a
+number appears the same way in both.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from ..config import Config
+from .model import MAIN, Call, Session, ts_to_epoch
+
+# Shared with signals.py — the vocabulary of what an agent does around the tool.
+RE_ECHOLOT = re.compile(r"(?:^|[\s;&|(`$/])echolot\s+([a-z-]+)((?:\s+[^;&|\n]*)?)")
+RE_RE_RECORD = re.compile(
+    r"gradlew\b(?![^\n]*\btasks\b)[^\n]*\bconnected\w+|echolot\s+collect|"
+    r"adb\s+shell\s+perfetto|adb\s+shell\s+am\s+start|record_android_trace",
+    re.I | re.S)
+RE_TRACE_LITERAL = re.compile(r"\.(perfetto-trace|pftrace)\b")
+RE_TRACE_OPEN = re.compile(
+    r"trace_processor|from\s+perfetto|import\s+perfetto|TraceProcessor\(", re.I)
+RE_REPORT_BY_HAND = re.compile(
+    r"(json\.load|jq\b|python3?\s+-c).*report\.json|report\.json.*(json\.load|jq\b)",
+    re.S)
+RE_HELP_FLAG = re.compile(r"(?:^|\s)(?:--help|-h)(?:\s|$)")
+
+_EXIT = re.compile(r"Exit code (\d+)")
+_SHELL_ERROR = re.compile(r"\(eval\):|\bcd:\d*:|no matches found|command not found: (?!echolot)")
+_REDIRECT = re.compile(r"\s+\d?[<>]\S*.*$")
+_CONFIG_ARG = re.compile(r"(?:^|\s)(?:-c|--config)\s+(\S+)")
+_TRACE_CALL = re.compile(
+    r"\btrace\s*\(\s*\"|Trace\.beginSection\s*\(|beginAsyncSection\s*\(|"
+    r"androidx\.tracing", re.S)
+_CONCLUSION_FIELDS = {
+    "place": r"\bPlace\b|Место",
+    "evidence": r"\bEvidence\b|Улик|Доказательств",
+    "mechanism": r"\bMechanism\b|Механизм",
+    "suggestion": r"\bSuggestion\b|Предложен|Что делать|Рекомендац",
+    "confidence": r"\bConfidence\b|Уверенност",
+    "cleanup": r"\bCleanup\b|Уборк|Очистк",
+}
+_CONFIDENCE = re.compile(
+    r"(?:Confidence|Уверенность)\s*[:*]*\s*\**\s*([^\n.]{0,60})", re.I)
+
+
+@dataclass
+class EcholotCall:
+    ts: str
+    agent: str
+    sub: str                      # subcommand: analyze, doctor, ...
+    argv: str                     # the rest of the line, clipped
+    command: str                  # the whole Bash command, clipped
+    is_error: bool
+    exit: int | None
+    duration_s: float | None
+    output_chars: int
+    output_head: str
+    config: str | None            # -c value, if any
+    traceback: bool
+    is_help: bool
+    shell_error: bool = False     # the shell failed before echolot ran (cd, glob)
+    recorded: dict[str, Any] | None = None   # matched runs.jsonl entry
+
+
+@dataclass
+class Facts:
+    echolot_calls: list[EcholotCall] = field(default_factory=list)
+    milestones: list[dict[str, Any]] = field(default_factory=list)
+    hunts: list[dict[str, Any]] = field(default_factory=list)   # per perf-hunter
+    cost: dict[str, Any] = field(default_factory=dict)
+    top_outputs: list[dict[str, Any]] = field(default_factory=list)
+    instrumentation: dict[str, Any] = field(default_factory=dict)
+    gaps: list[dict[str, Any]] = field(default_factory=list)
+    entry: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
+    runs: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+# ------------------------------------------------------------ echolot calls
+
+def echolot_calls(session: Session) -> list[EcholotCall]:
+    out: list[EcholotCall] = []
+    for c in session.bash():
+        cmd = c.command or ""
+        for m in RE_ECHOLOT.finditer(cmd):
+            argv = _REDIRECT.sub("", (m.group(2) or "").strip())
+            cfg = _CONFIG_ARG.search(argv)
+            exit_m = _EXIT.search(c.output_head or "")
+            sub = m.group(1)
+            if sub.startswith("-"):
+                sub = "help"
+            # Per invocation, not per Bash line: `echolot doctor; echolot
+            # names --help` is one lookup, not two.
+            is_help = sub in ("help", "explain") or bool(RE_HELP_FLAG.search(argv))
+            out.append(EcholotCall(
+                ts=c.ts, agent=c.agent, sub=sub, argv=argv[:200],
+                command=cmd[:300], is_error=c.is_error,
+                exit=int(exit_m.group(1)) if exit_m else (0 if not c.is_error else None),
+                duration_s=c.duration_s, output_chars=c.output_chars,
+                output_head=c.output_head,
+                config=cfg.group(1) if cfg else None,
+                traceback="Traceback (most recent call last)" in (c.output_head or ""),
+                is_help=is_help,
+                shell_error=bool(c.is_error and _SHELL_ERROR.search(c.output_head or "")),
+            ))
+    out.sort(key=lambda e: ts_to_epoch(e.ts))
+    return out
+
+
+def match_runs(calls: list[EcholotCall], runs: list[dict[str, Any]],
+               window: tuple[float, float] | None, slack_s: float = 15.0
+               ) -> list[dict[str, Any]]:
+    """Attach recorder entries to transcript calls by subcommand and time.
+
+    Returns the recorder entries that fall inside the session window (the
+    session's own view of the runs), having stamped the matching ones onto
+    the calls. The recorder's timestamp is the start of the run; the
+    transcript's is when the agent issued the Bash call — the two differ by
+    the shell's own startup, so a few seconds of slack is expected.
+    """
+    inside = []
+    for r in runs:
+        t = ts_to_epoch(r.get("ts"))
+        if window and not (window[0] - slack_s <= t <= window[1] + slack_s):
+            continue
+        inside.append(r)
+    used: set[int] = set()
+    for c in calls:
+        best, best_d = None, None
+        for i, r in enumerate(inside):
+            if i in used or r.get("cmd") != c.sub:
+                continue
+            d = abs(ts_to_epoch(r.get("ts")) - ts_to_epoch(c.ts))
+            if d <= slack_s and (best_d is None or d < best_d):
+                best, best_d = i, d
+        if best is not None:
+            used.add(best)
+            c.recorded = inside[best]
+            if c.exit is None or c.exit == 0:
+                c.exit = inside[best].get("exit", c.exit)
+    return inside
+
+
+# --------------------------------------------------------------- milestones
+
+def _mark(ts: str, label: str, agent: str, detail: str = "") -> dict[str, Any]:
+    return {"ts": ts, "label": label, "agent": agent, "detail": detail}
+
+
+def milestones(session: Session, calls: list[EcholotCall]) -> list[dict[str, Any]]:
+    marks: list[dict[str, Any]] = []
+    for t in session.turns:
+        if t.kind == "slash":
+            marks.append(_mark(t.ts, f"slash {t.command}", t.agent, t.args or ""))
+        elif t.kind == "interrupt":
+            marks.append(_mark(t.ts, "user interrupted", t.agent))
+    firsts: dict[str, EcholotCall] = {}
+    for c in calls:
+        firsts.setdefault(c.sub, c)
+    for sub, c in firsts.items():
+        marks.append(_mark(c.ts, f"first echolot {sub}", c.agent, c.argv[:80]))
+    for a in session.asks:
+        marks.append(_mark(a.ts, "asked the human", a.agent, a.question[:80]))
+    for e in session.edits():
+        if e.path and Path(e.path).name in ("echolot.yml", "local.yml"):
+            marks.append(_mark(e.ts, f"{e.tool} {Path(e.path).name}", e.agent))
+    for s in session.subagents:
+        marks.append(_mark(s.started or "", f"agent {s.type or '?'} launched",
+                           MAIN, s.description or ""))
+        if s.ended:
+            marks.append(_mark(s.ended, f"agent {s.type or '?'} finished", MAIN))
+    for c in session.calls:
+        if c.tool in ("Edit", "Write") and _has_prefix_added(c):
+            marks.append(_mark(c.ts, "temporary instrumentation added", c.agent,
+                               _short(c.path)))
+            break
+    marks.sort(key=lambda m: ts_to_epoch(m["ts"]))
+    return marks
+
+
+def _short(path: str | None, keep: int = 3) -> str:
+    if not path:
+        return ""
+    return "/".join(Path(path).parts[-keep:])
+
+
+def describe(c: Call, limit: int = 80) -> str:
+    """`tool: what` — the command, the path, or the first string argument."""
+    what = c.command or c.path
+    if not what:
+        inp = c.input or {}
+        for key in ("description", "prompt", "code", "query", "skill", "url"):
+            if isinstance(inp.get(key), str) and inp[key]:
+                what = inp[key]
+                break
+        else:
+            what = next((v for v in inp.values() if isinstance(v, str) and v), "")
+    return f"{c.tool}: {' '.join(str(what).split())[:limit]}"
+
+
+# --------------------------------------------------------------------- hunt
+
+def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
+    """One entry per perf-hunter run: rounds, tools, tokens, conclusion."""
+    out = []
+    for s in session.subagents:
+        label = f"sub:{s.id}"
+        calls = session.calls_of(label)
+        bash = [c for c in calls if c.tool == "Bash"]
+        analyzes = [c for c in bash if re.search(r"echolot\s+analyze\b", c.command or "")]
+        rerecords = [c for c in bash if RE_RE_RECORD.search(c.command or "")]
+        # A round is an analyze that follows a re-record; the first analyze
+        # opens round one. Ordering by time, per protocol.
+        rounds = 0
+        seen_record = False
+        for c in sorted(bash, key=lambda x: ts_to_epoch(x.ts)):
+            if RE_RE_RECORD.search(c.command or ""):
+                seen_record = True
+            elif re.search(r"echolot\s+analyze\b", c.command or ""):
+                if rounds == 0 or seen_record:
+                    rounds += 1
+                    seen_record = False
+        tools: dict[str, int] = {}
+        for c in calls:
+            tools[c.tool] = tools.get(c.tool, 0) + 1
+        fields_present = {
+            k: bool(re.search(p, s.final_text)) for k, p in _CONCLUSION_FIELDS.items()
+        }
+        conf = _CONFIDENCE.search(s.final_text or "")
+        dur = None
+        if s.started and s.ended:
+            dur = round(ts_to_epoch(s.ended) - ts_to_epoch(s.started))
+        out.append({
+            "id": s.id,
+            "type": s.type,
+            "description": s.description,
+            "started": s.started,
+            "ended": s.ended,
+            "duration_s": dur,
+            "prompt_chars": len(s.prompt),
+            "prompt_head": s.prompt[:400],
+            "prompt_mentions": _prompt_mentions(s.prompt),
+            "rounds": rounds,
+            "max_rounds": (cfg.get("loop.max_rounds") if cfg else None),
+            "analyze_calls": len(analyzes),
+            "re_records": len(rerecords),
+            "tools": tools,
+            "usage": asdict(s.usage),
+            "thinking_blocks": s.thinking_blocks,
+            "conclusion_fields": fields_present,
+            "confidence": conf.group(1).strip(" *:") if conf else None,
+            "final_text": s.final_text,
+            "has_transcript": bool(s.source),
+        })
+    return out
+
+
+def _prompt_mentions(prompt: str) -> dict[str, bool]:
+    """The three things echolot-hunt.md says to pass down."""
+    p = prompt or ""
+    return {
+        "traces": bool(RE_TRACE_LITERAL.search(p) or re.search(r"\btraces?\b|трейс", p, re.I)),
+        "regression": bool(re.search(
+            r"было|стало|regress|was\b.*\bnow\b|просел|P9\d|\d+\s*(?:ms|мс|s|с)\b", p, re.I)),
+        "since_change": bool(re.search(
+            r"после\s+(?:какого|коммит|измен)|after\s+(?:which|the)\s+(?:change|commit)|"
+            r"since\s+commit|\bcommit\b|\bPR\b|\bMR\b", p, re.I)),
+    }
+
+
+# --------------------------------------------------------------------- cost
+
+def cost(session: Session) -> dict[str, Any]:
+    tools_main: dict[str, int] = {}
+    tools_sub: dict[str, int] = {}
+    for c in session.calls:
+        target = tools_main if c.agent == MAIN else tools_sub
+        target[c.tool] = target.get(c.tool, 0) + 1
+    sub_usage = {"input": 0, "cache_read": 0, "cache_create": 0, "output": 0,
+                 "messages": 0}
+    for s in session.subagents:
+        for k in sub_usage:
+            sub_usage[k] += getattr(s.usage, k)
+    total_output_chars = sum(c.output_chars for c in session.calls)
+    return {
+        "duration_s": (round(session.duration_s()) if session.duration_s() else None),
+        "usage_main": asdict(session.usage),
+        "usage_subagents": sub_usage,
+        "tools_main": dict(sorted(tools_main.items(), key=lambda kv: -kv[1])),
+        "tools_subagents": dict(sorted(tools_sub.items(), key=lambda kv: -kv[1])),
+        "thinking_blocks_main": session.thinking_blocks,
+        "tool_output_chars": total_output_chars,
+        "user_turns": sum(1 for t in session.turns if t.role == "user" and t.kind == "text"),
+        "asks": len(session.asks),
+    }
+
+
+def top_outputs(session: Session, n: int = 5) -> list[dict[str, Any]]:
+    ranked = sorted(session.calls, key=lambda c: -c.output_chars)[:n]
+    return [{
+        "chars": c.output_chars, "tool": c.tool, "agent": c.agent,
+        "what": (c.command or c.path or "")[:120],
+        "echolot": bool(c.command and re.search(r"\becholot\s", c.command)),
+    } for c in ranked if c.output_chars]
+
+
+# ------------------------------------------------------- instrumentation
+
+def _has_prefix_added(c: Call, prefix: str = "AGENTTMP_") -> bool:
+    inp = c.input or {}
+    new = str(inp.get("new_string") or inp.get("content") or "")
+    old = str(inp.get("old_string") or "")
+    return prefix in new and prefix not in old
+
+
+def _has_prefix_removed(c: Call, prefix: str = "AGENTTMP_") -> bool:
+    inp = c.input or {}
+    new = str(inp.get("new_string") or "")
+    old = str(inp.get("old_string") or "")
+    return prefix in old and prefix not in new
+
+
+def instrumentation(session: Session, cfg: Config | None) -> dict[str, Any]:
+    prefix = (cfg.get("instrumentation.temp_prefix") if cfg else None) or "AGENTTMP_"
+    allowed = list((cfg.get("instrumentation.allowed") if cfg else None) or [])
+    per_file: dict[str, dict[str, int]] = {}
+    unprefixed: list[dict[str, Any]] = []
+    outside: list[dict[str, Any]] = []
+    for c in session.edits():
+        if not c.path:
+            continue
+        rel = _relative(c.path, session.cwd)
+        inp = c.input or {}
+        new = str(inp.get("new_string") or inp.get("content") or "")
+        old = str(inp.get("old_string") or "")
+        entry = per_file.setdefault(rel, {"added": 0, "removed": 0})
+        if prefix in new and prefix not in old:
+            entry["added"] += 1
+        elif prefix in old and prefix not in new:
+            entry["removed"] += 1
+        # A tracing call inserted without the prefix: cleanup by grep will
+        # miss it.
+        if _TRACE_CALL.search(new) and prefix not in new and not _TRACE_CALL.search(old):
+            unprefixed.append({"ts": c.ts, "file": rel, "agent": c.agent})
+        # `allowed` governs the agent's temporary instrumentation. A fix the
+        # human asked for in the main context is a different matter, so only
+        # subagent edits and prefixed edits are held against the list.
+        temporary = prefix in new or prefix in old
+        if allowed and _is_source(rel) and not _under_any(rel, allowed) \
+                and (c.agent != MAIN or temporary):
+            outside.append({"ts": c.ts, "file": rel, "agent": c.agent,
+                            "temporary": temporary})
+    touched = {f: v for f, v in per_file.items() if v["added"] or v["removed"]}
+    outside.sort(key=lambda r: ts_to_epoch(r["ts"]))
+    # The cleanup grep must follow the last edit that touched the prefix —
+    # not the last edit of the session, which may be a fix made much later.
+    last_edit = max((ts_to_epoch(c.ts) for c in session.edits()
+                     if prefix in str((c.input or {}).get("new_string", ""))
+                     or prefix in str((c.input or {}).get("old_string", ""))
+                     or prefix in str((c.input or {}).get("content", ""))),
+                    default=0.0)
+    final_grep = [
+        c for c in session.bash()
+        if "grep" in (c.command or "") and prefix in (c.command or "")
+        and ts_to_epoch(c.ts) >= last_edit
+    ]
+    return {
+        "prefix": prefix,
+        "allowed": allowed,
+        "files": touched,
+        "unbalanced": {f: v for f, v in touched.items() if v["added"] != v["removed"]},
+        "unprefixed_trace_calls": unprefixed,
+        "edits_outside_allowed": outside,
+        "cleanup_grep_after_last_edit": len(final_grep),
+        "grep_calls_total": sum(
+            1 for c in session.bash()
+            if "grep" in (c.command or "") and prefix in (c.command or "")),
+    }
+
+
+def _relative(path: str, cwd: str | None) -> str:
+    if cwd and path.startswith(cwd.rstrip("/") + "/"):
+        return path[len(cwd.rstrip("/")) + 1:]
+    return path
+
+
+def _is_source(rel: str) -> bool:
+    if rel.startswith("/") or "/scratchpad/" in rel or rel.startswith(".echolot/"):
+        return False
+    return rel.endswith((".kt", ".java", ".kts", ".xml"))
+
+
+def _under_any(rel: str, roots: list[str]) -> bool:
+    return any(rel == r.rstrip("/") or rel.startswith(r.rstrip("/") + "/")
+               for r in roots)
+
+
+# --------------------------------------------------------------------- gaps
+
+def gaps(session: Session, min_s: float = 120.0) -> list[dict[str, Any]]:
+    """Silences between consecutive events, per agent, above the floor.
+
+    Long ones are usually the agent waiting for gradle or a device — worth
+    seeing, but not the agent's fault.
+    """
+    out = []
+    by_agent: dict[str, list[tuple[float, str]]] = {}
+    for c in session.calls:
+        by_agent.setdefault(c.agent, []).append((ts_to_epoch(c.ts), describe(c)))
+    for agent, events in by_agent.items():
+        events.sort()
+        for (t0, what), (t1, _) in zip(events, events[1:]):
+            if t1 - t0 >= min_s:
+                out.append({"agent": agent, "seconds": round(t1 - t0),
+                            "after": what})
+    out.sort(key=lambda g: -g["seconds"])
+    return out[:8]
+
+
+# -------------------------------------------------------------------- entry
+
+def entry(session: Session, calls: list[EcholotCall]) -> dict[str, Any]:
+    """How the session got into the tool: prompts, slash commands, skills.
+
+    The entry window closes when real work starts: the first analyze /
+    calibrate / collect, or the launch of a subagent — whichever comes first.
+    Slash commands and interruptions inside it are the cost of finding the
+    door.
+    """
+    first_call = ts_to_epoch(calls[0].ts) if calls else None
+    work = [ts_to_epoch(c.ts) for c in calls if c.sub in ("analyze", "calibrate", "collect")]
+    work += [ts_to_epoch(s.started) for s in session.subagents if s.started]
+    window_end = min(work) if work else (first_call or float("inf"))
+    before = [t for t in session.turns
+              if t.role == "user" and ts_to_epoch(t.ts) < window_end]
+    return {
+        "user_prompts": [
+            {"ts": t.ts, "text": t.text} for t in session.turns
+            if t.role == "user" and t.kind == "text" and t.agent == MAIN
+        ][:12],
+        "slash_commands": [
+            {"ts": t.ts, "command": t.command, "args": t.args}
+            for t in session.turns if t.kind == "slash"
+        ],
+        "skills_loaded": list(session.skills_loaded),
+        "interruptions": sum(1 for t in session.turns if t.kind == "interrupt"),
+        "interruptions_in_entry": sum(1 for t in before if t.kind == "interrupt"),
+        "slash_in_entry": sum(1 for t in before if t.kind == "slash"),
+        "entry_seconds": (round(window_end - ts_to_epoch(session.started))
+                          if work and session.started else None),
+        "seconds_to_first_call": (
+            round(first_call - ts_to_epoch(session.started))
+            if first_call and session.started else None),
+    }
+
+
+# ------------------------------------------------------------------- config
+
+def config_snapshot(cfg: Config | None) -> dict[str, Any]:
+    if cfg is None:
+        return {"present": False}
+    return {
+        "present": True,
+        "path": str(cfg.path) if cfg.path else None,
+        "local": str(cfg.local_path) if cfg.local_path else None,
+        "scenario": cfg.get("scenario.name"),
+        "process": cfg.get("project.process"),
+        "source_root": cfg.get("project.source_root"),
+        "max_rounds": cfg.get("loop.max_rounds"),
+        "instrumentation_allowed": cfg.get("instrumentation.allowed"),
+        "temp_prefix": cfg.get("instrumentation.temp_prefix"),
+        "detector_overrides": cfg.detector_overrides,
+    }
+
+
+# ------------------------------------------------------------------ gather
+
+def gather(session: Session, cfg: Config | None,
+           runs: list[dict[str, Any]]) -> Facts:
+    calls = echolot_calls(session)
+    window = None
+    if session.started and session.ended:
+        window = (ts_to_epoch(session.started), ts_to_epoch(session.ended))
+    inside = match_runs(calls, runs, window)
+    return Facts(
+        echolot_calls=calls,
+        milestones=milestones(session, calls),
+        hunts=hunts(session, cfg),
+        cost=cost(session),
+        top_outputs=top_outputs(session),
+        instrumentation=instrumentation(session, cfg),
+        gaps=gaps(session),
+        entry=entry(session, calls),
+        config=config_snapshot(cfg),
+        runs=inside,
+    )

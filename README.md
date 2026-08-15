@@ -76,6 +76,7 @@ names       slice name inventory and detector mask coverage
 calibrate   thresholds derived from known-healthy runs
 analyze     run the detectors, build a Marker Report
 explain     list the detectors and their parameters
+reflect     the same kind of report over an agent session — for improving the tool
 ```
 
 ## Where things live
@@ -84,7 +85,7 @@ explain     list the detectors and their parameters
 android-project/
 ├── echolot.yml       ← the project half, committed
 ├── local.yml         ← device serials, binary path; in .gitignore
-└── .echolot/         ← traces and reports; in .gitignore
+└── .echolot/         ← traces, reports, the run log, reflect reports; in .gitignore
 ```
 
 Read it like `gradle.properties` and `local.properties`: one tool per machine,
@@ -100,6 +101,7 @@ the binding to a project inside that project's repository.
 | [docs/calibrate.md](docs/calibrate.md) | thresholds from healthy runs, why rank beats percentile |
 | [docs/determinism.md](docs/determinism.md) | the pinned trace_processor, `doctor`, the self-check |
 | [docs/agent-layer.md](docs/agent-layer.md) | the `.claude/` layer and why the loop lives in a subagent |
+| [docs/reflect.md](docs/reflect.md) | `reflect` — the report over the agent's session, for improving the tool |
 
 The agent-facing reference material ships inside the package, under
 `echolot/claude/skills/echolot/references/` — the report schema, the config

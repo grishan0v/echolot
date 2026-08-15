@@ -38,7 +38,7 @@ dependencies = [
 echolot = "echolot.main:main"
 
 [tool.setuptools]
-packages = ["echolot"]
+packages = ["echolot", "echolot.reflect"]
 
 # Without this the installed package has no detectors: SQL_DIR points at
 # echolot/sql next to __file__, and a wheel ships only .py by default.

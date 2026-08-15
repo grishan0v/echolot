@@ -78,6 +78,10 @@ network speed.
 Thresholds are tied to a device and a scenario. When either changes, run
 `echolot calibrate` on healthy runs instead of nudging numbers by hand.
 
+When the question is about the tool rather than the app — "how did that
+session go, what should change in echolot" — that is `/echolot-reflect`, not
+this skill.
+
 ## References
 
 - `references/report.md` — the `report.json` schema, all detectors, what each column means

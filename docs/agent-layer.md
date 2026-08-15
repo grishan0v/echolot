@@ -15,6 +15,7 @@ Installs into the project the knowledge of how to use the tool:
 ├── agents/perf-hunter.md     subagent: the iterative loop
 ├── commands/echolot-setup.md /echolot-setup — build the config
 ├── commands/echolot-hunt.md  /echolot-hunt — find the cause
+├── commands/echolot-reflect.md /echolot-reflect — how the session went, what to change in the tool
 └── settings.json             permission to call echolot without asking
 ```
 

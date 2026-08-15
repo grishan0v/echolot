@@ -11,16 +11,21 @@ Commands:
   calibrate <trace...>        thresholds from known-healthy runs
   analyze  <trace> -c cfg     run the detectors, build a Marker Report
   explain                     list the detectors and their parameters
+  reflect  [--last|--all]     the same kind of report over an agent session:
+                              how the tool was used, where it got in the way
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
+from . import recorder
 from . import report as report_mod
 from .config import NO_ANCHOR, Config, ConfigError
 from .tp import (
@@ -167,6 +172,15 @@ def cmd_analyze(args) -> int:
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+    w = rep.get("window") or {}
+    recorder.note(
+        traces=len(args.traces),
+        fired=rep["summary"]["fired_ids"],
+        window_ms=w.get("duration_ms"),
+        start_anchor_matches=(w.get("start_anchor") or {}).get("matches"),
+        process_alternatives=len(w.get("process_alternatives") or []),
+    )
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -792,6 +806,8 @@ def cmd_doctor(args) -> int:
     failed = [(name, why) for name, why in results if why]
     for name, why in results:
         print(f"  ok    {name}" if not why else f"  FAILS {name}\n          {why}")
+    recorder.note(checks=len(results), failed=[name for name, _ in failed],
+                  trace_processor=info.get("trace_processor"))
 
     print()
     if failed:
@@ -819,6 +835,188 @@ def cmd_explain(args) -> int:
             print(f"  params: {d.params}")
         print()
     return 0
+
+
+def cmd_reflect(args) -> int:
+    """The Marker Report over an agent session instead of a trace.
+
+    Reads the agent's transcript (Claude Code for now) plus the tool's own
+    `runs.jsonl`, compresses them into facts and signals, and writes
+    `.echolot/reflect/<session>.md` and `.json`. Run it from the application
+    project the agent worked in — that is where Claude Code keyed the
+    transcript, and where echolot.yml and the recorder log live.
+    """
+    from datetime import datetime, timezone
+
+    from .reflect import claude_code
+    from .reflect import facts as facts_mod
+    from .reflect import render as reflect_render
+    from .reflect import signals as signals_mod
+
+    project = Path(args.project or ".").resolve()
+    if args.transcripts:
+        tdir = Path(args.transcripts).expanduser()
+    else:
+        tdir = claude_code.project_dir(project)
+    if tdir is None or not tdir.is_dir():
+        looked = claude_code.PROJECTS_ROOT / claude_code.slug_candidates(project)[0]
+        print(f"error: no Claude Code transcripts for {project}\n"
+              f"  looked in: {looked}\n"
+              f"  Run from the application project the agent worked in, or "
+              f"point --transcripts at the directory.", file=sys.stderr)
+        return 2
+
+    since = _parse_since(args.since) if args.since else None
+    refs = claude_code.list_sessions(tdir)
+    if since is not None:
+        refs = [r for r in refs if r.mtime >= since]
+    if args.session:
+        refs = [r for r in refs if r.id.startswith(args.session)]
+        if not refs:
+            print(f"error: no session starting with '{args.session}' in {tdir}",
+                  file=sys.stderr)
+            return 2
+
+    picked = []
+    for ref in refs:
+        session = claude_code.read_session(ref.path)
+        # An explicit id is taken as is; otherwise only sessions that used the
+        # tool for real work count — a session that merely ran `reflect` is
+        # not worth reflecting on.
+        if not args.session and not claude_code.involves_echolot(session):
+            continue
+        picked.append((ref, session))
+        if not (args.all or args.list or args.session or since is not None):
+            break   # --last: the newest one is enough
+
+    if not picked:
+        print(f"nothing to reflect on: no session under {tdir} used echolot"
+              + (f" since {args.since}" if args.since else ""), file=sys.stderr)
+        return 1
+
+    if args.list:
+        print(f"{'session':10} {'started (UTC)':17} {'dur':>7} {'echolot':>7} "
+              f"{'hunt':>4}  first prompt")
+        for ref, s in picked:
+            subs = claude_code.echolot_subcommands(s)
+            hunts = sum(1 for a in s.subagents if a.type == "perf-hunter")
+            first = next((t.text for t in s.turns if t.role == "user" and t.kind == "text"), "")
+            dur = s.duration_s()
+            print(f"{ref.id[:8]:10} {(s.started or '')[:16].replace('T', ' '):17} "
+                  f"{_fmt_dur(dur):>7} {len(subs):>7} {hunts:>4}  "
+                  f"{' '.join(first.split())[:60]}")
+        return 0
+
+    cfg = None
+    cfg_path = Path(args.config)
+    if not cfg_path.is_absolute() and project != Path.cwd():
+        cfg_path = project / cfg_path
+    if cfg_path.exists():
+        try:
+            cfg = Config.load(cfg_path, args.local)
+        except ConfigError as e:
+            print(f"config ignored: {e}", file=sys.stderr)
+    runs = recorder.read(project / recorder.LOG_FILE)
+
+    out_dir = Path(args.out)
+    if not out_dir.is_absolute():
+        out_dir = project / out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    reports = []
+    written = []
+    for ref, session in picked:
+        facts = facts_mod.gather(session, cfg, runs)
+        sigs = signals_mod.run(session, facts, cfg)
+        rep = reflect_render.build(session, facts, sigs)
+        stem = ref.id[:8]
+        (out_dir / f"{stem}.json").write_text(
+            reflect_render.to_json(rep), encoding="utf-8")
+        (out_dir / f"{stem}.md").write_text(
+            reflect_render.to_markdown(rep), encoding="utf-8")
+        written += [out_dir / f"{stem}.md", out_dir / f"{stem}.json"]
+        reports.append(rep)
+
+    recorder.note(sessions=len(reports),
+                  warn=sum(r["summary"]["signals"].get("warn", 0) for r in reports))
+
+    if len(reports) == 1:
+        print(reflect_render.to_markdown(reports[0]))
+    else:
+        summary = _reflect_summary(reports)
+        (out_dir / "summary.md").write_text(summary, encoding="utf-8")
+        (out_dir / "summary.json").write_text(json.dumps({
+            "schema": 1,
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "sessions": [{
+                "session": r["source"]["session"], "started": r["context"]["started"],
+                "duration_s": r["context"]["duration_s"], "summary": r["summary"],
+            } for r in reports],
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        written += [out_dir / "summary.md", out_dir / "summary.json"]
+        print(summary)
+
+    print("\n" + "\n".join(f"→ {p}" for p in written), file=sys.stderr)
+    return 0
+
+
+def _parse_since(text: str) -> float:
+    """`2h`, `30m`, `3d` → epoch seconds of the cut-off."""
+    import time as _time
+    m = re.fullmatch(r"(\d+)\s*([mhd])", text.strip())
+    if not m:
+        raise SystemExit(f"error: --since expects e.g. 2h, 30m, 3d; got '{text}'")
+    n, unit = int(m.group(1)), m.group(2)
+    return _time.time() - n * {"m": 60, "h": 3600, "d": 86400}[unit]
+
+
+def _fmt_dur(seconds) -> str:
+    if seconds is None:
+        return "—"
+    s = int(seconds)
+    return f"{s // 60}m" if s < 3600 else f"{s // 3600}h{(s % 3600) // 60:02d}"
+
+
+def _reflect_summary(reports: list[dict]) -> str:
+    """Several sessions on one page: a row each, then how often each signal fires."""
+    out = ["# Reflect Summary", "",
+           f"{len(reports)} session(s), newest first.", ""]
+    rows = []
+    freq: dict[str, list[int]] = {}
+    for r in reports:
+        s = r["summary"]
+        hunts = r.get("hunts") or []
+        rows.append({
+            "session": r["source"]["session"][:8],
+            "started": (r["context"].get("started") or "")[:16].replace("T", " "),
+            "dur": _fmt_dur(r["context"].get("duration_s")),
+            "echolot": s["echolot_calls"],
+            "hunts": len(hunts),
+            "rounds": ", ".join(str(h["rounds"]) for h in hunts) or "—",
+            "confidence": ", ".join(str(h.get("confidence") or "?") for h in hunts) or "—",
+            "warn": s["signals"].get("warn", 0),
+            "warn ids": ", ".join(s.get("warn_ids") or []),
+        })
+        for sig in r["signals"]:
+            freq.setdefault(f"{sig['severity']} {sig['id']}", []).append(1)
+    out.append(_md_table(rows))
+    out.append("")
+    out.append("## Signals by frequency")
+    out.append("")
+    out.append(_md_table([{"signal": k, "sessions": len(v)}
+                          for k, v in sorted(freq.items(), key=lambda kv: (-len(kv[1]), kv[0]))]))
+    return "\n".join(out)
+
+
+def _md_table(rows: list[dict]) -> str:
+    if not rows:
+        return "_empty_"
+    cols = list(rows[0].keys())
+    head = "| " + " | ".join(cols) + " |"
+    sep = "|" + "|".join("---" for _ in cols) + "|"
+    body = ["| " + " | ".join(str(r.get(c, "")).replace("|", "\\|") for c in cols) + " |"
+            for r in rows]
+    return "\n".join([head, sep, *body])
 
 
 def _dump(tp, sql: str) -> None:
@@ -918,12 +1116,45 @@ def build_parser() -> argparse.ArgumentParser:
 
     ex = sub.add_parser("explain", help="list the detectors")
     ex.set_defaults(func=cmd_explain)
+
+    rf = sub.add_parser(
+        "reflect", help="a Marker Report over an agent session — for improving the tool")
+    pick = rf.add_mutually_exclusive_group()
+    pick.add_argument("--last", action="store_true",
+                      help="the newest session that used echolot (default)")
+    pick.add_argument("--session", metavar="ID",
+                      help="a session id, or its first characters")
+    pick.add_argument("--since", metavar="2h",
+                      help="every session that used echolot in the last 2h / 30m / 3d")
+    pick.add_argument("--all", action="store_true",
+                      help="every session that used echolot, plus a summary")
+    rf.add_argument("--list", action="store_true",
+                    help="only list the candidate sessions, write nothing")
+    rf.add_argument("--project", metavar="ROOT",
+                    help="the application project the agent worked in (default: .)")
+    rf.add_argument("--transcripts", metavar="DIR",
+                    help="transcript directory, if not ~/.claude/projects/<slug>")
+    rf.add_argument("-c", "--config", default="echolot.yml",
+                    help="the project config, for the protocol checks")
+    rf.add_argument("--local", help="path to local.yml (defaults to alongside)")
+    rf.add_argument("-o", "--out", default=".echolot/reflect")
+    rf.set_defaults(func=cmd_reflect)
     return p
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    # Every invocation leaves one line in .echolot/log/runs.jsonl — the tool's
+    # own record of what was asked and how it went, independent of whichever
+    # agent (or human) was typing. `echolot reflect` reads it later.
+    started = time.time()
+    try:
+        code = args.func(args)
+    except BaseException as e:
+        recorder.record(args, argv, started, exit_code=1, error=e)
+        raise
+    recorder.record(args, argv, started, exit_code=code)
+    return code
 
 
 if __name__ == "__main__":
