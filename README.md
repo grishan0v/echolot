@@ -1,21 +1,5 @@
-# echolot
 
-A deterministic layer between a Perfetto trace and an AI agent.
-
-The agent **never looks at the trace**. A trace is gigabytes, and a model
-drowns in them: it burns tokens, wanders into side quests, and reaches
-different conclusions from one run to the next. Between the trace and the model
-sits a CLI that compresses the trace with pre-written SQL down to a table of
-twenty rows.
-
-```
-81 MB trace, 475k slices   →   14 KB report.json   in 5 seconds
-```
-
-The agent reasons over facts instead of digging for them.
-
-Side effect: the tool is useful with no AI involved at all — it is a set of
-ready-made detectors you can hang in CI and catch regressions for zero tokens.
+<img width="2560" height="904" alt="echolot-hero" src="https://github.com/user-attachments/assets/c5640665-d1ae-41ac-8da9-669434ce51ac" />
 
 ## Install
 
@@ -23,14 +7,12 @@ ready-made detectors you can hang in CI and catch regressions for zero tokens.
 pipx install git+https://github.com/grishan0v/echolot.git
 ```
 
-`trace_processor_shell` does not need installing — the `perfetto` package
-downloads and caches the binary on first use.
-
 ## First time
 
 ```bash
-cd ~/StudioProjects/my-app
-echolot init
+cd ~/my-app
+//open your agent
+/echolot init
 ```
 
 That installs the `.claude/` layer — the skill, the `perf-hunter` agent, the
