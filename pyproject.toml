@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=68"]
+# >=77 for the SPDX `license = "..."` form (PEP 639); older setuptools would
+# reject the key as a plain string.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,8 +9,25 @@ name = "echolot"
 version = "0.1.0"
 description = "A deterministic layer between Perfetto traces and AI agents"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "Andrey Grishanov", email = "grishanov.dev@gmail.com" }]
+keywords = ["perfetto", "android", "performance", "tracing", "profiling", "ai-agents", "claude-code"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: System :: Monitoring",
+]
 
 dependencies = [
     # The version is pinned exactly, and that is a necessity rather than hygiene.
@@ -34,11 +53,22 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/grishan0v/echolot"
+Documentation = "https://github.com/grishan0v/echolot/tree/main/docs"
+Repository = "https://github.com/grishan0v/echolot"
+Issues = "https://github.com/grishan0v/echolot/issues"
+
 [project.scripts]
 echolot = "echolot.main:main"
 
-[tool.setuptools]
-packages = ["echolot", "echolot.reflect"]
+# Namespace discovery rather than an explicit list: echolot/sql and
+# echolot/claude have no __init__.py, and setuptools' rule for such
+# data-only directories under an explicitly listed package is deprecated —
+# a newer setuptools in CI could drop them from the wheel without a word.
+# With `find` + namespaces (the default) they are found on purpose.
+[tool.setuptools.packages.find]
+include = ["echolot*"]
 
 # Without this the installed package has no detectors: SQL_DIR points at
 # echolot/sql next to __file__, and a wheel ships only .py by default.

@@ -4,7 +4,7 @@
 ## Install
 
 ```bash
-pipx install git+https://github.com/grishan0v/echolot.git
+pipx install echolot
 ```
 
 ## First time
@@ -122,14 +122,14 @@ the binding to a project inside that project's repository.
 
 | document | about |
 |---|---|
-| [docs/collecting.md](docs/collecting.md) | `collect`, the three modes, merging repeats |
-| [docs/analysing.md](docs/analysing.md) | `probe`, `names`, `domains` — from a trace to a place in the code |
-| [docs/mark.md](docs/mark.md) | `mark` — the first markers for a project with no instrumentation, from the platform's vocabulary |
-| [docs/detectors.md](docs/detectors.md) | writing your own, the context views, self time versus total |
-| [docs/calibrate.md](docs/calibrate.md) | thresholds from healthy runs, why rank beats percentile |
-| [docs/determinism.md](docs/determinism.md) | the pinned trace_processor, `doctor`, the self-check |
-| [docs/agent-layer.md](docs/agent-layer.md) | the `.claude/` layer and why the loop lives in a subagent |
-| [docs/reflect.md](docs/reflect.md) | `reflect` — the report over the agent's session, for improving the tool |
+| [docs/collecting.md](https://github.com/grishan0v/echolot/blob/main/docs/collecting.md) | `collect`, the three modes, merging repeats |
+| [docs/analysing.md](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md) | `probe`, `names`, `domains` — from a trace to a place in the code |
+| [docs/mark.md](https://github.com/grishan0v/echolot/blob/main/docs/mark.md) | `mark` — the first markers for a project with no instrumentation, from the platform's vocabulary |
+| [docs/detectors.md](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md) | writing your own, the context views, self time versus total |
+| [docs/calibrate.md](https://github.com/grishan0v/echolot/blob/main/docs/calibrate.md) | thresholds from healthy runs, why rank beats percentile |
+| [docs/determinism.md](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) | the pinned trace_processor, `doctor`, the self-check |
+| [docs/agent-layer.md](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md) | the `.claude/` layer and why the loop lives in a subagent |
+| [docs/reflect.md](https://github.com/grishan0v/echolot/blob/main/docs/reflect.md) | `reflect` — the report over the agent's session, for improving the tool |
 
 The agent-facing reference material ships inside the package, under
 `echolot/claude/skills/echolot/references/` — the report schema, the config
