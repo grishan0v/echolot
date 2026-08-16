@@ -10,10 +10,12 @@ You:
   collect  -c cfg -n 5        capture N traces of one scenario from a device
   doctor                      environment + self-check, exit 0/1; -q for three lines
 
-The agent (through /echolot-setup and /echolot-hunt in Claude Code):
+The agent (through /echolot in Claude Code):
   probe    <trace>            what is inside the trace at all
   names    <trace>            how slices are named and what the masks see
   domains  --root <repo>      slice-to-code map and instrumentation coverage
+  mark     [--apply|--remove] the first temporary markers for a project with none,
+                              from the manifest and the SDK, never from names
   calibrate <trace...>        thresholds from known-healthy runs
   explain                     the detectors and their parameters
 

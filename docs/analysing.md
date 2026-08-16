@@ -116,7 +116,9 @@ with the most code and none of it instrumented:
 ```
 
 That is an honest answer to "how much do we need to instrument before this
-works": not a number pulled from the air but addresses for the skeleton.
+works": the modules with the most code and none of it, by name.
 
 `uninstrumented_cpu` works without any instrumentation anyway — it will show
-which of those modules actually burns CPU, so the skeleton goes where it pays.
+which of those modules actually burns CPU. And where the first markers go —
+the entry points, from the manifest and the SDK, with a source on every row
+— is `echolot mark`, in [mark.md](mark.md).

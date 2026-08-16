@@ -26,7 +26,11 @@ should be holding real options from a real trace, not guesses.
 
 No instrumentation at all is normal and is an important fact. `echolot domains`
 prints the coverage and the modules with the most code and none of it; show
-that to the user and offer a skeleton later, after the first report.
+that to the user. Then run `echolot mark`: it lists the entry points the
+first markers would go to — from the manifest and the SDK, with a source on
+each row — and says whether `androidx.compose.runtime:runtime-tracing` is
+missing. Show the list; do not apply anything during setup. The hunt applies
+it when the first report has nothing of the application's to name.
 
 ### 2. A probe trace
 

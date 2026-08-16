@@ -113,6 +113,7 @@ these:
 probe       processes, threads by CPU, scenario anchor candidates
 names       slice name inventory and detector mask coverage
 domains     slice-to-code map and instrumentation coverage
+mark        the first temporary markers for a project with none — from the manifest and the SDK, not from names; --apply / --remove
 calibrate   thresholds derived from known-healthy runs
 explain     list the detectors and their parameters
 ```
@@ -141,6 +142,7 @@ the binding to a project inside that project's repository.
 |---|---|
 | [docs/collecting.md](docs/collecting.md) | `collect`, the three modes, merging repeats |
 | [docs/analysing.md](docs/analysing.md) | `probe`, `names`, `domains` — from a trace to a place in the code |
+| [docs/mark.md](docs/mark.md) | `mark` — the first markers for a project with no instrumentation, from the platform's vocabulary |
 | [docs/detectors.md](docs/detectors.md) | writing your own, the context views, self time versus total |
 | [docs/calibrate.md](docs/calibrate.md) | thresholds from healthy runs, why rank beats percentile |
 | [docs/determinism.md](docs/determinism.md) | the pinned trace_processor, `doctor`, the self-check |

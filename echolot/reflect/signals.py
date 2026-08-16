@@ -790,12 +790,10 @@ def code_read_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None
                   "instrumentation to map them to: the agent reads to decide where "
                   "the first markers go.",
                   rows,
-                  "The bridge is missing on the tool's side: something that proposes "
-                  "the first instrumentation sites for a scenario (Application, the "
-                  "launcher Activity, setContent, the first ViewModel, Room) would "
-                  "replace most of these reads. Until then perf-hunter.md should say: "
-                  "instrument the skeleton first, read second, and never `cat` a "
-                  "whole file.")
+                  "`echolot mark` proposes the first markers from the manifest and the "
+                  "SDK and `--apply` puts them in; if the agent read the app instead, "
+                  "check whether it ran mark at all (the echolot calls column), and if "
+                  "it did, which reads came after — those are what mark did not cover.")
 
 
 def long_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None:

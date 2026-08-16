@@ -25,21 +25,25 @@ over the app took forty to sixty percent of everything that entered the
 window — before a single marker was placed. It happens when the report names
 system slices and threads (`bindApplication`, `Compose:recompose`,
 `arch_disk_io_*`) and `domains` has no instrumentation to map them to. That
-is not a reason to read the app; it is the definition of a blind spot, and
-the answer to a blind spot is instrumentation, not archaeology:
+is the definition of a blind spot, and the answer to a blind spot is
+instrumentation:
 
-- Instrument the skeleton first, read second. With no instrumentation at all,
-  five to seven markers at the scenario's obvious joints — `Application.onCreate`,
-  the launcher Activity's `onCreate`, `setContent {`, the first ViewModel's
-  init, the DI graph, `Room.databaseBuilder` — and one re-record tell you more
-  than an hour of reading. Locate those joints with `grep -n` for the class
-  and function names, not by opening files.
-- Read the lines around a slice name, not the file: `grep -n "name" -A5 -B5`
-  or `sed -n 40,70p`. Never `cat` a whole source file into the window.
+- `echolot mark` first, reading second. With no instrumentation at all, run
+  `echolot mark`: it names the entry points from the manifest and the SDK —
+  `Application.onCreate`, the launcher Activity's `onCreate`, `setContent`,
+  the composables it calls, Room, DI — with a source on every row. Show the
+  list, then `echolot mark --apply`, re-record once. That report names this
+  application's code, and `domains` has something to point at.
+- After that, read the one place the report named — the lines around it:
+  `grep -n "name" -A5 -B5` or `sed -n 40,70p`. Never `cat` a whole source
+  file into the window.
 - Budget: a handful of source reads per round. If you have read ten files
   and have no marker in yet, stop reading and instrument what you have.
 - The report is the primary source. `report.json`, `names`, `probe`,
-  `domains` come before any file in `app/`.
+  `domains`, `mark` come before any file in `app/`.
+- Where `mark` says it cannot see (an Activity that inherits its `onCreate`
+  from a base class, an ambiguity between modules), it says so; that note
+  is where your one `grep -n` goes.
 
 **Do not nudge thresholds until something fires.** An empty report is an
 answer. Thresholds are changed by `echolot calibrate` from healthy runs, not by
@@ -80,9 +84,11 @@ own.
 3. hypotheses: firing detectors → domains → files
    localised to a place in the code → exit with the finding
 
-4. otherwise pick a blind spot (usually uninstrumented_cpu),
-   add AGENTTMP_ instrumentation,
+4. otherwise pick a blind spot (usually uninstrumented_cpu):
+   no instrumentation at all → echolot mark, then echolot mark --apply
+   a named place → a few AGENTTMP_ markers around it, by hand
    copy the current traces aside, re-record, round += 1
+   (cleanup: echolot mark --remove takes out what --apply put in)
    round > loop.max_rounds → exit with an interim conclusion
 
 5. cleanup: remove every AGENTTMP_ marker — always
@@ -100,6 +106,9 @@ echolot analyze … --set main_thread_block.min_slice_ms=4
 echolot names <trace>                              slice names of project.process — with
                                                    --top 200 --min-ms 0 to see AGENTTMP_ ones
 echolot domains --root .                           slice name → file
+echolot mark                                       the first markers for a project with none:
+                                                   where and why; --apply puts them in,
+                                                   --remove takes exactly those out
 echolot explain                                    the detectors and their default params
 ```
 

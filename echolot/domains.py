@@ -151,8 +151,8 @@ def render(sites: list[Site], stats: dict[str, ModuleStat],
         out.append("#")
         out.append("# No instrumentation. There is nothing to attach findings")
         out.append("# to: the detectors will show system slices and blind")
-        out.append("# spots, but not a place in the code. Start with a")
-        out.append("# skeleton — one slice per major stage boundary. Modules")
+        out.append("# spots, but not a place in the code. `echolot mark`")
+        out.append("# names the entry points the first markers go to. Modules")
         out.append("# with the most code and no instrumentation at all:")
         out.append("#")
         empty = sorted((s for s in stats.values() if not s.sites),

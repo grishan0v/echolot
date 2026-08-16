@@ -55,15 +55,15 @@ Pass the agent:
 - that doctor passed, and at what time — so the agent skips its own run
 - whether the project has any instrumentation (`echolot domains --root .`
   says). If it has none, say so and say what follows: the report will name
-  system slices and threads, and the agent's first move is a skeleton of
-  markers and one re-record — not reading the app to find where the time
-  goes.
+  system slices and threads, and the agent's first move is `echolot mark`
+  (then `--apply`) and one re-record; reading the app to find where the
+  time goes comes after the report has named a place.
 
 The window is the budget. In two hunts out of two the agent spent forty to
-sixty percent of it reading sources by hand; `echolot reflect` now shows the
-split (`window fed by:` in the Subagent section) and flags it. If it keeps
-happening, the fix is in the tool — a command that proposes the first
-instrumentation sites — not in more words here.
+sixty percent of it reading sources by hand; `echolot reflect` shows the
+split (`window fed by:` in the Subagent section) and flags it. `echolot
+mark` exists for exactly that step; if the share stays high with it in
+place, the report says which reads it did not replace.
 
 Do not re-record in the main context, and do not move the traces the agent
 is about to compare against. If a re-record is needed, it happens inside the
