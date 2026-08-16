@@ -1021,6 +1021,63 @@ def cmd_domains(args) -> int:
     return 0
 
 
+def cmd_mark(args) -> int:
+    """Where the first temporary markers go — and putting them there.
+
+    Bound to the platform's vocabulary only (manifest, lifecycle, API calls,
+    one call hop from setContent), so the answer is the same on any project
+    and says "not found" where it cannot see. See mark.py.
+    """
+    from . import mark as mark_mod
+
+    root = Path(args.root).resolve()
+    if not root.is_dir():
+        print(f"no such directory: {root}", file=sys.stderr)
+        return 2
+    package, allowed, prefix = None, [], mark_mod.DEFAULT_PREFIX
+    if args.config and Path(args.config).exists():
+        try:
+            cfg = Config.load(args.config, getattr(args, "local", None))
+            package = cfg.get("project.package") or cfg.get("project.process")
+            allowed = list(cfg.get("instrumentation.allowed") or [])
+            prefix = str(cfg.get("instrumentation.temp_prefix") or prefix)
+        except ConfigError as e:
+            print(f"config ignored: {e}", file=sys.stderr)
+
+    if args.remove:
+        touched = mark_mod.remove(root)
+        for rel, n in touched:
+            print(f"  - {rel}: {n} line(s)")
+        print(f"removed markers from {len(touched)} file(s)" if touched
+              else "no `echolot:mark` lines found under this root")
+        recorder.note(removed_files=len(touched))
+        return 0
+
+    pl = mark_mod.plan(root, package=package, allowed=allowed, prefix=prefix,
+                       module=args.module)
+    if args.json:
+        print(json.dumps(pl.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        for line in mark_mod.render(pl):
+            print(line)
+    recorder.note(proposals=len(pl.proposals),
+                  applicable=sum(1 for p in pl.proposals if p.applicable),
+                  ambiguity=len(pl.ambiguity))
+    if pl.ambiguity:
+        return 2
+
+    if args.apply:
+        done = mark_mod.apply(root, pl)
+        print()
+        for rel, markers in done:
+            print(f"  + {rel}: {', '.join(markers)}")
+        print(f"applied {sum(len(m) for _, m in done)} marker(s) in {len(done)} file(s); "
+              f"every inserted line ends with `{mark_mod.TAG}` — `echolot mark --remove` "
+              f"takes them out" if done else "nothing applicable to apply")
+        recorder.note(applied=sum(len(m) for _, m in done))
+    return 0
+
+
 def cmd_collect(args) -> int:
     """N repeats of one scenario.
 
@@ -1672,6 +1729,26 @@ def build_parser() -> argparse.ArgumentParser:
     dom.add_argument("--top", type=int, default=12,
                      help="how many modules to list when there is none")
     dom.set_defaults(func=cmd_domains)
+
+    mk = sub.add_parser(
+        "mark", help="where the first temporary markers go; --apply puts them there",
+        description="Proposes the first AGENTTMP_ markers for a project with no "
+                    "instrumentation, from the platform's vocabulary only: the "
+                    "manifest's launcher Activity and Application class, their "
+                    "onCreate, setContent, one call hop from it, Room and DI entry "
+                    "points. Each row says where it comes from. --apply inserts "
+                    "begin/end pairs tagged `// echolot:mark`; --remove deletes "
+                    "exactly those lines.")
+    mk.add_argument("--root", default=".", help="repository root")
+    mk.add_argument("-c", "--config", default="echolot.yml",
+                    help="for project.package (which app module) and instrumentation.allowed")
+    mk.add_argument("--local", help="path to local.yml (defaults to alongside)")
+    mk.add_argument("--module", help="the app module when several declare a launcher, e.g. :app")
+    mk.add_argument("--apply", action="store_true", help="insert the applicable markers")
+    mk.add_argument("--remove", action="store_true",
+                    help="delete every line tagged `// echolot:mark` under --root")
+    mk.add_argument("--json", action="store_true", help="the plan as JSON")
+    mk.set_defaults(func=cmd_mark)
 
     col = sub.add_parser("collect", help="capture N traces of one scenario")
     col.add_argument("-c", "--config", default="echolot.yml")

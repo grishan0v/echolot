@@ -554,6 +554,184 @@ def _(report):
     assert len(line) < 400, f"the warning is {len(line)} chars long"
 
 
+# --- mark ------------------------------------------------------------------
+
+def _mark_repo(root: Path, *, app="GloomApp", act="MainActivity", theme="AppTheme",
+               nav="AppNavHost", pkg="com.example.app", app_return=False,
+               launcher=True, second_app=False) -> None:
+    """A Kotlin + Compose app: manifest, Application, launcher Activity with
+    setContent, a theme and a nav host in two modules, Room in a core module.
+
+    Every name is a parameter so the same tree can be built with nonsense
+    names — `mark` must give the same skeleton, source for source.
+    """
+    (root / "settings.gradle.kts").write_text("", encoding="utf-8")
+    for module in ("app", "feature/home", "core/database", "core/ui"):
+        (root / module).mkdir(parents=True, exist_ok=True)
+        (root / module / "build.gradle.kts").write_text(
+            f'android {{ namespace = "{pkg}{"" if module == "app" else "." + module.replace("/", ".")}" }}\n',
+            encoding="utf-8")
+    main = root / "app/src/main"
+    (main / "kotlin/x").mkdir(parents=True)
+    filt = ("<intent-filter><action android:name=\"android.intent.action.MAIN\" />"
+            "<category android:name=\"android.intent.category.LAUNCHER\" /></intent-filter>"
+            if launcher else "")
+    (main / "AndroidManifest.xml").write_text(
+        f'<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+        f'  <application android:name=".{app}">\n'
+        f'    <activity android:name=".ui.{act}" android:exported="true">{filt}</activity>\n'
+        f'    <activity android:name=".ui.Other" />\n'
+        f'  </application>\n</manifest>\n', encoding="utf-8")
+    ret = "        if (BuildConfig.DEBUG) return\n" if app_return else ""
+    (main / f"kotlin/x/{app}.kt").write_text(
+        f"package {pkg}\n\nclass {app} : Application() {{\n"
+        f"    override fun onCreate() {{\n        super.onCreate()\n{ret}"
+        f"        // a string with a brace: \"}}\" and a comment }} here\n"
+        f"        init()\n    }}\n}}\n", encoding="utf-8")
+    (main / f"kotlin/x/{act}.kt").write_text(
+        f"package {pkg}.ui\n\nclass {act} : ComponentActivity() {{\n"
+        f"    override fun onCreate(savedInstanceState: Bundle?) {{\n"
+        f"        super.onCreate(savedInstanceState)\n"
+        f"        setContent {{\n            {theme} {{\n                Surface(modifier = Modifier) {{\n"
+        f"                    {nav}(start = true)\n                }}\n            }}\n        }}\n"
+        f"    }}\n}}\n", encoding="utf-8")
+    ui = root / "core/ui/src/main/kotlin"
+    ui.mkdir(parents=True)
+    (ui / "Theme.kt").write_text(
+        f"package {pkg}.core.ui\n\n@Composable\nfun {theme}(content: @Composable () -> Unit) {{\n"
+        f"    MaterialTheme(content = content)\n}}\n", encoding="utf-8")
+    home = root / "feature/home/src/main/kotlin"
+    home.mkdir(parents=True)
+    (home / "Nav.kt").write_text(
+        f"package {pkg}.feature.home\n\n@Composable\nfun {nav}(start: Boolean) {{\n"
+        f"    NavHost(startDestination = \"home\") {{ }}\n}}\n", encoding="utf-8")
+    db = root / "core/database/src/main/kotlin"
+    db.mkdir(parents=True)
+    (db / "Db.kt").write_text(
+        f"package {pkg}.core.database\n\nfun open(ctx: Context) =\n"
+        f"    Room.databaseBuilder(ctx, AppDb::class.java, \"app.db\").build()\n",
+        encoding="utf-8")
+    if second_app:
+        wear = root / "wear/src/main"
+        (wear / "kotlin").mkdir(parents=True)
+        (root / "wear/build.gradle.kts").write_text(
+            f'android {{ namespace = "{pkg}.wear" }}\n', encoding="utf-8")
+        (wear / "AndroidManifest.xml").write_text(
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+            '  <application><activity android:name=".WearActivity">'
+            '<intent-filter><action android:name="android.intent.action.MAIN" />'
+            '<category android:name="android.intent.category.LAUNCHER" /></intent-filter>'
+            '</activity></application>\n</manifest>\n', encoding="utf-8")
+        (wear / "kotlin/WearActivity.kt").write_text(
+            f"package {pkg}.wear\nclass WearActivity : ComponentActivity() {{\n"
+            f"    override fun onCreate(b: Bundle?) {{ super.onCreate(b) }}\n}}\n",
+            encoding="utf-8")
+
+
+def _shape(pl) -> list[tuple[str, str, bool]]:
+    return [(p.kind, p.source, p.applicable) for p in pl.proposals]
+
+
+@check("mark: the skeleton comes from the platform's vocabulary, not the project's names")
+def _(report):
+    from . import mark as mk
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root)
+        pl = mk.plan(root, package="com.example.app",
+                     allowed=["app/src/main", "feature/home/src/main"])
+        assert pl.module == ":app" and not pl.ambiguity, (pl.module, pl.ambiguity)
+        shape = _shape(pl)
+        assert shape == [
+            ("app_oncreate", "manifest+lifecycle", True),
+            ("activity_oncreate", "manifest+lifecycle", True),
+            ("set_content", "api", True),
+            # composables in call order: theme first, nav host inside it —
+            # the theme sits in core/ui, outside allowed
+            ("compose_root", "call-from-setContent", False),
+            ("compose_root", "call-from-setContent", False),
+            ("room_open", "api", False),
+        ], shape
+    by = {p.marker: p for p in pl.proposals}
+    assert by["AGENTTMP_compose_AppTheme"].file == "core/ui/src/main/kotlin/Theme.kt"
+    assert "outside instrumentation.allowed" in by["AGENTTMP_compose_AppTheme"].reason
+    assert by["AGENTTMP_compose_AppNavHost"].file == "feature/home/src/main/kotlin/Nav.kt"
+    assert by["AGENTTMP_room_open"].file == "core/database/src/main/kotlin/Db.kt"
+    # the string "}" and the comment "}" in onCreate did not confuse the brace match
+    assert by["AGENTTMP_app_oncreate"].applicable and by["AGENTTMP_app_oncreate"].close_at
+    assert any("runtime-tracing" in n for n in pl.notes), pl.notes
+
+    # the same tree, every name nonsense: same skeleton, source for source
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root, app="Zq1", act="Yx2", theme="Wv3", nav="Ut4", pkg="a.b.c")
+        pl2 = mk.plan(root, package="a.b.c", allowed=["app/src/main", "feature/home/src/main"])
+        assert _shape(pl2) == shape, (_shape(pl2), shape)
+        # and it says so in the markers, with the project's own words
+        assert {p.marker for p in pl2.proposals} >= {"AGENTTMP_compose_Wv3", "AGENTTMP_compose_Ut4"}
+
+
+@check("mark: what it cannot see it says — no launcher, two launchers, an early return")
+def _(report):
+    from . import mark as mk
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root, launcher=False)
+        pl = mk.plan(root)
+        assert not pl.proposals and any("no launcher Activity" in n for n in pl.notes), pl.notes
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root, second_app=True)
+        pl = mk.plan(root)   # no package to break the tie
+        assert pl.ambiguity and not pl.proposals, (pl.ambiguity, pl.proposals)
+        pl = mk.plan(root, package="com.example.app")
+        assert pl.module == ":app" and not pl.ambiguity, (pl.module, pl.ambiguity)
+        pl = mk.plan(root, module=":wear")
+        assert pl.module == ":wear" and _shape(pl)[:1] == [("activity_oncreate", "manifest+lifecycle", True)], _shape(pl)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root, app_return=True)
+        pl = mk.plan(root, package="com.example.app")
+        app = next(p for p in pl.proposals if p.kind == "app_oncreate")
+        assert not app.applicable and "return" in app.reason, app
+    # the same tree twice: byte-identical
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root)
+        a = "\n".join(mk.render(mk.plan(root, package="com.example.app")))
+        b = "\n".join(mk.render(mk.plan(root, package="com.example.app")))
+        assert a == b
+
+
+@check("mark: --apply inserts tagged pairs, --remove restores the bytes")
+def _(report):
+    from . import mark as mk
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root)
+        before = {p: p.read_bytes() for p in mk.source_files(root)}
+        pl = mk.plan(root, package="com.example.app", allowed=["app/src/main"])
+        done = mk.apply(root, pl)
+        files = {rel for rel, _ in done}
+        assert files == {"app/src/main/kotlin/x/GloomApp.kt", "app/src/main/kotlin/x/MainActivity.kt"}, files
+        act = (root / "app/src/main/kotlin/x/MainActivity.kt").read_text(encoding="utf-8")
+        tagged = [ln for ln in act.splitlines() if mk.TAG in ln]
+        assert len(tagged) == 4, tagged      # onCreate pair + setContent pair
+        assert tagged[0].strip().startswith('android.os.Trace.beginSection("AGENTTMP_activity_oncreate")'), tagged
+        # order inside the file: begin(onCreate) … begin(setContent) … end … end,
+        # the inner pair indented one level deeper
+        assert ["begin" in t for t in tagged] == [True, True, False, False], tagged
+        assert "AGENTTMP_set_content" in tagged[1], tagged
+        indent = [len(t) - len(t.lstrip()) for t in tagged]
+        assert indent[0] == indent[3] < indent[1] == indent[2], indent
+        # applying twice does not double the markers
+        assert mk.apply(root, mk.plan(root, package="com.example.app", allowed=["app/src/main"])) == []
+        touched = mk.remove(root)
+        assert {rel for rel, _ in touched} == files and all(n == 2 or n == 4 for _, n in touched), touched
+        after = {p: p.read_bytes() for p in mk.source_files(root)}
+        assert after == before, "remove must restore every file byte for byte"
+
+
 @check("domains: no instrumentation is a report, not an empty output")
 def _(report):
     from . import domains as dm
