@@ -1,10 +1,14 @@
 name: publish
 
-# Publishes to PyPI on a version tag:
+# A version tag is the release:
 #
 #     git tag v0.1.0 && git push origin v0.1.0
 #
-# Authentication is PyPI Trusted Publishing (OIDC): no token lives in the
+# Three jobs, in order: build the sdist and wheel; upload them to PyPI; create
+# the GitHub Release for the tag with the same two files attached and the
+# notes generated from the commits since the previous tag.
+#
+# PyPI authentication is Trusted Publishing (OIDC): no token lives in the
 # repository. PyPI must know this workflow — see docs/publishing.md.
 
 on:
@@ -15,9 +19,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -37,7 +41,7 @@ jobs:
           python -m build
           python -m twine check dist/*
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -53,9 +57,35 @@ jobs:
     permissions:
       id-token: write   # required for Trusted Publishing
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Runs only after PyPI has the files, so a GitHub Release never exists for a
+  # version that failed to publish. The attached wheel and sdist are the same
+  # artifact PyPI received, byte for byte.
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to create the release and upload its assets
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "echolot ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --notes "PyPI: https://pypi.org/project/echolot/${GITHUB_REF_NAME#v}/" \
+            dist/*

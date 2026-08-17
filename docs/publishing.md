@@ -1,8 +1,12 @@
 # Publishing to PyPI
 
 A release is a git tag. `.github/workflows/publish.yml` builds the sdist and
-wheel on the tag and uploads them with PyPI Trusted Publishing — no API token
-is stored anywhere in the repository or in GitHub secrets.
+wheel on the tag, uploads them with PyPI Trusted Publishing — no API token is
+stored anywhere in the repository or in GitHub secrets — and then creates the
+GitHub Release for that tag: the same two files attached, notes generated from
+the commits since the previous tag, a link to the version on PyPI on top. The
+GitHub Release is created only after PyPI has accepted the upload, so the two
+never disagree about which versions exist.
 
 ## One-time setup on PyPI
 
@@ -35,7 +39,15 @@ git push origin v0.1.0
 ```
 
 Watch the run under **Actions**. When it is green the package is at
-<https://pypi.org/project/echolot/> and `pipx install echolot` works.
+<https://pypi.org/project/echolot/>, `pipx install echolot` works, and the
+release is listed at <https://github.com/grishan0v/echolot/releases>. The
+generated notes are a list of commits — edit them in the GitHub UI if a
+version deserves a paragraph.
+
+A tag, and therefore a release, is a snapshot: it contains what was committed
+before the tag was made and nothing after. To ship a fix, bump the version and
+tag again — an uploaded version number can never be reused on PyPI, even after
+deletion.
 
 ## Checking the artefacts locally
 
