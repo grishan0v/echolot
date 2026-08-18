@@ -34,6 +34,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from . import hunt as hunt_mod
 from . import recorder
 from . import report as report_mod
 from .config import NO_ANCHOR, Config, ConfigError
@@ -138,6 +139,18 @@ def _out_dir(out: str, cfg: Config) -> Path:
     if p.is_absolute() or cfg.path is None:
         return p
     return Path(cfg.path).resolve().parent / p
+
+
+def _project_root(cfg: Config) -> Path:
+    """The directory the config names, which is what "this project" means.
+
+    `analyze` is run from wherever the traces are — the agent calls it inside a
+    macrobenchmark's output directory. The report already follows the config
+    rather than the working directory (see `_out_dir`); the open investigation
+    has to follow it for the same reason, or a hunt is silently left untouched
+    and the freshness rule then reports it as abandoned.
+    """
+    return Path(cfg.path).resolve().parent if cfg.path else Path.cwd()
 
 
 def parse_set(values: list[str], detectors) -> dict[str, dict]:
@@ -307,6 +320,9 @@ def cmd_analyze(args) -> int:
     print(report_mod.to_markdown(rep))
     print(f"\n→ {out_dir/'report.md'}\n→ {out_dir/'report.json'}",
           file=sys.stderr)
+    # `touched_at` has to mean work, not "when someone last typed echolot":
+    # the freshness rule that decides whether to ask stands on it.
+    hunt_mod.touch(_project_root(cfg), analyze=True)
     return 0
 
 
@@ -861,6 +877,10 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
         except (OSError, ValueError):
             st["report"] = {"path": rep, "error": "unreadable"}
 
+    # Which question all of the above is about. None is a normal answer:
+    # every project predates its first investigation.
+    st["hunt"] = hunt_mod.load(project)
+
     st["last_doctor"] = st["last_analyze"] = None
     for run in recorder.read(project / recorder.LOG_FILE):
         if run.get("cmd") == "doctor":
@@ -872,7 +892,8 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
 
 # The next step as one word — what `/echolot` in Claude Code switches on —
 # and as the line a person reads. Both from the same decision.
-NEXT_KINDS = ("init", "init-force", "doctor", "setup", "fix-config", "hunt")
+NEXT_KINDS = ("init", "init-force", "doctor", "setup", "fix-config",
+              "resume-or-new", "hunt")
 
 
 def next_kind(st: dict) -> str:
@@ -890,6 +911,12 @@ def next_kind(st: dict) -> str:
         return "setup"
     if cfg.get("error"):
         return "fix-config"
+    # There is an investigation open, it left traces or a report behind, and
+    # enough time has passed that the human may have come back for something
+    # else entirely. The CLI does not ask — it says the answer is open, and
+    # the agent puts the question with the recap `status` prints below.
+    if hunt_mod.needs_choice(st.get("hunt"), st):
+        return "resume-or-new"
     return "hunt"
 
 
@@ -909,6 +936,10 @@ def next_step(st: dict) -> str:
         return "/echolot in Claude Code — it will build echolot.yml from the repository and a probe trace"
     if kind == "fix-config":
         return f"fix echolot.yml — it does not load: {st['config']['error']}"
+    if kind == "resume-or-new":
+        q = (st.get("hunt") or {}).get("question") or "the earlier question"
+        return (f'/echolot in Claude Code — it will ask whether to carry on with '
+                f'"{q}" or start a new investigation')
     if not st["traces"]["count"]:
         return "/echolot in Claude Code (the hunt captures traces), or: echolot collect -c echolot.yml -n 5"
     return ("/echolot in Claude Code, or by hand: "
@@ -938,6 +969,86 @@ def _iso_epoch(ts: str | None) -> float | None:
         return None
 
 
+def _hunt_config(project: Path, config: str) -> tuple[str | None, str | None]:
+    """Scenario name and config hash, best effort — a broken config is not fatal.
+
+    An investigation records what it was opened against so that `drift` can
+    later say "the scenario changed" instead of the human having to remember.
+    """
+    try:
+        cfg = Config.load(project / config)
+        return cfg.scenario_name, cfg.sha
+    except (ConfigError, OSError):
+        return None, None
+
+
+def _hunt_ops(args, project: Path) -> int | None:
+    """Record the human's answer about which investigation to work in.
+
+    Returns an exit code when the call was one of these, None when it was a
+    plain `status`. Deliberately hidden from `--help`: only the agent issues
+    them, and the CLI's verbs are due a rethink of their own — a name
+    published now would have to be carried or deprecated afterwards.
+    """
+    question = getattr(args, "hunt_open", None)
+    conclusion = getattr(args, "hunt_conclude", None)
+    config = getattr(args, "config", "echolot.yml")
+
+    if question:
+        scenario, sha = _hunt_config(project, config)
+        # The whole point of the feature: a new investigation must not start
+        # on the previous one's traces. Nothing is deleted — the set moves
+        # aside exactly the way `collect` moves it between rounds.
+        if scenario:
+            from . import runner
+            runner.set_aside(project / ".echolot" / "traces", scenario,
+                             log=lambda m: print(m, file=sys.stderr))
+        h = hunt_mod.open_new(project, question,
+                              since=getattr(args, "hunt_since", None),
+                              scenario=scenario, config_sha=sha)
+        print(f'opened: "{h["question"]}"')
+        if h.get("since"):
+            print(f'  after: {h["since"]}')
+        # Instrumentation the previous investigation never took out would
+        # otherwise become this one's starting conditions.
+        left = hunt_mod.leftovers(project)
+        if left["markers"]:
+            print(f'\n[!] {left["markers"]} {left["prefix"]} marker(s) left in '
+                  f'{len(left["files"])} file(s) by the previous investigation.',
+                  file=sys.stderr)
+            by_hand = left["markers"] - left["removable"]
+            how = f'`echolot mark --remove` takes out {left["removable"]}'
+            if by_hand:
+                how += f', the other {by_hand} were added by hand and go by hand'
+            print(f'    {how}.', file=sys.stderr)
+        recorder.note(hunt="opened", scenario=scenario,
+                      leftover_markers=left["markers"])
+        return 0
+
+    if conclusion:
+        h = hunt_mod.conclude(project, conclusion)
+        if not h:
+            print("no investigation is open", file=sys.stderr)
+            return 1
+        print(f'concluded: "{h["question"]}"')
+        recorder.note(hunt="concluded")
+        return 0
+
+    if getattr(args, "hunt_resume", False):
+        h = hunt_mod.load(project)
+        if not h:
+            print("no investigation is open", file=sys.stderr)
+            return 1
+        hunt_mod.touch(project)
+        st = project_state(project, config)
+        for line in hunt_mod.recap(st.get("hunt"), st, root=project):
+            print(line)
+        recorder.note(hunt="resumed")
+        return 0
+
+    return None
+
+
 def cmd_status(args) -> int:
     """`echolot` with nothing after it: where things stand, and the next step.
 
@@ -947,7 +1058,11 @@ def cmd_status(args) -> int:
     branch that applies. Two commands are all a person needs to know —
     `echolot init` and `echolot` — and the agent knows the rest.
     """
-    st = project_state(Path.cwd(), getattr(args, "config", "echolot.yml"))
+    project = Path.cwd()
+    rc = _hunt_ops(args, project)
+    if rc is not None:
+        return rc
+    st = project_state(project, getattr(args, "config", "echolot.yml"))
     if getattr(args, "next", False):
         # One word for the skill to switch on; the prose is for people.
         print(next_kind(st))
@@ -970,6 +1085,7 @@ def cmd_status(args) -> int:
         if cfg.get("local"):
             bits.append("local.yml applied")
         lines.append(("config", "echolot.yml · " + " · ".join(bits)))
+    lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"))))
     tr = st["traces"]
     if tr["count"]:
         lines.append(("traces", f"{tr['count']} in .echolot/traces, newest {_ago(tr['newest'])}"))
@@ -999,6 +1115,13 @@ def cmd_status(args) -> int:
     for k, v in lines:
         print(f"{k.ljust(width)}  {v}")
     print(f"{'next'.ljust(width)}  {next_step(st)}")
+
+    # Everything needed to answer "carry on, or start new?" in one call, so
+    # the agent asks the human without a second round trip.
+    if next_kind(st) == "resume-or-new":
+        print()
+        for line in hunt_mod.recap(st.get("hunt"), st, root=project):
+            print(line)
     return 0
 
 
@@ -1137,6 +1260,7 @@ def cmd_collect(args) -> int:
 
     for r in results:
         print(r["path"])
+    hunt_mod.touch(_project_root(cfg), collect=True)
     return 0
 
 
@@ -1693,6 +1817,14 @@ def build_parser() -> argparse.ArgumentParser:
     stt.add_argument("--next", action="store_true",
                      help="print only the next step, one word: "
                           + " | ".join(NEXT_KINDS) + " — what /echolot switches on")
+    # Recording which investigation to work in. Hidden from --help on purpose:
+    # only the agent issues these, after asking the human, and the semantics
+    # of this CLI's verbs are due a rethink of their own — a name published
+    # now would have to be carried or deprecated afterwards.
+    stt.add_argument("--hunt-open", metavar="QUESTION", help=argparse.SUPPRESS)
+    stt.add_argument("--hunt-since", metavar="CHANGE", help=argparse.SUPPRESS)
+    stt.add_argument("--hunt-resume", action="store_true", help=argparse.SUPPRESS)
+    stt.add_argument("--hunt-conclude", metavar="TEXT", help=argparse.SUPPRESS)
     stt.set_defaults(func=cmd_status)
 
     # Ordered by the working flow rather than by when things were written:

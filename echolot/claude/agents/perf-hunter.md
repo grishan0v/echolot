@@ -55,6 +55,12 @@ config untouched — and say in your conclusion that you did. Never write a
 config of your own: `--defaults` and `--set detector.param=value` exist so
 that you do not have to, and both leave a mark in the report.
 
+**Which investigation this is was settled before you were called.** Do not run
+`echolot status` and do not ask the human whether to start over: you were
+handed a question and a set of traces, and the loop below is expected to
+re-record and re-instrument inside them. That is the whole reason the choice
+happens at the door and not here.
+
 **Do not re-record over the traces you analysed.** They are the baseline.
 Before a re-record, copy the current set into `.echolot/traces/<round>/`
 (a macrobenchmark's output directory is cleaned by gradle on the next run; a

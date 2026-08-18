@@ -39,7 +39,45 @@ Show that output to the human as it is, then act on the `next` line
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | invoke the `echolot-setup` skill (the Skill tool) — it builds `echolot.yml` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |
+| `resume-or-new` | **ask before attaching to anything** — see below |
 | `hunt` | invoke the `echolot-hunt` skill — it asks what regressed and runs perf-hunter |
+
+## `resume-or-new`: whose question are we answering
+
+An investigation is open, it left traces and a report on disk, and nobody has
+worked on it for a while. Attaching to that history without asking is how a
+question about scrolling gets answered with cold-start traces.
+
+`echolot` has already printed the recap under the table — the question, when it
+was last worked on, how many traces it would reuse, what the last report said,
+and anything that drifted since. **Show that recap as it is**, then ask with
+`AskUserQuestion`:
+
+| the human picks | what you do |
+|---|---|
+| carry on | `echolot status --hunt-resume`, then the `echolot-hunt` skill with the recorded question |
+| something new | `echolot status --hunt-open "<their question>" --hunt-since "<the change, or unknown>"`, then the `echolot-hunt` skill |
+| just show the report | print `.echolot/out/report.md` and stop |
+
+Lean towards "something new" when the recap shows a `!` line — the scenario
+changed, the config changed, or it has been untouched for over a week.
+
+`--hunt-open` moves the previous set of traces aside before anything is
+recorded, so the new investigation cannot inherit them, and it says on stderr
+if the previous one left `AGENTTMP_` markers in the sources. **Deal with those
+before hunting**: `echolot mark --remove` takes out what `mark --apply` wrote,
+and anything added by hand has to go by hand. Instrumentation nobody meant to
+leave behind is the starting condition of the next investigation otherwise.
+
+When the human's own words already name a different question — `/echolot why
+does the list stutter` while the open investigation is about cold start — still
+ask, but offer "something new" first with their words filled in. A new
+formulation is sometimes a sharper version of the same hunt.
+
+Two things this is never asked about. Inside `perf-hunter`'s loop: it
+re-records and re-instruments on purpose, works inside an investigation it was
+handed, and never calls `status` at all. And within half an hour of the last
+`collect` or `analyze` — that is the same sitting, and `next` says `hunt`.
 
 With an argument, the argument wins over the state:
 
@@ -51,6 +89,8 @@ With an argument, the argument wins over the state:
   "the list stutters since the redesign") means the same.
 - `/echolot doctor`, `/echolot status`, `/echolot analyze …` — run that
   command, show the output.
+- `/echolot new <words>` — start a fresh investigation with those words as the
+  question, without asking. `/echolot resume` carries on with the open one.
 - `/echolot reflect` — the `echolot-reflect` skill: how the last session
   went, what to change in the tool.
 

@@ -114,6 +114,53 @@ clean up on success and on running out of rounds alike. The prefix is what
 makes cleanup deterministic — `grep` and delete, rather than "remember what you
 added".
 
+## Which investigation, and where that is asked
+
+`.echolot/traces/` and `.echolot/out/report.json` mean "the latest set" and
+nothing more. For a while the tool had no way of saying what question that set
+was recorded for, so `/echolot` a week later found history, attached to it and
+carried on — whether or not the human had come back for the same thing. Old
+cold-start traces answered a question about scrolling; thresholds calibrated
+for one scenario gated another; markers left behind by an investigation that
+ran out of context became the starting conditions of the next one.
+
+`.echolot/hunt.json` is the missing label: one open investigation at a time,
+holding the question in the human's words, when it opened, what it has been
+through, and the config it was opened against. It sits in `.gitignore` next to
+the traces — an investigation is the state of a machine, while `echolot.yml`
+describes the project and is committed.
+
+`next_kind` reads it and gains one word, `resume-or-new`: there is an
+investigation open, it left traces or a report behind, and nobody has worked on
+it recently enough for this to be the same sitting. The CLI still asks nobody
+anything — it prints the recap and the word, and the skill puts the question
+with `AskUserQuestion`. That keeps `status` usable from CI, where there is no
+one to answer.
+
+**The loop never sees the question, by construction rather than by a flag.**
+The question is *which investigation to work in*; `perf-hunter` is handed one
+in its prompt, so for the loop the question cannot arise. It never calls
+`status` at all. And the two set-aside boundaries do not meet: `collect` moves
+traces aside between **rounds**, opening an investigation moves them aside
+between **investigations**, and both use the same primitive at different
+levels.
+
+A second guard falls out of the same design: every `collect` and `analyze`
+updates `touched_at`, so a running loop keeps its own investigation inside the
+freshness window even if it started from a stale one. `touched_at` means work
+rather than "when someone last typed `echolot`", which is what makes the
+freshness rule honest.
+
+Starting a new investigation is where the value beyond the question sits. The
+previous one is archived rather than deleted — the question someone was chasing
+three weeks ago costs a kilobyte and cannot be reconstructed from the traces.
+The loose trace set moves aside, so the new investigation cannot inherit it.
+And the sources are scanned for leftover `AGENTTMP_` markers, split by who can
+remove them: lines `mark --apply` wrote carry its tag and `mark --remove` takes
+them out, while ones an agent added by hand carry only the prefix and have to
+go by hand. One number for both would send a human away believing the tree was
+clean.
+
 ## Three things this layer closes
 
 **The agent never looks at the trace.** The rule is the first item in the

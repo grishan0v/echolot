@@ -17,6 +17,19 @@ and when, so it does not run it again.
 A loop on an invented config burns rounds for nothing.
 
 **Traces.** None? Capture them with `echolot collect -c echolot.yml -n 5`.
+Some already there? They belong to whatever investigation is open — `echolot`
+prints its question on the `hunt` line. If you arrived here through
+`resume-or-new` the human has already said which one applies; if you arrived
+any other way and the question on that line is not the one being asked now,
+stop and settle that first (`echolot status --hunt-open "<the question>"`
+moves the old traces aside). Analysing the previous hunt's traces produces a
+confident report about the wrong thing.
+
+**Leftover instrumentation.** `grep -rn AGENTTMP_ <source_root>`. Markers from
+an investigation that ran out of context are still compiled in, still in the
+trace, and still in the report — and they are attributed to code nobody
+touched this time. `echolot mark --remove` takes out what `mark --apply`
+wrote; anything added by hand goes by hand.
 
 **Thresholds.** Read `config` and `detectors[].params_source` in the last
 `report.json`, or the `Config:` line in `report.md`. If the thresholds were

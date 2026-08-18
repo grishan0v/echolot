@@ -915,8 +915,41 @@ def _(report):
         st = project_state(project)
         assert st["config"] and st["config"].get("error"), st["config"]
         assert next_kind(st) == "fix-config" and next_step(st).startswith("fix echolot.yml"), next_step(st)
+        # an open investigation nobody has touched for a while, with history
+        # on disk: the human is asked rather than attached to it silently
+        from . import hunt as hunt_mod
+        (project / "echolot.yml").write_text(
+            "project:\n  process: app\nscenario:\n  name: checkout\n", encoding="utf-8")
+        hunt_mod.open_new(project, "checkout got slower", scenario="checkout")
+        st = project_state(project)
+        assert next_kind(st) == "hunt", "just opened — the same sitting, do not ask"
+        aged = hunt_mod.load(project)
+        aged["touched_at"] = "2020-01-01T00:00:00+00:00"
+        hunt_mod.save(project, aged)
+        st = project_state(project)
+        assert next_kind(st) == "resume-or-new", next_kind(st)
+        assert "carry on" in next_step(st), next_step(st)
+        # and the loop is never asked: its own work keeps the hunt current
+        hunt_mod.touch(project, analyze=True)
+        assert next_kind(project_state(project)) == "hunt", \
+            "the loop must never be interrupted by the choice"
         # every kind the skill switches on is one the decision can produce
-        assert set(NEXT_KINDS) >= {"init", "init-force", "doctor", "setup", "fix-config", "hunt"}
+        assert set(NEXT_KINDS) >= {"init", "init-force", "doctor", "setup",
+                                   "fix-config", "resume-or-new", "hunt"}
+
+
+@check(".claude/ layer: the skill knows every `next` the tool can produce")
+def _(report):
+    """A word `status --next` prints that SKILL.md does not list is a dead end.
+
+    The skill dispatches on that one word. Adding a state to `next_kind` and
+    forgetting the row leaves the agent holding a value it has no branch for,
+    and what it does then is anyone's guess.
+    """
+    from .main import CLAUDE_DIR, NEXT_KINDS
+    skill = (CLAUDE_DIR / "skills" / "echolot" / "SKILL.md").read_text(encoding="utf-8")
+    missing = [k for k in NEXT_KINDS if f"`{k}`" not in skill]
+    assert not missing, f"SKILL.md has no branch for: {missing}"
 
 
 @check(".claude/ layer: the skill and the agent have frontmatter")
@@ -949,8 +982,16 @@ def _(report):
     )
 
 
-@check("docs: README links to docs/ are not broken")
+@check("docs: every document under docs/ is reachable, and no link dangles")
 def _(report):
+    """Reachable from the README or from the index the README points at.
+
+    Two link forms have to count. The README is also the PyPI long
+    description, where a relative path resolves against pypi.org, so its links
+    are absolute; docs/README.md is only ever read on GitHub, so its links are
+    relative. An earlier version of this check knew only the relative form and
+    passed vacuously — it went green on a README that linked nothing at all.
+    """
     import re as _re
     from .main import CLAUDE_DIR
     # The repo root, when we are running from a source checkout. An installed
@@ -958,21 +999,38 @@ def _(report):
     # check passes trivially rather than failing for every user.
     root = CLAUDE_DIR.parent.parent
     readme = root / "README.md"
+    index = root / "docs" / "README.md"
     if not readme.exists() or not (root / "docs").is_dir():
         return
 
-    text = readme.read_text(encoding="utf-8")
-    linked = set(_re.findall(r"\(docs/([\w-]+\.md)\)", text))
-    assert linked, "the README links to no document under docs/"
-    for name in linked:
+    # (docs/name.md) and (https://github.com/…/docs/name.md) alike, plus the
+    # index's own (name.md) written from inside docs/.
+    def links(path, bare=False):
+        if not path.exists():
+            return set()
+        text = path.read_text(encoding="utf-8")
+        found = set(_re.findall(r"\((?:[^)\s]*/)?docs/([\w-]+\.md)\)", text))
+        if bare:
+            found |= set(_re.findall(r"\(([\w-]+\.md)\)", text))
+        return found
+
+    from_readme = links(readme)
+    linked = from_readme | links(index, bare=True)
+    assert from_readme or linked, "nothing under docs/ is linked from anywhere"
+    for name in sorted(linked):
         assert (root / "docs" / name).exists(), (
-            f"README points at docs/{name}, but the file is missing"
+            f"a link points at docs/{name}, but the file is missing"
         )
-    on_disk = {p.name for p in (root / "docs").glob("*.md")}
+    # The index is the way in, not a document to be indexed by itself.
+    on_disk = {p.name for p in (root / "docs").glob("*.md")} - {"README.md"}
     assert on_disk <= linked, (
-        f"a document exists under docs/ but the README does not link it: "
-        f"{on_disk - linked}"
+        f"a document exists under docs/ but nothing links it: "
+        f"{sorted(on_disk - linked)}"
     )
+    if index.exists():
+        assert on_disk <= links(index, bare=True), (
+            f"the index does not list: {sorted(on_disk - links(index, bare=True))}"
+        )
 
 
 # --- the run ---------------------------------------------------------------
