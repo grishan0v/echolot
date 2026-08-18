@@ -161,7 +161,12 @@ freshness rule honest.
 Starting a new investigation is where the value beyond the question sits. The
 previous one is archived rather than deleted — the question someone was chasing
 three weeks ago costs a kilobyte and cannot be reconstructed from the traces.
-The loose trace set moves aside, so the new investigation cannot inherit it.
+The loose trace set moves aside, so the new investigation cannot inherit it,
+and *where it moved to* is recorded against the investigation it belonged to.
+That last part is what keeps the archive from being decoration: `set_aside`
+already returned the directory it created, and dropping that return value left
+the record remembering a question with nothing behind it. Investigations are
+numbered so there is something short to name one by — `echolot hunt --show 2`.
 And the sources are scanned for leftover `AGENTTMP_` markers, split by who can
 remove them: lines `mark --apply` wrote carry its tag and `mark --remove` takes
 them out, while ones an agent added by hand carry only the prefix and have to

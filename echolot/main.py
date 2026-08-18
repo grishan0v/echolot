@@ -9,6 +9,7 @@ and by hand in the README, and argparse printed a third flat copy underneath.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import sys
@@ -982,17 +983,18 @@ def cmd_hunt(args) -> int:
     config = getattr(args, "config", "echolot.yml")
 
     if args.list:
-        past = hunt_mod.history(project)
-        if not past:
-            print("no investigations yet")
-            return 0
-        for h in past:
-            mark = "→" if h.get("current") else " "
-            when = (h.get("opened_at") or "")[:10]
-            state = h.get("status") or "open"
-            print(f'{mark} {when}  {state:<10} "{h.get("question") or "—"}"')
-            if h.get("conclusion"):
-                print(f'    {h["conclusion"]}')
+        for line in hunt_mod.list_rows(project):
+            print(line)
+        return 0
+
+    if args.show:
+        h = hunt_mod.find(project, args.show)
+        if not h:
+            print(f"no investigation matches {args.show!r} — `echolot hunt --list` "
+                  f"shows them all", file=sys.stderr)
+            return 1
+        for line in hunt_mod.detail(h, project):
+            print(line)
         return 0
 
     if question:
@@ -1000,14 +1002,21 @@ def cmd_hunt(args) -> int:
         # The whole point of the feature: a new investigation must not start
         # on the previous one's traces. Nothing is deleted — the set moves
         # aside exactly the way `collect` moves it between rounds.
+        aside = None
         if scenario:
             from . import runner
-            runner.set_aside(project / ".echolot" / "traces", scenario,
-                             log=lambda m: print(m, file=sys.stderr))
+            aside = runner.set_aside(project / ".echolot" / "traces", scenario,
+                                     log=lambda m: print(m, file=sys.stderr))
+            if aside is not None:
+                # Relative to the project, so the record survives the tree
+                # being moved or cloned somewhere else.
+                with contextlib.suppress(ValueError):
+                    aside = aside.resolve().relative_to(project.resolve())
         h = hunt_mod.open_new(project, question,
                               since=getattr(args, "hunt_since", None),
-                              scenario=scenario, config_sha=sha)
-        print(f'opened: "{h["question"]}"')
+                              scenario=scenario, config_sha=sha,
+                              traces_aside=aside)
+        print(f'opened #{h["n"]}: "{h["question"]}"')
         if h.get("since"):
             print(f'  after: {h["since"]}')
         # Instrumentation the previous investigation never took out would
@@ -1890,6 +1899,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="record what it came to, and close it")
     hn.add_argument("--list", action="store_true",
                     help="every investigation this project has had")
+    hn.add_argument("--show", metavar="N|WORDS",
+                    help="one of them in full, by number or by part of its question")
     hn.set_defaults(func=cmd_hunt)
 
     # Ordered by the working flow rather than by when things were written:

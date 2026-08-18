@@ -223,8 +223,18 @@ echolot hunt "cold start was 3s, now 7s" --since "the tab redesign"
 
 That opens one, moves the previous set of traces aside without deleting it,
 and says whether the last investigation left temporary markers in your
-sources. `echolot hunt` on its own says what is open; `--resume`, `--done` and
-`--list` do the rest.
+sources. `echolot hunt` on its own says what is open.
+
+```
+echolot hunt --list          every investigation, newest first
+echolot hunt --show 2        one of them in full — including where its traces went
+echolot hunt --resume        carry on with the open one
+echolot hunt --done "..."    record what it came to
+```
+
+Each one is numbered, and the set of traces pushed aside to make room for the
+next investigation is recorded against the one it belonged to. So a question
+asked three weeks ago still knows what was measured to answer it.
 
 You rarely type any of it. `/echolot` reads the state and, when an
 investigation has been sitting untouched with traces behind it, asks whether

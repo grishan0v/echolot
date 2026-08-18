@@ -65,6 +65,28 @@ def _slug(text: str, limit: int = 40) -> str:
     return s[:limit].strip("-") or "hunt"
 
 
+def next_n(project: Path) -> int:
+    """The next investigation's number.
+
+    A person needs something short to name one by — `hunt --show 2` rather
+    than a timestamp. Derived from what is on disk rather than kept in a
+    counter file: one fewer thing to go stale, and a hand-deleted archive
+    just frees its number.
+    """
+    return max((int(h.get("n") or 0) for h in history(project)), default=0) + 1
+
+
+def find(project: Path, ident: str) -> dict[str, Any] | None:
+    """An investigation by number, or by a piece of its question."""
+    past = history(project)
+    if ident.isdigit():
+        n = int(ident)
+        return next((h for h in past if int(h.get("n") or 0) == n), None)
+    needle = ident.lower()
+    return next((h for h in past
+                 if needle in (h.get("question") or "").lower()), None)
+
+
 def path(project: Path) -> Path:
     return project / HUNT_FILE
 
@@ -114,11 +136,17 @@ def archive(project: Path, hunt: dict[str, Any]) -> Path | None:
 
 def open_new(project: Path, question: str, since: str | None = None,
              scenario: str | None = None, config_sha: str | None = None,
-             status: str = "abandoned") -> dict[str, Any]:
+             status: str = "abandoned",
+             traces_aside: Path | None = None) -> dict[str, Any]:
     """Close whatever was open, archive it, and start a new investigation.
 
     `status` is what the previous one is recorded as — `abandoned` when the
     human simply moved on, which is the common case and the honest word for it.
+
+    `traces_aside` is where the loose set of traces was moved to make room.
+    That set is the *previous* investigation's evidence, so it is recorded on
+    the record being closed. Without it the archive remembers the question and
+    forgets what was measured, which makes it decoration.
     """
     previous = load(project)
     if previous:
@@ -126,9 +154,12 @@ def open_new(project: Path, question: str, since: str | None = None,
         if previous["status"] == "open":
             previous["status"] = status
             previous["closed_at"] = _now()
+        if traces_aside is not None:
+            previous.setdefault("traces", []).append(str(traces_aside))
         archive(project, previous)
 
     hunt = {
+        "n": next_n(project),
         "question": question,
         "since": since,
         "scenario": scenario,
@@ -138,6 +169,7 @@ def open_new(project: Path, question: str, since: str | None = None,
         "status": "open",
         "collects": 0,
         "analyzes": 0,
+        "traces": [],
         "conclusion": None,
     }
     save(project, hunt)
@@ -198,7 +230,12 @@ def history(project: Path) -> list[dict[str, Any]]:
                 continue
             if isinstance(h, dict):
                 out.append(dict(h, current=False))
-    return sorted(out, key=lambda h: h.get("opened_at") or "", reverse=True)
+    # By number first: several investigations can open within one second —
+    # a person trying a few questions in a row — and a sort on the timestamp
+    # alone then puts them in whatever order the directory listing gave.
+    # Records written before numbering exist fall back to the timestamp.
+    return sorted(out, key=lambda h: (int(h.get("n") or 0), h.get("opened_at") or ""),
+                  reverse=True)
 
 
 # --- deciding whether to ask ------------------------------------------------
@@ -360,6 +397,95 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
                 how += f", {hand} were added by hand and need removing by hand"
             out.append(f"  ! {left['markers']} {left['prefix']} marker(s) still in "
                        f"{len(left['files'])} file(s) — {how}")
+    return out
+
+
+def _when(ts: str | None) -> str:
+    return (ts or "")[:16].replace("T", " ") or "—"
+
+
+def _ran_for(hunt: dict[str, Any]) -> str | None:
+    """How long an investigation was open, when both ends are known."""
+    a, b = _epoch(hunt.get("opened_at")), _epoch(hunt.get("closed_at") or hunt.get("touched_at"))
+    if a is None or b is None or b <= a:
+        return None
+    mins = (b - a) / 60
+    if mins < 90:
+        return f"{mins:.0f}m"
+    if mins < 2880:
+        return f"{mins / 60:.0f}h"
+    return f"{mins / 1440:.0f}d"
+
+
+def _did(hunt: dict[str, Any]) -> list[str]:
+    """What an investigation actually did — the facts already in the record.
+
+    These were being written and never shown, so a list of past hunts read as
+    a list of questions with no answers and no work behind them.
+    """
+    bits = []
+    if hunt.get("collects"):
+        bits.append(f"{hunt['collects']} collect(s)")
+    if hunt.get("analyzes"):
+        bits.append(f"{hunt['analyzes']} analyze(s)")
+    ran = _ran_for(hunt)
+    if ran:
+        bits.append(f"open for {ran}")
+    traces = hunt.get("traces") or []
+    if traces:
+        bits.append(f"{len(traces)} trace set(s) kept")
+    return bits
+
+
+def list_rows(project: Path) -> list[str]:
+    """`hunt --list`: every investigation, newest first, with what it came to."""
+    past = history(project)
+    if not past:
+        return ['no investigations yet — `echolot hunt "<what regressed>"` opens one']
+    width = max(len(str(h.get("n") or "?")) for h in past)
+    out = []
+    for h in past:
+        mark = "→" if h.get("current") else " "
+        n = str(h.get("n") or "?").rjust(width)
+        out.append(f'{mark} {n}  {_when(h.get("opened_at"))}  '
+                   f'{(h.get("status") or "open"):<10} "{h.get("question") or "—"}"')
+        pad = " " * (width + 22)
+        did = _did(h)
+        if did:
+            out.append(f"{pad}{' · '.join(did)}")
+        if h.get("conclusion"):
+            out.append(f"{pad}→ {h['conclusion']}")
+    return out
+
+
+def detail(hunt: dict[str, Any], project: Path) -> list[str]:
+    """`hunt --show`: one investigation in full, evidence included."""
+    out = [f'#{hunt.get("n") or "?"}  "{hunt.get("question") or "—"}"']
+    if hunt.get("since"):
+        out.append(f"  after: {hunt['since']}")
+    out.append(f"  status: {hunt.get('status') or 'open'}"
+               + (f" · {hunt['conclusion']}" if hunt.get("conclusion") else ""))
+    out.append(f"  opened: {_when(hunt.get('opened_at'))}"
+               + (f" · closed {_when(hunt['closed_at'])}" if hunt.get("closed_at")
+                  else f" · last worked on {_ago(_epoch(hunt.get('touched_at')))}"))
+    if hunt.get("scenario"):
+        out.append(f"  scenario: {hunt['scenario']}")
+    did = _did(hunt)
+    if did:
+        out.append("  did: " + " · ".join(did))
+    traces = hunt.get("traces") or []
+    if traces:
+        out.append("  traces:")
+        for t in traces:
+            d = Path(t)
+            if not d.is_absolute():
+                d = project / t
+            n = len(list(d.glob("*.perfetto-trace"))) + len(list(d.glob("*.pftrace"))) \
+                if d.is_dir() else 0
+            gone = "" if d.is_dir() else "  (gone)"
+            out.append(f"    {t}  {n} trace(s){gone}")
+    else:
+        out.append("  traces: none recorded")
     return out
 
 

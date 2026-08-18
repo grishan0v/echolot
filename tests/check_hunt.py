@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -250,6 +251,104 @@ def case_cli_status_is_read_only(tmp: Path) -> None:
               hunt_mod.path(p).read_text() == before)
         code, text = run("status")
         check("status still names the open one", "the list stutters" in text, text)
+    finally:
+        os.chdir(here)
+
+
+def case_cli_numbering_and_evidence(tmp: Path) -> None:
+    """Numbers a person can type, and where each question's traces went.
+
+    The archive used to remember the question and forget what was measured:
+    `set_aside` returns the directory it created and the return value was
+    dropped. A set of traces belongs to the investigation that was open when
+    it was pushed aside, so it is recorded on the one being closed.
+    """
+    p = setup(tmp)
+    here = Path.cwd()
+    try:
+        os.chdir(p)
+
+        def traces(n=4):
+            d = p / ".echolot" / "traces"
+            d.mkdir(parents=True, exist_ok=True)
+            for i in range(n):
+                (d / f"coldStart_iter{i}.perfetto-trace").write_bytes(b"x")
+
+        traces()
+        _, text = run("hunt", "cold start 3s → 7s")
+        check("first is #1", "opened #1:" in text, text)
+        run("hunt", "--done", "TextLayout on main")
+        traces()
+        _, text = run("hunt", "the list stutters")
+        check("second is #2", "opened #2:" in text, text)
+
+        # The set aside when #2 opened was #1's evidence, not #2's.
+        first = hunt_mod.find(p, "1")
+        check("#1 kept its traces", len(first.get("traces") or []) == 1,
+              str(first.get("traces")))
+        check("#2 starts with none", not (hunt_mod.load(p).get("traces") or []))
+        recorded = Path(first["traces"][0])
+        check("the path is relative to the project", not recorded.is_absolute(),
+              str(recorded))
+        check("and it is really there",
+              len(list((p / recorded).glob("*.perfetto-trace"))) == 4)
+
+        code, text = run("hunt", "--show", "1")
+        check("--show by number", code == 0 and "cold start 3s → 7s" in text, text)
+        check("--show counts the traces", "4 trace(s)" in text, text)
+        code, text = run("hunt", "--show", "stutters")
+        check("--show by words", code == 0 and "the list stutters" in text, text)
+        code, text = run("hunt", "--show", "99")
+        check("--show on a miss exits 1", code == 1, f"exit {code}")
+    finally:
+        os.chdir(here)
+
+
+def case_cli_list_order(tmp: Path) -> None:
+    """Newest first, even when several open within the same second.
+
+    Sorting on the timestamp alone left three same-second investigations in
+    whatever order the directory listing produced.
+    """
+    p = setup(tmp)
+    here = Path.cwd()
+    try:
+        os.chdir(p)
+        for q in ("first thing", "second thing", "third thing"):
+            run("hunt", q)
+        _, text = run("hunt", "--list")
+        order = re.findall(r"^[→ ] *(\d+)  \d{4}-", text, re.M)
+        check("newest first", order == ["3", "2", "1"], f"{order}\n{text}")
+    finally:
+        os.chdir(here)
+
+
+def case_record_from_0_2_0(tmp: Path) -> None:
+    """A hunt.json written before numbering existed must still work.
+
+    Anyone upgrading from 0.2.0 has one on disk with no `n` and no `traces`.
+    """
+    p = setup(tmp, traces=3)
+    hunt_mod.path(p).parent.mkdir(parents=True, exist_ok=True)
+    hunt_mod.path(p).write_text(json.dumps({
+        "question": "cold start 3s → 7s", "since": None, "scenario": "coldStart",
+        "config_sha": "abc", "opened_at": "2026-08-17T10:00:00+00:00",
+        "touched_at": "2026-08-17T10:00:00+00:00", "status": "open",
+        "collects": 2, "analyzes": 5, "conclusion": None,
+    }), encoding="utf-8")
+    here = Path.cwd()
+    try:
+        os.chdir(p)
+        code, text = run("hunt", "--list")
+        check("an old record still lists", code == 0 and "cold start" in text, text)
+        check("and shows what it did", "2 collect(s)" in text, text)
+        code, text = run("hunt", "--show", "cold start")
+        check("and is reachable by words", code == 0, text)
+        check("its missing traces are stated", "none recorded" in text, text)
+        # The next investigation numbers itself around the gap.
+        _, text = run("hunt", "something else")
+        check("numbering starts at 1 beside an unnumbered record",
+              "opened #1:" in text, text)
     finally:
         os.chdir(here)
 
