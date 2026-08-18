@@ -70,12 +70,6 @@ jobs:
       - name: reflect
         run: python tests/check_reflect.py
 
-      # TEMPORARY — proving the gate goes red on a failing leg. Removed in the
-      # next commit.
-      - name: deliberate failure on one version
-        if: matrix.python == '3.12'
-        run: exit 1
-
   # One context for the whole matrix, so the branch rule does not name Python
   # versions. Required checks are matched by context name: with the matrix
   # reported directly, a pull request that drops 3.10 would wait forever for a
