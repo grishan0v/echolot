@@ -21,7 +21,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
 from echolot import hunt as hunt_mod  # noqa: E402
+# `main` under another name: this file defines its own runner below.
+from echolot.main import main as cli  # noqa: E402
 from echolot.main import next_kind, project_state  # noqa: E402
 
 CONFIG = """\
@@ -182,6 +187,71 @@ def case_touch_without_hunt(tmp: Path) -> None:
     hunt_mod.touch(p, analyze=True)
     check("touch with nothing open writes nothing",
           hunt_mod.load(p) is None and not hunt_mod.path(p).exists())
+
+
+# --- through the CLI, the way anyone actually reaches this ------------------
+
+def run(*argv) -> tuple[int, str]:
+    """`echolot …` for real: argv in, exit code and everything printed out."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = cli(list(argv))
+    return code, out.getvalue() + err.getvalue()
+
+
+def case_cli_round_trip(tmp: Path) -> None:
+    """Open, report, conclude, list — the whole verb, from the command line."""
+    p = setup(tmp, traces=3)
+    here = Path.cwd()
+    try:
+        os.chdir(p)
+        code, text = run("hunt")
+        check("bare hunt with nothing open says so",
+              code == 0 and "no investigation is open" in text, text)
+
+        code, text = run("hunt", "cold start 3s → 7s", "--since", "tab redesign")
+        check("hunt opens one", code == 0 and "cold start" in text, text)
+        check("and moves the previous traces aside", "set aside: 3 trace(s)" in text, text)
+        # The half a shell cannot do has to be said, or the person is left
+        # with an open investigation and no idea what comes next.
+        check("and names the half it cannot do", "/echolot" in text, text)
+        check("traces no longer loose",
+              not list((p / ".echolot" / "traces").glob("*.perfetto-trace")))
+
+        code, text = run("hunt")
+        check("bare hunt now recaps", "cold start 3s → 7s" in text, text)
+
+        code, text = run("hunt", "--done", "TextLayout on main")
+        check("--done closes it", code == 0 and "concluded" in text, text)
+
+        code, text = run("hunt", "--list")
+        check("--list shows it with its conclusion",
+              "cold start 3s → 7s" in text and "TextLayout on main" in text, text)
+
+        code, text = run("hunt", "--resume")
+        check("--resume on a concluded hunt still reports it",
+              code == 0 and "cold start" in text, text)
+    finally:
+        os.chdir(here)
+
+
+def case_cli_status_is_read_only(tmp: Path) -> None:
+    """`status` must not change what it reports on: it runs in loops."""
+    p = setup(tmp, traces=3)
+    here = Path.cwd()
+    try:
+        os.chdir(p)
+        run("hunt", "the list stutters")
+        before = hunt_mod.path(p).read_text()
+        for _ in range(3):
+            run("status")
+            run("status", "--next")
+        check("status left the investigation untouched",
+              hunt_mod.path(p).read_text() == before)
+        code, text = run("status")
+        check("status still names the open one", "the list stutters" in text, text)
+    finally:
+        os.chdir(here)
 
 
 # --- drift, archiving, leftovers --------------------------------------------

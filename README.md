@@ -160,8 +160,12 @@ about five seconds.
 
 ## Commands
 
-Two are yours to remember: **`echolot init`** and **`echolot`** with nothing
-after it. The rest split by who calls them.
+Three audiences share one CLI, and `echolot --help` says which is which — the
+grouping below is generated from the same registration, so the two cannot
+drift apart.
+
+Every argument after `/echolot` is a verb of the same name, doing the same
+thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 
 ### Yours
 
@@ -169,9 +173,15 @@ after it. The rest split by who calls them.
 |---|---|
 | `echolot` | where this project stands, and the next step |
 | `echolot init` | install or update the `.claude/` layer; checks the environment |
+| `echolot hunt "<what regressed>"` | open an investigation — see [below](#the-investigation) |
+| `echolot doctor` | environment + self-check on a synthetic trace; exit 0/1, `-q` for three lines |
+
+### The pipeline — for CI, and for traces by hand
+
+| command | what it does |
+|---|---|
 | `echolot collect` | capture N traces of one scenario — `launch`, `command` or `gradle` |
 | `echolot analyze` | run the detectors, build a Marker Report |
-| `echolot doctor` | environment + self-check on a synthetic trace; exit 0/1, `-q` for three lines |
 
 <details>
 <summary><b>The agent's, behind <code>/echolot</code></b> — you do not call these</summary>
@@ -199,6 +209,27 @@ after it. The rest split by who calls them.
 | `reflect` | the same kind of report, over an agent session — how the tool was used, where it got in the way |
 
 </details>
+
+## The investigation
+
+`.echolot/traces/` and `.echolot/out/report.json` mean "the latest set". An
+investigation is the label that says which question that set was recorded for,
+so that coming back a week later does not answer a question about scrolling
+with cold-start traces.
+
+```bash
+echolot hunt "cold start was 3s, now 7s" --since "the tab redesign"
+```
+
+That opens one, moves the previous set of traces aside without deleting it,
+and says whether the last investigation left temporary markers in your
+sources. `echolot hunt` on its own says what is open; `--resume`, `--done` and
+`--list` do the rest.
+
+You rarely type any of it. `/echolot` reads the state and, when an
+investigation has been sitting untouched with traces behind it, asks whether
+to carry on or start something new — and never asks inside the hunting loop,
+which re-records and re-instruments on purpose.
 
 ## Detectors
 

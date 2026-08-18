@@ -178,6 +178,29 @@ def conclude(project: Path, conclusion: str) -> dict[str, Any] | None:
     return hunt
 
 
+def history(project: Path) -> list[dict[str, Any]]:
+    """Every investigation this project has had, newest first, open one included.
+
+    Archived files are named by when the investigation opened, so the sort is
+    over the field rather than the filename: a hand-edited archive still lands
+    in the right place.
+    """
+    out: list[dict[str, Any]] = []
+    current = load(project)
+    if current:
+        out.append(dict(current, current=True))
+    d = project / ARCHIVE_DIR
+    if d.is_dir():
+        for f in d.glob("*.json"):
+            try:
+                h = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(h, dict):
+                out.append(dict(h, current=False))
+    return sorted(out, key=lambda h: h.get("opened_at") or "", reverse=True)
+
+
 # --- deciding whether to ask ------------------------------------------------
 
 def is_fresh(hunt: dict[str, Any] | None, minutes: int = FRESH_MINUTES) -> bool:

@@ -21,8 +21,8 @@ Some already there? They belong to whatever investigation is open — `echolot`
 prints its question on the `hunt` line. If you arrived here through
 `resume-or-new` the human has already said which one applies; if you arrived
 any other way and the question on that line is not the one being asked now,
-stop and settle that first (`echolot status --hunt-open "<the question>"`
-moves the old traces aside). Analysing the previous hunt's traces produces a
+stop and settle that first (`echolot hunt "<the question>"` moves the old
+traces aside). Analysing the previous hunt's traces produces a
 confident report about the wrong thing.
 
 **Leftover instrumentation.** `grep -rn AGENTTMP_ <source_root>`. Markers from

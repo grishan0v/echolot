@@ -130,6 +130,13 @@ through, and the config it was opened against. It sits in `.gitignore` next to
 the traces — an investigation is the state of a machine, while `echolot.yml`
 describes the project and is committed.
 
+`echolot hunt` is where that state is read and written — one noun with one
+home. It began as four hidden flags on `status`, which made a reporting
+command mutate state and left the concept without a name a person could find;
+`status` reports, `hunt` is the investigation. The word means the same in a
+shell and after `/echolot`: `echolot hunt "<q>"` does the half a shell can do
+and names the half it cannot, `/echolot hunt <q>` does both.
+
 `next_kind` reads it and gains one word, `resume-or-new`: there is an
 investigation open, it left traces or a report behind, and nobody has worked on
 it recently enough for this to be the same sitting. The CLI still asks nobody

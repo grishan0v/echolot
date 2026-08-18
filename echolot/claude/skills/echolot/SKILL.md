@@ -55,14 +55,14 @@ and anything that drifted since. **Show that recap as it is**, then ask with
 
 | the human picks | what you do |
 |---|---|
-| carry on | `echolot status --hunt-resume`, then the `echolot-hunt` skill with the recorded question |
-| something new | `echolot status --hunt-open "<their question>" --hunt-since "<the change, or unknown>"`, then the `echolot-hunt` skill |
+| carry on | `echolot hunt --resume`, then the `echolot-hunt` skill with the recorded question |
+| something new | `echolot hunt "<their question>" --since "<the change, or unknown>"`, then the `echolot-hunt` skill |
 | just show the report | print `.echolot/out/report.md` and stop |
 
 Lean towards "something new" when the recap shows a `!` line — the scenario
 changed, the config changed, or it has been untouched for over a week.
 
-`--hunt-open` moves the previous set of traces aside before anything is
+`echolot hunt "<question>"` moves the previous set of traces aside before anything is
 recorded, so the new investigation cannot inherit them, and it says on stderr
 if the previous one left `AGENTTMP_` markers in the sources. **Deal with those
 before hunting**: `echolot mark --remove` takes out what `mark --apply` wrote,
@@ -89,8 +89,13 @@ With an argument, the argument wins over the state:
   "the list stutters since the redesign") means the same.
 - `/echolot doctor`, `/echolot status`, `/echolot analyze …` — run that
   command, show the output.
-- `/echolot new <words>` — start a fresh investigation with those words as the
-  question, without asking. `/echolot resume` carries on with the open one.
+- `/echolot hunt <words>` — that question, without asking first. It is the
+  same word as `echolot hunt <words>` in a shell, and does the same thing
+  plus the loop: the CLI half opens the investigation, the agent half runs it.
+
+Every argument after `/echolot` is a CLI verb of the same name, except
+`setup` — that one needs an agent and has no shell half. Where a verb has
+both, `/echolot X` runs `echolot X` and then whatever loop it needs.
 - `/echolot reflect` — the `echolot-reflect` skill: how the last session
   went, what to change in the tool.
 

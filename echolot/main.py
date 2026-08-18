@@ -1,27 +1,9 @@
 #!/usr/bin/env python3
 """echolot — a deterministic layer between the trace and the agent.
 
-You:
-  echolot                     where this project stands, and the next step
-  init                        install or update the .claude/ layer; checks the
-                              environment; the one command to know
-  analyze  <trace...> -c cfg  run the detectors, build a Marker Report — for CI
-                              and for looking at traces by hand
-  collect  -c cfg -n 5        capture N traces of one scenario from a device
-  doctor                      environment + self-check, exit 0/1; -q for three lines
-
-The agent (through /echolot in Claude Code):
-  probe    <trace>            what is inside the trace at all
-  names    <trace>            how slices are named and what the masks see
-  domains  --root <repo>      slice-to-code map and instrumentation coverage
-  mark     [--apply|--remove] the first temporary markers for a project with none,
-                              from the manifest and the SDK, never from names
-  calibrate <trace...>        thresholds from known-healthy runs
-  explain                     the detectors and their parameters
-
-Improving the tool:
-  reflect  [--last|--all]     the same kind of report over an agent session:
-                              how the tool was used, where it got in the way
+The command list in `--help` is generated from the registration below, so the
+grouping by audience cannot drift from it. It used to be kept by hand here,
+and by hand in the README, and argparse printed a third flat copy underneath.
 """
 
 from __future__ import annotations
@@ -982,17 +964,36 @@ def _hunt_config(project: Path, config: str) -> tuple[str | None, str | None]:
         return None, None
 
 
-def _hunt_ops(args, project: Path) -> int | None:
-    """Record the human's answer about which investigation to work in.
+def cmd_hunt(args) -> int:
+    """The investigation: which question the traces on disk are about.
 
-    Returns an exit code when the call was one of these, None when it was a
-    plain `status`. Deliberately hidden from `--help`: only the agent issues
-    them, and the CLI's verbs are due a rethink of their own — a name
-    published now would have to be carried or deprecated afterwards.
+    One noun, one home. This used to be four hidden flags on `status`, which
+    made a reporting command mutate state and gave the concept no name a
+    person could find. `status` reports; `hunt` is the investigation.
+
+    The word means the same here and in Claude Code. `echolot hunt "<q>"` does
+    the half a shell can do — opens the investigation, moves the previous set
+    of traces aside, says what the last one left behind — and names the half
+    it cannot: the loop needs an agent. `/echolot hunt <q>` does both.
     """
-    question = getattr(args, "hunt_open", None)
-    conclusion = getattr(args, "hunt_conclude", None)
+    project = Path.cwd()
+    question = " ".join(args.question) if args.question else None
+    conclusion = args.done
     config = getattr(args, "config", "echolot.yml")
+
+    if args.list:
+        past = hunt_mod.history(project)
+        if not past:
+            print("no investigations yet")
+            return 0
+        for h in past:
+            mark = "→" if h.get("current") else " "
+            when = (h.get("opened_at") or "")[:10]
+            state = h.get("status") or "open"
+            print(f'{mark} {when}  {state:<10} "{h.get("question") or "—"}"')
+            if h.get("conclusion"):
+                print(f'    {h["conclusion"]}')
+        return 0
 
     if question:
         scenario, sha = _hunt_config(project, config)
@@ -1023,6 +1024,13 @@ def _hunt_ops(args, project: Path) -> int | None:
             print(f'    {how}.', file=sys.stderr)
         recorder.note(hunt="opened", scenario=scenario,
                       leftover_markers=left["markers"])
+        # The half a shell cannot do. Said every time rather than only when
+        # something looks wrong: this is the command a person reaches for
+        # first, and it is where the two surfaces have to line up out loud.
+        print("\nThe hunt itself needs an agent: run `/echolot` in Claude Code.",
+              file=sys.stderr)
+        print("By hand: echolot collect -c echolot.yml -n 5, then echolot analyze "
+              ".echolot/traces/*.perfetto-trace", file=sys.stderr)
         return 0
 
     if conclusion:
@@ -1034,19 +1042,22 @@ def _hunt_ops(args, project: Path) -> int | None:
         recorder.note(hunt="concluded")
         return 0
 
-    if getattr(args, "hunt_resume", False):
-        h = hunt_mod.load(project)
-        if not h:
+    if args.resume:
+        if not hunt_mod.load(project):
             print("no investigation is open", file=sys.stderr)
             return 1
         hunt_mod.touch(project)
-        st = project_state(project, config)
-        for line in hunt_mod.recap(st.get("hunt"), st, root=project):
-            print(line)
         recorder.note(hunt="resumed")
-        return 0
 
-    return None
+    # Bare `echolot hunt`, and the tail of --resume: what is open, in full.
+    st = project_state(project, config)
+    if not st.get("hunt"):
+        print('no investigation is open — `echolot hunt "<what regressed>"` '
+              'opens one')
+        return 0
+    for line in hunt_mod.recap(st["hunt"], st, root=project):
+        print(line)
+    return 0
 
 
 def cmd_status(args) -> int:
@@ -1059,9 +1070,6 @@ def cmd_status(args) -> int:
     `echolot init` and `echolot` — and the agent knows the rest.
     """
     project = Path.cwd()
-    rc = _hunt_ops(args, project)
-    if rc is not None:
-        return rc
     st = project_state(project, getattr(args, "config", "echolot.yml"))
     if getattr(args, "next", False):
         # One word for the skill to switch on; the prose is for people.
@@ -1790,6 +1798,41 @@ def _dump(tp, sql: str) -> None:
         print("| " + " | ".join(str(r.get(c, "")) for c in cols) + " |")
 
 
+# Who each verb is for. Three audiences share one CLI, and until this was
+# structural the split lived only in prose: `echolot --help` showed twelve
+# equal verbs, and a person reasonably tried `probe` and got a wall of
+# reconnaissance meant for an agent.
+# The order verbs are read in, which is neither registration order nor
+# alphabetical. A verb missing from here is caught by the self-check.
+ORDER = ("status", "init", "hunt", "doctor", "collect", "analyze",
+         "probe", "names", "domains", "mark", "calibrate", "explain", "reflect")
+
+GROUP_TITLES = {
+    "yours": ("Yours", None),
+    "pipeline": ("The pipeline", "for CI, and for traces by hand"),
+    "agent": ("The agent's",
+              "through /echolot in Claude Code — you do not call these"),
+    "tool": ("Improving the tool", None),
+}
+
+
+def _describe(entries: list[tuple[str, str, str, str]]) -> str:
+    """The header of `echolot --help`, grouped by who types the command."""
+    out = ["echolot — a deterministic layer between the trace and the agent.", ""]
+    width = max(len(f"{name} {usage}".rstrip()) for _, name, usage, _ in entries)
+    for group, (title, note) in GROUP_TITLES.items():
+        rows = sorted((e for e in entries if e[0] == group),
+                      key=lambda e: ORDER.index(e[1]) if e[1] in ORDER else 99)
+        if not rows:
+            continue
+        out.append(f"{title}:" + (f"  ({note})" if note else ""))
+        for _, name, usage, help_text in rows:
+            call = f"{name} {usage}".rstrip()
+            out.append(f"  {call.ljust(width)}  {help_text}")
+        out.append("")
+    return "\n".join(out).rstrip()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="echolot", description=__doc__,
@@ -1808,41 +1851,62 @@ def build_parser() -> argparse.ArgumentParser:
 
     # `echolot` alone is `echolot status`: where things stand, and the next
     # step. The subcommand is not required so that the bare form works.
-    sub = p.add_subparsers(dest="cmd", required=False, parser_class=(
+    sub = p.add_subparsers(dest="cmd", required=False, metavar="<command>",
+                           help="one of the above", parser_class=(
         lambda **kw: argparse.ArgumentParser(parents=[common], **kw)))
     p.set_defaults(func=cmd_status, cmd="status")
 
-    stt = sub.add_parser("status", help="where this project stands, and the next step")
+    # Each verb declares its audience here and nowhere else, and the header
+    # above is generated from it. No `help=` reaches add_parser: a subparser
+    # with one gets listed a second time, ungrouped, under "positional
+    # arguments" — and `help=argparse.SUPPRESS` does not prevent that, it
+    # prints the literal ==SUPPRESS== instead.
+    entries: list[tuple[str, str, str, str]] = []
+
+    def add(name: str, group: str, usage: str, help_text: str, **kw):
+        entries.append((group, name, usage, help_text))
+        return sub.add_parser(name, **kw)
+
+    stt = add("status", "yours", "", "where this project stands, and the next step")
     stt.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
     stt.add_argument("--next", action="store_true",
                      help="print only the next step, one word: "
                           + " | ".join(NEXT_KINDS) + " — what /echolot switches on")
-    # Recording which investigation to work in. Hidden from --help on purpose:
-    # only the agent issues these, after asking the human, and the semantics
-    # of this CLI's verbs are due a rethink of their own — a name published
-    # now would have to be carried or deprecated afterwards.
-    stt.add_argument("--hunt-open", metavar="QUESTION", help=argparse.SUPPRESS)
-    stt.add_argument("--hunt-since", metavar="CHANGE", help=argparse.SUPPRESS)
-    stt.add_argument("--hunt-resume", action="store_true", help=argparse.SUPPRESS)
-    stt.add_argument("--hunt-conclude", metavar="TEXT", help=argparse.SUPPRESS)
     stt.set_defaults(func=cmd_status)
+
+    # The investigation, with a name a person can find. `hunt` means the same
+    # word in the shell and after /echolot: here it does the half a shell can
+    # do and names the half it cannot.
+    hn = add("hunt", "yours", "[<question>]",
+             "the investigation: open one, or say what is open")
+    hn.add_argument("question", nargs="*",
+                    help="what regressed, in your words — opens a new investigation")
+    hn.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
+    hn.add_argument("--since", dest="hunt_since", metavar="CHANGE",
+                    help="after which change: a commit, a bump, a date, or 'unknown'")
+    hn.add_argument("--resume", action="store_true",
+                    help="carry on with the open one")
+    hn.add_argument("--done", metavar="CONCLUSION",
+                    help="record what it came to, and close it")
+    hn.add_argument("--list", action="store_true",
+                    help="every investigation this project has had")
+    hn.set_defaults(func=cmd_hunt)
 
     # Ordered by the working flow rather than by when things were written:
     # first make sure the environment computes correctly, then reconnaissance,
     # then analysis.
-    dr = sub.add_parser("doctor", help="check the environment and self-check")
+    dr = add("doctor", "yours", "", "environment + self-check on a synthetic trace, exit 0/1")
     dr.add_argument("-q", "--quiet", action="store_true",
                     help="three lines and the failures, same exit code — for "
                          "subagents and CI")
     dr.set_defaults(func=cmd_doctor)
 
-    pr = sub.add_parser("probe", help="reconnaissance over a trace")
+    pr = add("probe", "agent", "<trace>", "what is inside the trace at all")
     pr.add_argument("trace")
     pr.add_argument("--process", help="process name to break down in detail")
     pr.set_defaults(func=cmd_probe)
 
-    nm = sub.add_parser("names",
-                        help="slice name inventory and mask coverage")
+    nm = add("names", "agent", "<trace>", "how slices are named and what the masks see")
     nm.add_argument("trace")
     nm.add_argument("--process", default=None,
                     help="GLOB over the process name (default: project.process "
@@ -1857,16 +1921,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="relevance floor: shorter families are not shown")
     nm.set_defaults(func=cmd_names)
 
-    dom = sub.add_parser("domains",
-                         help="slice-to-code map and instrumentation coverage")
+    dom = add("domains", "agent", "--root <repo>", "slice-to-code map and instrumentation coverage")
     dom.add_argument("--root", default=".", help="repository root")
     dom.add_argument("--top", type=int, default=12,
                      help="how many modules to list when there is none")
     dom.set_defaults(func=cmd_domains)
 
-    mk = sub.add_parser(
-        "mark", help="where the first temporary markers go; --apply puts them there",
-        description="Proposes the first AGENTTMP_ markers for a project with no "
+    mk = add("mark", "agent", "[--apply|--remove]", "the first temporary markers for a project with none",
+             description="Proposes the first AGENTTMP_ markers for a project with no "
                     "instrumentation, from the platform's vocabulary only: the "
                     "manifest's launcher Activity and Application class, their "
                     "onCreate, setContent, one call hop from it, Room and DI entry "
@@ -1884,7 +1946,7 @@ def build_parser() -> argparse.ArgumentParser:
     mk.add_argument("--json", action="store_true", help="the plan as JSON")
     mk.set_defaults(func=cmd_mark)
 
-    col = sub.add_parser("collect", help="capture N traces of one scenario")
+    col = add("collect", "pipeline", "-n 5", "capture N traces of one scenario from a device")
     col.add_argument("-c", "--config", default="echolot.yml")
     col.add_argument("--local", help="path to local.yml (defaults to alongside)")
     col.add_argument("-n", "--iterations", type=int,
@@ -1893,9 +1955,8 @@ def build_parser() -> argparse.ArgumentParser:
     col.add_argument("--device", help="device serial, when there are several")
     col.set_defaults(func=cmd_collect)
 
-    ini = sub.add_parser(
-        "init", help="install or update the .claude/ layer, check the environment",
-        description="The one command to know. First time: installs the .claude/ "
+    ini = add("init", "yours", "", "install or update the .claude/ layer; checks the environment",
+             description="The one command to know. First time: installs the .claude/ "
                     "layer. Later: brings untouched files up to date, keeps the "
                     "ones you edited, runs the environment check, and says what "
                     "to do next.")
@@ -1906,8 +1967,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="skip the environment check at the end")
     ini.set_defaults(func=cmd_init)
 
-    cal = sub.add_parser(
-        "calibrate", help="derive thresholds from known-healthy traces")
+    cal = add("calibrate", "agent", "<trace...>", "thresholds from known-healthy runs")
     cal.add_argument("traces", nargs="+",
                      help="repeats of ONE scenario on a healthy build")
     cal.add_argument("-c", "--config", default="echolot.yml")
@@ -1916,9 +1976,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="below this many values no threshold is derived")
     cal.set_defaults(func=cmd_calibrate)
 
-    an = sub.add_parser(
-        "analyze", help="run the detectors",
-        description="Run the detectors over one trace or repeats of one "
+    an = add("analyze", "pipeline", "<trace...>", "run the detectors, build a Marker Report",
+             description="Run the detectors over one trace or repeats of one "
                     "scenario and write the Marker Report. Thresholds: the "
                     "detector's defaults, then the config's detectors section, "
                     "then --set; --defaults skips the config's section.")
@@ -1941,11 +2000,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "say without touching the config")
     an.set_defaults(func=cmd_analyze)
 
-    ex = sub.add_parser("explain", help="list the detectors")
+    ex = add("explain", "agent", "", "the detectors and their parameters")
     ex.set_defaults(func=cmd_explain)
 
-    rf = sub.add_parser(
-        "reflect", help="a Marker Report over an agent session — for improving the tool")
+    rf = add("reflect", "tool", "[--last|--all]", "the same kind of report over an agent session")
     pick = rf.add_mutually_exclusive_group()
     pick.add_argument("--last", action="store_true",
                       help="the newest session that used echolot (default)")
@@ -1966,6 +2024,8 @@ def build_parser() -> argparse.ArgumentParser:
     rf.add_argument("--local", help="path to local.yml (defaults to alongside)")
     rf.add_argument("-o", "--out", default=".echolot/reflect")
     rf.set_defaults(func=cmd_reflect)
+
+    p.description = _describe(entries)
     return p
 
 

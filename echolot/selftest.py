@@ -938,6 +938,62 @@ def _(report):
                                    "fix-config", "resume-or-new", "hunt"}
 
 
+@check("CLI: every verb is grouped by audience and shown in --help")
+def _(report):
+    """The header of `--help` is generated, so nothing can quietly fall out.
+
+    Three audiences share this CLI. While the split lived in prose, `--help`
+    showed a flat list of equals and argparse printed a second copy below it.
+    Both the grouping and the reading order now come from the registration —
+    and a verb added without a place in either would silently vanish from the
+    only list a person reads.
+    """
+    from .main import ORDER, build_parser
+
+    parser = build_parser()
+    verbs = set()
+    for action in parser._actions:
+        if hasattr(action, "choices") and action.choices:
+            verbs = set(action.choices)
+            break
+    assert verbs, "no subcommands are registered"
+    assert verbs <= set(ORDER), f"no place in the reading order: {sorted(verbs - set(ORDER))}"
+
+    help_text = parser.format_help()
+    missing = [v for v in verbs if f"  {v} " not in help_text
+               and f"  {v}\n" not in help_text]
+    assert not missing, f"registered but absent from --help: {sorted(missing)}"
+    # The second, ungrouped copy argparse prints when a subparser carries
+    # help= — and the literal it prints when that help is SUPPRESS.
+    assert "==SUPPRESS==" not in help_text, "a subparser was given help=SUPPRESS"
+    for title in ("Yours:", "The pipeline:", "The agent's:"):
+        assert title in help_text, f"the {title} group is missing from --help"
+
+
+@check("CLI: status reports and does not mutate")
+def _(report):
+    """`status` grew four hidden flags that opened and closed investigations.
+
+    That was deliberate and temporary — the verbs were due a rethink and a
+    published name would have had to be carried. The rethink happened: the
+    state lives in `hunt`. A reporting command must not change what it reports
+    on, or `echolot` in a loop stops being safe to run.
+    """
+    from .main import build_parser
+
+    parser = build_parser()
+    for action in parser._actions:
+        if hasattr(action, "choices") and action.choices:
+            flags = {s for a in action.choices["status"]._actions for s in a.option_strings}
+            assert not any("hunt" in f for f in flags), \
+                f"status can still mutate the investigation: {sorted(flags)}"
+            assert "--resume" in {s for a in action.choices["hunt"]._actions
+                                  for s in a.option_strings}, \
+                "hunt has no --resume"
+            return
+    raise AssertionError("no subcommands are registered")
+
+
 @check(".claude/ layer: the skill knows every `next` the tool can produce")
 def _(report):
     """A word `status --next` prints that SKILL.md does not list is a dead end.
