@@ -1,0 +1,91 @@
+name: checks
+
+# Every pull request into main, and main itself after a merge.
+#
+# `protect-main` gates merging on review. Review does not run the detectors,
+# and this project's claim is that they compute the same answer everywhere —
+# so the claim has to be checked somewhere other than the author's laptop.
+#
+# The publish workflow also builds and runs `twine check`, but only on a
+# version tag, which is far too late: a tag is irreversible and a PyPI version
+# number can never be reused. The `package` job below moves that check to
+# where it can still stop something.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A second push to the same PR makes the first run pointless.
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Every version is worth a separate answer: one of them failing must not
+      # hide whether the others pass.
+      fail-fast: false
+      matrix:
+        # The range pyproject.toml claims in its classifiers. Claiming it
+        # without running it is how the claim goes stale.
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      # trace_processor is ~40 MB, fetched on first use and verified against a
+      # SHA-256 pinned by the perfetto package. Keyed on pyproject.toml because
+      # that is where the pin lives: change the pin, get a different binary.
+      - name: Cache trace_processor
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/perfetto/prebuilts
+          key: tp-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      # The environment, then 49 checks against a synthetic trace with problems
+      # planted in it in advance. tests/check_fixture.py is the same run under
+      # another name, so it is not repeated here.
+      - name: doctor — environment and the self-check
+        run: echolot doctor -q
+
+      - name: the investigation
+        run: python tests/check_hunt.py
+
+      - name: reflect
+        run: python tests/check_reflect.py
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # `twine check` is what verifies the README renders on PyPI. Relative
+      # links do not resolve there, which is why the README uses full GitHub
+      # URLs — a check that only ran at tag time would find that out after the
+      # version was already published.
+      - name: Build and check the artefacts
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*

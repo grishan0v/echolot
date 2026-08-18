@@ -31,6 +31,20 @@ creates the project and the publisher becomes permanent.
    The environment name must match the `environment: name:` in the workflow.
    GitHub creates the environment on the first run; nothing to configure there.
 
+## Before a release: what CI already checked
+
+`.github/workflows/checks.yml` runs on every pull request into `main`, and on
+`main` after a merge: `echolot doctor -q` plus the investigation and reflect
+self-checks, across every Python version the classifiers claim, and a
+`python -m build` with `twine check` on the artefacts.
+
+That last one is the reason the job exists at release time. `twine check`
+verifies the README renders on PyPI, and the publish workflow runs it too —
+but only on a version tag, which is after the point of no return. A PyPI
+version number can never be reused, even after deletion, so a rendering
+mistake found at tag time costs a version number. Found on the pull request,
+it costs a commit.
+
 ## Cutting a release
 
 ```bash
