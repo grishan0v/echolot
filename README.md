@@ -232,9 +232,14 @@ echolot hunt --resume        carry on with the open one
 echolot hunt --done "..."    record what it came to
 ```
 
-Each one is numbered, and the set of traces pushed aside to make room for the
-next investigation is recorded against the one it belonged to. So a question
-asked three weeks ago still knows what was measured to answer it.
+Each one is numbered, and everything it produces is filed under it: every
+round of traces by path, every report as a copy in
+`.echolot/hunts/<n>/reports/`. So a question asked three weeks ago still knows
+what was measured to answer it, and what each round concluded on the way.
+
+Nothing moves to make this work — `collect` still writes to `.echolot/traces/`
+and the latest report is still `.echolot/out/report.json`, so every example
+above and any CI job keep working unchanged.
 
 You rarely type any of it. `/echolot` reads the state and, when an
 investigation has been sitting untouched with traces behind it, asks whether

@@ -305,7 +305,14 @@ def cmd_analyze(args) -> int:
           file=sys.stderr)
     # `touched_at` has to mean work, not "when someone last typed echolot":
     # the freshness rule that decides whether to ask stands on it.
-    hunt_mod.touch(_project_root(cfg), analyze=True)
+    root = _project_root(cfg)
+    hunt_mod.touch(root, analyze=True)
+    # .echolot/out/report.json is always the latest and every analyze
+    # overwrites it, including one belonging to a different question. The
+    # investigation keeps its own copy of each.
+    kept = hunt_mod.record_report(root, out_dir)
+    if kept is not None:
+        print(f"→ {kept}  (this investigation's copy)", file=sys.stderr)
     return 0
 
 
@@ -1259,6 +1266,10 @@ def cmd_collect(args) -> int:
             device=args.device or section.get("device"),
             name=cfg.scenario_name,
             log=lambda m: print(m, file=sys.stderr),
+            # The set pushed aside is the previous round of this same
+            # investigation — its baseline, and what the next report is
+            # compared against.
+            on_set_aside=lambda d: hunt_mod.record_traces(_project_root(cfg), d),
         )
     except runner.RunnerError as e:
         print(f"collection error: {e}", file=sys.stderr)

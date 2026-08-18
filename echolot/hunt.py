@@ -28,8 +28,10 @@ project and is committed.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,6 +116,78 @@ def save(project: Path, hunt: dict[str, Any]) -> None:
                  encoding="utf-8")
 
 
+def home(project: Path, hunt: dict[str, Any] | None) -> Path | None:
+    """`.echolot/hunts/<n>/` — where an investigation keeps its own copies.
+
+    The working paths do not move: `collect` still writes into
+    `.echolot/traces/` and `analyze` still leaves the latest report in
+    `.echolot/out/`, which is what every example, every CI job and the agent
+    read. What changes is that each artefact is also filed under the
+    investigation it belongs to — reports copied in, trace directories
+    recorded by path, because traces run to gigabytes and copying them would
+    be a way to fill a disk.
+    """
+    n = (hunt or {}).get("n")
+    return project / ARCHIVE_DIR / str(n) if n else None
+
+
+def _rel(project: Path, p: Path) -> str:
+    """Stored relative to the project, so a record survives a move or a clone."""
+    try:
+        return str(p.resolve().relative_to(project.resolve()))
+    except ValueError:
+        return str(p)
+
+
+def record_traces(project: Path, directory: Path) -> None:
+    """Note that this directory of traces belongs to the open investigation.
+
+    Called wherever a set is pushed aside — between rounds by `collect`, and
+    at the boundary when a new investigation opens. Until this existed only
+    the closing set was recorded, so a hunt that ran four rounds remembered
+    the last one and lost the three it reasoned from.
+    """
+    hunt = load(project)
+    if not hunt or hunt.get("status") != "open":
+        return
+    rel = _rel(project, directory)
+    kept = hunt.setdefault("traces", [])
+    if rel not in kept:
+        kept.append(rel)
+        with contextlib.suppress(OSError):
+            save(project, hunt)
+
+
+def record_report(project: Path, out_dir: Path) -> Path | None:
+    """Copy the report just written into the open investigation's own history.
+
+    `.echolot/out/report.json` is always the latest one and every analyze
+    overwrites it — including an analyze belonging to a different question.
+    A copy per run costs tens of kilobytes and is the only way to see what an
+    investigation concluded at each step rather than only at the end.
+    """
+    hunt = load(project)
+    if not hunt or hunt.get("status") != "open":
+        return None
+    dest = home(project, hunt)
+    if dest is None:
+        return None
+    dest = dest / "reports"
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        seq = len(list(dest.glob("*.json"))) + 1
+        for ext in ("json", "md"):
+            src_file = out_dir / f"report.{ext}"
+            if src_file.exists():
+                shutil.copy2(src_file, dest / f"{seq:03d}.{ext}")
+    except OSError:
+        return None
+    hunt["reports"] = int(hunt.get("reports") or 0) + 1
+    with contextlib.suppress(OSError):
+        save(project, hunt)
+    return dest / f"{seq:03d}.json"
+
+
 def archive(project: Path, hunt: dict[str, Any]) -> Path | None:
     """Move a finished investigation into `.echolot/hunts/`.
 
@@ -122,13 +196,21 @@ def archive(project: Path, hunt: dict[str, Any]) -> Path | None:
     """
     if not hunt:
         return None
-    opened = (hunt.get("opened_at") or _now())[:19].replace(":", "").replace("-", "")
-    dest = project / ARCHIVE_DIR / f"{opened}-{_slug(hunt.get('question', ''))}.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    n = 1
-    while dest.exists():
-        n += 1
-        dest = dest.with_name(f"{dest.stem}-{n}.json")
+    # A numbered investigation already has a directory holding its reports;
+    # its record goes in beside them. The flat, timestamped filename is what
+    # 0.2.0 wrote, and unnumbered records from it keep using that shape.
+    own = home(project, hunt)
+    if own is not None:
+        own.mkdir(parents=True, exist_ok=True)
+        dest = own / "hunt.json"
+    else:
+        opened = (hunt.get("opened_at") or _now())[:19].replace(":", "").replace("-", "")
+        dest = project / ARCHIVE_DIR / f"{opened}-{_slug(hunt.get('question', ''))}.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        n = 1
+        while dest.exists():
+            n += 1
+            dest = dest.with_name(f"{dest.stem}-{n}.json")
     dest.write_text(json.dumps(hunt, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8")
     return dest
@@ -223,7 +305,9 @@ def history(project: Path) -> list[dict[str, Any]]:
         out.append(dict(current, current=True))
     d = project / ARCHIVE_DIR
     if d.is_dir():
-        for f in d.glob("*.json"):
+        # <n>/hunt.json is the shape from here on; *.json at the top level is
+        # what 0.2.0 wrote and is still read.
+        for f in list(d.glob("*/hunt.json")) + list(d.glob("*.json")):
             try:
                 h = json.loads(f.read_text(encoding="utf-8"))
             except (OSError, ValueError):
@@ -433,7 +517,9 @@ def _did(hunt: dict[str, Any]) -> list[str]:
         bits.append(f"open for {ran}")
     traces = hunt.get("traces") or []
     if traces:
-        bits.append(f"{len(traces)} trace set(s) kept")
+        bits.append(f"{len(traces)} trace set(s)")
+    if hunt.get("reports"):
+        bits.append(f"{hunt['reports']} report(s) kept")
     return bits
 
 
@@ -486,6 +572,13 @@ def detail(hunt: dict[str, Any], project: Path) -> list[str]:
             out.append(f"    {t}  {n} trace(s){gone}")
     else:
         out.append("  traces: none recorded")
+
+    own = home(project, hunt)
+    reports = sorted((own / "reports").glob("*.json")) if own else []
+    if reports:
+        out.append(f"  reports ({len(reports)}, oldest first):")
+        for r in reports:
+            out.append(f"    {r.relative_to(project) if r.is_relative_to(project) else r}")
     return out
 
 

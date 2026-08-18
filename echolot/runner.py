@@ -222,7 +222,8 @@ def collect(package: str, out_dir: Path, iterations: int,
             section: dict | None = None,
             device: str | None = None,
             name: str = "run",
-            log: Callable[[str], None] = print) -> list[dict]:
+            log: Callable[[str], None] = print,
+            on_set_aside: Callable[[Path], None] | None = None) -> list[dict]:
     """N repeats of a scenario. The mode decides who drives it.
 
     launch  — we do: force-stop and launch the activity. Cold start.
@@ -230,7 +231,10 @@ def collect(package: str, out_dir: Path, iterations: int,
     gradle  — the macrobenchmark writes traces itself, we only collect them.
 
     Whatever the mode, a set already in out_dir is set aside first, never
-    overwritten: see set_aside.
+    overwritten: see set_aside. `on_set_aside` is handed the directory that
+    set went to, when there was one — the caller files it under the
+    investigation it belongs to. Without it the return value was dropped here
+    and a multi-round hunt kept no record of the rounds it reasoned from.
     """
     import time
 
@@ -238,7 +242,9 @@ def collect(package: str, out_dir: Path, iterations: int,
     mode = str(section.get("mode", "launch"))
     duration_ms = int(section.get("duration_ms", 12000))
     reset = str(section.get("reset_policy", "force-stop"))
-    set_aside(out_dir, name, log)
+    aside = set_aside(out_dir, name, log)
+    if aside is not None and on_set_aside is not None:
+        on_set_aside(aside)
 
     if mode == "gradle":
         task = section.get("gradle_task")

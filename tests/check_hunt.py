@@ -353,6 +353,112 @@ def case_record_from_0_2_0(tmp: Path) -> None:
         os.chdir(here)
 
 
+def case_rounds_and_reports_accumulate(tmp: Path) -> None:
+    """A multi-round hunt keeps every round and every report it produced.
+
+    Before this, `.echolot/out/report.json` was overwritten by each analyze —
+    including one belonging to a different question — and the directories
+    `collect` pushed aside between rounds were recorded nowhere. An
+    investigation remembered its last set of traces and nothing it reasoned
+    from on the way there.
+    """
+    p = setup(tmp)
+    out = p / ".echolot" / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
+
+    for r in (1, 2, 3):
+        out.joinpath("report.json").write_text(f'{{"round": {r}}}', encoding="utf-8")
+        out.joinpath("report.md").write_text(f"# round {r}", encoding="utf-8")
+        hunt_mod.record_report(p, out)
+        d = p / ".echolot" / "traces" / f"coldStart-round{r}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "coldStart_iter0.perfetto-trace").write_bytes(b"x")
+        hunt_mod.record_traces(p, d)
+
+    h = hunt_mod.load(p)
+    check("every round recorded", len(h["traces"]) == 3, str(h["traces"]))
+    check("every report counted", h["reports"] == 3, str(h.get("reports")))
+    kept = sorted((p / hunt_mod.ARCHIVE_DIR / "1" / "reports").glob("*.json"))
+    check("and kept on disk, oldest first", [f.name for f in kept]
+          == ["001.json", "002.json", "003.json"], str([f.name for f in kept]))
+    check("each holds that round's report",
+          json.loads(kept[0].read_text())["round"] == 1
+          and json.loads(kept[2].read_text())["round"] == 3)
+    check("the markdown came along",
+          (p / hunt_mod.ARCHIVE_DIR / "1" / "reports" / "003.md").exists())
+    check("recording the same directory twice does not double it",
+          (hunt_mod.record_traces(p, p / ".echolot" / "traces" / "coldStart-round3")
+           or len(hunt_mod.load(p)["traces"])) == 3)
+
+
+def case_collect_reports_the_round_it_set_aside(tmp: Path) -> None:
+    """`collect` hands back the directory it pushed the previous round into.
+
+    It used to call `set_aside` and drop the return value — the same shape of
+    defect as `cmd_hunt` dropping it, and the reason rounds went unrecorded.
+    Checked against the real function: the callback has to fire before any
+    device work, or a hunt on a machine with no phone attached would lose the
+    round anyway.
+    """
+    from echolot import runner
+
+    p = setup(tmp, traces=3)
+    hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
+    seen: list[Path] = []
+    try:
+        # gradle with no task fails immediately after the set-aside, which is
+        # exactly the window under test — no adb, no device, no waiting.
+        runner.collect(package="com.example.app",
+                       out_dir=p / ".echolot" / "traces",
+                       iterations=1, section={"mode": "gradle"},
+                       name="coldStart", log=lambda m: None,
+                       on_set_aside=lambda d: (seen.append(d),
+                                               hunt_mod.record_traces(p, d)))
+    except runner.RunnerError:
+        pass
+    check("collect reported the set-aside directory", len(seen) == 1, str(seen))
+    if seen:
+        check("with the traces really in it",
+              len(list(seen[0].glob("*.perfetto-trace"))) == 3)
+        check("and the investigation recorded it",
+              len(hunt_mod.load(p).get("traces") or []) == 1)
+
+
+def case_reports_do_not_cross_investigations(tmp: Path) -> None:
+    """The whole point: one question's evidence never lands under another's."""
+    p = setup(tmp)
+    out = p / ".echolot" / "out"
+    out.mkdir(parents=True, exist_ok=True)
+
+    hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
+    out.joinpath("report.json").write_text('{"belongs_to": 1}', encoding="utf-8")
+    hunt_mod.record_report(p, out)
+
+    hunt_mod.open_new(p, "the list stutters", scenario="coldStart")
+    out.joinpath("report.json").write_text('{"belongs_to": 2}', encoding="utf-8")
+    hunt_mod.record_report(p, out)
+
+    for n in (1, 2):
+        kept = sorted((p / hunt_mod.ARCHIVE_DIR / str(n) / "reports").glob("*.json"))
+        check(f"#{n} kept exactly its own", len(kept) == 1, str(kept))
+        if kept:
+            check(f"#{n}'s report is the right one",
+                  json.loads(kept[0].read_text())["belongs_to"] == n)
+
+
+def case_nothing_open_files_nothing(tmp: Path) -> None:
+    """An ad-hoc analyze on someone else's trace has no investigation to file under."""
+    p = setup(tmp)
+    out = p / ".echolot" / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    out.joinpath("report.json").write_text("{}", encoding="utf-8")
+    check("record_report is a no-op", hunt_mod.record_report(p, out) is None)
+    hunt_mod.record_traces(p, p / ".echolot" / "traces")
+    check("and nothing was created",
+          not (p / hunt_mod.ARCHIVE_DIR).exists() and not hunt_mod.path(p).exists())
+
+
 # --- drift, archiving, leftovers --------------------------------------------
 
 def case_drift_scenario(tmp: Path) -> None:
@@ -370,18 +476,52 @@ def case_drift_scenario(tmp: Path) -> None:
 
 
 def case_archive(tmp: Path) -> None:
-    """Starting a new investigation never destroys the previous question."""
+    """Starting a new investigation never destroys the previous question.
+
+    A numbered investigation is archived into the directory that already holds
+    its reports, so everything it produced sits together.
+    """
     p = setup(tmp, traces=5, report=True)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     hunt_mod.open_new(p, "the list stutters", scenario="listScroll")
-    archived = sorted((p / hunt_mod.ARCHIVE_DIR).glob("*.json"))
-    check("previous investigation archived", len(archived) == 1,
-          f"{len(archived)} file(s)")
-    if archived:
-        old = json.loads(archived[0].read_text())
+    record = p / hunt_mod.ARCHIVE_DIR / "1" / "hunt.json"
+    check("archived into its own home", record.exists(), str(record))
+    if record.exists():
+        old = json.loads(record.read_text())
         check("archived with its question", old["question"] == "cold start 3s → 7s")
         check("archived as abandoned", old["status"] == "abandoned", old["status"])
     check("the new one is open", hunt_mod.load(p)["question"] == "the list stutters")
+    check("both are in the history", len(hunt_mod.history(p)) == 2,
+          str(len(hunt_mod.history(p))))
+
+
+def case_archive_from_0_2_0_is_still_read(tmp: Path) -> None:
+    """0.2.0 archived to a flat, timestamped filename. Those must keep showing.
+
+    Anyone upgrading has some. Reading only the new shape would make their
+    past investigations vanish from `hunt --list` — the tool losing history
+    it had explicitly promised not to delete.
+    """
+    p = setup(tmp)
+    flat = p / hunt_mod.ARCHIVE_DIR / "20260817T100000-an-older-question.json"
+    flat.parent.mkdir(parents=True, exist_ok=True)
+    flat.write_text(json.dumps({
+        "question": "an older question", "scenario": "coldStart",
+        "opened_at": "2026-08-17T10:00:00+00:00",
+        "touched_at": "2026-08-17T10:30:00+00:00",
+        "status": "concluded", "collects": 1, "analyzes": 2,
+        "conclusion": "it was the images",
+    }), encoding="utf-8")
+    here = Path.cwd()
+    try:
+        os.chdir(p)
+        code, text = run("hunt", "--list")
+        check("a 0.2.0 archive still lists", code == 0 and "an older question" in text, text)
+        check("with its conclusion", "it was the images" in text, text)
+        code, text = run("hunt", "--show", "older")
+        check("and opens by words", code == 0 and "an older question" in text, text)
+    finally:
+        os.chdir(here)
 
 
 def case_leftover_markers(tmp: Path) -> None:

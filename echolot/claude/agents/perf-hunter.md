@@ -65,7 +65,9 @@ happens at the door and not here.
 Before a re-record, copy the current set into `.echolot/traces/<round>/`
 (a macrobenchmark's output directory is cleaned by gradle on the next run; a
 rename inside it goes with the cleaning). `echolot collect` does this on its
-own.
+own, and records where the round went against the open investigation — so you
+do not have to keep a list of your own. `echolot hunt --show <n>` reads it
+back: every round, and a copy of every report you produced.
 
 ## The protocol
 

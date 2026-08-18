@@ -167,6 +167,35 @@ That last part is what keeps the archive from being decoration: `set_aside`
 already returned the directory it created, and dropping that return value left
 the record remembering a question with nothing behind it. Investigations are
 numbered so there is something short to name one by — `echolot hunt --show 2`.
+
+### Filed under the investigation, without moving
+
+`.echolot/traces/` and `.echolot/out/report.json` stay exactly where they are:
+they are what every example, every CI job and the agent read, and moving them
+would rewrite all three for tidiness. What changed is that each artefact is
+*also* filed under the investigation it belongs to.
+
+```
+.echolot/
+├── hunt.json                    the open investigation
+├── traces/                      the working set — unchanged
+│   └── coldStart-<stamp>/       a round, pushed aside by collect
+├── out/report.json|md           the latest report — unchanged
+└── hunts/
+    └── 1/
+        ├── hunt.json            the record, once it is closed
+        └── reports/001.json…    a copy per analyze, oldest first
+```
+
+Reports are copied, trace directories are recorded by path. That asymmetry is
+deliberate: a report is tens of kilobytes and there is no other way to see what
+an investigation concluded at each step, while traces run to gigabytes and
+copying them would be a way to fill a disk.
+
+Two return values had to stop being dropped for this to work. `collect` called
+`set_aside` and discarded the directory, so a hunt that ran four rounds
+remembered only the last; it now hands it to the caller through `on_set_aside`.
+And `analyze` overwrote one `report.json` for every question in the project.
 And the sources are scanned for leftover `AGENTTMP_` markers, split by who can
 remove them: lines `mark --apply` wrote carry its tag and `mark --remove` takes
 them out, while ones an agent added by hand carry only the prefix and have to
