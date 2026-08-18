@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
+  selfchecks:
     name: python ${{ matrix.python }}
     runs-on: ubuntu-latest
     strategy:
@@ -69,6 +69,29 @@ jobs:
 
       - name: reflect
         run: python tests/check_reflect.py
+
+  # One context for the whole matrix, so the branch rule does not name Python
+  # versions. Required checks are matched by context name: with the matrix
+  # reported directly, a pull request that drops 3.10 would wait forever for a
+  # `python 3.10` that is never coming, and the rule would have to be edited
+  # before the change that needs it could merge.
+  #
+  # `if: always()` is what makes this a gate rather than decoration. Without
+  # it the job is skipped when the matrix fails, and a skipped check is not a
+  # failed one — the rule would pass on a red build.
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    needs: [selfchecks]
+    if: always()
+    steps:
+      - name: Every Python version passed
+        # `result` on a matrix job is the aggregate: success only when every
+        # leg succeeded. Anything else — failure, cancelled, skipped — is not
+        # a pass and must not read as one.
+        run: |
+          echo "selfchecks: ${{ needs.selfchecks.result }}"
+          [ "${{ needs.selfchecks.result }}" = "success" ] || exit 1
 
   package:
     name: package
