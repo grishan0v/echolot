@@ -1,5 +1,7 @@
 # Thresholds from a healthy run
 
+[← Docs index](README.md) · [README](../README.md)
+
 An absolute threshold is brittle. 16 ms on a flagship and on a budget phone are
 different things, and the config does not travel between devices. Worse, it
 does not travel between scenarios either: on a 772 ms startup and on a minute

@@ -1,5 +1,7 @@
 # Determinism
 
+[← Docs index](README.md) · [README](../README.md)
+
 The whole premise is that the same trace yields the same answer, run after run.
 Two things make that true rather than aspirational: the parser version is
 pinned, and the pipeline proves itself on a trace whose contents are known.

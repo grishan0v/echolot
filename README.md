@@ -1,153 +1,297 @@
-
 <img width="2560" height="904" alt="echolot-hero" src="https://github.com/user-attachments/assets/c5640665-d1ae-41ac-8da9-669434ce51ac" />
 
-## Install
+<p align="center">
+  <b>Find where Android startup time actually goes — from a Perfetto trace down to a line of code.</b>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/echolot/"><img alt="PyPI" src="https://img.shields.io/pypi/v/echolot.svg"></a>
+  <a href="https://pypi.org/project/echolot/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/echolot.svg"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>
+  <a href="#status"><img alt="Status" src="https://img.shields.io/badge/status-v0-orange.svg"></a>
+</p>
+
+---
+
+**Contents** · [What it is](#what-it-is) · [Requirements](#requirements) · [Quick start](#quick-start) · [What you get](#what-you-get) · [Commands](#commands) · [Detectors](#detectors) · [How it works](#how-it-works) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
+
+---
+
+## What it is
+
+A Perfetto trace of one cold start holds around half a million slices in eighty
+megabytes. Nobody reads that, and an AI agent pointed at the raw file produces
+confident guesses instead of answers.
+
+echolot sits in between. It runs six SQL detectors over the trace and returns
+about twenty rows: where the time went, how much of it, and the evidence behind
+each claim. Same trace in, same report out — the `trace_processor` version is
+pinned and verified on every run.
+
+> [!TIP]
+> The intended way to use it is through Claude Code: you describe the
+> regression in plain words, the agent collects traces, reads the report and
+> walks down to the code. The command line works on its own too — see
+> [without an agent](#without-an-agent).
+
+## Requirements
+
+| | |
+|---|---|
+| **Python** | 3.10 or newer |
+| **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
+| **Device** | a phone or emulator with USB debugging on |
+| **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code), for the guided workflow |
+
+Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
+
+## Quick start
+
+### 1. Install
 
 ```bash
 pipx install echolot
 ```
 
-## First time
+### 2. Set up your project
+
+Run this once inside your Android project:
 
 ```bash
-cd ~/my-app
-//open your agent
-/echolot init
+cd ~/my-app && echolot init
 ```
 
-That installs the `.claude/` layer — the skill, the `perf-hunter` agent, the
-commands — checks that this machine computes correctly, and ends with the next
-step. Then open Claude Code in the project and type `/echolot`. That is the
-one door: it asks the tool where the project stands and takes the next step
-itself — the first time, that is building `echolot.yml` from the repository
-and a probe trace (four questions to you along the way); every time after,
-finding the cause of the regression you describe.
+This installs the `.claude/` layer — a skill, the `perf-hunter` agent and three
+commands — then checks that this machine computes traces correctly.
+
+### 3. Open the agent and type one word
 
 ```
-/echolot                              # reads the state, does what is next
-/echolot why is cold start slow       # hunt, with that as the question
-/echolot init · setup · hunt · reflect · doctor   # that thing, explicitly
+/echolot
 ```
 
-## Coming back
+That is the only entry point you need to remember. It asks the tool where the
+project stands and takes the next step by itself:
+
+- **first run** — builds `echolot.yml` from your repository and a probe trace,
+  asking you four questions along the way;
+- **every run after** — hunts down the regression you describe.
+
+```
+/echolot                          reads the state, does whatever is next
+/echolot why is cold start slow   hunt, with that as the question
+/echolot init | setup | hunt | reflect | doctor
+```
+
+### Coming back later
 
 ```bash
 echolot
 ```
 
-Where things stand — layer, config, traces, last report, last `doctor` — and
-one line saying what to do next; usually `/echolot`. After updating the
-package, run `echolot init` again: it brings the layer up to date and leaves
-the files you edited alone.
+Prints where the project stands — layer, config, traces, last report, last
+`doctor` — and one line saying what to do next.
 
-Without an agent, or in CI:
+> [!IMPORTANT]
+> After upgrading the package, run `echolot init` again. It brings the
+> `.claude/` layer up to date and leaves files you edited alone.
+
+### Without an agent
+
+The same work, by hand or in CI:
 
 ```bash
 echolot collect -c echolot.yml -n 5                              # 5 repeats of the scenario
-echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml  # the report
-echolot doctor -q                                                # exit 0/1: does this environment compute correctly?
+echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml  # build the report
+echolot doctor -q                                                # exit 0/1: is this environment sane?
 ```
 
-The output is `.echolot/out/report.md` for humans and `report.json` for the
-agent. `doctor` builds a synthetic trace with problems planted in advance and
-checks the answers against them — no device, about a second — good both as a
-CI gate and as the agent's first move.
+Results land in `.echolot/out/` — `report.md` for you, `report.json` for the
+agent.
 
-## What it looks for
+## What you get
+
+A **Marker Report**: one section per detector that fired, nothing else.
+
+<details>
+<summary><b>Example report</b> (click to expand)</summary>
+
+```markdown
+# Marker Report
+
+Runs: **5**, numbers are medians across them
+Process: `com.example.app` (pid 12903)
+Scenario window: **1184 ms** (from 1102 to 1291)
+Detectors fired: **3 of 6**
+
+## Where the main thread spent its time
+
+_measured as SELF time, children subtracted_
+
+| Where | N | Self, ms | Total, ms | Max, ms |
+|---|---|---|---|---|
+| draw | 4 | 125.4 | 130.1 | 61.2 |
+| TextLayout:initLayout | 61 | 88.0 | 88.0 | 4.1 |
+| inflate | 12 | 47.3 | 210.7 | 12.9 |
+
+## Blind spots: threads burning CPU with no instrumentation
+
+_the only detector that finds a problem inside uninstrumented code_
+
+| Where | Total, ms | Instrumented, ms | Evidence |
+|---|---|---|---|
+| DefaultDispatcher-worker-2 | 340.2 | 0.0 | 0 slices |
+
+## Monitor contention
+
+| Where | N | Total, ms | Max, ms | Evidence |
+|---|---|---|---|---|
+| Lock contention on a monitor lock | 9 | 61.5 | 22.4 | owner tid 12931 |
+
+**Silent:** gc_pressure, binder_txn, runnable_starvation
+```
+
+</details>
+
+The report is written for two readers at once: `report.md` reads like a
+findings list, `report.json` carries the same numbers in a shape the agent can
+walk. An 81 MB trace with 475k slices comes out as a 14 KB `report.json` in
+about five seconds.
+
+## Commands
+
+Two are yours to remember: **`echolot init`** and **`echolot`** with nothing
+after it. The rest split by who calls them.
+
+### Yours
+
+| command | what it does |
+|---|---|
+| `echolot` | where this project stands, and the next step |
+| `echolot init` | install or update the `.claude/` layer; checks the environment |
+| `echolot collect` | capture N traces of one scenario — `launch`, `command` or `gradle` |
+| `echolot analyze` | run the detectors, build a Marker Report |
+| `echolot doctor` | environment + self-check on a synthetic trace; exit 0/1, `-q` for three lines |
+
+<details>
+<summary><b>The agent's, behind <code>/echolot</code></b> — you do not call these</summary>
+
+<br>
+
+| command | what it does |
+|---|---|
+| `probe` | processes, threads by CPU, scenario anchor candidates |
+| `names` | slice name inventory and detector mask coverage |
+| `domains` | slice-to-code map and instrumentation coverage |
+| `mark` | the first temporary markers for a project with none, from the manifest and the SDK — `--apply` / `--remove` |
+| `calibrate` | thresholds derived from known-healthy runs |
+| `explain` | list the detectors and their parameters |
+
+</details>
+
+<details>
+<summary><b>For improving the tool</b></summary>
+
+<br>
+
+| command | what it does |
+|---|---|
+| `reflect` | the same kind of report, over an agent session — how the tool was used, where it got in the way |
+
+</details>
+
+## Detectors
 
 | detector | what it catches |
 |---|---|
-| `main_thread_block` | where the main thread spent its time (by self time) |
+| `main_thread_block` | where the main thread spent its time, by self time |
 | `gc_pressure` | frequent or expensive GC, and waits on allocation |
-| `monitor_contention` | monitor contention, with the owner's tid as evidence |
+| `monitor_contention` | lock contention, with the owner's tid as evidence |
 | `binder_txn` | long synchronous IPC, and death by a thousand cuts |
-| `runnable_starvation` | thread ready but preempted on CPU |
+| `runnable_starvation` | thread ready to run but preempted on CPU |
 | `uninstrumented_cpu` | **threads burning CPU with no instrumentation** |
 
-The last one is the only detector that finds a problem inside uninstrumented
-code. It does not guess; it presents a fact: "thread
-`DefaultDispatcher-worker-2` was Running for 340 ms, zero slices". That is
-where to add `trace{}` and re-record.
+That last one is the only detector that finds a problem inside code nobody
+instrumented. It does not guess — it states a fact:
 
-Each detector is one self-contained `.sql` file with its metadata in the
-header. Drop a file into `echolot/sql/detectors/` and it is picked up — there
-is no registration in code.
+> thread `DefaultDispatcher-worker-2` was Running for 340 ms, zero slices
 
-## The commands
+Which is exactly where to add `trace{}` and record again.
 
-Two are yours to remember — `init` and `echolot` with nothing after it. The
-rest split by who calls them.
+> [!NOTE]
+> Each detector is one self-contained `.sql` file with its metadata in the
+> header. Drop a file into `echolot/sql/detectors/` and it is picked up —
+> there is no registration step in code. See
+> [docs/detectors.md](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md).
 
-**You**
+## How it works
 
-```
-echolot     where this project stands, and the next step
-init        install or update the .claude/ layer; checks the environment
-analyze     run the detectors, build a Marker Report — CI, or traces by hand
-collect     capture N traces of one scenario: launch | command | gradle
-doctor      environment + self-check on a synthetic trace + is the layer current; exit 0/1, -q for three lines
-```
+```mermaid
+flowchart LR
+    A["Android device"]
+    B["trace<br/>81 MB · 475k slices"]
+    C["6 SQL detectors<br/>pinned trace_processor"]
+    D["report.md<br/>~20 rows"]
+    E["report.json<br/>14 KB"]
+    F(["You"])
+    G(["The agent"])
 
-**The agent**, behind `/echolot` — you do not call
-these:
-
-```
-probe       processes, threads by CPU, scenario anchor candidates
-names       slice name inventory and detector mask coverage
-domains     slice-to-code map and instrumentation coverage
-mark        the first temporary markers for a project with none — from the manifest and the SDK, not from names; --apply / --remove
-calibrate   thresholds derived from known-healthy runs
-explain     list the detectors and their parameters
+    A -->|"echolot collect"| B
+    B -->|"echolot analyze"| C
+    C --> D --> F
+    C --> E --> G
 ```
 
-**Improving the tool**
-
-```
-reflect     the same kind of report over an agent session — how the tool was used, where it got in the way
-```
-
-## Where things live
+## Project layout
 
 ```
 android-project/
 ├── echolot.yml       ← the project half, committed
 ├── local.yml         ← device serials, binary path; in .gitignore
-└── .echolot/         ← traces, reports, the run log, reflect reports; in .gitignore
+└── .echolot/         ← traces, reports, run log, reflect reports; in .gitignore
 ```
 
-Read it like `gradle.properties` and `local.properties`: one tool per machine,
-the binding to a project inside that project's repository.
+Read it the way you read `gradle.properties` and `local.properties`: one tool
+per machine, and the binding to a project living inside that project's
+repository.
 
 ## Documentation
 
-| document | about |
-|---|---|
-| [docs/collecting.md](https://github.com/grishan0v/echolot/blob/main/docs/collecting.md) | `collect`, the three modes, merging repeats |
-| [docs/analysing.md](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md) | `probe`, `names`, `domains` — from a trace to a place in the code |
-| [docs/mark.md](https://github.com/grishan0v/echolot/blob/main/docs/mark.md) | `mark` — the first markers for a project with no instrumentation, from the platform's vocabulary |
-| [docs/detectors.md](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md) | writing your own, the context views, self time versus total |
-| [docs/calibrate.md](https://github.com/grishan0v/echolot/blob/main/docs/calibrate.md) | thresholds from healthy runs, why rank beats percentile |
-| [docs/determinism.md](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) | the pinned trace_processor, `doctor`, the self-check |
-| [docs/agent-layer.md](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md) | the `.claude/` layer and why the loop lives in a subagent |
-| [docs/reflect.md](https://github.com/grishan0v/echolot/blob/main/docs/reflect.md) | `reflect` — the report over the agent's session, for improving the tool |
+Start at the [documentation index](https://github.com/grishan0v/echolot/tree/main/docs), or jump straight in:
 
-The agent-facing reference material ships inside the package, under
+| | document | about |
+|---|---|---|
+| 🎬 | [Collecting](https://github.com/grishan0v/echolot/blob/main/docs/collecting.md) | `collect`, the three modes, merging repeats |
+| 🔎 | [Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md) | `probe`, `names`, `domains` — from a trace to a place in the code |
+| 🏷️ | [Marking](https://github.com/grishan0v/echolot/blob/main/docs/mark.md) | `mark` — first markers for a project with no instrumentation |
+| ⚙️ | [Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md) | writing your own, the context views, self time versus total |
+| 📏 | [Calibrating](https://github.com/grishan0v/echolot/blob/main/docs/calibrate.md) | thresholds from healthy runs, why rank beats percentile |
+| 🔒 | [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) | the pinned `trace_processor`, `doctor`, the self-check |
+| 🤖 | [The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md) | the `.claude/` layer, and why the loop lives in a subagent |
+| 🪞 | [Reflect](https://github.com/grishan0v/echolot/blob/main/docs/reflect.md) | the report over an agent session, for improving the tool |
+
+Agent-facing reference material ships inside the package under
 `echolot/claude/skills/echolot/references/` — the report schema, the config
 schema, how ART names things, and how to capture a trace by hand.
 
 ## Status
 
-v0. Everything planned for it is in place except CI mode.
+**v0.** Everything planned for it is in place except CI mode.
 
-The detectors were validated on a synthetic trace (46 checks in `doctor`) and
-on live traces from Android 14 (emulator) and Android 13 (Galaxy A51). The
-naming masks for GC, locks and binder were narrowed against those real traces,
-and every narrowing is pinned by a check.
+The detectors were validated against a synthetic trace — 46 checks inside
+`doctor` — and against live traces from Android 14 (emulator) and Android 13
+(Galaxy A51). The naming masks for GC, locks and binder were narrowed against
+those real traces, and every narrowing is pinned by a check.
 
-**Not done: CI mode.** `scenario.budget_ms` is declared in the config but not
-read by the code. What is needed is `analyze` with an exit code — either
-against the budget or on "any detector fired", which after `calibrate` amounts
-to a comparison against the baseline.
+> [!WARNING]
+> **CI mode is not done.** `scenario.budget_ms` is declared in the config but
+> never read. What is missing is `analyze` with an exit code — either against
+> the budget or on "any detector fired", which after `calibrate` amounts to a
+> comparison against the baseline.
 
-A failed detector never fails the run — the error goes to stderr and into
+A failed detector never fails the run: the error goes to stderr and into
 `report.json`.
+
+## License
+
+[Apache 2.0](https://github.com/grishan0v/echolot/blob/main/LICENSE)

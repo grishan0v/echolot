@@ -1,5 +1,7 @@
 # The `.claude/` layer
 
+[← Docs index](README.md) · [README](../README.md)
+
 ```bash
 cd ~/StudioProjects/my-app
 echolot init

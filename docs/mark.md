@@ -1,5 +1,7 @@
 # `mark`: the first markers, from the platform's vocabulary
 
+[← Docs index](README.md) · [README](../README.md)
+
 ```bash
 echolot mark                     # where the first markers go, and why there
 echolot mark --apply             # put the applicable ones in

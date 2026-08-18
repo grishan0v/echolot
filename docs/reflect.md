@@ -1,5 +1,7 @@
 # Reflect: the report over the agent
 
+[← Docs index](README.md) · [README](../README.md)
+
 `echolot analyze` stands between the trace and the agent. `echolot reflect`
 stands between the agent's session and the person maintaining the tool. Same
 reason in both places: a session transcript is hundreds of kilobytes to tens

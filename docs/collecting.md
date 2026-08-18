@@ -1,5 +1,7 @@
 # Collecting traces
 
+[← Docs index](README.md) · [README](../README.md)
+
 ```bash
 echolot collect -c echolot.yml -n 5 -o traces/
 echolot analyze traces/*.perfetto-trace -c echolot.yml
