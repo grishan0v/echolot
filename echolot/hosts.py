@@ -16,6 +16,9 @@ and there is one text to keep right instead of one per client.
 
 from __future__ import annotations
 
+import json
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -130,3 +133,117 @@ def write_stub(project: Path, host: Host) -> tuple[str, Path]:
     # Ours, and out of date: the file is a pointer, not something to edit.
     dest.write_text(text, encoding="utf-8")
     return "updated", dest
+
+
+# --- the choice, remembered --------------------------------------------------
+#
+# Without this, deselecting Claude Code is a trap: `.claude/` would be absent,
+# `_layer_line` would call that "absent", and `next` would ask for `echolot
+# init` forever — on a project that had just said it does not want the layer.
+
+CHOICE_FILE = Path(".echolot") / "hosts.json"
+
+
+def choice_path(project: Path) -> Path:
+    return project / CHOICE_FILE
+
+
+def save_choice(project: Path, chosen: list[Host]) -> None:
+    try:
+        p = choice_path(project)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"hosts": [h.key for h in chosen]}, indent=2) + "\n",
+                     encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_choice(project: Path) -> list[str] | None:
+    """The keys this project chose, or None when it never chose."""
+    try:
+        data = json.loads(choice_path(project).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    keys = data.get("hosts") if isinstance(data, dict) else None
+    return [k for k in keys if k in BY_KEY] if isinstance(keys, list) else None
+
+
+def wants_claude(project: Path) -> bool:
+    """Whether this project expects the .claude/ layer. Never asked means yes."""
+    chosen = load_choice(project)
+    return "claude" in chosen if chosen is not None else True
+
+
+# --- the screen --------------------------------------------------------------
+
+def _colour(stream) -> tuple[str, str, str]:
+    if os.environ.get("NO_COLOR") or not getattr(stream, "isatty", lambda: False)():
+        return "", "", ""
+    return "\033[1m", "\033[2m", "\033[0m"
+
+
+def interactive(stream) -> bool:
+    """Ask only when there is certainly somebody there to answer.
+
+    `echolot init` is run by agents, and by `doctor`'s own self-check five
+    times over into temporary directories. A prompt appearing there is a hang,
+    not a question — so this errs heavily towards silence: a real terminal on
+    both ends, and not a CI runner.
+    """
+    if os.environ.get("CI") or os.environ.get("ECHOLOT_NO_INPUT"):
+        return False
+    try:
+        return sys.stdin.isatty() and stream.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def pick(detected: list[Host], stream=sys.stdout) -> list[Host]:
+    """Confirm a guess rather than ask a blank question.
+
+    Detection has already looked at the project, so the common answer is
+    Enter. Numbered input rather than an arrow-key menu: no raw terminal mode
+    to enter and leave, it survives a pipe, and a process dying mid-screen
+    cannot leave the terminal wedged.
+    """
+    bold, dim, off = _colour(stream)
+    pre = {h.key for h in detected}
+    print(f"\n{bold}Point which agents at echolot?{off}\n", file=stream)
+    width = max(len(h.title) for h in HOSTS)
+    for i, h in enumerate(HOSTS, 1):
+        mark = "✓" if h.key in pre else "·"
+        found = "   (found)" if h.key in pre and h.key != "claude" else ""
+        print(f"  {i} {mark} {h.title.ljust(width)}  {dim}{h.path}{off}{found}",
+              file=stream)
+        if h.note:
+            print(f"        {' ' * width}{dim}{h.note}{off}", file=stream)
+
+    default = ",".join(str(i) for i, h in enumerate(HOSTS, 1) if h.key in pre)
+    print(f'\n  {dim}Enter — keep {default} · numbers — "1 3" · "all" · "none"{off}',
+          file=stream)
+    try:
+        raw = input("› ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print(file=stream)
+        return detected
+
+    if not raw:
+        return detected
+    if raw == "all":
+        return list(HOSTS)
+    if raw == "none":
+        return []
+    picked, bad = [], []
+    for token in raw.replace(",", " ").split():
+        host = None
+        if token.isdigit() and 1 <= int(token) <= len(HOSTS):
+            host = HOSTS[int(token) - 1]
+        elif token in BY_KEY:
+            host = BY_KEY[token]
+        else:
+            bad.append(token)
+        if host is not None and host not in picked:
+            picked.append(host)
+    if bad:
+        print(f"  ignored: {', '.join(bad)}", file=stream)
+    return picked or detected

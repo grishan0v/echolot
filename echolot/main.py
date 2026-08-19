@@ -693,7 +693,7 @@ def layer_files() -> list[Path]:
             if p.is_file() and not p.name.startswith(".")]
 
 
-def _install_pointers(project: Path, spec: str | None) -> None:
+def _install_pointers(project: Path, chosen: list) -> None:
     """Tell the other clients this tool exists.
 
     `.claude/` is a Claude Code mechanism, and in Cursor or Codex it is an
@@ -705,12 +705,6 @@ def _install_pointers(project: Path, spec: str | None) -> None:
     """
     from . import hosts as hosts_mod
 
-    chosen = hosts_mod.parse(spec) if spec else hosts_mod.detect(project)
-    if chosen is None:
-        print(f"\nunknown client in --for {spec!r}. There is: "
-              f"{', '.join(h.key for h in hosts_mod.HOSTS)}, or `all`",
-              file=sys.stderr)
-        return
     stubs = [h for h in chosen if h.key != "claude"]
     if not stubs:
         return
@@ -810,6 +804,15 @@ def _layer_line(project: Path) -> tuple[str, str]:
     """(verdict, one line) about the project's .claude/ layer — for -q."""
     status = layer_status(project)
     if status is None:
+        # Absent because this project said it does not use Claude Code is a
+        # different fact from absent because nobody ran init. Without the
+        # distinction, `next` would ask for `echolot init` forever on a
+        # project that had just declined the layer.
+        from . import hosts as hosts_mod
+        if not hosts_mod.wants_claude(project):
+            chosen = hosts_mod.load_choice(project) or []
+            named = ", ".join(hosts_mod.BY_KEY[k].title for k in chosen) or "nothing"
+            return "opted-out", f"layer: not installed — this project points {named} at echolot"
         return "absent", "layer: none installed here (`echolot init`)"
     by_state: dict[str, int] = {}
     for r in status["rows"]:
@@ -931,6 +934,8 @@ NEXT_KINDS = ("init", "init-force", "doctor", "setup", "fix-config",
 
 
 def next_kind(st: dict) -> str:
+    # `opted-out` falls through on purpose: nothing to install and nothing
+    # wrong, so the next step is whatever the config says.
     if st["layer_verdict"] == "absent":
         return "init"
     if st["layer_verdict"] == "stale":
@@ -954,6 +959,17 @@ def next_kind(st: dict) -> str:
     return "hunt"
 
 
+def _door(st: dict) -> str:
+    """How this project's agent is reached, in its own words.
+
+    Leading with "/echolot in Claude Code" on a project that has just declined
+    the layer names a command its human does not have.
+    """
+    if st.get("layer_verdict") == "opted-out":
+        return "`echolot guide"
+    return "/echolot in Claude Code, or `echolot guide"
+
+
 def next_step(st: dict) -> str:
     """One line: what to do next, from the state. Shared by status and init."""
     kind = next_kind(st)
@@ -967,8 +983,8 @@ def next_step(st: dict) -> str:
     if kind == "doctor":
         return "echolot doctor — the last self-check failed; no report is trustworthy until it passes"
     if kind == "setup":
-        return ("/echolot in Claude Code, or `echolot guide setup` in any other "
-                "agent — echolot.yml from the repository and a probe trace")
+        return (f"{_door(st)} setup` — echolot.yml from the repository "
+                f"and a probe trace")
     if kind == "fix-config":
         return f"fix echolot.yml — it does not load: {st['config']['error']}"
     if kind == "resume-or-new":
@@ -976,11 +992,10 @@ def next_step(st: dict) -> str:
         return (f'/echolot in Claude Code — it will ask whether to carry on with '
                 f'"{q}" or start a new investigation')
     if not st["traces"]["count"]:
-        return ("/echolot in Claude Code, `echolot guide hunt` in any other agent, "
-                "or by hand: echolot collect -c echolot.yml -n 5")
-    return ("/echolot in Claude Code, `echolot guide hunt` in any other agent, "
-            "or by hand: echolot analyze .echolot/traces/*.perfetto-trace "
-            "-c echolot.yml")
+        return (f"{_door(st)} hunt` — or by hand: "
+                f"echolot collect -c echolot.yml -n 5")
+    return (f"{_door(st)} hunt` — or by hand: "
+            f"echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml")
 
 
 def _ago(epoch: float | None) -> str:
@@ -1382,6 +1397,31 @@ def cmd_init(args) -> int:
         print(f"no such directory: {target}", file=sys.stderr)
         return 2
 
+    from . import hosts as hosts_mod
+
+    spec = getattr(args, "for_hosts", None)
+    chosen = hosts_mod.parse(spec) if spec else None
+    if spec and chosen is None:
+        print(f"unknown client in --for {spec!r}. There is: "
+              f"{', '.join(h.key for h in hosts_mod.HOSTS)}, or `all`",
+              file=sys.stderr)
+        return 2
+    if chosen is None:
+        chosen = hosts_mod.detect(target)
+        # Two gates, both required. The parser is the only thing that turns
+        # `interactive` on, so the self-check's bare Namespace can never
+        # prompt; and even then there has to be a terminal on both ends.
+        if getattr(args, "interactive", False) and hosts_mod.interactive(sys.stdout):
+            chosen = hosts_mod.pick(chosen)
+    hosts_mod.save_choice(target, chosen)
+
+    if not any(h.key == "claude" for h in chosen):
+        print("\nClaude Code not selected — .claude/ stays out of this project.")
+        _install_pointers(target, chosen)
+        print("\nAny agent: `echolot guide`. `echolot init --for all` adds the rest.")
+        recorder.note(hosts=[h.key for h in chosen], layer="skipped")
+        return 0
+
     root = target / ".claude"
     before = layer_status(target)
     states = {r["file"]: r["state"] for r in (before or {}).get("rows", [])}
@@ -1439,7 +1479,8 @@ def cmd_init(args) -> int:
         print(f"\n{len(kept)} file(s) differ from the template and were kept. "
               f"`echolot init --force` overwrites them; carry your edits over after.")
 
-    _install_pointers(target, getattr(args, "for_hosts", None))
+    _install_pointers(target, chosen)
+    recorder.note(hosts=[h.key for h in chosen])
     if before is None:
         print("\nLayer installed.")
     elif written or updated:
@@ -2064,6 +2105,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="which agents to point at the tool: claude, agents, "
                           "cursor, copilot — comma-separated, or `all`. "
                           "Default: whichever this project shows evidence of")
+    # Only the parser turns prompting on: cmd_init is also called directly,
+    # by the self-check, with a Namespace that has none of these.
+    ini.set_defaults(interactive=True)
+    ini.add_argument("--no-input", dest="interactive", action="store_false",
+                     help="never ask, take the detected set "
+                          "(already implied without a terminal)")
     ini.add_argument("--no-doctor", action="store_true",
                      help="skip the environment check at the end")
     ini.set_defaults(func=cmd_init)

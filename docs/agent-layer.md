@@ -79,7 +79,21 @@ echolot guide hunt     # the loop
 
 `echolot init` writes a few lines into whatever the project shows evidence of —
 `AGENTS.md`, `.cursor/rules/echolot.mdc`, `.github/copilot-instructions.md` —
-each naming that command. `--for claude,cursor` overrides the detection.
+each naming that command. On a terminal it shows the detected set and lets you
+change it; `--for claude,cursor` (or `--for all`) skips the question, and
+`--no-input` takes the detection as-is.
+
+The question is asked only when the CLI parser turned it on **and** there is a
+terminal at both ends, and never under `CI`. `init` is run by agents, and by
+`doctor`'s own self-check five times over into temporary directories: a prompt
+appearing there is a hang rather than a question, so both gates are pinned by
+checks.
+
+The answer is kept in `.echolot/hosts.json`, because declining Claude Code has
+to be a state rather than a moment. `.claude/` missing normally means "run
+init" — on a project that chose Cursor only, that same absence would have
+`next` demand `echolot init` forever. With the choice recorded the layer reads
+as `opted-out`, and the next step is whatever the config says.
 
 **The knowledge is not copied per client, on purpose.** Four files would drift
 apart within two releases, and a copy committed to somebody's repository goes
