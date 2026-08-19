@@ -131,6 +131,19 @@ that once — a cold cache, a lock, a first-run path. `detail` carries the media
 and how many occurrences it came from, which is what to hold a benchmark's
 percentiles against.
 
+## Reporting back on the tool itself
+
+When the question is about echolot rather than the app — how a session went,
+where the tool got in the way — that is `echolot reflect --last`, run from the
+project you worked in.
+
+Only Claude Code has a reader for its transcripts. From anywhere else the
+report is built from the tool's own run log, `.echolot/log/runs.jsonl`: which
+commands ran, when, for how long, with what exit code. It is smaller, and it
+names under **Not checked** every check it could not make. Read that section —
+a check listed there found nothing because it had nothing to look at, which is
+not the same as finding nothing wrong.
+
 ## Boundaries
 
 The tool **localises one specific regression**: you know "it was 3 s, now it is
@@ -143,6 +156,7 @@ Thresholds are tied to a device and a scenario. When either changes, run
 ## More
 
 ```bash
+echolot reflect --last  # how this session went, and what to change in the tool
 echolot compare --help  # the forms it takes and the floor it uses
 echolot guide setup     # building echolot.yml for a project that has none
 echolot guide hunt      # the loop: from a report down to a place in the code

@@ -18,6 +18,18 @@ from typing import Any
 
 MAIN = "main"  # `agent` value for the top-level context
 
+# What a source can show, declared by the reader that produced it. A check
+# needing something absent is reported as not checked rather than as clean —
+# without this, a reader that carries only echolot's own calls would have
+# `trace_opened_directly` return "the trace was never opened directly" every
+# time, which is a green tick over a question nobody asked.
+TURNS = "turns"            # what the human and the agent said
+TOOLS = "tools"            # tool calls other than echolot's own
+ASKS = "asks"              # questions put to the human
+SUBAGENTS = "subagents"    # a loop running in its own context
+USAGE = "usage"            # tokens
+EVERYTHING = [TURNS, TOOLS, ASKS, SUBAGENTS, USAGE]
+
 
 @dataclass
 class Turn:
@@ -106,6 +118,12 @@ class Session:
     skills_loaded: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)      # files read
     notes: list[str] = field(default_factory=list)        # reader caveats
+    # What this source can show. Defaults to everything, so the reader that
+    # predates the field keeps behaving as it did.
+    carries: list[str] = field(default_factory=lambda: list(EVERYTHING))
+
+    def shows(self, what: str) -> bool:
+        return what in self.carries
 
     # -- helpers used by signals and rendering ---------------------------
 

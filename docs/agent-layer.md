@@ -122,9 +122,11 @@ work in short passes and keep raw output out of the conversation. That is a
 mitigation, not a fix — Claude Code remains the better experience, and now it
 is the better one rather than the only one.
 
-`reflect` also stays Claude Code-only for now: it reads that client's
-transcripts. See [reflect.md](reflect.md) under "Other agents" for what
-another reader would have to produce.
+`reflect` reads the full session only for Claude Code, because only that
+client's transcripts have a reader. Everywhere else it falls back to the
+recorder log, which every command writes from every caller — so the report
+exists, it is smaller, and it says which checks it could not make. See
+[reflect.md](reflect.md) under "Without a transcript".
 
 ## Why the loop lives in a subagent
 

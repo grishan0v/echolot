@@ -17,11 +17,11 @@ from .facts import Facts
 from .model import Session
 from .signals import Signal
 
-_MARK = {"warn": "⚠", "info": "ℹ", "ok": "✓"}
+_MARK = {"warn": "⚠", "info": "ℹ", "ok": "✓", "skip": "·"}
 
 
 def build(session: Session, facts: Facts, signals: list[Signal]) -> dict[str, Any]:
-    by_sev: dict[str, int] = {"warn": 0, "info": 0, "ok": 0}
+    by_sev: dict[str, int] = {"warn": 0, "info": 0, "ok": 0, "skip": 0}
     for s in signals:
         by_sev[s.severity] = by_sev.get(s.severity, 0) + 1
     return {
@@ -35,6 +35,11 @@ def build(session: Session, facts: Facts, signals: list[Signal]) -> dict[str, An
             "cwd": session.cwd,
             "git_branch": session.git_branch,
             "files": session.sources,
+            # What this source can show, and what the reader wants said about
+            # it. A consumer that ignores both will read an absent finding as
+            # an absent problem.
+            "carries": session.carries,
+            "notes": session.notes,
         },
         "context": {
             "started": session.started,
@@ -46,6 +51,7 @@ def build(session: Session, facts: Facts, signals: list[Signal]) -> dict[str, An
             "signals": by_sev,
             "warn_ids": [s.id for s in signals if s.severity == "warn"],
             "info_ids": [s.id for s in signals if s.severity == "info"],
+            "skipped_ids": [s.id for s in signals if s.severity == "skip"],
             "echolot_calls": len(facts.echolot_calls),
             "hunts": len(facts.hunts),
             "asks": len(session.asks),
@@ -101,10 +107,21 @@ def to_markdown(report: dict[str, Any]) -> str:
                    "need it were skipped_")
     s = report["summary"]
     out.append("")
-    out.append(f"**{s['signals'].get('warn', 0)} warn · {s['signals'].get('info', 0)} info · "
-               f"{s['signals'].get('ok', 0)} ok** — {s['echolot_calls']} echolot call(s), "
+    sig = s["signals"]
+    tally = (f"**{sig.get('warn', 0)} warn · {sig.get('info', 0)} info · "
+             f"{sig.get('ok', 0)} ok")
+    if sig.get('skip'):
+        tally += f" · {sig['skip']} not checked"
+    out.append(tally + f"** — {s['echolot_calls']} echolot call(s), "
                f"{s['hunts']} subagent run(s), {s['asks']} question(s) to the human")
     out.append("")
+
+    # What the source could not show, before anything it did. Read in the
+    # other order, a short report looks like a clean one.
+    for note in (report.get("source") or {}).get("notes") or []:
+        out.append(f"> {note}")
+    if (report.get("source") or {}).get("notes"):
+        out.append("")
 
     # ---- signals: warn and info in full, ok as a checklist
     loud = [x for x in report["signals"] if x["severity"] in ("warn", "info")]
@@ -129,6 +146,16 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
         for x in quiet:
             out.append(f"- ✓ **{x['title']}** — {x['why']}")
+        out.append("")
+
+    skipped = [x for x in report["signals"] if x["severity"] == "skip"]
+    if skipped:
+        out.append("## Not checked")
+        out.append("")
+        out.append("_These read the agent's own tool calls, and this source "
+                   "does not carry them. Their silence is not a verdict._")
+        out.append("")
+        out.append(", ".join(f"`{x['id']}`" for x in skipped))
         out.append("")
 
     # ---- entry

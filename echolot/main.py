@@ -1770,6 +1770,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="only list the candidate sessions, write nothing")
     rf.add_argument("--project", metavar="ROOT",
                     help="the application project the agent worked in (default: .)")
+    rf.add_argument("--from-log", action="store_true",
+                    help="read .echolot/log/runs.jsonl only, ignoring any "
+                         "agent transcript — what every client but Claude Code "
+                         "gets by default")
     rf.add_argument("--transcripts", metavar="DIR",
                     help="transcript directory, if not ~/.claude/projects/<slug>")
     rf.add_argument("-c", "--config", default="echolot.yml",
