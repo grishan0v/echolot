@@ -56,25 +56,18 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
+          python -m pip install -e '.[dev]'
 
-      # The environment, then 49 checks against a synthetic trace with problems
-      # planted in it in advance. tests/check_fixture.py is the same run under
-      # another name, so it is not repeated here.
-      - name: doctor — environment and the self-check
-        run: echolot doctor -q
-
-      - name: the investigation
-        run: python tests/check_hunt.py
-
-      - name: reflect
-        run: python tests/check_reflect.py
-
-      # Most of these need no trace_processor — compare reads report.json and
-      # never a trace. The last case does: it is the one that fails when
-      # analyze and compare stop agreeing on the shape between them.
-      - name: compare
-        run: python tests/check_compare.py
+      # One step, because there is one suite. It used to be four: a doctor run
+      # and three scripts, each with its own runner, its own output format and
+      # its own idea of what a failure looks like.
+      #
+      # `doctor` is in there as a test of its own — the command's exit code is
+      # what CI and the agent layer both route on — and so is every check it
+      # runs, one pytest test each, so a failure names the claim rather than a
+      # count.
+      - name: pytest
+        run: pytest -q
 
   # One context for the whole matrix, so the branch rule does not name Python
   # versions. Required checks are matched by context name: with the matrix

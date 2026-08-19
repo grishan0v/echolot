@@ -53,6 +53,20 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+# Development only. Nothing here reaches a wheel, and nothing here can change
+# what a detector computes — `doctor` still runs its checks with the package's
+# own dependencies and no pytest anywhere near it, because it runs on a user's
+# laptop.
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Every warning the package emits, at the top of the report. A DeprecationWarning
+# from the standard library is how a future Python announces a breakage, and the
+# only cheap moment to hear it is now.
+filterwarnings = ["error::DeprecationWarning:echolot.*"]
+
 [project.urls]
 Homepage = "https://github.com/grishan0v/echolot"
 Documentation = "https://github.com/grishan0v/echolot/tree/main/docs"

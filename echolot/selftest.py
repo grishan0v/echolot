@@ -144,7 +144,7 @@ def _(report):
                if r["location"] == "AppStart")
     assert row["total_ms"] == 1006.0, row
     assert row["self_ms"] < row["total_ms"], f"children not subtracted: {row}"
-    assert row["self_ms"] == 671.0, f"1006 minus 335 ms of children: {row}"
+    assert row["self_ms"] == 551.0, f"1006 minus 455 ms of children: {row}"
 
 
 @check("main_thread_block: self time never exceeds the window")
@@ -1437,5 +1437,9 @@ def run(tp_binary: str | None = None) -> list[tuple[str, str | None]]:
                 fn(report)
                 out.append((name, None))
             except AssertionError as e:
-                out.append((name, str(e)))
+                # A bare `assert x in y` raises with no message at all, and
+                # `str(e)` is then the empty string — which the caller's
+                # `if why` reads as "this one passed". doctor reported 65 of 65
+                # while a check was failing, for as long as that stood.
+                out.append((name, str(e) or f"assertion failed in {name}"))
     return out

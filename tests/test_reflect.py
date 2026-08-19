@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Self-check for `echolot reflect` on a synthetic Claude Code session.
+"""`echolot reflect` over a synthetic Claude Code session.
 
 Builds a small transcript in the layout Claude Code uses — a main file plus a
 subagent file — with known events planted in it, runs `reflect` over it, and
 checks the answers: the reader must find every planted event, and each signal
 must fire exactly where it was planted and stay quiet elsewhere.
 
-    python tests/check_reflect.py
+Building the transcript and running reflect over it happens once for the file;
+every check below reads the one report that produced.
 """
 
 from __future__ import annotations
@@ -22,8 +23,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest  # noqa: E402
+
 from echolot import recorder  # noqa: E402
 from echolot.main import main  # noqa: E402
+from tests.support import check  # noqa: E402
+
+
+def expect(ok: object, claim: str) -> None:
+    """`check` with the claim second, as this file has always written it."""
+    check(claim, ok)
+
 
 T0 = datetime(2026, 8, 15, 12, 0, 0, tzinfo=timezone.utc)
 SESSION = "abcdef12-0000-0000-0000-000000000000"
@@ -252,17 +262,42 @@ def build(root: Path, project: Path) -> Path:
     return pdir
 
 
-def check(report: dict) -> list[str]:
-    fails: list[str] = []
+@pytest.fixture(scope="module")
+def reflected(tmp_path_factory):
+    """One transcript, one reflect run, one report — read by every check below."""
+    root = tmp_path_factory.mktemp("reflect")
+    project = root / "app-project"
+    project.mkdir()
+    (project / "echolot.yml").write_text(
+        "project:\n  process: app\n  source_root: app/src/main/kotlin\n"
+        "scenario:\n  name: checkout\n"
+        "loop:\n  max_rounds: 3\n"
+        "instrumentation:\n  allowed: [\"app/src/main\"]\n  temp_prefix: AGENTTMP_\n",
+        encoding="utf-8")
+    transcripts = build(root / "projects", project)
 
-    def expect(cond: bool, what: str) -> None:
-        if not cond:
-            fails.append(what)
+    here = os.getcwd()
+    os.chdir(project)
+    try:
+        # The report itself goes to stdout; here only the verdict matters.
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            code = main(["reflect", "--last", "--transcripts", str(transcripts),
+                         "--project", str(project)])
+    finally:
+        os.chdir(here)
+    check("reflect exits 0", code == 0, f"exit {code}")
 
+    written = list((project / ".echolot" / "reflect").glob("*.json"))
+    check("exactly one report was written", len(written) == 1, str(written))
+    return json.loads(written[0].read_text(encoding="utf-8")), project
+
+
+def test_the_reader_found_every_planted_event(reflected):
+    """Transcript in, normalised session out, with nothing lost on the way."""
+    report, _ = reflected
     sig = {x["id"]: x for x in report["signals"]}
     src = report["source"]
-
-    # --- reader
     expect(src["model"] == "claude-fable-5", "model read from assistant rows")
     expect(src["agent_version"] == "2.1.0", "agent version read")
     expect(src["git_branch"] == "main", f"HEAD is not a branch: {src['git_branch']}")
@@ -318,7 +353,13 @@ def check(report: dict) -> list[str]:
     us = report["cost"]["usage_subagents"]
     expect(us["output"] == 400 + 100 * 18, f"subagent output tokens: {us['output']}")
 
-    # --- signals that must fire
+
+def test_every_planted_signal_fired(reflected):
+    """Each signal must fire exactly where the transcript plants its cause."""
+    report, _ = reflected
+    sig = {x["id"]: x for x in report["signals"]}
+    h = report["hunts"][0]
+
     expect(sig.get("doctor_first", {}).get("severity") == "ok", "doctor_first ok")
     expect(sig.get("trace_opened_directly", {}).get("severity") == "ok", "trace never opened")
     expect(sig.get("loop_in_main_context", {}).get("severity") == "ok", "loop stayed in subagent")
@@ -412,69 +453,26 @@ def check(report: dict) -> list[str]:
     expect(x and all(r.get("phase") == "after setup" for r in x["rows"]),
            f"config bypass phase: {x}")
 
-    # --- signals that must stay quiet
+
+def test_the_signals_with_nothing_planted_stayed_quiet(reflected):
+    """Silence is a result too, and a signal that fires anyway is noise."""
+    report, _ = reflected
+    sig = {x["id"]: x for x in report["signals"]}
+
     for quiet in ("context_hogs", "env_friction"):
         expect(quiet not in sig, f"{quiet} must not fire: {sig.get(quiet)}")
-    return fails
 
 
-def check_recorder(project: Path) -> list[str]:
-    fails = []
+def test_the_recorder_logged_the_reflect_run(reflected):
+    """The tool's own flight recorder, which no transcript can vouch for."""
+    _, project = reflected
+
     log = project / recorder.LOG_FILE
     runs = recorder.read(log)
     reflects = [r for r in runs if r.get("cmd") == "reflect"]
-    if not reflects:
-        return ["recorder: no line for the reflect run itself"]
+    check("a line for the reflect run itself", reflects, "none in the log")
     r = reflects[-1]
-    if r.get("exit") != 0 or "ms" not in r or "argv" not in r:
-        fails.append(f"recorder: malformed line {r}")
-    if (r.get("facts") or {}).get("sessions") != 1:
-        fails.append(f"recorder: reflect facts missing: {r.get('facts')}")
-    return fails
-
-
-def run() -> int:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        project = root / "app-project"
-        project.mkdir()
-        (project / "echolot.yml").write_text(
-            "project:\n  process: app\n  source_root: app/src/main/kotlin\n"
-            "scenario:\n  name: checkout\n"
-            "loop:\n  max_rounds: 3\n"
-            "instrumentation:\n  allowed: [\"app/src/main\"]\n  temp_prefix: AGENTTMP_\n",
-            encoding="utf-8")
-        transcripts = build(root / "projects", project)
-
-        old = os.getcwd()
-        os.chdir(project)
-        try:
-            # The report itself goes to stdout; here only the verdict matters.
-            with contextlib.redirect_stdout(io.StringIO()), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                code = main(["reflect", "--last", "--transcripts", str(transcripts),
-                             "--project", str(project)])
-        finally:
-            os.chdir(old)
-        if code != 0:
-            print(f"reflect exited with {code}")
-            return 1
-        out = project / ".echolot" / "reflect"
-        jsons = list(out.glob("*.json"))
-        if len(jsons) != 1:
-            print(f"expected one report, found {jsons}")
-            return 1
-        report = json.loads(jsons[0].read_text(encoding="utf-8"))
-        fails = check(report) + check_recorder(project)
-
-    for f in fails:
-        print(f"  FAILS {f}")
-    if fails:
-        print(f"\n{len(fails)} check(s) failed.")
-        return 1
-    print("reflect self-check: all planted events found, all signals where planted.")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(run())
+    check("the line carries exit, duration and argv",
+          r.get("exit") == 0 and "ms" in r and "argv" in r, r)
+    check("and the facts reflect attached to it",
+          (r.get("facts") or {}).get("sessions") == 1, r.get("facts"))
