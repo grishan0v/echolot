@@ -172,12 +172,32 @@ def writes_file(cmd: str, name: str) -> bool:
     return bool(_PY_WRITES.search(cmd))
 
 
+def verbs() -> frozenset[str]:
+    """Every subcommand the installed package registers.
+
+    Late import: main imports reflect, so this cannot be a module-level one.
+    Read from the parser rather than written down here, for the same reason
+    `--help` is generated from it — a list kept by hand goes stale on the next
+    verb, and what it produces in the meantime is plausible.
+    """
+    from ..main import ORDER
+    return frozenset(ORDER)
+
+
 def echolot_calls(session: Session) -> list[EcholotCall]:
     out: list[EcholotCall] = []
+    known = verbs()
     for c in session.bash():
         cmd = strip_heredocs(c.command or "")
         head = c.output_head or ""
-        matches = list(RE_ECHOLOT.finditer(cmd))
+        # The word `echolot` followed by a word is not a call. It is also an
+        # echo, a comment, a leftover heredoc line and, most often, English: a
+        # real report once counted `ran`, `call`, `calls` and `without` as
+        # subcommands, and its "By subcommand" line read like a sentence.
+        # Everything downstream — the timeline, the tally, the signals — was
+        # measuring prose.
+        matches = [m for m in RE_ECHOLOT.finditer(cmd)
+                   if m.group(1) in known or m.group(1).startswith("-")]
         exit_m = _EXIT.search(head)
         shell_err = bool(_SHELL_ERROR.search(head))
         glob_miss = _GLOB_MISS.search(head)

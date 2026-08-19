@@ -11,10 +11,16 @@ Layout:
 
     model.py        the normalised session — what every reader must produce
     claude_code.py  the reader for Claude Code transcripts (~/.claude/projects)
+    from_log.py     the reader that needs no transcript: .echolot/log/runs.jsonl
     signals.py      the detectors over a normalised session
     render.py       report.json / report.md
     cli.py          `echolot reflect`: which session, and the across-runs summary
 
 Only the reader knows the agent's on-disk format. Signals and rendering work on
 the model alone, so a second agent means a second reader and nothing else.
+
+A reader also declares what its source can show, in `Session.carries`. That is
+not bookkeeping: a check finding no evidence returns "clean", and on a source
+that could never have held the evidence, "clean" is a green tick over a
+question nobody asked. What a reader cannot show is reported as not checked.
 """

@@ -161,6 +161,13 @@ def build(root: Path, project: Path) -> Path:
          "python3 -c \"import json; r=json.load(open('.echolot/out/report.json')); r['detectors'].items()\"",
          "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n"
          "AttributeError: 'list' object has no attribute 'items'", dt=26.0)
+    # Prose that mentions the tool is not a call. Before subcommands were
+    # checked against the parser, `ran` and `without` arrived in the report as
+    # subcommands of their own and the "By subcommand" line read like a
+    # sentence — with the timeline and every signal measuring it.
+    bash(m, 140, cwd, "tu_echo",
+         'echo "echolot ran fine, and echolot without asking is the default"',
+         "echolot ran fine, and echolot without asking is the default")
     m.append(user_text(150, cwd, "<command-message>echolot-hunt</command-message>\n"
                                   "<command-name>/echolot-hunt</command-name>"))
     MSG[0] += 1
@@ -302,7 +309,8 @@ def test_the_reader_found_every_planted_event(reflected):
     expect(src["agent_version"] == "2.1.0", "agent version read")
     expect(src["git_branch"] == "main", f"HEAD is not a branch: {src['git_branch']}")
     calls = report["echolot_calls"]
-    expect(len(calls) == 13, f"13 echolot calls, got {len(calls)}")
+    expect(len(calls) == 13,
+           f"13 echolot calls; prose about the tool is not one, got {len(calls)}")
     subs = sorted(c["sub"] for c in calls)
     expect(subs.count("analyze") == 8 and subs.count("doctor") == 2 and subs.count("names") == 1,
            f"subcommands: {subs}")
@@ -349,7 +357,7 @@ def test_the_reader_found_every_planted_event(reflected):
     # streaming usage: max per message (250, not 3 and not 253), one count per
     # message id, main and subagent kept apart
     um = report["cost"]["usage_main"]
-    expect(um["output"] == 250 + 100 * 14, f"main output tokens: {um['output']}")
+    expect(um["output"] == 250 + 100 * 15, f"main output tokens: {um['output']}")
     us = report["cost"]["usage_subagents"]
     expect(us["output"] == 400 + 100 * 18, f"subagent output tokens: {us['output']}")
 

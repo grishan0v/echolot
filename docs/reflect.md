@@ -120,12 +120,47 @@ Token counts come from the transcript's usage fields, taken as the maximum
 per API response — the rows of one response are written as it streams and the
 last row carries the final numbers.
 
-## Other agents
+## Without a transcript
 
-The reader for Claude Code is one file. Everything else — facts, signals,
-report — works on the normalised session in `echolot/reflect/model.py`:
-turns, tool calls, questions, usage, subagents. Another agent means another
-reader producing that shape, and nothing else changes; what degrades is what
-that agent does not record — questions to the human become a heuristic over
-text, subagents may not exist, tokens may be missing. The recorder is the
-floor that holds regardless.
+Only Claude Code has a reader for its transcripts. Every other client — and a
+run from a plain shell, or from CI — gets the report built from
+`.echolot/log/runs.jsonl` alone:
+
+```bash
+echolot reflect --last              # falls back on its own, and says it did
+echolot reflect --last --from-log   # ignore any transcript and use the log
+```
+
+The recorder is the floor because it does not depend on who was driving. Every
+command writes a line from every caller, and it keeps the exit code a
+transcript loses the moment a call is wrapped in `2>&1 | tail`. What it holds
+is which echolot commands ran, when, for how long, with what exit code, and
+the facts each attached.
+
+So the checks that read echolot's own calls run unchanged — `doctor_first`,
+`echolot_failures`, `retries`, `help_lookups`, `long_gaps`. The rest have
+nothing to read.
+
+**And that is the part worth getting right.** A check that finds no evidence
+returns "clean": `trace_opened_directly` with nothing to look at reports "the
+trace was never opened directly" — a green tick over the one rule the whole
+design rests on, from a source that could never have seen it either way. So a
+reader declares what its source can show, in `Session.carries`, and a check
+needing more is listed under **Not checked** with its silence named as no
+verdict rather than a clean one.
+
+A sitting stands in for a session. The log is a stream with no session id in
+it, so runs are cut into sittings wherever the tool was left alone for more
+than half an hour — the same notion `hunt` uses to decide whether it is looking
+at the same sitting before asking a question. The gap is measured from the end
+of the last run, so `collect -n 5` on a real device does not split one sitting
+in two.
+
+## Another agent's transcript
+
+Everything above the reader — facts, signals, report — works on the normalised
+session in `echolot/reflect/model.py`: turns, tool calls, questions, usage,
+subagents. Another client means another reader producing that shape, declaring
+what it carries, and nothing else changes. What degrades is what that client
+does not record: questions to the human become a heuristic over text, subagents
+may not exist, tokens may be missing.

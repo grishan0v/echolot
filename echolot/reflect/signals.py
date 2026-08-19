@@ -4,11 +4,14 @@ Each signal is one small function over the normalised session and the derived
 facts. It returns a `Signal` — or None when it has nothing to say. Add a
 function, append it to SIGNALS, done: there is no registration elsewhere.
 
-Three severities:
+Four severities:
 
     warn   the protocol was broken or the tool failed — look at it
     info   friction or a workaround: a hint at what the CLI could absorb
     ok     a protocol check that passed; kept so the report shows it
+    skip   the source does not carry what this check reads. Not a verdict,
+           and the report has to say so — a check that quietly returns "ok"
+           over data it never had is worse than one that does not run
 
 A `hint` is one line: what this usually means for the tool. It is a pointer,
 not a conclusion — the reasoning is left to whoever reads the report.
@@ -31,7 +34,7 @@ from .facts import (
     Facts,
     config_writes,
 )
-from .model import MAIN, Session, ts_to_epoch
+from .model import MAIN, TOOLS, Session, ts_to_epoch
 
 
 @dataclass
@@ -853,9 +856,32 @@ SIGNALS: list[Detector] = [
 ]
 
 
+# The signals that need nothing but echolot's own calls — which is all the
+# recorder log holds, and therefore all a session read without a transcript
+# has. Named as an allowlist rather than the other way round on purpose: get
+# this list wrong by omission and a check is skipped that could have run,
+# which costs a line in the report. Get it wrong the other way and a check
+# reports "clean" over evidence it never had, which is worse than useless.
+FROM_CALLS_ALONE = {
+    "doctor_first",
+    "echolot_failures",
+    "retries",
+    "help_lookups",
+    "long_gaps",
+}
+
+
 def run(session: Session, facts: Facts, cfg: Config | None) -> list[Signal]:
     out: list[Signal] = []
+    partial = not session.shows(TOOLS)
     for det in SIGNALS:
+        if partial and det.__name__ not in FROM_CALLS_ALONE:
+            out.append(Signal(
+                det.__name__, "skip", f"{det.__name__} — not checked",
+                "This source carries echolot's own calls and nothing else, and "
+                "the check needs more than that. Silence here is not a clean "
+                "verdict; it is no verdict."))
+            continue
         try:
             sig = det(session, facts, cfg)
         except Exception as e:   # one broken detector must not kill the report
@@ -863,6 +889,6 @@ def run(session: Session, facts: Facts, cfg: Config | None) -> list[Signal]:
                          f"{type(e).__name__}: {e}")
         if sig is not None:
             out.append(sig)
-    order = {"warn": 0, "info": 1, "ok": 2}
-    out.sort(key=lambda x: order.get(x.severity, 3))
+    order = {"warn": 0, "info": 1, "ok": 2, "skip": 3}
+    out.sort(key=lambda x: order.get(x.severity, 4))
     return out

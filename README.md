@@ -260,7 +260,7 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 
 | command | what it does |
 |---|---|
-| `reflect` | the same kind of report, over an agent session — how the tool was used, where it got in the way |
+| `reflect` | the same kind of report, over an agent session — how the tool was used, where it got in the way. Full detail for Claude Code; from anywhere else, built from the run log and honest about what it could not see |
 
 </details>
 
