@@ -77,6 +77,27 @@ milliseconds, but a reader who assumes duration reads them wrong. So the
 deviation is stated in the detector's own header, in the report reference, and
 here. A detector that bends the contract quietly is a bug.
 
+### Window functions are available, and worth reaching for
+
+The bundled SQLite is 3.50 and has had window functions since 3.25. A median
+per group — which SQLite has no aggregate for — is one sort rather than a
+correlated subquery per group:
+
+```sql
+ranked AS (
+    SELECT name, dur,
+           ROW_NUMBER() OVER (PARTITION BY name ORDER BY dur) AS rk,
+           COUNT(*)     OVER (PARTITION BY name)              AS n
+    FROM _slice_win
+),
+baseline AS (SELECT name, n, dur AS median_ns FROM ranked WHERE rk = (n + 1) / 2)
+```
+
+`main_thread_outlier` is built on exactly that. The alternatives considered
+before checking what the bundled SQLite could do were a per-group `ORDER BY …
+LIMIT 1 OFFSET n/2`, an `AVG` that the outlier itself would drag, and computing
+the base in Python and substituting numbers. None was needed.
+
 ### Use `_cpu_in_slice`, do not rebuild it
 
 The question "what share of a thread's work ran inside instrumented code"

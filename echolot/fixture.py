@@ -175,6 +175,41 @@ SLICES = {
             # blocks scattered exactly that way and none cleared the threshold.
             ("Lock contention on a monitor lock (owner tid: 4202)", 880, 12, []),
 
+            # --- main_thread_outlier -----------------------------------
+            # A group with a history and one occurrence far outside it. Six
+            # inflates of 4 ms and one of 44: 11x the median, and past the
+            # 40 ms floor. Nothing about the group's SUM is remarkable, which
+            # is the point — main_thread_block sees 64 ms and shrugs.
+            *[("inflate", 322 + i * 6, 4, []) for i in range(5)],
+            ("inflate", 352, 44, []),
+
+            # Negative control: a group with no outlier in it. Even work stays
+            # even work however often it repeats.
+            *[("measure", 530 + i * 8, 6, []) for i in range(6)],
+
+            # Negative control: three occurrences and a spike. A name seen
+            # three times has no typical duration for anything to be an
+            # outlier from, and min_occurrences is what says so.
+            ("Rare_work", 641, 1, []),
+            ("Rare_work", 643, 1, []),
+            ("Rare_work", 645, 45, []),
+
+            # Negative control: 20x the median, and 20 ms. A ratio without an
+            # absolute floor under it turns every short repeated slice into a
+            # finding.
+            *[("Tiny_tick", 762 + i * 2, 1, []) for i in range(5)],
+            ("Tiny_tick", 775, 20, []),
+
+            # Negative control, and the one the other three do not cover:
+            # work that is genuinely slow and consistently so. Five at 12 ms
+            # and one at 44 — past the absolute floor, and only 3.7x the
+            # median. Without the ratio gate this fires; with it, slow-but-
+            # even work stays main_thread_block's business.
+            *[("Steady_heavy", 405 + i * 13, 12, []) for i in range(3)],
+            ("Steady_heavy", 820, 12, []),
+            ("Steady_heavy", 833, 12, []),
+            ("Steady_heavy", 1040, 44, []),
+
             # The end anchor: ts + dur = 1105
             ("Screen.firstFrame", 1100, 5, []),
         ]),

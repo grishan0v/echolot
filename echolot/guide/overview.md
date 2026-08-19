@@ -120,6 +120,17 @@ work in short passes and keep raw output out of the conversation: read
 window filled with raw output is where the instability this tool exists to
 remove comes back.
 
+**`main_thread_outlier` is not `main_thread_block` again.** One gates on the
+sum for a name and answers "where did the time go"; the other gates on a
+single occurrence against the median for that same name and answers "which one
+was out of line". A name in both is telling you two things.
+
+They lead to different places in the code. Expensive every time means the fix
+is in that work. Usually fine and once not means the cause is the state it hit
+that once — a cold cache, a lock, a first-run path. `detail` carries the median
+and how many occurrences it came from, which is what to hold a benchmark's
+percentiles against.
+
 ## Boundaries
 
 The tool **localises one specific regression**: you know "it was 3 s, now it is

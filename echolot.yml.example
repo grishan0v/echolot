@@ -111,6 +111,13 @@ detectors:
   frame_jank:
     min_frames: 3
     min_overrun_ms: 4
+  # The pair to main_thread_block: that one gates on the sum for a name, this
+  # one on a single occurrence against the median for the same name. A spike
+  # in the tail hides from every sum, which is how it was found.
+  main_thread_outlier:
+    factor: 4                 # times the median before it counts as out of line
+    min_abs_ms: 40            # and never mind the ratio below this
+    min_occurrences: 5        # fewer than this is no history to be an outlier from
 
 # --- the contract for later (not read by the code yet) ---------------------
 

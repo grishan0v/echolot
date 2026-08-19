@@ -144,7 +144,7 @@ def _(report):
                if r["location"] == "AppStart")
     assert row["total_ms"] == 1006.0, row
     assert row["self_ms"] < row["total_ms"], f"children not subtracted: {row}"
-    assert row["self_ms"] == 551.0, f"1006 minus 455 ms of children: {row}"
+    assert row["self_ms"] == 275.0, f"1006 minus 731 ms of children: {row}"
 
 
 @check("main_thread_block: self time never exceeds the window")
@@ -229,6 +229,65 @@ def _(report):
     # waitWhileAllocatingLocked appears on application threads when an
     # allocation stalls waiting for the collector. A real name from Android 14.
     assert "waitWhileAllocatingLocked" in locations(report, "gc_pressure")
+
+
+@check("main_thread_outlier: one occurrence far outside its own history")
+def _(report):
+    # Six inflates of 4 ms and one of 44. The sum, 68 ms, is unremarkable and
+    # main_thread_block reports it without comment; the single occurrence is
+    # the finding, and it is the one a benchmark's P99 was made of.
+    row = only_row(report, "main_thread_outlier")
+    assert row["location"] == "inflate", row
+    assert row["count"] == 1, f"one occurrence was out of line, not the group: {row}"
+    assert row["max_ms"] == 44.0, row
+    assert "median 4.0 ms of 6" in row["detail"], row["detail"]
+    assert "11.0×" in row["detail"], row["detail"]
+
+
+@check("main_thread_outlier: an even group is not an outlier from itself")
+def _(report):
+    # Six occurrences of 6 ms. Repetition is not a finding, however much of it
+    # there is — that question belongs to main_thread_block and its sums.
+    assert "measure" not in locations(report, "main_thread_outlier"), \
+        "an even group fired"
+
+
+@check("main_thread_outlier: three occurrences are not a history")
+def _(report):
+    # 1, 1, 45 ms. Forty-five times the median of a name seen three times is
+    # arithmetic, not evidence, and min_occurrences is what says so.
+    assert "Rare_work" not in locations(report, "main_thread_outlier"), \
+        "a group below min_occurrences fired"
+
+
+@check("main_thread_outlier: a large ratio on a small slice is not a finding")
+def _(report):
+    # Twenty times the median, and twenty milliseconds. Without the absolute
+    # floor every short repeated slice in a trace becomes a row.
+    assert "Tiny_tick" not in locations(report, "main_thread_outlier"), \
+        "a 20x ratio under the absolute floor fired"
+
+
+@check("main_thread_outlier: slow but even work is not an outlier")
+def _(report):
+    # Five at 12 ms and one at 44: past the absolute floor, and 3.7x the
+    # median. The absolute floor alone would let this through, which is why
+    # there is a ratio gate as well — and why this control exists, because
+    # without it removing that gate changed nothing in the fixture.
+    assert "Steady_heavy" not in locations(report, "main_thread_outlier"), \
+        "work that is consistently slow fired as an outlier"
+
+
+@check("main_thread_outlier: the pair with main_thread_block, not a copy")
+def _(report):
+    # The same name in both, saying different things: 64 ms of main-thread time
+    # in total there, one occurrence of 44 against a median of 4 here. If this
+    # detector ever reduces to "the sums again", that is what it will lose.
+    block = next(r for r in rows(report, "main_thread_block")
+                 if r["location"] == "inflate")
+    assert block["count"] == 6 and block["self_ms"] == 64.0, block
+    outlier = only_row(report, "main_thread_outlier")
+    assert outlier["count"] == 1 and outlier["max_ms"] == 44.0, outlier
 
 
 @check("runnable_starvation: 50 ms in state R")
