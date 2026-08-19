@@ -125,6 +125,7 @@ nest. Adding `self_ms` is fine — self times do not overlap.
 | `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |
 | `runnable_starvation` | thread ready but preempted | this is about the device, not the code |
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}` |
+| `frame_jank` | frames that missed their deadline | `location` is why it missed, `detail` says whose fault |
 
 ### What matters about individual ones
 
@@ -138,6 +139,28 @@ uninstrumented code. `covered_ms` far below `total_ms` means the thread worked
 and what it did is unknown. This is where adding `AGENTTMP_` instrumentation
 and re-recording makes sense. There is no code behind the finding yet; looking
 for it is pointless.
+
+**`frame_jank`** is the only detector that answers "which frames stuttered"
+rather than "where did the total go", and the only one that needs no
+instrumentation: SurfaceFlinger records every frame's deadline and what it
+actually took. Read it with three things in mind.
+
+*Its numbers are overruns.* `total_ms` is the time past the deadline summed
+across those frames and `max_ms` is the worst single overrun — not durations,
+which is what those columns mean everywhere else. The frame's own length is in
+`detail` (`longest 86.2 ms`), because that is the number a benchmark's
+percentiles are quoted in and the one to match a FrameTimingMetric run against.
+
+*`detail` leads with whose deadline it was*, and it is the platform's verdict
+rather than ours. `Self Jank` is the app — go and look. `Other Jank` is the
+compositor or the display, and sending anyone into the app's code over it
+wastes a round. `Buffer Stuffing` is the queue backing up.
+
+*Silence has two causes here.* No bad frames, or no frame timeline in the
+trace at all — Android 11 and below, or a capture that did not ask for the
+`android.surfaceflinger.frametimeline` data source. Those look identical in the
+report. Before calling a scenario smooth, check that some other frame row
+exists or that the trace came from `echolot collect`.
 
 **`gc_pressure`** also catches the other side: `waitWhileAllocatingLocked` on an
 application thread means an allocation stalled waiting for the collector. GC

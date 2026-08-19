@@ -105,6 +105,12 @@ detectors:
   uninstrumented_cpu:
     min_running_ms: 50
     max_covered_pct: 50
+  # Reads SurfaceFlinger's frame timeline rather than your slices, so it needs
+  # no instrumentation — and nothing to configure beyond how many bad frames
+  # count as a pattern. Android 12 and up; silent on older traces.
+  frame_jank:
+    min_frames: 3
+    min_overrun_ms: 4
 
 # --- the contract for later (not read by the code yet) ---------------------
 

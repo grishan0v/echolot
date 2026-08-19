@@ -166,6 +166,22 @@ expanded to the whole trace and none of the numbers are about your scenario.
 Fix the config rather than hunting a problem. Same for `process_alternatives` —
 you may be analysing the wrong process.
 
+**`frame_jank` is about single frames, not totals.** The other six aggregate by
+name and gate on sums, which is right for "cold start got slower" and blind to
+a heavy tail: one 86 ms frame among thousands disappears into every sum there
+is. This one reads SurfaceFlinger's per-frame record instead, so it needs no
+instrumentation and answers a question the rest cannot.
+
+Its `total_ms` and `max_ms` are time **past the deadline**; the frame's own
+length is in `detail`, which is where a benchmark's percentiles can be matched.
+`detail` also leads with the platform's verdict on whose deadline was missed —
+`Self Jank` is the app, `Other Jank` is the compositor and is not something to
+go into the code over.
+
+Its silence is ambiguous: no bad frames, and no frame timeline in the trace at
+all, look the same. Android 11 and below have none, and neither does a capture
+that did not ask for it. Check before calling a scenario smooth.
+
 ## From a finding to the code
 
 1. A firing detector gives you a `location` — a slice or thread name.

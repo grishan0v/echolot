@@ -22,8 +22,8 @@ are looking for; sorted by slice count it would sit at the bottom.
 
 ## `names` — how ART names things here
 
-Four of the six detectors are structural: duration, thread, scheduler state.
-They do not care what anything is called. But `gc_pressure`,
+Most detectors are structural: duration, thread, scheduler state, or a fact
+the platform recorded itself. They do not care what anything is called. But `gc_pressure`,
 `monitor_contention` and `binder_txn` search by **name**, and the names are
 invented by ART, differing across Android versions and vendors. You cannot
 guess them — you can look:
