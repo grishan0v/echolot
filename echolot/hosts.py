@@ -76,6 +76,14 @@ HOSTS: tuple[Host, ...] = (
     Host(key="agents", title="AGENTS.md", path="AGENTS.md",
          evidence=("AGENTS.md", ".codex"),
          note="Codex, and a growing set of clients that read it"),
+    # Gemini CLI reads GEMINI.md from the project root by default. AGENTS.md
+    # reaches it only when someone has set context.fileName in
+    # .gemini/settings.json — the docs show it as an example of overriding the
+    # default, not as a second default. So the AGENTS.md stub does not cover
+    # this client, and it gets its own.
+    Host(key="gemini", title="Gemini CLI", path="GEMINI.md",
+         evidence=(".gemini", "GEMINI.md"),
+         note="its context file — AGENTS.md is not read unless configured"),
     Cursor(key="cursor", title="Cursor", path=".cursor/rules/echolot.mdc",
            evidence=(".cursor", ".cursorrules"),
            note="a rule, always applied"),

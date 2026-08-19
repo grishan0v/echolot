@@ -78,8 +78,15 @@ echolot guide hunt     # the loop
 ```
 
 `echolot init` writes a few lines into whatever the project shows evidence of —
-`AGENTS.md`, `.cursor/rules/echolot.mdc`, `.github/copilot-instructions.md` —
-each naming that command. On a terminal it shows the detected set and lets you
+`AGENTS.md`, `GEMINI.md`, `.cursor/rules/echolot.mdc`,
+`.github/copilot-instructions.md` — each naming that command.
+
+Gemini CLI has its own entry rather than riding on `AGENTS.md`, and that is
+worth recording because the obvious assumption is wrong: its context file is
+`GEMINI.md`, and `AGENTS.md` reaches it only when somebody has set
+`context.fileName` in `.gemini/settings.json`. The documentation shows that as
+an example of overriding the default, not as a second default. One shared file
+does not yet cover everyone. On a terminal it shows the detected set and lets you
 change it; `--for claude,cursor` (or `--for all`) skips the question, and
 `--no-input` takes the detection as-is.
 
