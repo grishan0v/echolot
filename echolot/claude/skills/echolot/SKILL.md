@@ -121,6 +121,32 @@ or calibrated ones. Calibrated on the runs that hold the regression means the
 bar sits above it: look with `echolot analyze … --defaults` before calling a
 run clean.
 
+## Two reports, one question
+
+`analyze` says where the time went in one set of traces. "It was 3 s, now it is
+7 s" needs two sets, and subtracting two twenty-row tables by reading them is
+the work this tool exists to remove.
+
+```bash
+echolot compare                      # inside an investigation: previous round vs latest
+echolot compare --hunt 3             # its first report against its last
+echolot compare old.json new.json    # or name them
+```
+
+One table sorted by how far each row moved, plus `comparison.json` beside the
+report. Three things decide how to read it:
+
+- **`change`** — `appeared`, `grew`, `shrank`, `vanished`, `steady`. An
+  appeared row is usually the answer.
+- **`overlap`** — `false` means the two sets of repeats are apart and the move
+  survives a re-record; `true` means they disagree among themselves by more
+  than the medians moved, so record another round before concluding; `null`
+  means one side was a single trace.
+- **`warnings`** — reasons the two may not be comparable. `thresholds` is the
+  one to read first: against a moved bar, appeared and gone mean "the bar
+  moved", not "the app changed". `instrumentation` names rows that appeared
+  because you added `AGENTTMP_` markers between the rounds.
+
 ## Reading the report
 
 Details live in `references/report.md`; three things here that you will get

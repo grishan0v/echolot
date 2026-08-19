@@ -70,6 +70,12 @@ jobs:
       - name: reflect
         run: python tests/check_reflect.py
 
+      # Most of these need no trace_processor — compare reads report.json and
+      # never a trace. The last case does: it is the one that fails when
+      # analyze and compare stop agreeing on the shape between them.
+      - name: compare
+        run: python tests/check_compare.py
+
   # One context for the whole matrix, so the branch rule does not name Python
   # versions. Required checks are matched by context name: with the matrix
   # reported directly, a pull request that drops 3.10 would wait forever for a

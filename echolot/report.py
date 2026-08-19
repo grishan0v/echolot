@@ -8,12 +8,17 @@ Two formats from one set of data:
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
 COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
            "covered_ms", "detail"]
+# Keys a row may carry that are not columns. `_table` renders anything it does
+# not know as an extra column, which is right for a detector that invents one
+# and wrong for bookkeeping the report writes itself.
+HIDDEN = {"spread"}
 HEADERS = {
     "location": "Where",
     "runs": "Runs",
@@ -27,6 +32,43 @@ HEADERS = {
 
 # Columns averaged by median when repeats are merged.
 NUMERIC = ["count", "self_ms", "total_ms", "max_ms", "covered_ms"]
+
+# Columns whose per-run values survive the merge, in `spread`. The median alone
+# cannot say whether a number is steady: 120 ms from (118, 119, 121) and 120 ms
+# from (12, 120, 890) read identically, and only the second one means the next
+# run will say something else. Two columns rather than all five, because the
+# whole point of the report is that it stays small:
+#   the ranking metric — every conclusion is drawn from it, so its stability is
+#   what decides whether a conclusion holds;
+#   max_ms — where a single slow occurrence shows up at all, and a median over
+#   maxima across repeats is exactly what hides one.
+SPREAD = ["self_ms", "total_ms", "max_ms"]
+
+# Names that differ only by numbers are one phenomenon: 'Lock contention (owner
+# tid: 1234)' and the same with tid 5678, `Choreographer#doFrame 55112` in one
+# run and `55120` in the next, worker-2 and worker-5 of one pool.
+_DIGITS = re.compile(r"\d+")
+_HEX = re.compile(r"0x[0-9a-fA-F]+")
+
+
+def family(name: str) -> str:
+    """Collapses names that differ only by numbers.
+
+    Used by `names` to keep an inventory of a real trace from running to
+    thousands of rows, and by `compare` as the second matching pass: without
+    it a thread pool that handed the work to another worker reads as one row
+    vanishing and an unrelated one appearing.
+    """
+    return _DIGITS.sub("#", _HEX.sub("0x#", name))
+
+
+def metric_of(row: dict[str, Any]) -> str:
+    """Which column this row is judged by.
+
+    Self time where a detector measures it, total time otherwise. One rule,
+    used for ranking inside a report and for the delta between two.
+    """
+    return "self_ms" if row.get("self_ms") is not None else "total_ms"
 
 
 def build(
@@ -52,10 +94,7 @@ def build(
 
 
 def _rank(row: dict[str, Any]) -> float:
-    value = row.get("self_ms")
-    if value is None:
-        value = row.get("total_ms")
-    return value or 0.0
+    return row.get(metric_of(row)) or 0.0
 
 
 def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
@@ -100,11 +139,23 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         rows = []
         for location, found in groups.items():
             row = {"location": location, "runs": f"{len(found)}/{total}"}
+            spread = {}
             for col in NUMERIC:
                 values = [f[col] for f in found
                           if f.get(col) is not None]
-                if values:
-                    row[col] = round(median(values), 2)
+                if not values:
+                    continue
+                row[col] = round(median(values), 2)
+                if col in SPREAD:
+                    # In report order, and only the repeats where this row was
+                    # found at all — which is what the `runs` column counts.
+                    spread[col] = {
+                        "min": round(min(values), 2),
+                        "max": round(max(values), 2),
+                        "values": [round(v, 2) for v in values],
+                    }
+            if spread:
+                row["spread"] = spread
             # Evidence comes from the worst repeat: that is where it says most.
             worst = max(found, key=_rank)
             if worst.get("detail") is not None:
@@ -275,7 +326,7 @@ def _source_note(d: dict[str, Any]) -> str:
 
 def _table(rows: list[dict[str, Any]]) -> str:
     cols = [c for c in COLUMNS if any(c in r for r in rows)]
-    extra = [k for k in rows[0] if k not in cols]
+    extra = [k for k in rows[0] if k not in cols and k not in HIDDEN]
     cols += extra
     head = "| " + " | ".join(HEADERS.get(c, c) for c in cols) + " |"
     sep = "|" + "|".join("---" for _ in cols) + "|"

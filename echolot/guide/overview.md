@@ -47,6 +47,16 @@ echolot analyze <trace...> -c echolot.yml  # the report
 `analyze` writes `.echolot/out/report.json` for you and `report.md` for humans.
 **Read the json** — it has a stable schema.
 
+```bash
+echolot compare                            # what moved since the previous round
+echolot compare <before.json> <after.json> # or name the two reports
+```
+
+`compare` answers the other half of the question the report cannot: which rows
+appeared, which grew, and whether the repeats support calling that a change.
+Read `overlap` before acting on a row — `true` means the runs disagree among
+themselves by more than the medians moved.
+
 ## Reading the report
 
 Three things you will get wrong without being told.
@@ -106,6 +116,7 @@ Thresholds are tied to a device and a scenario. When either changes, run
 ## More
 
 ```bash
+echolot compare --help  # the forms it takes and the floor it uses
 echolot guide setup     # building echolot.yml for a project that has none
 echolot guide hunt      # the loop: from a report down to a place in the code
 echolot explain         # the detectors and their parameters

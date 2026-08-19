@@ -57,13 +57,21 @@ round = 1
 3. hypotheses: firing detectors → domains → files
    localised to a place in the code → exit with the finding
 
-4. otherwise pick a blind spot (usually uninstrumented_cpu):
+4. from round 2 on, before anything else:
+   echolot compare
+   the previous round against the one just recorded, sorted by what moved.
+   New rows with the AGENTTMP_ prefix are your own markers breaking down a
+   blind spot; the warning at the top names them. A row that grew with
+   Ranges `apart` is a real move, `overlap` means the repeats disagree by
+   more than the medians moved — record another round before concluding.
+
+5. otherwise pick a blind spot (usually uninstrumented_cpu):
    no instrumentation → echolot mark, then echolot mark --apply
    a named place → a few AGENTTMP_ markers around it, by hand
    re-record, round += 1
    round > loop.max_rounds (config, default 3) → exit with an interim conclusion
 
-5. cleanup: remove every AGENTTMP_ marker — always
+6. cleanup: remove every AGENTTMP_ marker — always
 ```
 
 Stopping is a number from the config, not a feeling. Without a limit you will
@@ -76,6 +84,8 @@ echolot analyze <traces> -c echolot.yml        report → .echolot/out/
 echolot analyze … --defaults                   every detector, built-in thresholds
 echolot analyze … --set main_thread_block.min_slice_ms=4
                                                one threshold, this run only
+echolot compare                                previous round vs the latest — what moved
+echolot compare <a.json> <b.json>              or name the two reports
 echolot names <trace>                          slice names — --top 200 --min-ms 0 to see AGENTTMP_
 echolot domains --root .                       slice name → file
 echolot mark [--apply|--remove]                first markers, and taking them out

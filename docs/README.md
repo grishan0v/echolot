@@ -2,9 +2,9 @@
 
 [← back to the README](../README.md)
 
-Eight documents. If you are here for the first time, read them in the order of
-the workflow: **collect → mark → analyse → calibrate**. The rest explains why
-the tool is built the way it is.
+Nine documents. If you are here for the first time, read them in the order of
+the workflow: **collect → mark → analyse → compare → calibrate**. The rest
+explains why the tool is built the way it is.
 
 ---
 
@@ -17,6 +17,7 @@ The path from a device to an answer, in the order you walk it.
 | 🎬 **[Collecting traces](collecting.md)** | you need traces — the three modes (`launch`, `command`, `gradle`), what the trace config must contain, and why repeats are merged rather than averaged |
 | 🏷️ **[Marking](mark.md)** | your project has no instrumentation and the report has nothing to attach findings to — `mark` writes the first markers from the platform's vocabulary, `--apply` / `--remove` |
 | 🔎 **[Analysing](analysing.md)** | you have a trace and need a place in the code — `probe`, `names`, `domains`, and the slice-to-code map |
+| 🔀 **[Comparing](compare.md)** | you have two sets of traces and need the difference — what appeared, what grew, and whether the repeats support calling it a change |
 | 📏 **[Calibrating](calibrate.md)** | the shipped thresholds fire on everything, or on nothing — derive them from known-healthy runs instead, and why rank beats percentile |
 
 ## Understanding it

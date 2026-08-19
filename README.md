@@ -14,7 +14,7 @@
 
 ---
 
-**Contents** · [What it is](#what-it-is) · [Requirements](#requirements) · [Quick start](#quick-start) · [What you get](#what-you-get) · [Commands](#commands) · [Detectors](#detectors) · [How it works](#how-it-works) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
+**Contents** · [What it is](#what-it-is) · [Requirements](#requirements) · [Quick start](#quick-start) · [What you get](#what-you-get) · [What changed](#what-changed) · [Commands](#commands) · [Detectors](#detectors) · [How it works](#how-it-works) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
 
 ---
 
@@ -109,6 +109,7 @@ The same work, by hand or in CI:
 ```bash
 echolot collect -c echolot.yml -n 5                              # 5 repeats of the scenario
 echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml  # build the report
+echolot compare before.json .echolot/out/report.json             # what changed since
 echolot doctor -q                                                # exit 0/1: is this environment sane?
 ```
 
@@ -164,6 +165,38 @@ findings list, `report.json` carries the same numbers in a shape the agent can
 walk. An 81 MB trace with 475k slices comes out as a 14 KB `report.json` in
 about five seconds.
 
+## What changed
+
+The report says where the time went in one set of traces. The question people
+arrive with has a second half — *it was 3 s, now it is 7 s* — and that needs
+two sets.
+
+```bash
+echolot compare                       # inside an investigation: previous round vs latest
+echolot compare old.json new.json     # or name them
+```
+
+One table, sorted by how far each row moved. The top row is usually the answer.
+
+```markdown
+| Where | Detector | Before | After | Δ | N | Ranges |
+|---|---|---|---|---|---|---|
+| SyncAdapter.onPerformSync | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
+| TeamRepository.loadAll | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73** | 1 → 1 | apart |
+| inflate | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.6 | 12 → 31 | overlap |
+```
+
+`N` separates "called more often" from "became slower inside" — two different
+bugs in two different places. **Ranges** is the column that decides whether a
+row is worth acting on: `apart` means every repeat after fell outside
+everything seen before, `overlap` means the runs disagree among themselves by
+more than the medians moved, and the honest next step is another round of
+`collect` rather than a conclusion.
+
+Reports built against different thresholds are compared with the reason printed
+above the table — a row can cross a moved bar without anything in the app
+changing. See [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md).
+
 ## Commands
 
 Three audiences share one CLI, and `echolot --help` says which is which — the
@@ -188,6 +221,7 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 |---|---|
 | `echolot collect` | capture N traces of one scenario — `launch`, `command` or `gradle` |
 | `echolot analyze` | run the detectors, build a Marker Report |
+| `echolot compare` | the difference between two reports — see [below](#what-changed) |
 
 <details>
 <summary><b>The agent's, behind <code>/echolot</code></b> — you do not call these</summary>
@@ -315,6 +349,7 @@ Start at the [documentation index](https://github.com/grishan0v/echolot/tree/mai
 |---|---|---|
 | 🎬 | [Collecting](https://github.com/grishan0v/echolot/blob/main/docs/collecting.md) | `collect`, the three modes, merging repeats |
 | 🔎 | [Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md) | `probe`, `names`, `domains` — from a trace to a place in the code |
+| 🔀 | [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md) | `compare` — what changed between two reports, and when the repeats support saying so |
 | 🏷️ | [Marking](https://github.com/grishan0v/echolot/blob/main/docs/mark.md) | `mark` — first markers for a project with no instrumentation |
 | ⚙️ | [Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md) | writing your own, the context views, self time versus total |
 | 📏 | [Calibrating](https://github.com/grishan0v/echolot/blob/main/docs/calibrate.md) | thresholds from healthy runs, why rank beats percentile |
@@ -354,9 +389,13 @@ Where echolot is hard to replace is the other question: *where* the time went.
 So the useful shape in CI is the opposite of a gate. Run `echolot doctor -q` as
 a precondition — it already answers "does this machine compute correctly" with
 an exit code — then `analyze` over the traces the benchmark has already
-written, and keep `report.json` as a build artefact. When someone asks a day
-later why the nightly regressed, the window, the thresholds and the evidence
-are already sitting next to the commit: no device, no re-recording.
+written, `compare` against yesterday's report, and keep both JSON files as
+build artefacts. When someone asks a day later why the nightly regressed, the
+window, the thresholds, the evidence and the delta are already sitting next to
+the commit: no device, no re-recording.
+
+`compare` exits 0 whatever it finds, for the same reason. It reports; it does
+not stand guard.
 
 `scenario.budget_ms` stays in the config. It records what a team considers
 acceptable, which is worth writing down whether or not anything enforces it.

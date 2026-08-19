@@ -92,14 +92,22 @@ back: every round, and a copy of every report you produced.
 3. hypotheses: firing detectors → domains → files
    localised to a place in the code → exit with the finding
 
-4. otherwise pick a blind spot (usually uninstrumented_cpu):
+4. from round 2 on, before anything else:
+   echolot compare
+   the previous round against the one just recorded, sorted by what moved.
+   New rows with the AGENTTMP_ prefix are your own markers breaking down a
+   blind spot; the warning at the top names them. A row that grew with
+   Ranges `apart` is a real move, `overlap` means the repeats disagree by
+   more than the medians moved — record another round before concluding.
+
+5. otherwise pick a blind spot (usually uninstrumented_cpu):
    no instrumentation at all → echolot mark, then echolot mark --apply
    a named place → a few AGENTTMP_ markers around it, by hand
    copy the current traces aside, re-record, round += 1
    (cleanup: echolot mark --remove takes out what --apply put in)
    round > loop.max_rounds → exit with an interim conclusion
 
-5. cleanup: remove every AGENTTMP_ marker — always
+6. cleanup: remove every AGENTTMP_ marker — always
 ```
 
 The commands you will reach for, so that `--help` is not a round trip:
@@ -111,6 +119,8 @@ echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere (a round'
 echolot analyze … --defaults                       every detector, built-in thresholds
 echolot analyze … --set main_thread_block.min_slice_ms=4
                                                    one threshold, this run only
+echolot compare                                    the previous round against the latest;
+                                                   --hunt <n> for first against last
 echolot names <trace>                              slice names of project.process — with
                                                    --top 200 --min-ms 0 to see AGENTTMP_ ones
 echolot domains --root .                           slice name → file

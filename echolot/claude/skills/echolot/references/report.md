@@ -32,7 +32,12 @@ cannot be mistaken for the project's.
     { "id": "…", "title": "…", "why": "…",
       "params": { … }, "params_source": "config",
       "defaults": { "min_slice_ms": 16 },
-      "rows": [ … ], "error": null }
+      "rows": [ { "location": "draw", "runs": "5/5", "count": 4,
+                  "self_ms": 125.4, "total_ms": 130.1, "max_ms": 61.2,
+                  "spread": { "self_ms": { "min": …, "max": …, "values": [ … ] },
+                              "max_ms":  { … } },
+                  "detail": "main" } ],
+      "error": null }
   ]
 }
 ```
@@ -83,6 +88,26 @@ The contract is shared, but not every detector fills every column.
 | `max_ms` | the longest single occurrence |
 | `covered_ms` | how much on-CPU time ran inside instrumented code |
 | `detail` | the evidence: thread, state, lock name with the owner's tid |
+| `spread` | the per-run values behind the medians, for two columns — see below |
+
+**`spread` is what makes a number checkable.** Merging repeats reduces each row
+to a median, and a median cannot say whether a number is steady: 120 ms from
+(118, 119, 121) and 120 ms from (12, 120, 890) read identically, and only the
+second means the next run will say something else.
+
+```json
+"spread": { "self_ms": { "min": 118.2, "max": 340.1,
+                         "values": [118.2, 121.0, 125.4, 133.7, 340.1] } }
+```
+
+Present for the detector's ranking metric (`self_ms` where it has one,
+`total_ms` otherwise) and for `max_ms`. `values` holds one entry per repeat the
+row was **found in**, which is what `runs` counts: a `3/5` row has three. Absent
+when `analyze` ran on a single trace — there is nothing to spread.
+
+Use it before acting on a number. A row whose `max` is several times its median
+holds one slow occurrence rather than a steady cost, and that is a different
+bug in a different place.
 
 **`self_ms` and `total_ms` are not duplicates.** The first answers "where was
 it spent", the second "how long did it take altogether". A slice with
@@ -132,3 +157,70 @@ No detector fired — two possibilities, and telling them apart is mandatory:
    trace, the anchors did not match, the process is the wrong one.
 
 The second case is more common than the first.
+
+## The comparison — `echolot compare`
+
+Two Marker Reports in, one table out, sorted by how far each row moved. Written
+to `comparison.json` and `comparison.md` beside the report.
+
+```bash
+echolot compare                      # inside an investigation: previous round vs latest
+echolot compare --hunt 3             # its first report against its last
+echolot compare old.json new.json    # or name them
+```
+
+```json
+{
+  "kind": "comparison",
+  "comparable": true,
+  "warnings": [ { "id": "thresholds", "text": "…" } ],
+  "window": { "before_ms": 1184.0, "after_ms": 2960.4,
+              "delta_ms": 1776.4, "ratio": 2.5 },
+  "summary": { "moved": 4, "appeared": 2, "vanished": 1, "steady": 17,
+               "state_changed": [ { "id": "binder_txn",
+                                    "before": "silent", "after": "1 row(s)" } ] },
+  "rows": [
+    { "location": "TeamRepository.loadAll", "detector": "main_thread_block",
+      "metric": "self_ms", "change": "grew", "matched_by": "exact",
+      "before": { "self_ms": 12.1, "min": 10.4, "max": 14.0, "count": 1 },
+      "after":  { "self_ms": 883.4, "min": 840.1, "max": 931.7, "count": 1 },
+      "delta_ms": 871.3, "ratio": 73.0, "overlap": false }
+  ]
+}
+```
+
+**`change`** is `appeared`, `grew`, `shrank`, `vanished` or `steady`. Rows are
+sorted by the size of the move, so the first one is usually the answer. Steady
+rows stay in the JSON and are collapsed to one line in the markdown; nothing is
+dropped silently.
+
+**`overlap`** answers whether the repeats support calling it a change. `false`
+means the two sets are apart — every run after was outside everything seen
+before. `true` means they intersect, so the runs disagree among themselves by
+more than the medians moved: record another round before concluding. `null`
+means one side was a single trace.
+
+**`count` before and after** separates "called more often" from "became slower
+inside". `inflate` at 12 → 31 occurrences and `loadAll` growing 73× at one
+occurrence are different bugs in different places.
+
+**`matched_by`** is `exact` or `family`. Rows are paired by name first and by
+name family second — `DefaultDispatcher-worker-2` and `-worker-5` are one pool.
+The family pass only fires when exactly one row on each side is unmatched;
+otherwise the rows stay listed as appeared and gone rather than guessed at.
+
+**`warnings`** — read before the table:
+
+| `id` | what it means |
+|---|---|
+| `thresholds` | detector parameters differ. **appeared** and **gone** mean the bar moved, not that the app changed. Re-run both with `--defaults` |
+| `instrumentation` | rows that appeared are `AGENTTMP_` markers added between the rounds — a breakdown of a blind spot, not new work |
+| `process` | two different apps. `comparable: false` |
+| `defaults` / `config` | one side used `--defaults`, or the config's hash changed |
+| `anchor-before` / `anchor-after` | that side's window is the whole trace |
+| `runs` / `single` | different repeat counts, or a single trace with no spread to test against |
+| `detectors` | the two runs did not use the same set of detectors |
+
+A row is listed as moved when it changes by more than 5 ms or 10 %, whichever
+is larger — `--floor-ms` and `--floor-pct` change that. The exit code is 0
+whatever the comparison finds.
