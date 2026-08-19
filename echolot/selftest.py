@@ -938,6 +938,60 @@ def _(report):
                                    "fix-config", "resume-or-new", "hunt"}
 
 
+@check("guide: printed knowledge covers every `next` the tool can produce")
+def _(report):
+    """The guide is what an agent outside Claude Code has to work from.
+
+    `.claude/` is a Claude Code mechanism; in Cursor or Codex it is an
+    invisible directory, and the reported symptom was a tool that "sometimes
+    follows the instructions" — the model found SKILL.md by chance or it did
+    not. `echolot guide` replaces chance with a command, which only works if
+    the guide actually answers every state the tool can report.
+    """
+    from .main import GUIDE_DIR, NEXT_KINDS
+
+    overview = (GUIDE_DIR / "overview.md").read_text(encoding="utf-8")
+    missing = [k for k in NEXT_KINDS if f"`{k}`" not in overview]
+    assert not missing, f"`next` words with no branch in the guide: {missing}"
+    for topic in ("setup", "hunt"):
+        assert (GUIDE_DIR / f"{topic}.md").exists(), f"guide {topic} is missing"
+        assert f"guide {topic}" in overview, \
+            f"the overview never sends anyone to `guide {topic}`"
+    # The rule the whole design rests on, in the words an agent will act on.
+    assert "Never open the trace yourself" in overview
+
+
+@check("guide: a client pointer sends the agent to the guide, not to a copy")
+def _(report):
+    """Stubs must stay stubs.
+
+    One knowledge file per client is how four copies drift apart. Each pointer
+    is a few lines naming the command; the text lives in the package, so it
+    cannot go stale inside somebody's repository the way a committed copy
+    does. A pointer that grew into a copy would bring the drift back.
+    """
+    from . import hosts as hosts_mod
+
+    for host in hosts_mod.HOSTS:
+        if host.key == "claude":
+            continue
+        text = host.render()
+        assert "echolot guide" in text, f"{host.key} never names the guide"
+        assert hosts_mod.MARKER in text, f"{host.key} carries no marker to find it by"
+        assert len(text.splitlines()) < 40, \
+            f"{host.key} is turning into a copy of the guide ({len(text.splitlines())} lines)"
+
+    # A file the project wrote itself is never rewritten.
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        own = project / "AGENTS.md"
+        own.write_text("# our own rules\n", encoding="utf-8")
+        what, _ = hosts_mod.write_stub(project, hosts_mod.BY_KEY["agents"])
+        assert what == "exists-without-ours", what
+        assert own.read_text(encoding="utf-8") == "# our own rules\n", \
+            "a project's own AGENTS.md was edited"
+
+
 @check("CLI: every verb is grouped by audience and shown in --help")
 def _(report):
     """The header of `--help` is generated, so nothing can quietly fall out.

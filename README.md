@@ -34,6 +34,11 @@ pinned and verified on every run.
 > walks down to the code. The command line works on its own too — see
 > [without an agent](#without-an-agent).
 
+**Using Cursor, Codex or something else?** `echolot init` points them at the
+tool, and `echolot guide` tells any agent how to work with it. The loop runs
+in your main context rather than a subagent, so keep the passes short — the
+guide says where that matters.
+
 ## Requirements
 
 | | |
@@ -41,7 +46,7 @@ pinned and verified on every run.
 | **Python** | 3.10 or newer |
 | **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
 | **Device** | a phone or emulator with USB debugging on |
-| **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code), for the guided workflow |
+| **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) for the full workflow; Cursor, Codex and others via `echolot guide` |
 
 Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
 

@@ -675,6 +675,7 @@ def _rows_out(head: list[str], body: list[list[str]]) -> None:
         print("| " + " | ".join(c.replace("|", "\\|") for c in row) + " |")
 
 
+GUIDE_DIR = Path(__file__).resolve().parent / "guide"
 CLAUDE_DIR = Path(__file__).parent / "claude"
 # What `init` installed, file by file: the manifest lets `doctor` tell a file
 # the project customised from one the package has since moved on from.
@@ -690,6 +691,49 @@ def layer_files() -> list[Path]:
     """The template, minus hidden files (macOS drops .DS_Store into it)."""
     return [p for p in sorted(CLAUDE_DIR.rglob("*"))
             if p.is_file() and not p.name.startswith(".")]
+
+
+def _install_pointers(project: Path, spec: str | None) -> None:
+    """Tell the other clients this tool exists.
+
+    `.claude/` is a Claude Code mechanism, and in Cursor or Codex it is an
+    invisible directory. The CLI worked there all along — it is a program —
+    but nothing pointed an agent at it, so the instructions were followed only
+    when the model happened to read the file while looking around. Each client
+    gets a few lines saying "run `echolot guide`"; the knowledge stays in the
+    package rather than being copied per client.
+    """
+    from . import hosts as hosts_mod
+
+    chosen = hosts_mod.parse(spec) if spec else hosts_mod.detect(project)
+    if chosen is None:
+        print(f"\nunknown client in --for {spec!r}. There is: "
+              f"{', '.join(h.key for h in hosts_mod.HOSTS)}, or `all`",
+              file=sys.stderr)
+        return
+    stubs = [h for h in chosen if h.key != "claude"]
+    if not stubs:
+        return
+
+    print()
+    manual = []
+    for host in stubs:
+        what, dest = hosts_mod.write_stub(project, host)
+        rel = dest.relative_to(project)
+        if what == "exists-without-ours":
+            manual.append(rel)
+            print(f"  ≠ {rel} exists and is yours — left alone")
+        elif what == "current":
+            print(f"  = {rel} ({host.title}, current)")
+        else:
+            print(f"  {'↑' if what == 'updated' else '+'} {rel} ({host.title})")
+
+    if manual:
+        print(f"\nAdd this to {', '.join(str(m) for m in manual)} so the agent "
+              f"finds the tool:\n")
+        for line in hosts_mod.BODY.strip().split("\n")[:4]:
+            print(f"    {line}")
+        print("    …  (`echolot guide` prints the rest)")
 
 
 def _read_manifest(root: Path) -> dict:
@@ -923,7 +967,8 @@ def next_step(st: dict) -> str:
     if kind == "doctor":
         return "echolot doctor — the last self-check failed; no report is trustworthy until it passes"
     if kind == "setup":
-        return "/echolot in Claude Code — it will build echolot.yml from the repository and a probe trace"
+        return ("/echolot in Claude Code, or `echolot guide setup` in any other "
+                "agent — echolot.yml from the repository and a probe trace")
     if kind == "fix-config":
         return f"fix echolot.yml — it does not load: {st['config']['error']}"
     if kind == "resume-or-new":
@@ -931,9 +976,11 @@ def next_step(st: dict) -> str:
         return (f'/echolot in Claude Code — it will ask whether to carry on with '
                 f'"{q}" or start a new investigation')
     if not st["traces"]["count"]:
-        return "/echolot in Claude Code (the hunt captures traces), or: echolot collect -c echolot.yml -n 5"
-    return ("/echolot in Claude Code, or by hand: "
-            "echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml")
+        return ("/echolot in Claude Code, `echolot guide hunt` in any other agent, "
+                "or by hand: echolot collect -c echolot.yml -n 5")
+    return ("/echolot in Claude Code, `echolot guide hunt` in any other agent, "
+            "or by hand: echolot analyze .echolot/traces/*.perfetto-trace "
+            "-c echolot.yml")
 
 
 def _ago(epoch: float | None) -> str:
@@ -1146,6 +1193,30 @@ def cmd_status(args) -> int:
         print()
         for line in hunt_mod.recap(st.get("hunt"), st, root=project):
             print(line)
+    return 0
+
+
+def cmd_guide(args) -> int:
+    """How to work with this tool, printed by the package that implements it.
+
+    The `.claude/` layer is copied into a project and therefore drifts: the
+    package moves on, the copy does not, and `init` has to be re-run. It is
+    also invisible to every client that is not Claude Code, which is how a
+    Cursor user ends up with a tool that "sometimes follows the instructions"
+    — the model finds SKILL.md by chance while reading the repository, or it
+    does not.
+
+    Printed guidance has neither problem. It cannot be stale, and any client
+    that can run a command can read it.
+    """
+    topic = (args.topic or "overview").lower()
+    path = GUIDE_DIR / f"{topic}.md"
+    if not path.exists():
+        available = sorted(p.stem for p in GUIDE_DIR.glob("*.md"))
+        print(f"no guide for {topic!r}. There is: {', '.join(available)}",
+              file=sys.stderr)
+        return 2
+    print(path.read_text(encoding="utf-8").rstrip())
     return 0
 
 
@@ -1367,6 +1438,8 @@ def cmd_init(args) -> int:
     if kept:
         print(f"\n{len(kept)} file(s) differ from the template and were kept. "
               f"`echolot init --force` overwrites them; carry your edits over after.")
+
+    _install_pointers(target, getattr(args, "for_hosts", None))
     if before is None:
         print("\nLayer installed.")
     elif written or updated:
@@ -1825,13 +1898,15 @@ def _dump(tp, sql: str) -> None:
 # The order verbs are read in, which is neither registration order nor
 # alphabetical. A verb missing from here is caught by the self-check.
 ORDER = ("status", "init", "hunt", "doctor", "collect", "analyze",
-         "probe", "names", "domains", "mark", "calibrate", "explain", "reflect")
+         "guide", "probe", "names", "domains", "mark", "calibrate", "explain",
+         "reflect")
 
 GROUP_TITLES = {
     "yours": ("Yours", None),
     "pipeline": ("The pipeline", "for CI, and for traces by hand"),
     "agent": ("The agent's",
-              "through /echolot in Claude Code — you do not call these"),
+              "an agent runs these — `guide` is how one that is not Claude Code "
+              "learns the rest"),
     "tool": ("Improving the tool", None),
 }
 
@@ -1985,6 +2060,10 @@ def build_parser() -> argparse.ArgumentParser:
     ini.add_argument("--into", default=".", help="Android project root")
     ini.add_argument("--force", action="store_true",
                      help="overwrite files the project has edited too")
+    ini.add_argument("--for", dest="for_hosts", metavar="CLIENTS",
+                     help="which agents to point at the tool: claude, agents, "
+                          "cursor, copilot — comma-separated, or `all`. "
+                          "Default: whichever this project shows evidence of")
     ini.add_argument("--no-doctor", action="store_true",
                      help="skip the environment check at the end")
     ini.set_defaults(func=cmd_init)
@@ -2021,6 +2100,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "built-in thresholds. To see what the shipped numbers "
                          "say without touching the config")
     an.set_defaults(func=cmd_analyze)
+
+    gd = add("guide", "agent", "[<topic>]",
+             "how to work with this tool — for any agent, not only Claude Code")
+    gd.add_argument("topic", nargs="?",
+                    help="overview (default), setup, hunt")
+    gd.set_defaults(func=cmd_guide)
 
     ex = add("explain", "agent", "", "the detectors and their parameters")
     ex.set_defaults(func=cmd_explain)

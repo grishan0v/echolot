@@ -61,9 +61,49 @@ two apart. A layer installed before the manifest existed can only be
 MCP earns its place where interactive access to state is required. Here there
 is no state: a trace goes in, a table comes out.
 
-The consequence is portability. For another client — Codex, Cursor, Copilot,
-Junie — only the format of the knowledge file is rewritten; the core is
-untouched.
+The consequence is portability, and it took a user's report to finish
+collecting on it. `.claude/` is a Claude Code mechanism: a skill found by its
+`description`, slash commands, a subagent. In Cursor it is an invisible
+directory. The CLI worked there the whole time — it is a program — but nothing
+pointed an agent at it, so the instructions were followed only when the model
+happened to read `SKILL.md` while looking around. From the outside that is a
+tool that "sometimes follows the flow".
+
+What ships now is one command and a set of pointers:
+
+```bash
+echolot guide          # how to work with this tool
+echolot guide setup    # building echolot.yml
+echolot guide hunt     # the loop
+```
+
+`echolot init` writes a few lines into whatever the project shows evidence of —
+`AGENTS.md`, `.cursor/rules/echolot.mdc`, `.github/copilot-instructions.md` —
+each naming that command. `--for claude,cursor` overrides the detection.
+
+**The knowledge is not copied per client, on purpose.** Four files would drift
+apart within two releases, and a copy committed to somebody's repository goes
+stale the moment the package moves — which is exactly why `init` has to be
+re-run for `.claude/` and why `doctor` checks whether that layer is current.
+Text printed by the installed package cannot be stale. The pointers are stubs,
+and a self-check fails if one starts growing into a copy.
+
+A file the project wrote itself is never rewritten. When `AGENTS.md` is
+already there and has no echolot section, `init` prints the lines to add and
+leaves the file alone.
+
+### What still does not port
+
+The subagent. A client without one runs the loop in the main context, where
+raw output fills the window and the instability this whole design exists to
+remove comes back. `guide` says so in as many words and tells the agent to
+work in short passes and keep raw output out of the conversation. That is a
+mitigation, not a fix — Claude Code remains the better experience, and now it
+is the better one rather than the only one.
+
+`reflect` also stays Claude Code-only for now: it reads that client's
+transcripts. See [reflect.md](reflect.md) under "Other agents" for what
+another reader would have to produce.
 
 ## Why the loop lives in a subagent
 
