@@ -1,9 +1,26 @@
 #!/usr/bin/env python3
 """echolot — a deterministic layer between the trace and the agent.
 
-The command list in `--help` is generated from the registration below, so the
-grouping by audience cannot drift from it. It used to be kept by hand here,
-and by hand in the README, and argparse printed a third flat copy underneath.
+The verbs, and the parser that registers them. The command list in `--help` is
+generated from that registration, so the grouping by audience cannot drift from
+it — it used to be kept by hand here, and by hand in the README, with argparse
+printing a third flat copy underneath.
+
+What a command stands on lives beside it, one file per job:
+
+    config.py    echolot.yml, and local.yml layered on top
+    tp.py        the pinned trace_processor, and loading detectors from .sql
+    report.py    the Marker Report — report.json and report.md
+    compare.py   the delta between two of those
+    runner.py    the device: adb, the perfetto config, capturing a scenario
+    hunt.py      the open investigation — which question the traces answer
+    layer.py     the .claude/ layer: what init installs, and whether it drifted
+    state.py     where a project stands, and the one word for what is next
+    table.py     the one markdown table every one of these prints through
+    mark.py      the first markers for a project with no instrumentation
+    domains.py   slice name → a place in the code
+    reflect/     the same idea as a report, pointed at an agent session
+    selftest.py  what doctor runs; fixture.py builds the trace it runs on
 """
 
 from __future__ import annotations
@@ -11,7 +28,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
-import re
 import sys
 import time
 from collections import defaultdict
@@ -19,9 +35,10 @@ from pathlib import Path
 
 from . import compare as compare_mod
 from . import hunt as hunt_mod
-from . import recorder
+from . import layer, recorder, state, table
 from . import report as report_mod
 from .config import NO_ANCHOR, Config, ConfigError
+from .reflect.cli import cmd_reflect
 from .tp import (
     TraceSession,
     load_detectors,
@@ -726,12 +743,11 @@ def cmd_names(args) -> int:
                   "responsible for, yet no mask sees them. If there is a real "
                   "problem among them, widen the mask in `echolot.yml`.\n")
             missed.sort(key=lambda x: -x[2]["ns"])
-            head = ["section", "family", "N", "total, ms"]
-            body = [
-                [title, _clip(fam), str(d["n"]), f"{d['ns']/1e6:.1f}"]
+            table.show([
+                {"section": title, "family": _clip(fam), "N": d["n"],
+                 "total, ms": f"{d['ns']/1e6:.1f}"}
                 for title, fam, d in missed[:args.top]
-            ]
-            _rows_out(head, body)
+            ])
             _note_dropped(len(missed), args.top)
     return 0
 
@@ -748,378 +764,24 @@ def _note_dropped(total: int, shown: int) -> None:
 
 
 def _families_table(items) -> None:
-    head = ["family", "N", "total, ms", "threads", "mask"]
-    body = []
+    rows = []
     for fam, data in items:
         threads = sorted(data["threads"])
         shown = ", ".join(threads[:2]) + (f" +{len(threads)-2}" if len(threads) > 2 else "")
         marks = sorted(data["dets"])
         marks += [f"{d} (excluded)" for d in sorted(data["skips"])]
-        body.append([
-            _clip(fam),
-            str(data["n"]),
-            f"{data['ns']/1e6:.1f}",
-            _clip(shown, 34),
-            ", ".join(marks) or "—",
-        ])
-    _rows_out(head, body)
+        rows.append({
+            "family": _clip(fam),
+            "N": data["n"],
+            "total, ms": f"{data['ns']/1e6:.1f}",
+            "threads": _clip(shown, 34),
+            "mask": ", ".join(marks) or "—",
+        })
+    table.show(rows)
 
 
 def _clip(text: str, width: int = 58) -> str:
     return text if len(text) <= width else text[:width - 1] + "…"
-
-
-def _rows_out(head: list[str], body: list[list[str]]) -> None:
-    print("| " + " | ".join(head) + " |")
-    print("|" + "|".join("---" for _ in head) + "|")
-    for row in body:
-        print("| " + " | ".join(c.replace("|", "\\|") for c in row) + " |")
-
-
-GUIDE_DIR = Path(__file__).resolve().parent / "guide"
-CLAUDE_DIR = Path(__file__).parent / "claude"
-# What `init` installed, file by file: the manifest lets `doctor` tell a file
-# the project customised from one the package has since moved on from.
-LAYER_MANIFEST = "echolot-layer.json"
-
-
-def _sha(path: Path) -> str:
-    import hashlib
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-
-
-def layer_files() -> list[Path]:
-    """The template, minus hidden files (macOS drops .DS_Store into it)."""
-    return [p for p in sorted(CLAUDE_DIR.rglob("*"))
-            if p.is_file() and not p.name.startswith(".")]
-
-
-def _install_pointers(project: Path, chosen: list) -> None:
-    """Tell the other clients this tool exists.
-
-    `.claude/` is a Claude Code mechanism, and in Cursor or Codex it is an
-    invisible directory. The CLI worked there all along — it is a program —
-    but nothing pointed an agent at it, so the instructions were followed only
-    when the model happened to read the file while looking around. Each client
-    gets a few lines saying "run `echolot guide`"; the knowledge stays in the
-    package rather than being copied per client.
-    """
-    from . import hosts as hosts_mod
-
-    stubs = [h for h in chosen if h.key != "claude"]
-    if not stubs:
-        return
-
-    print()
-    manual = []
-    for host in stubs:
-        what, dest = hosts_mod.write_stub(project, host)
-        rel = dest.relative_to(project)
-        if what == "exists-without-ours":
-            manual.append(rel)
-            print(f"  ≠ {rel} exists and is yours — left alone")
-        elif what == "current":
-            print(f"  = {rel} ({host.title}, current)")
-        else:
-            print(f"  {'↑' if what == 'updated' else '+'} {rel} ({host.title})")
-
-    if manual:
-        print(f"\nAdd this to {', '.join(str(m) for m in manual)} so the agent "
-              f"finds the tool:\n")
-        for line in hosts_mod.BODY.strip().split("\n")[:4]:
-            print(f"    {line}")
-        print("    …  (`echolot guide` prints the rest)")
-
-
-def _read_manifest(root: Path) -> dict:
-    p = root / LAYER_MANIFEST
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _write_manifest(root: Path, files: dict[str, str]) -> None:
-    old = _read_manifest(root)
-    merged = dict(old.get("files") or {})
-    merged.update(files)
-    (root / LAYER_MANIFEST).write_text(json.dumps({
-        "echolot": recorder.version(),
-        "files": dict(sorted(merged.items())),
-    }, indent=2) + "\n", encoding="utf-8")
-
-
-def layer_status(project: Path) -> dict | None:
-    """The project's .claude/ layer against the package's template.
-
-    None when there is no layer here. Otherwise one row per template file:
-
-        current      identical to the template
-        stale        untouched since install, and the template has moved on
-        customised   edited in the project, the template has not moved
-        conflict     edited in the project AND the template has moved on
-        differs      not identical, and no manifest to say which of the two
-        missing      the template has it, the project does not
-
-    The manifest is what makes stale and customised distinguishable; a layer
-    installed before it existed can only be "differs".
-    """
-    root = project / ".claude"
-    if not (root / "skills" / "echolot" / "SKILL.md").exists():
-        return None
-    manifest = _read_manifest(root)
-    installed = manifest.get("files") or {}
-    rows = []
-    for src in layer_files():
-        rel = str(src.relative_to(CLAUDE_DIR))
-        dst = root / rel
-        t_sha = _sha(src)
-        if not dst.exists():
-            state = "missing"
-        else:
-            d_sha = _sha(dst)
-            if d_sha == t_sha:
-                state = "current"
-            elif rel in installed:
-                was = installed[rel]
-                if d_sha == was:
-                    state = "stale"
-                elif t_sha == was:
-                    state = "customised"
-                else:
-                    state = "conflict"
-            else:
-                state = "differs"
-        rows.append({"file": rel, "state": state})
-    return {
-        "rows": rows,
-        "manifest": bool(installed),
-        "installed_by": manifest.get("echolot"),
-    }
-
-
-def _layer_line(project: Path) -> tuple[str, str]:
-    """(verdict, one line) about the project's .claude/ layer — for -q."""
-    status = layer_status(project)
-    if status is None:
-        # Absent because this project said it does not use Claude Code is a
-        # different fact from absent because nobody ran init. Without the
-        # distinction, `next` would ask for `echolot init` forever on a
-        # project that had just declined the layer.
-        from . import hosts as hosts_mod
-        if not hosts_mod.wants_claude(project):
-            chosen = hosts_mod.load_choice(project) or []
-            named = ", ".join(hosts_mod.BY_KEY[k].title for k in chosen) or "nothing"
-            return "opted-out", f"layer: not installed — this project points {named} at echolot"
-        return "absent", "layer: none installed here (`echolot init`)"
-    by_state: dict[str, int] = {}
-    for r in status["rows"]:
-        by_state[r["state"]] = by_state.get(r["state"], 0) + 1
-    needs = {k: v for k, v in by_state.items()
-             if k in ("stale", "conflict", "differs", "missing")}
-    if not needs:
-        return "current", f"layer: current ({len(status['rows'])} files)"
-    what = ", ".join(f"{v} {k}" for k, v in needs.items())
-    # stale and missing files `init` updates on its own; files that differ
-    # with no manifest to say why, or that were edited here, need --force.
-    if set(needs) <= {"stale", "missing"}:
-        return "stale", f"layer: STALE — {what} → `echolot init`"
-    return "differs", f"layer: STALE — {what} → `echolot init --force`"
-
-
-def _print_layer_status(project: Path) -> str | None:
-    """The doctor section; returns the one-word verdict for the run log."""
-    status = layer_status(project)
-    print("\n## The .claude/ layer in this project\n")
-    if status is None:
-        print("  none installed here. `echolot init` puts the skill, the agent "
-              "and the commands into ./.claude/")
-        return "absent"
-    by_state: dict[str, list[str]] = {}
-    for r in status["rows"]:
-        by_state.setdefault(r["state"], []).append(r["file"])
-    total = len(status["rows"])
-    counts = ", ".join(f"{len(v)} {k}" for k, v in by_state.items())
-    print(f"  {total} template files: {counts}")
-    for state in ("stale", "conflict", "customised", "differs", "missing"):
-        for rel in by_state.get(state, []):
-            print(f"    {state:<10} {rel}")
-    if status["installed_by"]:
-        print(f"  installed by echolot {status['installed_by']}, "
-              f"this is {recorder.version()}")
-    needs_update = set(by_state) & {"stale", "conflict", "differs", "missing"}
-    if not needs_update:
-        print("  the layer is current.")
-        return "current"
-    if not status["manifest"]:
-        print("  installed before echolot kept a manifest, so a file that differs "
-              "cannot be told\n  customised from stale. `echolot init --force` "
-              "overwrites; keep the project's edits with git.")
-    else:
-        print("  → `echolot init --force` updates it. Customised files are "
-              "listed above and are\n    overwritten too — carry the edits "
-              "over afterwards.")
-    return "stale"
-
-
-# -------------------------------------------------------------- status
-
-def project_state(project: Path, config: str = "echolot.yml") -> dict:
-    """Where this project stands with echolot: the facts `status` and `init`
-    decide the next step from.
-
-    Everything here is read from disk and the run log; nothing runs.
-    """
-    st: dict = {"project": project}
-    st["layer_verdict"], st["layer_line"] = _layer_line(project)
-
-    cfg_path = project / config
-    st["config"] = None
-    if cfg_path.exists():
-        try:
-            cfg = Config.load(cfg_path)
-            calibrated = bool(cfg.detector_overrides)
-            st["config"] = {
-                "path": cfg_path, "scenario": cfg.scenario_name,
-                "process": cfg.get("project.process") or cfg.get("project.package"),
-                "thresholds": "from the config" if calibrated else "built-in defaults",
-                "local": cfg.local_path is not None,
-                "runner": str(cfg.runner.get("mode", "launch")) if cfg.runner else None,
-                "sha": cfg.sha,
-            }
-        except ConfigError as e:
-            st["config"] = {"path": cfg_path, "error": str(e)}
-
-    traces_dir = project / ".echolot" / "traces"
-    traces = [p for pat in ("*.perfetto-trace", "*.pftrace")
-              for p in traces_dir.glob(pat)] if traces_dir.is_dir() else []
-    st["traces"] = {"dir": traces_dir, "count": len(traces),
-                    "newest": max((p.stat().st_mtime for p in traces), default=None)}
-
-    st["report"] = None
-    rep = project / ".echolot" / "out" / "report.json"
-    if rep.exists():
-        try:
-            r = json.loads(rep.read_text(encoding="utf-8"))
-            s = r.get("summary") or {}
-            c = r.get("config") or {}
-            st["report"] = {
-                "path": rep, "generated_at": r.get("generated_at"),
-                "fired": s.get("detectors_fired"), "run": s.get("detectors_run"),
-                "runs": len(r.get("traces") or []) or 1,
-                "config_sha": c.get("sha"), "defaults": c.get("defaults"),
-            }
-        except (OSError, ValueError):
-            st["report"] = {"path": rep, "error": "unreadable"}
-
-    # Which question all of the above is about. None is a normal answer:
-    # every project predates its first investigation.
-    st["hunt"] = hunt_mod.load(project)
-
-    st["last_doctor"] = st["last_analyze"] = None
-    for run in recorder.read(project / recorder.LOG_FILE):
-        if run.get("cmd") == "doctor":
-            st["last_doctor"] = run
-        elif run.get("cmd") == "analyze":
-            st["last_analyze"] = run
-    return st
-
-
-# The next step as one word — what `/echolot` in Claude Code switches on —
-# and as the line a person reads. Both from the same decision.
-NEXT_KINDS = ("init", "init-force", "doctor", "setup", "fix-config",
-              "resume-or-new", "hunt")
-
-
-def next_kind(st: dict) -> str:
-    # `opted-out` falls through on purpose: nothing to install and nothing
-    # wrong, so the next step is whatever the config says.
-    if st["layer_verdict"] == "absent":
-        return "init"
-    if st["layer_verdict"] == "stale":
-        return "init"
-    if st["layer_verdict"] == "differs":
-        return "init-force"
-    d = st.get("last_doctor")
-    if d and d.get("facts", {}).get("failed"):
-        return "doctor"
-    cfg = st.get("config")
-    if not cfg:
-        return "setup"
-    if cfg.get("error"):
-        return "fix-config"
-    # There is an investigation open, it left traces or a report behind, and
-    # enough time has passed that the human may have come back for something
-    # else entirely. The CLI does not ask — it says the answer is open, and
-    # the agent puts the question with the recap `status` prints below.
-    if hunt_mod.needs_choice(st.get("hunt"), st):
-        return "resume-or-new"
-    return "hunt"
-
-
-def _door(st: dict) -> str:
-    """How this project's agent is reached, in its own words.
-
-    Leading with "/echolot in Claude Code" on a project that has just declined
-    the layer names a command its human does not have.
-    """
-    if st.get("layer_verdict") == "opted-out":
-        return "`echolot guide"
-    return "/echolot in Claude Code, or `echolot guide"
-
-
-def next_step(st: dict) -> str:
-    """One line: what to do next, from the state. Shared by status and init."""
-    kind = next_kind(st)
-    if kind == "init":
-        if st["layer_verdict"] == "absent":
-            return "echolot init — installs the .claude/ layer; then /echolot in Claude Code"
-        return "echolot init — brings the .claude/ layer up to date (the agent reads it)"
-    if kind == "init-force":
-        return ("echolot init --force — the .claude/ layer differs from the package's and "
-                "nothing says whether you edited it; --force overwrites, keep your edits with git")
-    if kind == "doctor":
-        return "echolot doctor — the last self-check failed; no report is trustworthy until it passes"
-    if kind == "setup":
-        return (f"{_door(st)} setup` — echolot.yml from the repository "
-                f"and a probe trace")
-    if kind == "fix-config":
-        return f"fix echolot.yml — it does not load: {st['config']['error']}"
-    if kind == "resume-or-new":
-        q = (st.get("hunt") or {}).get("question") or "the earlier question"
-        return (f'/echolot in Claude Code — it will ask whether to carry on with '
-                f'"{q}" or start a new investigation')
-    if not st["traces"]["count"]:
-        return (f"{_door(st)} hunt` — or by hand: "
-                f"echolot collect -c echolot.yml -n 5")
-    return (f"{_door(st)} hunt` — or by hand: "
-            f"echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml")
-
-
-def _ago(epoch: float | None) -> str:
-    if not epoch:
-        return "never"
-    delta = time.time() - epoch
-    if delta < 90:
-        return f"{int(delta)}s ago"
-    if delta < 5400:
-        return f"{int(delta // 60)}m ago"
-    if delta < 172800:
-        return f"{delta / 3600:.0f}h ago"
-    return f"{delta / 86400:.0f}d ago"
-
-
-def _iso_epoch(ts: str | None) -> float | None:
-    if not ts:
-        return None
-    try:
-        from datetime import datetime
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
 
 
 def _hunt_config(project: Path, config: str) -> tuple[str | None, str | None]:
@@ -1229,7 +891,7 @@ def cmd_hunt(args) -> int:
         recorder.note(hunt="resumed")
 
     # Bare `echolot hunt`, and the tail of --resume: what is open, in full.
-    st = project_state(project, config)
+    st = state.project_state(project, config)
     if not st.get("hunt"):
         print('no investigation is open — `echolot hunt "<what regressed>"` '
               'opens one')
@@ -1249,10 +911,10 @@ def cmd_status(args) -> int:
     `echolot init` and `echolot` — and the agent knows the rest.
     """
     project = Path.cwd()
-    st = project_state(project, getattr(args, "config", "echolot.yml"))
+    st = state.project_state(project, getattr(args, "config", "echolot.yml"))
     if getattr(args, "next", False):
         # One word for the skill to switch on; the prose is for people.
-        print(next_kind(st))
+        print(state.next_kind(st))
         return 0
     info = toolchain_info(getattr(args, "tp_binary", None))
     print(f"echolot {recorder.version()} · trace_processor "
@@ -1275,12 +937,12 @@ def cmd_status(args) -> int:
     lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"))))
     tr = st["traces"]
     if tr["count"]:
-        lines.append(("traces", f"{tr['count']} in .echolot/traces, newest {_ago(tr['newest'])}"))
+        lines.append(("traces", f"{tr['count']} in .echolot/traces, newest {state.ago(tr['newest'])}"))
     else:
         lines.append(("traces", "none in .echolot/traces"))
     rep = st["report"]
     if rep and not rep.get("error"):
-        made = _ago(_iso_epoch(rep.get("generated_at")))
+        made = state.ago(state.iso_epoch(rep.get("generated_at")))
         what = (f"{rep['fired']} of {rep['run']} detectors fired"
                 if rep.get("run") is not None else "")
         note = ""
@@ -1294,18 +956,18 @@ def cmd_status(args) -> int:
     d = st["last_doctor"]
     if d:
         failed = (d.get("facts") or {}).get("failed") or []
-        lines.append(("doctor", f"{_ago(_iso_epoch(d.get('ts')))}, "
+        lines.append(("doctor", f"{state.ago(state.iso_epoch(d.get('ts')))}, "
                       + (f"{len(failed)} check(s) FAILED" if failed else "passed")))
     else:
         lines.append(("doctor", "never run here"))
     width = max(len(k) for k, _ in lines)
     for k, v in lines:
         print(f"{k.ljust(width)}  {v}")
-    print(f"{'next'.ljust(width)}  {next_step(st)}")
+    print(f"{'next'.ljust(width)}  {state.next_step(st)}")
 
     # Everything needed to answer "carry on, or start new?" in one call, so
     # the agent asks the human without a second round trip.
-    if next_kind(st) == "resume-or-new":
+    if state.next_kind(st) == "resume-or-new":
         print()
         for line in hunt_mod.recap(st.get("hunt"), st, root=project):
             print(line)
@@ -1326,9 +988,9 @@ def cmd_guide(args) -> int:
     that can run a command can read it.
     """
     topic = (args.topic or "overview").lower()
-    path = GUIDE_DIR / f"{topic}.md"
+    path = layer.GUIDE_DIR / f"{topic}.md"
     if not path.exists():
-        available = sorted(p.stem for p in GUIDE_DIR.glob("*.md"))
+        available = sorted(p.stem for p in layer.GUIDE_DIR.glob("*.md"))
         print(f"no guide for {topic!r}. There is: {', '.join(available)}",
               file=sys.stderr)
         return 2
@@ -1518,31 +1180,31 @@ def cmd_init(args) -> int:
 
     if not any(h.key == "claude" for h in chosen):
         print("\nClaude Code not selected — .claude/ stays out of this project.")
-        _install_pointers(target, chosen)
+        layer.install_pointers(target, chosen)
         print("\nAny agent: `echolot guide`. `echolot init --for all` adds the rest.")
         recorder.note(hosts=[h.key for h in chosen], layer="skipped")
         return 0
 
     root = target / ".claude"
-    before = layer_status(target)
+    before = layer.audit(target)
     states = {r["file"]: r["state"] for r in (before or {}).get("rows", [])}
 
     written, updated, same, kept, overwritten = [], [], [], [], []
     installed: dict[str, str] = {}
-    for src in layer_files():
-        rel = str(src.relative_to(CLAUDE_DIR))
+    for src in layer.template_files():
+        rel = str(src.relative_to(layer.CLAUDE_DIR))
         dst = root / rel
-        state = states.get(rel)
+        was = states.get(rel)
         if dst.exists():
-            if state == "current":
+            if was == "current":
                 same.append(rel)
-                installed[rel] = _sha(src)
+                installed[rel] = layer.sha(src)
                 continue
             # Untouched since install and the template moved on: ours to
             # update, no flag needed. Anything the project may have edited
             # (customised, conflict, or differs with no manifest to tell)
             # waits for --force.
-            if state == "stale":
+            if was == "stale":
                 updated.append(rel)
             elif not args.force:
                 kept.append(rel)
@@ -1553,7 +1215,7 @@ def cmd_init(args) -> int:
         dst.write_bytes(src.read_bytes())
         if rel not in updated:
             written.append(rel)
-        installed[rel] = _sha(src)
+        installed[rel] = layer.sha(src)
 
     for rel in written:
         flag = "!" if rel in overwritten else "+"
@@ -1574,13 +1236,13 @@ def cmd_init(args) -> int:
     if written or updated or same:
         # Only what was verified against the template goes into the manifest;
         # a file left untouched keeps whatever the old manifest said about it.
-        _write_manifest(root, installed)
+        layer.write_manifest(root, installed)
 
     if kept:
         print(f"\n{len(kept)} file(s) differ from the template and were kept. "
               f"`echolot init --force` overwrites them; carry your edits over after.")
 
-    _install_pointers(target, chosen)
+    layer.install_pointers(target, chosen)
     recorder.note(hosts=[h.key for h in chosen])
     if before is None:
         print("\nLayer installed.")
@@ -1607,7 +1269,7 @@ def cmd_init(args) -> int:
         print("\nnext  echolot doctor — the self-check failed (see above); until it "
               "passes, no report from this environment can be trusted")
     else:
-        print(f"\nnext  {next_step(project_state(target))}")
+        print(f"\nnext  {state.next_step(state.project_state(target))}")
     return code
 
 
@@ -1755,8 +1417,8 @@ def cmd_doctor(args) -> int:
     # "there is no runner yet" while the binary had one went unnoticed for a
     # whole session. Not a check that can fail: a project may have edited its
     # copy on purpose.
-    layer = _print_layer_status(Path.cwd())
-    recorder.note(layer=layer)
+    verdict = layer.print_status(Path.cwd())
+    recorder.note(layer=verdict)
 
     print("\n## Self-check on a synthetic trace\n")
     try:
@@ -1798,8 +1460,8 @@ def _doctor_quiet(args, info: dict, project: Path | None = None) -> int:
     print(f"echolot {recorder.version()} · trace_processor {tp}{src} · "
           f"perfetto {info.get('perfetto_package') or 'unknown'} · "
           f"python {py_platform.python_version()}")
-    layer, line = _layer_line(project or Path.cwd())
-    recorder.note(layer=layer)
+    verdict, line = layer.one_line(project or Path.cwd())
+    recorder.note(layer=verdict)
     print(line)
     try:
         from . import selftest
@@ -1839,198 +1501,9 @@ def cmd_explain(args) -> int:
     return 0
 
 
-def cmd_reflect(args) -> int:
-    """The Marker Report over an agent session instead of a trace.
-
-    Reads the agent's transcript (Claude Code for now) plus the tool's own
-    `runs.jsonl`, compresses them into facts and signals, and writes
-    `.echolot/reflect/<session>.md` and `.json`. Run it from the application
-    project the agent worked in — that is where Claude Code keyed the
-    transcript, and where echolot.yml and the recorder log live.
-    """
-    from datetime import datetime, timezone
-
-    from .reflect import claude_code
-    from .reflect import facts as facts_mod
-    from .reflect import render as reflect_render
-    from .reflect import signals as signals_mod
-
-    project = Path(args.project or ".").resolve()
-    if args.transcripts:
-        tdir = Path(args.transcripts).expanduser()
-    else:
-        tdir = claude_code.project_dir(project)
-    if tdir is None or not tdir.is_dir():
-        looked = claude_code.PROJECTS_ROOT / claude_code.slug_candidates(project)[0]
-        print(f"error: no Claude Code transcripts for {project}\n"
-              f"  looked in: {looked}\n"
-              f"  Run from the application project the agent worked in, or "
-              f"point --transcripts at the directory.", file=sys.stderr)
-        return 2
-
-    since = _parse_since(args.since) if args.since else None
-    refs = claude_code.list_sessions(tdir)
-    if since is not None:
-        refs = [r for r in refs if r.mtime >= since]
-    if args.session:
-        refs = [r for r in refs if r.id.startswith(args.session)]
-        if not refs:
-            print(f"error: no session starting with '{args.session}' in {tdir}",
-                  file=sys.stderr)
-            return 2
-
-    picked = []
-    for ref in refs:
-        session = claude_code.read_session(ref.path)
-        # An explicit id is taken as is; otherwise only sessions that used the
-        # tool for real work count — a session that merely ran `reflect` is
-        # not worth reflecting on.
-        if not args.session and not claude_code.involves_echolot(session):
-            continue
-        picked.append((ref, session))
-        if not (args.all or args.list or args.session or since is not None):
-            break   # --last: the newest one is enough
-
-    if not picked:
-        print(f"nothing to reflect on: no session under {tdir} used echolot"
-              + (f" since {args.since}" if args.since else ""), file=sys.stderr)
-        return 1
-
-    if args.list:
-        print(f"{'session':10} {'started (UTC)':17} {'dur':>7} {'echolot':>7} "
-              f"{'hunt':>4}  first prompt")
-        for ref, s in picked:
-            subs = claude_code.echolot_subcommands(s)
-            hunts = sum(1 for a in s.subagents if a.type == "perf-hunter")
-            first = next((t.text for t in s.turns if t.role == "user" and t.kind == "text"), "")
-            dur = s.duration_s()
-            print(f"{ref.id[:8]:10} {(s.started or '')[:16].replace('T', ' '):17} "
-                  f"{_fmt_dur(dur):>7} {len(subs):>7} {hunts:>4}  "
-                  f"{' '.join(first.split())[:60]}")
-        return 0
-
-    cfg = None
-    cfg_path = Path(args.config)
-    if not cfg_path.is_absolute() and project != Path.cwd():
-        cfg_path = project / cfg_path
-    if cfg_path.exists():
-        try:
-            cfg = Config.load(cfg_path, args.local)
-        except ConfigError as e:
-            print(f"config ignored: {e}", file=sys.stderr)
-    runs = recorder.read(project / recorder.LOG_FILE)
-
-    out_dir = Path(args.out)
-    if not out_dir.is_absolute():
-        out_dir = project / out_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    reports = []
-    written = []
-    for ref, session in picked:
-        facts = facts_mod.gather(session, cfg, runs)
-        sigs = signals_mod.run(session, facts, cfg)
-        rep = reflect_render.build(session, facts, sigs)
-        stem = ref.id[:8]
-        (out_dir / f"{stem}.json").write_text(
-            reflect_render.to_json(rep), encoding="utf-8")
-        (out_dir / f"{stem}.md").write_text(
-            reflect_render.to_markdown(rep), encoding="utf-8")
-        written += [out_dir / f"{stem}.md", out_dir / f"{stem}.json"]
-        reports.append(rep)
-
-    recorder.note(sessions=len(reports),
-                  warn=sum(r["summary"]["signals"].get("warn", 0) for r in reports))
-
-    if len(reports) == 1:
-        print(reflect_render.to_markdown(reports[0]))
-    else:
-        summary = _reflect_summary(reports)
-        (out_dir / "summary.md").write_text(summary, encoding="utf-8")
-        (out_dir / "summary.json").write_text(json.dumps({
-            "schema": 1,
-            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "sessions": [{
-                "session": r["source"]["session"], "started": r["context"]["started"],
-                "duration_s": r["context"]["duration_s"], "summary": r["summary"],
-            } for r in reports],
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-        written += [out_dir / "summary.md", out_dir / "summary.json"]
-        print(summary)
-
-    print("\n" + "\n".join(f"→ {p}" for p in written), file=sys.stderr)
-    return 0
-
-
-def _parse_since(text: str) -> float:
-    """`2h`, `30m`, `3d` → epoch seconds of the cut-off."""
-    import time as _time
-    m = re.fullmatch(r"(\d+)\s*([mhd])", text.strip())
-    if not m:
-        raise SystemExit(f"error: --since expects e.g. 2h, 30m, 3d; got '{text}'")
-    n, unit = int(m.group(1)), m.group(2)
-    return _time.time() - n * {"m": 60, "h": 3600, "d": 86400}[unit]
-
-
-def _fmt_dur(seconds) -> str:
-    if seconds is None:
-        return "—"
-    s = int(seconds)
-    return f"{s // 60}m" if s < 3600 else f"{s // 3600}h{(s % 3600) // 60:02d}"
-
-
-def _reflect_summary(reports: list[dict]) -> str:
-    """Several sessions on one page: a row each, then how often each signal fires."""
-    out = ["# Reflect Summary", "",
-           f"{len(reports)} session(s), newest first.", ""]
-    rows = []
-    freq: dict[str, list[int]] = {}
-    for r in reports:
-        s = r["summary"]
-        hunts = r.get("hunts") or []
-        rows.append({
-            "session": r["source"]["session"][:8],
-            "started": (r["context"].get("started") or "")[:16].replace("T", " "),
-            "dur": _fmt_dur(r["context"].get("duration_s")),
-            "echolot": s["echolot_calls"],
-            "hunts": len(hunts),
-            "rounds": ", ".join(str(h["rounds"]) for h in hunts) or "—",
-            "confidence": ", ".join(str(h.get("confidence") or "?") for h in hunts) or "—",
-            "warn": s["signals"].get("warn", 0),
-            "warn ids": ", ".join(s.get("warn_ids") or []),
-        })
-        for sig in r["signals"]:
-            freq.setdefault(f"{sig['severity']} {sig['id']}", []).append(1)
-    out.append(_md_table(rows))
-    out.append("")
-    out.append("## Signals by frequency")
-    out.append("")
-    out.append(_md_table([{"signal": k, "sessions": len(v)}
-                          for k, v in sorted(freq.items(), key=lambda kv: (-len(kv[1]), kv[0]))]))
-    return "\n".join(out)
-
-
-def _md_table(rows: list[dict]) -> str:
-    if not rows:
-        return "_empty_"
-    cols = list(rows[0].keys())
-    head = "| " + " | ".join(cols) + " |"
-    sep = "|" + "|".join("---" for _ in cols) + "|"
-    body = ["| " + " | ".join(str(r.get(c, "")).replace("|", "\\|") for c in cols) + " |"
-            for r in rows]
-    return "\n".join([head, sep, *body])
-
-
 def _dump(tp, sql: str) -> None:
-    rows = tp.query(" ".join(sql.split()))
-    if not rows:
-        print("_empty_")
-        return
-    cols = list(rows[0].keys())
-    print("| " + " | ".join(cols) + " |")
-    print("|" + "|".join("---" for _ in cols) + "|")
-    for r in rows:
-        print("| " + " | ".join(str(r.get(c, "")) for c in cols) + " |")
+    """A raw query, straight to stdout as a table. Reconnaissance only."""
+    table.show(tp.query(" ".join(sql.split())))
 
 
 # Who each verb is for. Three audiences share one CLI, and until this was
@@ -2108,7 +1581,7 @@ def build_parser() -> argparse.ArgumentParser:
     stt.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
     stt.add_argument("--next", action="store_true",
                      help="print only the next step, one word: "
-                          + " | ".join(NEXT_KINDS) + " — what /echolot switches on")
+                          + " | ".join(state.NEXT_KINDS) + " — what /echolot switches on")
     stt.set_defaults(func=cmd_status)
 
     # The investigation, with a name a person can find. `hunt` means the same

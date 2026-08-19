@@ -379,6 +379,43 @@ def _(report):
     assert len(plan) == 6 and all(src == "default" and not over for _, over, src in plan), plan
 
 
+@check("a pipe in a cell does not shift the table")
+def _(report):
+    # A slice name is whatever someone passed to trace{}, and one pipe in it
+    # used to move every column of that row one to the right — in a table an
+    # agent reads as data. Two of the five renderers this replaced escaped it
+    # and three did not, which is what having five of them costs.
+    from . import table
+    rows = [{"location": "a|b", "count": 1}]
+    line = table.render(rows).splitlines()[-1]
+    assert line.count("|") == 3 + 1, f"the pipe was not escaped: {line}"
+    assert "a\\|b" in line, line
+
+    # And the same through the Marker Report, which is where it would show up.
+    from .report import to_markdown
+    text = to_markdown({
+        "window": {"duration_ms": 1.0}, "trace": "t",
+        "summary": {"detectors_run": 1, "detectors_fired": 1, "fired_ids": ["d"]},
+        "detectors": [{"id": "d", "title": "T", "why": "", "params": {},
+                       "params_source": "default", "error": None,
+                       "rows": [{"location": "a|b", "self_ms": 1.0}]}],
+    })
+    assert "a\\|b" in text, text
+
+
+@check("a table keeps the columns it knows in order, and shows the rest")
+def _(report):
+    from . import table
+    # Registered columns first, in the order the report declares them; a
+    # column a detector invented follows rather than disappearing.
+    rows = [{"detail": "d", "invented": 7, "location": "x"}]
+    cols = table.columns(rows, order=["location", "detail"])
+    assert cols == ["location", "detail", "invented"], cols
+    assert table.columns(rows, order=["location"], skip=["invented"]) \
+        == ["location", "detail"], "skip drops a column entirely"
+    assert table.render([]) == "_empty_"
+
+
 @check("analyze: a relative -o is taken from the config's directory")
 def _(report):
     from .main import _out_dir
@@ -812,7 +849,7 @@ def _(report):
 @check(".claude/ layer: every part of the template is present")
 def _(report):
     import json as _json
-    from .main import CLAUDE_DIR
+    from .layer import CLAUDE_DIR
     required = [
         "skills/echolot/SKILL.md",
         "agents/perf-hunter.md",
@@ -832,14 +869,15 @@ def _(report):
     import argparse
     import contextlib
     import io
-    from .main import CLAUDE_DIR, LAYER_MANIFEST, cmd_init, layer_status, _write_manifest
+    from .main import cmd_init
+    from .layer import CLAUDE_DIR, LAYER_MANIFEST, audit, write_manifest
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
-        assert layer_status(project) is None, "no layer yet must be None"
+        assert audit(project) is None, "no layer yet must be None"
         with contextlib.redirect_stdout(io.StringIO()):
             cmd_init(argparse.Namespace(into=str(project), force=False, no_doctor=True))
         assert (project / ".claude" / LAYER_MANIFEST).exists(), "init writes the manifest"
-        st = layer_status(project)
+        st = audit(project)
         assert st and st["manifest"], st
         assert {r["state"] for r in st["rows"]} == {"current"}, st["rows"]
 
@@ -850,13 +888,13 @@ def _(report):
         # the template moves on for another. Stale means: the file equals
         # what init wrote and the template no longer does — emulated by
         # changing the installed copy and recording that as what init wrote.
-        from .main import _sha
+        from .layer import sha
         agent.write_text(agent.read_text(encoding="utf-8") + "\n# older\n", encoding="utf-8")
-        _write_manifest(project / ".claude", {"agents/perf-hunter.md": _sha(agent)})
+        write_manifest(project / ".claude", {"agents/perf-hunter.md": sha(agent)})
         # and one file goes missing
         (project / ".claude" / "commands" / "echolot-hunt.md").unlink()
 
-        by = {r["file"]: r["state"] for r in layer_status(project)["rows"]}
+        by = {r["file"]: r["state"] for r in audit(project)["rows"]}
         assert by["skills/echolot/SKILL.md"] == "customised", by
         assert by["agents/perf-hunter.md"] == "stale", by
         assert by["commands/echolot-hunt.md"] == "missing", by
@@ -874,12 +912,12 @@ def _(report):
         with contextlib.redirect_stdout(out):
             cmd_init(argparse.Namespace(into=str(project), force=True, no_doctor=True))
         assert "! .claude/skills/echolot/SKILL.md" in out.getvalue(), out.getvalue()
-        assert {r["state"] for r in layer_status(project)["rows"]} == {"current"}
+        assert {r["state"] for r in audit(project)["rows"]} == {"current"}
 
         # a layer installed before the manifest existed: differs, not stale
         (project / ".claude" / LAYER_MANIFEST).unlink()
         skill.write_text("edited", encoding="utf-8")
-        st = layer_status(project)
+        st = audit(project)
         assert not st["manifest"]
         by = {r["file"]: r["state"] for r in st["rows"]}
         assert by["skills/echolot/SKILL.md"] == "differs", by
@@ -890,7 +928,8 @@ def _(report):
     import argparse
     import contextlib
     import io
-    from .main import NEXT_KINDS, cmd_init, next_kind, next_step, project_state
+    from .main import cmd_init
+    from .state import NEXT_KINDS, next_kind, next_step, project_state
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
         # nothing here yet: install the layer
@@ -950,7 +989,8 @@ def _(report):
     not. `echolot guide` replaces chance with a command, which only works if
     the guide actually answers every state the tool can report.
     """
-    from .main import GUIDE_DIR, NEXT_KINDS
+    from .state import NEXT_KINDS
+    from .layer import GUIDE_DIR
 
     overview = (GUIDE_DIR / "overview.md").read_text(encoding="utf-8")
     missing = [k for k in NEXT_KINDS if f"`{k}`" not in overview]
@@ -1057,7 +1097,8 @@ def _(report):
     import argparse
 
     from . import hosts as hosts_mod
-    from .main import cmd_init, next_kind, project_state
+    from .main import cmd_init
+    from .state import next_kind, project_state
 
     with tempfile.TemporaryDirectory() as d:
         project = Path(d)
@@ -1141,7 +1182,8 @@ def _(report):
     forgetting the row leaves the agent holding a value it has no branch for,
     and what it does then is anyone's guess.
     """
-    from .main import CLAUDE_DIR, NEXT_KINDS
+    from .state import NEXT_KINDS
+    from .layer import CLAUDE_DIR
     skill = (CLAUDE_DIR / "skills" / "echolot" / "SKILL.md").read_text(encoding="utf-8")
     missing = [k for k in NEXT_KINDS if f"`{k}`" not in skill]
     assert not missing, f"SKILL.md has no branch for: {missing}"
@@ -1149,7 +1191,7 @@ def _(report):
 
 @check(".claude/ layer: the skill and the agent have frontmatter")
 def _(report):
-    from .main import CLAUDE_DIR
+    from .layer import CLAUDE_DIR
     for rel in ("skills/echolot/SKILL.md", "agents/perf-hunter.md"):
         text = (CLAUDE_DIR / rel).read_text(encoding="utf-8")
         assert text.startswith("---\n"), f"{rel}: no frontmatter"
@@ -1161,7 +1203,7 @@ def _(report):
 @check(".claude/ layer: reference links are not broken")
 def _(report):
     import re as _re
-    from .main import CLAUDE_DIR
+    from .layer import CLAUDE_DIR
     root = CLAUDE_DIR / "skills" / "echolot"
     skill = (root / "SKILL.md").read_text(encoding="utf-8")
     mentioned = set(_re.findall(r"references/([\w-]+\.md)", skill))
@@ -1188,7 +1230,7 @@ def _(report):
     passed vacuously — it went green on a README that linked nothing at all.
     """
     import re as _re
-    from .main import CLAUDE_DIR
+    from .layer import CLAUDE_DIR
     # The repo root, when we are running from a source checkout. An installed
     # package has neither README nor docs/ — nothing to verify there, so the
     # check passes trivially rather than failing for every user.
@@ -1232,7 +1274,7 @@ def _(report):
 
 def build_report(tp_binary: str | None = None) -> dict:
     """Builds the fixture into a temp file and runs the detectors over it."""
-    from .main import analyze_trace  # late import: main imports us
+    from .main import analyze_trace# late import: main imports us
 
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"

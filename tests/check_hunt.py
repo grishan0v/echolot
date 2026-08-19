@@ -27,8 +27,8 @@ import io  # noqa: E402
 
 from echolot import hunt as hunt_mod  # noqa: E402
 # `main` under another name: this file defines its own runner below.
-from echolot.main import main as cli  # noqa: E402
-from echolot.main import next_kind, project_state  # noqa: E402
+from echolot.main import main as cli# noqa: E402
+from echolot.state import next_kind, project_state  # noqa: E402
 
 CONFIG = """\
 project:
