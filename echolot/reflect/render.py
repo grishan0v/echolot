@@ -12,6 +12,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from .. import table
 from .facts import Facts
 from .model import Session
 from .signals import Signal
@@ -355,17 +356,10 @@ def to_markdown(report: dict[str, Any]) -> str:
 # ------------------------------------------------------------------ helpers
 
 def _table(rows: list[dict[str, Any]]) -> str:
-    if not rows:
-        return "_empty_"
-    cols: list[str] = []
-    for r in rows:
-        for k in r:
-            if k not in cols:
-                cols.append(k)
-    head = "| " + " | ".join(cols) + " |"
-    sep = "|" + "|".join("---" for _ in cols) + "|"
-    body = ["| " + " | ".join(_fmt(r.get(c)) for c in cols) + " |" for r in rows]
-    return "\n".join([head, sep, *body])
+    # A reflect row carries a command line, and a command line carries pipes.
+    # This used to render them raw, which broke the table exactly where the
+    # evidence was.
+    return table.render(rows, cell=_fmt)
 
 
 def _fmt(v: Any) -> str:

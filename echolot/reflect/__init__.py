@@ -13,6 +13,7 @@ Layout:
     claude_code.py  the reader for Claude Code transcripts (~/.claude/projects)
     signals.py      the detectors over a normalised session
     render.py       report.json / report.md
+    cli.py          `echolot reflect`: which session, and the across-runs summary
 
 Only the reader knows the agent's on-disk format. Signals and rendering work on
 the model alone, so a second agent means a second reader and nothing else.

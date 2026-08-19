@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
+from . import table
+
 COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
            "covered_ms", "detail"]
 # Keys a row may carry that are not columns. `_table` renders anything it does
@@ -325,19 +327,4 @@ def _source_note(d: dict[str, Any]) -> str:
 
 
 def _table(rows: list[dict[str, Any]]) -> str:
-    cols = [c for c in COLUMNS if any(c in r for r in rows)]
-    extra = [k for k in rows[0] if k not in cols and k not in HIDDEN]
-    cols += extra
-    head = "| " + " | ".join(HEADERS.get(c, c) for c in cols) + " |"
-    sep = "|" + "|".join("---" for _ in cols) + "|"
-    body = [
-        "| " + " | ".join(_fmt(r.get(c)) for c in cols) + " |"
-        for r in rows
-    ]
-    return "\n".join([head, sep, *body])
-
-
-def _fmt(v: Any) -> str:
-    if v is None:
-        return "—"
-    return str(v).replace("|", "\\|")
+    return table.render(rows, order=COLUMNS, headers=HEADERS, skip=HIDDEN)
