@@ -17,6 +17,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from . import compare as compare_mod
 from . import hunt as hunt_mod
 from . import recorder
 from . import report as report_mod
@@ -316,6 +317,120 @@ def cmd_analyze(args) -> int:
     return 0
 
 
+def _reports_of_hunt(project: Path, ident: str) -> list[Path]:
+    """Every report an investigation kept, in the order it wrote them."""
+    found = hunt_mod.find(project, ident)
+    if found is None:
+        raise ConfigError(
+            f"no investigation matching '{ident}'. `echolot hunt --list` shows "
+            f"every one this project has had.")
+    home = hunt_mod.home(project, found)
+    reports = sorted((home / "reports").glob("*.json")) if home else []
+    if len(reports) < 2:
+        raise ConfigError(
+            f"investigation {found.get('n')} has {len(reports)} report(s) — "
+            f"a comparison needs two. Each `echolot analyze` inside an open "
+            f"investigation files one.")
+    return reports
+
+
+def _compare_pair(args, project: Path) -> tuple[Path, Path]:
+    """Which two reports, from what the caller gave.
+
+    The bare form is the one an agent uses inside the loop: it changed
+    something, re-recorded, and wants to know what that did. Naming two paths
+    is the form CI uses, where nothing is "open".
+    """
+    paths = [Path(p) for p in (args.paths or [])]
+    if len(paths) > 2:
+        raise ConfigError("compare takes at most two reports")
+    if len(paths) == 2:
+        return paths[0], paths[1]
+
+    latest = _out_dir(args.out, args.cfg) / "report.json" if args.cfg else \
+        Path(".echolot/out/report.json")
+    if len(paths) == 1:
+        # One path is "against what I just measured": the named report is the
+        # older side, because that is the direction of every question asked
+        # here — what did the change do.
+        return paths[0], latest
+
+    if args.hunt:
+        reports = _reports_of_hunt(project, str(args.hunt))
+        return reports[0], reports[-1]
+
+    open_hunt = hunt_mod.load(project)
+    if open_hunt and open_hunt.get("status") == "open":
+        reports = _reports_of_hunt(project, str(open_hunt.get("n")))
+        return reports[-2], reports[-1]
+
+    raise ConfigError(
+        "nothing to compare. Name two reports, or `--hunt <n>` for an "
+        "investigation's first against its last. With an investigation open, "
+        "`echolot compare` on its own takes its previous round against the "
+        "latest.")
+
+
+def _load_report(path: Path) -> dict:
+    if not path.exists():
+        raise ConfigError(f"report not found: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ConfigError(f"{path}: not valid JSON ({e})") from e
+    if data.get("kind") == "comparison":
+        raise ConfigError(
+            f"{path} is a comparison, not a Marker Report. Compare two reports "
+            f"written by `echolot analyze`.")
+    if "detectors" not in data:
+        raise ConfigError(f"{path}: not a Marker Report — no `detectors` section")
+    return data
+
+
+def cmd_compare(args) -> int:
+    """The delta between two Marker Reports."""
+    try:
+        args.cfg = None
+        with contextlib.suppress(ConfigError):
+            args.cfg = Config.load(args.config, args.local)
+        project = _project_root(args.cfg) if args.cfg else Path.cwd()
+
+        before_path, after_path = _compare_pair(args, project)
+        cmp = compare_mod.build(
+            _load_report(before_path), _load_report(after_path),
+            before_path=str(before_path), after_path=str(after_path),
+            floor_ms=args.floor_ms, floor_ratio=args.floor_pct / 100.0,
+            temp_prefix=(args.cfg.get("instrumentation.temp_prefix")
+                         if args.cfg else None))
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    s = cmp["summary"]
+    recorder.note(comparable=cmp["comparable"], moved=s["moved"],
+                  appeared=s["appeared"], vanished=s["vanished"],
+                  warnings=[w["id"] for w in cmp["warnings"]])
+
+    text = compare_mod.to_markdown(cmp)
+    print(text)
+
+    # Next to the report it is about, by the same rule: a relative path is
+    # taken from the config's directory, so running this from wherever the
+    # traces are does not scatter output across build directories.
+    if args.cfg is not None:
+        out_dir = _out_dir(args.out, args.cfg)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "comparison.json").write_text(
+            report_mod.to_json(cmp), encoding="utf-8")
+        (out_dir / "comparison.md").write_text(text, encoding="utf-8")
+        print(f"\n\u2192 {out_dir/'comparison.md'}\n\u2192 {out_dir/'comparison.json'}",
+              file=sys.stderr)
+    else:
+        print("\n[i] no config found, so nothing was written to disk — "
+              "the comparison above is the whole output", file=sys.stderr)
+    return 0
+
+
 def _resolve_process(tp, glob: str) -> list[dict]:
     """Target process candidates, the fattest by slice count first.
 
@@ -438,20 +553,6 @@ BUCKETS = (
     ("Binder / IPC", ("binder", "transact", "ipc")),
 )
 
-_DIGITS = re.compile(r"\d+")
-_HEX = re.compile(r"0x[0-9a-fA-F]+")
-
-
-def _family(name: str) -> str:
-    """Collapses names that differ only by numbers.
-
-    'Lock contention on a monitor lock (owner tid: 1234)' and the same with tid
-    5678 are one phenomenon. Without this the inventory of a real trace runs to
-    thousands of rows.
-    """
-    return _DIGITS.sub("#", _HEX.sub("0x#", name))
-
-
 def _detector_masks(overrides: dict | None = None) -> list[tuple[str, str, str]]:
     """The name masks detectors declare through @param.
 
@@ -562,7 +663,7 @@ def cmd_names(args) -> int:
 
         families: dict[str, dict] = {}
         for r in rows:
-            fam = families.setdefault(_family(r["name"]), {
+            fam = families.setdefault(report_mod.family(r["name"]), {
                 "n": 0, "ns": 0, "threads": set(), "dets": set(), "skips": set(),
             })
             fam["n"] += r["n"]
@@ -1938,7 +2039,7 @@ def _dump(tp, sql: str) -> None:
 # reconnaissance meant for an agent.
 # The order verbs are read in, which is neither registration order nor
 # alphabetical. A verb missing from here is caught by the self-check.
-ORDER = ("status", "init", "hunt", "doctor", "collect", "analyze",
+ORDER = ("status", "init", "hunt", "doctor", "collect", "analyze", "compare",
          "guide", "probe", "names", "domains", "mark", "calibrate", "explain",
          "reflect")
 
@@ -2147,6 +2248,31 @@ def build_parser() -> argparse.ArgumentParser:
                          "built-in thresholds. To see what the shipped numbers "
                          "say without touching the config")
     an.set_defaults(func=cmd_analyze)
+
+    cp = add("compare", "pipeline", "[<before.json> [<after.json>]]",
+             "what changed between two Marker Reports",
+             description="The delta between two reports, sorted by how much "
+                    "each row moved. With an investigation open and no "
+                    "arguments: its previous round against the latest. One "
+                    "path: that report against .echolot/out/report.json. "
+                    "Two: exactly those.")
+    cp.add_argument("paths", nargs="*",
+                    help="the older report first, then the newer one")
+    cp.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
+    cp.add_argument("--local", help=argparse.SUPPRESS)
+    cp.add_argument("--hunt", metavar="N|WORDS",
+                    help="an investigation's first report against its last")
+    cp.add_argument("-o", "--out", default=".echolot/out",
+                    help="where comparison.md and comparison.json go")
+    cp.add_argument("--floor-ms", type=float, default=compare_mod.FLOOR_MS,
+                    metavar="MS",
+                    help="movement below this many ms is not a row "
+                         f"(default: {compare_mod.FLOOR_MS:g})")
+    cp.add_argument("--floor-pct", type=float,
+                    default=compare_mod.FLOOR_RATIO * 100, metavar="PCT",
+                    help="and below this share of the earlier value "
+                         f"(default: {compare_mod.FLOOR_RATIO * 100:g})")
+    cp.set_defaults(func=cmd_compare)
 
     gd = add("guide", "agent", "[<topic>]",
              "how to work with this tool — for any agent, not only Claude Code")
