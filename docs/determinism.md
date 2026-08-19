@@ -45,7 +45,7 @@ second reader in the same session would pay for again.
 ```
 echolot 0.1.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
 layer: STALE — 8 differs, 1 missing → `echolot init --force`
-self-check: 42 of 42 passed
+self-check: 65 of 65 passed
 ```
 
 Exit code 0/1. No device needed, one second — good both as a CI gate and as
@@ -84,6 +84,23 @@ round costs the subagent its whole window.
 
 The fixture also pays off in development speed: the SQL edit cycle drops from
 ten minutes with a device to one second.
+
+### Running them while working on the tool
+
+`doctor` is what a user runs, and it prints a tally. While changing a detector
+you want the opposite — one failure, named, with the claim that stopped
+holding:
+
+```bash
+pip install -e '.[dev]'
+pytest                       # every check, plus the rest of the suite
+pytest -k uninstrumented     # one detector's checks
+pytest -k frame_jank -x      # and stop at the first that fails
+```
+
+The checks themselves do not move: pytest points at the same `CHECKS` list
+`doctor` walks, one test each. Nothing in `echolot/` imports pytest, and a user
+without it installed still gets all of them through `doctor`.
 
 ## Why the trace_processor version is pinned
 

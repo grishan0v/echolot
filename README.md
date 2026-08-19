@@ -374,8 +374,8 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 49 checks inside
-`doctor` — and against live traces from Android 14 (emulator) and Android 13
+The detectors were validated against a synthetic trace — 65 checks inside
+`doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
 

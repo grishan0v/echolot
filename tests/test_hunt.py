@@ -22,12 +22,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from tests.support import check  # noqa: E402
+
 import contextlib  # noqa: E402
 import io  # noqa: E402
 
 from echolot import hunt as hunt_mod  # noqa: E402
 # `main` under another name: this file defines its own runner below.
-from echolot.main import main as cli# noqa: E402
+from echolot.main import main as cli  # noqa: E402
 from echolot.state import next_kind, project_state  # noqa: E402
 
 CONFIG = """\
@@ -40,32 +42,27 @@ runner:
   mode: launch
 """
 
-RESULTS: list[tuple[str, str | None]] = []
 
 
-def check(name: str, ok: bool, why: str = "") -> None:
-    RESULTS.append((name, None if ok else (why or "failed")))
-
-
-def setup(tmp: Path, *, config: str = CONFIG, traces: int = 0,
+def setup(tmp_path: Path, *, config: str = CONFIG, traces: int = 0,
           report: bool = False) -> Path:
     """A project with as much history as the case under test needs."""
-    tmp.mkdir(parents=True, exist_ok=True)
-    (tmp / "echolot.yml").write_text(config, encoding="utf-8")
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "echolot.yml").write_text(config, encoding="utf-8")
     if traces:
-        d = tmp / ".echolot" / "traces"
+        d = tmp_path / ".echolot" / "traces"
         d.mkdir(parents=True, exist_ok=True)
         for i in range(traces):
             (d / f"coldStart_iter{i}.perfetto-trace").write_bytes(b"not a real trace")
     if report:
-        d = tmp / ".echolot" / "out"
+        d = tmp_path / ".echolot" / "out"
         d.mkdir(parents=True, exist_ok=True)
         (d / "report.json").write_text(json.dumps({
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "summary": {"detectors_fired": 3, "detectors_run": 6},
             "traces": ["a", "b"],
         }), encoding="utf-8")
-    return tmp
+    return tmp_path
 
 
 def backdate(project: Path, **delta) -> None:
@@ -90,40 +87,40 @@ def kind(project: Path) -> str:
 
 # --- the choice, and when it is not offered ---------------------------------
 
-def case_no_hunt(tmp: Path) -> None:
+def test_no_hunt(tmp_path: Path) -> None:
     """No investigation ever opened: nothing to carry on with, do not ask."""
-    p = setup(tmp, traces=5, report=True)
+    p = setup(tmp_path, traces=5, report=True)
     check("no investigation → hunt", kind(p) == "hunt", kind(p))
 
 
-def case_fresh(tmp: Path) -> None:
+def test_fresh(tmp_path: Path) -> None:
     """Worked on minutes ago: the same sitting, asking would be noise."""
-    p = setup(tmp, traces=5, report=True)
+    p = setup(tmp_path, traces=5, report=True)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     check("worked on just now → hunt", kind(p) == "hunt", kind(p))
     check("fresh is fresh", hunt_mod.is_fresh(hunt_mod.load(p)))
 
 
-def case_stale_with_history(tmp: Path) -> None:
+def test_stale_with_history(tmp_path: Path) -> None:
     """Away for days with traces still on disk: this is the case to ask about."""
-    p = setup(tmp, traces=5, report=True)
+    p = setup(tmp_path, traces=5, report=True)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     backdate(p, days=6)
     check("away, history present → resume-or-new",
           kind(p) == "resume-or-new", kind(p))
 
 
-def case_stale_no_history(tmp: Path) -> None:
+def test_stale_no_history(tmp_path: Path) -> None:
     """Away for days but nothing on disk: a new hunt inherits nothing. Do not ask."""
-    p = setup(tmp)
+    p = setup(tmp_path)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     backdate(p, days=6)
     check("away, nothing to inherit → hunt", kind(p) == "hunt", kind(p))
 
 
-def case_concluded(tmp: Path) -> None:
+def test_concluded(tmp_path: Path) -> None:
     """An answered investigation is not something to carry on with."""
-    p = setup(tmp, traces=5, report=True)
+    p = setup(tmp_path, traces=5, report=True)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     backdate(p, days=6)
     hunt_mod.conclude(p, "TextLayout:initLayout on the main thread")
@@ -132,7 +129,7 @@ def case_concluded(tmp: Path) -> None:
           hunt_mod.load(p)["conclusion"].startswith("TextLayout"))
 
 
-def case_loop_is_never_asked(tmp: Path) -> None:
+def test_loop_is_never_asked(tmp_path: Path) -> None:
     """The loop's own work keeps the investigation fresh, so it never sees a prompt.
 
     This is the constraint the whole design turns on. `perf-hunter` re-records
@@ -140,7 +137,7 @@ def case_loop_is_never_asked(tmp: Path) -> None:
     investigation, which keeps it inside the freshness window. Even starting
     from an old one, the loop's first `analyze` settles the question.
     """
-    p = setup(tmp, traces=5, report=True)
+    p = setup(tmp_path, traces=5, report=True)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     backdate(p, days=6)
     check("stale before the loop starts", kind(p) == "resume-or-new", kind(p))
@@ -153,7 +150,7 @@ def case_loop_is_never_asked(tmp: Path) -> None:
           f"collects={h['collects']} analyzes={h['analyzes']}")
 
 
-def case_touch_follows_the_config(tmp: Path) -> None:
+def test_touch_follows_the_config(tmp_path: Path) -> None:
     """`analyze` runs from wherever the traces are, not from the project root.
 
     The agent calls it inside a macrobenchmark's output directory. If the touch
@@ -164,10 +161,10 @@ def case_touch_follows_the_config(tmp: Path) -> None:
     from echolot.config import Config
     from echolot.main import _project_root
 
-    p = setup(tmp, traces=5)
+    p = setup(tmp_path, traces=5)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     backdate(p, days=6)
-    elsewhere = tmp / "build" / "outputs"
+    elsewhere = tmp_path / "build" / "outputs"
     elsewhere.mkdir(parents=True)
     here = Path.cwd()
     try:
@@ -182,9 +179,9 @@ def case_touch_follows_the_config(tmp: Path) -> None:
           hunt_mod.load(p)["analyzes"] == 1 and kind(p) == "hunt")
 
 
-def case_touch_without_hunt(tmp: Path) -> None:
+def test_touch_without_hunt(tmp_path: Path) -> None:
     """An ad-hoc analyze must not invent an investigation out of nothing."""
-    p = setup(tmp)
+    p = setup(tmp_path)
     hunt_mod.touch(p, analyze=True)
     check("touch with nothing open writes nothing",
           hunt_mod.load(p) is None and not hunt_mod.path(p).exists())
@@ -200,9 +197,9 @@ def run(*argv) -> tuple[int, str]:
     return code, out.getvalue() + err.getvalue()
 
 
-def case_cli_round_trip(tmp: Path) -> None:
+def test_cli_round_trip(tmp_path: Path) -> None:
     """Open, report, conclude, list — the whole verb, from the command line."""
-    p = setup(tmp, traces=3)
+    p = setup(tmp_path, traces=3)
     here = Path.cwd()
     try:
         os.chdir(p)
@@ -236,9 +233,9 @@ def case_cli_round_trip(tmp: Path) -> None:
         os.chdir(here)
 
 
-def case_cli_status_is_read_only(tmp: Path) -> None:
+def test_cli_status_is_read_only(tmp_path: Path) -> None:
     """`status` must not change what it reports on: it runs in loops."""
-    p = setup(tmp, traces=3)
+    p = setup(tmp_path, traces=3)
     here = Path.cwd()
     try:
         os.chdir(p)
@@ -255,7 +252,7 @@ def case_cli_status_is_read_only(tmp: Path) -> None:
         os.chdir(here)
 
 
-def case_cli_numbering_and_evidence(tmp: Path) -> None:
+def test_cli_numbering_and_evidence(tmp_path: Path) -> None:
     """Numbers a person can type, and where each question's traces went.
 
     The archive used to remember the question and forget what was measured:
@@ -263,7 +260,7 @@ def case_cli_numbering_and_evidence(tmp: Path) -> None:
     dropped. A set of traces belongs to the investigation that was open when
     it was pushed aside, so it is recorded on the one being closed.
     """
-    p = setup(tmp)
+    p = setup(tmp_path)
     here = Path.cwd()
     try:
         os.chdir(p)
@@ -304,13 +301,13 @@ def case_cli_numbering_and_evidence(tmp: Path) -> None:
         os.chdir(here)
 
 
-def case_cli_list_order(tmp: Path) -> None:
+def test_cli_list_order(tmp_path: Path) -> None:
     """Newest first, even when several open within the same second.
 
     Sorting on the timestamp alone left three same-second investigations in
     whatever order the directory listing produced.
     """
-    p = setup(tmp)
+    p = setup(tmp_path)
     here = Path.cwd()
     try:
         os.chdir(p)
@@ -323,12 +320,12 @@ def case_cli_list_order(tmp: Path) -> None:
         os.chdir(here)
 
 
-def case_record_from_0_2_0(tmp: Path) -> None:
+def test_record_from_0_2_0(tmp_path: Path) -> None:
     """A hunt.json written before numbering existed must still work.
 
     Anyone upgrading from 0.2.0 has one on disk with no `n` and no `traces`.
     """
-    p = setup(tmp, traces=3)
+    p = setup(tmp_path, traces=3)
     hunt_mod.path(p).parent.mkdir(parents=True, exist_ok=True)
     hunt_mod.path(p).write_text(json.dumps({
         "question": "cold start 3s → 7s", "since": None, "scenario": "coldStart",
@@ -353,7 +350,7 @@ def case_record_from_0_2_0(tmp: Path) -> None:
         os.chdir(here)
 
 
-def case_rounds_and_reports_accumulate(tmp: Path) -> None:
+def test_rounds_and_reports_accumulate(tmp_path: Path) -> None:
     """A multi-round hunt keeps every round and every report it produced.
 
     Before this, `.echolot/out/report.json` was overwritten by each analyze —
@@ -362,7 +359,7 @@ def case_rounds_and_reports_accumulate(tmp: Path) -> None:
     investigation remembered its last set of traces and nothing it reasoned
     from on the way there.
     """
-    p = setup(tmp)
+    p = setup(tmp_path)
     out = p / ".echolot" / "out"
     out.mkdir(parents=True, exist_ok=True)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
@@ -392,7 +389,7 @@ def case_rounds_and_reports_accumulate(tmp: Path) -> None:
            or len(hunt_mod.load(p)["traces"])) == 3)
 
 
-def case_collect_reports_the_round_it_set_aside(tmp: Path) -> None:
+def test_collect_reports_the_round_it_set_aside(tmp_path: Path) -> None:
     """`collect` hands back the directory it pushed the previous round into.
 
     It used to call `set_aside` and drop the return value — the same shape of
@@ -403,7 +400,7 @@ def case_collect_reports_the_round_it_set_aside(tmp: Path) -> None:
     """
     from echolot import runner
 
-    p = setup(tmp, traces=3)
+    p = setup(tmp_path, traces=3)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     seen: list[Path] = []
     try:
@@ -425,9 +422,9 @@ def case_collect_reports_the_round_it_set_aside(tmp: Path) -> None:
               len(hunt_mod.load(p).get("traces") or []) == 1)
 
 
-def case_reports_do_not_cross_investigations(tmp: Path) -> None:
+def test_reports_do_not_cross_investigations(tmp_path: Path) -> None:
     """The whole point: one question's evidence never lands under another's."""
-    p = setup(tmp)
+    p = setup(tmp_path)
     out = p / ".echolot" / "out"
     out.mkdir(parents=True, exist_ok=True)
 
@@ -447,9 +444,9 @@ def case_reports_do_not_cross_investigations(tmp: Path) -> None:
                   json.loads(kept[0].read_text())["belongs_to"] == n)
 
 
-def case_nothing_open_files_nothing(tmp: Path) -> None:
+def test_nothing_open_files_nothing(tmp_path: Path) -> None:
     """An ad-hoc analyze on someone else's trace has no investigation to file under."""
-    p = setup(tmp)
+    p = setup(tmp_path)
     out = p / ".echolot" / "out"
     out.mkdir(parents=True, exist_ok=True)
     out.joinpath("report.json").write_text("{}", encoding="utf-8")
@@ -461,9 +458,9 @@ def case_nothing_open_files_nothing(tmp: Path) -> None:
 
 # --- drift, archiving, leftovers --------------------------------------------
 
-def case_drift_scenario(tmp: Path) -> None:
+def test_drift_scenario(tmp_path: Path) -> None:
     """The config's scenario changed: almost certainly a different question."""
-    p = setup(tmp, traces=5, report=True)
+    p = setup(tmp_path, traces=5, report=True)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     backdate(p, days=6)
     backdate(p, days=9)
@@ -475,13 +472,13 @@ def case_drift_scenario(tmp: Path) -> None:
     check("age is reported", any("untouched for" in r for r in reasons), str(reasons))
 
 
-def case_archive(tmp: Path) -> None:
+def test_archive(tmp_path: Path) -> None:
     """Starting a new investigation never destroys the previous question.
 
     A numbered investigation is archived into the directory that already holds
     its reports, so everything it produced sits together.
     """
-    p = setup(tmp, traces=5, report=True)
+    p = setup(tmp_path, traces=5, report=True)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
     hunt_mod.open_new(p, "the list stutters", scenario="listScroll")
     record = p / hunt_mod.ARCHIVE_DIR / "1" / "hunt.json"
@@ -495,14 +492,14 @@ def case_archive(tmp: Path) -> None:
           str(len(hunt_mod.history(p))))
 
 
-def case_archive_from_0_2_0_is_still_read(tmp: Path) -> None:
+def test_archive_from_0_2_0_is_still_read(tmp_path: Path) -> None:
     """0.2.0 archived to a flat, timestamped filename. Those must keep showing.
 
     Anyone upgrading has some. Reading only the new shape would make their
     past investigations vanish from `hunt --list` — the tool losing history
     it had explicitly promised not to delete.
     """
-    p = setup(tmp)
+    p = setup(tmp_path)
     flat = p / hunt_mod.ARCHIVE_DIR / "20260817T100000-an-older-question.json"
     flat.parent.mkdir(parents=True, exist_ok=True)
     flat.write_text(json.dumps({
@@ -524,7 +521,7 @@ def case_archive_from_0_2_0_is_still_read(tmp: Path) -> None:
         os.chdir(here)
 
 
-def case_leftover_markers(tmp: Path) -> None:
+def test_leftover_markers(tmp_path: Path) -> None:
     """Markers a dead investigation left behind, and who can remove them.
 
     `mark --apply` tags the lines it writes and `mark --remove` takes exactly
@@ -532,7 +529,7 @@ def case_leftover_markers(tmp: Path) -> None:
     has to go by hand. Reporting one count for both would send the human away
     believing the tree was clean.
     """
-    p = setup(tmp)
+    p = setup(tmp_path)
     src = p / "app" / "src" / "main" / "kotlin"
     src.mkdir(parents=True)
     (src / "App.kt").write_text(
@@ -551,13 +548,13 @@ def case_leftover_markers(tmp: Path) -> None:
           str(left["removable"]))
     check("both files named", len(left["files"]) == 2, str(left["files"]))
 
-    clean = hunt_mod.leftovers(setup(tmp / "clean"))
+    clean = hunt_mod.leftovers(setup(tmp_path / "clean"))
     check("a clean tree reports nothing", clean["markers"] == 0)
 
 
-def case_recap(tmp: Path) -> None:
+def test_recap(tmp_path: Path) -> None:
     """The recap has to answer "carry on with what?" without a second call."""
-    p = setup(tmp, traces=5, report=True)
+    p = setup(tmp_path, traces=5, report=True)
     hunt_mod.open_new(p, "cold start 3s → 7s", since="the tab redesign",
                       scenario="coldStart")
     backdate(p, days=9)
@@ -568,36 +565,11 @@ def case_recap(tmp: Path) -> None:
         check(f"recap says: {want}", want in text, text)
 
 
-def case_corrupt_file(tmp: Path) -> None:
+def test_corrupt_file(tmp_path: Path) -> None:
     """A broken hunt file degrades to the behaviour from before it existed."""
-    p = setup(tmp, traces=5, report=True)
+    p = setup(tmp_path, traces=5, report=True)
     hunt_mod.path(p).parent.mkdir(parents=True, exist_ok=True)
     hunt_mod.path(p).write_text("{not json", encoding="utf-8")
     check("unreadable investigation reads as none", hunt_mod.load(p) is None)
     check("and the tool carries on", kind(p) == "hunt", kind(p))
 
-
-CASES = [v for k, v in sorted(globals().items()) if k.startswith("case_")]
-
-
-def main() -> int:
-    os.environ["ECHOLOT_NO_RECORD"] = "1"
-    for case in CASES:
-        with tempfile.TemporaryDirectory() as d:
-            here = Path.cwd()
-            try:
-                case(Path(d))
-            except Exception as e:                      # noqa: BLE001
-                check(f"{case.__name__} raised", False, repr(e))
-            finally:
-                os.chdir(here)
-
-    failed = [(n, w) for n, w in RESULTS if w]
-    for name, why in RESULTS:
-        print(f"  ok    {name}" if not why else f"  FAILS {name}\n          {why}")
-    print(f"\n{len(RESULTS)} checks, {len(failed)} failed")
-    return 1 if failed else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

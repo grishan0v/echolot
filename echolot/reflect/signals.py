@@ -559,7 +559,7 @@ def _touches_traces(segment: str, dirs: list[str]) -> bool:
             if not rest or rest[0] in " \"'":
                 return True
             if rest[0] == "/":
-                tail = re.split(r"[\s\"']", rest[1:], 1)[0]
+                tail = re.split(r"[\s\"']", rest[1:], maxsplit=1)[0]
                 if not tail or "*" in tail:
                     return True
     return False

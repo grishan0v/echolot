@@ -25,13 +25,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from tests.support import check  # noqa: E402
+
 from echolot import compare as compare_mod  # noqa: E402
 
-RESULTS: list[tuple[str, str | None]] = []
-
-
-def check(name: str, ok: bool, why: str = "") -> None:
-    RESULTS.append((name, None if ok else (why or "failed")))
 
 
 # --- building reports by hand ----------------------------------------------
@@ -84,7 +81,7 @@ def warned(cmp: dict) -> set[str]:
 
 # --- what counts as movement ------------------------------------------------
 
-def case_grew_shrank_steady() -> None:
+def test_grew_shrank_steady() -> None:
     """The three verdicts on a row that exists in both, and their order."""
     before = report([det("main_thread_block", [
         row("A", 100.0), row("B", 100.0), row("C", 100.0)])])
@@ -107,7 +104,7 @@ def case_grew_shrank_steady() -> None:
           next(r for r in cmp["rows"] if r["location"] == "B")["delta_ms"] == -50.0)
 
 
-def case_floor_has_two_halves() -> None:
+def test_floor_has_two_halves() -> None:
     """Absolute floor and relative floor, each doing the job the other cannot."""
     before = report([det("d", [row("big", 900.0), row("small", 20.0)])])
     after = report([det("d", [row("big", 940.0), row("small", 26.0)])])
@@ -119,7 +116,7 @@ def case_floor_has_two_halves() -> None:
           changes(cmp)["small"] == "grew", str(changes(cmp)))
 
 
-def case_floor_is_configurable() -> None:
+def test_floor_is_configurable() -> None:
     before = report([det("d", [row("A", 100.0)])])
     after = report([det("d", [row("A", 130.0)])])
     check("30% is a move by default", changes(compare(before, after))["A"] == "grew")
@@ -127,7 +124,7 @@ def case_floor_is_configurable() -> None:
           changes(compare(before, after, floor_ratio=0.5))["A"] == "steady")
 
 
-def case_appeared_and_vanished() -> None:
+def test_appeared_and_vanished() -> None:
     before = report([det("d", [row("gone", 88.0)])])
     after = report([det("d", [row("new", 1402.0)])])
     cmp = compare(before, after)
@@ -146,7 +143,7 @@ def case_appeared_and_vanished() -> None:
 
 # --- the same thing under a new name ----------------------------------------
 
-def case_family_match() -> None:
+def test_family_match() -> None:
     """One worker of a pool handing over to another is not a finding."""
     before = report([det("uninstrumented_cpu", [
         row("DefaultDispatcher-worker-2", 300.0, metric="total_ms")])])
@@ -162,7 +159,7 @@ def case_family_match() -> None:
           cmp["rows"][0]["change"])
 
 
-def case_family_refuses_to_guess() -> None:
+def test_family_refuses_to_guess() -> None:
     """Two candidates on one side: there is no honest pairing, so make none."""
     before = report([det("d", [
         row("worker-2", 300.0, metric="total_ms"),
@@ -179,7 +176,7 @@ def case_family_refuses_to_guess() -> None:
 
 # --- did the repeats move, or only the median -------------------------------
 
-def case_ranges_apart() -> None:
+def test_ranges_apart() -> None:
     before = report([det("d", [row("A", 102.0, values=[100.0, 102.0, 104.0])])])
     after = report([det("d", [row("A", 205.0, values=[200.0, 205.0, 210.0])])])
     cmp = compare(before, after)
@@ -187,7 +184,7 @@ def case_ranges_apart() -> None:
           str(cmp["rows"][0]["overlap"]))
 
 
-def case_ranges_overlap() -> None:
+def test_ranges_overlap() -> None:
     """Medians moved, but every run after was inside what was already seen."""
     before = report([det("d", [row("A", 100.0, values=[10.0, 100.0, 300.0])])])
     after = report([det("d", [row("A", 150.0, values=[12.0, 150.0, 320.0])])])
@@ -197,7 +194,7 @@ def case_ranges_overlap() -> None:
     check("the move is still reported", cmp["rows"][0]["change"] == "grew")
 
 
-def case_ranges_unknown() -> None:
+def test_ranges_unknown() -> None:
     before = report([det("d", [row("A", 100.0)])], runs=1)
     after = report([det("d", [row("A", 200.0)])], runs=1)
     cmp = compare(before, after)
@@ -209,7 +206,7 @@ def case_ranges_unknown() -> None:
 
 # --- when two reports may not be compared -----------------------------------
 
-def case_thresholds_moved() -> None:
+def test_thresholds_moved() -> None:
     """The bar decides which rows exist, so a moved bar invents rows."""
     before = report([det("d", [row("A", 100.0)], params={"min_slice_ms": 16})])
     after = report([det("d", [row("A", 100.0), row("B", 20.0)],
@@ -223,7 +220,7 @@ def case_thresholds_moved() -> None:
           "min_slice_ms" in text and "16" in text and "5" in text, text)
 
 
-def case_process_differs() -> None:
+def test_process_differs() -> None:
     before = report([det("d", [row("A", 100.0)])],
                     window={"process": "com.example.app", "duration_ms": 1000.0})
     after = report([det("d", [row("A", 100.0)])],
@@ -233,7 +230,7 @@ def case_process_differs() -> None:
     check("and the reason is named", "process" in warned(cmp), str(warned(cmp)))
 
 
-def case_anchor_never_matched() -> None:
+def test_anchor_never_matched() -> None:
     before = report([det("d", [row("A", 100.0)])], window={
         "process": "com.example.app", "duration_ms": 1000.0,
         "start_anchor": {"glob": "AppStart", "matches": 0}})
@@ -243,7 +240,7 @@ def case_anchor_never_matched() -> None:
           str(warned(compare(before, after))))
 
 
-def case_config_and_defaults() -> None:
+def test_config_and_defaults() -> None:
     before = report([det("d", [row("A", 100.0)])],
                     config={"sha": "aaaa", "defaults": False})
     after = report([det("d", [row("A", 100.0)])],
@@ -253,7 +250,7 @@ def case_config_and_defaults() -> None:
     check("--defaults on one side only is a warning", "defaults" in w, str(w))
 
 
-def case_unequal_repeats() -> None:
+def test_unequal_repeats() -> None:
     before = report([det("d", [row("A", 100.0)])], runs=3)
     after = report([det("d", [row("A", 100.0)])], runs=10)
     check("different repeat counts are said out loud",
@@ -261,7 +258,7 @@ def case_unequal_repeats() -> None:
           str(warned(compare(before, after))))
 
 
-def case_detector_sets_differ() -> None:
+def test_detector_sets_differ() -> None:
     before = report([det("one", [row("A", 100.0)])])
     after = report([det("one", [row("A", 100.0)]), det("two", [row("B", 50.0)])])
     check("a detector that ran once is a warning",
@@ -271,7 +268,7 @@ def case_detector_sets_differ() -> None:
 
 # --- the rest of the report -------------------------------------------------
 
-def case_planted_markers() -> None:
+def test_planted_markers() -> None:
     """A marker the hunt added between rounds is not a new regression."""
     before = report([det("main_thread_block", [row("A", 100.0)])])
     after = report([det("main_thread_block", [
@@ -290,7 +287,7 @@ def case_planted_markers() -> None:
           changes(told)["AGENTTMP_loadTeams"] == "appeared", str(changes(told)))
 
 
-def case_state_changed() -> None:
+def test_state_changed() -> None:
     before = report([det("binder_txn", [])])
     after = report([det("binder_txn", [row("t", 214.0, metric="total_ms")])])
     cmp = compare(before, after)
@@ -300,14 +297,14 @@ def case_state_changed() -> None:
           str(changed))
 
 
-def case_metric_falls_back_to_total() -> None:
+def test_metric_falls_back_to_total() -> None:
     before = report([det("d", [row("A", 100.0, metric="total_ms")])])
     after = report([det("d", [row("A", 200.0, metric="total_ms")])])
     check("a detector without self time is judged by total",
           compare(before, after)["rows"][0]["metric"] == "total_ms")
 
 
-def case_window_delta() -> None:
+def test_window_delta() -> None:
     before = report([det("d", [])], window={"process": "p", "duration_ms": 1184.0})
     after = report([det("d", [])], window={"process": "p", "duration_ms": 2960.0})
     w = compare(before, after)["window"]
@@ -315,7 +312,7 @@ def case_window_delta() -> None:
     check("and its ratio", w["ratio"] == 2.5, str(w))
 
 
-def case_markdown() -> None:
+def test_markdown() -> None:
     before = report([det("main_thread_block", [row("A", 100.0), row("C", 100.0)],
                          params={"min_slice_ms": 16})])
     after = report([det("main_thread_block", [row("A", 900.0), row("C", 101.0)],
@@ -330,7 +327,7 @@ def case_markdown() -> None:
     check("no python None reaches the page", "None" not in text)
 
 
-def case_markdown_nothing_moved() -> None:
+def test_markdown_nothing_moved() -> None:
     before = report([det("d", [row("A", 100.0)])])
     after = report([det("d", [row("A", 101.0)])])
     text = compare_mod.to_markdown(compare(before, after))
@@ -351,7 +348,7 @@ scenario:
 """
 
 
-def case_end_to_end(tmp: Path) -> None:
+def test_end_to_end(tmp_path: Path) -> None:
     """The real pipeline: analyze writes it, compare reads it.
 
     Everything above builds reports by hand, which pins the logic and nothing
@@ -359,17 +356,17 @@ def case_end_to_end(tmp: Path) -> None:
     when a column is renamed on one side only.
     """
     env = dict(os.environ, ECHOLOT_NO_RECORD="1")
-    trace = tmp / "fixture.perfetto-trace"
+    trace = tmp_path / "fixture.perfetto-trace"
     run = subprocess.run([sys.executable, "-m", "echolot.fixture", str(trace)],
                          capture_output=True, text=True, env=env)
     if run.returncode != 0:
         check("the fixture builds", False, run.stderr[-300:])
         return
-    (tmp / "echolot.yml").write_text(FIXTURE_CONFIG, encoding="utf-8")
+    (tmp_path / "echolot.yml").write_text(FIXTURE_CONFIG, encoding="utf-8")
 
     def cli(*argv) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-m", "echolot.main", *argv],
-                              capture_output=True, text=True, cwd=tmp, env=env)
+                              capture_output=True, text=True, cwd=tmp_path, env=env)
 
     done = cli("analyze", str(trace), str(trace), str(trace),
                "-c", "echolot.yml")
@@ -377,7 +374,7 @@ def case_end_to_end(tmp: Path) -> None:
         check("analyze runs on the fixture", False, done.stderr[-400:])
         return
 
-    written = json.loads((tmp / ".echolot/out/report.json").read_text())
+    written = json.loads((tmp_path / ".echolot/out/report.json").read_text())
     banded = [r for d in written["detectors"] for r in d["rows"] if r.get("spread")]
     check("analyze writes the spread compare reads", bool(banded))
     if banded:
@@ -390,23 +387,23 @@ def case_end_to_end(tmp: Path) -> None:
 
     # The same report with one worker renamed: a real report shape going
     # through the family pass.
-    before = tmp / "before.json"
+    before = tmp_path / "before.json"
     before.write_text(json.dumps(written), encoding="utf-8")
     after = json.loads(json.dumps(written))
     for d in after["detectors"]:
         for r in d["rows"]:
             r["location"] = r["location"].replace("DefaultDispatcher-worker-1",
                                                   "DefaultDispatcher-worker-3")
-    (tmp / "after.json").write_text(json.dumps(after), encoding="utf-8")
+    (tmp_path / "after.json").write_text(json.dumps(after), encoding="utf-8")
 
     done = cli("compare", "before.json", "after.json", "-c", "echolot.yml")
     check("compare exits 0", done.returncode == 0, done.stderr[-400:])
     check("and writes both files",
-          (tmp / ".echolot/out/comparison.json").exists()
-          and (tmp / ".echolot/out/comparison.md").exists())
+          (tmp_path / ".echolot/out/comparison.json").exists()
+          and (tmp_path / ".echolot/out/comparison.md").exists())
 
-    if (tmp / ".echolot/out/comparison.json").exists():
-        cmp = json.loads((tmp / ".echolot/out/comparison.json").read_text())
+    if (tmp_path / ".echolot/out/comparison.json").exists():
+        cmp = json.loads((tmp_path / ".echolot/out/comparison.json").read_text())
         worker = [r for r in cmp["rows"] if "DefaultDispatcher" in r["location"]]
         check("the renamed worker is one row, matched by family",
               len(worker) == 1 and worker[0]["matched_by"] == "family",
@@ -426,7 +423,7 @@ def case_end_to_end(tmp: Path) -> None:
 
 # --- which two reports, when nobody named them ------------------------------
 
-def case_pair_resolution(tmp: Path) -> None:
+def test_pair_resolution(tmp_path: Path) -> None:
     """The forms that take their arguments from the open investigation.
 
     This is the shape the loop uses: change something, record again, ask what
@@ -435,17 +432,17 @@ def case_pair_resolution(tmp: Path) -> None:
     """
     from echolot import hunt as hunt_mod
 
-    (tmp / "echolot.yml").write_text(FIXTURE_CONFIG, encoding="utf-8")
-    out = tmp / ".echolot" / "out"
+    (tmp_path / "echolot.yml").write_text(FIXTURE_CONFIG, encoding="utf-8")
+    out = tmp_path / ".echolot" / "out"
     out.mkdir(parents=True, exist_ok=True)
-    hunt_mod.open_new(tmp, "cold start 3s -> 7s", scenario="fixture")
+    hunt_mod.open_new(tmp_path, "cold start 3s -> 7s", scenario="fixture")
 
     def round_of(value: float) -> None:
         """One analyze: the latest report, then a copy filed under the hunt."""
         body = report([det("d", [row("A", value)])])
         (out / "report.json").write_text(json.dumps(body), encoding="utf-8")
         (out / "report.md").write_text("#", encoding="utf-8")
-        hunt_mod.record_report(tmp, out)
+        hunt_mod.record_report(tmp_path, out)
 
     for value in (100.0, 400.0, 900.0):
         round_of(value)
@@ -454,7 +451,7 @@ def case_pair_resolution(tmp: Path) -> None:
 
     def cli(*argv) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-m", "echolot.main", *argv],
-                              capture_output=True, text=True, cwd=tmp, env=env)
+                              capture_output=True, text=True, cwd=tmp_path, env=env)
 
     def delta_of(done: subprocess.CompletedProcess) -> float | None:
         if done.returncode != 0:
@@ -485,11 +482,11 @@ def case_pair_resolution(tmp: Path) -> None:
           too_many.stderr[-200:])
 
 
-def case_nothing_to_compare(tmp: Path) -> None:
+def test_nothing_to_compare(tmp_path: Path) -> None:
     """No investigation, no arguments: say what to do rather than guess."""
-    (tmp / "echolot.yml").write_text(FIXTURE_CONFIG, encoding="utf-8")
+    (tmp_path / "echolot.yml").write_text(FIXTURE_CONFIG, encoding="utf-8")
     done = subprocess.run([sys.executable, "-m", "echolot.main", "compare"],
-                          capture_output=True, text=True, cwd=tmp,
+                          capture_output=True, text=True, cwd=tmp_path,
                           env=dict(os.environ, ECHOLOT_NO_RECORD="1"))
     check("nothing to compare is refused", done.returncode == 2,
           f"exit {done.returncode}")
@@ -497,28 +494,3 @@ def case_nothing_to_compare(tmp: Path) -> None:
           "--hunt" in done.stderr and "two reports" in done.stderr,
           done.stderr[-250:])
 
-
-CASES = [v for k, v in sorted(globals().items()) if k.startswith("case_")]
-
-
-def main() -> int:
-    os.environ["ECHOLOT_NO_RECORD"] = "1"
-    for case in CASES:
-        try:
-            if case.__code__.co_argcount:
-                with tempfile.TemporaryDirectory() as d:
-                    case(Path(d))
-            else:
-                case()
-        except Exception as e:                          # noqa: BLE001
-            check(f"{case.__name__} raised", False, repr(e))
-
-    failed = [(n, w) for n, w in RESULTS if w]
-    for name, why in RESULTS:
-        print(f"  ok    {name}" if not why else f"  FAILS {name}\n          {why}")
-    print(f"\n{len(RESULTS)} checks, {len(failed)} failed")
-    return 1 if failed else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

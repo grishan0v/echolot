@@ -155,9 +155,14 @@ SLICES = {
             # so that mask behaviour stays visible in `names` and in the
             # checks, instead of living as a comment in the README.
 
-            # The other side of GC: an allocation on main stalled waiting for
-            # the collector.
+            # The other side of GC: allocations on main stalled waiting for
+            # the collector. Three of them, 180 ms together, because that is
+            # what it takes to clear gc_pressure's max_total_ms of 120 — with
+            # one 60 ms stall the second mask was planted and never exercised,
+            # and the check that said so had never once held.
             ("waitWhileAllocatingLocked", 700, 60, []),
+            ("waitWhileAllocatingLocked", 900, 60, []),
+            ("waitWhileAllocatingLocked", 980, 60, []),
             # A runtime-internal lock. The narrowed mask must NOT pick it up:
             # there is no application code behind it.
             ("Lock contention on GC lock (owner tid: 4202)", 800, 20, []),
