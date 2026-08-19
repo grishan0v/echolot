@@ -24,7 +24,7 @@ A Perfetto trace of one cold start holds around half a million slices in eighty
 megabytes. Nobody reads that, and an AI agent pointed at the raw file produces
 confident guesses instead of answers.
 
-echolot sits in between. It runs seven SQL detectors over the trace and returns
+echolot sits in between. It runs eight SQL detectors over the trace and returns
 about twenty rows: where the time went, how much of it, and the evidence behind
 each claim. Same trace in, same report out — the `trace_processor` version is
 pinned and verified on every run.
@@ -129,7 +129,7 @@ A **Marker Report**: one section per detector that fired, nothing else.
 Runs: **5**, numbers are medians across them
 Process: `com.example.app` (pid 12903)
 Scenario window: **1184 ms** (from 1102 to 1291)
-Detectors fired: **4 of 7**
+Detectors fired: **5 of 8**
 
 ## Where the main thread spent its time
 
@@ -162,6 +162,12 @@ _time past the deadline; frame duration is in the evidence_
 | Where | N | Total, ms | Max, ms | Evidence |
 |---|---|---|---|---|
 | App Deadline Missed | 14 | 412.0 | 70.1 | Self Jank · 14 of 300 frames · longest 86.2 ms |
+
+## Single occurrences far longer than the same work usually takes
+
+| Where | N | Total, ms | Max, ms | Evidence |
+|---|---|---|---|---|
+| inflate | 2 | 149.3 | 86.2 | median 12.9 ms of 312 · worst 6.7× |
 
 **Silent:** gc_pressure, binder_txn, runnable_starvation
 ```
@@ -305,6 +311,7 @@ which re-records and re-instruments on purpose.
 | `runnable_starvation` | thread ready to run but preempted on CPU |
 | `uninstrumented_cpu` | **threads burning CPU with no instrumentation** |
 | `frame_jank` | frames that missed their deadline, and whose fault it was |
+| `main_thread_outlier` | one occurrence far longer than that work usually takes |
 
 That last one is the only detector that finds a problem inside code nobody
 instrumented. It does not guess — it states a fact:

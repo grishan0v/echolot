@@ -126,6 +126,7 @@ nest. Adding `self_ms` is fine — self times do not overlap.
 | `runnable_starvation` | thread ready but preempted | this is about the device, not the code |
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}` |
 | `frame_jank` | frames that missed their deadline | `location` is why it missed, `detail` says whose fault |
+| `main_thread_outlier` | one occurrence far longer than usual | `detail` carries the median it is measured against |
 
 ### What matters about individual ones
 
@@ -161,6 +162,25 @@ trace at all — Android 11 and below, or a capture that did not ask for the
 `android.surfaceflinger.frametimeline` data source. Those look identical in the
 report. Before calling a scenario smooth, check that some other frame row
 exists or that the trace came from `echolot collect`.
+
+**`main_thread_outlier`** is the pair to `main_thread_block`, and reading one
+as the other wastes a round. `main_thread_block` gates on the **sum** for a
+name and answers "where did the main thread's time go". This one gates on a
+**single occurrence** against the median for that same name, and answers "which
+one was out of line". A name can appear in both, saying different things.
+
+Take it to the code differently, too. A `main_thread_block` row means the work
+is expensive every time it runs, and the fix is in that work. A
+`main_thread_outlier` row means the work is usually fine and once was not, so
+the cause is the state it hit that once — a cold cache, a lock, a first-run
+path, an allocation that stalled. `detail` gives the median and how many
+occurrences it came from, which is the number to compare a benchmark's
+percentiles against.
+
+It is also the row a merge across repeats does **not** smooth away. Its rows
+only exist in the runs where something was out of line, so `runs: 1/10` means
+"once in ten" rather than "we lost it in a median" — the opposite of what
+`max_ms` does on a row present in every run.
 
 **`gc_pressure`** also catches the other side: `waitWhileAllocatingLocked` on an
 application thread means an allocation stalled waiting for the collector. GC
