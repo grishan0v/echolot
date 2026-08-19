@@ -31,9 +31,11 @@ scenario:
     name: "Choreographer#doFrame*"
     _source: confirmed_by_user
     _evidence: "probe: first frame after bindApplication"
-  # NOT read by the code yet: it needs CI mode (`analyze` with an exit code
-  # driven by the budget), deferred to a later version. The field is still
-  # worth keeping — it records what the team considers acceptable.
+  # Not read by the code, and deliberately so — there is no CI gate. Why is in
+  # the README under "There is no CI gate, on purpose": the question a budget
+  # answers is already answered by the benchmark that produced the trace. The
+  # field records what the team considers acceptable, which is worth writing
+  # down on its own.
   budget_ms: 2500
 
 runner:

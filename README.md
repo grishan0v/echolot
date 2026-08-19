@@ -322,21 +322,38 @@ schema, how ART names things, and how to capture a trace by hand.
 
 ## Status
 
-**v0.** Everything planned for it is in place except CI mode.
+**v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 46 checks inside
+The detectors were validated against a synthetic trace — 49 checks inside
 `doctor` — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
 
-> [!WARNING]
-> **CI mode is not done.** `scenario.budget_ms` is declared in the config but
-> never read. What is missing is `analyze` with an exit code — either against
-> the budget or on "any detector fired", which after `calibrate` amounts to a
-> comparison against the baseline.
-
 A failed detector never fails the run: the error goes to stderr and into
 `report.json`.
+
+### There is no CI gate, on purpose
+
+An earlier plan had `analyze` exit non-zero against `scenario.budget_ms`, so a
+build could fail on a slow run. It is not being built, and this is the reason.
+
+"Did it get slower" is already answered. Macrobenchmark writes percentiles per
+iteration right next to the traces echolot collects from it, and comparing a
+median against a number is a few lines of anything. An eleventh implementation
+of that adds nothing. Worse, detector thresholds on a shared CI runner would
+fire on properties of the runner — the same caution this tool already gives
+about `runnable_starvation` on a loaded machine.
+
+Where echolot is hard to replace is the other question: *where* the time went.
+So the useful shape in CI is the opposite of a gate. Run `echolot doctor -q` as
+a precondition — it already answers "does this machine compute correctly" with
+an exit code — then `analyze` over the traces the benchmark has already
+written, and keep `report.json` as a build artefact. When someone asks a day
+later why the nightly regressed, the window, the thresholds and the evidence
+are already sitting next to the commit: no device, no re-recording.
+
+`scenario.budget_ms` stays in the config. It records what a team considers
+acceptable, which is worth writing down whether or not anything enforces it.
 
 ## License
 

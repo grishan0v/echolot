@@ -62,9 +62,16 @@ the CLI puts `matches` into `window`. Check it before drawing conclusions.
 
 ### `scenario.budget_ms`
 
-Declared but **not read by the code**: it needs CI mode — `analyze` with an
-exit code driven by the budget — which is deferred to a later version. Do not
-build logic on it and do not expect a run to fail when it is exceeded.
+Declared and **not read by the code**, deliberately: there is no CI gate and
+none is planned. Do not build logic on it and do not expect a run to fail when
+it is exceeded.
+
+The question a budget answers — "did it get slower" — is already answered by
+the benchmark that produced the trace, and thresholds evaluated on a shared CI
+runner fire on properties of the runner. What echolot contributes is the other
+question, *where* the time went, so in CI it belongs after the gate rather than
+in it: `doctor -q` as a precondition, then `analyze`, with `report.json` kept
+as a build artefact for whoever asks later.
 
 Keeping the field is still worthwhile: it records what the team considers
 acceptable, and it survives a change of device better than memory does.
