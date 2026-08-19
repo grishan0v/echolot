@@ -81,4 +81,7 @@ echolot = [
     "claude/*/*.md",
     "claude/*/*/*.md",
     "claude/*/*/*/*.md",
+    # Printed by `echolot guide`: the same knowledge, for clients that have no
+    # skill mechanism to install it into.
+    "guide/*.md",
 ]
