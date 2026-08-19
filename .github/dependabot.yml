@@ -1,0 +1,23 @@
+version: 2
+
+# A pinned SHA is a frozen SHA, and freezing on its own trades one risk for
+# another. Nothing can retag an action out from under a build any more; nothing
+# tells you when the action you froze has since been fixed. `release/v1` on the
+# publish action existed precisely so security updates arrived on their own, and
+# pinning it takes that away. This is the half that gives it back.
+#
+# One pull request per update, carrying the new SHA and the release notes, which
+# is the point of pinning: the change becomes something to look at rather than
+# something that happened.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+# Deliberately not the pip ecosystem. perfetto is pinned with `==` because the
+# package carries the trace_processor binary and its SHA-256, and a different
+# binary means different trace semantics with the SQL unchanged — pyproject.toml
+# says so at length. Raising that pin is a decision with a self-check attached,
+# and a bot opening it weekly would be arguing with the policy rather than
+# serving it.
