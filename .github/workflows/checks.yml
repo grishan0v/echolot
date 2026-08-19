@@ -139,10 +139,53 @@ jobs:
           print(f"README badge and classifiers agree: {want.replace('--', '-')}")
           PY
 
-      # `twine check` is what verifies the README renders on PyPI. Relative
-      # links do not resolve there, which is why the README uses full GitHub
-      # URLs — a check that only ran at tag time would find that out after the
-      # version was already published.
+      # What the README will actually be on PyPI. readme_renderer is the
+      # renderer PyPI runs, and its Markdown support is an extra that neither
+      # twine nor readme_renderer itself depends on — without `[md]` installed
+      # the render is not merely unchecked, it is impossible.
+      #
+      # The interesting failure is the quiet one. The sanitiser works from an
+      # allow-list and it edits in place: an address it rejects is removed and
+      # the tag stays, so `<img alt="License">` reaches the page as an empty
+      # box while every count still matches. Counting tags proves nothing.
+      # The addresses themselves are what has to come out the other side.
+      - name: Check that the README renders on PyPI
+        run: |
+          python -m pip install --upgrade 'readme_renderer[md]'
+          python - <<'PY'
+          import re
+
+          source = open("README.md", encoding="utf-8").read()
+
+          from readme_renderer.markdown import render
+          html = render(source)
+          if html is None:
+              raise SystemExit("README.md does not render on PyPI at all")
+
+          SRC = r'<img[^>]*\ssrc="([^"]+)"'
+          wanted = dict.fromkeys(re.findall(SRC, source))
+          arrived = set(re.findall(SRC, html))
+
+          # `&` comes out as `&amp;`, which is encoding rather than loss.
+          lost = [u for u in wanted
+                  if u not in arrived and u.replace("&", "&amp;") not in arrived]
+          if lost:
+              raise SystemExit(
+                  "the sanitiser removed these image addresses; they would be "
+                  "empty boxes on PyPI:\n  " + "\n  ".join(lost)
+              )
+          print(f"README renders; all {len(wanted)} image addresses survive")
+          PY
+
+      # `twine check` validates the packaging metadata, and for a Markdown
+      # README that is all it does: its `_RENDERERS` table maps `text/markdown`
+      # to None with the comment "Rendering cannot fail", so it never opens
+      # README.md. The step above is the render this comment used to claim.
+      #
+      # Both run here rather than only at tag time. Relative links do not
+      # resolve on PyPI, which is why the README uses full GitHub URLs, and a
+      # check that waited for the tag would report it after the version was
+      # already published.
       - name: Build and check the artefacts
         run: |
           python -m pip install --upgrade build twine
