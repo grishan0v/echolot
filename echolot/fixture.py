@@ -65,6 +65,66 @@ OTHER_PID = 5000
 OTHER_NAME = "com.other.app"
 OTHER_THREADS = {OTHER_PID: "m.other.app"}
 
+# --- surfaceflinger: the owner of display frames ---------------------------
+# Present so that display frames sit where they really sit. They share a table
+# with the app's surface frames, and the only thing keeping them out of the
+# report is that they belong to another process.
+
+SF_PID = 600
+SF_NAME = "/system/bin/surfaceflinger"
+SF_THREADS = {SF_PID: "surfaceflinger"}
+
+# --- the frame timeline ----------------------------------------------------
+# Shape: (token, start_ms, expected_ms, actual_ms, jank)
+#
+# Recorded by SurfaceFlinger since Android 12, not by the app: every frame
+# carries the deadline it was given, what it actually took, and why it missed.
+# These arrive as their own packets and land on their own track types
+# (android_expected_frame_timeline / android_actual_frame_timeline), never on
+# a thread track — so the six slice-based detectors cannot see them and adding
+# them here changes nothing about what those report. A check pins that.
+#
+# The window is [100, 1105]. Overrun is actual minus expected, and the frame
+# rate is deliberately ignored: what matters is which frames the detector
+# picks up, not that they form a plausible 60 Hz sequence.
+
+FT = pb.FrameTimelineEvent
+LAYER = "com.example.app/com.example.app.MainActivity#0"
+
+APP_FRAMES = [
+    # The finding: 5 frames the app itself was late for, 44 ms over each.
+    *[(1 + i, 200 + i * 50, 16, 60, FT.JANK_APP_DEADLINE_MISSED) for i in range(5)],
+    # Negative control: the same jank type, 2 ms over — below min_overrun_ms.
+    # They must not swell the count of the row above, which is why the floor
+    # is applied per frame and before the grouping.
+    *[(10 + i, 450 + i * 20, 16, 18, FT.JANK_APP_DEADLINE_MISSED) for i in range(3)],
+    # A second finding, and the one nobody should be sent into the code over:
+    # the app finished on time and SurfaceFlinger did not. The platform tags
+    # this 'Other Jank' by itself.
+    *[(20 + i, 550 + i * 30, 16, 30, FT.JANK_SF_CPU_DEADLINE_MISSED) for i in range(4)],
+    # Negative control: healthy frames. They fire nothing and still count in
+    # the denominator — "5 of 24 frames" is the honest form of the finding.
+    *[(30 + i, 700 + i * 5, 16, 14, FT.JANK_NONE) for i in range(10)],
+    # Negative control: 34 ms over, but only twice — below min_frames. Two bad
+    # frames are an anecdote.
+    *[(50 + i, 800 + i * 20, 16, 50, FT.JANK_BUFFER_STUFFING) for i in range(2)],
+    # Negative control: 184 ms over, outside the window. The worst frame in
+    # the trace, and none of the detector's business.
+    (60, 1200, 16, 200, FT.JANK_APP_DEADLINE_MISSED),
+]
+
+# Negative control: another app janking inside our window.
+OTHER_LAYER = "com.other.app/com.other.app.Main#0"
+OTHER_FRAMES = [
+    (100 + i, 300 + i * 40, 16, 90, FT.JANK_APP_DEADLINE_MISSED) for i in range(4)
+]
+
+# Negative control: display frames. Same table, no surface token, and owned by
+# surfaceflinger rather than by us.
+SF_FRAMES = [
+    (900 + i, 250 + i * 40, 16, 70, FT.JANK_SF_CPU_DEADLINE_MISSED) for i in range(4)
+]
+
 # --- slices ----------------------------------------------------------------
 # Shape: (name, start_ms, dur_ms, [children])
 # The scenario window is set by the anchors AppStart (start) and
@@ -201,7 +261,62 @@ def _flatten(slices, out, seq):
     return out
 
 
-def build() -> bytes:
+def _span(builder, cookies, kind, start_ms, dur_ms, **fields) -> None:
+    """One timeline entry: a start event, then FrameEnd on the same cookie.
+
+    Duration is not a field. The parser derives it from the gap between the
+    start packet and the FrameEnd carrying the same cookie, which is why every
+    frame costs two packets per timeline and why cookies must be unique across
+    the whole trace.
+    """
+    cookie = next(cookies)
+    packet = builder.add_packet()
+    packet.timestamp = ms(start_ms)
+    event = getattr(packet.frame_timeline_event, kind)
+    event.cookie = cookie
+    for key, value in fields.items():
+        setattr(event, key, value)
+
+    packet = builder.add_packet()
+    packet.timestamp = ms(start_ms + dur_ms)
+    packet.frame_timeline_event.frame_end.cookie = cookie
+
+
+def _frames(builder) -> None:
+    """The frame timeline: expected and actual, for three processes."""
+    cookies = iter(range(10**5, 10**6))
+
+    for frames, pid, layer in ((APP_FRAMES, APP_PID, LAYER),
+                               (OTHER_FRAMES, OTHER_PID, OTHER_LAYER)):
+        for token, start, expected_ms, actual_ms, jank in frames:
+            surface = dict(token=token, display_frame_token=token + 1000,
+                           pid=pid, layer_name=layer)
+            _span(builder, cookies, "expected_surface_frame_start",
+                  start, expected_ms, **surface)
+            _span(builder, cookies, "actual_surface_frame_start",
+                  start, actual_ms, **surface, jank_type=jank,
+                  present_type=(FT.PRESENT_ON_TIME if jank == FT.JANK_NONE
+                                else FT.PRESENT_LATE),
+                  on_time_finish=(jank == FT.JANK_NONE),
+                  gpu_composition=False, prediction_type=FT.PREDICTION_VALID)
+
+    for token, start, expected_ms, actual_ms, jank in SF_FRAMES:
+        _span(builder, cookies, "expected_display_frame_start",
+              start, expected_ms, token=token, pid=SF_PID)
+        _span(builder, cookies, "actual_display_frame_start",
+              start, actual_ms, token=token, pid=SF_PID, jank_type=jank,
+              present_type=FT.PRESENT_LATE, on_time_finish=False,
+              gpu_composition=False, prediction_type=FT.PREDICTION_VALID)
+
+
+def build(frames: bool = True) -> bytes:
+    """The fixture trace. `frames=False` leaves out the frame timeline.
+
+    Android 11 and below, and any trace recorded without the
+    android.surfaceflinger.frametimeline data source, have no frame timeline
+    at all. That is the common case for a while yet, and frame_jank has to
+    meet it with silence rather than an error.
+    """
     builder = TraceProtoBuilder()
 
     # ProcessTree is the only source of process names.
@@ -211,6 +326,7 @@ def build() -> bytes:
     for pid, name, threads in (
         (APP_PID, APP_NAME, THREADS),
         (OTHER_PID, OTHER_NAME, OTHER_THREADS),
+        (SF_PID, SF_NAME, SF_THREADS),
     ):
         proc = tree.processes.add()
         proc.pid = pid
@@ -221,6 +337,9 @@ def build() -> bytes:
             thread.tid = tid
             thread.tgid = pid
             thread.name = tname
+
+    if frames:
+        _frames(builder)
 
     # Collect ftrace events per CPU.
     by_cpu: dict[int, list] = {}

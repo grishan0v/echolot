@@ -42,6 +42,13 @@ project-specific belongs inside a detector.
 | `_tstate_win` | thread states **clipped** to the window |
 | `_cpu_in_slice` | time **on CPU inside** top-level slices |
 
+Not everything worth detecting is a slice. `frame_jank` reads
+`actual_frame_timeline_slice` and `expected_frame_timeline_slice` directly —
+SurfaceFlinger's own per-frame record, which has no context view because
+nothing else needs it. A detector reaching outside the views takes on two jobs
+the views were doing for it: joining `_proc` so it stays inside our process,
+and clipping to `_window` itself. Both are visible at the top of that file.
+
 ### Two duration columns are not a duplicate
 
 `_slice_win` carries both:
@@ -55,6 +62,20 @@ Adding up `dur` when computing coverage is a way to get past 100% and miss the
 problem. On `_tstate_win` the `dur` field is already clipped, because the
 question there is always "how long did the thread spend in this state inside
 the scenario".
+
+### A column may mean something else, if the header says so
+
+The contract is shared, and one detector bends it. In `frame_jank` `total_ms`
+and `max_ms` are time **past the deadline** rather than duration, because the
+loss is the actionable number and the frame's own length is not. The frame
+duration is in `detail` instead, since that is the number a benchmark's
+percentiles are quoted in.
+
+That is allowed and it is not free: anything reading the report generically —
+`compare`, the markdown table — treats the numbers as milliseconds and gets
+milliseconds, but a reader who assumes duration reads them wrong. So the
+deviation is stated in the detector's own header, in the report reference, and
+here. A detector that bends the contract quietly is a bug.
 
 ### Use `_cpu_in_slice`, do not rebuild it
 

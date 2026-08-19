@@ -94,7 +94,7 @@ measuring.
 ## What the trace config must contain
 
 The runner builds the perfetto config itself, but if you capture by hand
-(recipe in `echolot/claude/skills/echolot/references/collect.md`), three things
+(recipe in `echolot/claude/skills/echolot/references/collect.md`), four things
 are mandatory:
 
 **`sched/sched_switch`** — without it there is no `thread_state`, which means
@@ -107,6 +107,19 @@ nothing.
 
 **`atrace_apps`** with the package name — otherwise the trace holds system
 slices only.
+
+**`android.surfaceflinger.frametimeline`** — SurfaceFlinger's own record of
+every frame, and the only source `frame_jank` has. It is a separate data
+source rather than an atrace category:
+
+```
+data_sources: { config { name: "android.surfaceflinger.frametimeline" } }
+```
+
+Android 12 and up. On anything older the data source does not exist, perfetto
+records the rest without complaining, and the detector is silent — which reads
+exactly like "no bad frames". If jank is the question and the report says
+nothing, check the Android version before believing it.
 
 There is also a requirement on the app itself: slices arrive only if it is
 **profileable or debuggable**. The manifest needs

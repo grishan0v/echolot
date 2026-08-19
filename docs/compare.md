@@ -31,7 +31,7 @@ project. Without a config it prints to stdout and writes nothing.
 | inflate | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.6 | 12 → 31 | overlap |
 ```
 
-**One table, not six sections.** The Marker Report is grouped by detector
+**One table, not one section per detector.** The Marker Report is grouped by detector
 because each answers a different question. A comparison has one question, so
 the detector moves into a column and the rows are sorted across all of them.
 

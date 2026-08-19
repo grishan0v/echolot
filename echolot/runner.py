@@ -24,6 +24,18 @@ DEFAULT_CATEGORIES = [
     "am", "wm", "gfx", "view", "dalvik", "binder_driver", "res", "database",
 ]
 
+# Perfetto reads this as protobuf text format. Braces are doubled because the
+# same string goes through str.format; nothing else about it is Python.
+#
+# `android.surfaceflinger.frametimeline` is SurfaceFlinger's own record of
+# every frame — the deadline it was given, what it actually took, and why it
+# missed — and it is the only source frame_jank has. Android 12 and up; on
+# anything older the data source does not exist, perfetto records the rest
+# without complaining, and the detector stays silent.
+#
+# Comments do not go in the template. Text format spells them `#`, and a
+# config that fails to parse on the device turns every capture into a puzzle
+# for the sake of a sentence that reads better here.
 TRACE_CONFIG = """\
 buffers: {{ size_kb: {buffer_kb} fill_policy: DISCARD }}
 data_sources: {{
@@ -45,6 +57,11 @@ data_sources: {{
   config {{
     name: "linux.process_stats"
     process_stats_config {{ scan_all_processes_on_start: true }}
+  }}
+}}
+data_sources: {{
+  config {{
+    name: "android.surfaceflinger.frametimeline"
   }}
 }}
 duration_ms: {duration_ms}

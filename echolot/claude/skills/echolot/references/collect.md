@@ -37,6 +37,9 @@ data_sources: { config {
     name: "linux.process_stats"
     process_stats_config { scan_all_processes_on_start: true }
 } }
+data_sources: { config {
+    name: "android.surfaceflinger.frametimeline"
+} }
 duration_ms: 12000
 EOF
 
@@ -63,6 +66,12 @@ nothing.
 
 **`atrace_apps`** with the package name — otherwise there will be no
 application slices, only system ones.
+
+**`android.surfaceflinger.frametimeline`** — a data source rather than an
+atrace category, and the only thing `frame_jank` reads. Android 12 and up; on
+older devices it does not exist, perfetto records the rest without complaining,
+and the detector is silent. Silence there looks exactly like "no bad frames",
+so check the Android version before reporting a scenario as smooth.
 
 ## What the app itself may be missing
 

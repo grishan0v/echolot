@@ -39,6 +39,13 @@ FIXTURE_CONFIG = {
 CHECKS: list[tuple[str, object]] = []
 
 
+def _shipped() -> int:
+    """How many detectors this package ships."""
+    from .main import DETECTOR_DIR
+    from .tp import load_detectors
+    return len(load_detectors(DETECTOR_DIR))
+
+
 def check(name):
     def deco(fn):
         CHECKS.append((name, fn))
@@ -96,11 +103,15 @@ def _(report):
     assert w["end_anchor"]["matches"] == 1, w["end_anchor"]
 
 
-@check("all six detectors fired")
+@check("every shipped detector ran, and every one fired")
 def _(report):
+    # Counted rather than written down. The fixture's promise is that it plants
+    # a problem for each detector, and a detector added to sql/detectors/ needs
+    # no registration in code — a number here would quietly turn both of those
+    # into "for the six that existed when this line was written".
     s = report["summary"]
-    assert s["detectors_run"] == 6, s
-    assert s["detectors_fired"] == 6, s["fired_ids"]
+    assert s["detectors_run"] == _shipped(), s
+    assert s["detectors_fired"] == _shipped(), s["fired_ids"]
 
 
 @check("slices outside the window stayed out of the report")
@@ -376,7 +387,138 @@ def _(report):
     assert src == "config+cli" and over["min_slice_ms"] == 5, (over, src)
     # --defaults: every detector, shipped numbers, the config's list ignored
     plan = plan_detectors(cfg, use_defaults=True)
-    assert len(plan) == 6 and all(src == "default" and not over for _, over, src in plan), plan
+    assert len(plan) == _shipped(), plan
+    assert all(src == "default" and not over for _, over, src in plan), plan
+
+
+# --- frame_jank ------------------------------------------------------------
+#
+# The fixture plants 24 frames inside the window: 5 the app was 44 ms late for,
+# 3 more of the same kind but only 2 ms late, 4 that SurfaceFlinger was late
+# for, 10 healthy ones and 2 stuffed. Outside the window sits the worst frame
+# in the trace, and in other processes sit eight more.
+
+@check("frame_jank: found the app's late frames, at the right size")
+def _(report):
+    row = next(r for r in rows(report, "frame_jank")
+               if r["location"] == "App Deadline Missed")
+    assert row["count"] == 5, f"5 frames cleared the overrun floor: {row}"
+    assert row["total_ms"] == 220.0, f"5 frames, 44 ms over each: {row}"
+    assert row["max_ms"] == 44.0, f"the worst single overrun: {row}"
+
+
+@check("frame_jank: the floor is applied per frame, before the grouping")
+def _(report):
+    # Three more frames of the same jank type missed by 2 ms. Filtering after
+    # the GROUP BY would leave the row at 8 frames and add 6 ms of overrun to
+    # a finding that is supposed to be about the 44 ms ones.
+    row = next(r for r in rows(report, "frame_jank")
+               if r["location"] == "App Deadline Missed")
+    assert row["count"] == 5, f"the 2 ms frames must not swell the row: {row}"
+
+
+@check("frame_jank: two bad frames are an anecdote, not a row")
+def _(report):
+    loc = locations(report, "frame_jank")
+    assert "Buffer Stuffing" not in loc, \
+        f"2 frames must not clear a floor of 3: {loc}"
+
+
+@check("frame_jank: healthy frames count in the denominator and nowhere else")
+def _(report):
+    loc = locations(report, "frame_jank")
+    assert "None" not in loc, f"'No Jank' is not a finding: {loc}"
+    row = next(r for r in rows(report, "frame_jank")
+               if r["location"] == "App Deadline Missed")
+    # "5 of 24 frames" — the share is what makes the number mean anything.
+    # Against a denominator of only the janky ones it would read 5 of 11.
+    assert "5 of 24 frames" in row["detail"], row["detail"]
+
+
+@check("frame_jank: the platform's verdict on whose deadline it was")
+def _(report):
+    by_loc = {r["location"]: r for r in rows(report, "frame_jank")}
+    assert by_loc["App Deadline Missed"]["detail"].startswith("Self Jank"), \
+        by_loc["App Deadline Missed"]["detail"]
+    # The app finished on time and the compositor did not. Same table, same
+    # window, and nobody should be sent into the app's code over it.
+    other = by_loc["SurfaceFlinger CPU Deadline Missed"]
+    assert other["detail"].startswith("Other Jank"), other["detail"]
+    assert other["count"] == 4 and other["total_ms"] == 56.0, other
+
+
+@check("frame_jank: the worst frame in the trace is outside the window")
+def _(report):
+    # 200 ms, 184 over, at ts 1200 — after Screen.firstFrame ends the window.
+    # It would be the top row of the report if the clip were missing.
+    for row in rows(report, "frame_jank"):
+        assert row["max_ms"] < 184.0, f"a frame outside the window leaked: {row}"
+        assert "of 25 frames" not in row["detail"], \
+            f"it must not reach the denominator either: {row}"
+
+
+@check("frame_jank: other processes and display frames stay out")
+def _(report):
+    # com.other.app janks four times inside our window, 74 ms over each, and
+    # surfaceflinger's own display frames sit in the same table with no
+    # surface token. Neither is ours.
+    for row in rows(report, "frame_jank"):
+        assert row["max_ms"] != 74.0, f"a foreign process leaked in: {row}"
+        assert row["max_ms"] != 54.0, f"a display frame leaked in: {row}"
+    row = next(r for r in rows(report, "frame_jank")
+               if r["location"] == "SurfaceFlinger CPU Deadline Missed")
+    assert row["count"] == 4, f"ours are the four surface frames: {row}"
+
+
+@check("frame_jank: frames never reach the slice-based detectors")
+def _(report):
+    # The frame timeline lands in the `slice` table too, named by the frame
+    # token — but on its own track types rather than a thread track, so _slice
+    # cannot see it. If that ever changes, main_thread_block starts reporting
+    # rows called "1", "2", "3".
+    for det in ("main_thread_block", "gc_pressure", "monitor_contention",
+                "binder_txn", "uninstrumented_cpu"):
+        for row in rows(report, det):
+            assert not str(row["location"]).isdigit(), \
+                f"a frame token surfaced in {det}: {row}"
+
+
+@check("frame_jank: a trace without a frame timeline is silence, not an error")
+def _(report):
+    # Android 11 and below, and anything recorded without the frametimeline
+    # data source, have no frame timeline. The two tables still exist in
+    # trace_processor and are simply empty — but "still exist" is an
+    # assumption, and if it ever stops holding, every such trace comes back
+    # with an error in detectors[].error instead of a clean silent detector.
+    from .main import analyze_trace
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "no-frames.perfetto-trace"
+        trace.write_bytes(fixture.build(frames=False))
+        plain = analyze_trace(trace, Config(FIXTURE_CONFIG))
+    det = next(d for d in plain["detectors"] if d["id"] == "frame_jank")
+    assert det["error"] is None, f"empty tables must not be an error: {det['error']}"
+    assert det["rows"] == [], det["rows"]
+    # And the rest of the report is exactly what it was before frames existed.
+    assert plain["summary"]["detectors_fired"] == _shipped() - 1, plain["summary"]
+
+
+@check("the trace config asks for the frame timeline, and parses")
+def _(report):
+    # frame_jank has exactly one source, and it is off unless the config asks.
+    # A detector nobody can ever trigger is worse than no detector.
+    from .runner import trace_config
+    text = trace_config("com.example.app", 12000, ["view", "gfx"], 65536)
+    assert "android.surfaceflinger.frametimeline" in text, text
+
+    # Perfetto reads this as protobuf text format, where a comment is `#`.
+    # A `--` in here parses as SQL nowhere and as a syntax error on the
+    # device — every capture fails, and the message points at the config
+    # rather than at whoever wrote the sentence.
+    assert "--" not in text, "a SQL comment in a protobuf text config"
+    opens = text.count("{") - text.count("{{")
+    assert opens == text.count("}") - text.count("}}"), "unbalanced braces"
+    assert "{{" not in text and "}}" not in text, \
+        "a doubled brace survived str.format"
 
 
 @check("analyze: a relative -o is taken from the config's directory")
