@@ -103,6 +103,42 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The badge in the README states a range; the classifiers state the list
+      # the matrix above is built from. One claim kept in two places, and the
+      # short badge is only worth having if something keeps them equal: a
+      # version added to the matrix and forgotten in the README leaves the
+      # front page quietly wrong while every other check stays green.
+      - name: Check that the README badge matches the classifiers
+        run: |
+          python - <<'PY'
+          import re, tomllib
+
+          PREFIX = "Programming Language :: Python :: "
+          classifiers = tomllib.load(open("pyproject.toml", "rb"))["project"]["classifiers"]
+          versions = sorted(
+              tuple(int(n) for n in c[len(PREFIX):].split("."))
+              for c in classifiers
+              if c.startswith(PREFIX) and c[len(PREFIX):].count(".") == 1
+          )
+          if not versions:
+              raise SystemExit("pyproject.toml declares no Python X.Y classifiers")
+
+          # `--` in a shields path renders as one hyphen, so that is the form
+          # the badge URL carries and the form compared here.
+          want = "%d.%d--%d.%d" % (*versions[0], *versions[-1])
+
+          readme = open("README.md", encoding="utf-8").read()
+          found = re.search(r"img\.shields\.io/badge/(\d+\.\d+--\d+\.\d+)-blue\?logo=python", readme)
+          if not found:
+              raise SystemExit("README.md has no Python version badge in the expected shape")
+          if found.group(1) != want:
+              raise SystemExit(
+                  f"README badge says {found.group(1).replace('--', '-')}, "
+                  f"classifiers say {want.replace('--', '-')}"
+              )
+          print(f"README badge and classifiers agree: {want.replace('--', '-')}")
+          PY
+
       # `twine check` is what verifies the README renders on PyPI. Relative
       # links do not resolve there, which is why the README uses full GitHub
       # URLs — a check that only ran at tag time would find that out after the
