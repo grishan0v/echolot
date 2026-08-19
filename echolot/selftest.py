@@ -14,10 +14,12 @@ Run through `echolot doctor`.
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
 from . import fixture
+from . import recorder
 from .config import Config, ConfigError
 
 # The config is kept in memory rather than in a file: the self-check must not
@@ -990,6 +992,89 @@ def _(report):
         assert what == "exists-without-ours", what
         assert own.read_text(encoding="utf-8") == "# our own rules\n", \
             "a project's own AGENTS.md was edited"
+
+
+@check("init: the picker can never hang an agent or the self-check")
+def _(report):
+    """The one way this feature could be worse than not having it.
+
+    `echolot init` is run by agents, and by this very self-check five times
+    over. A prompt that appears there is a hang, not a question. Two gates
+    have to hold: only the CLI parser turns prompting on, so a direct call
+    with a bare Namespace is silent whatever the terminal is doing; and even
+    with the flag there must be a terminal on both ends.
+    """
+    import argparse
+
+    from . import hosts as hosts_mod
+    from .main import cmd_init
+
+    # A bare Namespace is what the self-check itself passes.
+    bare = argparse.Namespace(into=".", force=False, no_doctor=True)
+    assert not getattr(bare, "interactive", False), \
+        "a direct call would prompt — the self-check would hang"
+
+    class Tty:
+        def isatty(self): return True
+        def write(self, *a): pass
+        def flush(self): pass
+
+    saved = os.environ.get("CI")
+    try:
+        os.environ["CI"] = "1"
+        assert not hosts_mod.interactive(Tty()), "CI is not a place to ask questions"
+        os.environ.pop("CI")
+        os.environ["ECHOLOT_NO_INPUT"] = "1"
+        assert not hosts_mod.interactive(Tty()), "ECHOLOT_NO_INPUT was ignored"
+    finally:
+        os.environ.pop("ECHOLOT_NO_INPUT", None)
+        if saved is not None:
+            os.environ["CI"] = saved
+        else:
+            os.environ.pop("CI", None)
+
+    class NotTty(Tty):
+        def isatty(self): return False
+    assert not hosts_mod.interactive(NotTty()), "asked without a terminal"
+
+    # And it really does install, silently, when called the bare way.
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        with recorder.isolated():
+            cmd_init(argparse.Namespace(into=str(project), force=False,
+                                        no_doctor=True))
+        assert (project / ".claude").is_dir(), "the bare call installed nothing"
+
+
+@check("init: declining Claude Code is remembered, not asked again forever")
+def _(report):
+    """Opting out must not become a loop.
+
+    `.claude/` absent normally means "run init". On a project that chose
+    Cursor only, that same absence would have `next` demand `echolot init`
+    every time — on a project that had just declined it.
+    """
+    import argparse
+
+    from . import hosts as hosts_mod
+    from .main import cmd_init, next_kind, project_state
+
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        (project / "echolot.yml").write_text(
+            "project:\n  process: com.example.app\n", encoding="utf-8")
+        with recorder.isolated():
+            cmd_init(argparse.Namespace(into=str(project), force=False,
+                                        no_doctor=True, for_hosts="cursor"))
+        assert not (project / ".claude").exists(), \
+            "the layer went in despite not being chosen"
+        assert (project / ".cursor" / "rules" / "echolot.mdc").exists()
+        assert hosts_mod.load_choice(project) == ["cursor"], \
+            hosts_mod.load_choice(project)
+
+        st = project_state(project, "echolot.yml")
+        assert st["layer_verdict"] == "opted-out", st["layer_verdict"]
+        assert next_kind(st) != "init", "a project that declined is still asked to init"
 
 
 @check("CLI: every verb is grouped by audience and shown in --help")
