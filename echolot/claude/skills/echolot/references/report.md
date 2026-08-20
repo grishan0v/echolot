@@ -133,6 +133,8 @@ nest. Adding `self_ms` is fine — self times do not overlap.
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}` |
 | `frame_jank` | frames that missed their deadline | `location` is why it missed, `detail` says whose fault |
 | `main_thread_outlier` | one occurrence far longer than usual | `detail` carries the median it is measured against |
+| `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |
+| `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
 
 ### What matters about individual ones
 
@@ -168,6 +170,29 @@ trace at all — Android 11 and below, or a capture that did not ask for the
 `android.surfaceflinger.frametimeline` data source. Those look identical in the
 report. Before calling a scenario smooth, check that some other frame row
 exists or that the trace came from `echolot collect`.
+
+**`anr_risk` measures a length of time, not a name.** The others ask how much
+went into one slice name, or whether one occurrence was unusual. This asks how
+long the main thread went without returning to the message queue — fifty
+different pieces of work back to back freeze an app exactly as one long one
+does, and nothing that groups by name can see that.
+
+Its bar is the platform's five seconds and it is never calibrated. On a
+cold-start scenario the window is a second or two, so it is silent by
+construction; it is for the longer recording an ANR hunt collects. `detail`
+splits the stretch three ways and that is the next step: time on a CPU points
+at the code, time waiting for one at something else on the device, and the
+remainder at a lock or a disk — read `monitor_contention` next when the
+remainder dominates.
+
+**`anr` is the only detector not clipped to the scenario window**, and its
+`detail` says where the record fell relative to it. An ANR fires five seconds
+after the event that could not be served, and a cold start's window closes at
+the first frame — clipped, it would be absent from nearly every trace that
+contains one. Its `location` is the platform's own reason (`Input dispatching
+timed out …`), which no Crashlytics export carries, and `detail` holds the
+error id: the same string the device's `dumpsys dropbox` record has, so a
+trace and a report can be matched by hand.
 
 **`main_thread_outlier`** is the pair to `main_thread_block`, and reading one
 as the other wastes a round. `main_thread_block` gates on the **sum** for a

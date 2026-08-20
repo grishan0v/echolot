@@ -160,6 +160,7 @@ echolot reflect --last  # how this session went, and what to change in the tool
 echolot compare --help  # the forms it takes and the floor it uses
 echolot guide setup     # building echolot.yml for a project that has none
 echolot guide hunt      # the loop: from a report down to a place in the code
+echolot guide anr       # the app stopped answering: reading an ANR report, and measuring one
 echolot explain         # the detectors and their parameters
 echolot --help          # every command, grouped by who runs it
 ```

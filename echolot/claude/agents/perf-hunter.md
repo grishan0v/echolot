@@ -69,6 +69,33 @@ own, and records where the round went against the open investigation — so you
 do not have to keep a list of your own. `echolot hunt --show <n>` reads it
 back: every round, and a copy of every report you produced.
 
+## When the hunt started from an ANR report
+
+The prompt names a report file instead of, or alongside, a regression. Then
+step 0 is not `doctor`:
+
+```bash
+echolot anr <report> --root .
+```
+
+Half the answer is often already there and costs no trace. A monitor held by a
+thread parked on a blocking call, with the main thread queued behind it, is the
+mechanism — open the holder's frames and go. `echolot mark --from-anr <report>`
+turns those frames into a marker plan, which is a better first round than
+`mark` from the manifest: it instruments what was measured to be on the thread
+rather than where instrumentation usually belongs.
+
+Two things to carry into the loop below. If the main thread was **idle**
+(`nativePollOnce`), it was not the culprit and its top frame is Android's
+message queue — read the threads that were working instead. And if the frames
+land nowhere in the checkout, say which build the report names and stop before
+believing any line number.
+
+Then the loop, with two differences: the recording has to be long enough for
+`anr_risk` to see a five-second stretch, and `monitor_contention` is the
+detector to open first when `anr_risk` reports its time as neither on a CPU nor
+waiting for one.
+
 ## The protocol
 
 ```
@@ -127,6 +154,9 @@ echolot domains --root .                           slice name → file
 echolot mark                                       the first markers for a project with none:
                                                    where and why; --apply puts them in,
                                                    --remove takes exactly those out
+echolot anr <report> --root .                      an ANR report: the lock chain, who was
+                                                   working, where the frames are; --json
+echolot mark --from-anr <report>                   markers on what was on the stack
 echolot explain                                    the detectors and their default params
 ```
 

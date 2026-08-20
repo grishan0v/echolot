@@ -2,7 +2,7 @@
 
 [← back to the README](../README.md)
 
-Ten documents. If you are here for the first time, read them in the order of
+Eleven documents. If you are here for the first time, read them in the order of
 the workflow: **collect → mark → analyse → compare → calibrate**. The rest
 explains why the tool is built the way it is.
 
@@ -15,6 +15,7 @@ The path from a device to an answer, in the order you walk it.
 | document | read it when |
 |---|---|
 | 🎬 **[Collecting traces](collecting.md)** | you need traces — the three modes (`launch`, `command`, `gradle`), what the trace config must contain, and why repeats are merged rather than averaged |
+| 🧊 **[ANRs](anr.md)** | the app stopped answering and the report came from a phone you do not have — reading it, pointing its frames at your files, and measuring the freeze when you can record it |
 | 🏷️ **[Marking](mark.md)** | your project has no instrumentation and the report has nothing to attach findings to — `mark` writes the first markers from the platform's vocabulary, `--apply` / `--remove` |
 | 🔎 **[Analysing](analysing.md)** | you have a trace and need a place in the code — `probe`, `names`, `domains`, and the slice-to-code map |
 | 🔀 **[Comparing](compare.md)** | you have two sets of traces and need the difference — what appeared, what grew, and whether the repeats support calling it a change |
