@@ -67,6 +67,12 @@ and the largest by slice count was taken. If you are analysing `:pushservice`
 instead of the main process, narrow `project.process`. The list holds the
 next few by slice count; `process_alternatives_total` is how many there were.
 
+**`summary.absent_ids` non-empty** — this project's config names detectors,
+so only those ran, and the ones listed here were shipped after it was written.
+They are not silent; they never ran. `echolot analyze … --defaults` runs every
+shipped detector without touching the config, which is the quickest way to see
+what they would have said.
+
 **`detectors[].error != null`** — that detector failed while the rest ran. SQL
 is version-fragile; report the error, but do not treat the absence of findings
 as an answer.

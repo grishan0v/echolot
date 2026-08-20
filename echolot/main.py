@@ -265,8 +265,15 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 entry["defaults"] = {k: d.params[k] for k in overrides if k in d.params}
             results.append(entry)
 
+    # Shipped, and not in the plan. `plan_detectors` narrows to what the
+    # config named, and until now the difference was invisible: the report
+    # said "3 of 6" on a project where eight were installed.
+    planned = {d.id for d, _, _ in plan}
+    absent = [d.id for d in load_detectors(DETECTOR_DIR) if d.id not in planned]
+
     return report_mod.build(str(trace), window, results,
-                            toolchain=toolchain_info(tp_binary))
+                            toolchain=toolchain_info(tp_binary),
+                            absent=absent)
 
 
 def cmd_analyze(args) -> int:

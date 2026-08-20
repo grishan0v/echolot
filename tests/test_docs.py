@@ -106,3 +106,37 @@ def test_documented_detector_count_is_current(document, pattern):
     assert set(stated) == {shipped}, (
         f"{document} says {sorted(set(stated))} detectors, {shipped} are shipped"
     )
+
+
+# --- the version, which is also a claim about the tool ----------------------
+
+def test_the_version_comes_from_the_code_and_only_from_there():
+    """`doctor` printed 0.1.0 against a pyproject that said 0.4.0.
+
+    `importlib.metadata` answers from whatever dist-info exists, and an
+    editable install keeps the one written when it was created. That number is
+    not decoration: it goes into every line of `runs.jsonl`, into the
+    `.claude/` layer manifest, and into the first line `doctor` prints — so a
+    run log can record a version that has not existed for three releases.
+
+    The fix is to have one source. This holds it there: a literal `version =`
+    back in `pyproject.toml` is how the two start disagreeing again.
+    """
+    import echolot
+    from echolot import recorder
+
+    assert recorder.version() == echolot.__version__, (
+        f"recorder says {recorder.version()}, the package says "
+        f"{echolot.__version__}"
+    )
+
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'dynamic = ["version"]' in text, "pyproject stopped declaring it dynamic"
+    assert 'attr = "echolot.__version__"' in text, "pyproject stopped reading the package"
+    # A quoted literal, which is what a static version looks like. The
+    # dynamic declaration below it is `version = { attr = … }` and must not
+    # match — the first draft of this check caught its own fix.
+    assert not re.search(r'^version = "', text, re.M), (
+        "a literal `version =` is back in pyproject.toml — that is how the two "
+        "started disagreeing"
+    )

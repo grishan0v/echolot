@@ -65,6 +65,11 @@ runner:
 # threshold without disabling the rest, list them all. An empty section, or no
 # section at all, means every detector found is enabled.
 #
+# That also means a detector shipped after this file was written never runs
+# here. The report says so — "N shipped detector(s) are not in this config" —
+# because on a real project two of eight were missing for months and nothing
+# mentioned it.
+#
 # Do not pick these numbers by hand — `echolot calibrate run*.perfetto-trace`
 # derives them from known-healthy runs and prints a ready section with the
 # reasoning attached. The values below are the shipped defaults.

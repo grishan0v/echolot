@@ -78,7 +78,9 @@ def build(
     window: dict[str, Any],
     results: list[dict[str, Any]],
     toolchain: dict[str, Any] | None = None,
+    absent: list[str] | None = None,
 ) -> dict[str, Any]:
+    """`absent` — shipped detectors this config left out. See `to_markdown`."""
     fired = [r for r in results if r["rows"]]
     return {
         "schema": 1,
@@ -90,6 +92,7 @@ def build(
             "detectors_run": len(results),
             "detectors_fired": len(fired),
             "fired_ids": [r["id"] for r in fired],
+            "absent_ids": sorted(absent or []),
         },
         "detectors": results,
     }
@@ -194,6 +197,9 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         "detectors_run": len(detectors),
         "detectors_fired": len(fired),
         "fired_ids": [d["id"] for d in fired],
+        # The same config produced every repeat, so the same detectors were
+        # left out of all of them.
+        "absent_ids": (reports[0]["summary"] or {}).get("absent_ids") or [],
     }
     return merged
 
@@ -257,6 +263,17 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.append(
         f"Detectors fired: **{s['detectors_fired']} of {s['detectors_run']}**"
     )
+    # "3 of 6" reads as though six were all there is. A project config that
+    # names detectors enables only those, so a detector shipped later never
+    # runs there and nothing said so — a real report on a real project was
+    # missing two of eight, silently, months after they landed.
+    absent = s.get("absent_ids") or []
+    if absent:
+        out.append(
+            f"> ⚠️ {len(absent)} shipped detector(s) are not in this config and "
+            f"did not run: {', '.join(f'`{a}`' for a in absent)}. Add them to "
+            f"the `detectors` section, or run `--defaults` to see what they say."
+        )
     line = _config_line(report)
     if line:
         out.append(line)
