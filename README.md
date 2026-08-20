@@ -41,6 +41,10 @@ tool, and `echolot guide` tells any agent how to work with it. The loop runs
 in your main context rather than a subagent, so keep the passes short — the
 guide says where that matters.
 
+`echolot reflect` works from any of them: with no transcript to read it builds
+the report from the tool's own run log, and names every check it could not
+make rather than reporting silence as a clean bill.
+
 ## Requirements
 
 | | |
@@ -49,6 +53,7 @@ guide says where that matters.
 | **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
 | **Device** | a phone or emulator with USB debugging on |
 | **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) for the full workflow; Cursor, Codex and others via `echolot guide` |
+| **Android 12+** *(for one detector)* | `frame_jank` reads SurfaceFlinger's frame timeline. Older devices do not have it, and the detector is then silent — which reads exactly like "no bad frames" |
 
 Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
 
@@ -245,6 +250,7 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 
 | command | what it does |
 |---|---|
+| `guide` | how to work with this tool, printed by the package — what an agent without the `.claude/` layer reads instead of it |
 | `probe` | processes, threads by CPU, scenario anchor candidates |
 | `names` | slice name inventory and detector mask coverage |
 | `domains` | slice-to-code map and instrumentation coverage |
@@ -314,12 +320,25 @@ which re-records and re-instruments on purpose.
 | `frame_jank` | frames that missed their deadline, and whose fault it was |
 | `main_thread_outlier` | one occurrence far longer than that work usually takes |
 
-That last one is the only detector that finds a problem inside code nobody
-instrumented. It does not guess — it states a fact:
+Two of them find something where nobody wrote a `trace{}` call.
+
+`uninstrumented_cpu` does not guess — it states a fact:
 
 > thread `DefaultDispatcher-worker-2` was Running for 340 ms, zero slices
 
 Which is exactly where to add `trace{}` and record again.
+
+`frame_jank` needs no instrumentation at all: SurfaceFlinger records every
+frame's deadline and what it actually took, and says whose fault a miss was.
+Android 12 and up — see [requirements](#requirements).
+
+`main_thread_block` and `main_thread_outlier` are a pair, and reading one as
+the other wastes a round. The first gates on the **sum** for a name and answers
+"where did the time go". The second gates on a **single occurrence** against
+the median for that same name and answers "which one was out of line". A name
+can appear in both, saying different things — and they lead to different
+places: expensive every time means the fix is in that work, usually fine and
+once not means the cause is the state it hit that once.
 
 > [!NOTE]
 > Each detector is one self-contained `.sql` file with its metadata in the
@@ -336,6 +355,7 @@ flowchart LR
     C["8 SQL detectors<br/>pinned trace_processor"]
     D["report.md<br/>~20 rows"]
     E["report.json<br/>14 KB"]
+    H["comparison<br/>what moved, and by how much"]
     F(["You"])
     G(["The agent"])
 
@@ -343,6 +363,9 @@ flowchart LR
     B -->|"echolot analyze"| C
     C --> D --> F
     C --> E --> G
+    E -->|"echolot compare, against an earlier one"| H
+    H --> F
+    H --> G
 ```
 
 ## Project layout
@@ -387,8 +410,27 @@ The detectors were validated against a synthetic trace — 71 checks inside
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
 
+Two are newer than that hardware round and have not had one. `frame_jank` was
+built against the pinned `trace_processor` and a frame timeline written for the
+purpose — the column names, the jank vocabulary and where display frames live
+were all read back out of it rather than assumed — but no report from it has
+been compared with a real device's own frame statistics yet.
+`main_thread_outlier` was written for a miss recorded on an A51 and has so far
+answered only the fixture.
+
 A failed detector never fails the run: the error goes to stderr and into
 `report.json`.
+
+### Working on the tool
+
+```bash
+pip install -e '.[dev]'
+pytest                       # every check, including the ones doctor runs
+pytest -k uninstrumented     # one detector's claims, by name
+```
+
+`doctor` stays dependency-free: it walks the same list itself, because it runs
+on a user's laptop where pytest is not installed.
 
 ### There is no CI gate, on purpose
 
