@@ -41,7 +41,7 @@ def keep_cwd():
 def marker_report():
     """The fixture trace, analysed once for the whole session.
 
-    Building the trace is instant; running seven detectors over it through
+    Building the trace is instant; running every detector over it through
     trace_processor is not, and every check in echolot/selftest.py reads the
     same report. `doctor` pays this once too.
     """

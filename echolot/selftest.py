@@ -648,6 +648,47 @@ def _(report):
     assert "a\\|b" in text, text
 
 
+@check("doctor: a check that breaks fails itself, and says which kind of not")
+def _(report):
+    """`run` caught AssertionError and nothing else.
+
+    A check is ordinary Python over a report — it indexes dicts, reads files,
+    builds temp trees. Any of that can raise something that is not an
+    assertion, and that exception went all the way up to `cmd_doctor`, which
+    prints "could not run" and "The environment is broken. Until this is
+    fixed, no report from it can be trusted" — on a machine where every other
+    check would have passed, and without naming the one that did not.
+
+    Each check fails on its own now, and the two kinds of failure are told
+    apart: the claim not holding is the pipeline's problem, the check raising
+    is the check's, and they are fixed in different places.
+    """
+    from . import selftest as st
+
+    def passes(_report):
+        pass
+
+    def claims(_report):
+        assert 1 == 2, "120 ms became 240 ms"
+
+    def bare(_report):
+        assert "x" in []
+
+    def breaks(_report):
+        {"a": 1}["b"]
+
+    out = dict(st.run_checks({}, [("passes", passes), ("claims", claims),
+                                  ("bare", bare), ("breaks", breaks)]))
+    assert out["passes"] is None, out["passes"]
+    assert out["claims"] == "120 ms became 240 ms", out["claims"]
+    # A bare assert carries no message; an empty string reads as "passed".
+    assert out["bare"] and "assertion failed at selftest.py:" in out["bare"], out["bare"]
+    assert out["breaks"] and out["breaks"].startswith(
+        "the check itself raised KeyError at selftest.py:"), out["breaks"]
+    # And the run went on: one broken check is one failure, not none of them.
+    assert sum(1 for why in out.values() if why) == 3, out
+
+
 @check("reflect: a word after `echolot` is not a subcommand")
 def _(report):
     """The readers and the facts disagreed on what counts as a call.
@@ -1762,22 +1803,61 @@ def build_report(tp_binary: str | None = None) -> dict:
         return analyze_trace(trace, Config(FIXTURE_CONFIG), tp_binary)
 
 
-def run(tp_binary: str | None = None) -> list[tuple[str, str | None]]:
-    """[(check name, None if it passed else the mismatch text)]."""
+def _where(e: BaseException) -> str:
+    """`at selftest.py:412` — the line the check gave up on."""
+    import traceback
+    frames = traceback.extract_tb(e.__traceback__)
+    if not frames:
+        return ""
+    last = frames[-1]
+    return f" at {Path(last.filename).name}:{last.lineno}"
+
+
+def _why(e: BaseException) -> str:
+    """Why a check did not pass, in a sentence that says which kind of not.
+
+    An AssertionError is the claim failing: the pipeline computed something
+    other than what the fixture plants, which is the whole point of the
+    check. Anything else is the check itself breaking — a KeyError over a
+    renamed field, an OSError on a temp directory — and that is a different
+    problem with a different fix, so it does not get to wear the first one's
+    words.
+    """
+    if isinstance(e, AssertionError):
+        # A bare `assert x in y` raises with no message at all, and `str(e)`
+        # is then the empty string — which the caller's `if why` reads as
+        # "this one passed". doctor reported 65 of 65 while a check was
+        # failing, for as long as that stood.
+        return str(e) or f"assertion failed{_where(e)}"
+    return f"the check itself raised {type(e).__name__}{_where(e)}: {e}"
+
+
+def run_checks(report: dict, checks) -> list[tuple[str, str | None]]:
+    """[(check name, None if it passed else why)] — the judging half.
+
+    Separated from `run` so that what happens to a check that breaks can be
+    checked over made-up checks, rather than by breaking a real one.
+    """
     from . import recorder
-    report = build_report(tp_binary)
     out = []
     # Checks call commands of their own (`init` into a temp dir); their notes
     # must not land in the log line of the doctor run that hosts them.
     with recorder.isolated():
-        for name, fn in CHECKS:
+        for name, fn in checks:
             try:
                 fn(report)
                 out.append((name, None))
-            except AssertionError as e:
-                # A bare `assert x in y` raises with no message at all, and
-                # `str(e)` is then the empty string — which the caller's
-                # `if why` reads as "this one passed". doctor reported 65 of 65
-                # while a check was failing, for as long as that stood.
-                out.append((name, str(e) or f"assertion failed in {name}"))
+            except Exception as e:
+                # Every check fails on its own. Letting anything but an
+                # AssertionError out of here took the whole run with it:
+                # doctor caught it far above, printed "could not run" and
+                # declared the environment broken — on a machine where 78 of
+                # the 79 checks would have passed, and without naming the one
+                # that did not.
+                out.append((name, _why(e)))
     return out
+
+
+def run(tp_binary: str | None = None) -> list[tuple[str, str | None]]:
+    """[(check name, None if it passed else the mismatch text)]."""
+    return run_checks(build_report(tp_binary), CHECKS)
