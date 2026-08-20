@@ -648,6 +648,73 @@ def _(report):
     assert "a\\|b" in text, text
 
 
+@check("compare: a pipe does not shift either of its tables")
+def _(report):
+    """`compare` printed the sixth hand-rolled markdown table.
+
+    `table` exists because there were five, three column orders and two of
+    them not escaping `|`. This file assembled its own header, its own
+    separator and its own `_escape` — and the second table, the one listing
+    detectors that changed state, escaped nothing at all.
+    """
+    from . import compare as cmp_mod
+
+    def side(moved_ms, quiet_rows):
+        return {"schema": 1, "trace": "t", "window": {"duration_ms": 100.0},
+                "summary": {"detectors_run": 2, "detectors_fired": 1,
+                            "fired_ids": ["d|x"]},
+                "detectors": [
+                    {"id": "d|x", "title": "T", "why": "", "params": {},
+                     "params_source": "default", "error": None,
+                     "rows": [{"location": "a|b", "total_ms": moved_ms}]},
+                    {"id": "q|t", "title": "Q", "why": "", "params": {},
+                     "params_source": "default", "error": None,
+                     "rows": quiet_rows},
+                ]}
+
+    text = cmp_mod.to_markdown(cmp_mod.build(
+        side(10.0, []), side(300.0, [{"location": "z", "total_ms": 9.0}]),
+        before_path="before.json", after_path="after.json"))
+    # the moved table: the location and the detector id
+    assert "a\\|b" in text, text
+    assert "d\\|x" in text, text
+    # and the one below it, which never escaped anything
+    assert "## Detectors that changed state" in text, text
+    assert "q\\|t" in text, text
+    # An escaped pipe is not a cell boundary: every body row of both tables
+    # has to come out with the column count its header declared.
+    for line in text.splitlines():
+        if line.startswith("|") and set(line) - set("|- "):
+            assert line.replace("\\|", "").count("|") in (4, 8), line
+
+
+@check("one way to say how long ago, on every screen that says it")
+def _(report):
+    """`status` and `hunt --show` print this one under the other.
+
+    They were two copies of the same eleven lines — the same three thresholds,
+    the same four spellings — in two files that cannot import each other,
+    because `state` already imports `hunt`. Nothing compared them, so editing
+    one would have made the two lines disagree in silence.
+    """
+    import time
+    from . import hunt as hunt_mod
+    from . import when
+
+    now = time.time()
+    assert when.ago(None) == "never"
+    assert when.ago(now - 30) == "30s ago"
+    assert when.ago(now - 3600) == "60m ago"
+    assert when.ago(now - 86400) == "24h ago"
+    assert when.ago(now - 86400 * 3) == "3d ago"
+    assert when.iso_epoch(None) is None and when.iso_epoch("not a date") is None
+    assert when.iso_epoch("2020-01-01T00:00:00Z") == \
+        when.iso_epoch("2020-01-01T00:00:00+00:00")
+    # One definition, reached from both, rather than two that happen to agree.
+    assert hunt_mod._ago is when.ago, "hunt has grown its own copy again"
+    assert hunt_mod._epoch is when.iso_epoch, "and its own parse"
+
+
 @check("a table keeps the columns it knows in order, and shows the rest")
 def _(report):
     from . import table

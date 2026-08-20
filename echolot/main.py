@@ -35,7 +35,7 @@ from pathlib import Path
 
 from . import compare as compare_mod
 from . import hunt as hunt_mod
-from . import layer, recorder, state, table
+from . import layer, recorder, state, table, when
 from . import report as report_mod
 from .config import NO_ANCHOR, Config, ConfigError
 from .reflect.cli import cmd_reflect
@@ -941,12 +941,12 @@ def cmd_status(args) -> int:
     lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"))))
     tr = st["traces"]
     if tr["count"]:
-        lines.append(("traces", f"{tr['count']} in .echolot/traces, newest {state.ago(tr['newest'])}"))
+        lines.append(("traces", f"{tr['count']} in .echolot/traces, newest {when.ago(tr['newest'])}"))
     else:
         lines.append(("traces", "none in .echolot/traces"))
     rep = st["report"]
     if rep and not rep.get("error"):
-        made = state.ago(state.iso_epoch(rep.get("generated_at")))
+        made = when.ago(when.iso_epoch(rep.get("generated_at")))
         what = (f"{rep['fired']} of {rep['run']} detectors fired"
                 if rep.get("run") is not None else "")
         note = ""
@@ -960,7 +960,7 @@ def cmd_status(args) -> int:
     d = st["last_doctor"]
     if d:
         failed = (d.get("facts") or {}).get("failed") or []
-        lines.append(("doctor", f"{state.ago(state.iso_epoch(d.get('ts')))}, "
+        lines.append(("doctor", f"{when.ago(when.iso_epoch(d.get('ts')))}, "
                       + (f"{len(failed)} check(s) FAILED" if failed else "passed")))
     else:
         lines.append(("doctor", "never run here"))

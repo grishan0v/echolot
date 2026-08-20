@@ -13,10 +13,7 @@ building a project on disk for every case.
 
 from __future__ import annotations
 
-import contextlib
 import json
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from . import hunt as hunt_mod
@@ -155,24 +152,3 @@ def next_step(st: dict) -> str:
     return (f"{_door(st)} hunt` — or by hand: "
             f"echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml")
 
-
-def ago(epoch: float | None) -> str:
-    if not epoch:
-        return "never"
-    delta = time.time() - epoch
-    if delta < 90:
-        return f"{int(delta)}s ago"
-    if delta < 5400:
-        return f"{int(delta // 60)}m ago"
-    if delta < 172800:
-        return f"{delta / 3600:.0f}h ago"
-    return f"{delta / 86400:.0f}d ago"
-
-
-def iso_epoch(ts: str | None) -> float | None:
-    if not ts:
-        return None
-    try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
