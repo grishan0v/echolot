@@ -29,6 +29,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from . import table
 from .report import family, metric_of
 
 # What counts as movement worth a row. Absolute floor first, so a 4 ms wobble
@@ -404,6 +405,13 @@ def _overlap(rb: dict | None, ra: dict | None, metric: str) -> bool | None:
 CHANGE_LABEL = {APPEARED: "**new**", VANISHED: "**gone**"}
 RANGE_LABEL = {True: "overlap", False: "apart", None: "—"}
 
+# The two tables this file prints, in the order they are read.
+MOVED_COLUMNS = ["location", "detector", "before", "after", "delta", "count",
+                 "ranges"]
+MOVED_HEADERS = {"location": "Where", "detector": "Detector", "before": "Before",
+                 "after": "After", "delta": "Δ", "count": "N", "ranges": "Ranges"}
+STATE_HEADERS = {"id": "detector", "before": "before", "after": "after"}
+
 
 def to_markdown(cmp: dict[str, Any]) -> str:
     out: list[str] = ["# Comparison", ""]
@@ -463,10 +471,10 @@ def to_markdown(cmp: dict[str, Any]) -> str:
     if s["state_changed"]:
         out.append("## Detectors that changed state")
         out.append("")
-        out.append("| detector | before | after |")
-        out.append("|---|---|---|")
-        for row in s["state_changed"]:
-            out.append(f"| `{row['id']}` | {row['before']} | {row['after']} |")
+        out.append(table.render(
+            [{"id": f"`{row['id']}`", "before": row["before"],
+              "after": row["after"]} for row in s["state_changed"]],
+            order=list(STATE_HEADERS), headers=STATE_HEADERS))
         out.append("")
 
     steady = [r for r in cmp["rows"] if r["change"] == STEADY]
@@ -498,21 +506,24 @@ def _all_ids(cmp: dict[str, Any]) -> list[str]:
 
 
 def _table(rows: list[dict[str, Any]]) -> str:
-    head = "| Where | Detector | Before | After | Δ | N | Ranges |"
-    sep = "|---|---|---|---|---|---|---|"
-    body = []
-    for r in rows:
-        body.append("| " + " | ".join([
-            _escape(r["location"])
-            + (" *(family)*" if r["matched_by"] == "family" else ""),
-            r["detector"],
-            _band(r["before"], r["metric"]),
-            _band(r["after"], r["metric"]),
-            _delta(r),
-            _counts(r),
-            RANGE_LABEL[r["overlap"]],
-        ]) + " |")
-    return "\n".join([head, sep, *body])
+    """The moved rows, through the one renderer that escapes.
+
+    A location is a slice name or a thread name — an arbitrary string chosen
+    by whoever wrote the trace{} call — and this file used to assemble its own
+    header, its own separator and its own `_escape`, byte for byte the copy
+    `table` exists to have ended. The other table below escaped nothing at
+    all, so one pipe in a detector id would have shifted its row.
+    """
+    return table.render([{
+        "location": r["location"]
+                    + (" *(family)*" if r["matched_by"] == "family" else ""),
+        "detector": r["detector"],
+        "before": _band(r["before"], r["metric"]),
+        "after": _band(r["after"], r["metric"]),
+        "delta": _delta(r),
+        "count": _counts(r),
+        "ranges": RANGE_LABEL[r["overlap"]],
+    } for r in rows], order=MOVED_COLUMNS, headers=MOVED_HEADERS)
 
 
 def _band(face: dict | None, metric: str) -> str:
@@ -558,6 +569,3 @@ def _when(side: dict[str, Any]) -> str:
     ts = side.get("generated_at") or ""
     return ts.replace("T", " ").replace("+00:00", "").rstrip("Z")
 
-
-def _escape(text: str) -> str:
-    return str(text).replace("|", "\\|")

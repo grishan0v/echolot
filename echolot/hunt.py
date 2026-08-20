@@ -37,6 +37,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .when import ago as _ago
+from .when import iso_epoch as _epoch
+
 HUNT_FILE = Path(".echolot") / "hunt.json"
 ARCHIVE_DIR = Path(".echolot") / "hunts"
 
@@ -51,15 +54,6 @@ STALE_DAYS = 7
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _epoch(ts: str | None) -> float | None:
-    if not ts:
-        return None
-    try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
 
 
 def _slug(text: str, limit: int = 40) -> str:
@@ -581,16 +575,3 @@ def detail(hunt: dict[str, Any], project: Path) -> list[str]:
         for r in reports:
             out.append(f"    {r.relative_to(project) if r.is_relative_to(project) else r}")
     return out
-
-
-def _ago(epoch: float | None) -> str:
-    if not epoch:
-        return "never"
-    delta = time.time() - epoch
-    if delta < 90:
-        return f"{int(delta)}s ago"
-    if delta < 5400:
-        return f"{int(delta // 60)}m ago"
-    if delta < 172800:
-        return f"{delta / 3600:.0f}h ago"
-    return f"{delta / 86400:.0f}d ago"
