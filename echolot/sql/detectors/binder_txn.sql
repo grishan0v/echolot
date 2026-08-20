@@ -7,6 +7,7 @@
 -- @param: skip_glob = *async*
 -- @calibrate: min_txn_ms = top10(max_ms) * 1.5
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
+-- @identity: location, detail
 --
 -- Two conditions, not one. On a live cold start (772 ms window) the main
 -- thread took 76 transactions totalling 65.9 ms, the longest 9.71 ms: not a

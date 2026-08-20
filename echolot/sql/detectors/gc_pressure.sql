@@ -8,6 +8,7 @@
 -- @param: name_glob_alt = waitWhileAllocating*
 -- @calibrate: max_events = top10(count) * 1.5
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
+-- @identity: location, detail
 --
 -- Masks verified against a live Android 14 trace (ART, concurrent copying).
 --

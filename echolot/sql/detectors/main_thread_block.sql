@@ -5,6 +5,7 @@
 --       counts it twice
 -- @param: min_slice_ms = 16
 -- @calibrate: min_slice_ms = top10(self_ms) * 1.5
+-- @identity: location, detail
 --
 -- On a live cold start, sorting by total duration produced:
 --   d0  355.4 ms  Choreographer#doFrame 55112

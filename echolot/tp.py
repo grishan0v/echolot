@@ -6,8 +6,14 @@ A detector is a self-contained .sql file with metadata in its header:
     -- @title: Where the main thread spent its time
     -- @why: ...
     -- @param: min_slice_ms = 16
+    -- @identity: location, detail
 
 @param values are defaults. The project config overrides them.
+
+@identity names the columns that tell one row of the result from another —
+what the query GROUP BYs, as it reaches the report. It defaults to `location`
+and only needs saying when a detector groups by something else as well; see
+Detector.identity for what goes wrong when it is left unsaid.
 """
 
 from __future__ import annotations
@@ -149,6 +155,10 @@ def parse_meta(text: str):
     return meta, params, calibrations
 
 
+# Which columns name a row when nothing says otherwise.
+DEFAULT_IDENTITY = ("location",)
+
+
 @dataclass
 class Detector:
     id: str
@@ -156,6 +166,7 @@ class Detector:
     why: str
     params: dict[str, Any] = field(default_factory=dict)
     calibrations: list[Calibration] = field(default_factory=list)
+    identity: tuple[str, ...] = DEFAULT_IDENTITY
     sql: str = ""
     path: Path | None = None
 
@@ -172,6 +183,7 @@ class Detector:
             why=meta.get("why", ""),
             params=params,
             calibrations=calibrations,
+            identity=_identity(meta.get("identity")),
             sql=text,
             path=path,
         )
@@ -203,6 +215,23 @@ class Detector:
         sql = _PLACEHOLDER.sub(
             lambda m: sql_value(resolved[m.group(1)]), self.sql)
         return sql, resolved
+
+
+def _identity(declared: str | None) -> tuple[str, ...]:
+    """What `-- @identity:` says, or `location`.
+
+    A row of a detector's result is identified by what the query grouped by.
+    `location` alone is the common case and stays the default; a detector that
+    also groups by the thread or the thread's state has two rows carrying one
+    location in a single run, and merging repeats on the name alone folds two
+    different phenomena into one median.
+    """
+    cols = [c.strip() for c in (declared or "").split(",") if c.strip()]
+    if not cols:
+        return DEFAULT_IDENTITY
+    if "location" not in cols:
+        raise ValueError(f"@identity must include location, got: {declared}")
+    return tuple(cols)
 
 
 def sql_value(value: Any) -> str:

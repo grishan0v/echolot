@@ -1099,6 +1099,73 @@ def _(report):
     assert rows["collection_mapping"]["runs"] == "2/2", rows["collection_mapping"]
 
 
+@check("merging repeats: rows a detector kept apart stay apart")
+def _(report):
+    """Two rows, one location, one run — and the merge used to eat one.
+
+    `runnable_starvation` groups by thread and state, so a thread that was
+    both preempted (R) and runnable-on-another-cpu (R+) is two rows carrying
+    one thread name. Merged on the name alone they became a single row whose
+    median was taken over both: `runs 6/3` for three repeats, `N 2.5`, and a
+    spread reading 20→110 where each phenomenon had been steady. The fixture
+    plants only state R, so nothing here could ever have caught it.
+    """
+    import copy
+    from .report import aggregate
+
+    def run(r_ms, rplus_ms):
+        return {"schema": 1, "trace": f"t{r_ms}", "window": {"duration_ms": 1000.0},
+                "summary": {"detectors_run": 1, "detectors_fired": 1,
+                            "fired_ids": ["runnable_starvation"]},
+                "detectors": [{
+                    "id": "runnable_starvation", "title": "t", "why": "",
+                    "params": {}, "params_source": "default", "error": None,
+                    "identity": ["location", "detail"],
+                    "rows": [
+                        {"location": "RenderThread", "count": 3,
+                         "total_ms": r_ms, "max_ms": r_ms, "detail": "state R"},
+                        {"location": "RenderThread", "count": 2,
+                         "total_ms": rplus_ms, "max_ms": rplus_ms, "detail": "state R+"},
+                    ]}]}
+
+    merged = aggregate([run(100.0, 20.0), run(110.0, 22.0), run(105.0, 21.0)])
+    rows = {r["detail"]: r for r in merged["detectors"][0]["rows"]}
+    assert set(rows) == {"state R", "state R+"}, merged["detectors"][0]["rows"]
+    assert rows["state R"]["runs"] == "3/3", rows["state R"]
+    assert rows["state R"]["total_ms"] == 105.0, rows["state R"]
+    assert rows["state R+"]["total_ms"] == 21.0, rows["state R+"]
+    # Each phenomenon was steady; the merged spread has to say so.
+    assert rows["state R"]["spread"]["total_ms"] == {
+        "min": 100.0, "max": 110.0, "values": [100.0, 110.0, 105.0]}, rows["state R"]
+
+    # A report from before the field existed keeps the old behaviour rather
+    # than failing: location alone, exactly as it was merged then.
+    old = copy.deepcopy([run(100.0, 20.0), run(110.0, 22.0)])
+    for r in old:
+        del r["detectors"][0]["identity"]
+    assert len(aggregate(old)["detectors"][0]["rows"]) == 1
+
+
+@check("every detector names one row per run, by its own @identity")
+def _(report):
+    """The declaration and the query's GROUP BY, checked against each other.
+
+    @identity is written by hand in the .sql header and nothing in SQLite can
+    be asked whether it is right. What can be checked is the consequence: if
+    the declared columns leave two rows of one run indistinguishable, merging
+    repeats will fold them together and the declaration is short a column.
+    """
+    from .report import identity_of
+    for d in report["detectors"]:
+        identity = identity_of(d)
+        assert "location" in identity, (d["id"], identity)
+        keys = [tuple(r.get(c) for c in identity) for r in d["rows"]]
+        assert len(set(keys)) == len(keys), (
+            f"{d['id']} declares @identity {', '.join(identity)} and produced "
+            f"two rows that share it: {[k for k in keys if keys.count(k) > 1]}"
+        )
+
+
 @check("merging repeats: a single trace stays itself")
 def _(report):
     from .report import aggregate

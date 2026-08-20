@@ -99,6 +99,17 @@ def _rank(row: dict[str, Any]) -> float:
     return row.get(metric_of(row)) or 0.0
 
 
+def identity_of(detector: dict[str, Any]) -> tuple[str, ...]:
+    """Which columns name a row of this detector's result.
+
+    Declared in the .sql header and carried in the report; `location` alone
+    for a report written before the field existed, which is what merging
+    always assumed.
+    """
+    cols = detector.get("identity") or ["location"]
+    return tuple(cols)
+
+
 def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
     """Merges N repeats into a single report using the median.
 
@@ -133,14 +144,21 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
     detectors = []
     for det_id, runs in by_id.items():
         head = dict(runs[0])
-        groups: dict[str, list[dict]] = {}
-        for run in runs:
+        identity = identity_of(head)
+        # (which repeat, the row) — the repeat's index is what the `runs`
+        # column counts, and counting rows instead of repeats is how a
+        # detector with two rows per run once printed "6/3".
+        groups: dict[tuple, list[tuple[int, dict]]] = {}
+        for i, run in enumerate(runs):
             for row in run["rows"]:
-                groups.setdefault(row["location"], []).append(row)
+                groups.setdefault(tuple(row.get(c) for c in identity),
+                                  []).append((i, row))
 
         rows = []
-        for location, found in groups.items():
-            row = {"location": location, "runs": f"{len(found)}/{total}"}
+        for key, seen in groups.items():
+            found = [r for _, r in seen]
+            row: dict[str, Any] = dict(zip(identity, key))
+            row["runs"] = f"{len({i for i, _ in seen})}/{total}"
             spread = {}
             for col in NUMERIC:
                 values = [f[col] for f in found
@@ -159,8 +177,10 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
             if spread:
                 row["spread"] = spread
             # Evidence comes from the worst repeat: that is where it says most.
+            # Unless it is part of what names the row, in which case it is the
+            # same in every repeat by construction and already set above.
             worst = max(found, key=_rank)
-            if worst.get("detail") is not None:
+            if "detail" not in identity and worst.get("detail") is not None:
                 row["detail"] = worst["detail"]
             rows.append(row)
 
