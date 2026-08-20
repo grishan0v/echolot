@@ -5,6 +5,7 @@
 --       has other plans.
 -- @param: min_runnable_ms = 20
 -- @calibrate: min_runnable_ms = top10(total_ms) * 1.5
+-- @identity: location, detail
 
 SELECT
     thread_name                       AS location,

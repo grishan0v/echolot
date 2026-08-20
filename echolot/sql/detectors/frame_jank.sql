@@ -36,6 +36,12 @@
 -- and gets one row, not two. `detail` leads with jank_tag, the platform's own
 -- verdict on whose deadline was missed: 'Self Jank' is the app, 'Other Jank'
 -- is the system and is not something to send anyone into the code over.
+--
+-- jank_tag joins that GROUP BY and still does not belong in @identity: it is
+-- a verdict *on* the jank_type, one per type, so the pair names no more rows
+-- than the type alone. And `detail` carries per-frame numbers around it, so
+-- naming rows by it would put a row's own measurements into its name and no
+-- two repeats would ever be the same row.
 
 WITH win AS (
     SELECT ts_start, ts_end FROM _window

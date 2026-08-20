@@ -252,6 +252,10 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 "why": d.why,
                 "params": params,
                 "params_source": source,
+                # What tells one row from another. Written down per report so
+                # that merging repeats does not have to guess, and so that a
+                # report read back later still knows.
+                "identity": list(d.identity),
                 "rows": rows,
                 "error": err,
             }
