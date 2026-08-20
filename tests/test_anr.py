@@ -6,11 +6,19 @@ at it, and the reports it was written against are a live application's — they
 carry a package, versions and internal class names, and none of that belongs in
 this repository.
 
-So the dump below is synthetic, and every shape in it was seen on a real
-export: a lock note on the signature and a signature without one, java frames
-under native ones, two threads sharing a name, an obfuscated class in the
-monitor next to the unminified one in the frames, and a line the reader is
-meant to admit it could not read.
+So the dumps below are synthetic, one per source. Every shape in the
+Crashlytics one was seen on a real export: a lock note on the signature and a
+signature without one, java frames under native ones, two threads sharing a
+name, an obfuscated class in the monitor next to the unminified one in the
+frames, and a line the reader is meant to admit it could not read.
+
+The device's record is the half-verified one. Its header was read off a live
+device; its thread body is ART's own format, written from it rather than
+sampled, because the files under `/data/anr/` are mode 600 owned by `system`
+and a device without root parts with them only inside a bugreport. What these
+cases pin is that the reader holds together on that format — a real record
+that turns out to differ will show up in the unread count rather than in a
+wrong answer.
 """
 
 from __future__ import annotations
@@ -284,8 +292,161 @@ def test_the_report_names_the_questions_it_cannot_answer():
           "durations come from a trace" in text, text)
 
 
-def test_a_dump_in_a_signature_form_this_reader_does_not_know_reads_as_nothing(tmp_path):
+def test_a_form_no_source_here_announces_threads_in_is_refused(tmp_path):
     """Silence with a reason, rather than a report built from zero threads."""
-    art = tmp_path / "dumpsys.txt"
-    art.write_text('"main" prio=5 tid=1 Blocked\n  | group="main"\n', encoding="utf-8")
-    check("it refuses", anr.main([str(art)]) == 1)
+    strange = tmp_path / "strange.txt"
+    strange.write_text("Thread 1 <main> RUNNING\n  frame: Foo.bar\n",
+                       encoding="utf-8")
+    check("it refuses", anr.main([str(strange)]) == 1)
+
+
+# --- the record the device keeps itself -------------------------------------
+#
+# The header below was read off a live device. The thread body is ART's own
+# format and is written from it rather than sampled: the files under
+# `/data/anr/` are mode 600 owned by `system`, and a device without root parts
+# with them only inside a bugreport.
+
+DROPBOX = """\
+Process: com.example.app
+PID: 4100
+Flags: 0x2008be45
+Package: com.example.app v45 (1.2.3)
+Foreground: Yes
+Subject: Input dispatching timed out (no focused window)
+Build: generic/vbox86p:13/TP1A/1234:user/release-keys
+Dropped-Count: 0
+
+----- pid 4100 at 2026-08-20 19:12:08 -----
+Cmd line: com.example.app
+
+suspend all histogram:  Sum: 3ms 99% C.I. 1us-2ms Avg: 30us Max: 2ms
+DALVIK THREADS (4):
+"main" prio=5 tid=1 Blocked
+  | group="main" sCount=1 dsCount=0 flags=1 obj=0x72a8e030 self=0xb400007
+  | sysTid=4100 nice=-10 cgrp=top-app sched=0/0 handle=0x7c9f2f14f8
+  | state=S schedstat=( 1234 567 89 ) utm=10 stm=2 core=3 HZ=100
+  | held mutexes=
+  at com.example.app.data.StateStore.read(StateStore.kt:31)
+  - waiting to lock <0x0a714d13> (a com.example.app.data.q) held by thread 12
+  at com.example.app.ui.HomeViewModel.load(HomeViewModel.kt:88)
+  at android.os.Looper.loop(Looper.java:392)
+
+"Worker-2" daemon prio=5 tid=12 Waiting
+  | sysTid=4112 nice=0 cgrp=default
+  native: #00 pc 00000000000d9f5c  /apex/com.android.runtime/lib64/bionic/libc.so (syscall+28)
+  at jdk.internal.misc.Unsafe.park(Native method)
+  - locked <0x0a714d13> (a com.example.app.data.q)
+  at com.google.android.gms.tasks.Tasks.await(Tasks.java:8)
+  at com.example.app.data.StateStore.flush(StateStore.kt:52)
+  at java.lang.Thread.run(Thread.java:1012)
+
+"pool-1-thread-1" prio=5 tid=20 TimedWaiting
+  | sysTid=4120 nice=0 cgrp=default
+  at java.util.concurrent.LinkedBlockingQueue.take(LinkedBlockingQueue.java:435)
+  at java.util.concurrent.ThreadPoolExecutor.getTask(ThreadPoolExecutor.java:1026)
+
+"Binder:4100_1" sysTid=4123
+  native: #00 pc 0000000000119748  /apex/com.android.runtime/lib64/bionic/libc.so (__ioctl+8)
+  native: #01 pc 00000000000946c8  /system/lib64/libbinder.so (android::IPCThreadState::joinThreadPool+152)
+
+----- end 4100 -----
+
+----- pid 5200 at 2026-08-20 19:12:09 -----
+Cmd line: com.other.app
+
+DALVIK THREADS (1):
+"main" prio=5 tid=1 Runnable
+  | sysTid=5200 nice=0 cgrp=default
+  at com.other.app.Thing.spin(Thing.kt:9)
+
+----- end 5200 -----
+"""
+
+
+def test_the_source_is_decided_by_how_threads_are_announced():
+    check("the device's record reads as itself",
+          anr.detect(DROPBOX) is anr.DUMPSYS, anr.detect(DROPBOX))
+    check("and the export as itself",
+          anr.detect(DUMP) is anr.CRASHLYTICS, anr.detect(DUMP))
+
+
+def test_the_record_carries_the_reason_the_export_does_not():
+    rep = anr.parse(DROPBOX)
+    check("the subject is read",
+          rep.reason == "Input dispatching timed out (no focused window)",
+          rep.reason)
+    check("and it leads the report",
+          "Fired for: **Input dispatching timed out" in anr.render(rep))
+    check("so the gap is not claimed",
+          "carries no reason" not in anr.render(rep))
+
+
+def test_the_runtimes_state_names_land_in_the_same_vocabulary():
+    by_tid = anr.parse(DROPBOX).by_tid()
+    check("Blocked", by_tid["1"].state == "blocked", by_tid["1"].state)
+    check("Waiting", by_tid["12"].state == "waiting", by_tid["12"].state)
+    check("TimedWaiting is two words here",
+          by_tid["20"].state == "timed waiting", by_tid["20"].state)
+
+
+def test_only_the_process_that_hung_is_read():
+    rep = anr.parse(DROPBOX)
+    check("four threads from the app", len(rep.threads) == 4,
+          [(t.name, t.process) for t in rep.threads])
+    check("the other process is counted, not merged", rep.elsewhere == 1,
+          rep.elsewhere)
+    check("and the report says so",
+          "from other processes" in anr.render(rep), anr.render(rep))
+
+
+def test_the_lock_note_is_read_from_its_own_line():
+    chain = anr.chains(anr.parse(DROPBOX))[0]
+    check("the monitor is read past the article ART puts in it",
+          chain.monitor == "com.example.app.data.q", chain.monitor)
+    check("and named from the waiter's frame",
+          chain.named == "com.example.app.data.StateStore", chain.named)
+    check("the holder is the thread that says it locked it",
+          chain.owner is not None and chain.owner.name == "Worker-2", chain.owner)
+    check("main is behind it", chain.blocks_main)
+
+
+def test_the_holder_is_found_by_what_it_locked_when_the_tid_is_absent():
+    """ART prints what a thread holds; Crashlytics prints nothing of the kind.
+
+    It is the second way to the same answer, and it survives a holder whose
+    tid the dump names but does not carry.
+    """
+    orphan = DROPBOX.replace("held by thread 12", "held by thread 999")
+    chain = anr.chains(anr.parse(orphan))[0]
+    check("still resolved", chain.owner is not None and chain.owner.tid == "12",
+          chain.owner)
+
+
+def test_the_runtimes_bookkeeping_lines_are_not_counted_as_unreadable():
+    rep = anr.parse(DROPBOX)
+    stray = [line for t in rep.threads for line in t.unread]
+    check("nothing inside a thread went unread", not stray, stray)
+    check("and nothing outside one either", not rep.unread, rep.unread)
+
+
+def test_a_thread_the_runtime_never_attached_has_no_tid_to_be_held_by():
+    rep = anr.parse(DROPBOX)
+    binder = next(t for t in rep.threads if t.name.startswith("Binder:"))
+    check("it has a system id", binder.systid == "4123", binder.systid)
+    check("and no runtime tid", binder.tid == "", binder.tid)
+    check("so it cannot collide in the tid index",
+          "" not in rep.by_tid(), sorted(rep.by_tid()))
+    check("it is still struck out as an idle binder thread",
+          anr.idle_reason(binder) == "binder pool waiting",
+          anr.idle_reason(binder))
+
+
+def test_a_second_entry_in_the_file_is_a_second_anr_and_is_not_merged():
+    two = DROPBOX + "\n" + "=" * 40 + "\n" + DROPBOX
+    rep = anr.parse(two)
+    check("only the first is read", len(rep.threads) == 4,
+          [t.name for t in rep.threads])
+    check("and the reader says there are more", rep.entries == 2, rep.entries)
+    check("in the report too",
+          "holds more than one ANR" in anr.render(rep), anr.render(rep))
