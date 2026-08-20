@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .facts import subcommands
 from .model import MAIN, Ask, Call, Session, SubAgent, Turn, Usage, clip, ts_to_epoch
 
 AGENT_NAME = "claude-code"
@@ -47,7 +48,6 @@ FINAL_TEXT_LIMIT = 12000
 # written, and a 2000-character clip lost it.
 COMMAND_LIMIT = 8000
 
-_ECHOLOT_CALL = re.compile(r"(?:^|[\s;&|(`$])echolot\s+([a-z-]+)")
 # MCP tools that run a shell command: the name says so, or the input does.
 _SHELL_TOOL = re.compile(
     r"(?:^|__)(?:ctx_execute|ctx_batch_execute|bash|shell|sh|terminal|"
@@ -102,12 +102,14 @@ def list_sessions(pdir: Path) -> list[SessionRef]:
 
 
 def echolot_subcommands(session: Session) -> list[str]:
-    """Every `echolot <sub>` seen in Bash calls, in order."""
-    out = []
-    for c in session.bash():
-        for m in _ECHOLOT_CALL.finditer(c.command or ""):
-            out.append(m.group(1))
-    return out
+    """Every echolot subcommand really invoked from a shell, in order.
+
+    Through the same rule the facts use, rather than a second regex beside it.
+    This one had no idea which words are subcommands, so `echo "echolot never
+    ran here"` put `never` in the count a session is listed by, and made a
+    session that had not touched the tool the newest candidate to reflect on.
+    """
+    return [sub for c in session.bash() for sub in subcommands(c.command or "")]
 
 
 def involves_echolot(session: Session) -> bool:

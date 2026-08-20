@@ -648,6 +648,47 @@ def _(report):
     assert "a\\|b" in text, text
 
 
+@check("reflect: a word after `echolot` is not a subcommand")
+def _(report):
+    """The readers and the facts disagreed on what counts as a call.
+
+    `facts` filters the match against the verbs the parser registers, and says
+    at length why: a real report once counted `ran`, `call`, `calls` and
+    `without` as subcommands, and its "By subcommand" line read like a
+    sentence. The Claude Code reader had a second regex beside it with no such
+    filter, so `echo "echolot never ran here"` put `never` in the count a
+    session is listed by — and made a session that never touched the tool the
+    newest candidate to reflect on.
+    """
+    from .reflect import claude_code
+    from .reflect import facts as facts_mod
+    from .reflect.model import Call, Session
+
+    assert facts_mod.subcommands('echo "echolot never ran here" && ls') == []
+    assert facts_mod.subcommands(
+        "cd x && echolot doctor -q && echolot analyze t.perfetto-trace") == \
+        ["doctor", "analyze"]
+    assert facts_mod.subcommands("echolot --help") == ["help"]
+    # A heredoc body is the config being written, not calibrate being run.
+    assert facts_mod.subcommands(
+        "cat > echolot.yml <<EOF\necholot calibrate a b\nEOF") == []
+
+    def session(*commands):
+        s = Session(id="s", agent="claude-code")
+        s.calls = [Call(id=str(i), ts="", tool="Bash", input={}, command=c)
+                   for i, c in enumerate(commands)]
+        return s
+
+    prose = session('echo "echolot was never run in this session"')
+    assert claude_code.echolot_subcommands(prose) == [], \
+        claude_code.echolot_subcommands(prose)
+    assert not claude_code.involves_echolot(prose), \
+        "a session that only talked about the tool is not one to reflect on"
+    real = session("echolot doctor", "echolot analyze x.perfetto-trace")
+    assert claude_code.echolot_subcommands(real) == ["doctor", "analyze"]
+    assert claude_code.involves_echolot(real)
+
+
 @check("compare: a pipe does not shift either of its tables")
 def _(report):
     """`compare` printed the sixth hand-rolled markdown table.
