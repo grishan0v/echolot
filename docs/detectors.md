@@ -63,6 +63,22 @@ problem. On `_tstate_win` the `dur` field is already clipped, because the
 question there is always "how long did the thread spend in this state inside
 the scenario".
 
+### Sums and single occurrences are different detectors
+
+Most of the shipped ones gate on an accumulated sum for a name: how much time
+went into `inflate` across the window. That is the right shape for "the whole
+thing got slower" and blind to a heavy tail — one occurrence of 86 ms among
+thousands dissolves into any sum you care to take, which is how a benchmark
+reporting P50 14.7 ms and P99 86 ms met silence from six detectors at once.
+
+`main_thread_outlier` is the other shape: a single occurrence against the
+median for that same name. Worth knowing before writing a detector, because
+the question decides the gate, and a `HAVING SUM(...)` answers only one of
+them. Two floors go under a ratio, or it is worthless at small sizes — an
+absolute one, so "four times longer than 0.5 ms" is not a finding, and a
+minimum number of occurrences, because a name seen three times has no typical
+duration to be an outlier from.
+
 ### A column may mean something else, if the header says so
 
 The contract is shared, and one detector bends it. In `frame_jank` `total_ms`

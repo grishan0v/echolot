@@ -97,9 +97,10 @@ The runner builds the perfetto config itself, but if you capture by hand
 (recipe in `echolot/claude/skills/echolot/references/collect.md`), four things
 are mandatory:
 
-**`sched/sched_switch`** — without it there is no `thread_state`, which means
-`runnable_starvation` and `uninstrumented_cpu` both go silent. Those are the
-two structural detectors.
+**`sched/sched_switch`** — without it there is no `thread_state`, and the two
+detectors built on it, `runnable_starvation` and `uninstrumented_cpu`, both go
+silent. They are also the two that need no instrumentation in the app, so on a
+project with none they are the whole report.
 
 **`linux.process_stats` with `scan_all_processes_on_start`** — the only source
 of process names. Without it `process.name` is empty and the config matches

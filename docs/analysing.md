@@ -124,3 +124,24 @@ works": the modules with the most code and none of it, by name.
 which of those modules actually burns CPU. And where the first markers go —
 the entry points, from the manifest and the SDK, with a source on every row
 — is `echolot mark`, in [mark.md](mark.md).
+
+## Two rows about one name
+
+A name can appear under both `main_thread_block` and `main_thread_outlier`,
+and they are not saying the same thing twice. The first gates on the **sum**
+for that name — the work is expensive every time it runs, and the fix is in
+the work. The second gates on a **single occurrence** against the median for
+that same name — the work is usually fine and once was not, so the cause is
+the state it hit that once: a cold cache, a lock, a first-run path, an
+allocation that stalled.
+
+Walking down to the code the same way for both wastes a round.
+`main_thread_outlier` puts the median and how many occurrences it came from in
+`detail`, which is also the number to hold a benchmark's percentiles against.
+
+## Once you have two of them
+
+Everything here reads one set of traces. The question that brought you —
+*it was 3 s, now it is 7 s* — has a second half that needs two, and reading
+two twenty-row tables against each other by eye is the work this tool exists
+to remove. That is [`echolot compare`](compare.md).
