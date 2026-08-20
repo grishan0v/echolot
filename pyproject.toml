@@ -6,7 +6,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "echolot"
-version = "0.4.0"
+# Read from echolot/__init__.py. Written in one place, because the version is
+# also reported by `doctor`, stamped into runs.jsonl and into the layer
+# manifest — and importlib.metadata answers from whatever dist-info exists,
+# which on an editable install is whatever was written the first time.
+dynamic = ["version"]
 description = "A deterministic layer between Perfetto traces and AI agents"
 readme = "README.md"
 license = "Apache-2.0"
@@ -84,6 +88,9 @@ testpaths = ["tests"]
 # from the standard library is how a future Python announces a breakage, and the
 # only cheap moment to hear it is now.
 filterwarnings = ["error::DeprecationWarning:echolot.*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "echolot.__version__" }
 
 [project.urls]
 Homepage = "https://github.com/grishan0v/echolot"

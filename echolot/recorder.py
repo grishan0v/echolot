@@ -70,10 +70,17 @@ def _config_stamp(path: str | None) -> dict[str, Any] | None:
 
 
 def version() -> str:
-    """The installed package version, or "unknown" from a bare checkout."""
+    """The version of the code that is running.
+
+    Read from the package rather than from installed metadata. An editable
+    install keeps the dist-info it was created with, so importlib.metadata
+    happily answers 0.1.0 for a checkout that says 0.4.0 — and that number is
+    stamped into every line of this log, into the layer manifest, and into the
+    first line `doctor` prints.
+    """
     try:
-        from importlib.metadata import version as _v
-        return _v("echolot")
+        from . import __version__
+        return __version__
     except Exception:
         return "unknown"
 

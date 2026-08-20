@@ -98,3 +98,50 @@ def test_evidence_comes_from_the_worst_repeat():
     got = merged_rows(runs)["lock"]
     check("the heavier run's evidence is the one kept",
           got["detail"] == "owner tid 222", got)
+
+
+# --- detectors a config left out --------------------------------------------
+
+def test_a_report_names_the_detectors_the_config_left_out():
+    """"3 of 6" reads as though six were all there is.
+
+    A project config that names detectors enables only those. A detector
+    shipped later never runs there, and until the report said so, nothing did:
+    a real project was missing two of eight for months after they landed.
+    """
+    rep = report_mod.build(
+        "t.perfetto-trace", {"process": "p", "duration_ms": 1.0},
+        [{"id": "d", "title": "T", "why": "", "params": {},
+          "params_source": "config", "error": None, "rows": []}],
+        absent=["main_thread_outlier", "frame_jank"])
+
+    check("the ids are in the summary, sorted",
+          rep["summary"]["absent_ids"] == ["frame_jank", "main_thread_outlier"],
+          rep["summary"])
+    text = report_mod.to_markdown(rep)
+    check("and the markdown says it above the config line",
+          "did not run" in text and "`frame_jank`" in text, text[:400])
+    check("with what to do about it",
+          "--defaults" in text, text[:400])
+
+
+def test_nothing_is_said_when_the_config_leaves_nothing_out():
+    rep = report_mod.build(
+        "t.perfetto-trace", {"process": "p", "duration_ms": 1.0},
+        [{"id": "d", "title": "T", "why": "", "params": {},
+          "params_source": "default", "error": None, "rows": []}])
+    check("no ids", rep["summary"]["absent_ids"] == [], rep["summary"])
+    check("and no warning", "did not run" not in report_mod.to_markdown(rep))
+
+
+def test_the_absent_set_survives_merging_repeats():
+    """One config produced every repeat, so it left the same ones out."""
+    runs = [report_mod.build("a", {"process": "p", "duration_ms": 1.0},
+                             [{"id": "d", "title": "T", "why": "", "params": {},
+                               "params_source": "config", "error": None,
+                               "rows": [row("x", self_ms=1.0)]}],
+                             absent=["frame_jank"])
+            for _ in range(3)]
+    merged = report_mod.aggregate(runs)
+    check("carried through the merge",
+          merged["summary"]["absent_ids"] == ["frame_jank"], merged["summary"])
