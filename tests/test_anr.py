@@ -33,6 +33,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import anr  # noqa: E402
@@ -593,3 +595,118 @@ def test_the_verb_refuses_a_file_that_is_not_there(tmp_path):
     code, _, err = run("anr", str(tmp_path / "nothing.txt"))
     check("exit 2", code == 2, code)
     check("and says so", "no such file" in err, err)
+
+
+# --- from a frame to a file -------------------------------------------------
+#
+# A java frame carries the file and the line the compiler put in it, so the
+# repository is asked to confirm a path rather than to find one. What these
+# pin is the part that can still be wrong: which file, when two modules hold
+# one of that name, and saying so when the answer was a guess.
+
+@pytest.fixture
+def repo(tmp_path) -> Path:
+    root = tmp_path / "checkout"
+    files = {
+        "app/src/main/java/com/example/app/data/StateStore.kt": "class StateStore",
+        "app/src/main/java/com/example/app/ui/HomeViewModel.kt": "class HomeViewModel",
+        # The same file name in another module, and another package.
+        "feature/src/main/java/com/other/pkg/StateStore.kt": "class StateStore",
+        # One of its name, in a directory that does not spell out its package.
+        "app/src/main/java/legacy/Sync.kt": "class Sync",
+        # Never reached: everything under a build directory is output.
+        "app/build/generated/com/example/app/ui/HomeViewModel.kt": "generated",
+    }
+    for rel, body in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return root
+
+
+def test_a_frame_is_placed_by_its_own_file_and_line(repo):
+    placed, _ = anr.locate(report(), repo)
+    by_symbol = {f.symbol: f for f in placed}
+    read = by_symbol["com.example.app.data.StateStore.read"]
+    check("the file", read.file.endswith("com/example/app/data/StateStore.kt"),
+          read.file)
+    check("and the line the frame carried", read.line == 31, read.line)
+
+
+def test_the_package_settles_which_of_two_files_of_a_name(repo):
+    placed, _ = anr.locate(report(), repo)
+    read = next(f for f in placed
+                if f.symbol == "com.example.app.data.StateStore.read")
+    check("the module whose package agrees", "feature/" not in read.file, read.file)
+    check("and it is not a guess", read.exact, read)
+
+
+def test_one_file_of_that_name_is_not_a_guess_whatever_the_package_says(repo):
+    """Kotlin lets a class live in a directory that does not spell out its
+    package; warning about that would cry wolf on every one of them."""
+    index = anr.source_index(repo)
+    found = anr.place("com.example.app.work.Sync.run(Sync.kt:19)", index, repo)
+    check("placed", found is not None and found.file.endswith("legacy/Sync.kt"),
+          found)
+    check("and certain", found.exact, found)
+
+
+def test_build_output_is_not_a_place_in_the_repository(repo):
+    placed, _ = anr.locate(report(), repo)
+    for found in placed:
+        check("nothing under build/", "/build/" not in found.file, found.file)
+
+
+def test_a_frame_that_names_no_source_is_placed_nowhere(repo):
+    index = anr.source_index(repo)
+    for frame in ("java.lang.Object.wait(Native method)",
+                  "android.view.View.-$$Nest$m(unavailable:0)",
+                  "com.google.android.gms.dynamite.zza.run"
+                  "(com.google.android.gms:play-services-basement@@18.3.0:2)"):
+        check(f"`{frame[:40]}` is not a file", anr.place(frame, index, repo) is None,
+              anr.place(frame, index, repo))
+
+
+def test_a_frame_this_checkout_does_not_have_is_said_out_loud(repo):
+    """The module is elsewhere, or the report is from another version.
+
+    Both are worth saying rather than rounding down to a shorter list.
+    """
+    other = DUMP.replace("HomeViewModel.kt:88", "Missing.kt:88")
+    placed, missing = anr.locate(anr.parse(other), repo)
+    check("it is not placed", not any("Missing" in f.file for f in placed), placed)
+    check("it is counted", any("Missing.kt" in frame for frame in missing), missing)
+    check("and the report says so",
+          "this checkout does not have" in anr.render(anr.parse(other),
+                                                      (placed, missing)))
+
+
+def test_the_verb_places_frames_when_pointed_at_a_checkout(repo, tmp_path):
+    report_file = tmp_path / "export.txt"
+    report_file.write_text(DUMP, encoding="utf-8")
+
+    code, out, _ = run("anr", str(report_file), "--root", str(repo))
+    check("exit 0", code == 0, code)
+    check("the section is there",
+          "## Where these frames are in this checkout" in out, out)
+    check("with a path a person can open",
+          "com/example/app/data/StateStore.kt:31" in out, out)
+
+    found = json.loads(run("anr", str(report_file), "--root", str(repo),
+                           "--json")[1])
+    placed = {f["symbol"]: f for f in found["code"]["placed"]}
+    check("and an agent gets the same",
+          placed["com.example.app.data.StateStore.read"]["line"] == 31, placed)
+
+
+def test_a_root_with_no_sources_costs_the_report_nothing(tmp_path):
+    report_file = tmp_path / "export.txt"
+    report_file.write_text(DUMP, encoding="utf-8")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    code, out, _ = run("anr", str(report_file), "--root", str(empty))
+    check("still exits 0", code == 0, code)
+    check("the findings are still there", "## What was holding the lock" in out, out)
+    check("and no empty section is printed",
+          "Where these frames are" not in out, out)

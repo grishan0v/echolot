@@ -1053,12 +1053,21 @@ def cmd_anr(args) -> int:
               file=sys.stderr)
         return 2
 
+    # The repository is optional on purpose. A report read anywhere still
+    # answers what froze; pointed at a checkout it also says where to open.
+    code = None
+    root = Path(args.root).resolve()
+    if root.is_dir():
+        code = anr_mod.locate(report, root)
+
     found = anr_mod.chains(report)
     recorder.note(anr=source.name, threads=len(report.threads),
                   chains=len(found),
-                  blocks_main=any(c.blocks_main for c in found))
+                  blocks_main=any(c.blocks_main for c in found),
+                  placed=len(code[0]) if code else 0)
 
-    print(anr_mod.to_json(report) if args.json else anr_mod.render(report))
+    print(anr_mod.to_json(report, code) if args.json
+          else anr_mod.render(report, code))
     return 0
 
 
@@ -1707,6 +1716,9 @@ def build_parser() -> argparse.ArgumentParser:
                     "was doing, and the few threads that were not idle. Reads "
                     "and prints; opens no investigation and writes nothing.")
     an_r.add_argument("report", help="the report file")
+    an_r.add_argument("--root", default=".",
+                      help="repository root, to place the frames in files "
+                           "(default: the current directory)")
     an_r.add_argument("--json", action="store_true",
                       help="the same findings in the shape an agent walks")
     an_r.set_defaults(func=cmd_anr)
