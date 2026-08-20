@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
-from .model import MAIN, Call, Session, ts_to_epoch
+from .model import Call, MAIN, Session, strip_heredocs, ts_to_epoch
 
 # Shared with signals.py — the vocabulary of what an agent does around the tool.
 RE_ECHOLOT = re.compile(r"(?:^|[\s;&|(`$/])echolot\s+([a-z-]+)((?:\s+[^;&|\n]*)?)")
@@ -56,7 +56,6 @@ _CONFIDENCE = re.compile(
     r"(?:Confidence|Уверенность)\s*[:*]*\s*\**\s*([^\n.*(]{0,60})", re.I)
 # A heredoc body is data, not commands: `cat > x.yml <<EOF … echolot calibrate …`
 # is a config being written, not calibrate being run.
-_HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n(?:.*?\n)?\s*\2[ \t]*(?=\n|$)", re.S)
 # A traceback whose first frame is the shell's inline python belongs to the
 # agent's one-liner, not to echolot.
 _TB_FIRST_FRAME = re.compile(r"Traceback \(most recent call last\):\s*File \"([^\"]*)\"")
@@ -135,16 +134,6 @@ def _skipped_by_glob(argvs: list[str], missing: str) -> int | None:
     return scores.index(top)
 
 
-def strip_heredocs(cmd: str) -> str:
-    """The command with heredoc bodies removed, first lines kept.
-
-    What is between `<<EOF` and `EOF` is data — a config being written, a
-    python script — and an `echolot calibrate` mentioned in there is not a
-    call. Everything that scans for commands works on this view.
-    """
-    return _HEREDOC.sub(lambda m: m.group(0).split("\n", 1)[0] + "\n", cmd)
-
-
 def _is_echolot_traceback(head: str) -> bool:
     """A traceback in the output, and not from the agent's inline python."""
     if "Traceback (most recent call last)" not in head:
@@ -161,9 +150,13 @@ def writes_file(cmd: str, name: str) -> bool:
     is mentioned in the same command (the path is usually in a variable by
     then). Edit/Write-only reading missed all of these.
     """
-    if name not in cmd:
+    # The name has to end where the name ends. Without the boundary,
+    # `echolot.yml` matches inside `echolot.yml.example` — and writing the
+    # documented example, in this tool's own repository, was reported as
+    # editing a project's config by hand.
+    n = re.escape(name) + r"(?![\w.-])"
+    if not re.search(n, cmd):
         return False
-    n = re.escape(name)
     if re.search(r">>?\s*[\"']?[^\s\"'|;&]*" + n, cmd):
         return True
     if re.search(r"(?:^|[\s;&|(])(?:sed\s+-[a-zA-Z]*i\S*|perl\s+-[a-zA-Z]*i\S*|tee|cp|mv)\b"
@@ -215,7 +208,7 @@ def echolot_calls(session: Session) -> list[EcholotCall]:
     out: list[EcholotCall] = []
     known = verbs()
     for c in session.bash():
-        cmd = strip_heredocs(c.command or "")
+        cmd = c.shell
         head = c.output_head or ""
         matches = [m for m in RE_ECHOLOT.finditer(cmd)
                    if is_invocation(m.group(1), known)]
