@@ -25,10 +25,17 @@ convention. Every proposal carries its source, so a reader can see how firm
 the ground is; what cannot be found is said as not found, never guessed;
 the output is sorted and byte-for-byte the same for the same tree.
 
-Applying is mechanical and reversible: each inserted line ends with the tag
-`// echolot:mark`, and `--remove` deletes exactly those lines. A method with
-a `return` in its body is refused for a begin/end pair (the end would be
-skipped) and reported as "mark by hand".
+Applying is mechanical and reversible: each inserted line is a whole line of
+its own ending in the tag `// echolot:mark`, and `--remove` deletes exactly
+those lines. Both halves of that sentence are load-bearing, so a block that
+cannot take a line of its own is refused rather than approximated:
+
+    a `return` in the body   the end would be skipped;
+    a body written on one    the begin and end lines would cross, and the
+    line                     body would end up inside the begin line's
+                             comment — where `--remove` would then delete it.
+
+Both are reported as "mark by hand" and shown with the reason.
 """
 
 from __future__ import annotations
@@ -44,6 +51,14 @@ SOURCE_EXT = (".kt", ".java")
 SKIP_DIRS = {"build", ".git", ".gradle", "generated", ".echolot", "node_modules"}
 DEFAULT_PREFIX = "AGENTTMP_"
 TAG = "// echolot:mark"
+# Exactly what `apply` writes, and nothing else. `remove` deletes whole lines,
+# so a rule as loose as "the tag is somewhere in it" takes the line's real code
+# along — which is how a one-line block used to be destroyed rather than merely
+# mangled. A hand-written tag on a line of code is now left alone and reported
+# as such rather than quietly deleted.
+_APPLIED_LINE = re.compile(
+    r"^\s*android\.os\.Trace\.(?:begin|end)Section\s*\([^)]*\)\s*;?\s*"
+    + re.escape(TAG) + r"\s*$")
 CAP = 7   # proposals shown; the rest is a count. Five to seven is a skeleton, not a survey.
 
 # --- the vocabulary -----------------------------------------------------------
@@ -74,6 +89,11 @@ _CALL = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=[({])")
 _KEYWORDS = {"if", "for", "while", "when", "try", "catch", "finally", "return", "else",
              "do", "run", "let", "also", "apply", "with", "repeat", "synchronized",
              "throw", "object", "fun", "class", "val", "var", "super", "this"}
+
+
+def is_applied_line(line: str) -> bool:
+    """A line `--apply` wrote: safe for `--remove` to delete whole."""
+    return bool(_APPLIED_LINE.match(line))
 
 
 @dataclass
@@ -175,6 +195,36 @@ def match_brace(clean: str, open_at: int) -> int | None:
 
 def line_of(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
+
+
+def one_line_body(text: str, open_at: int | None, close_at: int | None) -> bool:
+    """Is this block's `{ … }` all on one source line?
+
+    `apply` puts the begin line just after the `{` and the end line at the
+    start of the `}`'s line. When those are the same line the second insert
+    lands *before* the first: the end marker comes out above the block, and
+    the body is swallowed by the begin line's trailing `// echolot:mark`.
+    `remove` then deletes that line whole and the body goes with it, which is
+    the one thing this module promises never to do.
+
+    `setContent { AppRoot() }` is the shape a great deal of Compose is written
+    in, so this is not a corner. Refused and said out loud, the way a `return`
+    in the body already is.
+    """
+    if open_at is None or close_at is None:
+        return False
+    return "\n" not in text[open_at:close_at]
+
+
+def _why_not(open_at: int | None, has_return: bool, flat: bool) -> str:
+    """Why a block cannot take a begin/end pair mechanically. Empty when it can."""
+    if open_at is None:
+        return "no block body found"
+    if has_return:
+        return "has a return in its body — mark by hand"
+    if flat:
+        return "the whole body is on one line — split the block, or mark by hand"
+    return ""
 
 
 def _rel(path: Path, root: Path) -> str:
@@ -433,12 +483,13 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
                                  f"onCreate — nothing of yours runs at bindApplication")
             else:
                 line, o, c, ret = oc
+                flat = one_line_body(t, o, c)
                 add(Proposal("app_oncreate", _rel(f, root), line,
                              f"{simple_name(app_cls)}.onCreate — what runs inside bindApplication",
                              prefix + "app_oncreate", "manifest+lifecycle",
-                             gradle_module(f, root), applicable=o is not None and not ret,
-                             reason=("has a return in its body — mark by hand" if ret else
-                                     "" if o is not None else "no block body found"),
+                             gradle_module(f, root),
+                             applicable=o is not None and not ret and not flat,
+                             reason=_why_not(o, ret, flat),
                              open_at=o, close_at=c))
     else:
         out.notes.append("no custom Application class in the manifest — bindApplication is "
@@ -461,20 +512,23 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
                 + (f" — it inherits from {base}; the override, if any, is there" if base else ""))
         else:
             line, o, c, ret = oc
+            flat = one_line_body(t, o, c)
             add(Proposal("activity_oncreate", _rel(f, root), line,
                          f"{simple_name(act)}.onCreate — the launcher Activity, what runs inside activityStart",
                          prefix + "activity_oncreate", "manifest+lifecycle",
-                         gradle_module(f, root), applicable=o is not None and not ret,
-                         reason=("has a return in its body — mark by hand" if ret else
-                                 "" if o is not None else "no block body found"),
+                         gradle_module(f, root),
+                         applicable=o is not None and not ret and not flat,
+                         reason=_why_not(o, ret, flat),
                          open_at=o, close_at=c))
         sc = find_lambda(t, _SET_CONTENT)
         if sc:
             line, o, c = sc
+            flat = one_line_body(t, o, c)
             add(Proposal("set_content", _rel(f, root), line,
                          "setContent { } — the root of the Compose tree; recomposition re-enters it",
                          prefix + "set_content", "api", gradle_module(f, root),
-                         applicable=o is not None and c is not None,
+                         applicable=o is not None and c is not None and not flat,
+                         reason=_why_not(o, False, flat) if o is None or flat else "",
                          open_at=o, close_at=c, lambda_body=True))
             # one hop: what setContent calls, when it is this project's code
             if o is not None and c is not None:
@@ -585,9 +639,13 @@ def apply(root: Path, pl: Plan) -> list[tuple[str, list[str]]]:
         text = path.read_text(encoding="utf-8")
         semi = ";" if path.suffix == ".java" else ""
         edits = []   # (offset, insert_text)
+        marked = []
         for p in by_file[rel]:
             if TAG in text[p.open_at:p.close_at + 1]:
                 continue   # already marked here
+            if one_line_body(text, p.open_at, p.close_at):
+                continue   # the two inserts would cross — see one_line_body
+            marked.append(p.marker)
             ind = _inner_indent(text, p.open_at)
             begin = f"\n{ind}android.os.Trace.beginSection(\"{p.marker}\"){semi} {TAG}"
             end = f"{ind}android.os.Trace.endSection(){semi} {TAG}\n"
@@ -600,7 +658,7 @@ def apply(root: Path, pl: Plan) -> list[tuple[str, list[str]]]:
         for offset, ins in sorted(edits, key=lambda e: -e[0]):
             text = text[:offset] + ins + text[offset:]
         path.write_text(text, encoding="utf-8")
-        done.append((rel, [p.marker for p in by_file[rel]]))
+        done.append((rel, marked))
     return done
 
 
@@ -616,7 +674,7 @@ def remove(root: Path) -> list[tuple[str, int]]:
         if TAG not in text:
             continue
         lines = text.split("\n")
-        kept = [ln for ln in lines if TAG not in ln]
+        kept = [ln for ln in lines if not is_applied_line(ln)]
         removed = len(lines) - len(kept)
         if removed:
             p.write_text("\n".join(kept), encoding="utf-8")

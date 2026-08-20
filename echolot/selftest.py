@@ -798,7 +798,7 @@ def _(report):
 
 def _mark_repo(root: Path, *, app="GloomApp", act="MainActivity", theme="AppTheme",
                nav="AppNavHost", pkg="com.example.app", app_return=False,
-               launcher=True, second_app=False) -> None:
+               launcher=True, second_app=False, one_line=False) -> None:
     """A Kotlin + Compose app: manifest, Application, launcher Activity with
     setContent, a theme and a nav host in two modules, Room in a core module.
 
@@ -828,13 +828,18 @@ def _mark_repo(root: Path, *, app="GloomApp", act="MainActivity", theme="AppThem
         f"    override fun onCreate() {{\n        super.onCreate()\n{ret}"
         f"        // a string with a brace: \"}}\" and a comment }} here\n"
         f"        init()\n    }}\n}}\n", encoding="utf-8")
-    (main / f"kotlin/x/{act}.kt").write_text(
-        f"package {pkg}.ui\n\nclass {act} : ComponentActivity() {{\n"
+    body = (
+        f"    override fun onCreate(b: Bundle?) {{ super.onCreate(b); "
+        f"setContent {{ {theme} {{ {nav}(start = true) }} }} }}\n"
+        if one_line else
         f"    override fun onCreate(savedInstanceState: Bundle?) {{\n"
         f"        super.onCreate(savedInstanceState)\n"
         f"        setContent {{\n            {theme} {{\n                Surface(modifier = Modifier) {{\n"
         f"                    {nav}(start = true)\n                }}\n            }}\n        }}\n"
-        f"    }}\n}}\n", encoding="utf-8")
+        f"    }}\n")
+    (main / f"kotlin/x/{act}.kt").write_text(
+        f"package {pkg}.ui\n\nclass {act} : ComponentActivity() {{\n"
+        + body + "}\n", encoding="utf-8")
     ui = root / "core/ui/src/main/kotlin"
     ui.mkdir(parents=True)
     (ui / "Theme.kt").write_text(
@@ -862,9 +867,13 @@ def _mark_repo(root: Path, *, app="GloomApp", act="MainActivity", theme="AppThem
             '<intent-filter><action android:name="android.intent.action.MAIN" />'
             '<category android:name="android.intent.category.LAUNCHER" /></intent-filter>'
             '</activity></application>\n</manifest>\n', encoding="utf-8")
+        # A block body over several lines: this tree is about which module
+        # `--module` picks, and a one-line body is refused for its own
+        # reasons two checks below.
         (wear / "kotlin/WearActivity.kt").write_text(
             f"package {pkg}.wear\nclass WearActivity : ComponentActivity() {{\n"
-            f"    override fun onCreate(b: Bundle?) {{ super.onCreate(b) }}\n}}\n",
+            f"    override fun onCreate(b: Bundle?) {{\n"
+            f"        super.onCreate(b)\n    }}\n}}\n",
             encoding="utf-8")
 
 
@@ -970,6 +979,57 @@ def _(report):
         assert {rel for rel, _ in touched} == files and all(n == 2 or n == 4 for _, n in touched), touched
         after = {p: p.read_bytes() for p in mk.source_files(root)}
         assert after == before, "remove must restore every file byte for byte"
+
+
+@check("mark: a block written on one line is refused, never mangled")
+def _(report):
+    """`setContent { AppRoot() }` — half of Compose is written this way.
+
+    apply puts the begin line after the `{` and the end line at the start of
+    the `}`'s line; on one line those two inserts cross. The end marker came
+    out above the block, the body ended up inside the begin line's comment,
+    and `--remove` — which deletes tagged lines whole — then took the body
+    with it. The file could not be got back.
+    """
+    from . import mark as mk
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root, one_line=True)
+        before = {p: p.read_bytes() for p in mk.source_files(root)}
+        pl = mk.plan(root, package="com.example.app", allowed=["app/src/main"])
+        flat = [p for p in pl.proposals
+                if p.kind in ("activity_oncreate", "set_content")]
+        assert len(flat) == 2, _shape(pl)
+        for p in flat:
+            assert not p.applicable, f"a one-line block is not applicable: {p}"
+            assert "one line" in p.reason, p.reason
+        done = mk.apply(root, pl)
+        # The Application, whose onCreate spans lines, is still marked: the
+        # refusal is about the block, not about the file or the run.
+        assert [rel for rel, _ in done] == ["app/src/main/kotlin/x/GloomApp.kt"], done
+        act = root / "app/src/main/kotlin/x/MainActivity.kt"
+        assert act.read_bytes() == before[act], \
+            "a one-line block must come out of --apply untouched"
+        mk.remove(root)
+        after = {p: p.read_bytes() for p in mk.source_files(root)}
+        assert after == before, "remove must restore every file byte for byte"
+
+
+@check("mark: --remove deletes its own lines and nothing that carries code")
+def _(report):
+    """The other half of the same promise.
+
+    `remove` used to delete any line holding the tag. That is safe only while
+    every such line is one apply wrote — and the moment one was not, the code
+    sharing the line went too. Now the shape is the predicate, and a tag
+    someone typed onto a line of their own code is left where it is.
+    """
+    from . import mark as mk
+    assert mk.is_applied_line(
+        f'    android.os.Trace.beginSection("AGENTTMP_x") {mk.TAG}')
+    assert mk.is_applied_line(f'  android.os.Trace.endSection(); {mk.TAG}')  # Java
+    assert not mk.is_applied_line(f'    doWork() {mk.TAG}')
+    assert not mk.is_applied_line(f'    // TODO {mk.TAG} clean this up')
 
 
 @check("domains: no instrumentation is a report, not an empty output")
