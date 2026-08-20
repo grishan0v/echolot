@@ -49,6 +49,7 @@ TID_HEAP = 4202
 TID_OKHTTP = 4203
 TID_INSTR = 4204
 TID_BLOCKED = 4205
+TID_STUCK = 4206
 
 THREADS = {
     TID_MAIN: "m.example.app",  # Linux truncates comm to 15 characters
@@ -57,6 +58,7 @@ THREADS = {
     TID_OKHTTP: "OkHttp Dispatcher",
     TID_INSTR: "WellInstrumented",
     TID_BLOCKED: "BlockingIO-1",
+    TID_STUCK: "StuckForever",
 }
 
 # --- a foreign process: the process-isolation control ----------------------
@@ -131,6 +133,19 @@ SF_FRAMES = [
 # Screen.firstFrame (end), i.e. [100, 1105].
 
 SLICES = {
+    # A block that outlives the recording: opened 60 ms before the window
+    # closes and never ended, which is what ART's contention slice looks like
+    # when the lock is still held when tracing stops. Read as a slice of no
+    # length — which is what a raw `dur = -1` becomes under MAX(dur, 0) — the
+    # longest block in the trace disappears from every detector at once. On a
+    # real freeze this was twenty seconds of it.
+    #
+    # On its own thread rather than on main: the point is how the pipeline
+    # reads an open slice, and a window-long block on the main thread would
+    # rewrite half the other findings to prove it.
+    TID_STUCK: [
+        ("Lock contention on a monitor lock (owner tid: 4444)", 1045, None, []),
+    ],
     TID_MAIN: [
         # BEFORE the window — main_thread_block must not see it
         ("Bootstrap_OUTSIDE", 0, 50, []),
@@ -273,6 +288,11 @@ SCHED = [
     # depth is not evidence of anything.
     (0, TID_MAIN, 860, 1300, S),
 
+    # StuckForever: 10 ms on a CPU and then blocked for good. Enough to give
+    # the thread a place in the schedule and far too little to interest
+    # uninstrumented_cpu.
+    (5, TID_STUCK, 1040, 1050, S),
+
     # uninstrumented_cpu: 300 ms of Running, zero slices → fires
     (1, TID_WORKER, 200, 350, S),
     (1, TID_WORKER, 400, 550, S),
@@ -299,11 +319,19 @@ SCHED = [
 
 
 def _flatten(slices, out, seq):
-    """Unrolls the slice tree into B/E events with correct nesting."""
+    """Unrolls the slice tree into B/E events with correct nesting.
+
+    A duration of None means the slice never ends: the begin event is written
+    and no end event follows, which is what a trace looks like when the thing
+    was still happening when recording stopped. trace_processor gives such a
+    slice `dur = -1`, and reading that as zero is how the longest block in a
+    trace becomes invisible.
+    """
     for name, start, dur, children in slices:
         out.append((ms(start), next(seq), "B", name))
         _flatten(children, out, seq)
-        out.append((ms(start + dur), next(seq), "E", name))
+        if dur is not None:
+            out.append((ms(start + dur), next(seq), "E", name))
     return out
 
 

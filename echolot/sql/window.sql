@@ -13,15 +13,39 @@ SELECT {{ts_start}} AS ts_start, {{ts_end}} AS ts_end;
 --              a 200 ms block stays a 200 ms block even if the window cut it
 --              in half;
 --   dur_win  — only the part inside the window. For coverage and share math.
+--
+-- A slice still open when the trace stopped comes back with dur = -1, and
+-- reading that as zero is how the worst case in the trace becomes invisible.
+-- On a real ANR the main thread sat in ART's `monitor contention with owner
+-- …` for twenty seconds. The lock was never released, so the slice never
+-- closed, and every detector saw a slice of length zero. A block that outlives
+-- the recording is not a block of no length — it is the longest one there is,
+-- and the honest reading is that it ran to the end of the window.
+
 DROP VIEW IF EXISTS _slice_win;
 CREATE VIEW _slice_win AS
 SELECT
-    s.*,
+    s.slice_id,
+    s.ts,
+    CASE WHEN s.dur < 0 THEN {{ts_end}} - s.ts ELSE s.dur END        AS dur,
+    s.name,
+    s.depth,
+    s.utid,
+    s.tid,
+    s.thread_name,
+    s.is_main_thread,
+    -- Whether that duration is a measurement or a floor. A detector that
+    -- wants to say "at least" has the fact, and nothing has to infer it from
+    -- a number that happens to end exactly at the window.
+    CASE WHEN s.dur < 0 THEN 1 ELSE 0 END                            AS unfinished,
     MAX(s.ts, {{ts_start}})                                          AS ts_win,
-    MIN(s.ts + MAX(s.dur, 0), {{ts_end}}) - MAX(s.ts, {{ts_start}})  AS dur_win
+    MIN(s.ts + CASE WHEN s.dur < 0 THEN {{ts_end}} - s.ts
+                    ELSE MAX(s.dur, 0) END, {{ts_end}})
+        - MAX(s.ts, {{ts_start}})                                    AS dur_win
 FROM _slice s
 WHERE s.ts < {{ts_end}}
-  AND s.ts + MAX(s.dur, 0) > {{ts_start}};
+  AND s.ts + CASE WHEN s.dur < 0 THEN {{ts_end}} - s.ts
+                  ELSE MAX(s.dur, 0) END > {{ts_start}};
 
 -- Thread states, CLIPPED to the window.
 -- Here dur is already the clipped value: the question is always "how long did

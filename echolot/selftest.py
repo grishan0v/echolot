@@ -649,6 +649,35 @@ def _lowered_bar():
         }))
 
 
+@check("a block still running when the trace stopped is the longest one, not a zero")
+def _(report):
+    # trace_processor gives an unfinished slice dur = -1, and the window view
+    # used to fold that to zero with MAX(dur, 0). The effect was not a rounding
+    # error: on a real freeze the main thread sat in ART's contention slice for
+    # twenty seconds, the lock was never released, the slice never closed, and
+    # every detector in the report saw nothing at all. The worst thing in the
+    # trace was the one thing invisible in it.
+    #
+    # The fixture's `StuckForever` opens such a slice 60 ms before the window
+    # closes and never ends it. Sixty is the whole of what is left of the
+    # window, which is the reading being pinned: an open slice runs to the
+    # edge.
+    row = next(r for r in rows(report, "monitor_contention")
+               if r["location"] == "StuckForever")
+    assert row["max_ms"] == 60.0, row
+    assert row["count"] == 1, row
+
+
+@check("a finished block beside it keeps the length it actually had")
+def _(report):
+    # The other half of the same claim. Reading an open slice to the window's
+    # edge must not stretch the ones that ended on their own.
+    row = next(r for r in rows(report, "monitor_contention")
+               if r["location"] == "m.example.app")
+    assert row["max_ms"] == 30.0, row
+    assert row["total_ms"] == 42.0, row
+
+
 @check("anr: the record the system wrote, with its own subject")
 def _(report):
     found = rows(report, "anr")
