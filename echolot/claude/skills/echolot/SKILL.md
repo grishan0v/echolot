@@ -147,6 +147,42 @@ report. Three things decide how to read it:
   moved", not "the app changed". `instrumentation` names rows that appeared
   because you added `AGENTTMP_` markers between the rounds.
 
+## When what arrived is an ANR, not a regression
+
+Sometimes the question is not "it was 3 s, now it is 7 s" but a report from
+Crashlytics, Play Console, or the device's own drop box: the app stopped
+answering somewhere you cannot see. Different first move, and most of it needs
+no device and no trace.
+
+```bash
+echolot anr report.txt --root .
+```
+
+Reads and prints — it opens no investigation and writes nothing, so a folder of
+exports goes through it in one loop and the ones worth chasing are the ones
+that name a lock chain.
+
+| what it says | your next move |
+|---|---|
+| a lock chain with the main thread behind it | you have the mechanism. Open the holder's frames; no trace needed |
+| the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working |
+| frames placed in the checkout | open those lines |
+| frames landing nowhere | check out the build the report names — line numbers go stale first |
+
+The idle main thread is the case that wastes a day if you miss it: the dump is
+a snapshot taken five seconds in, and whatever caused the freeze had often let
+go by then. Reading its top frame as the culprit sends you into Android's
+message queue.
+
+Then `echolot mark --from-anr report.txt` proposes markers on the methods that
+were on the stack, and refuses the ones that would lie — a line that falls in a
+different function than the frame names, a `return` in the body, a one-line
+body. Show the reasons rather than working around them.
+
+To measure a freeze rather than read about one, record long enough for
+`anr_risk` and `anr` to see it: `duration_ms: 12000` does not hold a
+five-second freeze plus the five the system waits before declaring anything.
+
 ## Reading the report
 
 Details live in `references/report.md`; three things here that you will get

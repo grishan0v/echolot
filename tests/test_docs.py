@@ -29,9 +29,16 @@ from echolot import selftest
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# The prose spells small numbers out, so the patterns have to read them. The
+# list ended at ten and the eleventh document went in as a claim nothing
+# checked — a counter whose vocabulary runs out is a counter that stops
+# counting, quietly.
 WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
     "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20,
 }
 
 
