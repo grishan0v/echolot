@@ -17,7 +17,6 @@ import io
 import json
 import os
 import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -303,7 +302,6 @@ def reflected(tmp_path_factory):
 def test_the_reader_found_every_planted_event(reflected):
     """Transcript in, normalised session out, with nothing lost on the way."""
     report, _ = reflected
-    sig = {x["id"]: x for x in report["signals"]}
     src = report["source"]
     expect(src["model"] == "claude-fable-5", "model read from assistant rows")
     expect(src["agent_version"] == "2.1.0", "agent version read")

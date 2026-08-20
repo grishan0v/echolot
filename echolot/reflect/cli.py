@@ -163,12 +163,11 @@ def cmd_reflect(args) -> int:
 
 def _parse_since(text: str) -> float:
     """`2h`, `30m`, `3d` → epoch seconds of the cut-off."""
-    import time as _time
     m = re.fullmatch(r"(\d+)\s*([mhd])", text.strip())
     if not m:
         raise SystemExit(f"error: --since expects e.g. 2h, 30m, 3d; got '{text}'")
     n, unit = int(m.group(1)), m.group(2)
-    return _time.time() - n * {"m": 60, "h": 3600, "d": 86400}[unit]
+    return time.time() - n * {"m": 60, "h": 3600, "d": 86400}[unit]
 
 
 def _fmt_dur(seconds) -> str:

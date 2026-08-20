@@ -421,7 +421,7 @@ def _mix_line(window: dict[str, Any]) -> str | None:
     for name, v in sorted(by.items(), key=lambda kv: -kv[1]["chars"]):
         parts.append(f"{name} {v['calls']} calls · {v['chars'] / 1000:.0f}k chars ({v['share']}%)")
     total = window.get("total_chars", 0)
-    return (f"window fed by: " + " · ".join(parts)
+    return ("window fed by: " + " · ".join(parts)
             + f" — {total / 1000:.0f}k chars ≈ {total / 4000:.0f}k tokens of tool output")
 
 

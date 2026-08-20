@@ -142,7 +142,7 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
             by_id.setdefault(det["id"], []).append(det)
 
     detectors = []
-    for det_id, runs in by_id.items():
+    for runs in by_id.values():
         head = dict(runs[0])
         identity = identity_of(head)
         # (which repeat, the row) — the repeat's index is what the `runs`
@@ -157,7 +157,7 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         rows = []
         for key, seen in groups.items():
             found = [r for _, r in seen]
-            row: dict[str, Any] = dict(zip(identity, key))
+            row: dict[str, Any] = dict(zip(identity, key, strict=True))
             row["runs"] = f"{len({i for i, _ in seen})}/{total}"
             spread = {}
             for col in NUMERIC:

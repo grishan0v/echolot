@@ -15,6 +15,14 @@ on:
   push:
     tags: ["v*"]
 
+# The floor, so a job holds only what it declares. `publish` adds id-token and
+# `release` adds contents:write below; `build` needs neither and now says so.
+# It runs `python -m build`, which executes setup code out of the checked-out
+# tree, and it was the one workflow of the three without this line — in the
+# workflow that also carries PyPI's trust relationship.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
