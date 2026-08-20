@@ -35,8 +35,8 @@ creates the project and the publisher becomes permanent.
 
 `.github/workflows/checks.yml` runs on every pull request into `main`, and on
 `main` after a merge: `pytest` across every Python version the classifiers
-claim, and a `package` job that builds the artefacts and looks at the README
-four ways.
+claim, and a `package` job that looks at the README three ways and then builds
+the artefacts.
 
 The `package` job is the one that matters at release time, and it exists
 because a PyPI version number can never be reused. Not even after deletion. A
@@ -85,16 +85,30 @@ deletion.
 
 ## Checking the artefacts locally
 
-Same steps the workflow runs; useful before tagging.
+The packaging half of the `package` job, useful before tagging. CI has already
+run all four of its checks on the pull request, so this is a second look rather
+than the gate.
 
 ```bash
-python -m pip install build twine
+python -m pip install --upgrade build twine
 rm -rf dist && python -m build
 python -m twine check dist/*
 ```
 
-`twine check` verifies that the README renders on PyPI. Relative links do not
-resolve there, which is why the README links to `docs/` by full GitHub URL.
+That verdict is on the packaging metadata, and for a Markdown README it is the
+whole of it — the section above has the detail. `readme_renderer` arrives here
+as one of twine's own dependencies, and its presence does not make this the
+render either: without the `[md]` extra its Markdown renderer returns `None`
+instead of HTML, which is why the workflow installs `readme_renderer[md]`
+before rendering anything.
+
+The three README checks are not repeated here. Each is a dozen lines of Python
+that already live in `checks.yml`, and a second copy would drift from the first
+within two releases. What they cover: the version badge against the
+classifiers, the image addresses that have to survive the PyPI sanitiser, and
+the absence of relative links — which resolve against `pypi.org`, and are why
+README.md uses full GitHub URLs while `docs/*.md` link to each other
+relatively.
 
 ## Manual upload, if ever needed
 
