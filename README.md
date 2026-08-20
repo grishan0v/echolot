@@ -255,7 +255,7 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 | `probe` | processes, threads by CPU, scenario anchor candidates |
 | `names` | slice name inventory and detector mask coverage |
 | `domains` | slice-to-code map and instrumentation coverage |
-| `mark` | the first temporary markers for a project with none, from the manifest and the SDK — `--apply` / `--remove` |
+| `mark` | the first temporary markers for a project with none, from the manifest and the SDK, or from an ANR report's own frames with `--from-anr` — `--apply` / `--remove` |
 | `calibrate` | thresholds derived from known-healthy runs |
 | `explain` | list the detectors and their parameters |
 

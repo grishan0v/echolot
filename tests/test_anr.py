@@ -37,7 +37,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import anr  # noqa: E402
+from echolot import anr, mark  # noqa: E402
 from echolot.main import main as cli  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -710,3 +710,173 @@ def test_a_root_with_no_sources_costs_the_report_nothing(tmp_path):
     check("the findings are still there", "## What was holding the lock" in out, out)
     check("and no empty section is printed",
           "Where these frames are" not in out, out)
+
+
+# --- markers from a stack ---------------------------------------------------
+
+SOURCE = """\
+package com.example.app.data
+
+import com.example.app.log.Log
+
+class StateStore {
+
+  fun flush() {
+    write()
+    log()
+  }
+
+  fun read(): String {
+    val value = compute()
+    return value
+  }
+
+  fun brief() { write() }
+
+  companion object {
+    private const val KEY = "k"
+  }
+}
+"""
+
+
+def line_of(needle: str) -> int:
+    for number, text in enumerate(SOURCE.splitlines(), 1):
+        if needle in text:
+            return number
+    raise AssertionError(needle)
+
+
+@pytest.fixture
+def store(tmp_path) -> Path:
+    root = tmp_path / "checkout"
+    path = root / "app/src/main/java/com/example/app/data/StateStore.kt"
+    path.parent.mkdir(parents=True)
+    path.write_text(SOURCE, encoding="utf-8")
+    return root
+
+
+def plan_for(root: Path, symbol: str, needle: str):
+    rel = "app/src/main/java/com/example/app/data/StateStore.kt"
+    plan = mark.plan_from_anr(root, [(symbol, rel, line_of(needle))])
+    return plan.proposals[0]
+
+
+def test_a_lambdas_frame_names_the_function_it_was_written_in():
+    """Kotlin compiles a lambda into a class of its own, and the frame is that
+    class's synthetic method rather than anything a person wrote."""
+    cases = {
+        "com.example.app.data.StateStore.flush": "flush",
+        "com.example.Handler$updateLocality$2.invokeSuspend": "updateLocality",
+        # An anonymous class implementing an interface numbers every segment,
+        # and there the member's own name is the answer.
+        "com.example.MainActivity$1.onClick": "onClick",
+    }
+    for symbol, expected in cases.items():
+        check(f"`{symbol}` was written in `{expected}`",
+              mark.frame_function(symbol) == expected,
+              mark.frame_function(symbol))
+
+
+def test_the_marker_is_named_after_the_class_and_the_method():
+    check("package dropped",
+          mark.marker_for("com.example.app.data.StateStore.read", "AGENTTMP_")
+          == "AGENTTMP_StateStore_read")
+    check("and the compiler's dollars are not a name",
+          mark.marker_for("com.example.Handler$init$2.invoke", "AGENTTMP_")
+          == "AGENTTMP_Handler_init_2_invoke")
+
+
+def test_a_function_without_a_return_can_take_a_pair_mechanically(store):
+    proposal = plan_for(store, "com.example.app.data.StateStore.flush", "log()")
+    check("applicable", proposal.applicable, proposal.reason)
+    check("the declaration line, not the frame's",
+          proposal.line == line_of("fun flush"), proposal.line)
+
+
+def test_a_return_in_the_body_is_refused_and_said(store):
+    proposal = plan_for(store, "com.example.app.data.StateStore.read",
+                        "val value = compute")
+    check("refused", not proposal.applicable)
+    check("with the reason", "return in its body" in proposal.reason,
+          proposal.reason)
+
+
+def test_a_one_line_body_is_refused_the_way_it_already_was(store):
+    proposal = plan_for(store, "com.example.app.data.StateStore.brief",
+                        "fun brief")
+    check("refused", not proposal.applicable)
+    check("with the reason", "one line" in proposal.reason, proposal.reason)
+
+
+def test_a_line_in_no_function_is_refused(store):
+    proposal = plan_for(store, "com.example.app.data.StateStore.read",
+                        "const val KEY")
+    check("refused", not proposal.applicable)
+    check("with the reason", "no function around" in proposal.reason,
+          proposal.reason)
+
+
+def test_a_line_that_lands_in_another_function_than_the_frame_names(store):
+    """On a live report a frame naming `getActiveOrders` carried a line inside
+    `getPlacedOrder`. Bracketing that would name one function and measure
+    another, and the trace would then blame the wrong one."""
+    proposal = plan_for(store, "com.example.app.data.StateStore.read", "log()")
+    check("refused", not proposal.applicable)
+    check("naming both sides",
+          "`flush`" in proposal.reason and "`read`" in proposal.reason,
+          proposal.reason)
+
+
+def test_a_checkout_from_another_build_is_named_as_one(store):
+    rel = "app/src/main/java/com/example/app/data/StateStore.kt"
+    plan = mark.plan_from_anr(
+        store, [("com.example.app.data.StateStore.read", rel, line_of("import"))],
+        unplaced=4, version="26.15.1 (462)")
+    check("a note, not silence", plan.notes, plan.notes)
+    check("with the build in it", "26.15.1 (462)" in plan.notes[0], plan.notes)
+    check("and the count", "5 of 5" in plan.notes[0], plan.notes)
+
+
+def test_markers_from_a_stack_go_in_and_come_out_again(store):
+    rel = "app/src/main/java/com/example/app/data/StateStore.kt"
+    plan = mark.plan_from_anr(
+        store, [("com.example.app.data.StateStore.flush", rel, line_of("log()"))])
+    before = (store / rel).read_text(encoding="utf-8")
+
+    done = mark.apply(store, plan)
+    after = (store / rel).read_text(encoding="utf-8")
+    check("one file marked", len(done) == 1, done)
+    check("the marker is in it", "AGENTTMP_StateStore_flush" in after, after)
+    check("tagged so remove can find it", mark.TAG in after, after)
+
+    mark.remove(store)
+    check("and the file comes back exactly",
+          (store / rel).read_text(encoding="utf-8") == before,
+          (store / rel).read_text(encoding="utf-8"))
+
+
+def test_the_flag_reads_a_report_and_plans_from_its_frames(store, tmp_path):
+    dump = DUMP.replace("StateStore.kt:31", f"StateStore.kt:{line_of('log()')}")
+    dump = dump.replace("com.example.app.data.StateStore.read",
+                        "com.example.app.data.StateStore.flush")
+    report_file = tmp_path / "export.txt"
+    report_file.write_text(dump, encoding="utf-8")
+
+    code, out, _ = run("mark", "--root", str(store), "--from-anr",
+                       str(report_file), "--json")
+    check("exit 0", code == 0, code)
+    plan = json.loads(out)
+    markers = {p["marker"] for p in plan["proposals"]}
+    check("the frame became a proposal",
+          "AGENTTMP_StateStore_flush" in markers, markers)
+    check("and it says where it came from",
+          all(p["source"] == "anr" for p in plan["proposals"]), plan["proposals"])
+
+
+def test_the_flag_refuses_a_file_that_is_not_a_report(store, tmp_path):
+    plain = tmp_path / "notes.txt"
+    plain.write_text("just some text\n", encoding="utf-8")
+    code, _, err = run("mark", "--root", str(store), "--from-anr", str(plain))
+    check("exit 2", code == 2, code)
+    check("and says why", "not a report" in err, err)
