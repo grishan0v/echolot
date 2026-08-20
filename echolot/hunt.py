@@ -386,10 +386,11 @@ def leftovers(root: Path, prefix: str | None = None) -> dict[str, Any]:
 
     Counted by the prefix, which appears once per instrumentation point — on
     the `beginSection`, while its paired `endSection` carries only the tag. Of
-    those points, the ones `mark --apply` wrote also carry the tag and
-    `mark --remove` takes them out; ones the agent added by hand do not, and
-    have to go by hand. One number for both would send the human away
-    believing the tree was clean.
+    those points, the ones `mark --apply` wrote are a line of their own and
+    `mark --remove` takes them out; ones the agent added by hand are not, and
+    have to go by hand. The same predicate decides both here and there, so the
+    number is what `--remove` will actually do. One number for both would send
+    the human away believing the tree was clean.
     """
     from . import mark as mark_mod
 
@@ -412,7 +413,7 @@ def leftovers(root: Path, prefix: str | None = None) -> dict[str, Any]:
             continue
         files.append(str(p.relative_to(root)) if p.is_relative_to(root) else str(p))
         total += len(hits)
-        tagged += sum(1 for ln in hits if mark_mod.TAG in ln)
+        tagged += sum(1 for ln in hits if mark_mod.is_applied_line(ln))
     return {"files": files, "markers": total, "removable": tagged, "prefix": prefix}
 
 
