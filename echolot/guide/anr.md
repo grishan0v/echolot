@@ -23,15 +23,17 @@ record from `adb shell dumpsys dropbox --print data_app_anr`. Only the last of
 those carries the reason the system fired — checked across ten Crashlytics
 exports, none of them has one.
 
-Play Console has not been checked against a real export. It shows ART's format,
-so the reader should take it; if one is refused, say so and keep the file
-rather than working around it.
+Play Console strips who holds a monitor, so a chain from there names what
+everyone is queued on and says the holder is not in the file — look for it
+among the threads that were working. An export of the same freeze from
+Crashlytics or off a device is worth more.
 
 ## What to do with what it says
 
 | the report says | your next move |
 |---|---|
-| a lock chain with the main thread behind it | you have the mechanism. Open the holder's frames — this needs no trace |
+| a lock chain with the main thread behind it | you have the mechanism. Open the frames of the thread at the bottom — this needs no trace |
+| a queue with no holder named | the source withheld it. The holder is among the threads that were working |
 | the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working |
 | frames placed in the checkout | open those lines |
 | frames landing nowhere | check out the build the report names. Line numbers are the first thing to go stale |

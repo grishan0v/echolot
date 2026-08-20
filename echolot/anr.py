@@ -180,7 +180,32 @@ DUMPSYS = Source(
     body_indented=True,
 )
 
-SOURCES = (CRASHLYTICS, DUMPSYS)
+# What Play Console shows for an ANR cluster. Checked against a live export.
+#
+# Close to ART's and not the same: no `prio`, no `sysTid`, no header of any
+# kind, and the state is spelled in words with a space in it — `Timed Waiting`
+# rather than `TimedWaiting`. Frames carry a space before the parenthesis, and
+# native frames pad their columns.
+#
+# The one that matters: **no lock ownership**. Play Console strips
+# `held by thread N` and the `- locked` lines with it, so an export from here
+# can say a thread is blocked and never say by whom. The strongest finding this
+# reader has is unavailable from this source, and that is worth knowing before
+# choosing which console to export from.
+PLAY = Source(
+    name="play",
+    signature=re.compile(
+        r'^"(?P<name>[^"]*)" tid=(?P<tid>-?\d+) (?P<state>.+?)\s*$'
+    ),
+    frame=re.compile(r"^\s+at (?P<frame>.+)$"),
+    native=re.compile(r"^\s*#\d+\s+pc\s+[0-9a-fx]+\s+(?P<lib>\S+)"),
+    # There is nothing to read. A pattern that cannot match keeps the body
+    # reader uniform instead of teaching it that a source may have no locks.
+    lock=re.compile(r"(?!)"),
+    body_indented=True,
+)
+
+SOURCES = (CRASHLYTICS, DUMPSYS, PLAY)
 
 # Packages that belong to the platform, the runtime and the libraries every app
 # carries. Used only to decide which frames are worth printing — a stack of
@@ -585,6 +610,9 @@ class Chain:
     # reading — the others are queued exactly like the waiters are.
     holders: list[Thread] = field(default_factory=list)
     cycle: bool = False          # a holder waits, directly or not, on a waiter
+    # The monitor was worked out from the waiters rather than read off a note.
+    # True only for a source that records no ownership at all.
+    inferred: bool = False
 
     @property
     def owner(self) -> Thread | None:
@@ -661,8 +689,42 @@ def chains(report: Report) -> list[Chain]:
             holders=_down_to_the_root(owner, by_tid),
             cycle=_waits_back(owner, {t.tid for t in waiters}, by_tid),
         ))
+    if not found:
+        found = _queues_without_a_note(report)
     # Main first, then by how many threads piled up behind the lock.
     return sorted(found, key=lambda c: (not c.blocks_main, -len(c.waiters)))
+
+
+def _queues_without_a_note(report: Report) -> list[Chain]:
+    """Queues read off the waiters, for a source that records no ownership.
+
+    Play Console strips `held by thread N`, so an export from there says a
+    thread is blocked and never says by whom — the strongest finding this
+    reader has, gone. Most of it comes back without the note: a blocked thread
+    is standing in the method it could not enter, so several of them standing
+    in the same one are queued on the same monitor. On a live export seven
+    threads including main sat in one `getCurrentState`, and the Crashlytics
+    report of the same freeze confirms that class is the monitor.
+
+    What cannot be recovered is who holds it. That is said rather than guessed:
+    the holder is somewhere among the threads that were working, and picking
+    one would be inventing the half this source withheld.
+
+    One blocked thread on its own is not a queue and is only worth a row when
+    it is the main thread — everything else stops when that one does.
+    """
+    queues: dict[str, list[Thread]] = {}
+    for thread in report.threads:
+        if thread.state == "blocked" and thread.frames:
+            owner = thread.frames[0].split("(")[0].strip().rsplit(".", 1)[0]
+            if owner:
+                queues.setdefault(owner, []).append(thread)
+    return [
+        Chain(monitor=where, named=None, waiters=waiting, holders=[],
+              inferred=True)
+        for where, waiting in queues.items()
+        if len(waiting) > 1 or any(t.name == "main" for t in waiting)
+    ]
 
 
 def _down_to_the_root(owner: Thread | None,
@@ -899,20 +961,29 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
 
     found = chains(report)
     if found:
-        out += ["## What was holding the lock", "",
+        note = ("_several threads standing in the same method are queued on "
+                "the same monitor — the holder is what this source withheld_"
+                if all(c.inferred for c in found) else
                 "_a monitor held by a thread that is itself waiting is the "
-                "mechanism, not a coincidence — this section needs no trace_", ""]
+                "mechanism, not a coincidence — this section needs no trace_")
+        out += ["## What was holding the lock", "", note, ""]
         for chain in found:
             name = chain.named or chain.monitor
             also = f" (`{chain.monitor}` in the dump)" if chain.named else ""
             who = ", ".join(f"`{t.name}`" for t in chain.waiters[:4])
             if len(chain.waiters) > 4:
                 who += f" and {len(chain.waiters) - 4} more"
-            out.append(f"**{len(chain.waiters)} denied `{name}`**{also} — {who}")
+            verb = "blocked inside" if chain.inferred else "denied"
+            out.append(f"**{len(chain.waiters)} {verb} `{name}`**{also} — {who}")
             if chain.cycle:
                 out.append("")
                 out.append("> The holder is itself waiting on one of them: "
                            "this is a deadlock.")
+            if chain.inferred:
+                out += ["", "This source does not record who holds a monitor, "
+                            "so the holder is not in this file at all. It is "
+                            "one of the threads below that were working.", ""]
+                continue
             if not chain.holders:
                 out += ["", "Held by a thread that is not in this dump.", ""]
                 continue
@@ -1068,6 +1139,7 @@ def summary(report: Report,
                 "monitor": chain.monitor,
                 "named": chain.named,
                 "blocks_main": chain.blocks_main,
+                "inferred": chain.inferred,
                 "deadlock": chain.cycle,
                 "waiters": [t.name for t in chain.waiters],
                 "holders": [t.name for t in chain.holders],

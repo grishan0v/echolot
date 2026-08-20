@@ -965,3 +965,100 @@ def test_a_kernel_worker_keeps_the_number_in_its_name():
     rep = anr.parse(with_worker)
     check("the name is whole", ("38.0", "sugov:4") in
           [(f"{s}", n) for s, n in rep.load], rep.load)
+
+
+# --- what Play Console shows -------------------------------------------------
+#
+# A third form, close to ART's and not the same: no `prio`, no `sysTid`, no
+# header of any kind, a state spelled in words with a space in it, a space
+# before the parenthesis in a frame, and native frames padding their columns.
+# Every shape below was in a live export.
+#
+# And the one that matters: no lock ownership anywhere. Play Console strips
+# `held by thread N`, so an export can say a thread is blocked and never say
+# by whom.
+
+PLAY = """\
+"main" tid=1 Blocked
+  at com.example.app.data.StateStore.read (StateStore.kt)
+  at com.example.app.ui.HomeViewModel.load (HomeViewModel.kt:88)
+  at android.os.Looper.loop (Looper.java:288)
+
+"DefaultDispatcher-worker-3" tid=100 Blocked
+  at com.example.app.data.StateStore.write (StateStore.kt:47)
+  at java.lang.Thread.run (Thread.java:1012)
+
+"DefaultDispatcher-worker-7" tid=104 Timed Waiting
+  at jdk.internal.misc.Unsafe.park (Native method)
+  at kotlinx.coroutines.scheduling.CoroutineScheduler$Worker.tryPark (CoroutineScheduler.kt:781)
+
+"Worker-2" tid=110 Waiting
+  at jdk.internal.misc.Unsafe.park (Native method)
+  at com.google.android.gms.tasks.Tasks.await (com.google.android.gms:play-services-tasks@@18.1.0:8)
+  at com.example.app.data.StateStore.flush (StateStore.kt:52)
+
+"binder:1234_2" tid=120 Native
+  #00  pc 0x0000000000058f70  /apex/com.android.runtime/lib64/bionic/libc.so (ioctl+152)
+  #01  pc 0x0000000000016414  /system/lib64/libutils.so (android::IPCThreadState::joinThreadPool+112)
+"""
+
+
+def test_the_play_console_form_is_read_as_its_own():
+    check("detected", anr.detect(PLAY) is anr.PLAY, anr.detect(PLAY))
+    rep = anr.parse(PLAY)
+    check("every thread", len(rep.threads) == 5, [t.name for t in rep.threads])
+    check("nothing went unread",
+          not rep.unread and not [x for t in rep.threads for x in t.unread],
+          (rep.unread, [x for t in rep.threads for x in t.unread]))
+
+
+def test_a_state_spelled_in_two_words_lands_in_the_same_vocabulary():
+    by_tid = anr.parse(PLAY).by_tid()
+    check("Timed Waiting", by_tid["104"].state == "timed waiting",
+          by_tid["104"].state)
+    check("Blocked", by_tid["1"].state == "blocked", by_tid["1"].state)
+
+
+def test_a_native_frame_padding_its_columns_is_still_a_native_frame():
+    binder = anr.parse(PLAY).by_tid()["120"]
+    check("both read", len(binder.native) == 2, binder.native)
+    check("and it is struck out as an idle binder thread",
+          anr.idle_reason(binder) == "binder pool waiting", anr.idle_reason(binder))
+
+
+def test_a_queue_is_read_off_the_waiters_when_the_source_withholds_the_holder():
+    """Seven threads including main sat in one `getCurrentState` on a live
+    export, and the Crashlytics report of the same freeze confirms that class
+    is the monitor. Most of the finding survives the missing note."""
+    found = anr.chains(anr.parse(PLAY))
+    check("one queue", len(found) == 1, found)
+    chain = found[0]
+    check("named from the method they could not enter",
+          chain.monitor == "com.example.app.data.StateStore", chain.monitor)
+    check("both of them", len(chain.waiters) == 2,
+          [t.name for t in chain.waiters])
+    check("main among them", chain.blocks_main)
+    check("marked as worked out, not read", chain.inferred, chain)
+    check("and no holder invented", chain.holders == [], chain.holders)
+
+
+def test_the_report_says_the_holder_is_not_in_the_file():
+    text = anr.render(anr.parse(PLAY))
+    check("it says so", "does not record who holds a monitor" in text, text)
+    check("and points at where to look",
+          "one of the threads below that were working" in text, text)
+
+
+def test_one_blocked_thread_is_a_queue_only_when_it_is_main():
+    alone = PLAY.replace('"DefaultDispatcher-worker-3" tid=100 Blocked',
+                         '"DefaultDispatcher-worker-3" tid=100 Waiting')
+    check("main alone still counts", len(anr.chains(anr.parse(alone))) == 1)
+
+    without_main = alone.replace('"main" tid=1 Blocked', '"main" tid=1 Waiting')
+    check("nobody blocked, no queue", anr.chains(anr.parse(without_main)) == [])
+
+
+def test_a_source_that_does_record_ownership_is_not_second_guessed():
+    for dump in (DUMP, DROPBOX):
+        for chain in anr.chains(anr.parse(dump)):
+            check("read, not worked out", not chain.inferred, chain)
