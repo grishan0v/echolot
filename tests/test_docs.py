@@ -72,6 +72,32 @@ def test_documented_check_count_is_current(document, pattern):
     )
 
 
+def test_the_documentation_index_counts_the_documents_it_lists():
+    """The third count, and it had been wrong for longer than the other two.
+
+    `docs/README.md` opens by saying how many documents there are. It said
+    eight with nine on disk, then nine with ten — the number is updated when
+    somebody remembers, and forgetting produces a sentence nobody re-reads.
+    """
+    index = ROOT / "docs/README.md"
+    text = index.read_text(encoding="utf-8")
+    on_disk = sorted(p.name for p in (ROOT / "docs").glob("*.md")
+                     if p.name != "README.md")
+    # Sentence-initial, so the alternation in NUMBER has to be case-blind.
+    stated = _numbers("docs/README.md", r"(?i)" + NUMBER + r" documents")
+    assert stated, "docs/README.md: nothing matched /N documents/"
+    assert set(stated) == {len(on_disk)}, (
+        f"the index says {sorted(set(stated))} documents, {len(on_disk)} are in docs/"
+    )
+
+    # The count going stale is the visible failure. The one that costs a reader
+    # something is a document written and never linked from anywhere.
+    linked = set(re.findall(r"\]\((?!https?://|#)([a-z-]+\.md)", text))
+    assert not set(on_disk) - linked, (
+        f"in docs/ and not linked from the index: {sorted(set(on_disk) - linked)}"
+    )
+
+
 @pytest.mark.parametrize("document,pattern", DETECTOR_TALLIES, ids=lambda v: v[:34])
 def test_documented_detector_count_is_current(document, pattern):
     shipped = len(list((ROOT / "echolot/sql/detectors").glob("*.sql")))

@@ -34,16 +34,34 @@ creates the project and the publisher becomes permanent.
 ## Before a release: what CI already checked
 
 `.github/workflows/checks.yml` runs on every pull request into `main`, and on
-`main` after a merge: `echolot doctor -q` plus the investigation and reflect
-self-checks, across every Python version the classifiers claim, and a
-`python -m build` with `twine check` on the artefacts.
+`main` after a merge: `pytest` across every Python version the classifiers
+claim, and a `package` job that builds the artefacts and looks at the README
+four ways.
 
-That last one is the reason the job exists at release time. `twine check`
-verifies the README renders on PyPI, and the publish workflow runs it too —
-but only on a version tag, which is after the point of no return. A PyPI
-version number can never be reused, even after deletion, so a rendering
-mistake found at tag time costs a version number. Found on the pull request,
-it costs a commit.
+The `package` job is the one that matters at release time, and it exists
+because a PyPI version number can never be reused. Not even after deletion. A
+mistake found on a version tag costs a number; the same mistake found on the
+pull request costs a commit.
+
+What it checks, and why each is separate:
+
+| step | what would otherwise reach PyPI |
+|---|---|
+| the version badge against the classifiers | a front page claiming Python versions nothing runs on |
+| `readme_renderer` over README.md | image addresses the sanitiser strips, arriving as empty boxes |
+| no relative links in README.md | hrefs that resolve against `pypi.org` and 404 |
+| `python -m build` and `twine check` | broken packaging metadata |
+
+**`twine check` is not the render.** For a Markdown README it never opens the
+file: its `_RENDERERS` table maps `text/markdown` to `None` with the comment
+"Rendering cannot fail". What it validates is the packaging metadata, which is
+worth validating and is not the same thing. The render is its own step and has
+to install `readme_renderer[md]` first, because Markdown support is an extra
+that neither twine nor `readme_renderer` itself depends on.
+
+That distinction cost four releases: the licence badge pointed at a relative
+`LICENSE` path, which resolves against `pypi.org` and does not exist there,
+while every build stayed green.
 
 ## Cutting a release
 

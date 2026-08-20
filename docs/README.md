@@ -2,7 +2,7 @@
 
 [← back to the README](../README.md)
 
-Nine documents. If you are here for the first time, read them in the order of
+Ten documents. If you are here for the first time, read them in the order of
 the workflow: **collect → mark → analyse → compare → calibrate**. The rest
 explains why the tool is built the way it is.
 
