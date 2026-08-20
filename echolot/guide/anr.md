@@ -23,6 +23,10 @@ record from `adb shell dumpsys dropbox --print data_app_anr`. Only the last of
 those carries the reason the system fired — checked across ten Crashlytics
 exports, none of them has one.
 
+Play Console has not been checked against a real export. It shows ART's format,
+so the reader should take it; if one is refused, say so and keep the file
+rather than working around it.
+
 ## What to do with what it says
 
 | the report says | your next move |
@@ -31,7 +35,8 @@ exports, none of them has one.
 | the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working |
 | frames placed in the checkout | open those lines |
 | frames landing nowhere | check out the build the report names. Line numbers are the first thing to go stale |
-| nothing of the project in any frame | say so. The freeze was inside a library or the platform |
+| every frame in the platform or a library | say so, in those words. It is a finding, not an empty report |
+| a CPU table with the device busy | a machine under load is a different story from an app that blocked itself |
 
 An idle main thread is the case that wastes a day if you miss it. The dump is a
 snapshot taken five seconds in, and whatever caused the freeze had often let go

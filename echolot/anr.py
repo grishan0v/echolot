@@ -62,6 +62,17 @@ _ENTRY = re.compile(r"^={20,}\s*$")
 # The record's own furniture: block rules, the thread count above a block, and
 # the runtime's note about how long suspending everything took. Skipped by
 # name so that a line which is genuinely new still reaches the unread count.
+# One line of the record's own CPU table, which sits above the thread dump:
+#   57% 5662/system_server: 31% user + 25% kernel / faults: 22124 minor
+# It is the only thing in an ANR report that says what the rest of the device
+# was doing, and a machine that was busy is a different story from an app that
+# blocked itself.
+_LOAD = re.compile(
+    # The name runs to the colon that has a space after it: a kernel worker is
+    # `sugov:4`, and stopping at the first colon turns every one of them into
+    # the same row.
+    r"^\s*(?P<share>[\d.]+)% (?P<pid>\d+)/(?P<name>.+?):\s(?P<split>.*)$"
+)
 _SCAFFOLD = re.compile(
     r"^(?:"
     r"-{2,}.*-{2,}\s*"                       # the rule around a process block
@@ -239,6 +250,9 @@ class Report:
     # a second process is not this app, and a second entry is a second ANR.
     elsewhere: int = 0
     entries: int = 1
+    # (share of a CPU, process name) from the record's own table, biggest
+    # first. Empty for a source that does not print one.
+    load: list[tuple[float, str]] = field(default_factory=list)
     # Lines after the threads that were passed over by position rather than by
     # name: the runtime's statistics and the record's own furniture.
     skipped: int = 0
@@ -325,6 +339,7 @@ def parse(text: str, source: Source | None = None) -> Report:
     process = ""
     entries = 1
     skipped = 0
+    load: list[tuple[float, str]] = []
 
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.rstrip()
@@ -379,6 +394,11 @@ def parse(text: str, source: Source | None = None) -> Report:
             head.clear()
             current = None
             continue
+        busy = _LOAD.match(line)
+        if busy:
+            load.append((float(busy.group("share")),
+                         busy.group("name").strip()))
+            continue
         if _SCAFFOLD.match(line):
             continue
 
@@ -408,7 +428,8 @@ def parse(text: str, source: Source | None = None) -> Report:
             current.unread.append(line)
 
     report = Report(head=head, threads=threads, source=source.name,
-                    unread=unread, entries=entries, skipped=skipped)
+                    unread=unread, entries=entries, skipped=skipped,
+                    load=sorted(load, reverse=True))
     return _scoped(report)
 
 
@@ -558,8 +579,27 @@ class Chain:
     monitor: str                 # the class as printed in the signature
     named: str | None            # the same class, unobfuscated, when derivable
     waiters: list[Thread]
-    owner: Thread | None
-    cycle: bool = False          # the owner waits, directly or not, on a waiter
+    # Every thread between the waiters and the bottom: the one holding this
+    # monitor first, then whoever is holding what that one wants, and so on.
+    # Usually one long. When it is longer, the last is the only one worth
+    # reading — the others are queued exactly like the waiters are.
+    holders: list[Thread] = field(default_factory=list)
+    cycle: bool = False          # a holder waits, directly or not, on a waiter
+
+    @property
+    def owner(self) -> Thread | None:
+        """Who holds this monitor. Not necessarily who is to blame."""
+        return self.holders[0] if self.holders else None
+
+    @property
+    def root(self) -> Thread | None:
+        """The thread at the bottom, waiting on nothing anyone here holds.
+
+        This is the one standing on the actual blocking call. Reporting the
+        direct holder as the cause when it is itself queued behind someone
+        else names a victim.
+        """
+        return self.holders[-1] if self.holders else None
 
     @property
     def blocks_main(self) -> bool:
@@ -618,11 +658,36 @@ def chains(report: Report) -> list[Chain]:
             monitor=monitor,
             named=monitor_class(monitor, waiters),
             waiters=waiters,
-            owner=owner,
+            holders=_down_to_the_root(owner, by_tid),
             cycle=_waits_back(owner, {t.tid for t in waiters}, by_tid),
         ))
     # Main first, then by how many threads piled up behind the lock.
     return sorted(found, key=lambda c: (not c.blocks_main, -len(c.waiters)))
+
+
+def _down_to_the_root(owner: Thread | None,
+                      by_tid: dict[str, Thread]) -> list[Thread]:
+    """The holder, then whoever is holding what the holder wants, to the end.
+
+    A holder that is itself blocked is a link, not a cause. Naming it as the
+    answer sends a reader to a thread that is queued exactly like the ones
+    behind it, and the thread actually standing on the blocking call is
+    further down.
+
+    Stops on a thread that wants nothing, on one this dump does not carry, and
+    on a repeat — a cycle is a deadlock, and it is also the only way this could
+    walk forever.
+    """
+    walked: list[Thread] = []
+    seen: set[str] = set()
+    current = owner
+    while current is not None and current.tid not in seen:
+        seen.add(current.tid)
+        walked.append(current)
+        if current.lock is None:
+            break
+        current = by_tid.get(current.lock.owner)
+    return walked
 
 
 def _waits_back(owner: Thread | None, waiters: set[str], by_tid: dict[str, Thread]) -> bool:
@@ -848,13 +913,23 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 out.append("")
                 out.append("> The holder is itself waiting on one of them: "
                            "this is a deadlock.")
-            if chain.owner is None:
+            if not chain.holders:
                 out += ["", "Held by a thread that is not in this dump.", ""]
                 continue
-            out += ["", f"Held by **{chain.owner.name}** (tid {chain.owner.tid}, "
-                        f"{chain.owner.state}), which was standing on:", "", "```"]
-            out += _stack(chain.owner, report.prefixes)
-            out += ["```", ""]
+            links, root = chain.holders, chain.root
+            if len(links) == 1:
+                out += ["", f"Held by **{root.name}** (tid {root.tid}, "
+                            f"{root.state}), which was standing on:"]
+            else:
+                # Every link but the last is queued exactly like the threads
+                # above it. Reporting the first as the cause names a victim.
+                out += ["", "Held through "
+                        + " → ".join(f"`{t.name}`" for t in links)
+                        + ", each waiting on the next. Only the last is "
+                          "standing on anything of its own:",
+                        "", f"**{root.name}** (tid {root.tid}, {root.state}) "
+                            f"was on:"]
+            out += ["", "```"] + _stack(root, report.prefixes) + ["```", ""]
 
     main = report.main
     if main is not None:
@@ -872,6 +947,19 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
         else:
             out += [f"State `{main.state}`, standing on:", ""]
         out += ["```"] + _stack(main, report.prefixes) + ["```", ""]
+
+    if report.threads and not any(t.own(report.prefixes)
+                                 for t in of_interest(report)):
+        # Said as narrowly as it is checked. "Not this project's code" would
+        # need to know which packages are the project's, and an app published
+        # as `ru.example.app` routinely ships modules under `com.example.*`.
+        # What can be stated without guessing is that nothing here is outside
+        # the platform and the libraries every app carries.
+        out += ["## Every frame here belongs to the platform or a library", "",
+                "Not one frame outside them in any thread worth reading. The "
+                "freeze is inside something nobody here wrote, and there is no "
+                "line of yours to open — which is a finding, and not the same "
+                "as an empty report.", ""]
 
     others = [t for t in busy if t is not main and not t.lock]
     if others:
@@ -899,6 +987,17 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
             mark = "" if found.exact else "  ← one of several of that name"
             where = found.file + (f":{found.line}" if found.line else "")
             out.append(f"- `{_short(found.symbol)}` — {where}{mark}")
+        out.append("")
+
+    if report.load:
+        out += ["## What else the device was doing", "",
+                "_the record's own CPU table, over the seconds around the "
+                "freeze — a machine that was busy is a different story from "
+                "an app that blocked itself_", ""]
+        for share, name in report.load[:6]:
+            mine = "  ← this app" if report.package and name.startswith(
+                report.package) else ""
+            out.append(f"- {share}% `{name}`{mine}")
         out.append("")
 
     gaps = _gaps(report, missing)
@@ -971,11 +1070,12 @@ def summary(report: Report,
                 "blocks_main": chain.blocks_main,
                 "deadlock": chain.cycle,
                 "waiters": [t.name for t in chain.waiters],
-                "owner": None if chain.owner is None else {
-                    "name": chain.owner.name,
-                    "tid": chain.owner.tid,
-                    "state": chain.owner.state,
-                    "stack": _stack(chain.owner, report.prefixes),
+                "holders": [t.name for t in chain.holders],
+                "root": None if chain.root is None else {
+                    "name": chain.root.name,
+                    "tid": chain.root.tid,
+                    "state": chain.root.state,
+                    "stack": _stack(chain.root, report.prefixes),
                 },
             }
             for chain in chains(report)
@@ -999,6 +1099,8 @@ def summary(report: Report,
             ],
             "unplaced": code[1],
         },
+        "load": [{"share": s, "process": n} for s, n in report.load],
+        "own_frames": any(t.own(report.prefixes) for t in of_interest(report)),
         "unread": {
             "outside": len(report.unread),
             "inside": sum(len(t.unread) for t in report.threads),

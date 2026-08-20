@@ -584,9 +584,9 @@ def test_the_verb_gives_an_agent_the_same_findings_as_a_person(tmp_path):
     check("with main behind it", chain["blocks_main"], chain)
     check("the monitor named as in the markdown",
           chain["named"] == "com.example.app.data.StateStore", chain)
-    check("and the holder's stack carried",
-          any("StateStore.flush" in frame for frame in chain["owner"]["stack"]),
-          chain["owner"])
+    check("and the stack of the thread at the bottom carried",
+          any("StateStore.flush" in frame for frame in chain["root"]["stack"]),
+          chain["root"])
     check("the thread counts agree with the reader",
           found["threads"]["total"] == len(report().threads), found["threads"])
 
@@ -880,3 +880,88 @@ def test_the_flag_refuses_a_file_that_is_not_a_report(store, tmp_path):
     code, _, err = run("mark", "--root", str(store), "--from-anr", str(plain))
     check("exit 2", code == 2, code)
     check("and says why", "not a report" in err, err)
+
+
+# --- down to the root -------------------------------------------------------
+
+CHAIN = """\
+# Application: com.example.app
+
+main (blocked):tid=1 systid=1001 | waiting to lock <0x1> (com.example.app.A) held by thread 2
+       at com.example.app.A.read(A.kt:10)
+
+Worker-1 (blocked):tid=2 systid=1002 | waiting to lock <0x2> (com.example.app.B) held by thread 3
+       at com.example.app.B.write(B.kt:20)
+
+Worker-2 (waiting):tid=3 systid=1003
+       at jdk.internal.misc.Unsafe.park(Native method)
+       at com.google.android.gms.tasks.Tasks.await(Tasks.java:8)
+       at com.example.app.C.flush(C.kt:30)
+"""
+
+
+def test_a_holder_that_is_itself_blocked_is_a_link_not_a_cause():
+    """Naming the direct holder as the answer names a victim: it is queued
+    exactly like the threads behind it."""
+    chain = next(c for c in anr.chains(anr.parse(CHAIN)) if c.blocks_main)
+    check("the holder is the one the note named",
+          chain.owner.name == "Worker-1", chain.owner)
+    check("the root is the one standing on something",
+          chain.root.name == "Worker-2", chain.root)
+    check("and the walk kept both", [t.name for t in chain.holders]
+          == ["Worker-1", "Worker-2"], chain.holders)
+
+
+def test_the_report_shows_the_trail_and_the_root_of_a_long_chain():
+    text = anr.render(anr.parse(CHAIN))
+    check("the trail is named", "`Worker-1` → `Worker-2`" in text, text)
+    check("and the stack shown is the root's",
+          "com.example.app.C.flush(C.kt:30)" in text, text)
+    check("not the middle link's",
+          "com.example.app.B.write" not in text.split("## The main thread")[0],
+          text)
+
+
+def test_a_one_link_chain_says_nothing_about_a_trail():
+    text = anr.render(report())
+    check("no trail arrow", "→" not in text.split("## The main thread")[0], text)
+
+
+# --- nothing of this project ------------------------------------------------
+
+def test_a_dump_that_is_all_platform_and_libraries_says_so():
+    """One of the ten sample reports had not a single frame outside them in
+    any of its 53 threads — every busy thread was in `androidx.work`. Thin
+    sections are not the same statement."""
+    foreign = DUMP.replace("com.example.app.data.StateStore",
+                           "androidx.work.impl.Store").replace(
+        "com.example.app.ui.HomeViewModel", "androidx.work.impl.Model")
+    text = anr.render(anr.parse(foreign))
+    check("it is said",
+          "Every frame here belongs to the platform or a library" in text, text)
+
+
+def test_a_dump_with_code_of_its_own_stays_quiet_about_it():
+    check("no such section",
+          "belongs to the platform or a library" not in anr.render(report()))
+
+
+# --- what else the device was doing -----------------------------------------
+
+def test_the_records_cpu_table_is_read_and_ranked():
+    rep = anr.parse(DROPBOX)
+    check("both rows", len(rep.load) == 2, rep.load)
+    check("biggest first", rep.load[0] == (57.0, "system_server"), rep.load)
+    check("and it reaches the report",
+          "57.0% `system_server`" in anr.render(rep), anr.render(rep))
+
+
+def test_a_kernel_worker_keeps_the_number_in_its_name():
+    """`sugov:4` and `sugov:0` are different threads. Cutting at the first
+    colon collapses every one of them into one row."""
+    with_worker = DROPBOX.replace(
+        "  38% 5339/surfaceflinger: 26% user + 12% kernel / faults: 1366 minor",
+        "  38% 2165/sugov:4: 0% user + 38% kernel")
+    rep = anr.parse(with_worker)
+    check("the name is whole", ("38.0", "sugov:4") in
+          [(f"{s}", n) for s, n in rep.load], rep.load)
