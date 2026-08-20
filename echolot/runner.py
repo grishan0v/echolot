@@ -87,7 +87,7 @@ def _run(args: list[str], stdin: str | None = None, timeout: int = 120) -> str:
         ) from None
     except subprocess.TimeoutExpired:
         raise RunnerError(
-            f"no answer within {timeout}s from: {' '.join(args)}")
+            f"no answer within {timeout}s from: {' '.join(args)}") from None
     if done.returncode != 0:
         raise RunnerError(
             f"{' '.join(args)}\n{(done.stderr or done.stdout).strip()}")

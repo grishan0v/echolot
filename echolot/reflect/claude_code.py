@@ -450,7 +450,7 @@ def _asks_from(questions: list[dict[str, Any]], call: Call, ts: str,
         qtext = str(q.get("question") or "")
         labels = [str(o.get("label") or "") for o in (q.get("options") or [])
                   if isinstance(o, dict)]
-        rec = next((l for l in labels if _RECOMMENDED.search(l)), None)
+        rec = next((x for x in labels if _RECOMMENDED.search(x)), None)
         out.append(Ask(ts=call.ts, question=clip(qtext, 300), options=labels,
                        recommended=rec, chosen=answers.get(qtext),
                        answered_after_s=after, agent=agent))

@@ -1350,7 +1350,7 @@ def _(report):
     import contextlib
     import io
     from .main import cmd_init
-    from .layer import CLAUDE_DIR, LAYER_MANIFEST, audit, write_manifest
+    from .layer import LAYER_MANIFEST, audit, write_manifest
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
         assert audit(project) is None, "no layer yet must be None"

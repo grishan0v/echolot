@@ -95,7 +95,7 @@ def cmd_probe(args) -> int:
                 ORDER BY running_ms DESC, slices DESC LIMIT 25
             """)
 
-            print(f"\n## Longest slices (scenario anchor candidates)\n")
+            print("\n## Longest slices (scenario anchor candidates)\n")
             _dump(tp, f"""
                 SELECT s.name AS slice, t.name AS thread,
                        COUNT(*) AS n,
@@ -735,7 +735,7 @@ def cmd_names(args) -> int:
                 if f not in assigned and d["ns"] >= floor_ns]
         if rest:
             rest.sort(key=lambda x: -x[1]["ns"])
-            print(f"\n## Everything else\n")
+            print("\n## Everything else\n")
             _families_table(rest[:args.top])
             _note_dropped(len(rest), args.top)
 

@@ -58,7 +58,25 @@ dependencies = [
 # own dependencies and no pytest anywhere near it, because it runs on a user's
 # laptop.
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.14"]
+
+# What a linter is here for, and what it is not.
+#
+# codeql already reads this code, and reads it for a different thing: shapes
+# known to be exploitable. It has no opinion on an import nobody uses, and
+# that is the class this catches — a name left behind by a refactor, a
+# variable assigned and never read, an f-string with nothing in it, a `zip`
+# that silently stops at the shorter side.
+#
+# Ruff's own defaults (E4, E7, E9, F) plus bugbear and the whitespace rules.
+# Deliberately NOT E501: the comments here carry the reasoning, and a column
+# limit would be an argument with every one of them. Long lines are a matter
+# of taste and are left to it; a name that does not exist is not.
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

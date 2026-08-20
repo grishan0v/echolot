@@ -704,8 +704,9 @@ def instrumentation(session: Session, cfg: Config | None) -> dict[str, Any]:
          or prefix in str((c.input or {}).get("content", ""))]
         + [ts_to_epoch(e["ts"]) for e in shell],
         default=0.0)
-    is_grep = lambda c: ("grep" in (c.command or "") and prefix in (c.command or "")
-                         and not _PY_WRITES.search(c.command or ""))
+    def is_grep(c: Call) -> bool:
+        cmd = c.command or ""
+        return "grep" in cmd and prefix in cmd and not _PY_WRITES.search(cmd)
     # Calls are stored main-first, then subagents: sort by time, the verdict
     # is the latest grep's.
     final_grep = sorted((c for c in session.bash()
@@ -760,7 +761,7 @@ def gaps(session: Session, min_s: float = 120.0) -> list[dict[str, Any]]:
         by_agent.setdefault(c.agent, []).append((ts_to_epoch(c.ts), describe(c)))
     for agent, events in by_agent.items():
         events.sort()
-        for (t0, what), (t1, _) in zip(events, events[1:]):
+        for (t0, what), (t1, _) in zip(events, events[1:], strict=False):
             if t1 - t0 >= min_s:
                 out.append({"agent": agent, "seconds": round(t1 - t0),
                             "after": what})

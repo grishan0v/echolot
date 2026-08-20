@@ -692,7 +692,7 @@ def echolot_failures(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 def retries(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = []
     calls = f.echolot_calls
-    for a, b in zip(calls, calls[1:]):
+    for a, b in zip(calls, calls[1:], strict=False):
         if a.sub != b.sub or a.agent != b.agent:
             continue
         # `--help` then the real call is reading the manual, not a retry; two
