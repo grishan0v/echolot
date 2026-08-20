@@ -18,7 +18,7 @@ Three places produce the same artifact, and the frames in them are identical:
 | source | how to get it | what it adds |
 |---|---|---|
 | Crashlytics | export from the issue page | version and build, unminified frames |
-| Play Console | an ANR cluster in Android Vitals | the same shape |
+| Play Console | an ANR cluster in Android Vitals | ART's own format, so the same reader — see below |
 | the device itself | `adb shell dumpsys dropbox --print data_app_anr` | **the reason** — `Subject: Input dispatching timed out …` |
 
 Only the device's own record carries why the system fired. Checked across ten
@@ -30,6 +30,14 @@ The thread signature differs per source — Crashlytics writes
 so the reader decides which it is from how the file announces its threads. A
 file in a form it does not know exits with that as the reason rather than
 reporting zero threads as a clean bill.
+
+> [!NOTE]
+> The Crashlytics reader was written against ten live exports and the ART one
+> against a record made on purpose on a phone. **Play Console has not been
+> checked against a real export**: it shows ART's own format, so the ART reader
+> should take it, and that is an expectation rather than a fact. If one is
+> refused, the message names the forms it does know — and the file is worth
+> keeping, because that is what the third reader would be written from.
 
 ### Making one on purpose
 
@@ -50,6 +58,11 @@ itself parked on a blocking call, with the main thread queued behind it, is the
 mechanism rather than a coincidence. That kind of finding is fixable without
 recording anything.
 
+A holder that is itself blocked is a link, not a cause: it is queued exactly
+like the threads behind it. The chain is walked to the bottom, and the stack
+shown is the one thread standing on something of its own — naming the direct
+holder as the answer names a victim.
+
 R8 leaves the monitor's class obfuscated while the frames come back
 unminified, and no mapping file is needed to bridge them: a blocked thread is
 standing in the method it could not enter, so its own top frame names the class
@@ -61,11 +74,22 @@ one.
 the freeze had already let go, or never ran on that thread at all. Reading the
 top frame as the culprit sends an investigation into Android's message queue.
 
+**When every frame belongs to the platform or a library**, it says that in
+those words. One of the ten sample reports had not a single frame outside them
+in any of its fifty-three threads — every busy one was inside `androidx.work`.
+That is a finding, and it reads differently from a report with thin sections.
+
 **Then the threads that were doing something.** A dump holds fifty threads on a
 quiet app and three hundred on a busy one, nearly all asleep. Striking out the
 idle ones is most of the work — pools waiting on a queue, coroutine workers
 parked, binder pools, runtime daemons, loopers. What the vocabulary does not
 cover sinks to the bottom of the list rather than being struck out on a guess.
+
+**Then what else the device was doing**, when the source carries a CPU table.
+The device's own record does. A machine where `system_server` and
+`surfaceflinger` were eating most of two cores is a different story from an app
+that blocked itself, and the table is the only thing in a report that can tell
+them apart.
 
 **Then what it cannot say.** No reason, when the source has none. No durations
 at all — a dump is one moment, and how long anything took comes from a trace.
