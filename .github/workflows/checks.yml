@@ -176,6 +176,35 @@ jobs:
           print(f"README renders; all {len(wanted)} image addresses survive")
           PY
 
+      # The rule the comment below gives as its reason, enforced rather than
+      # stated. A relative link renders perfectly well — the step above will
+      # not object to one — and resolves against pypi.org, where the file it
+      # names does not exist. That is how the licence badge spent four
+      # releases pointing at nothing.
+      #
+      # README.md only. docs/*.md link to each other relatively and should:
+      # they are read on GitHub, they are never shipped to PyPI, and rewriting
+      # them as absolute URLs would pin every link to one branch name.
+      - name: Check that the README has no relative links
+        run: |
+          python - <<'PY'
+          import re
+
+          readme = open("README.md", encoding="utf-8").read()
+          links = re.findall(r'href="([^"]+)"', readme) + re.findall(r'\]\(([^)]+)\)', readme)
+
+          # An in-page anchor survives the trip: readme_renderer rewrites
+          # `#status` to `#user-content-status` and the heading id to match.
+          relative = sorted({u for u in links
+                             if not u.startswith(("https://", "http://", "#", "mailto:"))})
+          if relative:
+              raise SystemExit(
+                  "these links resolve against pypi.org and would go nowhere; "
+                  "use the full GitHub URL:\n  " + "\n  ".join(relative)
+              )
+          print(f"README has no relative links ({len(links)} checked)")
+          PY
+
       # `twine check` validates the packaging metadata, and for a Markdown
       # README that is all it does: its `_RENDERERS` table maps `text/markdown`
       # to None with the comment "Rendering cannot fail", so it never opens

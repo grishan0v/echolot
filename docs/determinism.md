@@ -33,7 +33,7 @@ echolot doctor
 
   ok    scenario window built from the anchors: 1005 ms
   ...
-  All 42 checks passed — the pipeline computes correctly.
+  All 71 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
@@ -43,9 +43,9 @@ anyone piping into `head`; the full output is six kilobytes of "ok" that a
 second reader in the same session would pay for again.
 
 ```
-echolot 0.1.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
+echolot 0.3.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
 layer: STALE — 8 differs, 1 missing → `echolot init --force`
-self-check: 65 of 65 passed
+self-check: 71 of 71 passed
 ```
 
 Exit code 0/1. No device needed, one second — good both as a CI gate and as

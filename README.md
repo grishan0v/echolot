@@ -332,7 +332,7 @@ Which is exactly where to add `trace{}` and record again.
 flowchart LR
     A["Android device"]
     B["trace<br/>81 MB · 475k slices"]
-    C["6 SQL detectors<br/>pinned trace_processor"]
+    C["8 SQL detectors<br/>pinned trace_processor"]
     D["report.md<br/>~20 rows"]
     E["report.json<br/>14 KB"]
     F(["You"])
@@ -381,7 +381,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 65 checks inside
+The detectors were validated against a synthetic trace — 71 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
