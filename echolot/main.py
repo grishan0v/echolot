@@ -72,6 +72,19 @@ def cmd_probe(args) -> int:
         """)
 
         if args.process:
+            # A mask that matches nothing used to print an empty table and
+            # exit 0. Everything else here shouts when the ground it checked
+            # was empty — an anchor that never matched, a detector left out of
+            # the config — and an agent that mistypes a process name deserves
+            # the same. The table above already lists what is there.
+            matched = tp.query(
+                f"SELECT COUNT(*) AS n FROM process "
+                f"WHERE name GLOB '{sql_value(args.process)}'")
+            if not (matched and matched[0]["n"]):
+                print(f"\nerror: no process matches '{args.process}' in this "
+                      f"trace — pick one from the table above, or widen the "
+                      f"mask.", file=sys.stderr)
+                return 2
             print(f"\n## Threads of process {args.process}\n")
             # Sorted by CPU rather than slice count: a thread with zero slices
             # and hundreds of milliseconds of Running is precisely the blind
