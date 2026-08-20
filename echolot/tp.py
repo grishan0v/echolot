@@ -377,12 +377,16 @@ class TraceSession:
 
 
 def _split_statements(sql: str) -> list[str]:
-    out = []
-    for chunk in sql.split(";"):
-        stripped = "\n".join(
-            line for line in chunk.splitlines()
-            if not line.strip().startswith("--")
-        ).strip()
-        if stripped:
-            out.append(stripped)
-    return out
+    """A script into statements, with comment lines dropped first.
+
+    First, because the split is on `;` and prose has semicolons in it. A
+    sentence in a header comment used to cut the script in half, leaving one
+    fragment that begins mid-word and fails to parse and another that silently
+    never runs — and the error names a line of English, which reads as
+    anything but "your comment has a semicolon in it". Twice in one sitting.
+    """
+    body = "\n".join(
+        line for line in sql.splitlines()
+        if not line.strip().startswith("--")
+    )
+    return [chunk.strip() for chunk in body.split(";") if chunk.strip()]
