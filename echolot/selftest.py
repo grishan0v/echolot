@@ -399,6 +399,50 @@ def _(report):
         assert said and "set aside" in said[0], said
 
 
+@check("collect: a scenario that overruns is an error, and it stops")
+def _(report):
+    """Two halves of one failure, and neither used to hold.
+
+    `subprocess.TimeoutExpired` went straight past `collect`'s
+    `except RunnerError` and out of the CLI as a traceback, which `reflect`
+    then files under "a traceback is a bug in echolot".
+
+    And killing a `shell=True` child kills `sh -c` and nothing it started. The
+    scenario carried on into the next iteration, driving the app while the
+    next trace was being recorded — the one failure mode a repeat cannot
+    survive.
+    """
+    import time
+    from . import runner
+
+    with tempfile.TemporaryDirectory() as tmp:
+        sentinel = Path(tmp) / "still-running"
+        # A grandchild that outlives the shell, and says so if it does.
+        started = time.monotonic()
+        try:
+            runner.run_command(
+                f"(sleep 1; touch {sentinel}) & sleep 30", timeout=0.4,
+                knob="runner.duration_ms")
+        except runner.RunnerError as e:
+            assert "still running after 0.4s" in str(e), e
+            assert "runner.duration_ms" in str(e), e
+        else:
+            raise AssertionError("an overrunning scenario must be a RunnerError")
+        assert time.monotonic() - started < 5, "the timeout did not stop it"
+        time.sleep(1.4)
+        assert not sentinel.exists(), (
+            "the shell was killed and its scenario kept going — it would drive "
+            "the app through the next iteration's recording")
+
+    # A command that merely fails is the other error, and still says so.
+    try:
+        runner.run_command("echo boom >&2; exit 3", timeout=30)
+    except runner.RunnerError as e:
+        assert "returned 3" in str(e) and "boom" in str(e), e
+    else:
+        raise AssertionError("a non-zero scenario must be a RunnerError")
+
+
 @check("thresholds: --set is typed and refuses what does not exist")
 def _(report):
     from .main import DETECTOR_DIR, parse_set

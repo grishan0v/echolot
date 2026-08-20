@@ -12,7 +12,9 @@ over repeats; without them both are guessing.
 
 from __future__ import annotations
 
+import os
 import re
+import signal
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -159,22 +161,56 @@ def trace_config(package: str, duration_ms: int, categories: list[str],
                                categories=lines, buffer_kb=buffer_kb)
 
 
-def run_command(command: str, timeout: int) -> float:
+def run_command(command: str, timeout: float, knob: str = "runner.timeout_s") -> float:
     """Lets something else drive the scenario while we record the trace.
 
     The command comes from the project's own config — the same level of trust
     as the gradle task next to it. Anything that can move the app goes here:
     adb input, uiautomator, maestro, your own script.
+
+    Two things about the timeout, both learned the hard way.
+
+    It is a `RunnerError` like every other failure in this module. Left as
+    subprocess's own exception it came out of `echolot collect` as a traceback
+    — past the `except RunnerError` that exists to turn a device problem into
+    a sentence — and `reflect` then filed it under "a traceback out of the CLI
+    is a bug in echolot", which it was not.
+
+    And it kills the scenario's whole process tree, not just the shell. With
+    `shell=True` the child is `sh -c`; killing that leaves what it started —
+    a gradle run, an adb shell driving the app — going into the next
+    iteration, where it records over the trace we are recording.
     """
     import time
     started = time.monotonic()
-    done = subprocess.run(command, shell=True, capture_output=True,
-                          text=True, timeout=timeout)
-    if done.returncode != 0:
+    proc = subprocess.Popen(
+        command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+        # POSIX only, and the reason the kill below can reach the whole tree.
+        start_new_session=(os.name == "posix"))
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        proc.communicate()
         raise RunnerError(
-            f"the scenario command returned {done.returncode}:\n"
-            f"{(done.stderr or done.stdout).strip()[:800]}")
+            f"the scenario command was still running after {timeout:g}s and "
+            f"was stopped:\n  {command[:300]}\n"
+            f"Raise {knob} if it honestly takes that long."
+        ) from None
+    if proc.returncode != 0:
+        raise RunnerError(
+            f"the scenario command returned {proc.returncode}:\n"
+            f"{(err or out).strip()[:800]}")
     return time.monotonic() - started
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """The scenario and everything it started. Falls back to the shell alone."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, AttributeError):
+        proc.kill()
 
 
 def harvest(search_root: Path, since: float, out_dir: Path,
@@ -272,7 +308,8 @@ def collect(package: str, out_dir: Path, iterations: int,
                             *(section.get("gradle_args") or [])])
         log(f"gradle: {command}")
         since = time.time()
-        spent = run_command(command, timeout=int(section.get("timeout_s", 3600)))
+        spent = run_command(command, timeout=int(section.get("timeout_s", 3600)),
+                            knob="runner.timeout_s")
         results = harvest(root, since, out_dir, name)
         if not results:
             raise RunnerError(
@@ -315,7 +352,8 @@ def collect(package: str, out_dir: Path, iterations: int,
         if mode == "launch":
             info = _launch(dev, activity)
         else:
-            spent = run_command(command, timeout=duration_ms // 1000 + 300)
+            spent = run_command(command, timeout=duration_ms // 1000 + 300,
+                                knob="runner.duration_ms")
             if spent * 1000 > duration_ms:
                 log(f"  [!] the scenario ran {spent:.0f}s against a "
                     f"{duration_ms / 1000:.0f}s recording window — the trace "
