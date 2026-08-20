@@ -51,7 +51,7 @@ from pathlib import Path
 #
 # `# Key: value` is Crashlytics, bare `Key: value` is the dropbox record. One
 # pattern reads both headers; only the thread body needed splitting.
-_HEADER = re.compile(r"^#?\s*(?P<key>[A-Za-z][A-Za-z -]*): (?P<value>.*)$")
+_HEADER = re.compile(r"^#?\s*(?P<key>[A-Za-z][A-Za-z _-]*):\s?(?P<value>.*)$")
 
 # The dropbox record wraps the dump: an ANR trace holds one block per process,
 # starting with the one that hung, and every block names itself.
@@ -63,7 +63,14 @@ _ENTRY = re.compile(r"^={20,}\s*$")
 # the runtime's note about how long suspending everything took. Skipped by
 # name so that a line which is genuinely new still reaches the unread count.
 _SCAFFOLD = re.compile(
-    r"^(?:-{2,}.*-{2,}\s*|DALVIK THREADS \(\d+\):|suspend all histogram:.*)$"
+    r"^(?:"
+    r"-{2,}.*-{2,}\s*"                       # the rule around a process block
+    r"|DALVIK THREADS \(\d+\):"              # how many are in the one below
+    r"|suspend all histogram:.*"             # what stopping them all cost
+    r"|CPU usage from .*"                    # the load table's heading
+    r"|\s*[+-]?[\d.]+% .*"                   # and one line of it
+    r"|\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \w+ \(.*\)\s*"   # the entry's own headline
+    r")$"
 )
 
 
@@ -83,6 +90,14 @@ class Source:
     held: re.Pattern[str] | None = None
     sys_tid: re.Pattern[str] | None = None
     lock_on_signature: bool = False
+    # Lines inside a thread block that are read and carry nothing this needs.
+    # Named rather than ignored by default, so a line that is genuinely new
+    # still reaches the unread count.
+    noise: re.Pattern[str] | None = None
+    # Whether a thread's body is indented under its signature. Where it is, an
+    # unindented line ends the thread — which is what tells the threads apart
+    # from the runtime summary printed after the last of them.
+    body_indented: bool = False
 
 
 # Verified against ten exports from a live application.
@@ -110,25 +125,26 @@ CRASHLYTICS = Source(
 # What ART itself prints, which is what `dumpsys dropbox --print data_app_anr`
 # and the files under `/data/anr/` carry.
 #
-# Verified in halves, and the halves are worth telling apart. The record's
-# header was read off a live device — `Process`, `Subject`, `Build`, and the
-# `====` between entries are as this device writes them. The thread body is
-# written from ART's own format and has NOT been checked against a real ANR
-# record: the files under `/data/anr/` are mode 600 owned by `system`, and a
-# device without root hands them over only inside a bugreport.
+# Checked against a record made on purpose: an app that takes a monitor on a
+# worker and then blocks the main thread on it, frozen on an Android 13 phone
+# and read back out of the drop box. Every shape below is in that record.
 #
-# So this half fails loudly on purpose. Lines that match nothing are counted
-# and printed, a dump that yields no threads exits with the reason, and neither
-# quietly produces a report built on a guess.
-#
-# Two signature forms, both ART's: a managed thread carries `prio` and `tid`,
-# and a thread the runtime never attached carries only `sysTid`.
+# Three signature forms, all ART's: a managed thread carries `prio` and `tid`,
+# one the runtime never attached carries `prio` and says so, and one still
+# starting carries a parenthetical after its state. Leaving room for that last
+# one is not cosmetic — without it the thread is swallowed into the block above
+# and disappears from the count.
 DUMPSYS = Source(
     name="dumpsys",
     signature=re.compile(
         r'^"(?P<name>[^"]*)"(?:\s+daemon)?\s+'
-        r"(?:prio=\d+\s+tid=(?P<tid>-?\d+)\s+(?P<state>\S+)"
-        r"|sysTid=(?P<systid>\d+))\s*$"
+        r"(?:prio=\d+\s+tid=(?P<tid>-?\d+)\s+(?P<state>[A-Za-z]\w*)"
+        r"|prio=\d+\s+\((?P<detached>not attached)\)"
+        r"|sysTid=(?P<systid>\d+))"
+        # A state can carry a parenthetical after it — `Native (still starting
+        # up)`. Without room for it the thread is not merely mis-stated, it is
+        # swallowed into the block above and vanishes from the count.
+        r"(?:\s+\(.*\))?\s*$"
     ),
     frame=re.compile(r"^\s+at (?P<frame>.+)$"),
     native=re.compile(r"^\s*(?:native:\s*)?#\d+ pc [0-9a-fx]+\s+(?P<lib>\S+)"),
@@ -142,6 +158,15 @@ DUMPSYS = Source(
     # it is what lets the holder be found when `held by thread` is absent.
     held=re.compile(r"^\s*- locked <(?P<addr>0x[0-9a-f]+)>"),
     sys_tid=re.compile(r"^\s*\|\s*sysTid=(?P<systid>\d+)"),
+    # `waiting on` and `sleeping on` name a monitor the thread is waiting
+    # *inside*, having released it — the opposite of holding, and no use to
+    # the chain. The rest is the runtime's own bookkeeping.
+    noise=re.compile(
+        r"^\s*(?:- (?:waiting on|sleeping on) <0x[0-9a-f]+>.*"
+        r"|\(no managed stack frames\)"
+        r"|DumpLatencyMs:.*)$"
+    ),
+    body_indented=True,
 )
 
 SOURCES = (CRASHLYTICS, DUMPSYS)
@@ -214,6 +239,9 @@ class Report:
     # a second process is not this app, and a second entry is a second ANR.
     elsewhere: int = 0
     entries: int = 1
+    # Lines after the threads that were passed over by position rather than by
+    # name: the runtime's statistics and the record's own furniture.
+    skipped: int = 0
 
     @property
     def package(self) -> str:
@@ -296,6 +324,7 @@ def parse(text: str, source: Source | None = None) -> Report:
     current: Thread | None = None
     process = ""
     entries = 1
+    skipped = 0
 
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.rstrip()
@@ -306,8 +335,11 @@ def parse(text: str, source: Source | None = None) -> Report:
         if signature:
             fields = {k: v or "" for k, v in signature.groupdict().items()}
             note = fields.pop("note", "")
-            current = Thread(state=_state(fields.pop("state", "")),
-                             process=process, **fields)
+            # A thread the runtime never attached has no state to print, and
+            # `not attached` is the more useful thing to say than nothing.
+            state = fields.pop("state", "") or fields.pop("detached", "")
+            fields.pop("detached", None)
+            current = Thread(state=_state(state), process=process, **fields)
             threads.append(current)
             if source.lock_on_signature:
                 held = source.lock.search(note)
@@ -318,7 +350,12 @@ def parse(text: str, source: Source | None = None) -> Report:
             continue
 
         if current is not None:
-            if _read_body(line, current, source):
+            if source.body_indented and not raw[:1].isspace():
+                # ART indents everything belonging to a thread. What is not
+                # indented is the next thread, the block's end, or the
+                # runtime's summary — none of them this thread's business.
+                current = None
+            elif _read_body(line, current, source):
                 continue
 
         # Outside a thread: the record's own scaffolding, then the header.
@@ -336,14 +373,27 @@ def parse(text: str, source: Source | None = None) -> Report:
             if threads:
                 entries += 1
                 break
+            # Everything before the first separator is what `dumpsys` says
+            # about the drop box itself — how many entries it holds, what it
+            # was asked for. None of it describes this ANR.
+            head.clear()
             current = None
             continue
         if _SCAFFOLD.match(line):
             continue
 
-        # The header runs before the first thread. After one has started, a
-        # `Key: value` line is something inside the block and belongs to it.
+        # The header runs before the first thread, and only before it. After
+        # the threads begin, ART prints its own statistics in the same
+        # `Key: value` shape — heap, intern table, JNI globals, loaded
+        # libraries — and reading those as fields of the report puts the
+        # runtime's bookkeeping where the application's identity belongs.
         if current is None:
+            if threads:
+                # Everything after the threads: the runtime summary, the block
+                # rules, the kernel wait channels. Unbounded, different on
+                # every vendor's build, and none of it about this freeze.
+                skipped += 1
+                continue
             field_line = _HEADER.match(line)
             if field_line:
                 head[field_line.group("key").strip()] = field_line.group("value").strip()
@@ -358,7 +408,7 @@ def parse(text: str, source: Source | None = None) -> Report:
             current.unread.append(line)
 
     report = Report(head=head, threads=threads, source=source.name,
-                    unread=unread, entries=entries)
+                    unread=unread, entries=entries, skipped=skipped)
     return _scoped(report)
 
 
@@ -381,6 +431,8 @@ def _read_body(line: str, thread: Thread, source: Source) -> bool:
             if holds:
                 thread.held.append(holds.group("addr"))
                 return True
+    if source.noise and source.noise.match(line):
+        return True
     if source.sys_tid:
         systid = source.sys_tid.match(line)
         if systid:
@@ -468,6 +520,7 @@ IDLE: list[tuple[str, tuple[str, ...]]] = [
     )),
     ("waiting on a descriptor", (
         "__epoll_pwait",
+        "__ppoll",
         "java.nio.channels.Selector.select",
     )),
     ("sleeping", (
@@ -734,6 +787,10 @@ def _gaps(report: Report) -> list[str]:
     if stray:
         gaps.append(f"- {stray} line(s) inside thread blocks that are neither "
                     f"frames nor a lock note.")
+    if report.skipped:
+        gaps.append(f"- {report.skipped} line(s) after the threads — the "
+                    f"runtime's own statistics and the record's furniture — "
+                    f"passed over by position rather than by name.")
     return gaps
 
 

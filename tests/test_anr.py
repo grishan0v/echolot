@@ -12,13 +12,17 @@ signature without one, java frames under native ones, two threads sharing a
 name, an obfuscated class in the monitor next to the unminified one in the
 frames, and a line the reader is meant to admit it could not read.
 
-The device's record is the half-verified one. Its header was read off a live
-device; its thread body is ART's own format, written from it rather than
-sampled, because the files under `/data/anr/` are mode 600 owned by `system`
-and a device without root parts with them only inside a bugreport. What these
-cases pin is that the reader holds together on that format — a real record
-that turns out to differ will show up in the unread count rather than in a
-wrong answer.
+The device's record was made on purpose: an app that takes a monitor on a
+worker thread and then blocks the main thread on it, frozen on an Android 13
+phone and read back with `dumpsys dropbox --print data_app_anr`. Everything in
+the second dump below is a shape that record actually had — the drop box's own
+preamble before the entry, the CPU table, a thread still starting up whose
+state carries a parenthetical, one the runtime never attached, `DumpLatencyMs`,
+`(no managed stack frames)`, the runtime's statistics after the last thread,
+and the kernel wait channels after that.
+
+Written from a guess, five of those would have gone unread and two threads
+would have vanished into the block above them.
 """
 
 from __future__ import annotations
@@ -308,51 +312,96 @@ def test_a_form_no_source_here_announces_threads_in_is_refused(tmp_path):
 # with them only inside a bugreport.
 
 DROPBOX = """\
+Drop box contents: 50 entries
+Max entries: 1000
+Searching for: data_app_anr
+
+========================================
+2026-08-20 21:22:45 data_app_anr (compressed text, 46727 bytes)
 Process: com.example.app
 PID: 4100
-Flags: 0x2008be45
-Package: com.example.app v45 (1.2.3)
+UID: 10214
+Frozen: false
+Flags: 0x30a8be46
+Package: com.example.app v45
 Foreground: Yes
-Subject: Input dispatching timed out (no focused window)
+Activity: com.example.app/.MainActivity
+ErrorId: 9bd4a668-f993-4911-b244-b698efb7357d
+Subject: Input dispatching timed out (com.example.app/.MainActivity is not responding. Waited 10000ms for MotionEvent)
 Build: generic/vbox86p:13/TP1A/1234:user/release-keys
 Dropped-Count: 0
 
------ pid 4100 at 2026-08-20 19:12:08 -----
+CPU usage from 8ms to -8423ms ago (2026-08-20 21:22:37 to 2026-08-20 21:22:45):
+  57% 5662/system_server: 31% user + 25% kernel / faults: 22124 minor
+  38% 5339/surfaceflinger: 26% user + 12% kernel / faults: 1366 minor
+ 12% TOTAL: 6% user + 5% kernel
+timestamp_ms: 1787253758398
+window_ms: 300000
+
+----- pid 4100 at 2026-08-20 21:22:39.180419343+0200 -----
 Cmd line: com.example.app
 
-suspend all histogram:  Sum: 3ms 99% C.I. 1us-2ms Avg: 30us Max: 2ms
 DALVIK THREADS (4):
 "main" prio=5 tid=1 Blocked
-  | group="main" sCount=1 dsCount=0 flags=1 obj=0x72a8e030 self=0xb400007
-  | sysTid=4100 nice=-10 cgrp=top-app sched=0/0 handle=0x7c9f2f14f8
-  | state=S schedstat=( 1234 567 89 ) utm=10 stm=2 core=3 HZ=100
+  | group="main" sCount=1 ucsCount=0 flags=1 obj=0x71d88e28 self=0x7a375f7800
+  | sysTid=4100 nice=-10 cgrp=default sched=0/0 handle=0x7a38cbe500
+  | state=S schedstat=( 498411186 25640425 513 ) utm=36 stm=13 core=5 HZ=100
   | held mutexes=
   at com.example.app.data.StateStore.read(StateStore.kt:31)
   - waiting to lock <0x0a714d13> (a com.example.app.data.q) held by thread 12
   at com.example.app.ui.HomeViewModel.load(HomeViewModel.kt:88)
   at android.os.Looper.loop(Looper.java:392)
+  DumpLatencyMs: 0.5
 
 "Worker-2" daemon prio=5 tid=12 Waiting
   | sysTid=4112 nice=0 cgrp=default
   native: #00 pc 00000000000d9f5c  /apex/com.android.runtime/lib64/bionic/libc.so (syscall+28)
   at jdk.internal.misc.Unsafe.park(Native method)
   - locked <0x0a714d13> (a com.example.app.data.q)
+  - waiting on <0x0b8f2a01> (a java.lang.Object)
   at com.google.android.gms.tasks.Tasks.await(Tasks.java:8)
   at com.example.app.data.StateStore.flush(StateStore.kt:52)
   at java.lang.Thread.run(Thread.java:1012)
+  DumpLatencyMs: 0.4
 
 "pool-1-thread-1" prio=5 tid=20 TimedWaiting
   | sysTid=4120 nice=0 cgrp=default
   at java.util.concurrent.LinkedBlockingQueue.take(LinkedBlockingQueue.java:435)
   at java.util.concurrent.ThreadPoolExecutor.getTask(ThreadPoolExecutor.java:1026)
 
+"perfetto_hprof_listener" prio=10 tid=3 Native (still starting up)
+  | sysTid=4103 nice=0 cgrp=default
+  native: #00 pc 0000000000119104  /apex/com.android.runtime/lib64/bionic/libc.so (read+4)
+  (no managed stack frames)
+
 "Binder:4100_1" sysTid=4123
   native: #00 pc 0000000000119748  /apex/com.android.runtime/lib64/bionic/libc.so (__ioctl+8)
   native: #01 pc 00000000000946c8  /system/lib64/libbinder.so (android::IPCThreadState::joinThreadPool+152)
 
+"mali-cmar-backe" prio=7 (not attached)
+  | sysTid=4125 nice=0 cgrp=default
+  native: #00 pc 00000000000dc778  /apex/com.android.runtime/lib64/bionic/libc.so (__ppoll+8)
+  (no managed stack frames)
+
+Zygote loaded classes=18934 post zygote classes=68
+Dumping registered class loaders
+#0 dalvik.system.PathClassLoader: [], parent #1
+Done dumping class loaders
+Intern table: 35638 strong; 1170 weak
+JNI: CheckJNI is on; globals=372 (plus 82 weak)
+Heap: 63% free, 3019KB/8192KB
+
 ----- end 4100 -----
 
------ pid 5200 at 2026-08-20 19:12:09 -----
+----- Waiting Channels: pid 4100 at 2026-08-20 21:22:39 -----
+Cmd line: com.example.app
+
+sysTid=4100      futex_wait_queue_me
+sysTid=4112      poll_schedule_timeout
+
+----- end 4100 -----
+
+----- pid 5200 at 2026-08-20 21:22:39.180419343+0200 -----
 Cmd line: com.other.app
 
 DALVIK THREADS (1):
@@ -374,8 +423,8 @@ def test_the_source_is_decided_by_how_threads_are_announced():
 def test_the_record_carries_the_reason_the_export_does_not():
     rep = anr.parse(DROPBOX)
     check("the subject is read",
-          rep.reason == "Input dispatching timed out (no focused window)",
-          rep.reason)
+          rep.reason.startswith("Input dispatching timed out")
+          and "Waited 10000ms for MotionEvent" in rep.reason, rep.reason)
     check("and it leads the report",
           "Fired for: **Input dispatching timed out" in anr.render(rep))
     check("so the gap is not claimed",
@@ -392,7 +441,7 @@ def test_the_runtimes_state_names_land_in_the_same_vocabulary():
 
 def test_only_the_process_that_hung_is_read():
     rep = anr.parse(DROPBOX)
-    check("four threads from the app", len(rep.threads) == 4,
+    check("six threads from the app", len(rep.threads) == 6,
           [(t.name, t.process) for t in rep.threads])
     check("the other process is counted, not merged", rep.elsewhere == 1,
           rep.elsewhere)
@@ -445,8 +494,48 @@ def test_a_thread_the_runtime_never_attached_has_no_tid_to_be_held_by():
 def test_a_second_entry_in_the_file_is_a_second_anr_and_is_not_merged():
     two = DROPBOX + "\n" + "=" * 40 + "\n" + DROPBOX
     rep = anr.parse(two)
-    check("only the first is read", len(rep.threads) == 4,
+    check("only the first is read", len(rep.threads) == 6,
           [t.name for t in rep.threads])
     check("and the reader says there are more", rep.entries == 2, rep.entries)
     check("in the report too",
           "holds more than one ANR" in anr.render(rep), anr.render(rep))
+
+
+def test_nothing_in_a_real_records_shape_goes_unread():
+    """The record carries far more than threads, and all of it was seen once."""
+    rep = anr.parse(DROPBOX)
+    check("nothing outside a thread", not rep.unread, rep.unread)
+    check("nothing inside one",
+          not [line for t in rep.threads for line in t.unread],
+          [line for t in rep.threads for line in t.unread])
+    check("and the rest is counted, not silent", rep.skipped > 0, rep.skipped)
+
+
+def test_the_runtimes_statistics_do_not_become_fields_of_the_report():
+    """`Intern table: …` and `Heap: …` are `Key: value` and are not the app."""
+    head = anr.parse(DROPBOX).head
+    for key in ("Intern table", "Heap", "JNI", "Drop box contents", "Searching for"):
+        check(f"`{key}` stays out of the header", key not in head, sorted(head))
+    check("while the record's own fields are in",
+          head.get("Process") == "com.example.app", sorted(head))
+
+
+def test_a_thread_still_starting_up_is_not_swallowed_by_the_one_above_it():
+    """Its state carries a parenthetical, and without room for it the thread
+    is not merely mis-stated — it vanishes from the dump."""
+    rep = anr.parse(DROPBOX)
+    starting = next((t for t in rep.threads
+                     if t.name == "perfetto_hprof_listener"), None)
+    check("it is there", starting is not None, [t.name for t in rep.threads])
+    check("with the state it was given", starting.state == "native",
+          starting.state)
+
+
+def test_a_thread_the_runtime_never_attached_says_so():
+    rep = anr.parse(DROPBOX)
+    mali = next(t for t in rep.threads if t.name == "mali-cmar-backe")
+    check("named rather than left blank", mali.state == "not attached",
+          mali.state)
+    check("and struck out as waiting on a descriptor",
+          anr.idle_reason(mali) == "waiting on a descriptor",
+          anr.idle_reason(mali))
