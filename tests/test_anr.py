@@ -27,13 +27,25 @@ would have vanished into the block above them.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import anr  # noqa: E402
+from echolot.main import main as cli  # noqa: E402
 from tests.support import check  # noqa: E402
+
+
+def run(*argv: str) -> tuple[int, str, str]:
+    """A command, with what it printed on each stream."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = cli(list(argv))
+    return code, out.getvalue(), err.getvalue()
 
 PACKAGE = "com.example.app"
 
@@ -301,7 +313,9 @@ def test_a_form_no_source_here_announces_threads_in_is_refused(tmp_path):
     strange = tmp_path / "strange.txt"
     strange.write_text("Thread 1 <main> RUNNING\n  frame: Foo.bar\n",
                        encoding="utf-8")
-    check("it refuses", anr.main([str(strange)]) == 1)
+    code, _, err = run("anr", str(strange))
+    check("it refuses", code == 2, code)
+    check("and says which forms it does know", "Crashlytics" in err, err)
 
 
 # --- the record the device keeps itself -------------------------------------
@@ -539,3 +553,43 @@ def test_a_thread_the_runtime_never_attached_says_so():
     check("and struck out as waiting on a descriptor",
           anr.idle_reason(mali) == "waiting on a descriptor",
           anr.idle_reason(mali))
+
+
+# --- the verb ---------------------------------------------------------------
+
+def test_the_verb_reads_a_report_and_writes_nothing(tmp_path):
+    """Reconnaissance, not an investigation. That is why it is its own verb."""
+    report_file = tmp_path / "export.txt"
+    report_file.write_text(DUMP, encoding="utf-8")
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    code, out, _ = run("anr", str(report_file))
+    check("it exits 0", code == 0, code)
+    check("and prints the lock section", "## What was holding the lock" in out, out)
+    check("nothing landed beside the report",
+          sorted(p.name for p in tmp_path.iterdir()) == before,
+          sorted(p.name for p in tmp_path.iterdir()))
+
+
+def test_the_verb_gives_an_agent_the_same_findings_as_a_person(tmp_path):
+    report_file = tmp_path / "export.txt"
+    report_file.write_text(DUMP, encoding="utf-8")
+
+    found = json.loads(run("anr", str(report_file), "--json")[1])
+    check("the source is named", found["source"] == "crashlytics", found["source"])
+    check("one chain", len(found["chains"]) == 1, found["chains"])
+    chain = found["chains"][0]
+    check("with main behind it", chain["blocks_main"], chain)
+    check("the monitor named as in the markdown",
+          chain["named"] == "com.example.app.data.StateStore", chain)
+    check("and the holder's stack carried",
+          any("StateStore.flush" in frame for frame in chain["owner"]["stack"]),
+          chain["owner"])
+    check("the thread counts agree with the reader",
+          found["threads"]["total"] == len(report().threads), found["threads"])
+
+
+def test_the_verb_refuses_a_file_that_is_not_there(tmp_path):
+    code, _, err = run("anr", str(tmp_path / "nothing.txt"))
+    check("exit 2", code == 2, code)
+    check("and says so", "no such file" in err, err)

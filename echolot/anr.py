@@ -32,15 +32,14 @@ On ten reports from a live app it appeared four times and unfolded to a line in
 a file every time. Everything else the dump says is a snapshot: where a thread
 was standing five seconds in, which is not necessarily where the time went.
 
-    python -m echolot.anr report.txt
+    echolot anr report.txt
 """
 
 from __future__ import annotations
 
+import json
 import re
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 
 # --- the format -------------------------------------------------------------
 #
@@ -794,31 +793,62 @@ def _gaps(report: Report) -> list[str]:
     return gaps
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1:
-        print("usage: python -m echolot.anr <report.txt>", file=sys.stderr)
-        return 2
-    path = Path(args[0])
-    if not path.is_file():
-        print(f"error: no such file: {path}", file=sys.stderr)
-        return 2
-    text = path.read_text(encoding="utf-8", errors="replace")
-    source = detect(text)
-    if source is None:
-        print(f"error: nothing in {path} announces a thread the way a source "
-              f"this reader knows does. It reads the Crashlytics export and "
-              f"the ART dump that `dumpsys dropbox --print data_app_anr` and "
-              f"the files under /data/anr/ carry.", file=sys.stderr)
-        return 1
-    report = parse(text, source)
-    if not report.threads:
-        print(f"error: {path} reads as {source.name} and yields no threads.",
-              file=sys.stderr)
-        return 1
-    print(render(report))
-    return 0
+def summary(report: Report) -> dict[str, object]:
+    """The same findings in the shape an agent walks.
+
+    Two readers, one set of numbers — the Marker Report is built the same way,
+    and for the same reason: a person reads the markdown, an agent reads this,
+    and neither is given a different answer.
+    """
+    busy = working(report)
+    main_thread = report.main
+    return {
+        "schema": 1,
+        "source": report.source,
+        "application": report.package,
+        "reason": report.reason or None,
+        "head": report.head,
+        "threads": {
+            "total": len(report.threads),
+            "working": len(busy),
+            "idle": len(report.threads) - len(busy),
+            "other_processes": report.elsewhere,
+        },
+        "entries": report.entries,
+        "chains": [
+            {
+                "monitor": chain.monitor,
+                "named": chain.named,
+                "blocks_main": chain.blocks_main,
+                "deadlock": chain.cycle,
+                "waiters": [t.name for t in chain.waiters],
+                "owner": None if chain.owner is None else {
+                    "name": chain.owner.name,
+                    "tid": chain.owner.tid,
+                    "state": chain.owner.state,
+                    "stack": _stack(chain.owner, report.prefixes),
+                },
+            }
+            for chain in chains(report)
+        ],
+        "main": None if main_thread is None else {
+            "state": main_thread.state,
+            "idle": idle_reason(main_thread),
+            "denied": None if not main_thread.lock else main_thread.lock.cls,
+            "stack": _stack(main_thread, report.prefixes),
+        },
+        "working": [
+            {"name": t.name, "state": t.state,
+             "where": (t.own(report.prefixes) or [t.top])[0]}
+            for t in busy if t is not main_thread and not t.lock
+        ],
+        "unread": {
+            "outside": len(report.unread),
+            "inside": sum(len(t.unread) for t in report.threads),
+            "after_the_threads": report.skipped,
+        },
+    }
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def to_json(report: Report) -> str:
+    return json.dumps(summary(report), ensure_ascii=False, indent=2)

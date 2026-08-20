@@ -1022,6 +1022,46 @@ def cmd_guide(args) -> int:
     return 0
 
 
+def cmd_anr(args) -> int:
+    """A thread dump from the field, read the way the report reads a trace.
+
+    Reconnaissance rather than an investigation, and that is the whole reason
+    it is its own verb. It reads a file and prints; nothing lands on disk and
+    no hunt is opened. That is what makes it composable — a folder of exports
+    from the console goes through it in one loop, and out of ten reports the
+    two worth chasing are the ones that name a lock chain. Opening ten
+    investigations to learn that would be the wrong shape.
+    """
+    from . import anr as anr_mod
+
+    path = Path(args.report)
+    if not path.is_file():
+        print(f"no such file: {path}", file=sys.stderr)
+        return 2
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    source = anr_mod.detect(text)
+    if source is None:
+        print(f"nothing in {path} announces a thread the way a source this "
+              f"reader knows does. It reads the Crashlytics export and the ART "
+              f"dump that `dumpsys dropbox --print data_app_anr` and the files "
+              f"under /data/anr/ carry.", file=sys.stderr)
+        return 2
+    report = anr_mod.parse(text, source)
+    if not report.threads:
+        print(f"{path} reads as {source.name} and yields no threads.",
+              file=sys.stderr)
+        return 2
+
+    found = anr_mod.chains(report)
+    recorder.note(anr=source.name, threads=len(report.threads),
+                  chains=len(found),
+                  blocks_main=any(c.blocks_main for c in found))
+
+    print(anr_mod.to_json(report) if args.json else anr_mod.render(report))
+    return 0
+
+
 def cmd_domains(args) -> int:
     """The slice-to-code map plus instrumentation coverage.
 
@@ -1536,9 +1576,11 @@ def _dump(tp, sql: str) -> None:
 # reconnaissance meant for an agent.
 # The order verbs are read in, which is neither registration order nor
 # alphabetical. A verb missing from here is caught by the self-check.
+# The agent's half is ordered by the working flow. `anr` sits at its head
+# because a report from the field arrives before there is a trace to probe.
 ORDER = ("status", "init", "hunt", "doctor", "collect", "analyze", "compare",
-         "guide", "probe", "names", "domains", "mark", "calibrate", "explain",
-         "reflect")
+         "guide", "anr", "probe", "names", "domains", "mark", "calibrate",
+         "explain", "reflect")
 
 GROUP_TITLES = {
     "yours": ("Yours", None),
@@ -1656,6 +1698,18 @@ def build_parser() -> argparse.ArgumentParser:
     nm.add_argument("--min-ms", type=float, default=1.0,
                     help="relevance floor: shorter families are not shown")
     nm.set_defaults(func=cmd_names)
+
+    an_r = add("anr", "agent", "<report>", "a thread dump from the field: the lock chain, and who was working",
+               description="Reads an ANR report — an export from Crashlytics or "
+                    "the device's own record from `adb shell dumpsys dropbox "
+                    "--print data_app_anr` — and prints what it found: the "
+                    "monitor everything was queued behind, what the main thread "
+                    "was doing, and the few threads that were not idle. Reads "
+                    "and prints; opens no investigation and writes nothing.")
+    an_r.add_argument("report", help="the report file")
+    an_r.add_argument("--json", action="store_true",
+                      help="the same findings in the shape an agent walks")
+    an_r.set_defaults(func=cmd_anr)
 
     dom = add("domains", "agent", "--root <repo>", "slice-to-code map and instrumentation coverage")
     dom.add_argument("--root", default=".", help="repository root")
