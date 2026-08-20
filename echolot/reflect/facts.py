@@ -184,20 +184,41 @@ def verbs() -> frozenset[str]:
     return frozenset(ORDER)
 
 
+def is_invocation(word: str, known: frozenset[str] | None = None) -> bool:
+    """Is this word after `echolot` a subcommand, or is it English?
+
+    The word `echolot` followed by a word is not a call. It is also an echo, a
+    comment, a leftover heredoc line and, most often, prose: a real report once
+    counted `ran`, `call`, `calls` and `without` as subcommands, and its "By
+    subcommand" line read like a sentence. Everything downstream — the
+    timeline, the tally, the signals — was measuring English.
+
+    A leading `-` is `echolot --help`, which is a call and is spelled `help`.
+    """
+    return word.startswith("-") or word in (known if known is not None else verbs())
+
+
+def subcommands(command: str) -> list[str]:
+    """The subcommands one shell command really invokes, in order.
+
+    What the readers report as "this session used echolot". Heredoc bodies are
+    data, not commands — `cat > x.yml <<EOF … echolot calibrate … EOF` is a
+    config being written.
+    """
+    known = verbs()
+    return ["help" if m.group(1).startswith("-") else m.group(1)
+            for m in RE_ECHOLOT.finditer(strip_heredocs(command))
+            if is_invocation(m.group(1), known)]
+
+
 def echolot_calls(session: Session) -> list[EcholotCall]:
     out: list[EcholotCall] = []
     known = verbs()
     for c in session.bash():
         cmd = strip_heredocs(c.command or "")
         head = c.output_head or ""
-        # The word `echolot` followed by a word is not a call. It is also an
-        # echo, a comment, a leftover heredoc line and, most often, English: a
-        # real report once counted `ran`, `call`, `calls` and `without` as
-        # subcommands, and its "By subcommand" line read like a sentence.
-        # Everything downstream — the timeline, the tally, the signals — was
-        # measuring prose.
         matches = [m for m in RE_ECHOLOT.finditer(cmd)
-                   if m.group(1) in known or m.group(1).startswith("-")]
+                   if is_invocation(m.group(1), known)]
         exit_m = _EXIT.search(head)
         shell_err = bool(_SHELL_ERROR.search(head))
         glob_miss = _GLOB_MISS.search(head)
