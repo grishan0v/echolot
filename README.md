@@ -251,6 +251,7 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 | command | what it does |
 |---|---|
 | `guide` | how to work with this tool, printed by the package — what an agent without the `.claude/` layer reads instead of it |
+| `anr` | an ANR report from the field — the lock chain, and the few threads that were not idle. Crashlytics exports and the device's own `dumpsys dropbox` record |
 | `probe` | processes, threads by CPU, scenario anchor candidates |
 | `names` | slice name inventory and detector mask coverage |
 | `domains` | slice-to-code map and instrumentation coverage |

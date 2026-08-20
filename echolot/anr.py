@@ -17,8 +17,13 @@ Play Console, and the device's own record under
 `#NN pc 0x… lib.so (symbol + offset)`. The thread signature is each source's
 own: Crashlytics writes `main (blocked):tid=1 systid=8413 | waiting to lock …`,
 ART in dumpsys writes `"main" prio=5 tid=1 Blocked` with a `| group=…` line
-under it. So one reader for the frames, one per source for the signature.
-Crashlytics is the one implemented here.
+under it. So one reader for the frames, one per source for the signature — the
+export and the device's own record, with the source decided by which of them
+the file announces its threads in.
+
+The device's record is the one with a `Subject`: the reason the system fired,
+which the export drops. It also holds a block per process, and only the one
+that hung is read.
 
 The strongest thing in the file is the lock chain, and it needs no trace at
 all. A monitor held by a thread that is itself parked on a blocking call, with
@@ -27,40 +32,143 @@ On ten reports from a live app it appeared four times and unfolded to a line in
 a file every time. Everything else the dump says is a snapshot: where a thread
 was standing five seconds in, which is not necessarily where the time went.
 
-    python -m echolot.anr report.txt
+    echolot anr report.txt
 """
 
 from __future__ import annotations
 
+import json
 import re
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 
 # --- the format -------------------------------------------------------------
 #
-# The signature has an optional tail after `|`. It carries the monitor a
-# blocked thread wants and the tid holding it, and nothing else observed so
-# far. Reading it is what makes the lock chain possible, and the first sample
-# report had no blocked thread at all — hence the tail being optional rather
-# than a second pattern.
-_SIGNATURE = re.compile(
-    r"^(?P<name>.+?) \((?P<state>[^)]*)\):"
-    r"tid=(?P<tid>-?\d+) systid=(?P<systid>-?\d+)\s*"
-    r"(?:\|\s*(?P<note>.*))?$"
-)
-_LOCK = re.compile(
-    r"waiting to lock <(?P<addr>0x[0-9a-f]+)> "
-    r"\((?P<cls>[^)]*)\) held by thread (?P<owner>-?\d+)"
-)
-_JAVA = re.compile(r"^\s+at (?P<frame>.+)$")
-_NATIVE = re.compile(r"^#\d+ pc 0x[0-9a-f]+ (?P<lib>\S+)")
+# Frames are what the sources agree on. Everything around them — how a thread
+# is announced, where the lock note lives, what a native frame is prefixed
+# with — is each source's own, so it is declared per source rather than
+# branched on inside the reader.
+#
+# `# Key: value` is Crashlytics, bare `Key: value` is the dropbox record. One
+# pattern reads both headers; only the thread body needed splitting.
+_HEADER = re.compile(r"^#?\s*(?P<key>[A-Za-z][A-Za-z _-]*):\s?(?P<value>.*)$")
 
-# `# Key: value` is Crashlytics, bare `Key: value` is the dropbox record. The
-# headers cost nothing to read from both; the dropbox *signature* form is the
-# real gap, and a report in it comes out with zero threads rather than wrong
-# ones.
-_HEADER = re.compile(r"^#?\s*(?P<key>[A-Za-z][A-Za-z ]*): (?P<value>.*)$")
+# The dropbox record wraps the dump: an ANR trace holds one block per process,
+# starting with the one that hung, and every block names itself.
+_PROCESS = re.compile(r"^-{2,}\s*pid (?P<pid>\d+) at .*-{2,}\s*$")
+_CMDLINE = re.compile(r"^Cmd line: (?P<cmd>\S+)")
+# `dumpsys dropbox --print <tag>` concatenates every entry it holds.
+_ENTRY = re.compile(r"^={20,}\s*$")
+# The record's own furniture: block rules, the thread count above a block, and
+# the runtime's note about how long suspending everything took. Skipped by
+# name so that a line which is genuinely new still reaches the unread count.
+_SCAFFOLD = re.compile(
+    r"^(?:"
+    r"-{2,}.*-{2,}\s*"                       # the rule around a process block
+    r"|DALVIK THREADS \(\d+\):"              # how many are in the one below
+    r"|suspend all histogram:.*"             # what stopping them all cost
+    r"|CPU usage from .*"                    # the load table's heading
+    r"|\s*[+-]?[\d.]+% .*"                   # and one line of it
+    r"|\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \w+ \(.*\)\s*"   # the entry's own headline
+    r")$"
+)
+
+
+@dataclass(frozen=True)
+class Source:
+    """One producer's way of printing a thread dump.
+
+    `signature` must yield `name` and `state`, and any of `tid`, `systid`,
+    `note`. `lock` is applied to the note when the source puts it there and to
+    every frame line when it does not.
+    """
+    name: str
+    signature: re.Pattern[str]
+    frame: re.Pattern[str]
+    native: re.Pattern[str]
+    lock: re.Pattern[str]
+    held: re.Pattern[str] | None = None
+    sys_tid: re.Pattern[str] | None = None
+    lock_on_signature: bool = False
+    # Lines inside a thread block that are read and carry nothing this needs.
+    # Named rather than ignored by default, so a line that is genuinely new
+    # still reaches the unread count.
+    noise: re.Pattern[str] | None = None
+    # Whether a thread's body is indented under its signature. Where it is, an
+    # unindented line ends the thread — which is what tells the threads apart
+    # from the runtime summary printed after the last of them.
+    body_indented: bool = False
+
+
+# Verified against ten exports from a live application.
+#
+# The tail after `|` carries the monitor a blocked thread wants and the tid
+# holding it. It is optional because the first sample report had no blocked
+# thread at all — a second pattern would have made that report unreadable
+# rather than merely quiet.
+CRASHLYTICS = Source(
+    name="crashlytics",
+    signature=re.compile(
+        r"^(?P<name>.+?) \((?P<state>[^)]*)\):"
+        r"tid=(?P<tid>-?\d+) systid=(?P<systid>-?\d+)\s*"
+        r"(?:\|\s*(?P<note>.*))?$"
+    ),
+    frame=re.compile(r"^\s+at (?P<frame>.+)$"),
+    native=re.compile(r"^\s*(?:native:\s*)?#\d+ pc 0x[0-9a-f]+ (?P<lib>\S+)"),
+    lock=re.compile(
+        r"waiting to lock <(?P<addr>0x[0-9a-f]+)> "
+        r"\((?P<cls>[^)]*)\) held by thread (?P<owner>-?\d+)"
+    ),
+    lock_on_signature=True,
+)
+
+# What ART itself prints, which is what `dumpsys dropbox --print data_app_anr`
+# and the files under `/data/anr/` carry.
+#
+# Checked against a record made on purpose: an app that takes a monitor on a
+# worker and then blocks the main thread on it, frozen on an Android 13 phone
+# and read back out of the drop box. Every shape below is in that record.
+#
+# Three signature forms, all ART's: a managed thread carries `prio` and `tid`,
+# one the runtime never attached carries `prio` and says so, and one still
+# starting carries a parenthetical after its state. Leaving room for that last
+# one is not cosmetic — without it the thread is swallowed into the block above
+# and disappears from the count.
+DUMPSYS = Source(
+    name="dumpsys",
+    signature=re.compile(
+        r'^"(?P<name>[^"]*)"(?:\s+daemon)?\s+'
+        r"(?:prio=\d+\s+tid=(?P<tid>-?\d+)\s+(?P<state>[A-Za-z]\w*)"
+        r"|prio=\d+\s+\((?P<detached>not attached)\)"
+        r"|sysTid=(?P<systid>\d+))"
+        # A state can carry a parenthetical after it — `Native (still starting
+        # up)`. Without room for it the thread is not merely mis-stated, it is
+        # swallowed into the block above and vanishes from the count.
+        r"(?:\s+\(.*\))?\s*$"
+    ),
+    frame=re.compile(r"^\s+at (?P<frame>.+)$"),
+    native=re.compile(r"^\s*(?:native:\s*)?#\d+ pc [0-9a-fx]+\s+(?P<lib>\S+)"),
+    # On its own line under the frame that could not enter, and the class comes
+    # with an article ART puts there: `(a java.lang.Object)`.
+    lock=re.compile(
+        r"^\s*- waiting to lock <(?P<addr>0x[0-9a-f]+)>"
+        r"\s+\(a (?P<cls>[^)]*)\) held by thread (?P<owner>-?\d+)"
+    ),
+    # What a thread already holds. Crashlytics prints nothing of the kind, and
+    # it is what lets the holder be found when `held by thread` is absent.
+    held=re.compile(r"^\s*- locked <(?P<addr>0x[0-9a-f]+)>"),
+    sys_tid=re.compile(r"^\s*\|\s*sysTid=(?P<systid>\d+)"),
+    # `waiting on` and `sleeping on` name a monitor the thread is waiting
+    # *inside*, having released it — the opposite of holding, and no use to
+    # the chain. The rest is the runtime's own bookkeeping.
+    noise=re.compile(
+        r"^\s*(?:- (?:waiting on|sleeping on) <0x[0-9a-f]+>.*"
+        r"|\(no managed stack frames\)"
+        r"|DumpLatencyMs:.*)$"
+    ),
+    body_indented=True,
+)
+
+SOURCES = (CRASHLYTICS, DUMPSYS)
 
 # Packages that belong to the platform, the runtime and the libraries every app
 # carries. Used only to decide which frames are worth printing — a stack of
@@ -86,11 +194,16 @@ class Lock:
 class Thread:
     name: str
     state: str
-    tid: str
-    systid: str
+    tid: str = ""
+    systid: str = ""
+    # Which process block this thread came from. Only the dropbox record has
+    # more than one; an ANR trace dumps the app that hung and its neighbours.
+    process: str = ""
     frames: list[str] = field(default_factory=list)
     native: list[str] = field(default_factory=list)
     lock: Lock | None = None
+    # Monitors this thread already holds, when the source says so.
+    held: list[str] = field(default_factory=list)
     # Lines inside the block that matched neither a frame nor anything else.
     # Kept rather than dropped: a format that grew a line we do not read should
     # say so out loud.
@@ -117,12 +230,34 @@ class Thread:
 class Report:
     head: dict[str, str]
     threads: list[Thread]
+    source: str = CRASHLYTICS.name
     # Lines outside every thread block that nothing matched.
     unread: list[tuple[int, str]] = field(default_factory=list)
+    # Threads belonging to other processes in the same record, and further ANR
+    # entries after the one that was read. Both are counted rather than merged:
+    # a second process is not this app, and a second entry is a second ANR.
+    elsewhere: int = 0
+    entries: int = 1
+    # Lines after the threads that were passed over by position rather than by
+    # name: the runtime's statistics and the record's own furniture.
+    skipped: int = 0
 
     @property
     def package(self) -> str:
-        return self.head.get("Application", "")
+        """Crashlytics names the application; the dropbox record names the
+        process that hung, which is the same string for a single-process app
+        and the right one to scope to when it is not."""
+        for key in ("Application", "Process", "Package"):
+            value = self.head.get(key, "")
+            if value:
+                return value.split()[0]
+        return ""
+
+    @property
+    def reason(self) -> str:
+        """Why the system fired it. The dropbox record has this; an export
+        from Crashlytics does not, checked across ten of them."""
+        return self.head.get("Subject", "") or self.head.get("Reason", "")
 
     @property
     def prefixes(self) -> tuple[str, ...]:
@@ -140,51 +275,124 @@ class Report:
         return (pkg,) if len(parts) < 2 else (pkg, ".".join(parts[:2]))
 
     def by_tid(self) -> dict[str, Thread]:
-        """Threads by tid — the id `held by thread N` refers to."""
-        return {t.tid: t for t in self.threads}
+        """Threads by tid — the id `held by thread N` refers to.
+
+        A thread the runtime never attached has no tid to be referred to by,
+        and an empty key would collect all of them into one.
+        """
+        return {t.tid: t for t in self.threads if t.tid}
 
     @property
     def main(self) -> Thread | None:
         return next((t for t in self.threads if t.name == "main"), None)
 
 
-def parse(text: str) -> Report:
+def detect(text: str) -> Source | None:
+    """Which producer wrote this, by whose signature its threads match.
+
+    Counted rather than decided on the first hit: a header line or a frame can
+    look like somebody's signature, and one accidental match should not choose
+    the reader for the whole file.
+    """
+    head = text.splitlines()[:600]
+    scored = [(sum(1 for line in head if source.signature.match(line)), source)
+              for source in SOURCES]
+    best, source = max(scored, key=lambda pair: pair[0])
+    return source if best else None
+
+
+def _state(word: str) -> str:
+    """One vocabulary for states two sources spell differently.
+
+    Crashlytics writes them in the words a person would (`timed waiting`), ART
+    writes them as its enum (`TimedWaiting`). Splitting on the inner capitals
+    turns the second into the first and leaves anything unforeseen readable
+    rather than dropped.
+    """
+    if not word or word.islower():
+        return word
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", word).lower()
+
+
+def parse(text: str, source: Source | None = None) -> Report:
     """A dump into threads. Everything unreadable is kept, not dropped."""
+    source = source or detect(text) or CRASHLYTICS
     head: dict[str, str] = {}
     threads: list[Thread] = []
     unread: list[tuple[int, str]] = []
     current: Thread | None = None
+    process = ""
+    entries = 1
+    skipped = 0
 
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.rstrip()
         if not line.strip():
             continue
 
-        signature = _SIGNATURE.match(line)
+        signature = source.signature.match(line)
         if signature:
-            fields = signature.groupdict()
-            note = fields.pop("note") or ""
-            current = Thread(**fields)
-            held = _LOCK.search(note)
-            if held:
-                current.lock = Lock(**held.groupdict())
-            elif note:
-                current.unread.append(note)
+            fields = {k: v or "" for k, v in signature.groupdict().items()}
+            note = fields.pop("note", "")
+            # A thread the runtime never attached has no state to print, and
+            # `not attached` is the more useful thing to say than nothing.
+            state = fields.pop("state", "") or fields.pop("detached", "")
+            fields.pop("detached", None)
+            current = Thread(state=_state(state), process=process, **fields)
             threads.append(current)
+            if source.lock_on_signature:
+                held = source.lock.search(note)
+                if held:
+                    current.lock = Lock(**held.groupdict())
+                elif note:
+                    current.unread.append(note)
             continue
 
-        java = _JAVA.match(line)
-        if java and current is not None:
-            current.frames.append(java.group("frame"))
+        if current is not None:
+            if source.body_indented and not raw[:1].isspace():
+                # ART indents everything belonging to a thread. What is not
+                # indented is the next thread, the block's end, or the
+                # runtime's summary — none of them this thread's business.
+                current = None
+            elif _read_body(line, current, source):
+                continue
+
+        # Outside a thread: the record's own scaffolding, then the header.
+        block = _PROCESS.match(line)
+        if block:
+            current, process = None, ""
+            continue
+        named = _CMDLINE.match(line)
+        if named:
+            current, process = None, named.group("cmd")
+            continue
+        if _ENTRY.match(line):
+            # A second entry is a second ANR. Reading it into the same report
+            # would merge two freezes into one set of threads.
+            if threads:
+                entries += 1
+                break
+            # Everything before the first separator is what `dumpsys` says
+            # about the drop box itself — how many entries it holds, what it
+            # was asked for. None of it describes this ANR.
+            head.clear()
+            current = None
+            continue
+        if _SCAFFOLD.match(line):
             continue
 
-        if _NATIVE.match(line) and current is not None:
-            current.native.append(line.strip())
-            continue
-
-        # The header runs before the first thread. After one has started, a
-        # `Key: value` line is something inside the block and belongs to it.
+        # The header runs before the first thread, and only before it. After
+        # the threads begin, ART prints its own statistics in the same
+        # `Key: value` shape — heap, intern table, JNI globals, loaded
+        # libraries — and reading those as fields of the report puts the
+        # runtime's bookkeeping where the application's identity belongs.
         if current is None:
+            if threads:
+                # Everything after the threads: the runtime summary, the block
+                # rules, the kernel wait channels. Unbounded, different on
+                # every vendor's build, and none of it about this freeze.
+                skipped += 1
+                continue
             field_line = _HEADER.match(line)
             if field_line:
                 head[field_line.group("key").strip()] = field_line.group("value").strip()
@@ -198,7 +406,63 @@ def parse(text: str) -> Report:
         else:
             current.unread.append(line)
 
-    return Report(head=head, threads=threads, unread=unread)
+    report = Report(head=head, threads=threads, source=source.name,
+                    unread=unread, entries=entries, skipped=skipped)
+    return _scoped(report)
+
+
+def _read_body(line: str, thread: Thread, source: Source) -> bool:
+    """A line inside a thread block, or False when it belongs to nobody."""
+    frame = source.frame.match(line)
+    if frame:
+        thread.frames.append(frame.group("frame"))
+        return True
+    if source.native.match(line):
+        thread.native.append(line.strip())
+        return True
+    if not source.lock_on_signature:
+        denied = source.lock.match(line)
+        if denied:
+            thread.lock = Lock(**denied.groupdict())
+            return True
+        if source.held:
+            holds = source.held.match(line)
+            if holds:
+                thread.held.append(holds.group("addr"))
+                return True
+    if source.noise and source.noise.match(line):
+        return True
+    if source.sys_tid:
+        systid = source.sys_tid.match(line)
+        if systid:
+            thread.systid = systid.group("systid")
+            return True
+        # The rest of ART's `|` continuation lines are scheduler and stack
+        # bookkeeping. Skipped by shape rather than listed: a build that adds
+        # a field to them must not read as a format this cannot handle.
+        if line.lstrip().startswith("|"):
+            return True
+    return False
+
+
+def _scoped(report: Report) -> Report:
+    """Threads of the process that hung, and a count of the ones set aside.
+
+    An ANR trace holds a block per process — the app that froze first, then
+    whatever else the system thought worth dumping. Reading them as one process
+    would put another app's stalled thread in this app's findings.
+    """
+    seen = {t.process for t in report.threads if t.process}
+    if len(seen) <= 1:
+        return report
+    target = report.package if report.package in seen else next(
+        (t.process for t in report.threads if t.process), "")
+    kept = [t for t in report.threads if t.process == target]
+    report.elsewhere = len(report.threads) - len(kept)
+    report.threads = kept
+    if not report.head.get("Process"):
+        report.head["Process"] = target
+    return report
 
 
 # --- what "doing nothing" looks like ----------------------------------------
@@ -255,6 +519,7 @@ IDLE: list[tuple[str, tuple[str, ...]]] = [
     )),
     ("waiting on a descriptor", (
         "__epoll_pwait",
+        "__ppoll",
         "java.nio.channels.Selector.select",
     )),
     ("sleeping", (
@@ -340,8 +605,13 @@ def chains(report: Report) -> list[Chain]:
             grouped.setdefault((thread.lock.addr, thread.lock.owner), []).append(thread)
 
     found = []
-    for (_, owner_tid), waiters in grouped.items():
-        owner = by_tid.get(owner_tid)
+    for (addr, owner_tid), waiters in grouped.items():
+        # By the tid the source named, and when that tid is not in the dump, by
+        # whoever says it holds this monitor. ART prints what a thread has
+        # locked; that is the second way to the same answer, and it survives an
+        # owner outside the process block that was read.
+        owner = by_tid.get(owner_tid) or next(
+            (t for t in report.threads if addr in t.held), None)
         monitor = waiters[0].lock.cls if waiters[0].lock else ""
         found.append(Chain(
             monitor=monitor,
@@ -414,11 +684,20 @@ def render(report: Report) -> str:
     marks = [x for x in (head.get("Issue", "")[:8], head.get("Date", "")) if x]
     out.append(f"**{title or 'unknown application'}**"
                + (" · " + " · ".join(marks) if marks else ""))
+    if report.reason:
+        out.append(f"Fired for: **{report.reason}**")
 
     busy = working(report)
     idle = len(report.threads) - len(busy)
-    out.append(f"Threads: **{len(report.threads)}** — {len(busy)} doing "
+    counted = (f"Threads: **{len(report.threads)}** — {len(busy)} doing "
                f"something, {idle} idle")
+    if report.elsewhere:
+        counted += (f" · {report.elsewhere} from other processes in this "
+                    f"record, not read")
+    out.append(counted)
+    if report.entries > 1:
+        out.append("This file holds more than one ANR. Everything below is "
+                   "the first of them.")
     out.append("")
 
     found = chains(report)
@@ -493,7 +772,7 @@ def _gaps(report: Report) -> list[str]:
     skipped, or silence reads as a clean bill.
     """
     gaps = []
-    if not any(k in report.head for k in ("Subject", "Reason")):
+    if not report.reason:
         gaps.append("- Why the system fired the ANR. A Crashlytics export "
                     "carries no reason, component or intent — those come from "
                     "`dumpsys dropbox` and Play Console.")
@@ -507,26 +786,69 @@ def _gaps(report: Report) -> list[str]:
     if stray:
         gaps.append(f"- {stray} line(s) inside thread blocks that are neither "
                     f"frames nor a lock note.")
+    if report.skipped:
+        gaps.append(f"- {report.skipped} line(s) after the threads — the "
+                    f"runtime's own statistics and the record's furniture — "
+                    f"passed over by position rather than by name.")
     return gaps
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1:
-        print("usage: python -m echolot.anr <report.txt>", file=sys.stderr)
-        return 2
-    path = Path(args[0])
-    if not path.is_file():
-        print(f"error: no such file: {path}", file=sys.stderr)
-        return 2
-    report = parse(path.read_text(encoding="utf-8", errors="replace"))
-    if not report.threads:
-        print(f"error: no threads read from {path}. The signature form of "
-              f"this source may not be one this reader knows.", file=sys.stderr)
-        return 1
-    print(render(report))
-    return 0
+def summary(report: Report) -> dict[str, object]:
+    """The same findings in the shape an agent walks.
+
+    Two readers, one set of numbers — the Marker Report is built the same way,
+    and for the same reason: a person reads the markdown, an agent reads this,
+    and neither is given a different answer.
+    """
+    busy = working(report)
+    main_thread = report.main
+    return {
+        "schema": 1,
+        "source": report.source,
+        "application": report.package,
+        "reason": report.reason or None,
+        "head": report.head,
+        "threads": {
+            "total": len(report.threads),
+            "working": len(busy),
+            "idle": len(report.threads) - len(busy),
+            "other_processes": report.elsewhere,
+        },
+        "entries": report.entries,
+        "chains": [
+            {
+                "monitor": chain.monitor,
+                "named": chain.named,
+                "blocks_main": chain.blocks_main,
+                "deadlock": chain.cycle,
+                "waiters": [t.name for t in chain.waiters],
+                "owner": None if chain.owner is None else {
+                    "name": chain.owner.name,
+                    "tid": chain.owner.tid,
+                    "state": chain.owner.state,
+                    "stack": _stack(chain.owner, report.prefixes),
+                },
+            }
+            for chain in chains(report)
+        ],
+        "main": None if main_thread is None else {
+            "state": main_thread.state,
+            "idle": idle_reason(main_thread),
+            "denied": None if not main_thread.lock else main_thread.lock.cls,
+            "stack": _stack(main_thread, report.prefixes),
+        },
+        "working": [
+            {"name": t.name, "state": t.state,
+             "where": (t.own(report.prefixes) or [t.top])[0]}
+            for t in busy if t is not main_thread and not t.lock
+        ],
+        "unread": {
+            "outside": len(report.unread),
+            "inside": sum(len(t.unread) for t in report.threads),
+            "after_the_threads": report.skipped,
+        },
+    }
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def to_json(report: Report) -> str:
+    return json.dumps(summary(report), ensure_ascii=False, indent=2)
