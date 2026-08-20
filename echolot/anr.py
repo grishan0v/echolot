@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # --- the format -------------------------------------------------------------
 #
@@ -642,6 +643,131 @@ def _waits_back(owner: Thread | None, waiters: set[str], by_tid: dict[str, Threa
     return False
 
 
+# --- from a frame to a file -------------------------------------------------
+#
+# A java frame carries its own source location: the compiler wrote the file
+# name and the line into it, and Crashlytics gives them back unminified. So
+# nothing has to be searched for — a basename and a package are enough to point
+# at a file in the repository, and that is a shorter road than the one
+# `domains` takes from a slice name.
+#
+# The repository walk is duplicated here rather than borrowed from `mark`,
+# which does the same thing for its own reasons. `mark` will want to read an
+# ANR report, and a module that imports it cannot also be imported by it.
+
+SOURCE_EXT = (".kt", ".java")
+SKIP_DIRS = {"build", ".git", ".gradle", "generated", ".echolot", "node_modules"}
+
+# `pkg.Class.method(File.kt:58)`, and everything that is not that:
+#   (Native method)                              nothing to point at
+#   (unavailable:0)                              the frame the runtime lost
+#   (com.google.x:artifact@@1.2.3:2)             a dependency's coordinate
+_FRAME = re.compile(r"^(?P<symbol>[^(]+)\((?P<where>[^)]*)\)\s*$")
+_WHERE = re.compile(r"^(?P<file>[\w$]+\.(?:kt|java))(?::(?P<line>\d+))?$")
+
+
+@dataclass
+class Located:
+    frame: str
+    symbol: str      # pkg.Class.method
+    file: str        # relative to the root
+    line: int | None
+    exact: bool      # not a guess: one candidate, or the package agreed
+
+
+def source_index(root: Path) -> dict[str, list[Path]]:
+    """Every Kotlin and Java source under the root, by file name."""
+    found: dict[str, list[Path]] = {}
+    for path in root.rglob("*"):
+        if path.suffix in SOURCE_EXT and path.is_file() \
+                and not (SKIP_DIRS & set(path.parts)):
+            found.setdefault(path.name, []).append(path)
+    return found
+
+
+def place(frame: str, index: dict[str, list[Path]], root: Path) -> Located | None:
+    """Where in the repository this frame is, or None when it says nowhere.
+
+    The file name alone is ambiguous in a multi-module project — two modules
+    holding `Mapper.kt` is ordinary. The package from the frame's own symbol
+    settles it, and when it settles nothing the first candidate is returned
+    with `exact` false rather than silently picked as if it were certain.
+    """
+    parsed = _FRAME.match(frame)
+    if not parsed:
+        return None
+    where = _WHERE.match(parsed.group("where").strip())
+    if not where:
+        return None
+    candidates = index.get(where.group("file"))
+    if not candidates:
+        return None
+
+    symbol = parsed.group("symbol").strip()
+    # `pkg.Class$1.onClick` — the anonymous class is still that package.
+    owner = symbol.rsplit(".", 1)[0].split("$", 1)[0]
+    package = owner.rsplit(".", 1)[0] if "." in owner else ""
+    wanted = "/".join(package.split(".")) if package else ""
+
+    # One file of that name in the whole checkout is not a guess, whatever the
+    # package says: Kotlin lets a class live in a directory that does not spell
+    # out its package, and warning about that would cry wolf on every one.
+    chosen, exact = candidates[0], len(candidates) == 1
+    for path in candidates:
+        if wanted and wanted in path.as_posix():
+            chosen, exact = path, True
+            break
+    line = where.group("line")
+    return Located(frame=frame, symbol=symbol,
+                   file=chosen.relative_to(root).as_posix(),
+                   line=int(line) if line else None, exact=exact)
+
+
+def of_interest(report: Report) -> list[Thread]:
+    """The threads a reader is shown, and therefore the ones worth placing.
+
+    Every thread in the dump would be hundreds of frames of platform and
+    library code with nothing of the project in them.
+    """
+    seen: dict[str, Thread] = {}
+    for chain in chains(report):
+        for thread in [*chain.waiters, chain.owner]:
+            if thread is not None:
+                seen[f"{thread.name}/{thread.tid}"] = thread
+    for thread in [report.main, *working(report)]:
+        if thread is not None:
+            seen.setdefault(f"{thread.name}/{thread.tid}", thread)
+    return list(seen.values())
+
+
+def locate(report: Report, root: Path) -> tuple[list[Located], list[str]]:
+    """Frames of this project placed in the repository, and those left over.
+
+    The leftovers are the point of returning two lists. A frame this project
+    owns that the repository cannot place means one of two things — the module
+    is not in this checkout, or the report is from a version that no longer
+    matches it — and both are worth saying rather than rounding down to a
+    shorter list.
+    """
+    index = source_index(root)
+    placed: list[Located] = []
+    missing: list[str] = []
+    seen: set[str] = set()
+    for thread in of_interest(report):
+        for frame in thread.own(report.prefixes):
+            if frame in seen:
+                continue
+            seen.add(frame)
+            found = place(frame, index, root)
+            if found:
+                placed.append(found)
+            elif _FRAME.match(frame) and _WHERE.match(
+                    _FRAME.match(frame).group("where").strip()):
+                # It named a source file, and this checkout has no such file.
+                missing.append(frame)
+    return placed, missing
+
+
 # --- the report -------------------------------------------------------------
 
 def _stack(thread: Thread, prefixes: tuple[str, ...], limit: int = 8) -> list[str]:
@@ -675,7 +801,13 @@ def _stack(thread: Thread, prefixes: tuple[str, ...], limit: int = 8) -> list[st
         lines + thread.native[1:3] if len(lines) == 1 else lines)
 
 
-def render(report: Report) -> str:
+def _short(symbol: str) -> str:
+    """`pkg.Class.method` as `Class.method` — the path below carries the rest."""
+    parts = symbol.split(".")
+    return ".".join(parts[-2:]) if len(parts) > 2 else symbol
+
+
+def render(report: Report, code: tuple[list[Located], list[str]] | None = None) -> str:
     """The dump as a findings list — sections that have something to say."""
     out: list[str] = ["# ANR Report", ""]
 
@@ -758,14 +890,25 @@ def render(report: Report) -> str:
             out.append(f"- … and {len(ranked) - 12} more")
         out.append("")
 
-    gaps = _gaps(report)
+    placed, missing = code or ([], [])
+    if placed:
+        out += ["## Where these frames are in this checkout", "",
+                "_the compiler wrote the file and the line into the frame; "
+                "nothing here was searched for_", ""]
+        for found in placed:
+            mark = "" if found.exact else "  ← one of several of that name"
+            where = found.file + (f":{found.line}" if found.line else "")
+            out.append(f"- `{_short(found.symbol)}` — {where}{mark}")
+        out.append("")
+
+    gaps = _gaps(report, missing)
     if gaps:
         out += ["## What this report does not say", ""] + gaps + [""]
 
     return "\n".join(out).rstrip() + "\n"
 
 
-def _gaps(report: Report) -> list[str]:
+def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
     """What could not be read or was never there.
 
     A tool that answers only what it can answer has to say which questions it
@@ -786,6 +929,11 @@ def _gaps(report: Report) -> list[str]:
     if stray:
         gaps.append(f"- {stray} line(s) inside thread blocks that are neither "
                     f"frames nor a lock note.")
+    if missing:
+        gaps.append(f"- where {len(missing)} of this project's frames are: they "
+                    f"name a source file this checkout does not have. Either "
+                    f"the module is elsewhere or the report is from another "
+                    f"version — first is `{missing[0]}`.")
     if report.skipped:
         gaps.append(f"- {report.skipped} line(s) after the threads — the "
                     f"runtime's own statistics and the record's furniture — "
@@ -793,7 +941,8 @@ def _gaps(report: Report) -> list[str]:
     return gaps
 
 
-def summary(report: Report) -> dict[str, object]:
+def summary(report: Report,
+            code: tuple[list[Located], list[str]] | None = None) -> dict[str, object]:
     """The same findings in the shape an agent walks.
 
     Two readers, one set of numbers — the Marker Report is built the same way,
@@ -842,6 +991,14 @@ def summary(report: Report) -> dict[str, object]:
              "where": (t.own(report.prefixes) or [t.top])[0]}
             for t in busy if t is not main_thread and not t.lock
         ],
+        "code": None if code is None else {
+            "placed": [
+                {"symbol": f.symbol, "file": f.file, "line": f.line,
+                 "exact": f.exact}
+                for f in code[0]
+            ],
+            "unplaced": code[1],
+        },
         "unread": {
             "outside": len(report.unread),
             "inside": sum(len(t.unread) for t in report.threads),
@@ -850,5 +1007,6 @@ def summary(report: Report) -> dict[str, object]:
     }
 
 
-def to_json(report: Report) -> str:
-    return json.dumps(summary(report), ensure_ascii=False, indent=2)
+def to_json(report: Report,
+            code: tuple[list[Located], list[str]] | None = None) -> str:
+    return json.dumps(summary(report, code), ensure_ascii=False, indent=2)

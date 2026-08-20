@@ -1053,12 +1053,21 @@ def cmd_anr(args) -> int:
               file=sys.stderr)
         return 2
 
+    # The repository is optional on purpose. A report read anywhere still
+    # answers what froze; pointed at a checkout it also says where to open.
+    code = None
+    root = Path(args.root).resolve()
+    if root.is_dir():
+        code = anr_mod.locate(report, root)
+
     found = anr_mod.chains(report)
     recorder.note(anr=source.name, threads=len(report.threads),
                   chains=len(found),
-                  blocks_main=any(c.blocks_main for c in found))
+                  blocks_main=any(c.blocks_main for c in found),
+                  placed=len(code[0]) if code else 0)
 
-    print(anr_mod.to_json(report) if args.json else anr_mod.render(report))
+    print(anr_mod.to_json(report, code) if args.json
+          else anr_mod.render(report, code))
     return 0
 
 
@@ -1115,8 +1124,29 @@ def cmd_mark(args) -> int:
         recorder.note(removed_files=len(touched))
         return 0
 
-    pl = mark_mod.plan(root, package=package, allowed=allowed, prefix=prefix,
-                       module=args.module)
+    if args.from_anr:
+        # The targets come from a freeze that happened rather than from where
+        # instrumentation usually belongs. Everything after this — rendering,
+        # --apply, --remove — is the same code and the same tag.
+        from . import anr as anr_mod
+
+        source = Path(args.from_anr)
+        if not source.is_file():
+            print(f"no such file: {source}", file=sys.stderr)
+            return 2
+        text = source.read_text(encoding="utf-8", errors="replace")
+        if anr_mod.detect(text) is None:
+            print(f"{source} is not a report this reader knows", file=sys.stderr)
+            return 2
+        report = anr_mod.parse(text)
+        placed, missing = anr_mod.locate(report, root)
+        pl = mark_mod.plan_from_anr(
+            root, [(f.symbol, f.file, f.line) for f in placed],
+            prefix=prefix, allowed=allowed, unplaced=len(missing),
+            version=report.head.get("Version") or report.head.get("Package"))
+    else:
+        pl = mark_mod.plan(root, package=package, allowed=allowed, prefix=prefix,
+                           module=args.module)
     if args.json:
         print(json.dumps(pl.to_dict(), ensure_ascii=False, indent=2))
     else:
@@ -1707,6 +1737,9 @@ def build_parser() -> argparse.ArgumentParser:
                     "was doing, and the few threads that were not idle. Reads "
                     "and prints; opens no investigation and writes nothing.")
     an_r.add_argument("report", help="the report file")
+    an_r.add_argument("--root", default=".",
+                      help="repository root, to place the frames in files "
+                           "(default: the current directory)")
     an_r.add_argument("--json", action="store_true",
                       help="the same findings in the shape an agent walks")
     an_r.set_defaults(func=cmd_anr)
@@ -1730,6 +1763,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="for project.package (which app module) and instrumentation.allowed")
     mk.add_argument("--local", help="path to local.yml (defaults to alongside)")
     mk.add_argument("--module", help="the app module when several declare a launcher, e.g. :app")
+    mk.add_argument("--from-anr", metavar="REPORT",
+                    help="take the targets from an ANR report's frames instead "
+                         "of the manifest — what was on the stack when it froze")
     mk.add_argument("--apply", action="store_true", help="insert the applicable markers")
     mk.add_argument("--remove", action="store_true",
                     help="delete every line tagged `// echolot:mark` under --root")

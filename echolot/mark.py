@@ -600,6 +600,202 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
     return out
 
 
+# --- markers from a stack ---------------------------------------------------
+#
+# The vocabulary above proposes where instrumentation *usually* belongs on a
+# project that has none: the launcher Activity, the Application class, one hop
+# from setContent. That is a good guess and it is a guess.
+#
+# A stack from a freeze is not. It names the methods that were on the thread at
+# the moment the system gave up, with the file and the line the compiler wrote
+# into each frame. Marking those is marking what was measured to be there.
+
+_KOTLIN_FUN = re.compile(
+    r"^[ \t]*(?:@[\w.]+(?:\([^)]*\))?[ \t]*)*"
+    r"(?:(?:public|private|internal|protected|suspend|inline|override|open|"
+    r"final|abstract|tailrec|operator|infix|external|actual|expect)[ \t]+)*"
+    r"fun[ \t]+(?:<[^>]*>[ \t]*)?(?:[\w.<>?]+\.)?(?P<name>[\w`]+)[ \t]*\("
+)
+_JAVA_DECL = re.compile(
+    r"^[ \t]*(?:@\w+(?:\([^)]*\))?[ \t]*)*"
+    r"(?:(?:public|private|protected|static|final|abstract|synchronized|"
+    r"native|default|strictfp)[ \t]+)+"
+    r"(?:<[^>]*>[ \t]*)?[\w.<>\[\]?]+[ \t]+(?P<name>\w+)[ \t]*\("
+)
+
+
+def _body_of(clean: str, paren_at: int) -> tuple[int | None, int | None]:
+    """The `{ … }` of a declaration whose parameter list opens at `paren_at`.
+
+    The parameters are matched first because they may run over several lines,
+    and the brace that follows them is the body's. An `=` or a `;` in between
+    means there is no body to bracket: an expression-bodied function, or a
+    declaration without an implementation.
+    """
+    depth, i = 0, paren_at
+    while i < len(clean):
+        if clean[i] == "(":
+            depth += 1
+        elif clean[i] == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    j = clean.find("{", i)
+    if j < 0 or "=" in clean[i:j] or ";" in clean[i:j]:
+        return (None, None)
+    k = match_brace(clean, j)
+    return (j, k) if k is not None else (None, None)
+
+
+def enclosing_block(text: str, suffix: str, line: int):
+    """The innermost declaration whose body holds this 1-based line.
+
+    Returns `(name, decl_line, open_at, close_at, has_return)`, or None when
+    the line sits in no block this can see — a property initialiser, a field, a
+    file whose shape these two patterns do not cover.
+
+    Innermost rather than first: a frame often points inside a lambda, and the
+    function around that lambda is the one worth bracketing, while an outer
+    function containing both would put the marker around far too much.
+    """
+    clean = strip_noise(text)
+    lines = text.splitlines(keepends=True)
+    if not 1 <= line <= len(lines):
+        return None
+    pattern = _KOTLIN_FUN if suffix == ".kt" else _JAVA_DECL
+
+    # By line rather than by offset. A frame can point at the signature line
+    # itself, whose offset is before the `{` — `fun brief() { write() }` would
+    # then be found to contain nothing, including itself.
+    best = None
+    offset = 0
+    for number, raw in enumerate(lines, 1):
+        found = pattern.match(raw)
+        if found:
+            paren = clean.find("(", offset)
+            open_at, close_at = _body_of(clean, paren) if paren >= 0 else (None, None)
+            if open_at is not None and number <= line <= line_of(text, close_at):
+                if best is None or open_at > best[2]:
+                    body = clean[open_at + 1:close_at]
+                    best = (found.group("name").strip("`"), number, open_at,
+                            close_at, re.search(r"\breturn\b", body) is not None)
+        offset += len(raw)
+    return best
+
+
+def frame_function(symbol: str) -> str:
+    """The source function a frame belongs to, seen through the compiler.
+
+    A plain frame names it directly. A lambda's does not: Kotlin compiles one
+    into a class of its own, so `Handler$updateLocality$2.invokeSuspend` is a
+    lambda written inside `updateLocality`, and the first `$` segment that is
+    not a number is the function a person would point at. An anonymous class
+    implementing an interface numbers all of its segments, and there the
+    member's own name is the answer.
+    """
+    owner, _, member = symbol.rpartition(".")
+    named = next((s for s in owner.split("$")[1:] if not s.isdigit()), "")
+    return named or member
+
+
+def marker_for(symbol: str, prefix: str) -> str:
+    """`pkg.Class$1.method` as `AGENTTMP_Class_1_method`.
+
+    The package is dropped: a trace section name is read in a list of twenty
+    and the last two parts are what tell them apart.
+    """
+    parts = symbol.split(".")
+    tail = ".".join(parts[-2:]) if len(parts) > 1 else symbol
+    return prefix + re.sub(r"\W+", "_", tail).strip("_")
+
+
+def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
+                  prefix: str = DEFAULT_PREFIX,
+                  allowed: list[str] | None = None,
+                  unplaced: int = 0, version: str | None = None) -> Plan:
+    """A marker plan whose targets come from a stack rather than the manifest.
+
+    `frames` is `(symbol, file relative to root, line)` — what `echolot anr`
+    placed in this checkout. Nothing is searched for here; each frame already
+    says where it is, and the work is finding the block around the line and
+    deciding whether a begin/end pair can go in mechanically.
+
+    `unplaced` and `version` are only for the note at the end: they are what
+    lets a working tree from the wrong build be named as such instead of
+    looking like a tool that refuses everything.
+    """
+    out = Plan(root=str(root), module=None, package=None)
+    seen: set[str] = set()
+    for symbol, rel, line in frames:
+        if line is None:
+            out.notes.append(f"{symbol} — the frame carries no line, so there "
+                             f"is nothing to find the block around")
+            continue
+        if allowed and not under_allowed(rel, allowed):
+            continue
+        marker = marker_for(symbol, prefix)
+        if marker in seen:
+            continue
+        seen.add(marker)
+
+        path = root / rel
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        block = enclosing_block(text, path.suffix, line)
+        if block is None:
+            out.proposals.append(Proposal(
+                "anr_frame", rel, line, f"{symbol.rsplit('.', 1)[-1]} — on the "
+                f"stack when it froze", marker, "anr", gradle_module(path, root),
+                applicable=False,
+                reason="no function around that line that this can bracket"))
+            continue
+
+        name, decl_line, open_at, close_at, has_return = block
+
+        # The line and the symbol can disagree, and when they do the line is
+        # the one to distrust. On a live report a frame naming
+        # `OrderManagerImpl.getActiveOrders` carried a line that falls inside
+        # `getPlacedOrder` — R8 moves them, and inlining moves them further.
+        # Bracketing the block the line landed in would have put a marker
+        # named after one function around the body of another, and the trace
+        # would then say that function took the time.
+        wanted = frame_function(symbol)
+        disagree = "" if name == wanted else (
+            f"the line falls inside `{name}` while the frame names "
+            f"`{wanted}` — the compiler moved it; mark by hand")
+        flat = one_line_body(text, open_at, close_at)
+        out.proposals.append(Proposal(
+            "anr_frame", rel, decl_line,
+            f"{name} — on the stack when it froze, at line {line}",
+            marker, "anr", gradle_module(path, root),
+            applicable=not has_return and not flat and not disagree,
+            reason=disagree or _why_not(open_at, has_return, flat),
+            open_at=open_at, close_at=close_at))
+
+    # A frame that lands on an import, on a blank line between two functions,
+    # or past the end of the file is not a hard case — it is a line number
+    # from another build. Refusing each one on its own merits and saying
+    # nothing about the pattern reads as a tool that cannot do its job, when
+    # what happened is that the checkout is not the version that froze.
+    astray = sum(1 for p in out.proposals if not p.applicable
+                 and (p.reason.startswith("no function")
+                      or p.reason.startswith("the line falls")))
+    total = len(out.proposals) + unplaced
+    if total and (astray + unplaced) * 2 > total:
+        out.notes.append(
+            f"{astray + unplaced} of {total} frames land nowhere this checkout "
+            f"recognises — on a line with no function, inside a different one, "
+            f"or in a file that is not here. This working tree is probably not "
+            f"the build that froze"
+            + (f" ({version})" if version else "")
+            + ". Check that build out before marking, or the markers measure "
+              "something else.")
+    return out
+
+
 # --- apply / remove ------------------------------------------------------------
 
 def _indent_of(text: str, offset: int) -> str:

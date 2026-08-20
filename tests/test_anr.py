@@ -33,9 +33,11 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import anr  # noqa: E402
+from echolot import anr, mark  # noqa: E402
 from echolot.main import main as cli  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -593,3 +595,288 @@ def test_the_verb_refuses_a_file_that_is_not_there(tmp_path):
     code, _, err = run("anr", str(tmp_path / "nothing.txt"))
     check("exit 2", code == 2, code)
     check("and says so", "no such file" in err, err)
+
+
+# --- from a frame to a file -------------------------------------------------
+#
+# A java frame carries the file and the line the compiler put in it, so the
+# repository is asked to confirm a path rather than to find one. What these
+# pin is the part that can still be wrong: which file, when two modules hold
+# one of that name, and saying so when the answer was a guess.
+
+@pytest.fixture
+def repo(tmp_path) -> Path:
+    root = tmp_path / "checkout"
+    files = {
+        "app/src/main/java/com/example/app/data/StateStore.kt": "class StateStore",
+        "app/src/main/java/com/example/app/ui/HomeViewModel.kt": "class HomeViewModel",
+        # The same file name in another module, and another package.
+        "feature/src/main/java/com/other/pkg/StateStore.kt": "class StateStore",
+        # One of its name, in a directory that does not spell out its package.
+        "app/src/main/java/legacy/Sync.kt": "class Sync",
+        # Never reached: everything under a build directory is output.
+        "app/build/generated/com/example/app/ui/HomeViewModel.kt": "generated",
+    }
+    for rel, body in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return root
+
+
+def test_a_frame_is_placed_by_its_own_file_and_line(repo):
+    placed, _ = anr.locate(report(), repo)
+    by_symbol = {f.symbol: f for f in placed}
+    read = by_symbol["com.example.app.data.StateStore.read"]
+    check("the file", read.file.endswith("com/example/app/data/StateStore.kt"),
+          read.file)
+    check("and the line the frame carried", read.line == 31, read.line)
+
+
+def test_the_package_settles_which_of_two_files_of_a_name(repo):
+    placed, _ = anr.locate(report(), repo)
+    read = next(f for f in placed
+                if f.symbol == "com.example.app.data.StateStore.read")
+    check("the module whose package agrees", "feature/" not in read.file, read.file)
+    check("and it is not a guess", read.exact, read)
+
+
+def test_one_file_of_that_name_is_not_a_guess_whatever_the_package_says(repo):
+    """Kotlin lets a class live in a directory that does not spell out its
+    package; warning about that would cry wolf on every one of them."""
+    index = anr.source_index(repo)
+    found = anr.place("com.example.app.work.Sync.run(Sync.kt:19)", index, repo)
+    check("placed", found is not None and found.file.endswith("legacy/Sync.kt"),
+          found)
+    check("and certain", found.exact, found)
+
+
+def test_build_output_is_not_a_place_in_the_repository(repo):
+    placed, _ = anr.locate(report(), repo)
+    for found in placed:
+        check("nothing under build/", "/build/" not in found.file, found.file)
+
+
+def test_a_frame_that_names_no_source_is_placed_nowhere(repo):
+    index = anr.source_index(repo)
+    for frame in ("java.lang.Object.wait(Native method)",
+                  "android.view.View.-$$Nest$m(unavailable:0)",
+                  "com.google.android.gms.dynamite.zza.run"
+                  "(com.google.android.gms:play-services-basement@@18.3.0:2)"):
+        check(f"`{frame[:40]}` is not a file", anr.place(frame, index, repo) is None,
+              anr.place(frame, index, repo))
+
+
+def test_a_frame_this_checkout_does_not_have_is_said_out_loud(repo):
+    """The module is elsewhere, or the report is from another version.
+
+    Both are worth saying rather than rounding down to a shorter list.
+    """
+    other = DUMP.replace("HomeViewModel.kt:88", "Missing.kt:88")
+    placed, missing = anr.locate(anr.parse(other), repo)
+    check("it is not placed", not any("Missing" in f.file for f in placed), placed)
+    check("it is counted", any("Missing.kt" in frame for frame in missing), missing)
+    check("and the report says so",
+          "this checkout does not have" in anr.render(anr.parse(other),
+                                                      (placed, missing)))
+
+
+def test_the_verb_places_frames_when_pointed_at_a_checkout(repo, tmp_path):
+    report_file = tmp_path / "export.txt"
+    report_file.write_text(DUMP, encoding="utf-8")
+
+    code, out, _ = run("anr", str(report_file), "--root", str(repo))
+    check("exit 0", code == 0, code)
+    check("the section is there",
+          "## Where these frames are in this checkout" in out, out)
+    check("with a path a person can open",
+          "com/example/app/data/StateStore.kt:31" in out, out)
+
+    found = json.loads(run("anr", str(report_file), "--root", str(repo),
+                           "--json")[1])
+    placed = {f["symbol"]: f for f in found["code"]["placed"]}
+    check("and an agent gets the same",
+          placed["com.example.app.data.StateStore.read"]["line"] == 31, placed)
+
+
+def test_a_root_with_no_sources_costs_the_report_nothing(tmp_path):
+    report_file = tmp_path / "export.txt"
+    report_file.write_text(DUMP, encoding="utf-8")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    code, out, _ = run("anr", str(report_file), "--root", str(empty))
+    check("still exits 0", code == 0, code)
+    check("the findings are still there", "## What was holding the lock" in out, out)
+    check("and no empty section is printed",
+          "Where these frames are" not in out, out)
+
+
+# --- markers from a stack ---------------------------------------------------
+
+SOURCE = """\
+package com.example.app.data
+
+import com.example.app.log.Log
+
+class StateStore {
+
+  fun flush() {
+    write()
+    log()
+  }
+
+  fun read(): String {
+    val value = compute()
+    return value
+  }
+
+  fun brief() { write() }
+
+  companion object {
+    private const val KEY = "k"
+  }
+}
+"""
+
+
+def line_of(needle: str) -> int:
+    for number, text in enumerate(SOURCE.splitlines(), 1):
+        if needle in text:
+            return number
+    raise AssertionError(needle)
+
+
+@pytest.fixture
+def store(tmp_path) -> Path:
+    root = tmp_path / "checkout"
+    path = root / "app/src/main/java/com/example/app/data/StateStore.kt"
+    path.parent.mkdir(parents=True)
+    path.write_text(SOURCE, encoding="utf-8")
+    return root
+
+
+def plan_for(root: Path, symbol: str, needle: str):
+    rel = "app/src/main/java/com/example/app/data/StateStore.kt"
+    plan = mark.plan_from_anr(root, [(symbol, rel, line_of(needle))])
+    return plan.proposals[0]
+
+
+def test_a_lambdas_frame_names_the_function_it_was_written_in():
+    """Kotlin compiles a lambda into a class of its own, and the frame is that
+    class's synthetic method rather than anything a person wrote."""
+    cases = {
+        "com.example.app.data.StateStore.flush": "flush",
+        "com.example.Handler$updateLocality$2.invokeSuspend": "updateLocality",
+        # An anonymous class implementing an interface numbers every segment,
+        # and there the member's own name is the answer.
+        "com.example.MainActivity$1.onClick": "onClick",
+    }
+    for symbol, expected in cases.items():
+        check(f"`{symbol}` was written in `{expected}`",
+              mark.frame_function(symbol) == expected,
+              mark.frame_function(symbol))
+
+
+def test_the_marker_is_named_after_the_class_and_the_method():
+    check("package dropped",
+          mark.marker_for("com.example.app.data.StateStore.read", "AGENTTMP_")
+          == "AGENTTMP_StateStore_read")
+    check("and the compiler's dollars are not a name",
+          mark.marker_for("com.example.Handler$init$2.invoke", "AGENTTMP_")
+          == "AGENTTMP_Handler_init_2_invoke")
+
+
+def test_a_function_without_a_return_can_take_a_pair_mechanically(store):
+    proposal = plan_for(store, "com.example.app.data.StateStore.flush", "log()")
+    check("applicable", proposal.applicable, proposal.reason)
+    check("the declaration line, not the frame's",
+          proposal.line == line_of("fun flush"), proposal.line)
+
+
+def test_a_return_in_the_body_is_refused_and_said(store):
+    proposal = plan_for(store, "com.example.app.data.StateStore.read",
+                        "val value = compute")
+    check("refused", not proposal.applicable)
+    check("with the reason", "return in its body" in proposal.reason,
+          proposal.reason)
+
+
+def test_a_one_line_body_is_refused_the_way_it_already_was(store):
+    proposal = plan_for(store, "com.example.app.data.StateStore.brief",
+                        "fun brief")
+    check("refused", not proposal.applicable)
+    check("with the reason", "one line" in proposal.reason, proposal.reason)
+
+
+def test_a_line_in_no_function_is_refused(store):
+    proposal = plan_for(store, "com.example.app.data.StateStore.read",
+                        "const val KEY")
+    check("refused", not proposal.applicable)
+    check("with the reason", "no function around" in proposal.reason,
+          proposal.reason)
+
+
+def test_a_line_that_lands_in_another_function_than_the_frame_names(store):
+    """On a live report a frame naming `getActiveOrders` carried a line inside
+    `getPlacedOrder`. Bracketing that would name one function and measure
+    another, and the trace would then blame the wrong one."""
+    proposal = plan_for(store, "com.example.app.data.StateStore.read", "log()")
+    check("refused", not proposal.applicable)
+    check("naming both sides",
+          "`flush`" in proposal.reason and "`read`" in proposal.reason,
+          proposal.reason)
+
+
+def test_a_checkout_from_another_build_is_named_as_one(store):
+    rel = "app/src/main/java/com/example/app/data/StateStore.kt"
+    plan = mark.plan_from_anr(
+        store, [("com.example.app.data.StateStore.read", rel, line_of("import"))],
+        unplaced=4, version="26.15.1 (462)")
+    check("a note, not silence", plan.notes, plan.notes)
+    check("with the build in it", "26.15.1 (462)" in plan.notes[0], plan.notes)
+    check("and the count", "5 of 5" in plan.notes[0], plan.notes)
+
+
+def test_markers_from_a_stack_go_in_and_come_out_again(store):
+    rel = "app/src/main/java/com/example/app/data/StateStore.kt"
+    plan = mark.plan_from_anr(
+        store, [("com.example.app.data.StateStore.flush", rel, line_of("log()"))])
+    before = (store / rel).read_text(encoding="utf-8")
+
+    done = mark.apply(store, plan)
+    after = (store / rel).read_text(encoding="utf-8")
+    check("one file marked", len(done) == 1, done)
+    check("the marker is in it", "AGENTTMP_StateStore_flush" in after, after)
+    check("tagged so remove can find it", mark.TAG in after, after)
+
+    mark.remove(store)
+    check("and the file comes back exactly",
+          (store / rel).read_text(encoding="utf-8") == before,
+          (store / rel).read_text(encoding="utf-8"))
+
+
+def test_the_flag_reads_a_report_and_plans_from_its_frames(store, tmp_path):
+    dump = DUMP.replace("StateStore.kt:31", f"StateStore.kt:{line_of('log()')}")
+    dump = dump.replace("com.example.app.data.StateStore.read",
+                        "com.example.app.data.StateStore.flush")
+    report_file = tmp_path / "export.txt"
+    report_file.write_text(dump, encoding="utf-8")
+
+    code, out, _ = run("mark", "--root", str(store), "--from-anr",
+                       str(report_file), "--json")
+    check("exit 0", code == 0, code)
+    plan = json.loads(out)
+    markers = {p["marker"] for p in plan["proposals"]}
+    check("the frame became a proposal",
+          "AGENTTMP_StateStore_flush" in markers, markers)
+    check("and it says where it came from",
+          all(p["source"] == "anr" for p in plan["proposals"]), plan["proposals"])
+
+
+def test_the_flag_refuses_a_file_that_is_not_a_report(store, tmp_path):
+    plain = tmp_path / "notes.txt"
+    plain.write_text("just some text\n", encoding="utf-8")
+    code, _, err = run("mark", "--root", str(store), "--from-anr", str(plain))
+    check("exit 2", code == 2, code)
+    check("and says why", "not a report" in err, err)

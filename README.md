@@ -251,11 +251,11 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 | command | what it does |
 |---|---|
 | `guide` | how to work with this tool, printed by the package — what an agent without the `.claude/` layer reads instead of it |
-| `anr` | an ANR report from the field — the lock chain, and the few threads that were not idle. Crashlytics exports and the device's own `dumpsys dropbox` record |
+| `anr` | an ANR report from the field — the lock chain, the few threads that were not idle, and where their frames are in this checkout. Crashlytics exports and the device's own `dumpsys dropbox` record |
 | `probe` | processes, threads by CPU, scenario anchor candidates |
 | `names` | slice name inventory and detector mask coverage |
 | `domains` | slice-to-code map and instrumentation coverage |
-| `mark` | the first temporary markers for a project with none, from the manifest and the SDK — `--apply` / `--remove` |
+| `mark` | the first temporary markers for a project with none, from the manifest and the SDK, or from an ANR report's own frames with `--from-anr` — `--apply` / `--remove` |
 | `calibrate` | thresholds derived from known-healthy runs |
 | `explain` | list the detectors and their parameters |
 
