@@ -81,7 +81,7 @@ SF_THREADS = {SF_PID: "surfaceflinger"}
 # carries the deadline it was given, what it actually took, and why it missed.
 # These arrive as their own packets and land on their own track types
 # (android_expected_frame_timeline / android_actual_frame_timeline), never on
-# a thread track — so the six slice-based detectors cannot see them and adding
+# a thread track — so the slice-based detectors cannot see them and adding
 # them here changes nothing about what those report. A check pins that.
 #
 # The window is [100, 1105]. Overrun is actual minus expected, and the frame
