@@ -18,6 +18,9 @@ local.yml
 # working notes: for development, not for the repo
 echolot-vision.md
 TODO.md
+# the end-to-end run on a real project: needs a device and an agent, so it is
+# a plan somebody follows rather than anything CI can execute
+REGRESSION.md
 
 # traces are not committed — they run to gigabytes.
 # The self-check fixture belongs here too: it is rebuilt deterministically
