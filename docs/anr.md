@@ -18,7 +18,7 @@ Three places produce the same artifact, and the frames in them are identical:
 | source | how to get it | what it adds |
 |---|---|---|
 | Crashlytics | export from the issue page | version and build, unminified frames |
-| Play Console | an ANR cluster in Android Vitals | ART's own format, so the same reader — see below |
+| Play Console | an ANR cluster in Android Vitals | nothing extra, and **no lock ownership** — see below |
 | the device itself | `adb shell dumpsys dropbox --print data_app_anr` | **the reason** — `Subject: Input dispatching timed out …` |
 
 Only the device's own record carries why the system fired. Checked across ten
@@ -31,13 +31,14 @@ so the reader decides which it is from how the file announces its threads. A
 file in a form it does not know exits with that as the reason rather than
 reporting zero threads as a clean bill.
 
-> [!NOTE]
-> The Crashlytics reader was written against ten live exports and the ART one
-> against a record made on purpose on a phone. **Play Console has not been
-> checked against a real export**: it shows ART's own format, so the ART reader
-> should take it, and that is an expectation rather than a fact. If one is
-> refused, the message names the forms it does know — and the file is worth
-> keeping, because that is what the third reader would be written from.
+> [!IMPORTANT]
+> **Play Console strips who holds a monitor.** Its export says a thread is
+> blocked and never says by whom — `held by thread N` is not in it, and neither
+> is a header, a version or a reason. Most of the finding survives anyway: a
+> blocked thread is standing in the method it could not enter, so several of
+> them standing in the same one are queued on the same monitor, and the report
+> names it and says the holder is not in the file. If you can get the same
+> freeze out of Crashlytics or off a device, that export is worth more.
 
 ### Making one on purpose
 
