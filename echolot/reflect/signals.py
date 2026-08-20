@@ -154,7 +154,7 @@ def doctor_first(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = []
     for c in s.bash():
-        cmd = c.command or ""
+        cmd = c.shell
         if RE_TRACE_OPEN.search(cmd):
             rows.append({"ts": _t(c.ts), "agent": c.agent, "how": c.tool,
                          "command": cmd[:120]})
@@ -181,7 +181,7 @@ def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | N
                   if prefix in str((c.input or {}).get("new_string", "")) or
                   prefix in str((c.input or {}).get("old_string", ""))]
     first_edit = min((ts_to_epoch(c.ts) for c in main_edits), default=None)
-    main_rerecords = [c for c in s.bash(MAIN) if RE_RE_RECORD.search(c.command or "")
+    main_rerecords = [c for c in s.bash(MAIN) if RE_RE_RECORD.search(c.shell)
                       and first_edit is not None and ts_to_epoch(c.ts) > first_edit]
     if not main_edits:
         if s.subagents:
@@ -190,7 +190,7 @@ def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | N
                           "The main context only saw the conclusion.")
         return None
     rows = [{"ts": _t(c.ts), "what": f"{c.tool} {_short(c.path)}"} for c in main_edits]
-    rows += [{"ts": _t(c.ts), "what": f"re-record: {(c.command or '')[:80]}"}
+    rows += [{"ts": _t(c.ts), "what": f"re-record: {c.shell[:80]}"}
              for c in main_rerecords]
     return Signal("loop_in_main_context", "warn",
                   "the iterative loop ran in the main context",
@@ -357,7 +357,7 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
             written.append({"ts": c.ts, "agent": c.agent, "sub": "Write",
                             "config": c.path[-80:]})
     for c in s.bash():
-        cmd = c.command or ""
+        cmd = c.shell
         # Any redirect into a yaml file that is not the project's: `cat >`
         # heredocs, `sed … > /tmp/x.yml`, `>>` appends.
         for m in _YAML_REDIRECT.finditer(cmd):
@@ -441,8 +441,8 @@ def _around(text: str, needle: str, width: int = 110) -> str:
 
 def report_sliced_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = [{"ts": _t(c.ts), "agent": c.agent,
-             "command": _around(c.command or "", "report.json")}
-            for c in s.bash() if RE_REPORT_BY_HAND.search(c.command or "")]
+             "command": _around(c.shell, "report.json")}
+            for c in s.bash() if RE_REPORT_BY_HAND.search(c.shell)]
     if not rows:
         return None
     return Signal("report_sliced_by_hand", "info",
@@ -475,7 +475,7 @@ def help_lookups(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 def bypass_tools(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     counts: dict[str, list[dict[str, Any]]] = {}
     for c in s.bash():
-        cmd = c.command or ""
+        cmd = c.shell
         if RE_ECHOLOT.search(cmd):
             continue
         for kind, rx in _BYPASS:
@@ -586,7 +586,7 @@ def baseline_lost(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     touched: str | None = None         # the analyzed dir the mv/cp named
     rows = []
     for c in calls:
-        cmd = c.command or ""
+        cmd = c.shell
         if RE_ECHOLOT.search(cmd) and re.search(r"echolot\s+analyze\b", cmd):
             for m in RE_ECHOLOT.finditer(cmd):
                 if m.group(1) == "analyze":
@@ -721,20 +721,20 @@ def env_friction(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     for c in s.calls:
         if not c.is_error:
             continue
-        if c.command is not None and RE_ECHOLOT.search(c.command):
+        if c.command is not None and RE_ECHOLOT.search(c.shell):
             continue   # echolot's own failures are a separate signal
         head = c.output_head or ""
         for kind, rx in _ENV_KINDS:
             if rx.search(head):
                 kinds.setdefault(kind, []).append(
                     {"ts": _t(c.ts), "agent": c.agent, "tool": c.tool,
-                     "what": (c.command or c.path or "")[:80],
+                     "what": (c.shell or c.path or "")[:80],
                      "error": head.replace("\n", " ")[:120]})
                 break
         else:
             kinds.setdefault("other", []).append(
                 {"ts": _t(c.ts), "agent": c.agent, "tool": c.tool,
-                 "what": (c.command or c.path or "")[:80],
+                 "what": (c.shell or c.path or "")[:80],
                  "error": head.replace("\n", " ")[:120]})
     if not kinds:
         return None

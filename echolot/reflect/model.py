@@ -12,11 +12,24 @@ the model holds evidence, not the transcript.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 MAIN = "main"  # `agent` value for the top-level context
+
+# What sits between `<<EOF` and `EOF` is data — a config being written, a
+# python script, a document. It travels inside the command string and is not
+# part of what ran.
+_HEREDOC = re.compile(
+    r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n(?:.*?\n)?\s*\2[ \t]*(?=\n|$)",
+    re.S)
+
+
+def strip_heredocs(cmd: str) -> str:
+    """The command with heredoc bodies removed, first lines kept."""
+    return _HEREDOC.sub(lambda m: m.group(0).split("\n", 1)[0] + "\n", cmd)
 
 # What a source can show, declared by the reader that produced it. A check
 # needing something absent is reported as not checked rather than as clean —
@@ -56,6 +69,22 @@ class Call:
     # Convenience views filled by the reader:
     command: str | None = None    # Bash: the command text (truncated)
     path: str | None = None       # Edit/Write/Read: the file path
+
+    @property
+    def shell(self) -> str:
+        """What ran, without the data it carried.
+
+        `command` is the whole string, heredoc bodies included, and a document
+        written through `cat > file <<EOF` is inside it. Anything scanning for
+        what the agent *did* wants this view; the raw text stays on `command`
+        for whoever wants the document.
+
+        Every signal that read `command` was reading the documents too. On one
+        real session that turned 19 of 21 `trace_opened_directly` rows into
+        false alarms — text about `trace_processor`, written into a file, read
+        as the agent opening a trace.
+        """
+        return strip_heredocs(self.command or "")
 
 
 @dataclass

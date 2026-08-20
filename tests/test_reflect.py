@@ -167,6 +167,23 @@ def build(root: Path, project: Path) -> Path:
     bash(m, 140, cwd, "tu_echo",
          'echo "echolot ran fine, and echolot without asking is the default"',
          "echolot ran fine, and echolot without asking is the default")
+    # A document written through a heredoc, mentioning the two things the
+    # command scanners look for. Nothing here ran: `trace_processor` and
+    # `report.json` are inside the body, on their way into a file. On a real
+    # session this shape produced 19 of 21 `trace_opened_directly` rows —
+    # writing about the tool read as using it.
+    bash(m, 142, cwd, "tu_notes",
+         "cat > notes.md <<'MD'\n"
+         "The pinned trace_processor is what makes two runs comparable.\n"
+         "Read report.json rather than the markdown: json.load(open('report.json')).\n"
+         "MD\necho written", "written")
+    # And the documented example, which is not the project's config. The name
+    # used to be matched as a substring, so writing this counted as editing
+    # `echolot.yml` — with the thresholds inside it read as hand-tuning.
+    bash(m, 145, cwd, "tu_example",
+         "cat > echolot.yml.example <<'YML'\n"
+         "detectors:\n  main_thread_block:\n    min_slice_ms: 40\n"
+         "YML\necho written", "written")
     m.append(user_text(150, cwd, "<command-message>echolot-hunt</command-message>\n"
                                   "<command-name>/echolot-hunt</command-name>"))
     MSG[0] += 1
@@ -355,7 +372,7 @@ def test_the_reader_found_every_planted_event(reflected):
     # streaming usage: max per message (250, not 3 and not 253), one count per
     # message id, main and subagent kept apart
     um = report["cost"]["usage_main"]
-    expect(um["output"] == 250 + 100 * 15, f"main output tokens: {um['output']}")
+    expect(um["output"] == 250 + 100 * 17, f"main output tokens: {um['output']}")
     us = report["cost"]["usage_subagents"]
     expect(us["output"] == 400 + 100 * 18, f"subagent output tokens: {us['output']}")
 
@@ -367,7 +384,22 @@ def test_every_planted_signal_fired(reflected):
     h = report["hunts"][0]
 
     expect(sig.get("doctor_first", {}).get("severity") == "ok", "doctor_first ok")
-    expect(sig.get("trace_opened_directly", {}).get("severity") == "ok", "trace never opened")
+    expect(sig.get("trace_opened_directly", {}).get("severity") == "ok",
+           "a document about trace_processor is not an opened trace")
+    # The transcript plants one genuine slicing — an inline python that loads
+    # report.json — and one document that merely mentions it. Only the first
+    # is a row.
+    sliced = sig.get("report_sliced_by_hand", {}).get("rows", [])
+    expect(len(sliced) == 3, f"the three real slicings, and not the document: {sliced}")
+    expect(all("notes.md" not in str(r.get("command", "")) for r in sliced),
+           f"a document about report.json is not report.json cut up: {sliced}")
+    # One row, for the one write to the project's own config. The count is
+    # what the claim rests on: `config_writes` records the name it searched
+    # for rather than the path it found, so asserting that no row says
+    # "example" would hold however wrong the matching got.
+    by_hand = sig.get("thresholds_by_hand", {}).get("rows", [])
+    expect(len(by_hand) == 1,
+           f"echolot.yml.example is not the project's config: {by_hand}")
     expect(sig.get("loop_in_main_context", {}).get("severity") == "ok", "loop stayed in subagent")
     expect(sig.get("rounds_over_max", {}).get("severity") == "ok", "rounds within max")
     expect(sig.get("conclusion_shape", {}).get("severity") == "ok", "conclusion shape ok")
