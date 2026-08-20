@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/grishan0v/echolot/actions/workflows/checks.yml"><img alt="checks" src="https://github.com/grishan0v/echolot/actions/workflows/checks.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/grishan0v/echolot/actions/workflows/codeql.yml"><img alt="codeql" src="https://github.com/grishan0v/echolot/actions/workflows/codeql.yml/badge.svg?branch=main"></a>
   <a href="https://pypi.org/project/echolot/"><img alt="PyPI" src="https://img.shields.io/pypi/v/echolot.svg"></a>
   <a href="https://pypi.org/project/echolot/"><img alt="Python versions" src="https://img.shields.io/badge/3.10--3.14-blue?logo=python&logoColor=white"></a>
   <a href="https://github.com/grishan0v/echolot/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>

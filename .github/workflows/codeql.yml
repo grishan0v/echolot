@@ -1,0 +1,85 @@
+name: codeql
+
+# Static analysis over the Python and over the workflows themselves.
+#
+# What this is worth, stated plainly so the badge is not read as more than it
+# is: CodeQL looks for shapes known to be exploitable — a path built from
+# unvalidated input, a subprocess assembled by string, a workflow expression
+# interpolated into a shell. It finds patterns. It does not find intent, and
+# code written to look ordinary will pass it. A green run means the known
+# shapes are absent, which is worth knowing and is not a certificate.
+#
+# The `actions` language is the half that earns its place here. This repository
+# has a workflow holding `id-token: write` and PyPI's trust relationship, and
+# CodeQL reads workflow files for injection through untrusted expressions and
+# for permissions wider than a job needs. That is the same threat the pinned
+# action SHAs address, approached from the other side.
+#
+# The schedule is not decoration either. New queries ship over time and find
+# things in code nobody has touched, so a repository that only scans on push
+# stops learning the moment it stops changing.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Mondays, off the hour — the top of it is when everyone else's cron fires.
+    - cron: "27 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyse:
+    name: codeql ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Writing results back to the Security tab is the whole output; without
+      # it the analysis runs and its findings go nowhere.
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      # One language failing must not hide what the other found.
+      fail-fast: false
+      matrix:
+        language: ["python", "actions"]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd  # v4.37.7
+        with:
+          languages: ${{ matrix.language }}
+
+      # No build step. Python and workflow files are analysed as they are, so
+      # the autobuild the template ships with has nothing to do here.
+      - name: Analyse
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd  # v4.37.7
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # One context for both languages, for the reason checks.yml gives at length:
+  # a branch rule matches required checks by name, so a rule naming
+  # `codeql python` would have to be edited before a change to the matrix could
+  # merge. Nothing requires this yet — it is here so that requiring it later is
+  # a setting rather than a refactor.
+  #
+  # `if: always()`, because a skipped job is not a passed one.
+  codeql:
+    name: codeql
+    runs-on: ubuntu-latest
+    needs: [analyse]
+    if: always()
+    steps:
+      - name: Every language passed
+        run: |
+          echo "analyse: ${{ needs.analyse.result }}"
+          [ "${{ needs.analyse.result }}" = "success" ] || exit 1
