@@ -265,7 +265,13 @@ SCHED = [
     # AFTER it closes. This checks whether context.sql clips intervals to the
     # window or merely filters them by their start point.
     (0, TID_MAIN, 50, 600, S),
-    (0, TID_MAIN, 610, 1300, S),
+    (0, TID_MAIN, 610, 800, S),
+    # An idle moment inside the scenario: 60 ms asleep with no slice open
+    # below the anchor. anr_risk must break its stretch here — the looper
+    # reached the queue, and a pending event would have been served. The
+    # anchor `AppStart` spans right across it at depth 0, which is why that
+    # depth is not evidence of anything.
+    (0, TID_MAIN, 860, 1300, S),
 
     # uninstrumented_cpu: 300 ms of Running, zero slices → fires
     (1, TID_WORKER, 200, 350, S),
@@ -349,6 +355,45 @@ def _frames(builder) -> None:
               gpu_composition=False, prediction_type=FT.PREDICTION_VALID)
 
 
+
+# --- the ANR the system recorded -------------------------------------------
+#
+# Not written by the app. When ActivityManager declares an ANR it writes two
+# atrace counters from system_server under the ActivityManager tag — the `am`
+# category, which `echolot collect` asks for — and the stdlib module reads the
+# ANR out of those. So the fixture has to carry a system_server, and the shape
+# of the two names is the whole contract:
+#
+#   ErrorId:<process> <pid>#<uuid>
+#   Subject(for ErrorId <uuid>):<subject>
+#
+# Placed AFTER the window on purpose. That is where a real one lands: the
+# system waits five seconds before declaring anything, and a cold start's
+# window closes at the first frame. A detector clipped to the window would
+# find nothing in almost every trace that contains an ANR, which is why this
+# one is not, and this is the case that proves it.
+
+SS_PID = 1200
+SS_NAME = "system_server"
+SS_THREADS = {SS_PID: "system_server"}
+
+ANR_UUID = "0123abcd-1111-2222-3333-444455556666"
+ANR_SUBJECT = "Input dispatching timed out (fixture)"
+ANR_AT_MS = 1300
+
+# Negative control: another application froze too. It is not our process and
+# has no business in our report.
+OTHER_UUID = "9999ffff-8888-7777-6666-555544443333"
+
+ANR_COUNTERS = [
+    (ANR_AT_MS, f"ErrorId:{APP_NAME} {APP_PID}#{ANR_UUID}"),
+    (ANR_AT_MS, f"Subject(for ErrorId {ANR_UUID}):{ANR_SUBJECT}"),
+    (ANR_AT_MS + 40, f"ErrorId:{OTHER_NAME} {OTHER_PID}#{OTHER_UUID}"),
+    (ANR_AT_MS + 40,
+     f"Subject(for ErrorId {OTHER_UUID}):Input dispatching timed out (other app)"),
+]
+
+
 def build(frames: bool = True) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
@@ -367,6 +412,7 @@ def build(frames: bool = True) -> bytes:
         (APP_PID, APP_NAME, THREADS),
         (OTHER_PID, OTHER_NAME, OTHER_THREADS),
         (SF_PID, SF_NAME, SF_THREADS),
+        (SS_PID, SS_NAME, SS_THREADS),
     ):
         proc = tree.processes.add()
         proc.pid = pid
@@ -413,6 +459,12 @@ def build(frames: bool = True) -> bytes:
             by_cpu.setdefault(cpu, []).append(
                 (ts, order, "print", tid, buf)
             )
+
+    # atrace counters: the ANR record, from system_server rather than from us.
+    for at, name in ANR_COUNTERS:
+        by_cpu.setdefault(0, []).append(
+            (ms(at), next(seq), "print", SS_PID, f"C|{SS_PID}|{name}|1\n")
+        )
 
     for cpu in sorted(by_cpu):
         packet = builder.add_packet()

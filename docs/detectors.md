@@ -63,6 +63,37 @@ problem. On `_tstate_win` the `dur` field is already clipped, because the
 question there is always "how long did the thread spend in this state inside
 the scenario".
 
+### A stretch is a third shape, and the window is not always right
+
+`anr_risk` asks neither "how much went into this name" nor "was this one
+occurrence unusual" but "how long did the main thread go without returning to
+the message queue". Fifty different pieces of work back to back freeze an app
+exactly as one long one does, and a detector that groups by name cannot see it.
+
+It takes evidence from slices at depth 1 and below, plus the thread's own
+states. **Depth 0 is deliberately excluded.** A scenario anchor — `AppStart`
+around a cold start, and every marker of that shape `echolot mark` proposes —
+is a top-level slice covering the whole run including its idle moments.
+Counting it would report every scenario as one unbroken stall on any project
+that has an anchor at all, which is every project this tool asks to add one.
+
+`anr` breaks the other rule: it is the one detector not clipped to the scenario
+window. An ANR fires five seconds after the event that could not be served, and
+a cold start's window closes at the first frame. Clipped, it would be absent
+from nearly every trace that contains one — and absence reads as "no freeze",
+which is the thing that detector exists to contradict. It reads the whole trace
+and says in `detail` where the record fell relative to the window.
+
+A detector needing a Perfetto stdlib module declares it in the header:
+
+```sql
+-- @module: android.anrs
+```
+
+The runner includes it once per session, before any query. It belongs in the
+header rather than in the SQL because a detector runs as a single statement,
+and an `INCLUDE` in front of the `SELECT` would make it two.
+
 ### Sums and single occurrences are different detectors
 
 Most of the shipped ones gate on an accumulated sum for a name: how much time

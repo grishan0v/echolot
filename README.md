@@ -25,7 +25,7 @@ A Perfetto trace of one cold start holds around half a million slices in eighty
 megabytes. Nobody reads that, and an AI agent pointed at the raw file produces
 confident guesses instead of answers.
 
-echolot sits in between. It runs eight SQL detectors over the trace and returns
+echolot sits in between. It runs ten SQL detectors over the trace and returns
 about twenty rows: where the time went, how much of it, and the evidence behind
 each claim. Same trace in, same report out — the `trace_processor` version is
 pinned and verified on every run.
@@ -319,6 +319,8 @@ which re-records and re-instruments on purpose.
 | `runnable_starvation` | thread ready to run but preempted on CPU |
 | `uninstrumented_cpu` | **threads burning CPU with no instrumentation** |
 | `frame_jank` | frames that missed their deadline, and whose fault it was |
+| `anr_risk` | stretches where the main thread never got back to the message queue |
+| `anr` | ANRs the system recorded during the trace, with its own reason |
 | `main_thread_outlier` | one occurrence far longer than that work usually takes |
 
 Two of them find something where nobody wrote a `trace{}` call.
@@ -353,7 +355,7 @@ once not means the cause is the state it hit that once.
 flowchart LR
     A["Android device"]
     B["trace<br/>81 MB · 475k slices"]
-    C["8 SQL detectors<br/>pinned trace_processor"]
+    C["10 SQL detectors<br/>pinned trace_processor"]
     D["report.md<br/>~20 rows"]
     E["report.json<br/>14 KB"]
     H["comparison<br/>what moved, and by how much"]
@@ -406,7 +408,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 80 checks inside
+The detectors were validated against a synthetic trace — 86 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.

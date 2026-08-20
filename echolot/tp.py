@@ -120,6 +120,13 @@ def parse_meta(text: str):
                 name, raw = value.split("=", 1)
                 params[name.strip()] = _coerce(raw.strip())
                 current = None
+            elif key == "module":
+                # A stdlib module the query needs. Kept out of the SQL body
+                # because a detector is run as one statement, and an INCLUDE
+                # in front of the SELECT would make it two. Declared here, the
+                # runner can also load it once per session instead of per row.
+                meta["module"] = (meta.get("module", "") + "," + value).strip(",")
+                current = None
             elif key == "calibrate":
                 m = _CALIB.match(value)
                 if not m:
@@ -167,6 +174,8 @@ class Detector:
     params: dict[str, Any] = field(default_factory=dict)
     calibrations: list[Calibration] = field(default_factory=list)
     identity: tuple[str, ...] = DEFAULT_IDENTITY
+    # Perfetto stdlib modules this query needs included first.
+    modules: tuple[str, ...] = ()
     sql: str = ""
     path: Path | None = None
 
@@ -184,6 +193,8 @@ class Detector:
             params=params,
             calibrations=calibrations,
             identity=_identity(meta.get("identity")),
+            modules=tuple(m.strip() for m in meta.get("module", "").split(",")
+                          if m.strip()),
             sql=text,
             path=path,
         )

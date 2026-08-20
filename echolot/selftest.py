@@ -36,6 +36,23 @@ FIXTURE_CONFIG = {
     },
 }
 
+# A detector the fixture cannot make fire, with the reason it cannot.
+#
+# Written down rather than counted, and named rather than numbered: whoever
+# adds a detector still has to plant a problem for it or say here why the
+# fixture is the wrong shape to hold one. `anr_risk` is the wrong shape by
+# construction — its bar is the platform's five seconds, and this fixture is a
+# cold start a second long. A window that could hold a six-second freeze would
+# be a different fixture, and every other check reads this one.
+#
+# It is not left untested for that: its own checks below drive it against this
+# fixture with the bar lowered, where the arithmetic and the splitting are the
+# same code, and one of them holds it to silence at the shipped bar.
+SILENT_ON_FIXTURE = {
+    "anr_risk": "its bar is five seconds and this fixture is a one-second "
+                "cold start",
+}
+
 CHECKS: list[tuple[str, object]] = []
 
 
@@ -111,7 +128,12 @@ def _(report):
     # into "for the six that existed when this line was written".
     s = report["summary"]
     assert s["detectors_run"] == _shipped(), s
-    assert s["detectors_fired"] == _shipped(), s["fired_ids"]
+    expected = _shipped() - len(SILENT_ON_FIXTURE)
+    assert s["detectors_fired"] == expected, (s["fired_ids"], SILENT_ON_FIXTURE)
+    for detector, why in SILENT_ON_FIXTURE.items():
+        assert detector not in s["fired_ids"], (
+            f"{detector} fired after all — it is excused because {why}, and "
+            f"that reason no longer holds")
 
 
 @check("slices outside the window stayed out of the report")
@@ -602,7 +624,96 @@ def _(report):
     assert det["error"] is None, f"empty tables must not be an error: {det['error']}"
     assert det["rows"] == [], det["rows"]
     # And the rest of the report is exactly what it was before frames existed.
-    assert plain["summary"]["detectors_fired"] == _shipped() - 1, plain["summary"]
+    assert plain["summary"]["detectors_fired"] \
+        == _shipped() - 1 - len(SILENT_ON_FIXTURE), plain["summary"]
+
+
+# --- anr, anr_risk ---------------------------------------------------------
+
+def _lowered_bar():
+    """The fixture analysed with anr_risk's bar dropped to a fixture's size.
+
+    The bar itself is the platform's and is checked at its shipped value below.
+    What is checked here is everything else the detector does — merging,
+    splitting, naming, the breakdown — on the only trace whose contents are
+    known exactly. Costs one more pass over the fixture, which is the price of
+    testing a five-second rule on a one-second scenario.
+    """
+    from .main import analyze_trace
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "lowered.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        return analyze_trace(trace, Config({
+            **FIXTURE_CONFIG,
+            "detectors": {"anr_risk": {"min_stall_ms": 100}},
+        }))
+
+
+@check("anr: the record the system wrote, with its own subject")
+def _(report):
+    found = rows(report, "anr")
+    assert len(found) == 1, found
+    row = found[0]
+    assert row["location"] == fixture.ANR_SUBJECT, row
+    # The platform's own id, so this report and a `dumpsys dropbox` entry off
+    # the device can be matched to each other by hand.
+    assert fixture.ANR_UUID in row["detail"], row["detail"]
+
+
+@check("anr: another application's freeze is not ours")
+def _(report):
+    for row in rows(report, "anr"):
+        assert "other app" not in row["location"], row
+        assert fixture.OTHER_UUID not in row["detail"], row
+
+
+@check("anr: a record outside the scenario window is still a record")
+def _(report):
+    # The one decision this detector makes differently from every other: it
+    # reads the whole trace. An ANR fires five seconds after the event that
+    # could not be served, and a cold start's window closes at the first
+    # frame — clip this to the window and it is absent from nearly every trace
+    # that contains one, which reads as "no freeze".
+    row = rows(report, "anr")[0]
+    assert "after the window" in row["detail"], row["detail"]
+    window_end_ms = 1105
+    expected = fixture.ANR_AT_MS - window_end_ms
+    assert f"{expected}" in row["detail"], (row["detail"], expected)
+
+
+@check("anr_risk: silent at the bar the platform sets")
+def _(report):
+    # Five seconds cannot happen inside a one-second scenario, and a detector
+    # that found one anyway would be measuring something other than what it
+    # says. The rest of its behaviour is checked below with the bar lowered.
+    assert rows(report, "anr_risk") == [], rows(report, "anr_risk")
+
+
+@check("anr_risk: an idle moment ends the stretch, and the anchor does not span it")
+def _(report):
+    # The fixture's main thread sleeps for 60 ms with no slice open below
+    # `AppStart`. The looper reached the queue there: a pending event would
+    # have been served, and no ANR would have fired.
+    #
+    # `AppStart` runs straight across that moment at depth 0. Counting depth 0
+    # would join the two halves into one 1005 ms stretch — the whole scenario,
+    # on any project that has an anchor, which is every project this tool asks
+    # to add one. Two rows is the proof that depth 0 is not evidence.
+    found = _lowered_bar()
+    got = rows(found, "anr_risk")
+    assert len(got) == 2, [(r["location"], r["max_ms"]) for r in got]
+    longest = max(r["max_ms"] for r in got)
+    assert longest < 1000, (longest, "the anchor was counted as a stretch")
+
+
+@check("anr_risk: the breakdown adds up to the stretch it describes")
+def _(report):
+    # `detail` splits the longest stretch into time on a CPU, time waiting for
+    # one, and the rest. A reader picks the next detector from that split, so
+    # the three parts have to be the stretch and not merely near it.
+    row = max(rows(_lowered_bar(), "anr_risk"), key=lambda r: r["max_ms"])
+    parts = [float(p.strip().split(" ")[0]) for p in row["detail"].split("·")[:3]]
+    assert abs(sum(parts) - row["max_ms"]) <= 0.3, (parts, row["max_ms"])
 
 
 @check("the trace config asks for the frame timeline, and parses")

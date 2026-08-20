@@ -251,6 +251,16 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         _setup_context(tp, cfg, procs[0]["upid"])
         window = _window_info(tp, cfg, procs)
 
+        # Stdlib modules the detectors declared, loaded once for the session.
+        # A module that is not in this trace_processor is not fatal here: the
+        # detector that wanted it fails on its own line below, with its own
+        # name against the reason, and the rest of the run is unaffected.
+        for module in sorted({m for d, _, _ in plan for m in d.modules}):
+            try:
+                tp.exec_script(f"INCLUDE PERFETTO MODULE {module};")
+            except Exception as e:
+                print(f"[!] module {module}: {e}", file=sys.stderr)
+
         for d, overrides, source in plan:
             try:
                 sql, params = d.render(overrides)
