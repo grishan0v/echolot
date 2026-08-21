@@ -53,6 +53,32 @@ def test_doctor_exits_zero():
     assert main(["doctor", "-q"]) == 0
 
 
+def test_doctor_q_is_actually_quiet(capsys, tmp_path, monkeypatch):
+    """`-q` exists to be short, and it had stopped being short.
+
+    "Three lines and every failure — for a subagent, a CI step, a `| head`."
+    It was printing thirty-one: several checks run real commands, `init` into
+    a temp directory and `status` against a config in another, and those
+    commands printed into the output of the run hosting them. The layer
+    installed somewhere in /tmp, a `next` step for a project that no longer
+    exists, a Cursor stub — all true about a directory nobody will ever see
+    again, and all between a reader and the verdict.
+
+    Bounded rather than pinned to a number: the three lines are a promise
+    about the shape, and a failure adds two lines per failing check.
+    """
+    from echolot.main import main
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["doctor", "-q"]) == 0
+    printed = capsys.readouterr().out.strip().splitlines()
+    assert len(printed) <= 4, (
+        f"`doctor -q` printed {len(printed)} lines:\n  "
+        + "\n  ".join(printed))
+    assert printed[0].startswith("echolot "), printed
+    assert printed[-1].startswith("self-check:"), printed
+
+
 def test_a_failing_bare_assert_is_not_reported_as_a_pass(monkeypatch):
     """The hole this file found on its first run.
 

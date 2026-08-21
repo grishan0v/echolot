@@ -2357,12 +2357,28 @@ def run_checks(report: dict, checks) -> list[tuple[str, str | None]]:
 
     Separated from `run` so that what happens to a check that breaks can be
     checked over made-up checks, rather than by breaking a real one.
+
+    What the checks print is swallowed. Several of them run real commands —
+    `init` into a temp directory, `status` against a config in another one —
+    and those commands print, into the output of the run hosting them.
+    `doctor -q` promises three lines and the failures and was printing
+    thirty-one: the layer `init` installed somewhere in /tmp, a `next` step
+    for a project that no longer exists, a Cursor stub. All of it true about
+    a directory nobody will ever see again, and all of it between a reader
+    and the verdict.
+
+    Same argument as `recorder.isolated()` below, which exists so those
+    commands' notes do not land in the log entry of the run hosting them.
+    Their output is the other half of it.
     """
+    import contextlib
+    import io
+
     from . import recorder
     out = []
     # Checks call commands of their own (`init` into a temp dir); their notes
     # must not land in the log line of the doctor run that hosts them.
-    with recorder.isolated():
+    with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()):
         for name, fn in checks:
             try:
                 fn(report)
