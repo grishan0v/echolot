@@ -146,7 +146,15 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
 
     detectors = []
     for runs in by_id.values():
-        head = dict(runs[0])
+        # The first repeat that got as far as running, for everything the
+        # merged entry says about itself. A detector that failed reports its
+        # `params` as the shipped defaults — `analyze_trace` has no resolved
+        # values to report when `render` is what raised — and taking those
+        # from repeat one meant a run whose first trace happened to trip a
+        # SQL error described its thresholds as the built-in ones. `compare`
+        # then read that against the next report and announced a threshold
+        # change nobody had made.
+        head = dict(next((r for r in runs if not r["error"]), runs[0]))
         identity = identity_of(head)
         # (which repeat, the row) — the repeat's index is what the `runs`
         # column counts, and counting rows instead of repeats is how a

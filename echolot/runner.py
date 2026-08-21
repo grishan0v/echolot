@@ -239,19 +239,26 @@ def harvest(search_root: Path, since: float, out_dir: Path,
     on the build variant and the device model — awkward to find by hand. We
     take everything that appeared after the run started.
     """
+    # The modification time is read once and carried, rather than read again
+    # in the sort key. Gradle is still tidying up while this walks its output
+    # directory, and a file that goes away between the two reads took the
+    # whole `collect` with it — an OSError from a lambda, past the
+    # `except RunnerError` that exists to turn a device problem into a
+    # sentence.
     found = []
     for pattern in ("*.perfetto-trace", "*.pftrace"):
         for path in search_root.rglob(pattern):
             try:
-                if path.stat().st_mtime >= since:
-                    found.append(path)
+                when = path.stat().st_mtime
             except OSError:
                 continue
-    found.sort(key=lambda p: p.stat().st_mtime)
+            if when >= since:
+                found.append((when, path))
+    found.sort()
 
     out_dir.mkdir(parents=True, exist_ok=True)
     results = []
-    for i, src in enumerate(found):
+    for i, (_when, src) in enumerate(found):
         dst = out_dir / f"{name}_iter{i:03d}.perfetto-trace"
         dst.write_bytes(src.read_bytes())
         results.append({"path": dst, "size": dst.stat().st_size,

@@ -169,7 +169,14 @@ def record_report(project: Path, out_dir: Path) -> Path | None:
     dest = dest / "reports"
     try:
         dest.mkdir(parents=True, exist_ok=True)
-        seq = len(list(dest.glob("*.json"))) + 1
+        # One past the highest number already there, not one past how many
+        # there are. Deleting a report from the middle — which a person may
+        # well do, they are just files in a directory — made the count line
+        # up with a name that was taken, and the next `analyze` wrote over
+        # the round before it. Silently, and these copies exist because the
+        # working report is overwritten every run.
+        seq = max((int(p.stem) for p in dest.glob("*.json")
+                   if p.stem.isdigit()), default=0) + 1
         for ext in ("json", "md"):
             src_file = out_dir / f"report.{ext}"
             if src_file.exists():

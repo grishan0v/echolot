@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .config import ConfigError
+
 _CALIB = re.compile(
     r"^(\w+)\s*=\s*(p|top)(\d+)\s*\(\s*(\w+)\s*\)\s*(?:\*\s*([\d.]+))?$")
 _META_KEY = re.compile(r"^\s*--\s*@(\w+)\s*:\s*(.*?)\s*$")
@@ -247,7 +249,16 @@ class Detector:
         where = f" ({source})" if source else ""
         for key, value in (overrides or {}).items():
             if key not in self.params:
-                continue        # not a declared @param; nothing substitutes it
+                # A key that is not a parameter substitutes nothing, so the
+                # threshold silently stays at its default: `min_slice` for
+                # `min_slice_ms` reads as calibration that did not take, and
+                # the report says `params_source: config` either way. Refused
+                # with the list, which is what `--set` has always done for the
+                # same typo typed on the command line.
+                raise ValueError(
+                    f"{self.id}{where} has no parameter '{key}'. "
+                    f"It has: {', '.join(sorted(self.params))}"
+                )
             default = self.params[key]
             if isinstance(default, (int, float)):
                 ok = isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -396,6 +407,22 @@ class TraceSession:
             raise RuntimeError(
                 "the perfetto package is not installed — run: pip install perfetto"
             ) from e
+
+        # Named on the command line, and the commonest thing to get wrong
+        # about it is the path — a glob that matched nothing expands to
+        # itself, and `analyze .echolot/traces/*.perfetto-trace` on an empty
+        # directory hands that string straight to here. It came out as a bare
+        # FileNotFoundError traceback out of the CLI.
+        #
+        # Checked here rather than in each command: this is the one place a
+        # trace is opened, so nothing can go round it.
+        path = Path(trace_path)
+        if not path.is_file():
+            raise ConfigError(
+                f"no such trace: {path}"
+                + ("  (a glob that matches nothing is passed through as "
+                   "written — is the directory empty?)" if "*" in str(path)
+                   else ""))
 
         cfg = TraceProcessorConfig(bin_path=binary) if binary else None
         self._tp = TraceProcessor(trace=str(trace_path), config=cfg) if cfg \
