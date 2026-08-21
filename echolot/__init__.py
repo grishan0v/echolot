@@ -5,4 +5,4 @@
 # was written three versions ago. `doctor` printed 0.1.0 against 0.4.0 in
 # pyproject for exactly that reason, and that number goes into every line of
 # the run log and into the .claude/ layer manifest.
-__version__ = "0.4.1"
+__version__ = "0.5.0"
