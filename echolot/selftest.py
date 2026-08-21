@@ -1023,6 +1023,67 @@ def _(report):
     raise AssertionError("stayed quiet about a missing file named explicitly")
 
 
+# --- the run log ------------------------------------------------------------
+
+@check("the run log goes to the project, not to wherever the command was typed")
+def _(report):
+    """Everything a run leaves behind follows the config. This did not.
+
+    `analyze` is called from wherever the traces are — inside a
+    macrobenchmark's output directory, named after a build variant and a
+    device model. The report follows the config, and so does the open
+    investigation, both deliberately. The run log was resolved against the
+    working directory while every reader looks under the project, so the two
+    could not meet: `status` said "doctor: never run here" on a project where
+    doctor had just passed, and `reflect` saw only the runs that happened to
+    be typed in the right place.
+    """
+    import json
+
+    from .main import main
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project, elsewhere = root / "proj", root / "builddir"
+        project.mkdir()
+        elsewhere.mkdir()
+        config = _write_pair(project, "project:\n  process: com.example.app\n"
+                                      "scenario:\n  name: firstLaunch\n", None)
+
+        here = Path.cwd()
+        # The recorder is what is under test, so it has to be on. pytest turns
+        # it off for every test in the suite — no test may append to whatever
+        # run log it happens to run beside — and this one writes into a
+        # temporary directory that is about to go away.
+        quiet = os.environ.pop("ECHOLOT_NO_RECORD", None)
+        try:
+            os.chdir(elsewhere)
+            # Its own scope: this runs inside the doctor run that hosts it,
+            # and neither the facts nor the project may leak into that line.
+            with recorder.isolated():
+                assert main(["status", "-c", str(config)]) == 0
+        finally:
+            os.chdir(here)
+            if quiet is not None:
+                os.environ["ECHOLOT_NO_RECORD"] = quiet
+
+        stray = list(elsewhere.rglob("runs.jsonl"))
+        assert not stray, f"the run log was left in the working directory: {stray}"
+
+        landed = project / recorder.LOG_FILE
+        assert landed.exists(), (
+            "nothing was written under the project the config names — "
+            "`status` there would report the run as never having happened")
+
+        entry = json.loads(landed.read_text(encoding="utf-8").splitlines()[-1])
+        assert entry["cmd"] == "status", entry
+        # Where the command ran is still a fact, and a useful one. It is a
+        # different question from where the log lives, and the two had one
+        # answer between them.
+        assert Path(entry["cwd"]).resolve() == elsewhere.resolve(), (
+            f"the working directory stopped being recorded: {entry['cwd']}")
+
+
 # --- the domains map -------------------------------------------------------
 
 def _sample_repo(root: Path) -> None:

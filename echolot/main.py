@@ -167,6 +167,30 @@ def _project_root(cfg: Config) -> Path:
     return Path(cfg.path).resolve().parent if cfg.path else Path.cwd()
 
 
+def project_of(args) -> Path:
+    """The same question `_project_root` answers, from the arguments alone.
+
+    `_project_root` needs a loaded config, and the run log is written by
+    `main` after the command has returned — including when it returned
+    because the config would not load. So the rule is read off the flags
+    instead: whatever names a project explicitly, then the config's own
+    directory, then the working directory.
+
+    One place rather than a call in each command. A `recorder.at(...)` per
+    verb is a list kept by hand, and the verb somebody forgets is the one
+    whose runs go missing — which is the failure this is fixing, arriving by
+    a different road.
+    """
+    for flag in ("project", "into"):        # reflect --project, init --into
+        named = getattr(args, flag, None)
+        if named:
+            return Path(named).resolve()
+    config = getattr(args, "config", None)
+    if config and Path(config).exists():
+        return Path(config).resolve().parent
+    return Path.cwd()
+
+
 def parse_set(values: list[str], detectors) -> dict[str, dict]:
     """--set detector.param=value, repeatable, into per-detector overrides.
 
@@ -1915,6 +1939,11 @@ def main(argv=None) -> int:
     # Every invocation leaves one line in .echolot/log/runs.jsonl — the tool's
     # own record of what was asked and how it went, independent of whichever
     # agent (or human) was typing. `echolot reflect` reads it later.
+    #
+    # Which project's log, decided before the command runs: it has to hold
+    # even when the command fails, and a failure is exactly the line worth
+    # keeping.
+    recorder.at(project_of(args))
     started = time.time()
     try:
         code = args.func(args)
