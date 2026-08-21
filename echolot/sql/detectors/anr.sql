@@ -36,9 +36,22 @@
 -- ## The process
 --
 -- `_proc` is the target process, and the module attributes each ANR to the
--- process that hung. `upid` is the reliable join when the trace saw that
--- process; `pid` covers a record whose process the trace never resolved into
--- a upid, which happens when the app died before process_stats ran.
+-- process that hung. Three ways to the same answer, and all three are needed.
+--
+-- `upid` is the reliable join when the trace saw that process, and `pid`
+-- covers a record whose process the trace never resolved into a upid, which
+-- happens when the app died before process_stats ran.
+--
+-- `process_name` is there because of the counter's two shapes. The name is
+-- written either as `ErrorId:<process> <pid>#<uuid>` or, on older platforms,
+-- as `ErrorId:<process>#<uuid>` with no pid in it at all. The stdlib reads the
+-- pid out of the first form, and on the second it has nothing to read: both
+-- `pid` and `upid` come back empty and a join on either matches nothing.
+--
+-- That is not a corner. A real ANR raised on purpose on an Android 13 phone,
+-- with the record sitting in the trace and the stdlib parsing its subject
+-- correctly, went unreported for exactly this reason — the detector was
+-- looking for a number the platform had not written.
 
 WITH win AS (
     SELECT ts_start, ts_end FROM _window
@@ -51,7 +64,7 @@ ours AS (
         a.anr_dur_ms
     FROM android_anrs a
     CROSS JOIN _proc p
-    WHERE a.upid = p.upid OR a.pid = p.pid
+    WHERE a.upid = p.upid OR a.pid = p.pid OR a.process_name = p.name
 )
 SELECT
     o.subject                                            AS location,

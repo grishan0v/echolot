@@ -413,9 +413,22 @@ ANR_AT_MS = 1300
 # has no business in our report.
 OTHER_UUID = "9999ffff-8888-7777-6666-555544443333"
 
+# The counter's name comes in two shapes and both are here, because the pid is
+# in only one of them:
+#
+#   ErrorId:<process> <pid>#<uuid>     the stdlib reads the pid out of this
+#   ErrorId:<process>#<uuid>           and has nothing to read in this
+#
+# Ours is written in the second, which is what an Android 13 phone actually
+# produced. On it the stdlib returns no pid and no upid, so a detector joining
+# on either matches nothing — a real ANR sat in a real trace, parsed correctly,
+# and went unreported. The process name is what identifies it, and this is the
+# fixture that says so.
 ANR_COUNTERS = [
-    (ANR_AT_MS, f"ErrorId:{APP_NAME} {APP_PID}#{ANR_UUID}"),
+    (ANR_AT_MS, f"ErrorId:{APP_NAME}#{ANR_UUID}"),
     (ANR_AT_MS, f"Subject(for ErrorId {ANR_UUID}):{ANR_SUBJECT}"),
+    # The negative control is written in the other shape, so the pid path is
+    # exercised too — and has to exclude it just the same.
     (ANR_AT_MS + 40, f"ErrorId:{OTHER_NAME} {OTHER_PID}#{OTHER_UUID}"),
     (ANR_AT_MS + 40,
      f"Subject(for ErrorId {OTHER_UUID}):Input dispatching timed out (other app)"),
