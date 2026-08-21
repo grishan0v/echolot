@@ -22,6 +22,11 @@ Two things it refuses to do quietly:
     themselves; the report says `overlap` and leaves the conclusion alone.
     That needs `spread` in the input, which `analyze` writes for two repeats
     or more — with a single trace on either side the column reads `—`.
+
+Rows are paired on everything the detector declared in `@identity`, which the
+report carries. Half the shipped detectors name a second column there, and one
+location legitimately holding several rows is what that field exists to say;
+see `_match` for what pairing on the name alone produced instead.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import table
-from .report import family, metric_of
+from .report import family, identity_of, metric_of
 
 # What counts as movement worth a row. Absolute floor first, so a 4 ms wobble
 # on a 6 ms slice is not "×1.7 slower"; relative floor second, so a 40 ms move
@@ -68,8 +73,10 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
                 "after": _state(rows_a),
             })
 
-        for loc, rb, ra, how in _match(rows_b, rows_a):
-            rows.append(_row(det_id, loc, rb, ra, how, floor_ms, floor_ratio))
+        identity = _identity(db, da)
+        for rb, ra, how in _match(rows_b, rows_a, identity):
+            rows.append(
+                _row(det_id, identity, rb, ra, how, floor_ms, floor_ratio))
 
     rows.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
 
@@ -276,9 +283,57 @@ def _state(rows: list[dict]) -> str:
 
 # --- pairing rows across two reports ---------------------------------------
 
-def _match(before_rows: list[dict], after_rows: list[dict]
-           ) -> list[tuple[str, dict | None, dict | None, str]]:
+def _identity(db: dict | None, da: dict | None) -> tuple[str, ...]:
+    """The columns that tell one row of this detector from another.
+
+    Written into every report by `analyze`, from the detector's `@identity`
+    header, and read back here rather than assumed — the same field, for the
+    same reason, that `report.aggregate` reads when it merges repeats.
+
+    Only what BOTH reports carry can be matched on. A report written before
+    the field existed says `location` alone, and it means it: that report
+    genuinely cannot tell two of its own rows apart, and comparing it against
+    a newer one on a column it never had would be reading a distinction into
+    it that is not there.
+    """
+    before = identity_of(db) if db is not None else ()
+    after = identity_of(da) if da is not None else ()
+    if not before or not after:
+        return before or after or ("location",)
+    return tuple(c for c in before if c in after) or ("location",)
+
+
+def _key(row: dict, identity: tuple[str, ...]) -> tuple:
+    return tuple(row.get(c) for c in identity)
+
+
+def _family_key(row: dict, identity: tuple[str, ...]) -> tuple:
+    return tuple(None if v is None else family(str(v))
+                 for v in _key(row, identity))
+
+
+def _match(before_rows: list[dict], after_rows: list[dict],
+           identity: tuple[str, ...]
+           ) -> list[tuple[dict | None, dict | None, str]]:
     """Pairs rows of one detector, exactly first and by name family second.
+
+    A row is named by every column in `identity`, never by `location` alone.
+    Five of the ten shipped detectors group by a second column —
+    `runnable_starvation` by the thread's state, `binder_txn` by whether the
+    thread is the main one, `anr` by which record it is — so one location
+    carrying several rows is ordinary rather than a corner.
+
+    Keyed on the location alone those rows collapse onto whichever came last,
+    and the ones left over pair with it. On a real shape — one thread with
+    `state R` at 100 ms and `state R+` at 30 ms before, 105 and 400 after —
+    the report subtracted `R` before from `R+` after and called the 300 ms a
+    regression, while the real `R` figure never appeared at all. Both rows
+    then printed as `main`, because what told them apart was the column not
+    being matched on.
+
+    `report.aggregate` made this exact mistake once, over repeats instead of
+    over rounds, and `@identity` is what was added to end it. The field was
+    already in the report; this file was not reading it.
 
     The second pass is what keeps a thread pool from reading as a disaster:
     `DefaultDispatcher-worker-2` in one set and `-worker-5` in the next is the
@@ -290,50 +345,61 @@ def _match(before_rows: list[dict], after_rows: list[dict]
     to say which became which, and guessing there would invent a delta out of
     nothing.
     """
-    out: list[tuple[str, dict | None, dict | None, str]] = []
-    by_loc_after = {r["location"]: r for r in after_rows}
-    used: set[str] = set()
+    out: list[tuple[dict | None, dict | None, str]] = []
+
+    # A list per key, not a row per key. Two rows of one report should never
+    # share a full identity — the detector groups by it — but a hand-edited
+    # report can, and dropping one silently is what this whole function is
+    # being fixed for.
+    by_key_after: dict[tuple, list[dict]] = {}
+    for ra in after_rows:
+        by_key_after.setdefault(_key(ra, identity), []).append(ra)
 
     left_before: list[dict] = []
+    taken: set[int] = set()
     for rb in before_rows:
-        ra = by_loc_after.get(rb["location"])
-        if ra is not None:
-            out.append((rb["location"], rb, ra, "exact"))
-            used.add(rb["location"])
+        same = by_key_after.get(_key(rb, identity))
+        if same:
+            ra = same.pop(0)
+            taken.add(id(ra))
+            out.append((rb, ra, "exact"))
         else:
             left_before.append(rb)
-    left_after = [r for r in after_rows if r["location"] not in used]
+    # In the report's own order rather than the grouping's.
+    left_after = [ra for ra in after_rows if id(ra) not in taken]
 
-    fam_before: dict[str, list[dict]] = {}
+    fam_before: dict[tuple, list[dict]] = {}
     for rb in left_before:
-        fam_before.setdefault(family(rb["location"]), []).append(rb)
-    fam_after: dict[str, list[dict]] = {}
+        fam_before.setdefault(_family_key(rb, identity), []).append(rb)
+    fam_after: dict[tuple, list[dict]] = {}
     for ra in left_after:
-        fam_after.setdefault(family(ra["location"]), []).append(ra)
+        fam_after.setdefault(_family_key(ra, identity), []).append(ra)
 
     paired_b: set[int] = set()
     paired_a: set[int] = set()
     for fam, bs in fam_before.items():
         as_ = fam_after.get(fam) or []
         if len(bs) == 1 and len(as_) == 1:
-            out.append((fam, bs[0], as_[0], "family"))
+            out.append((bs[0], as_[0], "family"))
             paired_b.add(id(bs[0]))
             paired_a.add(id(as_[0]))
 
     for rb in left_before:
         if id(rb) not in paired_b:
-            out.append((rb["location"], rb, None, "exact"))
+            out.append((rb, None, "exact"))
     for ra in left_after:
         if id(ra) not in paired_a:
-            out.append((ra["location"], None, ra, "exact"))
+            out.append((None, ra, "exact"))
     return out
 
 
-def _row(det_id: str, loc: str, rb: dict | None, ra: dict | None,
-         how: str, floor_ms: float, floor_ratio: float) -> dict[str, Any]:
+def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
+         ra: dict | None, how: str, floor_ms: float,
+         floor_ratio: float) -> dict[str, Any]:
     metric = metric_of(ra if ra is not None else rb)
     vb = (rb or {}).get(metric)
     va = (ra or {}).get(metric)
+    loc, detail = _name(rb if rb is not None else ra, identity, how)
 
     if rb is None:
         change, delta, ratio = APPEARED, va or 0.0, None
@@ -348,7 +414,7 @@ def _row(det_id: str, loc: str, rb: dict | None, ra: dict | None,
         else:
             change = GREW if delta > 0 else SHRANK
 
-    return {
+    row = {
         "location": loc,
         "detector": det_id,
         "metric": metric,
@@ -360,6 +426,30 @@ def _row(det_id: str, loc: str, rb: dict | None, ra: dict | None,
         "ratio": ratio,
         "overlap": _overlap(rb, ra, metric),
     }
+    if detail is not None:
+        row["detail"] = detail
+    return row
+
+
+def _name(row: dict, identity: tuple[str, ...],
+          how: str) -> tuple[str, str | None]:
+    """What to call this row: the location, and what tells it from its twins.
+
+    `detail` is carried only where the detector named it in `@identity` —
+    there it is the difference between two rows of one location, and leaving
+    it out prints them as duplicates of each other. Where a detector does not
+    group by it, `detail` is evidence that varies between the two sides and
+    would be a coin toss to show.
+
+    A pair matched by family is two different names for one thing, so both
+    halves are printed in the form they were matched in.
+    """
+    loc = str(row["location"])
+    detail = row.get("detail") if "detail" in identity else None
+    if how == "family":
+        loc = family(loc)
+        detail = None if detail is None else family(str(detail))
+    return loc, None if detail is None else str(detail)
 
 
 def _face(row: dict | None, metric: str) -> dict[str, Any] | None:
@@ -406,9 +496,16 @@ CHANGE_LABEL = {APPEARED: "**new**", VANISHED: "**gone**"}
 RANGE_LABEL = {True: "overlap", False: "apart", None: "—"}
 
 # The two tables this file prints, in the order they are read.
-MOVED_COLUMNS = ["location", "detector", "before", "after", "delta", "count",
-                 "ranges"]
-MOVED_HEADERS = {"location": "Where", "detector": "Detector", "before": "Before",
+#
+# `detail` sits next to the location because that is what it is for here: on a
+# detector that groups by a second column, two rows share one location and the
+# Evidence column is the only thing telling them apart. It is absent from the
+# rows of every other detector, and `table.columns` leaves out a column no row
+# carries — so the table grows this one exactly where it is needed.
+MOVED_COLUMNS = ["location", "detail", "detector", "before", "after", "delta",
+                 "count", "ranges"]
+MOVED_HEADERS = {"location": "Where", "detail": "Evidence",
+                 "detector": "Detector", "before": "Before",
                  "after": "After", "delta": "Δ", "count": "N", "ranges": "Ranges"}
 STATE_HEADERS = {"id": "detector", "before": "before", "after": "after"}
 
@@ -480,9 +577,13 @@ def to_markdown(cmp: dict[str, Any]) -> str:
     steady = [r for r in cmp["rows"] if r["change"] == STEADY]
     if steady:
         shown = steady[:8]
+        # Same reason the table carries the column: two steady rows of one
+        # location read as the same row listed twice without it.
         bits = [
-            f"`{r['location']}` {_num(r['before'], r['metric'])} → "
-            f"{_num(r['after'], r['metric'])}"
+            f"`{r['location']}`"
+            + (f" ({r['detail']})" if r.get("detail") else "")
+            + f" {_num(r['before'], r['metric'])} → "
+              f"{_num(r['after'], r['metric'])}"
             for r in shown
         ]
         rest = len(steady) - len(shown)
@@ -517,6 +618,7 @@ def _table(rows: list[dict[str, Any]]) -> str:
     return table.render([{
         "location": r["location"]
                     + (" *(family)*" if r["matched_by"] == "family" else ""),
+        **({"detail": r["detail"]} if r.get("detail") else {}),
         "detector": r["detector"],
         "before": _band(r["before"], r["metric"]),
         "after": _band(r["after"], r["metric"]),
