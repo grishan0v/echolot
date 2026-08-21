@@ -689,6 +689,18 @@ def _(report):
     assert fixture.ANR_UUID in row["detail"], row["detail"]
 
 
+@check("anr: a record whose counter carries no pid is still ours")
+def _(report):
+    # The counter is named either `ErrorId:<process> <pid>#<uuid>` or, on
+    # older platforms, `ErrorId:<process>#<uuid>` — and the stdlib can only
+    # read a pid out of the first. The fixture writes the second, which is
+    # what an Android 13 phone produced: no pid, no upid, and a detector
+    # joining on either finds nothing while the record sits in plain sight.
+    found = rows(report, "anr")
+    assert len(found) == 1, found
+    assert found[0]["location"] == fixture.ANR_SUBJECT, found[0]
+
+
 @check("anr: another application's freeze is not ours")
 def _(report):
     for row in rows(report, "anr"):
