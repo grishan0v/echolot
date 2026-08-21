@@ -42,6 +42,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .domains import source_files
+
 # --- the format -------------------------------------------------------------
 #
 # Frames are what the sources agree on. Everything around them — how a thread
@@ -281,6 +283,9 @@ class Report:
     # Lines after the threads that were passed over by position rather than by
     # name: the runtime's statistics and the record's own furniture.
     skipped: int = 0
+    # What `chains()` worked out, kept once. Not part of the report's content
+    # and not compared with anything: see `chains`.
+    _chains: "list[Chain] | None" = field(default=None, repr=False, compare=False)
 
     @property
     def package(self) -> str:
@@ -666,7 +671,21 @@ def chains(report: Report) -> list[Chain]:
     Grouped by monitor and owner rather than by waiter: five threads denied the
     same lock by the same thread are one finding, and listing them as five
     would bury the one that matters — whether `main` is among them.
+
+    Worked out once and kept on the report. It is a pure function of the
+    threads, and one `echolot anr` asked for it six times: `locate` through
+    `of_interest`, `render` for its own section and again through
+    `of_interest`, `summary` twice the same way, and the command itself. On a
+    three-hundred-thread dump each pass walks every thread and then walks the
+    holders down to the root.
     """
+    if report._chains is not None:
+        return report._chains
+    report._chains = _find_chains(report)
+    return report._chains
+
+
+def _find_chains(report: Report) -> list[Chain]:
     by_tid = report.by_tid()
     grouped: dict[tuple[str, str], list[Thread]] = {}
     for thread in report.threads:
@@ -778,12 +797,9 @@ def _waits_back(owner: Thread | None, waiters: set[str], by_tid: dict[str, Threa
 # at a file in the repository, and that is a shorter road than the one
 # `domains` takes from a slice name.
 #
-# The repository walk is duplicated here rather than borrowed from `mark`,
-# which does the same thing for its own reasons. `mark` will want to read an
-# ANR report, and a module that imports it cannot also be imported by it.
-
-SOURCE_EXT = (".kt", ".java")
-SKIP_DIRS = {"build", ".git", ".gradle", "generated", ".echolot", "node_modules"}
+# The walk is `domains.source_files`, not `mark`'s. That direction is the one
+# that matters: `mark` will want to read an ANR report, so a module this one
+# imports must not be one that imports it. `domains` imports nothing of ours.
 
 # `pkg.Class.method(File.kt:58)`, and everything that is not that:
 #   (Native method)                              nothing to point at
@@ -803,12 +819,15 @@ class Located:
 
 
 def source_index(root: Path) -> dict[str, list[Path]]:
-    """Every Kotlin and Java source under the root, by file name."""
+    """Every Kotlin and Java source under the root, by file name.
+
+    The walk is `domains.source_files`. Borrowing it is safe in the direction
+    that matters: `domains` imports nothing of ours, so this does not become
+    the cycle the note above is about — `mark` importing `anr`.
+    """
     found: dict[str, list[Path]] = {}
-    for path in root.rglob("*"):
-        if path.suffix in SOURCE_EXT and path.is_file() \
-                and not (SKIP_DIRS & set(path.parts)):
-            found.setdefault(path.name, []).append(path)
+    for path in source_files(root):
+        found.setdefault(path.name, []).append(path)
     return found
 
 
