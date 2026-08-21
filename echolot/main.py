@@ -59,6 +59,14 @@ def cmd_probe(args) -> int:
     This is what the agent feeds on during setup, so it can offer the user
     real options instead of inventing them.
     """
+    try:
+        return _probe(args)
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+
+def _probe(args) -> int:
     with TraceSession(args.trace, args.tp_binary) as tp:
         print("## Processes\n")
         _dump(tp, """
@@ -726,7 +734,13 @@ def cmd_names(args) -> int:
     if process is None:
         process = "*"
 
-    with TraceSession(args.trace, tp_bin) as tp:
+    try:
+        session = TraceSession(args.trace, tp_bin)
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    with session as tp:
         try:
             procs = _resolve_process(tp, process)
         except ConfigError as e:
@@ -1207,14 +1221,19 @@ def cmd_mark(args) -> int:
         return 2
 
     if args.apply:
-        done = mark_mod.apply(root, pl)
+        done, unreadable = mark_mod.apply(root, pl)
         print()
         for rel, markers in done:
             print(f"  + {rel}: {', '.join(markers)}")
+        for rel in unreadable:
+            print(f"  ! {rel}: not valid UTF-8 — skipped. Marking it "
+                  f"mechanically would put the lines at the wrong offsets.",
+                  file=sys.stderr)
         print(f"applied {sum(len(m) for _, m in done)} marker(s) in {len(done)} file(s); "
               f"every inserted line ends with `{mark_mod.TAG}` — `echolot mark --remove` "
               f"takes them out" if done else "nothing applicable to apply")
-        recorder.note(applied=sum(len(m) for _, m in done))
+        recorder.note(applied=sum(len(m) for _, m in done),
+                      unreadable=len(unreadable))
     return 0
 
 
@@ -1456,7 +1475,12 @@ def cmd_calibrate(args) -> int:
     windows: list[float] = []
 
     for trace in args.traces:
-        with TraceSession(trace, tp_binary) as tp:
+        try:
+            session = TraceSession(trace, tp_binary)
+        except ConfigError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        with session as tp:
             try:
                 procs = _resolve_process(tp, cfg.process)
             except ConfigError as e:

@@ -844,7 +844,7 @@ def test_markers_from_a_stack_go_in_and_come_out_again(store):
         store, [("com.example.app.data.StateStore.flush", rel, line_of("log()"))])
     before = (store / rel).read_text(encoding="utf-8")
 
-    done = mark.apply(store, plan)
+    done, _ = mark.apply(store, plan)
     after = (store / rel).read_text(encoding="utf-8")
     check("one file marked", len(done) == 1, done)
     check("the marker is in it", "AGENTTMP_StateStore_flush" in after, after)

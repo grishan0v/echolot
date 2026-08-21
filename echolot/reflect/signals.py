@@ -885,8 +885,18 @@ def run(session: Session, facts: Facts, cfg: Config | None) -> list[Signal]:
         try:
             sig = det(session, facts, cfg)
         except Exception as e:   # one broken detector must not kill the report
-            sig = Signal(det.__name__, "info", f"detector {det.__name__} failed",
-                         f"{type(e).__name__}: {e}")
+            # `skip`, and not `info`. A signal that raised checked nothing,
+            # which is the same state as one whose source could not carry
+            # what it needed — and the section above already argues that
+            # silence there is no verdict rather than a clean one. Filed as
+            # `info` it sat among the friction hints, where a reader looking
+            # for what the session did wrong would take it for one more
+            # observation about the session instead of a hole in the report.
+            sig = Signal(det.__name__, "skip",
+                         f"{det.__name__} — not checked, the signal broke",
+                         f"{type(e).__name__}: {e}. Nothing was examined, so "
+                         f"nothing here is a verdict. This is a bug in "
+                         f"echolot rather than anything about the session.")
         if sig is not None:
             out.append(sig)
     order = {"warn": 0, "info": 1, "ok": 2, "skip": 3}

@@ -66,7 +66,11 @@ def cmd_reflect(args) -> int:
                   f"{recorder.LOG_FILE} instead. Fewer checks; the report "
                   f"lists which.", file=sys.stderr)
 
-    since = _parse_since(args.since) if args.since else None
+    try:
+        since = _parse_since(args.since) if args.since else None
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     refs = reader.list_sessions(source)
     if since is not None:
         refs = [r for r in refs if r.mtime >= since]
@@ -162,10 +166,17 @@ def cmd_reflect(args) -> int:
 
 
 def _parse_since(text: str) -> float:
-    """`2h`, `30m`, `3d` → epoch seconds of the cut-off."""
+    """`2h`, `30m`, `3d` → epoch seconds of the cut-off.
+
+    A `ConfigError` like every other refusal of something the user typed. It
+    used to raise `SystemExit`, which is the one exit path in the CLI that
+    goes round the command's own `return 2` — and `main` re-raises it, so it
+    came out through the recorder's `except BaseException` and was filed as a
+    run that crashed rather than one that said no.
+    """
     m = re.fullmatch(r"(\d+)\s*([mhd])", text.strip())
     if not m:
-        raise SystemExit(f"error: --since expects e.g. 2h, 30m, 3d; got '{text}'")
+        raise ConfigError(f"--since expects e.g. 2h, 30m, 3d; got '{text}'")
     n, unit = int(m.group(1)), m.group(2)
     return time.time() - n * {"m": 60, "h": 3600, "d": 86400}[unit]
 

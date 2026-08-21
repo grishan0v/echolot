@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .config import ConfigError
+
 _CALIB = re.compile(
     r"^(\w+)\s*=\s*(p|top)(\d+)\s*\(\s*(\w+)\s*\)\s*(?:\*\s*([\d.]+))?$")
 _META_KEY = re.compile(r"^\s*--\s*@(\w+)\s*:\s*(.*?)\s*$")
@@ -396,6 +398,22 @@ class TraceSession:
             raise RuntimeError(
                 "the perfetto package is not installed — run: pip install perfetto"
             ) from e
+
+        # Named on the command line, and the commonest thing to get wrong
+        # about it is the path — a glob that matched nothing expands to
+        # itself, and `analyze .echolot/traces/*.perfetto-trace` on an empty
+        # directory hands that string straight to here. It came out as a bare
+        # FileNotFoundError traceback out of the CLI.
+        #
+        # Checked here rather than in each command: this is the one place a
+        # trace is opened, so nothing can go round it.
+        path = Path(trace_path)
+        if not path.is_file():
+            raise ConfigError(
+                f"no such trace: {path}"
+                + ("  (a glob that matches nothing is passed through as "
+                   "written — is the directory empty?)" if "*" in str(path)
+                   else ""))
 
         cfg = TraceProcessorConfig(bin_path=binary) if binary else None
         self._tp = TraceProcessor(trace=str(trace_path), config=cfg) if cfg \

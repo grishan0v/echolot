@@ -1259,7 +1259,8 @@ def _(report):
 
 def _mark_repo(root: Path, *, app="GloomApp", act="MainActivity", theme="AppTheme",
                nav="AppNavHost", pkg="com.example.app", app_return=False,
-               launcher=True, second_app=False, one_line=False) -> None:
+               launcher=True, second_app=False, one_line=False,
+               unclosed=False) -> None:
     """A Kotlin + Compose app: manifest, Application, launcher Activity with
     setContent, a theme and a nav host in two modules, Room in a core module.
 
@@ -1289,7 +1290,16 @@ def _mark_repo(root: Path, *, app="GloomApp", act="MainActivity", theme="AppThem
         f"    override fun onCreate() {{\n        super.onCreate()\n{ret}"
         f"        // a string with a brace: \"}}\" and a comment }} here\n"
         f"        init()\n    }}\n}}\n", encoding="utf-8")
-    body = (
+    if unclosed:
+        # A `setContent {` whose brace is never closed — what a file caught
+        # mid-edit looks like. Deliberately one `{` short of balancing to the
+        # end of the file, so `match_brace` walks off it and returns None.
+        body = (
+            f"    override fun onCreate(savedInstanceState: Bundle?) {{\n"
+            f"        super.onCreate(savedInstanceState)\n"
+            f"        setContent {{\n            {theme} {{\n"
+            f"                {nav}(start = true)\n")
+    body = body if unclosed else (
         f"    override fun onCreate(b: Bundle?) {{ super.onCreate(b); "
         f"setContent {{ {theme} {{ {nav}(start = true) }} }} }}\n"
         if one_line else
@@ -1404,6 +1414,22 @@ def _(report):
         pl = mk.plan(root, package="com.example.app")
         app = next(p for p in pl.proposals if p.kind == "app_oncreate")
         assert not app.applicable and "return" in app.reason, app
+    # Every refusal carries its reason. A row printed with `·` and nothing
+    # after it reads as the tool declining without saying why, and a reader
+    # cannot tell that from a bug. An unclosed brace was the one shape that
+    # produced it: `find_lambda` finds the `{`, `match_brace` returns None,
+    # and the proposal came out not applicable with an empty reason.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root, unclosed=True)
+        pl = mk.plan(root, package="com.example.app")
+        for p in pl.proposals:
+            assert p.applicable or p.reason, \
+                f"refused without saying why: {p.kind} in {p.file}"
+        sc = next((p for p in pl.proposals if p.kind == "set_content"), None)
+        assert sc is not None and not sc.applicable, _shape(pl)
+        assert "closing brace" in sc.reason, sc.reason
+
     # the same tree twice: byte-identical
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1421,7 +1447,7 @@ def _(report):
         _mark_repo(root)
         before = {p: p.read_bytes() for p in mk.source_files(root)}
         pl = mk.plan(root, package="com.example.app", allowed=["app/src/main"])
-        done = mk.apply(root, pl)
+        done, _ = mk.apply(root, pl)
         files = {rel for rel, _ in done}
         assert files == {"app/src/main/kotlin/x/GloomApp.kt", "app/src/main/kotlin/x/MainActivity.kt"}, files
         act = (root / "app/src/main/kotlin/x/MainActivity.kt").read_text(encoding="utf-8")
@@ -1435,7 +1461,9 @@ def _(report):
         indent = [len(t) - len(t.lstrip()) for t in tagged]
         assert indent[0] == indent[3] < indent[1] == indent[2], indent
         # applying twice does not double the markers
-        assert mk.apply(root, mk.plan(root, package="com.example.app", allowed=["app/src/main"])) == []
+        again, _ = mk.apply(root, mk.plan(root, package="com.example.app",
+                                          allowed=["app/src/main"]))
+        assert again == [], again
         touched = mk.remove(root)
         assert {rel for rel, _ in touched} == files and all(n == 2 or n == 4 for _, n in touched), touched
         after = {p: p.read_bytes() for p in mk.source_files(root)}
@@ -1464,7 +1492,7 @@ def _(report):
         for p in flat:
             assert not p.applicable, f"a one-line block is not applicable: {p}"
             assert "one line" in p.reason, p.reason
-        done = mk.apply(root, pl)
+        done, _ = mk.apply(root, pl)
         # The Application, whose onCreate spans lines, is still marked: the
         # refusal is about the block, not about the file or the run.
         assert [rel for rel, _ in done] == ["app/src/main/kotlin/x/GloomApp.kt"], done
@@ -1474,6 +1502,161 @@ def _(report):
         mk.remove(root)
         after = {p: p.read_bytes() for p in mk.source_files(root)}
         assert after == before, "remove must restore every file byte for byte"
+
+
+@check("the investigation keeps every round, even after one is deleted by hand")
+def _(report):
+    """`.echolot/out/report.json` is overwritten by every `analyze`.
+
+    The copies under the investigation are the only record of what it
+    concluded at each step, and their number came from counting the files
+    rather than from the highest name in use. Delete one from the middle —
+    they are just files in a directory — and the next `analyze` wrote over
+    the round before it, silently, in the one place a round is kept.
+    """
+    import json
+
+    from . import hunt as hunt_mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project, out = Path(tmp), Path(tmp) / "out"
+        out.mkdir()
+        hunt_mod.save(project, {"n": 1, "status": "open", "question": "why"})
+
+        kept = []
+        for i in range(3):
+            (out / "report.json").write_text(json.dumps({"round": i}),
+                                             encoding="utf-8")
+            kept.append(hunt_mod.record_report(project, out))
+        assert [p.name for p in kept] == ["001.json", "002.json", "003.json"], kept
+
+        kept[1].unlink()
+        (out / "report.json").write_text(json.dumps({"round": 3}), encoding="utf-8")
+        fourth = hunt_mod.record_report(project, out)
+
+        assert fourth.name == "004.json", f"the number was reused: {fourth.name}"
+        assert json.loads(kept[2].read_text(encoding="utf-8"))["round"] == 2, \
+            "the previous round was written over"
+
+
+@check("repeats: the merged report describes the run, not the repeat that failed")
+def _(report):
+    """`params` says which thresholds a detector actually used.
+
+    A detector that failed cannot say: `analyze_trace` has no resolved values
+    to report when rendering is what raised, so it falls back to the shipped
+    defaults. Merging took everything about the detector from repeat one, so
+    a run whose first trace happened to trip a SQL error described its
+    thresholds as the built-in ones — and `compare` read that against the
+    next report and announced a threshold change nobody had made.
+    """
+    from . import report as rep
+
+    def one(error, params):
+        return {"window": {"duration_ms": 10.0}, "trace": "t",
+                "summary": {"fired_ids": [], "absent_ids": []},
+                "detectors": [{"id": "d", "title": "d", "why": "",
+                               "identity": ["location"], "params": params,
+                               "params_source": "config", "rows": [],
+                               "error": error}]}
+
+    merged = rep.aggregate([one("boom", {"min_slice_ms": 16}),
+                            one(None, {"min_slice_ms": 40}),
+                            one(None, {"min_slice_ms": 40})])
+    only = merged["detectors"][0]
+    assert only["params"] == {"min_slice_ms": 40}, only["params"]
+    # The failure is still reported. Taking the description from a repeat
+    # that ran must not turn into hiding that another one did not.
+    assert only["error"] == "boom", only["error"]
+
+
+@check("reflect: a signal that broke is not checked, and does not read as checked")
+def _(report):
+    """`skip` and not `info`, for the reason `skip` exists at all.
+
+    A signal that raised examined nothing. Filed as `info` it sat among the
+    friction hints, where a reader looking for what the session did wrong
+    would take it for one more observation about the session rather than a
+    hole in the report.
+    """
+    from .reflect import signals as sig_mod
+    from .reflect.model import EVERYTHING, Session
+
+    def broken(session, facts, cfg):
+        raise RuntimeError("nope")
+
+    saved = sig_mod.SIGNALS[:]
+    sig_mod.SIGNALS[:] = [broken]
+    try:
+        got = sig_mod.run(Session(id="s", agent="x", carries=list(EVERYTHING)),
+                          sig_mod.Facts(), None)
+    finally:
+        sig_mod.SIGNALS[:] = saved
+
+    assert len(got) == 1 and got[0].severity == "skip", got
+    assert "RuntimeError" in got[0].why, got[0].why
+
+
+@check("CLI: what the user typed wrong is a sentence and an exit code, never a traceback")
+def _(report):
+    """Four ways the tool used to end in a Python traceback.
+
+    A traceback out of the CLI is a bug in echolot, and it is not a private
+    matter: `reflect` reads the run log, sees one, and files it as exactly
+    that. Three of these were not bugs in echolot at all — a path that is not
+    there, a `--since` nobody spelled right, a source file that is not UTF-8 —
+    and the fourth is a race with gradle tidying up its own output directory.
+    """
+    from . import mark as mk
+    from .main import main
+    from .tp import TraceSession
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "echolot.yml").write_text(
+            "project:\n  process: com.example.app\n", encoding="utf-8")
+
+        # A trace that is not there, from every verb that opens one. A glob
+        # that matched nothing arrives here as itself, which is how an empty
+        # .echolot/traces produced a bare FileNotFoundError.
+        try:
+            TraceSession(root / "nosuch.perfetto-trace")
+        except ConfigError as e:
+            assert "no such trace" in str(e), str(e)
+        else:
+            raise AssertionError("a missing trace opened a session")
+
+        here = Path.cwd()
+        try:
+            os.chdir(root)
+            with recorder.isolated():
+                for argv in (["analyze", "nosuch.perfetto-trace"],
+                             ["probe", "nosuch.perfetto-trace"],
+                             ["names", "nosuch.perfetto-trace"],
+                             ["calibrate", "nosuch.perfetto-trace"],
+                             ["reflect", "--since", "2weeks"]):
+                    assert main(argv) == 2, f"{argv} did not exit 2"
+        finally:
+            os.chdir(here)
+
+    # A source file that is not UTF-8. `plan` reads it leniently and computes
+    # offsets on what that produced; `apply` cannot read it the same way
+    # without those offsets shifting, so it skips the file and says which.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        rel = "app/src/main/kotlin/Foo.kt"
+        path = root / rel
+        path.parent.mkdir(parents=True)
+        path.write_bytes(
+            b"package a\n\n// caf\xe9\nclass Foo {\n"
+            b"    fun onCreate() {\n        bar()\n    }\n}\n")
+        was = path.read_bytes()
+
+        pl = mk.plan_from_anr(root, [("a.Foo.onCreate", rel, 6)])
+        assert pl.proposals and pl.proposals[0].applicable, _shape(pl)
+        done, unreadable = mk.apply(root, pl)
+        assert done == [] and unreadable == [rel], (done, unreadable)
+        assert path.read_bytes() == was, "a file that could not be read was written"
 
 
 @check("mark: --remove deletes its own lines and nothing that carries code")

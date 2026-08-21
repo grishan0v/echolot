@@ -216,10 +216,21 @@ def one_line_body(text: str, open_at: int | None, close_at: int | None) -> bool:
     return "\n" not in text[open_at:close_at]
 
 
-def _why_not(open_at: int | None, has_return: bool, flat: bool) -> str:
-    """Why a block cannot take a begin/end pair mechanically. Empty when it can."""
+def _why_not(open_at: int | None, has_return: bool, flat: bool,
+             close_at: int | None = 0) -> str:
+    """Why a block cannot take a begin/end pair mechanically. Empty when it can.
+
+    Every refusal has to carry its reason. A row printed with `·` and nothing
+    after it reads as the tool declining without saying why, and there is no
+    way for a reader to tell that from a bug — which is what the unclosed
+    brace below produced: `find_lambda` finds the `{` and `match_brace`
+    returns None, so the proposal was not applicable and the reason was the
+    empty string.
+    """
     if open_at is None:
         return "no block body found"
+    if close_at is None:
+        return "the block's closing brace was not found — the file may not parse"
     if has_return:
         return "has a return in its body — mark by hand"
     if flat:
@@ -528,7 +539,7 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
                          "setContent { } — the root of the Compose tree; recomposition re-enters it",
                          prefix + "set_content", "api", gradle_module(f, root),
                          applicable=o is not None and c is not None and not flat,
-                         reason=_why_not(o, False, flat) if o is None or flat else "",
+                         reason=_why_not(o, False, flat, c),
                          open_at=o, close_at=c, lambda_body=True))
             # one hop: what setContent calls, when it is this project's code
             if o is not None and c is not None:
@@ -816,23 +827,39 @@ def _inner_indent(text: str, open_at: int) -> str:
     return _indent_of(text, open_at) + "    "
 
 
-def apply(root: Path, pl: Plan) -> list[tuple[str, list[str]]]:
-    """Insert begin/end pairs for the applicable proposals. Returns (file, markers).
+def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]:
+    """Insert begin/end pairs for the applicable proposals.
+
+    Returns (edited files with their markers, files that could not be read).
 
     A begin line right after the block's `{`, an end line right before its
     `}`, both tagged so `remove` can find them without any bookkeeping.
     Files are edited from the last offset backwards, so earlier offsets stay
     valid. Java gets a `;`, Kotlin does not.
+
+    A file that is not valid UTF-8 is skipped and named. `plan` reads with
+    `errors="replace"` and computes its offsets on what that produced; this
+    used to read the same file strictly and come out of the CLI as a
+    `UnicodeDecodeError` traceback. Reading it leniently here instead would be
+    worse than the crash: an invalid sequence collapses to one replacement
+    character, every offset after it shifts, and the markers would go in at
+    the wrong places in a file nobody would think to re-check. `remove`
+    already skips such a file; this is the other half of that.
     """
     root = root.resolve()
     by_file: dict[str, list[Proposal]] = {}
     for p in pl.proposals:
         if p.applicable and p.open_at is not None and p.close_at is not None:
             by_file.setdefault(p.file, []).append(p)
-    done = []
+    done: list[tuple[str, list[str]]] = []
+    unreadable: list[str] = []
     for rel in sorted(by_file):
         path = root / rel
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            unreadable.append(rel)
+            continue
         semi = ";" if path.suffix == ".java" else ""
         edits = []   # (offset, insert_text)
         marked = []
@@ -855,7 +882,7 @@ def apply(root: Path, pl: Plan) -> list[tuple[str, list[str]]]:
             text = text[:offset] + ins + text[offset:]
         path.write_text(text, encoding="utf-8")
         done.append((rel, marked))
-    return done
+    return done, unreadable
 
 
 def remove(root: Path) -> list[tuple[str, int]]:
