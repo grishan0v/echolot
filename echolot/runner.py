@@ -154,8 +154,26 @@ def resolve_activity(device: str, package: str) -> str:
     return activity
 
 
+# A package name and an atrace category are both substituted between quotes in
+# the protobuf text above. Nothing that could end the string early has any
+# business being in either — a package name is dotted identifiers, a category
+# is one word — so the answer is to refuse rather than to escape.
+#
+# The failure it prevents is the one the template's own comment names: a config
+# that does not parse on the device turns every capture into a puzzle, and the
+# message would be perfetto's, about a line number in a file nobody wrote.
+_NAME_SHAPE = re.compile(r"^[A-Za-z0-9_.:\-]+$")
+
+
 def trace_config(package: str, duration_ms: int, categories: list[str],
                  buffer_kb: int) -> str:
+    for what, value in [("project.package", package),
+                        *(("runner.atrace_categories", c) for c in categories)]:
+        if not _NAME_SHAPE.match(str(value)):
+            raise RunnerError(
+                f"{what}: {value!r} is not a name — the device's trace config "
+                f"is a text format, and this would not parse there. Letters, "
+                f"digits, dot, colon, dash and underscore.")
     lines = "\n".join(f'      atrace_categories: "{c}"' for c in categories)
     return TRACE_CONFIG.format(package=package, duration_ms=duration_ms,
                                categories=lines, buffer_kb=buffer_kb)

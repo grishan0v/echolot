@@ -213,7 +213,56 @@ class Detector:
         sql, _ = self.render(resolved)
         return _LIMIT_TAIL.sub("", sql)
 
+    def check(self, overrides: dict[str, Any] | None = None,
+              source: str = "") -> None:
+        """A value of the wrong kind for the parameter it is replacing.
+
+        `@param` declares the default and, by what the default IS, the kind:
+        a number for a threshold, a string for a mask. An override arrives
+        from `echolot.yml` or from `--set` through `yaml.safe_load`, which is
+        perfectly happy to hand back a string where a number belongs. Nothing
+        looked.
+
+        It matters because thresholds are substituted into the query body
+        unquoted — `>= {{min_slice_ms}} * 1000000` — so whatever arrives lands
+        in the arithmetic as itself. Two ways that goes wrong, and the quiet
+        one is the reason this exists:
+
+            min_slice_ms: 16ms        →  a SQL error, reported against the
+                                         detector's name, which is a long way
+                                         from "a threshold has to be a number"
+            min_slice_ms: 16 OR 1=1   →  `HAVING x >= 16 OR 1=1 * 1000000`,
+                                         valid SQL with another meaning. Every
+                                         row passes, the detector reports the
+                                         whole trace, and nothing says a word.
+
+        int and float are one kind: `calibrate` derives 41.2 for a default of
+        16, and that is the feature working as designed. A bool is not a
+        number here whatever Python thinks — `min_slice_ms: yes` is a mistake,
+        not a threshold of one.
+
+        Raises ValueError. `plan_detectors` turns it into a ConfigError before
+        a trace is opened, because that is what it is.
+        """
+        where = f" ({source})" if source else ""
+        for key, value in (overrides or {}).items():
+            if key not in self.params:
+                continue        # not a declared @param; nothing substitutes it
+            default = self.params[key]
+            if isinstance(default, (int, float)):
+                ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+                kind = "a number"
+            else:
+                ok = isinstance(value, str)
+                kind = "a string"
+            if not ok:
+                raise ValueError(
+                    f"{self.id}.{key}{where} must be {kind}, like the "
+                    f"detector's own {default!r} — got {value!r}"
+                )
+
     def render(self, overrides: dict[str, Any] | None = None) -> tuple[str, dict]:
+        self.check(overrides)
         resolved = dict(self.params)
         resolved.update(overrides or {})
         missing = {
