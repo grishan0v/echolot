@@ -27,15 +27,44 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Relative on purpose: every reader spells it `project / LOG_FILE`, and the
+# project is not always the working directory. `at()` below is what tells the
+# writer which one it is.
 LOG_DIR = Path(".echolot") / "log"
 LOG_FILE = LOG_DIR / "runs.jsonl"
 
 _facts: dict[str, Any] = {}
+_root: Path | None = None
 
 
 def note(**facts: Any) -> None:
     """Attach facts to the current run. Called from inside a command."""
     _facts.update(facts)
+
+
+def at(root: Path | str | None) -> None:
+    """Which project this invocation is about — where `.echolot/` belongs.
+
+    `analyze` is run from wherever the traces are: the agent calls it inside a
+    macrobenchmark's output directory, which is named after a build variant
+    and a device model. Everything it leaves behind already follows the config
+    that named the project rather than the working directory — the report
+    through `_out_dir`, the investigation through `_project_root`.
+
+    This file did not, and it was the only one. `LOG_DIR` is a relative path
+    and it was resolved against whatever directory the command happened to run
+    in, while every reader looks under the project: `status` then said "doctor:
+    never run here" on a project where doctor had just passed, `next` could not
+    see a failed self-check, and `reflect` read whichever half of the session
+    had been run from the right place.
+    """
+    global _root
+    _root = Path(root) if root is not None else None
+
+
+def log_file(root: Path | None = None) -> Path:
+    """Where this invocation's line goes. `at()` decides; cwd is the fallback."""
+    return (root or _root or Path.cwd()) / LOG_FILE
 
 
 class isolated:
@@ -45,16 +74,21 @@ class isolated:
     those note facts of their own; without this, `doctor`'s line in the log
     carried `written: 2, overwritten: 1` from a temp directory that no
     longer existed.
+
+    The project is saved and restored for the same reason: a command run
+    inside a check must not move where the run hosting it is writing.
     """
 
     def __enter__(self):
         self._saved = dict(_facts)
+        self._saved_root = _root
         _facts.clear()
         return self
 
     def __exit__(self, *exc):
         _facts.clear()
         _facts.update(self._saved)
+        at(self._saved_root)
         return False
 
 
@@ -113,8 +147,12 @@ def record(args: Any, argv: list[str] | None, started: float,
                 type(error), error, error.__traceback__))
             # The tail is what matters; the head is argparse and main().
             entry["error"] = tb[-2000:]
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with LOG_FILE.open("a", encoding="utf-8") as f:
+        # `cwd` above and the file below are two different questions, and
+        # they used to have one answer. Where the command ran is a fact worth
+        # keeping; where the log lives is the project.
+        path = log_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
         pass
@@ -124,7 +162,7 @@ def record(args: Any, argv: list[str] | None, started: float,
 
 def read(path: Path | None = None) -> list[dict[str, Any]]:
     """All recorded runs, oldest first. Missing file → empty list."""
-    p = path or LOG_FILE
+    p = path or log_file()
     if not p.exists():
         return []
     out: list[dict[str, Any]] = []
