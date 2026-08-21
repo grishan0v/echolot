@@ -199,13 +199,11 @@ echolot compare old.json new.json     # or name them
 
 One table, sorted by how far each row moved. The top row is usually the answer.
 
-```markdown
-| Where | Detector | Before | After | Δ | N | Ranges |
-|---|---|---|---|---|---|---|
-| SyncAdapter.onPerformSync | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
-| TeamRepository.loadAll | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73** | 1 → 1 | apart |
-| inflate | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.6 | 12 → 31 | overlap |
-```
+| Where | Evidence | Detector | Before | After | Δ | N | Ranges |
+|---|---|---|---|---|---|---|---|
+| SyncAdapter.onPerformSync | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
+| TeamRepository.loadAll | main | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | apart |
+| inflate | main | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | overlap |
 
 `N` separates "called more often" from "became slower inside" — two different
 bugs in two different places. **Ranges** is the column that decides whether a
@@ -410,7 +408,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 95 checks inside
+The detectors were validated against a synthetic trace — 96 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.

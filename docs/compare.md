@@ -23,13 +23,11 @@ project. Without a config it prints to stdout and writes nothing.
 
 ## What the table says
 
-```markdown
-| Where | Detector | Before | After | Δ | N | Ranges |
-|---|---|---|---|---|---|---|
-| SyncAdapter.onPerformSync | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
-| TeamRepository.loadAll | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73** | 1 → 1 | apart |
-| inflate | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.6 | 12 → 31 | overlap |
-```
+| Where | Evidence | Detector | Before | After | Δ | N | Ranges |
+|---|---|---|---|---|---|---|---|
+| SyncAdapter.onPerformSync | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
+| TeamRepository.loadAll | main | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | apart |
+| inflate | main | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | overlap |
 
 **One table, not one section per detector.** The Marker Report is grouped by detector
 because each answers a different question. A comparison has one question, so

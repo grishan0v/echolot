@@ -249,7 +249,16 @@ class Detector:
         where = f" ({source})" if source else ""
         for key, value in (overrides or {}).items():
             if key not in self.params:
-                continue        # not a declared @param; nothing substitutes it
+                # A key that is not a parameter substitutes nothing, so the
+                # threshold silently stays at its default: `min_slice` for
+                # `min_slice_ms` reads as calibration that did not take, and
+                # the report says `params_source: config` either way. Refused
+                # with the list, which is what `--set` has always done for the
+                # same typo typed on the command line.
+                raise ValueError(
+                    f"{self.id}{where} has no parameter '{key}'. "
+                    f"It has: {', '.join(sorted(self.params))}"
+                )
             default = self.params[key]
             if isinstance(default, (int, float)):
                 ok = isinstance(value, (int, float)) and not isinstance(value, bool)

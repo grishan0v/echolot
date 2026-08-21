@@ -131,6 +131,46 @@ def test_documented_detector_count_is_current(document, pattern):
     )
 
 
+# --- the sample output, which is a claim like any other ---------------------
+
+# The comparison table is printed in two documents, and it is the one sample
+# in the set that a reader is invited to match against their own output
+# column by column.
+COMPARE_SAMPLES = ["README.md", "docs/compare.md"]
+
+
+@pytest.mark.parametrize("document", COMPARE_SAMPLES)
+def test_the_sample_comparison_has_the_columns_compare_prints(document):
+    """A column moved and the examples went on showing the old shape.
+
+    Adding `Evidence` to the comparison changed every table the tool prints
+    and nothing looked at the two in the documentation, which is the same
+    hole the tallies above were written for: a number in an example is a
+    claim about the tool, and so is a heading.
+
+    Rendered as a table rather than fenced, so this reads the page as GitHub
+    and PyPI do — and a fence would put the check back to sleep.
+    """
+    from echolot.compare import MOVED_COLUMNS, MOVED_HEADERS
+
+    want = [MOVED_HEADERS[c] for c in MOVED_COLUMNS]
+    text = (ROOT / document).read_text(encoding="utf-8")
+    # Not inside a fence: a fenced table is source on the page, not a table.
+    outside = re.sub(r"^```.*?^```", "", text, flags=re.S | re.M)
+    # A cell that IS "Detector", not a line that mentions it — the index
+    # table in the README links to `docs/detectors.md` and matched the
+    # looser rule.
+    rows = ([cell.strip() for cell in line.strip().strip("|").split("|")]
+            for line in outside.splitlines() if line.startswith("|"))
+    headers = [cells for cells in rows if "Detector" in cells]
+    assert headers, (
+        f"{document} has no rendered comparison table — either it moved, or "
+        f"it is inside a ``` fence, where it shows as source instead"
+    )
+    for got in headers:
+        assert got == want, f"{document} shows {got}, compare prints {want}"
+
+
 # --- the version, which is also a claim about the tool ----------------------
 
 def test_the_version_comes_from_the_code_and_only_from_there():
