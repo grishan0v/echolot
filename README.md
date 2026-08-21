@@ -1,7 +1,8 @@
-<img width="2560" height="904" alt="echolot-hero" src="https://github.com/user-attachments/assets/c5640665-d1ae-41ac-8da9-669434ce51ac" />
-
 <p align="center">
-  <b>Find where Android startup time actually goes — from a Perfetto trace down to a line of code.</b>
+<img width="429" height="128" alt="echolot-lockup-inverse-2x" src="https://github.com/user-attachments/assets/1cea634c-f0cd-4b32-a32f-c221e2be8227" />
+</p>
+<p align="center">
+  <b>CLI that helps your agent to find performance issues in Android apps.</b>
 </p>
 
 <p align="center">
