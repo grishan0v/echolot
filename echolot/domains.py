@@ -15,11 +15,49 @@ is cheaper than discovering it on the loop's third round.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 SOURCE_EXT = (".kt", ".java")
+
+# Directories a source walk has no business entering. The union of what the
+# three walkers used to carry separately, plus the ones none of them named:
+# a checkout can hold a virtualenv or a node_modules, and neither has Kotlin
+# in it.
+SKIP_DIRS = {
+    "build", ".git", ".gradle", "generated", ".echolot", "node_modules",
+    ".venv", "venv", ".idea", "__pycache__", ".tox",
+}
+
+
+def source_files(root: Path, *, under_src: bool = False) -> list[Path]:
+    """Every Kotlin and Java source under the root, in a stable order.
+
+    One walker for `domains`, `mark` and `anr`. All three wrote the same
+    `sorted(root.rglob("*"))` and then dropped what they did not want — which
+    reads the whole tree first and discards afterwards, so `.git` and
+    `node_modules` were walked in full every time to yield nothing. `os.walk`
+    can be told not to go in, and that is the difference between reading a
+    checkout and reading a checkout plus everything anyone ever installed
+    into it.
+
+    `under_src` is `mark`'s extra rule: it only proposes markers for files
+    under a `src/` directory.
+
+    Sorted at the end rather than per directory, so the order is exactly what
+    the global `sorted(rglob(...))` produced — `domains` names the first site
+    of each slice name in its map, and that must not move.
+    """
+    found: list[Path] = []
+    for base, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        here = Path(base)
+        if under_src and "src" not in here.parts:
+            continue
+        found += [here / n for n in names if n.endswith(SOURCE_EXT)]
+    return sorted(found)
 
 # Qualified forms are unambiguous and count everywhere.
 _QUALIFIED = re.compile(
@@ -100,13 +138,7 @@ def scan(root: Path) -> tuple[list[Site], dict[str, ModuleStat]]:
     sites: list[Site] = []
     stats: dict[str, ModuleStat] = {}
 
-    for path in sorted(root.rglob("*")):
-        if path.suffix not in SOURCE_EXT or not path.is_file():
-            continue
-        parts = set(path.parts)
-        if {"build", ".git", ".gradle", "generated"} & parts:
-            continue
-
+    for path in source_files(root):
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:

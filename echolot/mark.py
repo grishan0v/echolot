@@ -45,10 +45,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .domains import gradle_module
+from .domains import SKIP_DIRS, gradle_module
+from .domains import source_files as domains_source_files
 
-SOURCE_EXT = (".kt", ".java")
-SKIP_DIRS = {"build", ".git", ".gradle", "generated", ".echolot", "node_modules"}
 DEFAULT_PREFIX = "AGENTTMP_"
 TAG = "// echolot:mark"
 # Exactly what `apply` writes, and nothing else. `remove` deletes whole lines,
@@ -248,12 +247,12 @@ def _rel(path: Path, root: Path) -> str:
 # --- discovery -----------------------------------------------------------------
 
 def source_files(root: Path) -> list[Path]:
-    out = []
-    for p in sorted(root.rglob("*")):
-        if p.suffix in SOURCE_EXT and p.is_file() and not (SKIP_DIRS & set(p.parts)) \
-                and "src" in p.parts:
-            out.append(p)
-    return out
+    """This module's half of the walk: only what sits under a `src/`.
+
+    The walk itself is `domains.source_files`, which prunes as it goes
+    instead of reading the whole tree and discarding afterwards.
+    """
+    return domains_source_files(root, under_src=True)
 
 
 def manifests(root: Path) -> list[Path]:
@@ -310,18 +309,29 @@ def simple_name(class_ref: str) -> str:
     return class_ref.rsplit(".", 1)[-1]
 
 
-def find_class_file(root: Path, module_dir: Path | None, name: str,
-                    files: list[Path]) -> Path | None:
-    """The source file declaring `class <name>`, the manifest's module first."""
-    pat = re.compile(r"\b(?:class|object)\s+" + re.escape(name) + r"\b")
-    hits = []
+def read_sources(files: list[Path]) -> dict[Path, str]:
+    """Every source read once, for the searches below to share.
+
+    `plan` looks for the Application class, then the launcher Activity, then
+    a composable per name `setContent` calls, then Room and Koin and Hilt —
+    and each search used to open every file in the project again. On a
+    checkout of any size that is the whole tree read six or seven times over
+    for four answers, and the searches are what `mark` spends its time on.
+    """
+    out: dict[Path, str] = {}
     for p in files:
         try:
-            t = p.read_text(encoding="utf-8", errors="replace")
+            out[p] = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if pat.search(t):
-            hits.append(p)
+    return out
+
+
+def find_class_file(root: Path, module_dir: Path | None, name: str,
+                    sources: dict[Path, str]) -> Path | None:
+    """The source file declaring `class <name>`, the manifest's module first."""
+    pat = re.compile(r"\b(?:class|object)\s+" + re.escape(name) + r"\b")
+    hits = [p for p, text in sources.items() if pat.search(text)]
     if not hits:
         return None
     if module_dir is not None:
@@ -406,19 +416,16 @@ def calls_inside(clean_body: str) -> list[str]:
     return out
 
 
-def find_composable_decl(name: str, files: list[Path]) -> tuple[Path, int] | None:
+def find_composable_decl(name: str,
+                         sources: dict[Path, str]) -> tuple[Path, int] | None:
     """`@Composable fun <name>(` in this project's sources — the annotation is
     the platform's word for it, so a project function that merely shares a
     name with a library call is not mistaken for a screen."""
     pat = re.compile(r"@Composable\b[^{;]*?\bfun\s+(?:<[^>]*>\s*)?" + re.escape(name) + r"\s*\(", re.S)
-    for p in files:
-        try:
-            t = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        m = pat.search(t)
+    for p, text in sources.items():
+        m = pat.search(text)
         if m:
-            return p, line_of(t, m.end() - 1)
+            return p, line_of(text, m.end() - 1)
     return None
 
 
@@ -434,7 +441,8 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
          prefix: str = DEFAULT_PREFIX, module: str | None = None) -> Plan:
     root = root.resolve()
     allowed = list(allowed or [])
-    files = source_files(root)
+    # Read once, searched many times. See `read_sources`.
+    sources = read_sources(source_files(root))
     out = Plan(root=str(root), module=None, package=package)
 
     # 1. the app module: the manifest with a launcher activity
@@ -482,7 +490,7 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
     # 2. Application.onCreate
     app_cls = application_class(mtext)
     if app_cls:
-        f = find_class_file(root, mdir, simple_name(app_cls), files)
+        f = find_class_file(root, mdir, simple_name(app_cls), sources)
         if f is None:
             out.notes.append(f"Application class {app_cls} is declared in the manifest but no "
                              f"source declares it under src/ (generated, or in a dependency)")
@@ -508,7 +516,7 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
 
     # 3. launcher Activity: onCreate, setContent / setContentView
     act = launchers[0]
-    f = find_class_file(root, mdir, simple_name(act), files)
+    f = find_class_file(root, mdir, simple_name(act), sources)
     if f is None:
         out.notes.append(f"launcher Activity {act} is declared in the manifest but no source "
                          f"declares it under src/ (generated, or in a dependency)")
@@ -546,7 +554,7 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
                 clean = strip_noise(t)
                 found = 0
                 for name in calls_inside(clean[o + 1:c]):
-                    hit = find_composable_decl(name, files)
+                    hit = find_composable_decl(name, sources)
                     if hit is None:
                         continue
                     hf, hl = hit
@@ -569,12 +577,8 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
                              "surrounding onCreate instead (proposed above)"))
 
     # 4. Room, Koin, Hilt — API strings anywhere in the sources
-    for p in files:
+    for p, t in sources.items():
         rel = _rel(p, root)
-        try:
-            t = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
         for m in _ROOM_BUILDER.finditer(t):
             add(Proposal("room_open", rel, line_of(t, m.start()),
                          "Room.databaseBuilder — the database is opened here",
