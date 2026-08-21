@@ -226,6 +226,12 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
     rules without spinning up a session per case. Returns
     [(detector, overrides, source)] with source one of
     default / config / cli / config+cli.
+
+    Also where a threshold of the wrong kind is refused. That has to happen
+    here rather than at render time: `analyze_trace` renders inside a
+    `try/except` that turns any failure into one detector's error line, and a
+    value the config cannot mean is a config error — the same answer
+    `parse_set` already gives a `--set` typo, before a trace is opened.
     """
     detectors = load_detectors(DETECTOR_DIR)
     cli_overrides = cli_overrides or {}
@@ -246,6 +252,14 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
         source = "+".join(
             s for s, on in (("config", bool(from_cfg)), ("cli", bool(from_cli))) if on
         ) or "default"
+        # Named per side, so the message points at the file or at the flag
+        # rather than at "somewhere in the thresholds".
+        for values, whose in ((from_cfg, "from the config"),
+                              (from_cli, "from --set")):
+            try:
+                d.check(values, whose)
+            except ValueError as e:
+                raise ConfigError(str(e)) from e
         plan.append((d, overrides, source))
     return plan
 
@@ -1427,7 +1441,17 @@ def cmd_calibrate(args) -> int:
         print("no detector declared @calibrate", file=sys.stderr)
         return 2
 
+    # Before the first trace is opened. `calibrate` is where people iterate on
+    # the thresholds section, so it is where a value of the wrong kind is most
+    # likely to be typed — and it does not go through `plan_detectors`.
     overrides = cfg.detector_overrides
+    try:
+        for d in detectors:
+            d.check(overrides.get(d.id), "from the config")
+    except ValueError as e:
+        print(f"config error: {e}", file=sys.stderr)
+        return 2
+
     pooled: dict[str, list[dict]] = {d.id: [] for d in detectors}
     windows: list[float] = []
 

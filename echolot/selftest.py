@@ -516,6 +516,61 @@ def _(report):
     assert all(src == "default" and not over for _, over, src in plan), plan
 
 
+@check("thresholds: a value the parameter cannot mean is refused, not rendered")
+def _(report):
+    """The quiet one, which is why this is a check and not a comment.
+
+    Thresholds go into the query body unquoted — `>= {{min_slice_ms}} *
+    1000000` — so whatever the config holds lands in the arithmetic as itself.
+    `16ms` is a SQL error, reported against the detector, which is at least
+    visible. `16 OR 1=1` is valid SQL that means something else: the HAVING
+    clause stops filtering, the detector reports the whole trace, and the run
+    finishes green with a report nobody can trust.
+
+    `@param` already says which kind each one is, by what its default is.
+    Nothing was reading it.
+    """
+    from .main import plan_detectors
+
+    for value in ("16 OR 1=1", "16ms", None, True, [16]):
+        cfg = Config({**FIXTURE_CONFIG,
+                      "detectors": {"main_thread_block": {"min_slice_ms": value}}})
+        try:
+            plan_detectors(cfg)
+        except ConfigError as e:
+            assert "min_slice_ms" in str(e) and "number" in str(e), str(e)
+            assert "from the config" in str(e), \
+                f"the message does not say where the value came from: {e}"
+            continue
+        raise AssertionError(f"a threshold of {value!r} was accepted")
+
+    # And from the flag, named as the flag.
+    cfg = Config({**FIXTURE_CONFIG, "detectors": {"main_thread_block": {}}})
+    try:
+        plan_detectors(cfg, cli_overrides={"main_thread_block": {"min_slice_ms": "x"}})
+    except ConfigError as e:
+        assert "from --set" in str(e), str(e)
+    else:
+        raise AssertionError("--set accepted a threshold that is not a number")
+
+    # A mask is a string, and a number is not one of those either.
+    cfg = Config({**FIXTURE_CONFIG,
+                  "detectors": {"binder_txn": {"name_glob": 16}}})
+    try:
+        plan_detectors(cfg)
+    except ConfigError as e:
+        assert "string" in str(e), str(e)
+    else:
+        raise AssertionError("a mask of 16 was accepted")
+
+    # What must keep working: `calibrate` derives 41.2 for a default of 16,
+    # and refusing that would break the feature this guards.
+    cfg = Config({**FIXTURE_CONFIG,
+                  "detectors": {"main_thread_block": {"min_slice_ms": 41.2}}})
+    _, over, _src = plan_detectors(cfg)[0]
+    assert over == {"min_slice_ms": 41.2}, over
+
+
 # --- frame_jank ------------------------------------------------------------
 #
 # The fixture plants 24 frames inside the window: 5 the app was 44 ms late for,
