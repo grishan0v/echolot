@@ -58,6 +58,15 @@ def install_pointers(project: Path, chosen: list) -> None:
         if what == "exists-without-ours":
             manual.append(rel)
             print(f"  ≠ {rel} exists and is yours — left alone")
+        elif what == "ours-without-an-end":
+            # Installed before the section had a closing marker, and edited
+            # since. Where our part stops is no longer knowable, and the one
+            # thing worse than leaving it stale is deleting what is around it.
+            print(f"  ≠ {rel} has echolot's section from an older install and "
+                  f"has been edited since — left alone")
+            print(f"      Put `{hosts.END_MARKER}` on its own line where the "
+                  f"section ends, then run `echolot init` again; from then on "
+                  f"only that section is updated.")
         elif what == "current":
             print(f"  = {rel} ({host.title}, current)")
         else:
