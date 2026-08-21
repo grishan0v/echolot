@@ -95,6 +95,32 @@ blanked out, so a `}` inside a literal does not count.
 is still shown (the joint is where it is) but not applied, with the note to
 mark the nearest allowed caller instead.
 
+## `--from-anr`: targets from a stack instead of the manifest
+
+```bash
+echolot mark --from-anr report.txt
+```
+
+Everything above proposes where instrumentation *usually* belongs on a project
+that has none. A stack from a freeze is not a guess: it names the methods that
+were on the thread when the system gave up, with the file and the line the
+compiler wrote into each frame. Everything after the plan is the same code and
+the same tag, so `--apply` and `--remove` are unchanged.
+
+Expect most proposals to be refused, and read the reasons rather than working
+around them:
+
+- **the line falls inside another function than the frame names** — the
+  compiler moved it, and bracketing where the line landed would name one
+  function and measure another;
+- **a `return` in the body**, and **a body on one line** — the same two
+  refusals as above;
+- **most frames landing nowhere** — one sentence naming the build the report
+  came from. The working tree is not that build, and no line number in the
+  report means anything until it is.
+
+See [ANRs](anr.md) for the rest of that path.
+
 ## The loop it fits into
 
 ```
