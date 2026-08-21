@@ -33,15 +33,36 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The tag is the release; pyproject.toml is what ends up on PyPI. If they
-      # disagree the upload would carry the wrong version — fail here instead.
-      - name: Check that the tag matches pyproject.toml
+      # The tag is the release; the version in the code is what ends up on
+      # PyPI. If they disagree the upload would carry the wrong version — fail
+      # here instead.
+      #
+      # Read from echolot/__init__.py, because that is where the number lives.
+      # This step used to read `project.version` out of pyproject.toml, and
+      # #33 moved the version out of there: pyproject now declares
+      # `dynamic = ["version"]` and setuptools reads the attribute. The key
+      # this step asked for stopped existing, `tomllib` raised KeyError, and
+      # the job failed on every tag — so no release could publish at all. It
+      # went unnoticed because nothing exercises a workflow until a tag is
+      # pushed, and none was between the two changes.
+      - name: Check that the tag matches the version in the code
         run: |
-          v="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME does not match pyproject.toml version $v"
-            exit 1
-          fi
+          python - <<'PY'
+          import os, pathlib, re
+
+          text = pathlib.Path("echolot/__init__.py").read_text(encoding="utf-8")
+          found = re.search(r'^__version__ = "([^"]+)"', text, re.M)
+          if not found:
+              raise SystemExit("echolot/__init__.py declares no __version__")
+
+          version, tag = found.group(1), os.environ["GITHUB_REF_NAME"]
+          if tag != f"v{version}":
+              raise SystemExit(
+                  f"tag {tag} does not match __version__ {version} "
+                  f"in echolot/__init__.py"
+              )
+          print(f"tag {tag} matches __version__ {version}")
+          PY
 
       - name: Build sdist and wheel
         run: |

@@ -20,10 +20,15 @@ not checked, which is why a failure prints the pattern that found nothing.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 from echolot import selftest
 
@@ -157,4 +162,62 @@ def test_the_version_comes_from_the_code_and_only_from_there():
     assert not re.search(r'^version = "', text, re.M), (
         "a literal `version =` is back in pyproject.toml — that is how the two "
         "started disagreeing"
+    )
+
+
+def _tag_check_program() -> str:
+    """The python the publish workflow runs to compare the tag and the version.
+
+    Read out of the workflow rather than copied here. A copy would pass while
+    the workflow it describes was failing, which is the whole failure this
+    test exists to end.
+    """
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "publish.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["build"]["steps"]
+    named = [s for s in steps if "tag matches" in (s.get("name") or "")]
+    assert len(named) == 1, (
+        f"publish.yml has {len(named)} steps checking the tag against the "
+        f"version; this test knows how to read exactly one"
+    )
+    body = re.search(r"<<'PY'\n(.*?)\n *PY\s*$", named[0]["run"], re.S)
+    assert body, "the tag check is no longer a `python - <<'PY'` heredoc"
+    return textwrap.dedent(body.group(1))
+
+
+def _run_tag_check(tag: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-"], input=_tag_check_program(), cwd=ROOT,
+        env={**os.environ, "GITHUB_REF_NAME": tag},
+        capture_output=True, text=True,
+    )
+
+
+def test_the_publish_workflow_can_read_the_version():
+    """The release gate, run here instead of on a tag that cannot be taken back.
+
+    Nothing exercises a workflow until a tag is pushed, and a tag is
+    irreversible. That gap swallowed a whole release: #33 moved the version
+    out of `pyproject.toml` into the package, and the publish workflow went on
+    asking `tomllib` for `project.version`. The key no longer existed, the
+    step raised KeyError, `build` failed, and `publish` and `release` never
+    ran — so a tag would have created nothing at all.
+
+    The two halves are held apart by the test above, which requires the
+    version to be dynamic. So this one runs the workflow's own program against
+    the real checkout: the same source, the same tag, the same exit code.
+    """
+    import echolot
+
+    good = _run_tag_check(f"v{echolot.__version__}")
+    assert good.returncode == 0, (
+        f"the publish workflow cannot read the version it is about to "
+        f"release:\n{good.stdout}{good.stderr}"
+    )
+
+    # And it has to be a check rather than a formality: a tag naming another
+    # version must stop the release.
+    bad = _run_tag_check("v0.0.0-not-this-one")
+    assert bad.returncode != 0, (
+        "the publish workflow accepted a tag that does not match the version"
     )
