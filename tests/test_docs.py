@@ -62,10 +62,21 @@ CHECK_TALLIES = [
 ]
 
 # Every place a document states how many detectors there are: the sentence at
-# the top of the README, and the label inside the flowchart under it.
+# the top of the README, the label inside the flowchart under it, and the
+# sample report's own tally.
+#
+# That last one is the reason this list grew. The two above it were kept
+# current through two detectors being added; the sample report went on saying
+# "5 of 8" because no pattern looked at it. A number inside an example is a
+# claim about the tool exactly like a number in a sentence — and the example is
+# the part people read first.
+#
+# Only the second number counts. The first is how many fired on the run that
+# produced the sample, which is a fact about that run and not about the tool.
 DETECTOR_TALLIES = [
     ("README.md", r"runs " + NUMBER + r" SQL detectors"),
     ("README.md", NUMBER + r" SQL detectors<br/>"),
+    ("README.md", r"Detectors fired: \*\*\d+ of " + NUMBER + r"\*\*"),
 ]
 
 

@@ -63,6 +63,20 @@ problem. On `_tstate_win` the `dur` field is already clipped, because the
 question there is always "how long did the thread spend in this state inside
 the scenario".
 
+### A slice that never closed is the longest one, not a zero
+
+trace_processor gives a slice still open when the trace stopped `dur = -1`.
+`_slice_win` reads that as running to the end of the window and sets
+`unfinished` beside it, so a detector that wants to say "at least" has the fact
+rather than inferring it from a number that happens to land on the window's
+edge.
+
+The reading matters more than it sounds. On a real freeze the main thread sat
+in ART's contention slice for twenty seconds, the lock was never released, the
+slice never closed — and folding that to zero made the worst thing in the trace
+the one thing invisible in it. Two detectors missed it and neither had a bug of
+its own.
+
 ### A stretch is a third shape, and the window is not always right
 
 `anr_risk` asks neither "how much went into this name" nor "was this one

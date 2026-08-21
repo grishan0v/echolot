@@ -35,6 +35,11 @@ runner:
   reset_policy: force-stop  # force-stop (cold) | none (warm)
 ```
 
+`duration_ms` is sized for a start, and a freeze does not fit in it. Hunting
+one needs the block plus the ten seconds the system waits before declaring an
+ANR — forty-five is a working number, and twelve finds neither. See
+[ANRs](anr.md).
+
 ### `launch` — we drive it
 
 `force-stop`, start recording, `am start -W`, wait, pull. A cold start. With

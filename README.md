@@ -135,7 +135,7 @@ A **Marker Report**: one section per detector that fired, nothing else.
 Runs: **5**, numbers are medians across them
 Process: `com.example.app` (pid 12903)
 Scenario window: **1184 ms** (from 1102 to 1291)
-Detectors fired: **5 of 8**
+Detectors fired: **5 of 10**
 
 ## Where the main thread spent its time
 
@@ -175,7 +175,7 @@ _time past the deadline; frame duration is in the evidence_
 |---|---|---|---|---|
 | inflate | 2 | 149.3 | 86.2 | median 12.9 ms of 312 · worst 6.7× |
 
-**Silent:** gc_pressure, binder_txn, runnable_starvation
+**Silent:** gc_pressure, binder_txn, runnable_starvation, anr_risk, anr
 ```
 
 </details>
