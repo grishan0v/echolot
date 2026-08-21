@@ -1693,6 +1693,8 @@ def _(report):
         text = host.render()
         assert "echolot guide" in text, f"{host.key} never names the guide"
         assert hosts_mod.MARKER in text, f"{host.key} carries no marker to find it by"
+        assert hosts_mod.END_MARKER in text, \
+            f"{host.key} has no end marker, so nothing can say where it stops"
         assert len(text.splitlines()) < 40, \
             f"{host.key} is turning into a copy of the guide ({len(text.splitlines())} lines)"
 
@@ -1705,6 +1707,73 @@ def _(report):
         assert what == "exists-without-ours", what
         assert own.read_text(encoding="utf-8") == "# our own rules\n", \
             "a project's own AGENTS.md was edited"
+
+
+@check("init: run again, the pointer is updated and the project's own text is not")
+def _(report):
+    """The file these stubs go in belongs to the project, not to echolot.
+
+    `AGENTS.md` is where a team keeps its instructions for its own agents, and
+    `init` is meant to be run again — it says so, and it is the one command a
+    person has to know. So the ordinary sequence is: install, write your own
+    rules underneath, install again.
+
+    That sequence used to delete the rules. The guard asked only whether our
+    marker was in the file; when it was, and the content differed, the whole
+    file was rewritten and reported as `updated`. Nothing said what had gone.
+    """
+    from . import hosts as hosts_mod
+
+    agents = hosts_mod.BY_KEY["agents"]
+    theirs = "\n## Our build rules\n\nRun ./gradlew spotlessApply first.\n"
+
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        assert hosts_mod.write_stub(project, agents)[0] == "written"
+        own = project / "AGENTS.md"
+
+        # Nothing to do the second time round.
+        assert hosts_mod.write_stub(project, agents)[0] == "current", \
+            "a freshly written stub reads as out of date"
+
+        own.write_text(own.read_text(encoding="utf-8") + theirs, encoding="utf-8")
+        what, _ = hosts_mod.write_stub(project, agents)
+        after = own.read_text(encoding="utf-8")
+        assert theirs in after, (
+            f"`init` deleted the project's own section from AGENTS.md "
+            f"(reported {what!r})")
+        assert hosts_mod.MARKER in after and hosts_mod.END_MARKER in after, \
+            "the pointer went missing while the project's text was kept"
+
+        # And a stale section really is brought up to date, in place.
+        stale = after.replace("echolot guide", "echolot gide")
+        own.write_text(stale, encoding="utf-8")
+        assert hosts_mod.write_stub(project, agents)[0] == "updated"
+        fixed = own.read_text(encoding="utf-8")
+        assert "echolot gide" not in fixed, "a stale pointer was left stale"
+        assert theirs in fixed, "updating the pointer took the project's text"
+
+    # A file from before the section had an end, plus something written after
+    # it: where ours stops cannot be known, so nothing is written at all.
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        own = project / "AGENTS.md"
+        legacy = hosts_mod._without_an_end(agents.render()) + theirs
+        own.write_text(legacy, encoding="utf-8")
+        what, _ = hosts_mod.write_stub(project, agents)
+        assert what == "ours-without-an-end", what
+        assert own.read_text(encoding="utf-8") == legacy, \
+            "a file with no end marker was rewritten on a guess"
+
+    # The same file untouched is exactly what an earlier echolot wrote, so it
+    # is ours alone and this run gives it the end marker it lacks.
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        own = project / "AGENTS.md"
+        own.write_text(hosts_mod._without_an_end(agents.render()), encoding="utf-8")
+        assert hosts_mod.write_stub(project, agents)[0] == "updated"
+        assert hosts_mod.END_MARKER in own.read_text(encoding="utf-8"), \
+            "an older install was not migrated to the marked form"
 
 
 @check("init: the picker can never hang an agent or the self-check")

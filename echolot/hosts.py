@@ -22,9 +22,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+# Both ends, and the second one is load-bearing. `AGENTS.md`, `GEMINI.md` and
+# `copilot-instructions.md` belong to the project — they are where a team keeps
+# its own instructions for its own agents — and this file writes a section into
+# them. Without something saying where that section stops, "update the pointer"
+# and "replace the file" are the same operation, which is what it used to be.
 MARKER = "<!-- echolot -->"
+END_MARKER = "<!-- /echolot -->"
 
-BODY = f"""{MARKER}
+_LEAD = f"""{MARKER}
 ## Performance work: echolot
 
 This project uses [echolot](https://github.com/grishan0v/echolot) to find where
@@ -42,6 +48,8 @@ echolot guide    # how to work with it — read this before performance work
 version in use. `echolot guide hunt` is the loop; `echolot guide setup` builds
 the config.
 """
+
+BODY = _LEAD + END_MARKER + "\n"
 
 
 @dataclass(frozen=True)
@@ -119,13 +127,50 @@ def parse(spec: str) -> list[Host] | None:
     return [BY_KEY[k] for k in keys]
 
 
+def _ours(text: str) -> tuple[int, int] | None:
+    """Where our section starts and ends, or None when it has no end."""
+    start = text.find(MARKER)
+    if start < 0:
+        return None
+    end = text.find(END_MARKER, start)
+    return None if end < 0 else (start, end + len(END_MARKER))
+
+
+def _section(text: str) -> str:
+    """Our section out of a rendered stub, without the host's own preamble.
+
+    Cursor's rule carries frontmatter above the marker, and that frontmatter
+    is the project's to edit — putting it back on every run would be the same
+    overwriting this whole function exists to stop, one file smaller.
+    """
+    span = _ours(text)
+    return text[span[0]:span[1]] if span else text
+
+
+def _without_an_end(text: str) -> str:
+    """The same stub as an echolot before 0.4.1 wrote it: no end marker."""
+    return text.replace("\n" + END_MARKER, "")
+
+
 def write_stub(project: Path, host: Host) -> tuple[str, Path]:
     """Put the pointer in place. Returns (what happened, path).
 
-    A shared file — AGENTS.md, copilot-instructions.md — may already be the
-    project's own. It is never rewritten: the marker says whether our section
-    is in there, and when it is not the caller is told what to add rather than
-    having its file edited underneath it.
+    Only our section is written, never the file. `AGENTS.md`,
+    `GEMINI.md` and `copilot-instructions.md` are where a project keeps its
+    own instructions for its own agents, and `init` is meant to be run again —
+    it says so, and it is the one command a person has to know.
+
+    It used to write the whole file whenever the marker was there and the
+    content differed. That guarded exactly one case: a file our section had
+    never been in. The ordinary sequence — `init` writes the section, the team
+    writes its own rules underneath, `init` runs again — deleted the rules,
+    reported `updated`, and named nothing.
+
+    So the marked span is replaced in place and everything around it is left
+    alone. A file written before the section had an end marker is migrated
+    when it is exactly what an earlier echolot wrote, and otherwise left as it
+    is: it has content we did not write and no boundary to tell where ours
+    stops, and guessing there is how the file was lost the first time.
     """
     dest = project / host.path
     text = host.render()
@@ -133,13 +178,22 @@ def write_stub(project: Path, host: Host) -> tuple[str, Path]:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
         return "written", dest
+
     current = dest.read_text(encoding="utf-8", errors="replace")
     if MARKER not in current:
         return "exists-without-ours", dest
-    if current.strip() == text.strip():
+
+    span = _ours(current)
+    if span is None:
+        if current.strip() != _without_an_end(text).strip():
+            return "ours-without-an-end", dest
+        updated = text
+    else:
+        updated = current[:span[0]] + _section(text) + current[span[1]:]
+
+    if updated == current:
         return "current", dest
-    # Ours, and out of date: the file is a pointer, not something to edit.
-    dest.write_text(text, encoding="utf-8")
+    dest.write_text(updated, encoding="utf-8")
     return "updated", dest
 
 
