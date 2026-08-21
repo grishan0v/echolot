@@ -33,18 +33,27 @@ from echolot import compare as compare_mod  # noqa: E402
 # --- building reports by hand ----------------------------------------------
 
 def row(location: str, value: float, *, metric: str = "self_ms",
-        values: list[float] | None = None, count: float = 1.0) -> dict:
+        values: list[float] | None = None, count: float = 1.0,
+        detail: str | None = None) -> dict:
     out: dict = {"location": location, "runs": "3/3", "count": count,
                  metric: value}
+    if detail is not None:
+        out["detail"] = detail
     if values:
         out["spread"] = {metric: {"min": min(values), "max": max(values),
                                   "values": values}}
     return out
 
 
-def det(det_id: str, rows: list[dict], params: dict | None = None) -> dict:
-    return {"id": det_id, "title": det_id, "why": "", "rows": rows,
-            "params": params or {}, "params_source": "default", "error": None}
+def det(det_id: str, rows: list[dict], params: dict | None = None,
+        identity: list[str] | None = None) -> dict:
+    """`identity` defaults to absent, which is what a report written before the
+    field existed carries, and what `report.identity_of` reads as `location`."""
+    out = {"id": det_id, "title": det_id, "why": "", "rows": rows,
+           "params": params or {}, "params_source": "default", "error": None}
+    if identity is not None:
+        out["identity"] = identity
+    return out
 
 
 def report(detectors: list[dict], *, window: dict | None = None,
@@ -171,6 +180,137 @@ def test_family_refuses_to_guess() -> None:
           str(changes(cmp)))
     check("nothing is matched by family",
           all(r["matched_by"] == "exact" for r in cmp["rows"]))
+
+
+# --- one location, several rows ---------------------------------------------
+#
+# Five of the ten shipped detectors declare a second column in `@identity`, so
+# a location carrying more than one row is ordinary. Paired on the name alone
+# they collapsed onto whichever came last and the leftovers paired with it —
+# which subtracts one phenomenon from another and prints the difference as a
+# finding.
+
+def starvation(rows: list[dict]) -> dict:
+    """`runnable_starvation` as it really is: one row per thread AND state."""
+    return report([det("runnable_starvation", rows,
+                       identity=["location", "detail"])])
+
+
+def test_rows_of_one_location_are_paired_by_identity() -> None:
+    """The bug: `state R` before subtracted from `state R+` after.
+
+    One thread, two states, both over the threshold. `R+` really did grow, and
+    `R` really did not move. Keyed on the thread name, both before-rows found
+    the same after-row and the report claimed two moves — one of them a 300 ms
+    regression assembled out of two unrelated numbers, while the real `R`
+    figure appeared nowhere at all.
+    """
+    before = starvation([
+        row("main", 100.0, metric="total_ms", detail="state R"),
+        row("main", 30.0, metric="total_ms", detail="state R+"),
+    ])
+    after = starvation([
+        row("main", 105.0, metric="total_ms", detail="state R"),
+        row("main", 400.0, metric="total_ms", detail="state R+"),
+    ])
+    cmp = compare(before, after)
+    by_detail = {r["detail"]: r for r in cmp["rows"]}
+
+    check("both rows survive as themselves", sorted(by_detail) ==
+          ["state R", "state R+"], str(sorted(by_detail)))
+    check("the state that grew is the one reported as grown",
+          by_detail["state R+"]["change"] == "grew",
+          str(by_detail["state R+"]))
+    check("and it grew by its own number, not by somebody else's",
+          by_detail["state R+"]["delta_ms"] == 370.0,
+          str(by_detail["state R+"]["delta_ms"]))
+    check("the state that held still is steady",
+          by_detail["state R"]["change"] == "steady", str(by_detail["state R"]))
+    check("so exactly one row moved", cmp["summary"]["moved"] == 1,
+          str(cmp["summary"]))
+    check("and nothing was invented or lost",
+          cmp["summary"]["appeared"] == 0 and cmp["summary"]["vanished"] == 0,
+          str(cmp["summary"]))
+
+
+def test_the_second_column_reaches_the_table() -> None:
+    """Pairing them right is half of it; printing them apart is the other half.
+
+    Two rows of one location render as the same row twice unless what tells
+    them apart is on the page. A reader cannot act on `main 100 → 105` sitting
+    above `main 30 → 400`.
+    """
+    before = starvation([
+        row("main", 100.0, metric="total_ms", detail="state R"),
+        row("main", 30.0, metric="total_ms", detail="state R+"),
+    ])
+    after = starvation([
+        row("main", 400.0, metric="total_ms", detail="state R"),
+        row("main", 500.0, metric="total_ms", detail="state R+"),
+    ])
+    text = compare_mod.to_markdown(compare(before, after))
+
+    check("the Evidence column is there", "Evidence" in text, text)
+    for state in ("state R", "state R+"):
+        check(f"and it names {state}", f"| {state} |" in text, text)
+
+
+def test_a_row_that_only_one_side_has_is_still_new() -> None:
+    """The pairing must not go the other way and match too much.
+
+    A thread that was only ever runnable and then starts being preempted
+    grows a second row. That row is new, and the one already there did not
+    become it.
+    """
+    before = starvation([row("main", 100.0, metric="total_ms", detail="state R")])
+    after = starvation([
+        row("main", 100.0, metric="total_ms", detail="state R"),
+        row("main", 250.0, metric="total_ms", detail="state R+"),
+    ])
+    cmp = compare(before, after)
+    by_detail = {r["detail"]: r["change"] for r in cmp["rows"]}
+
+    check("the new state is new", by_detail.get("state R+") == "appeared",
+          str(by_detail))
+    check("the old one is untouched", by_detail.get("state R") == "steady",
+          str(by_detail))
+
+
+def test_a_report_without_identity_is_matched_on_the_name_alone() -> None:
+    """A report written before the field existed says `location`, and means it.
+
+    Such a report genuinely cannot tell two of its own rows apart, and reading
+    a distinction into it that it never recorded would be inventing one.
+    """
+    before = report([det("d", [row("A", 100.0, metric="total_ms",
+                                   detail="was one thing")])])
+    after = report([det("d", [row("A", 300.0, metric="total_ms",
+                                  detail="now says another")])])
+    cmp = compare(before, after)
+
+    check("one row, paired on the name", len(cmp["rows"]) == 1,
+          str(cmp["rows"]))
+    check("it moved", cmp["rows"][0]["change"] == "grew", str(cmp["rows"][0]))
+    check("and the evidence that varies is not printed as a difference",
+          "detail" not in cmp["rows"][0], str(cmp["rows"][0]))
+
+
+def test_only_what_both_reports_declare_is_matched_on() -> None:
+    """One side upgraded, the other not: match on what they share.
+
+    The older report has no second column to match on, so the newer one's is
+    not used either — otherwise every row of the pair would read as one gone
+    and one new for no reason but the version that wrote it.
+    """
+    before = report([det("d", [row("A", 100.0, metric="total_ms",
+                                   detail="x")])])
+    after = report([det("d", [row("A", 300.0, metric="total_ms", detail="y")],
+                        identity=["location", "detail"])])
+    cmp = compare(before, after)
+
+    check("still one row", len(cmp["rows"]) == 1, str(cmp["rows"]))
+    check("and it is a move, not a swap",
+          cmp["rows"][0]["change"] == "grew", str(cmp["rows"][0]))
 
 
 # --- did the repeats move, or only the median -------------------------------
