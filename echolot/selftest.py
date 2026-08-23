@@ -2230,6 +2230,39 @@ def _(report):
     assert not missing, f"SKILL.md has no branch for: {missing}"
 
 
+@check(".claude/ layer: the hunt says to wait for the agent it hands the work to")
+def _(report):
+    """A backgrounded hunt is a hunt whose answer nobody reads.
+
+    The host's own default is to run a subagent in the background and notify
+    the caller later. `perf-hunter`'s conclusion is the entire output of the
+    command, so there is nothing to do while it runs — and whether a later
+    turn arrives at all is not this command's to decide. Under `claude -p` it
+    does not: the turn ends with a promise, the process exits, and the agent's
+    answer goes nowhere.
+
+    Seen once in six recorded runs of this command, which is the shape that
+    makes it worth a check rather than a comment. Five times out of six the
+    model read the intent correctly from prose that never stated it; the sixth
+    did the whole hunt and printed "I will come back with its output".
+
+    The guide carries the same warning for hosts with no such flag to pass.
+    """
+    from .layer import CLAUDE_DIR, GUIDE_DIR
+
+    hunt = (CLAUDE_DIR / "commands" / "echolot-hunt.md").read_text(encoding="utf-8")
+    assert "run_in_background: false" in hunt, (
+        "echolot-hunt.md hands the loop to a subagent without saying to wait "
+        "for it — backgrounded, its conclusion reaches nobody")
+    assert "wait for it" in hunt, \
+        "the instruction is there but nothing says what it is for"
+
+    overview = (GUIDE_DIR / "overview.md").read_text(encoding="utf-8")
+    assert "wait for it" in overview, (
+        "the guide tells other hosts to use a subagent and does not tell them "
+        "to wait for it")
+
+
 @check(".claude/ layer: the skill and the agent have frontmatter")
 def _(report):
     from .layer import CLAUDE_DIR

@@ -52,11 +52,22 @@ agent hunts everything that looks expensive and comes back with a guess.
 
 ## The run
 
-Hand the work to the `perf-hunter` subagent. This is not a formality: the loop
-generates a lot of mess — raw output, repository searches, instrumentation
-diffs, several iterations. In the main context that fills the window within two
-rounds, and then the very instability this whole thing exists to remove sets
-in.
+Hand the work to the `perf-hunter` subagent, and **wait for it** —
+`run_in_background: false`. Its conclusion is the whole output of this
+command; there is nothing useful to do while it runs.
+
+Say it here because the tool's own default is the other way. Backgrounded, the
+turn ends with a promise to come back, and whether a next turn ever arrives is
+not up to this command: under `claude -p` it does not, so the hunt runs, the
+agent finishes, and its answer goes nowhere. That happened once in six
+recorded runs of this very command — the agent did the work and the run
+printed "I will come back with its output" and stopped. `--max-turns` does not
+help; the turn was not cut short, it was finished.
+
+Handing it over at all is not a formality either: the loop generates a lot of
+mess — raw output, repository searches, instrumentation diffs, several
+iterations. In the main context that fills the window within two rounds, and
+then the very instability this whole thing exists to remove sets in.
 
 Pass the agent:
 
