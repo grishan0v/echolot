@@ -43,7 +43,7 @@ anyone piping into `head`; the full output is six kilobytes of "ok" that a
 second reader in the same session would pay for again.
 
 ```
-echolot 0.5.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
+echolot 0.5.1 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
 layer: STALE — 8 differs, 1 missing → `echolot init --force`
 self-check: 97 of 97 passed
 ```
