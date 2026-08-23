@@ -114,7 +114,10 @@ for adding `trace{}`, not the location of a bug.
 
 The loop generates a lot of raw output — reports, repository searches,
 instrumentation diffs, several rounds. If your host can run this in a separate
-context or a subagent, do that and return only the conclusion. If it cannot,
+context or a subagent, do that — and wait for it rather than ending your turn
+while it runs. Its conclusion is the whole answer, and a host that only hands
+it back on a later turn may not get one. Return the conclusion alone. If it
+cannot run a separate context,
 work in short passes and keep raw output out of the conversation: read
 `report.json`, quote the two or three rows that matter, and drop the rest. A
 window filled with raw output is where the instability this tool exists to
