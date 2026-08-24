@@ -40,7 +40,7 @@ Show that output to the human as it is, then act on the `next` line
 | `setup` | invoke the `echolot-setup` skill (the Skill tool) — it builds `echolot.yml` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |
 | `resume-or-new` | **ask before attaching to anything** — see below |
-| `hunt` | invoke the `echolot-hunt` skill — it asks what regressed and runs perf-hunter |
+| `hunt` | invoke the `echolot-hunt` skill (the Skill tool) — **never run the loop here**; it asks what regressed and hands the work to `perf-hunter`, waiting for its answer |
 
 ## `resume-or-new`: whose question are we answering
 

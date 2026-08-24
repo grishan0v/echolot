@@ -2230,6 +2230,46 @@ def _(report):
     assert not missing, f"SKILL.md has no branch for: {missing}"
 
 
+@check(".claude/ layer: the skill says the loop does not run in the main context")
+def _(report):
+    """The rule has to survive a reader who never takes the next hop.
+
+    `SKILL.md` routes on one word from `status --next`, and its `hunt` row
+    sends the reader to the `echolot-hunt` skill. Everything about how a hunt
+    is run — hand it to `perf-hunter`, wait for it — lives in that command,
+    one hop away. A reader who loads the skill, follows its references and
+    starts running `echolot` by hand never opens it, and there is nothing in
+    the row to stop them.
+
+    The failure is silent, and it is the one the whole design exists to
+    prevent: the loop generates raw output, repository searches and
+    instrumentation diffs, and in the main context that fills the window
+    within two rounds. No error, no exit code, no line in the run log — the
+    answers just get worse.
+
+    The row states the boundary and nothing else. The mechanism stays in the
+    command, because one knowledge file per client is how copies drift, and
+    the check below exists to keep a pointer from growing into a copy.
+    """
+    from .layer import CLAUDE_DIR
+
+    skill = (CLAUDE_DIR / "skills" / "echolot" / "SKILL.md").read_text(encoding="utf-8")
+    row = next((ln for ln in skill.splitlines()
+                if ln.startswith("| `hunt`")), None)
+    assert row is not None, "SKILL.md has no `hunt` row to route on"
+    assert "never run the loop here" in row, (
+        "the `hunt` row points at the command and does not say the loop stays "
+        "out of this context — a reader who never opens the command has "
+        "nothing telling them so")
+    assert "`echolot-hunt`" in row, \
+        "the row stopped naming the skill it routes to"
+    # And it stays a pointer: the mechanism belongs to the command.
+    assert "run_in_background" not in skill, (
+        "SKILL.md has grown a copy of the command's own instructions — that is "
+        "the drift `guide: a client pointer sends the agent to the guide` is "
+        "about, one file over")
+
+
 @check(".claude/ layer: the hunt says to wait for the agent it hands the work to")
 def _(report):
     """A backgrounded hunt is a hunt whose answer nobody reads.
