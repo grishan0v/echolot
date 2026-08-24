@@ -162,6 +162,11 @@ SLICES = {
     #   shared_helper  two callers, 5 ms against 80 ms — same name, different
     #                  work; identical work costs an identical amount, and
     #                  that sameness is the whole signal
+    #
+    # And one that must not stay silent: `AGENTTMP_insert_card` is
+    # `shared_helper`'s shape carrying the temporary prefix, which makes it
+    # the hunt's own marker sitting one level too deep. That is a near miss
+    # rather than a finding, and the report says so.
     TID_SEED: [
         ("call_a", 110, 16, [("util_fn", 111, 12, [])]),
         ("call_b", 130, 16, [("util_fn", 131, 12, [])]),
@@ -170,7 +175,27 @@ SLICES = {
         ("batch_loop", 200, 120, [
             ("insert_row", 200 + i * 11, 8, []) for i in range(10)
         ]),
+        # The near miss: a marker one level too deep. `AGENTTMP_insert_card`
+        # is a loop body reached from two callers, so it clears every gate
+        # except the spread — a loop's occurrences vary by what they are
+        # given. On a live hunt this was the duplicate seen from one level
+        # down: the agent bracketed the insert instead of the unit around it,
+        # and a detector built for that finding said nothing at all.
+        #
+        # `shared_helper` below is its control: two callers and a spread just
+        # as wide, without the prefix. Nobody can re-wrap a slice they did not
+        # plant, so that one stays silent and this one does not.
+        ("AGENTTMP_seed_first", 330, 60, [
+            ("AGENTTMP_insert_card", 331, 2, []),
+            ("AGENTTMP_insert_card", 334, 2, []),
+            ("AGENTTMP_insert_card", 337, 24, []),
+        ]),
         ("stage_first", 400, 200, [("insert_decks", 410, 90, [])]),
+        ("AGENTTMP_seed_again", 610, 60, [
+            ("AGENTTMP_insert_card", 611, 2, []),
+            ("AGENTTMP_insert_card", 614, 2, []),
+            ("AGENTTMP_insert_card", 617, 20, []),
+        ]),
         ("stage_again", 700, 200, [("insert_decks", 710, 95, [])]),
         ("stage_light", 920, 30, [("shared_helper", 922, 5, [])]),
         ("stage_heavy", 960, 90, [("shared_helper", 962, 80, [])]),
