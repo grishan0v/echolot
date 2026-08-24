@@ -547,23 +547,127 @@ def _(report):
     cfg = Config({**FIXTURE_CONFIG,
                   "detectors": {"main_thread_block": {"min_slice_ms": 40}}})
     plan = plan_detectors(cfg)
-    # the config lists one detector: only it runs, from the config
-    assert [d.id for d, _, _ in plan] == ["main_thread_block"], plan
-    d, over, src = plan[0]
-    assert src == "config" and over == {"min_slice_ms": 40} and d.params["min_slice_ms"] == 16
-    # --set on a detector the config leaves out brings it in, marked cli
+    # Naming one detector tunes that one. It does not switch off the rest —
+    # see `Config.disabled_detectors` for what that used to cost.
+    by_id = {d.id: (over, src) for d, over, src in plan}
+    assert len(by_id) == _shipped(), sorted(by_id)
+    assert by_id["main_thread_block"] == ({"min_slice_ms": 40}, "config"), by_id
+    assert by_id["gc_pressure"] == ({}, "default"), by_id
+    # --set on a detector the config says nothing about: marked cli
     plan = plan_detectors(cfg, cli_overrides={"gc_pressure": {"max_events": 1}})
     by_id = {d.id: (over, src) for d, over, src in plan}
-    assert set(by_id) == {"main_thread_block", "gc_pressure"}, set(by_id)
     assert by_id["gc_pressure"] == ({"max_events": 1}, "cli"), by_id
     # --set on top of the config: cli wins, both are named
     plan = plan_detectors(cfg, cli_overrides={"main_thread_block": {"min_slice_ms": 5}})
-    _, over, src = plan[0]
+    _, over, src = next((d, o, s) for d, o, s in plan if d.id == "main_thread_block")
     assert src == "config+cli" and over["min_slice_ms"] == 5, (over, src)
-    # --defaults: every detector, shipped numbers, the config's list ignored
+    # --defaults: every detector, shipped numbers, the config ignored
     plan = plan_detectors(cfg, use_defaults=True)
     assert len(plan) == _shipped(), plan
     assert all(src == "default" and not over for _, over, src in plan), plan
+
+
+@check("detectors: tuning some does not switch off the rest")
+def _(report):
+    """The config's `detectors:` section says thresholds, and only thresholds.
+
+    It used to say *which detectors run* as well, and the two are different
+    sentences. `calibrate` prints a ready section; a human pastes it and tidies
+    the entries that came back with nothing but comments — and detectors leave
+    the config that way, without anyone deciding.
+
+    That happened. On a real project the section listed six, four sat out, and
+    three reports in a row said so at the top while nobody acted on it. Being
+    told is not the same as having chosen, so choosing is now something you
+    write.
+    """
+    from .main import DETECTOR_DIR, plan_detectors
+    from .tp import load_detectors
+
+    shipped = _shipped()
+
+    # Six tuned, nothing turned off: everything still runs.
+    six = Config({**FIXTURE_CONFIG, "detectors": {
+        "binder_txn": {"min_txn_ms": 14.4},
+        "gc_pressure": {"max_events": 8},
+        "main_thread_block": {"min_slice_ms": 83.3},
+        "monitor_contention": {},
+        "runnable_starvation": {"min_runnable_ms": 80},
+        "uninstrumented_cpu": {"min_running_ms": 71.1},
+    }})
+    by_id = {d.id: (over, src) for d, over, src in plan_detectors(six)}
+    assert len(by_id) == shipped, (
+        f"a config tuning 6 detectors ran {len(by_id)} of {shipped} — the "
+        f"section is a set of thresholds, not an allowlist")
+    assert by_id["main_thread_block"] == ({"min_slice_ms": 83.3}, "config"), by_id
+    assert by_id["frame_jank"] == ({}, "default"), by_id
+    assert not six.disabled_detectors, six.disabled_detectors
+
+    # `false` is how you turn one off, and it is not a threshold.
+    off = Config({**FIXTURE_CONFIG, "detectors": {
+        "frame_jank": False,
+        "main_thread_block": {"min_slice_ms": 40},
+    }})
+    assert off.disabled_detectors == {"frame_jank"}, off.disabled_detectors
+    assert "frame_jank" not in off.detector_overrides, off.detector_overrides
+    ran = {d.id for d, _, _ in plan_detectors(off)}
+    assert "frame_jank" not in ran, "a detector written off still ran"
+    assert len(ran) == shipped - 1, sorted(ran)
+
+    # Asking for it by name outranks the config saying no.
+    ran = {d.id for d, _, _ in
+           plan_detectors(off, cli_overrides={"frame_jank": {"min_frames": 1}})}
+    assert "frame_jank" in ran, "--set could not bring back a disabled detector"
+
+    # `--defaults` ignores the whole section, the `false` included.
+    ran = {d.id for d, _, _ in plan_detectors(off, use_defaults=True)}
+    assert len(ran) == shipped and "frame_jank" in ran, sorted(ran)
+
+    # Everything off is a config error rather than an empty report.
+    everything = Config({**FIXTURE_CONFIG, "detectors": {
+        d.id: False for d in load_detectors(DETECTOR_DIR)}})
+    try:
+        plan_detectors(everything)
+    except ConfigError as e:
+        assert "turned off" in str(e), str(e)
+    else:
+        raise AssertionError("a config with every detector off produced a plan")
+
+
+@check("detectors: the report names what was turned off, as a decision")
+def _(report):
+    """`absent_ids` used to mean "the config did not mention these".
+
+    That warning was written for the silent-allowlist failure and printed
+    faithfully through all of it. Now the only way into that list is to have
+    written `false`, so the line says a decision rather than an oversight —
+    and on a config that turns nothing off, there is no line at all.
+    """
+    from .main import DETECTOR_DIR, plan_detectors
+    from .report import to_markdown
+    from .tp import load_detectors
+
+    def rendered(cfg):
+        plan = plan_detectors(cfg)
+        planned = {d.id for d, _, _ in plan}
+        absent = sorted(d.id for d in load_detectors(DETECTOR_DIR)
+                        if d.id not in planned)
+        return to_markdown({
+            "window": {"duration_ms": 10.0}, "trace": "t", "detectors": [],
+            "summary": {"detectors_run": len(plan), "detectors_fired": 0,
+                        "fired_ids": [], "absent_ids": absent},
+        }), absent
+
+    text, absent = rendered(Config({**FIXTURE_CONFIG, "detectors": {
+        "main_thread_block": {"min_slice_ms": 40}}}))
+    assert absent == [], f"tuning one detector reported {absent} as not run"
+    assert "turned off" not in text and "did not run" not in text, text
+
+    text, absent = rendered(Config({**FIXTURE_CONFIG,
+                                    "detectors": {"frame_jank": False}}))
+    assert absent == ["frame_jank"], absent
+    assert "turned off in this config" in text, text
+    assert "`frame_jank`" in text, text
 
 
 @check("thresholds: a value the parameter cannot mean is refused, not rendered")
@@ -617,7 +721,7 @@ def _(report):
     # and refusing that would break the feature this guards.
     cfg = Config({**FIXTURE_CONFIG,
                   "detectors": {"main_thread_block": {"min_slice_ms": 41.2}}})
-    _, over, _src = plan_detectors(cfg)[0]
+    over = next(o for d, o, _ in plan_detectors(cfg) if d.id == "main_thread_block")
     assert over == {"min_slice_ms": 41.2}, over
 
 

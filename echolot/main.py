@@ -148,6 +148,26 @@ def _note_local(cfg: Config) -> None:
               file=sys.stderr)
 
 
+def _note_detectors(cfg: Config) -> None:
+    """How many detectors the config actually has an opinion about.
+
+    The section used to double as an allowlist, so a config naming six of ten
+    ran six. It no longer does, and that is a change in what an existing
+    config means — said out loud rather than discovered in a report that grew
+    sections nobody configured. It also answers the question the change
+    raises: how do I turn one off now.
+    """
+    tuned = set(cfg.detector_overrides)
+    shipped = {d.id for d in load_detectors(DETECTOR_DIR)}
+    off = cfg.disabled_detectors
+    rest = shipped - tuned - off
+    if tuned and rest:
+        print(f"[i] the config tunes {len(tuned)} of {len(shipped)} detectors; "
+              f"the other {len(rest)} run on their shipped thresholds. "
+              f"To turn one off: `<detector>: false` under `detectors:`.",
+              file=sys.stderr)
+
+
 def _out_dir(out: str, cfg: Config) -> Path:
     """A relative -o is taken from the config's directory, not from cwd.
 
@@ -244,14 +264,12 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
     detectors = load_detectors(DETECTOR_DIR)
     cli_overrides = cli_overrides or {}
     cfg_overrides = {} if use_defaults else cfg.detector_overrides
-    enabled = None if use_defaults else cfg.enabled_detectors
-    if enabled is not None:
-        # A detector named on the command line is asked for explicitly, even
-        # when the config's list leaves it out.
-        enabled = set(enabled) | set(cli_overrides)
-        detectors = [d for d in detectors if d.id in enabled]
+    # Only what the config turned off, and only what it turned off on purpose.
+    # `--set` on a detector asks for it by name, which outranks a `false`.
+    off = (set() if use_defaults else cfg.disabled_detectors) - set(cli_overrides)
+    detectors = [d for d in detectors if d.id not in off]
     if not detectors:
-        raise ConfigError("no detectors selected")
+        raise ConfigError("every detector is turned off in this config")
     plan = []
     for d in detectors:
         from_cfg = dict(cfg_overrides.get(d.id) or {})
@@ -334,9 +352,11 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 entry["defaults"] = {k: d.params[k] for k in overrides if k in d.params}
             results.append(entry)
 
-    # Shipped, and not in the plan. `plan_detectors` narrows to what the
-    # config named, and until now the difference was invisible: the report
-    # said "3 of 6" on a project where eight were installed.
+    # Shipped, and deliberately not run. This used to be everything the
+    # config's `detectors:` section happened not to mention, which was the
+    # wrong sentence about the wrong thing — see `Config.disabled_detectors`.
+    # Now it is what somebody wrote `false` against, and the report says so
+    # as a decision rather than as an oversight.
     planned = {d.id for d, _, _ in plan}
     absent = [d.id for d in load_detectors(DETECTOR_DIR) if d.id not in planned]
 
@@ -350,6 +370,8 @@ def cmd_analyze(args) -> int:
         cfg = Config.load(args.config, args.local)
         tp_binary = _tp_binary(args, cfg)
         _note_local(cfg)
+        if not args.defaults:
+            _note_detectors(cfg)
         cli_overrides = parse_set(args.set or [], load_detectors(DETECTOR_DIR))
         if args.defaults:
             print("[i] --defaults: the config's detectors section is ignored, "

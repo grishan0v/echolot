@@ -285,16 +285,20 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.append(
         f"Detectors fired: **{s['detectors_fired']} of {s['detectors_run']}**"
     )
-    # "3 of 6" reads as though six were all there is. A project config that
-    # names detectors enables only those, so a detector shipped later never
-    # runs there and nothing said so — a real report on a real project was
-    # missing two of eight, silently, months after they landed.
+    # "3 of 6" reads as though six were all there is, so a detector that did
+    # not run is named. It used to be named as an oversight — the config's
+    # `detectors:` section was an allowlist, and every detector it happened
+    # not to mention was off. This warning was written for that, and on a real
+    # project it printed at the top of three reports in a row while six of ten
+    # detectors sat out; being told is not the same as having chosen. Now the
+    # only way to be here is to have written `false`, so it says so.
     absent = s.get("absent_ids") or []
     if absent:
         out.append(
-            f"> ⚠️ {len(absent)} shipped detector(s) are not in this config and "
-            f"did not run: {', '.join(f'`{a}`' for a in absent)}. Add them to "
-            f"the `detectors` section, or run `--defaults` to see what they say."
+            f"> ⚠️ {len(absent)} detector(s) are turned off in this config and "
+            f"did not run: {', '.join(f'`{a}`' for a in absent)}. Remove the "
+            f"`false` to bring one back, or run `--defaults` to ignore the "
+            f"config's thresholds entirely."
         )
     line = _config_line(report)
     if line:
