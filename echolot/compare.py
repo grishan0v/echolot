@@ -74,9 +74,10 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
             })
 
         identity = _identity(db, da)
-        for rb, ra, how in _match(rows_b, rows_a, identity):
+        for rb, ra, how in _match(rows_b, rows_a, identity, temp_prefix):
             rows.append(
-                _row(det_id, identity, rb, ra, how, floor_ms, floor_ratio))
+                _row(det_id, identity, rb, ra, how, floor_ms, floor_ratio,
+                     temp_prefix))
 
     rows.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
 
@@ -307,13 +308,20 @@ def _key(row: dict, identity: tuple[str, ...]) -> tuple:
     return tuple(row.get(c) for c in identity)
 
 
-def _family_key(row: dict, identity: tuple[str, ...]) -> tuple:
-    return tuple(None if v is None else family(str(v))
+def _family_key(row: dict, identity: tuple[str, ...],
+                keep: str | None = None) -> tuple:
+    """`keep` is the instrumentation prefix — see `report.family`.
+
+    Two markers the hunt planted are two different things by construction;
+    folding `AGENTTMP_fill_v4` onto `AGENTTMP_fill_v6` would let one be
+    reported as the other having moved.
+    """
+    return tuple(None if v is None else family(str(v), keep=keep)
                  for v in _key(row, identity))
 
 
 def _match(before_rows: list[dict], after_rows: list[dict],
-           identity: tuple[str, ...]
+           identity: tuple[str, ...], keep: str | None = None
            ) -> list[tuple[dict | None, dict | None, str]]:
     """Pairs rows of one detector, exactly first and by name family second.
 
@@ -370,10 +378,10 @@ def _match(before_rows: list[dict], after_rows: list[dict],
 
     fam_before: dict[tuple, list[dict]] = {}
     for rb in left_before:
-        fam_before.setdefault(_family_key(rb, identity), []).append(rb)
+        fam_before.setdefault(_family_key(rb, identity, keep), []).append(rb)
     fam_after: dict[tuple, list[dict]] = {}
     for ra in left_after:
-        fam_after.setdefault(_family_key(ra, identity), []).append(ra)
+        fam_after.setdefault(_family_key(ra, identity, keep), []).append(ra)
 
     paired_b: set[int] = set()
     paired_a: set[int] = set()
@@ -395,11 +403,11 @@ def _match(before_rows: list[dict], after_rows: list[dict],
 
 def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
          ra: dict | None, how: str, floor_ms: float,
-         floor_ratio: float) -> dict[str, Any]:
+         floor_ratio: float, keep: str | None = None) -> dict[str, Any]:
     metric = metric_of(ra if ra is not None else rb)
     vb = (rb or {}).get(metric)
     va = (ra or {}).get(metric)
-    loc, detail = _name(rb if rb is not None else ra, identity, how)
+    loc, detail = _name(rb if rb is not None else ra, identity, how, keep)
 
     if rb is None:
         change, delta, ratio = APPEARED, va or 0.0, None
@@ -431,8 +439,8 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
     return row
 
 
-def _name(row: dict, identity: tuple[str, ...],
-          how: str) -> tuple[str, str | None]:
+def _name(row: dict, identity: tuple[str, ...], how: str,
+          keep: str | None = None) -> tuple[str, str | None]:
     """What to call this row: the location, and what tells it from its twins.
 
     `detail` is carried only where the detector named it in `@identity` —
@@ -447,8 +455,8 @@ def _name(row: dict, identity: tuple[str, ...],
     loc = str(row["location"])
     detail = row.get("detail") if "detail" in identity else None
     if how == "family":
-        loc = family(loc)
-        detail = None if detail is None else family(str(detail))
+        loc = family(loc, keep=keep)
+        detail = None if detail is None else family(str(detail), keep=keep)
     return loc, None if detail is None else str(detail)
 
 
