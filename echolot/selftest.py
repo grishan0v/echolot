@@ -1581,6 +1581,17 @@ def _mark_repo(root: Path, *, app="GloomApp", act="MainActivity", theme="AppThem
     (home / "Nav.kt").write_text(
         f"package {pkg}.feature.home\n\n@Composable\nfun {nav}(start: Boolean) {{\n"
         f"    NavHost(startDestination = \"home\") {{ }}\n}}\n", encoding="utf-8")
+    # --pools: one pool the JDK will name, and two shapes that must stay out.
+    # `setNameFormat` and `HandlerThread` both answer the question already —
+    # counting them found fifteen sites on a real project where four were real.
+    conc = root / "core/ui/src/main/kotlin"
+    (conc / "Pools.kt").write_text(
+        f"package {pkg}.core.ui\n\n"
+        "val io = Executors.newSingleThreadExecutor()\n"
+        "val named = Executors.newFixedThreadPool(\n"
+        "    2, ThreadFactoryBuilder().setNameFormat(\"sync-%d\").build())\n"
+        "val looper = HandlerThread(\"tracker\")\n", encoding="utf-8")
+
     db = root / "core/database/src/main/kotlin"
     db.mkdir(parents=True)
     (db / "Db.kt").write_text(
@@ -1697,6 +1708,57 @@ def _(report):
         a = "\n".join(mk.render(mk.plan(root, package="com.example.app")))
         b = "\n".join(mk.render(mk.plan(root, package="com.example.app")))
         assert a == b
+
+
+@check("mark --pools: the places the JDK will name, and the ones already named")
+def _(report):
+    """The third way in, and the only one that starts from the report.
+
+    A detector says a thread burned three seconds. The thread is called
+    `pool-7-thread-1`, and nothing in the repository is called that — the JDK
+    named it. Marking the work is the wrong first move: you do not know what
+    the work is, which is the complaint. Naming the pool is cheaper and does
+    not need to know — one edit at the place it is made covers everything that
+    will ever run on it, and every detector already groups by thread name.
+
+    Two shapes must stay out, and both were found on real projects: a factory
+    that already sets a name, and `HandlerThread`, which takes one as its
+    first argument. Counting those found fifteen sites on a codebase where
+    four were real.
+    """
+    from . import mark as mk
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root)
+        pl = mk.plan_pools(root)
+        found = {(p.file, p.line): p for p in pl.proposals}
+        assert len(found) == 1, _shape(pl)
+
+        p = next(iter(found.values()))
+        assert p.kind == "pool_name" and p.source == "jdk", p
+        assert "newSingleThreadExecutor" in p.what, p.what
+        # There is nothing to insert, and nothing may claim otherwise: the
+        # name has to be read off the call, and a guess from the surrounding
+        # code came out as `provideproductr` and `capacity` on real projects.
+        assert not p.applicable and p.marker == "(name it)", p
+        assert p.open_at is None and p.close_at is None, p
+
+        text = "\n".join(mk.render(pl))
+        assert "--apply" not in text, (
+            "the footer sends the reader to a flag with nothing to do here")
+        assert str(mk.COMM_MAX) in text, \
+            "the 15-character limit is not stated, and a longer name is unreadable"
+
+    # A tree with nothing to name says so, rather than printing an empty list.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "app/src/main/kotlin").mkdir(parents=True)
+        (root / "app/src/main/kotlin/A.kt").write_text(
+            "class A { fun go() = HandlerThread(\"named\") }\n", encoding="utf-8")
+        pl = mk.plan_pools(root)
+        assert not pl.proposals, _shape(pl)
+        assert any("already carries a name" in n for n in pl.notes), pl.notes
 
 
 @check("mark: --apply inserts tagged pairs, --remove restores the bytes")
