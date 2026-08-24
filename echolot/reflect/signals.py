@@ -325,8 +325,10 @@ def conclusion_shape(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         return Signal("conclusion_shape", "warn",
                       "the subagent's conclusion is missing fields",
                       "The return shape is Place / Evidence / Mechanism / Suggestion / "
-                      "Confidence / Cleanup. A missing field is a decision the human "
-                      "now has to make blind.",
+                      "Confidence / Also measured / Cleanup. A missing field is a "
+                      "decision the human now has to make blind — and a missing "
+                      "`Also measured` is every number the hunt took and did not "
+                      "pass on.",
                       rows)
     return Signal("conclusion_shape", "ok", "the conclusion came back in the agreed shape",
                   "; ".join(f"{h['type'] or h['id']}: confidence {h['confidence'] or '?'}"

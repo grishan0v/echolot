@@ -178,6 +178,24 @@ androidx.tracing.trace("AGENTTMP_collection_mapping") { … }
 The prefix makes cleanup deterministic: `grep -rl AGENTTMP_` and delete, rather
 than "remember what you added".
 
+**Name a marker after the work it wraps, never after where you put it.** Two
+markers around the same work must end up with the same name.
+
+```kotlin
+AGENTTMP_fill_decks        // the work — comparable wherever it is called from
+AGENTTMP_fill_decks_v6     // where you put it — comparable with nothing
+```
+
+This is not style. `repeated_work` finds the same named work entered from two
+different callers, and that is the whole shape of "this was already done".
+Named by call site, the two entries get two names and there is nothing to
+compare: a migration ladder redoing a rung came out as `AGENTTMP_fill_main`
+and `AGENTTMP_fill_decks_v6`, the duplicate sat in the report as two unrelated
+rows, and the detector built for it stayed silent.
+
+When you genuinely need to say where a call came from, put it in a second
+marker around the caller. Keep the work's own name the same in both places.
+
 **Cleanup is mandatory on success and on running out of rounds alike.** Before
 exiting, confirm that `grep -rn AGENTTMP_ <source_root>` is empty and say so in
 your report.
@@ -191,13 +209,28 @@ Keep it short. Do not retell the search: nobody will see it and it is not
 needed.
 
 ```
-Place:       <file:line or module>
-Evidence:    <detector, numbers from the report>
-Mechanism:   <why this costs that much time>
-Suggestion:  <what to do>
-Confidence:  high | medium | low — and why
-Cleanup:     temporary instrumentation removed | none was added
+Place:         <file:line or module>
+Evidence:      <detector, numbers from the report>
+Mechanism:     <why this costs that much time>
+Suggestion:    <what to do>
+Confidence:    high | medium | low — and why
+Also measured: <every marker you planted, one line and one number each>
+Cleanup:       temporary instrumentation removed | none was added
 ```
+
+**`Also measured` is not padding, and it is the one line here that is not
+about your conclusion.** Everything you bracketed, with its number, whether or
+not it turned out to be the answer — one line each, no prose, no argument for
+or against. You planted five to seven markers; five to seven lines.
+
+It is here because of what happened without it. An agent bracketed a
+migration ladder, measured `AGENTTMP_fill_decks_v6` at 252.7 ms — the exact
+redundant work the hunt was looking for — and returned a conclusion about
+something else. The number was on its screen and never reached the human. A
+finding you hold and do not pass on is a finding nobody has.
+
+"Keep it short" is about the search, not about the measurements. Six numbers
+are short. Retelling how you got them is not.
 
 If it did not come together within the rounds allowed, return the same shape
 with an honest low confidence and say which signal was missing. An interim
