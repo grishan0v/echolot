@@ -712,13 +712,20 @@ def cmd_names(args) -> int:
     THIS device names GC, locks and binder — and whether the detector masks
     land on those names.
     """
+    from .mark import DEFAULT_PREFIX
+
     overrides, tp_bin = {}, args.tp_binary
     process = args.process
+    # The markers this project plants. Their numbers were chosen to tell two
+    # things apart, so they are the one kind of name `family` must not fold —
+    # see there.
+    prefix = DEFAULT_PREFIX
     if args.config and Path(args.config).exists():
         try:
             cfg_names = Config.load(args.config, getattr(args, "local", None))
             overrides = cfg_names.detector_overrides
             tp_bin = _tp_binary(args, cfg_names)
+            prefix = str(cfg_names.get("instrumentation.temp_prefix") or prefix)
             # Without --process the fattest process wins, and on a real
             # device that is surfaceflinger, not the app. When the config is
             # right there, its process is the obvious default.
@@ -764,16 +771,7 @@ def cmd_names(args) -> int:
 
         covered, skipped = _name_coverage(tp, upid, _detector_masks(overrides))
 
-        families: dict[str, dict] = {}
-        for r in rows:
-            fam = families.setdefault(report_mod.family(r["name"]), {
-                "n": 0, "ns": 0, "threads": set(), "dets": set(), "skips": set(),
-            })
-            fam["n"] += r["n"]
-            fam["ns"] += r["total_ns"] or 0
-            fam["threads"].add(r["thread"])
-            fam["dets"].update(covered.get(r["name"], set()))
-            fam["skips"].update(skipped.get(r["name"], set()))
+        families = group_families(rows, covered, skipped, keep=prefix)
 
         print(
             "The 'mask' column covers only detectors that search by slice "
@@ -836,6 +834,25 @@ def cmd_names(args) -> int:
             ])
             _note_dropped(len(missed), args.top)
     return 0
+
+
+def group_families(rows, covered, skipped, keep: str | None = None) -> dict:
+    """Slice-name rows into families, with the planted markers left alone.
+
+    Pure, so the one rule that matters here can be pinned without a trace:
+    a name the agent wrote keeps its digits, and everything else folds.
+    """
+    families: dict[str, dict] = {}
+    for r in rows:
+        fam = families.setdefault(report_mod.family(r["name"], keep=keep), {
+            "n": 0, "ns": 0, "threads": set(), "dets": set(), "skips": set(),
+        })
+        fam["n"] += r["n"]
+        fam["ns"] += r["total_ns"] or 0
+        fam["threads"].add(r["thread"])
+        fam["dets"].update(covered.get(r["name"], set()))
+        fam["skips"].update(skipped.get(r["name"], set()))
+    return families
 
 
 def _note_dropped(total: int, shown: int) -> None:

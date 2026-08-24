@@ -937,6 +937,58 @@ def _(report):
     assert claude_code.involves_echolot(real)
 
 
+@check("names: a marker the agent placed comes back under the name it was given")
+def _(report):
+    """The tool folded away the distinction it had asked the agent to make.
+
+    `family` collapses digits so an inventory of a real trace does not run to
+    thousands of rows: `worker-2` and `worker-5` are one pool, a tid inside a
+    lock note is noise. Every number it folds is one the runtime chose.
+
+    A marker is the opposite case. The agent writes the digits itself, to tell
+    two things apart, and `mark` is the tool telling it to. On a real hunt an
+    agent bracketed the two rungs of a migration ladder as
+    `AGENTTMP_fill_v4` and `AGENTTMP_fill_v6` — and `names` handed back one
+    row, `AGENTTMP_fill_v# · N=2 · 1447 ms`. One stage that happens twice is
+    an ordinary thing to see. Two rungs where the second repeats the first is
+    the bug it was hunting, worth ~300 ms, and it went unreported in all three
+    runs of that experiment.
+
+    So the folding stops at the instrumentation prefix, and only there.
+    """
+    from .main import group_families
+    from .mark import DEFAULT_PREFIX
+    from .report import family
+
+    # What the runtime numbered still folds — that is what `family` is for.
+    assert family("DefaultDispatcher-worker-2") == \
+        family("DefaultDispatcher-worker-5"), "the pool stopped folding"
+    assert family("DefaultDispatcher-worker-2", keep=DEFAULT_PREFIX) == \
+        family("DefaultDispatcher-worker-5", keep=DEFAULT_PREFIX), \
+        "the prefix rule folded something it does not own"
+
+    # What the agent numbered does not.
+    a, b = DEFAULT_PREFIX + "fill_v4", DEFAULT_PREFIX + "fill_v6"
+    assert family(a) == family(b), "the fixture no longer reproduces the fold"
+    assert family(a, keep=DEFAULT_PREFIX) == a, family(a, keep=DEFAULT_PREFIX)
+    assert family(a, keep=DEFAULT_PREFIX) != family(b, keep=DEFAULT_PREFIX), \
+        "two markers the agent numbered apart still come back as one"
+
+    # And through the grouping `names` actually prints, which is where it bit.
+    rows = [
+        {"name": a, "thread": "main", "n": 1, "total_ns": 1_100_000_000},
+        {"name": b, "thread": "main", "n": 1, "total_ns": 347_000_000},
+        {"name": "DefaultDispatcher-worker-2", "thread": "w2", "n": 3, "total_ns": 5_000_000},
+        {"name": "DefaultDispatcher-worker-5", "thread": "w5", "n": 4, "total_ns": 6_000_000},
+    ]
+    folded = group_families(rows, {}, {}, keep=None)
+    kept = group_families(rows, {}, {}, keep=DEFAULT_PREFIX)
+    assert len(folded) == 2, sorted(folded)
+    assert sorted(kept) == [a, b, "DefaultDispatcher-worker-#"], sorted(kept)
+    assert kept[a]["ns"] == 1_100_000_000 and kept[b]["ns"] == 347_000_000, (
+        "the two rungs came back merged, which is the whole failure")
+
+
 @check("compare: a pipe does not shift either of its tables")
 def _(report):
     """`compare` printed the sixth hand-rolled markdown table.

@@ -53,14 +53,28 @@ _DIGITS = re.compile(r"\d+")
 _HEX = re.compile(r"0x[0-9a-fA-F]+")
 
 
-def family(name: str) -> str:
+def family(name: str, keep: str | None = None) -> str:
     """Collapses names that differ only by numbers.
 
     Used by `names` to keep an inventory of a real trace from running to
     thousands of rows, and by `compare` as the second matching pass: without
     it a thread pool that handed the work to another worker reads as one row
     vanishing and an unrelated one appearing.
+
+    `keep` is a prefix whose numbers are nobody's accident. Everything this
+    collapses — a tid inside a lock note, a frame number, worker-2 against
+    worker-5 — is a number the runtime chose, and two names differing only
+    there are one phenomenon. A marker the agent placed is the opposite case:
+    it wrote the digits itself, to tell two things apart.
+
+    That cost a real finding. An agent instrumenting a migration ladder wrote
+    `AGENTTMP_fill_v4` and `AGENTTMP_fill_v6` around the two rungs, and got
+    back one row — `AGENTTMP_fill_v# · N=2 · 1447 ms`. One stage that happens
+    twice looks ordinary; two rungs where the second repeats the first is the
+    bug it was hunting. The tool had both rows and merged them.
     """
+    if keep and name.startswith(keep):
+        return name
     return _DIGITS.sub("#", _HEX.sub("0x#", name))
 
 
