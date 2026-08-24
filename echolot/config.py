@@ -141,20 +141,45 @@ class Config:
             return str(name)
         return str(node)
 
-    @property
-    def detector_overrides(self) -> dict[str, dict[str, Any]]:
+    def _detectors(self) -> dict[str, Any]:
         node = self.get("detectors") or {}
         if not isinstance(node, dict):
             raise ConfigError("the detectors section must be a mapping")
-        return {k: (v or {}) for k, v in node.items()}
+        return node
 
     @property
-    def enabled_detectors(self) -> set[str] | None:
-        """None means every detector found is enabled."""
-        node = self.get("detectors")
-        if not node:
-            return None
-        return set(node.keys())
+    def detector_overrides(self) -> dict[str, dict[str, Any]]:
+        """Thresholds, per detector. `false` is not a threshold — see below."""
+        return {k: (v or {}) for k, v in self._detectors().items() if v is not False}
+
+    @property
+    def disabled_detectors(self) -> set[str]:
+        """The detectors this config turned off, and only those.
+
+        `detectors:` says what the thresholds are. It used to say *which
+        detectors run* as well, and the two are not the same sentence: writing
+        down a calibrated number for six detectors switched off the other
+        four, which nobody had decided.
+
+        That is how it went wrong on a real project. `calibrate` prints a
+        ready section, a human pastes it and tidies the entries that came back
+        with nothing but comments — and four detectors left the config that
+        way. Three runs in a row then measured six of ten. The report said so
+        at the top of every one of them, and being told is not the same as
+        having chosen.
+
+        So turning one off is now a thing you write:
+
+            detectors:
+              main_thread_block:
+                min_slice_ms: 83.3
+              frame_jank: false       # this device has no frame timeline
+
+        A section that names some detectors and not others means what it
+        looks like it means: those have tuned thresholds, the rest run on the
+        numbers they shipped with.
+        """
+        return {k for k, v in self._detectors().items() if v is False}
 
     @property
     def runner(self) -> dict[str, Any]:

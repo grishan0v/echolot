@@ -88,8 +88,22 @@ unsupported: wiping data changes the scenario rather than repeating it.
 
 ### `detectors`
 
-Listing keys means **enable only these**. To adjust one threshold without
-disabling the rest, list them all.
+Thresholds, per detector, and nothing else. Naming one leaves the rest
+running on the numbers they shipped with — you do not have to list them all
+to tune one.
+
+To turn a detector off, say so:
+
+```yaml
+detectors:
+  main_thread_block:
+    min_slice_ms: 26.6
+  frame_jank: false        # this device has no frame timeline
+```
+
+`false` is the only way out. Until 0.5.4 the section doubled as an allowlist,
+so a config naming six detectors ran six — and on a real project four sat out
+for weeks because a calibrated section had been tidied.
 
 The values override the `@param` defaults in the `.sql` files. Besides numbers
 they include name masks: `*name_glob*` over the slice name, `*thread_glob*`

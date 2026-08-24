@@ -79,6 +79,10 @@ runner:
 # versions: adapting to a device must not require editing a query. What is
 # actually in the trace, and which masks land on it, is shown by
 #   echolot names <trace> --process '...'
+# Thresholds, per detector. Naming one does not switch off the others: they
+# run on the numbers they shipped with, and the report says which is which.
+# To turn one off, write `<detector>: false` — that is the only way out, so
+# nothing leaves the run because a section was tidied.
 detectors:
   main_thread_block:
     min_slice_ms: 16
