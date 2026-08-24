@@ -312,6 +312,56 @@ def _(report):
     assert outlier["count"] == 1 and outlier["max_ms"] == 44.0, outlier
 
 
+@check("repeated_work: one name entered from two places, at the same price")
+def _(report):
+    """The planted duplicate, and what the row has to say to be worth a row.
+
+    `insert_decks` runs once under `stage_first` and once under
+    `stage_again`, 90 ms and 95 ms. Every other detector reads that as two
+    ordinary slices, and on the axis they all measure — how much — they are
+    right. What makes it a finding is that the work had already been done.
+    """
+    row = only_row(report, "repeated_work")
+    assert row["location"] == "insert_decks", row
+    assert row["count"] == 2, row
+    assert row["total_ms"] == 185.0, row
+    # Which two places is the reader's next question, so the row answers it
+    # rather than sending them back to the trace.
+    assert "stage_first" in row["detail"] and "stage_again" in row["detail"], row
+    assert "SeedWorker" in row["detail"], row
+
+
+@check("repeated_work: a loop, a shared helper and unequal work are not repeats")
+def _(report):
+    """The three shapes that share one feature with a duplicate.
+
+    Each is planted for one gate, and between them they are why this is a
+    detector rather than "the count column, read carefully":
+
+      `insert_row`      ten times under one caller. Repetition is the normal
+                        state of a trace; a loop is repetition by design.
+      `util_fn`         four callers, 12 ms each. A helper reached from
+                        everywhere is a shared utility, and this is the gate
+                        the detector's own header calls its softest.
+      `shared_helper`   two callers, 5 ms against 80 ms. The same name over
+                        different work — and identical work costs an
+                        identical amount, which is the whole signal.
+
+    All three clear the size floor. If any of them ever appears here, the
+    detector has become a count of names.
+    """
+    found = {r["location"] for r in rows(report, "repeated_work")}
+    for quiet in ("insert_row", "util_fn", "shared_helper"):
+        assert quiet not in found, (
+            f"{quiet} was reported as repeated work; it is planted as a "
+            f"control and clears the floor on purpose")
+    # And the thread carrying all of this stays out of the blind-spot answer:
+    # its Running time sits inside a depth-0 slice, so it is fully covered.
+    assert not [r for r in rows(report, "uninstrumented_cpu")
+                if "SeedWorker" in str(r.get("location", ""))], \
+        "the thread planted for one detector turned up in another's answer"
+
+
 @check("runnable_starvation: 50 ms in state R")
 def _(report):
     row = only_row(report, "runnable_starvation")

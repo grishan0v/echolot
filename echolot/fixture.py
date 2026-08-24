@@ -50,6 +50,7 @@ TID_OKHTTP = 4203
 TID_INSTR = 4204
 TID_BLOCKED = 4205
 TID_STUCK = 4206
+TID_SEED = 4207
 
 THREADS = {
     TID_MAIN: "m.example.app",  # Linux truncates comm to 15 characters
@@ -59,6 +60,7 @@ THREADS = {
     TID_INSTR: "WellInstrumented",
     TID_BLOCKED: "BlockingIO-1",
     TID_STUCK: "StuckForever",
+    TID_SEED: "SeedWorker",
 }
 
 # --- a foreign process: the process-isolation control ----------------------
@@ -143,6 +145,36 @@ SLICES = {
     # On its own thread rather than on main: the point is how the pipeline
     # reads an open slice, and a window-long block on the main thread would
     # rewrite half the other findings to prove it.
+    # --- work reached from two places, and three shapes that only look like it -
+    #
+    # The planted finding is `insert_decks`: the same named work entered once
+    # from `stage_first` and once from `stage_again`, costing about the same
+    # both times. That is what a migration ladder redoing a rung looks like in
+    # a trace — and every other detector reads it as two ordinary slices,
+    # because on the axis they all measure (how much) there is nothing wrong
+    # with it.
+    #
+    # The three controls are the shapes that share one feature with it and
+    # must stay silent, one per gate:
+    #
+    #   util_fn        four callers — a shared helper is not a repeat
+    #   insert_row     one caller, ten times — a loop is repetition by design
+    #   shared_helper  two callers, 5 ms against 80 ms — same name, different
+    #                  work; identical work costs an identical amount, and
+    #                  that sameness is the whole signal
+    TID_SEED: [
+        ("call_a", 110, 16, [("util_fn", 111, 12, [])]),
+        ("call_b", 130, 16, [("util_fn", 131, 12, [])]),
+        ("call_c", 150, 16, [("util_fn", 151, 12, [])]),
+        ("call_d", 170, 16, [("util_fn", 171, 12, [])]),
+        ("batch_loop", 200, 120, [
+            ("insert_row", 200 + i * 11, 8, []) for i in range(10)
+        ]),
+        ("stage_first", 400, 200, [("insert_decks", 410, 90, [])]),
+        ("stage_again", 700, 200, [("insert_decks", 710, 95, [])]),
+        ("stage_light", 920, 30, [("shared_helper", 922, 5, [])]),
+        ("stage_heavy", 960, 90, [("shared_helper", 962, 80, [])]),
+    ],
     TID_STUCK: [
         ("Lock contention on a monitor lock (owner tid: 4444)", 1045, None, []),
     ],
@@ -312,6 +344,13 @@ SCHED = [
     # on CPU only from 200..260. The later 100 ms of Running is outside slices.
     (6, TID_BLOCKED, 200, 260, S),
     (6, TID_BLOCKED, 600, 700, S),
+
+    # SeedWorker: 200 ms of Running sitting entirely inside `stage_first`,
+    # which is a depth-0 slice — so its coverage is complete and
+    # `uninstrumented_cpu` has nothing to say about it. The thread is here for
+    # `repeated_work`, and a thread planted for one detector must not turn up
+    # in another's answer.
+    (7, TID_SEED, 400, 600, S),
 
     # the foreign process
     (5, OTHER_PID, 200, 700, S),
