@@ -7,6 +7,7 @@
 -- @param: min_total_ms = 40
 -- @param: max_callers = 3
 -- @param: max_spread = 1.5
+-- @param: marker_prefix = AGENTTMP_
 -- @calibrate: min_total_ms = top5(total_ms) * 1.5
 -- @identity: location, detail
 --
@@ -58,6 +59,38 @@
 -- about how code is usually written rather than about the trace, so the
 -- fixture plants a four-caller helper to keep it honest.
 --
+-- ## The near miss, and why it only ever speaks about your own markers
+--
+-- A marker in the wrong place fails the spread gate rather than the caller
+-- gate, so the detector's silence is the same silence whether the trace is
+-- clean or the instrumentation is one level off. Three hunts on one app say
+-- which of those it usually is.
+--
+-- All three bracketed the call site of the repeat instead of the work it
+-- reached, and got one occurrence where the shape needs two. The third went
+-- one level deeper still and wrapped the insert inside the loop, and
+-- `AGENTTMP_insert_monster` came back under exactly two callers — 67
+-- occurrences, 325.9 ms of them, every gate cleared but one. The occurrences
+-- ran from 1.8 to 104.1 ms, a spread of 57.9, and nothing was said. One
+-- marker moved inside the shared function instead would have priced the two
+-- entries at 274 and 257 ms — medians over that round's five traces, a ratio
+-- of 1.07, and a row.
+--
+-- So a group that clears every gate but the spread is reported too, and its
+-- `detail` says which of the two it is. The row is not a finding — it is the
+-- report saying that a name planted by this hunt is entered from two places
+-- and its occurrences do not look alike, which is what a marker around a loop
+-- looks like from here.
+--
+-- Only names carrying the temporary prefix, and that restriction is what
+-- makes it a hint rather than noise. A platform slice with two callers and a
+-- wide spread is `Compose:recompose` or a Skia flush, and re-wrapping it is
+-- not an option anyone has; on the trace above the prefix is the difference
+-- between one row and three. It also keeps `calibrate` out of it: thresholds
+-- are measured on healthy runs, and a healthy run is one nobody has
+-- instrumented yet, so nothing here reaches the distribution `min_total_ms`
+-- is derived from.
+--
 -- ## What it cannot tell you
 --
 -- That the work was redundant. Two locales inserting the same number of rows
@@ -75,9 +108,23 @@ SELECT
     COUNT(*)                                                 AS count,
     ROUND(SUM(MAX(s.dur, 0)) / 1e6, 2)                       AS total_ms,
     ROUND(MAX(MAX(s.dur, 0)) / 1e6, 2)                       AS max_ms,
-    'entered from ' || COUNT(DISTINCT COALESCE(p.name, '(top level)'))
+    -- Two sentences, and which one a row gets is the spread gate. No number
+    -- from the trace goes into either: `detail` is half of `@identity`, so a
+    -- ratio that lands at 57.9 in one repeat and 61.2 in the next would make
+    -- one row into five, each of them seen once. The size of the thing is in
+    -- the columns, where merging repeats knows what to do with it.
+    CASE WHEN (MAX(MAX(s.dur, 0)) * 1.0) / MIN(MAX(s.dur, 0))
+              <= {{max_spread}}
+    THEN 'entered from ' || COUNT(DISTINCT COALESCE(p.name, '(top level)'))
         || ': ' || GROUP_CONCAT(DISTINCT COALESCE(p.name, '(top level)'))
-        || ' — on ' || s.thread_name                         AS detail
+        || ' — on ' || s.thread_name
+    ELSE 'near miss: entered from '
+        || COUNT(DISTINCT COALESCE(p.name, '(top level)'))
+        || ': ' || GROUP_CONCAT(DISTINCT COALESCE(p.name, '(top level)'))
+        || ' — on ' || s.thread_name
+        || '; occurrences too unlike to be one work. A marker inside a loop '
+        || 'reads like this — wrap the unit instead.'
+    END                                                      AS detail
 -- `_slice_win` carries no parent, and the parent is what makes this a claim
 -- about work rather than about a name: the same helper called from two places
 -- is the finding, and the same helper called twice from one place is a loop.
@@ -91,6 +138,10 @@ HAVING COUNT(DISTINCT COALESCE(p.name, '(top level)')) >= 2
    -- A slice still open when the trace stopped reads as zero here; dividing
    -- by it would be a ratio about nothing.
    AND MIN(MAX(s.dur, 0)) > 0
-   AND (MAX(MAX(s.dur, 0)) * 1.0) / MIN(MAX(s.dur, 0)) <= {{max_spread}}
+   -- Equal cost, or a name this hunt planted itself — see "The near miss".
+   -- `substr` rather than LIKE: `_` is a wildcard there, and every prefix
+   -- anyone uses ends in one.
+   AND ((MAX(MAX(s.dur, 0)) * 1.0) / MIN(MAX(s.dur, 0)) <= {{max_spread}}
+        OR SUBSTR(s.name, 1, LENGTH('{{marker_prefix}}')) = '{{marker_prefix}}')
 ORDER BY total_ms DESC
 LIMIT 20;

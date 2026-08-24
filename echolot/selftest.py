@@ -91,6 +91,20 @@ def only_row(report, detector_id):
     return got[0]
 
 
+def one_row(report, detector_id, location):
+    """The single row for one location, where the detector has several.
+
+    `only_row` says "this detector found exactly this"; a detector the fixture
+    plants more than one row for needs the row named, and still needs to be
+    told off for producing two of it.
+    """
+    got = [r for r in rows(report, detector_id) if r["location"] == location]
+    assert len(got) == 1, (
+        f"expected one {location!r} row from {detector_id}, got {len(got)}: "
+        f"{rows(report, detector_id)}")
+    return got[0]
+
+
 def no_slice_named(report, needle):
     """No detector may show this slice."""
     for d in report["detectors"]:
@@ -321,14 +335,48 @@ def _(report):
     ordinary slices, and on the axis they all measure — how much — they are
     right. What makes it a finding is that the work had already been done.
     """
-    row = only_row(report, "repeated_work")
-    assert row["location"] == "insert_decks", row
+    row = one_row(report, "repeated_work", "insert_decks")
     assert row["count"] == 2, row
     assert row["total_ms"] == 185.0, row
     # Which two places is the reader's next question, so the row answers it
     # rather than sending them back to the trace.
     assert "stage_first" in row["detail"] and "stage_again" in row["detail"], row
     assert "SeedWorker" in row["detail"], row
+    assert not row["detail"].startswith("near miss"), (
+        "a row that cleared every gate is being reported as a near miss")
+
+
+@check("repeated_work: a marker one level too deep comes back as a near miss")
+def _(report):
+    """The silence that means "you are one edit away", said out loud.
+
+    `AGENTTMP_insert_card` is a loop body entered from two callers: two
+    callers, 52 ms, and occurrences from 2 ms to 24 ms. Every gate but the
+    spread, which is exactly what a duplicate looks like when the marker is
+    around the insert rather than around the unit that runs twice. Three
+    hunts on one app produced that shape and read the silence as a clean
+    trace.
+
+    It is a hint and not a finding, so the row says which it is — and it
+    exists only because the name carries the temporary prefix. `shared_helper`
+    is the same shape without one and stays out, because re-wrapping a slice
+    nobody planted is not advice anyone can take.
+    """
+    row = one_row(report, "repeated_work", "AGENTTMP_insert_card")
+    assert row["count"] == 6, row
+    assert row["total_ms"] == 52.0, row
+    assert row["detail"].startswith("near miss"), row
+    assert "AGENTTMP_seed_first" in row["detail"], row
+    assert "AGENTTMP_seed_again" in row["detail"], row
+    # The advice is the point of the row: without it this is a row saying a
+    # name occurred twice, which the count column has always said.
+    assert "wrap the unit instead" in row["detail"], row
+    # No trace number in `detail`, which is half of @identity: a ratio that
+    # lands differently in each repeat would split one row into five.
+    import re
+    assert not re.search(r"\d+\.\d", row["detail"]), (
+        "a run-varying number in `detail` will not survive merging repeats: "
+        + row["detail"])
 
 
 @check("repeated_work: a loop, a shared helper and unequal work are not repeats")
@@ -349,6 +397,12 @@ def _(report):
 
     All three clear the size floor. If any of them ever appears here, the
     detector has become a count of names.
+
+    `shared_helper` carries a second job since the near miss went in. It is
+    that row's shape exactly — two callers, a spread far past the gate, over
+    the floor — minus the temporary prefix. So it is what keeps the near miss
+    from being a general licence to report wide-spread names: silent here,
+    reported there, and the prefix is the only difference between them.
     """
     found = {r["location"] for r in rows(report, "repeated_work")}
     for quiet in ("insert_row", "util_fn", "shared_helper"):
