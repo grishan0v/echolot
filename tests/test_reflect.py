@@ -197,6 +197,7 @@ def build(root: Path, project: Path) -> Path:
              f"<task-notification>\n<task-id>{AGENT}</task-id>\n<status>completed</status>\n"
              f"<result>Place: Foo.kt:12\nEvidence: main_thread_block 120 ms\n"
              f"Mechanism: sync IO\nSuggestion: move it\nConfidence: high\n"
+             f"Also measured: AGENTTMP_read 41 ms · AGENTTMP_parse 12 ms\n"
              f"Cleanup: removed</result>\n</task-notification>"))
     m.append(user_text(950, cwd, "thanks, implement the fix"))
     # two analyze calls in one Bash line against a config written on the
@@ -279,7 +280,8 @@ def build(root: Path, project: Path) -> Path:
     s.append(assistant(720, cwd, [{"type": "text", "text":
              "Place: Foo.kt:12\nEvidence: main_thread_block 120 ms\nMechanism: sync IO\n"
              + "the mechanism, at length: the file is read on the main thread\n" * 80
-             + "## Что чинить\nmove it\nConfidence: high\nCleanup: removed"}], output_tokens=400))
+             + "## Что чинить\nmove it\nConfidence: high\n"
+             + "Ещё измерено: AGENTTMP_read 41 ms\nCleanup: removed"}], output_tokens=400))
     (pdir / SESSION / "subagents" / f"agent-{AGENT}.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in s) + "\n", encoding="utf-8")
     return pdir

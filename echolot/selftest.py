@@ -2509,6 +2509,47 @@ def _(report):
         "to wait for it")
 
 
+@check(".claude/ layer: the hunter names work, and hands back what it measured")
+def _(report):
+    """Two rules the subagent had no way to know, and one hunt lost to each.
+
+    **Name after the work.** `repeated_work` finds the same named work entered
+    from two callers, which is the whole shape of "this was already done".
+    Named after the call site instead, a migration ladder redoing a rung came
+    back as `AGENTTMP_fill_main` and `AGENTTMP_fill_decks_v6` — two names, and
+    a detector built for exactly that finding with nothing to compare.
+
+    **Hand back every number.** The same agent measured
+    `AGENTTMP_fill_decks_v6` at 252.7 ms — the redundant work itself — and
+    returned a conclusion about something else. The return shape had six
+    fields, all of them about the one finding, and no room for a measurement
+    that turned out not to be it. `Also measured` is that room, and `reflect`
+    reads the field like the rest.
+    """
+    from .layer import CLAUDE_DIR
+    from .reflect.facts import _CONCLUSION_FIELDS
+
+    hunter = (CLAUDE_DIR / "agents" / "perf-hunter.md").read_text(encoding="utf-8")
+
+    assert "after the work it wraps" in hunter, (
+        "perf-hunter.md does not say to name a marker after the work — named "
+        "after the call site, two entries to one thing get two names and "
+        "`repeated_work` has nothing to compare")
+    assert "repeated_work" in hunter, \
+        "the rule is stated without the detector that depends on it"
+
+    assert "Also measured" in hunter, (
+        "the return shape has no room for a measurement that was not the "
+        "finding — which is how 252.7 ms of the answer stayed on one screen")
+    assert "also_measured" in _CONCLUSION_FIELDS, \
+        "reflect does not check the field the agent is asked to fill"
+    # And the field is recognised in both languages the others are.
+    import re
+    pattern = _CONCLUSION_FIELDS["also_measured"]
+    for said in ("Also measured: x 4 ms", "Ещё измерено: x 4 ms"):
+        assert re.search(pattern, said), said
+
+
 @check(".claude/ layer: the skill and the agent have frontmatter")
 def _(report):
     from .layer import CLAUDE_DIR

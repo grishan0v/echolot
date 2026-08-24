@@ -48,6 +48,12 @@ _CONCLUSION_FIELDS = {
     "mechanism": r"\bMechanism\b|Механизм",
     "suggestion": r"\bSuggestion\b|\bFix\b|Предложен|Что делать|Что чинить|Что исправ|Рекоменд",
     "confidence": r"\bConfidence\b|Уверенност",
+    # Everything the hunt bracketed, with its number, whether or not it was
+    # the answer. The one field that is not about the conclusion — and the
+    # reason it exists: an agent measured the redundant work it was hunting,
+    # at 252.7 ms, and returned a conclusion about something else. A finding
+    # held and not passed on is a finding nobody has.
+    "also_measured": r"Also measured|Ещё измер|Также измер",
     "cleanup": r"\bCleanup\b|Уборк|Очистк",
 }
 # The value after "Confidence:", up to the end of the phrase — markdown
