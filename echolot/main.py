@@ -1225,7 +1225,12 @@ def cmd_mark(args) -> int:
         recorder.note(removed_files=len(touched))
         return 0
 
-    if args.from_anr:
+    if getattr(args, "pools", False):
+        # The third way in, and the only one that starts from the report
+        # rather than from the code: a thread the JDK named, which nothing in
+        # the repository is called. See `mark.plan_pools`.
+        pl = mark_mod.plan_pools(root, allowed=allowed)
+    elif args.from_anr:
         # The targets come from a freeze that happened rather than from where
         # instrumentation usually belongs. Everything after this — rendering,
         # --apply, --remove — is the same code and the same tag.
@@ -1884,6 +1889,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="for project.package (which app module) and instrumentation.allowed")
     mk.add_argument("--local", help="path to local.yml (defaults to alongside)")
     mk.add_argument("--module", help="the app module when several declare a launcher, e.g. :app")
+    mk.add_argument("--pools", action="store_true",
+                    help="instead of markers: where a thread or pool is created "
+                         "with the JDK's default naming, so the report says "
+                         "`pool-7-thread-1` where a name would do")
     mk.add_argument("--from-anr", metavar="REPORT",
                     help="take the targets from an ANR report's frames instead "
                          "of the manifest — what was on the stack when it froze")

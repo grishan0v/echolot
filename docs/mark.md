@@ -121,6 +121,51 @@ around them:
 
 See [ANRs](anr.md) for the rest of that path.
 
+## `--pools`: naming the threads instead of marking the work
+
+The other two ways in start from a place in the code — the manifest, or a
+stack from a freeze. This one starts from the report:
+
+```
+uninstrumented_cpu   pool-7-thread-1   3184 ms   98% of CPU outside slices
+```
+
+Nothing in the repository is called `pool-7-thread-1`. The JDK named it, from
+the default factory that `Executors.new*` and a bare `Thread(` hand their
+threads to. Grepping for the name finds nothing, and that is where a hunt
+stalls.
+
+Marking the work is the wrong first move there — you do not know what the work
+is, which is the complaint. Naming the pool is cheaper and does not need to
+know: one edit where the pool is made covers everything that will ever run on
+it, and **every detector already groups by thread name**, so one round turns
+the whole report from `pool-7-thread-1` into `cart-queue`. Only then are
+markers worth placing, and by then you know where.
+
+```bash
+echolot mark --pools --root .
+```
+
+```
+· app/src/main/java/…/di/RepositoryModule.kt:355   (name it)  [jdk]  Executors.newSingleThreadExecutor
+· app/src/main/java/…/di/SchedulerModule.kt:24     (name it)  [jdk]  ThreadPoolExecutor
+```
+
+Nothing here is applicable, and the placeholder says so. The tool can find the
+site — `Executors.new*` is an exact string like `Room.databaseBuilder(` — and
+it cannot write the name: on two real projects a name taken from the
+surrounding code came out as `provideproductr`, `onauthenticatio` and
+`capacity`, because the enclosing symbol is a Dagger provider or a local
+variable while what the pool is *for* is in the call it is passed to.
+
+**At most 15 characters.** Linux truncates a thread's `comm` and the trace
+carries what is left — `pool-12-thread-` and `kin.gloommaster` are both cut in
+real traces. `cart-queue`, not `CartQueueProcessorExecutor`.
+
+A factory that already names its threads is not a finding, and neither is
+`HandlerThread`, which takes a name as its first argument. Counting those
+found fifteen sites on a codebase where four were real.
+
 ## The loop it fits into
 
 ```

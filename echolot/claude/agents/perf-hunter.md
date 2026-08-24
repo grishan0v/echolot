@@ -128,6 +128,10 @@ waiting for one.
    more than the medians moved — record another round before concluding.
 
 5. otherwise pick a blind spot (usually uninstrumented_cpu):
+   a thread the JDK named — pool-N-thread-M, Thread-N → `echolot mark --pools`
+     FIRST. Name the pool, re-record, and the row stops being anonymous. Do
+     not mark the work there: you do not know what it is yet, and that is the
+     complaint
    no instrumentation at all → echolot mark, then echolot mark --apply
    a named place → a few AGENTTMP_ markers around it, by hand
    copy the current traces aside, re-record, round += 1

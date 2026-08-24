@@ -19,6 +19,11 @@ project: it binds to the platform's vocabulary and never to the project's.
     call        the composables invoked directly inside `setContent { }`
                 — one hop, resolved by an exact `fun Name(` search, kept
                 only when the definition is in this project.
+    jdk         `--pools`: `Executors.new*`, `ThreadPoolExecutor(`, a bare
+                `Thread(` — the places that hand the JDK's default factory a
+                thread to name, so the report ends up saying
+                `pool-7-thread-1`. A different question from the rest, and
+                the only one that starts from the report; see `plan_pools`.
 
 Nothing here matches `*ViewModel`, `*Repository`, `*Screen` or any other
 convention. Every proposal carries its source, so a reader can see how firm
@@ -81,6 +86,30 @@ _SET_CONTENT_VIEW = re.compile(r"\bsetContentView\s*\(")
 _ROOM_BUILDER = re.compile(r"\bRoom\s*\.\s*(?:databaseBuilder|inMemoryDatabaseBuilder)\s*\(")
 _KOIN_START = re.compile(r"\bstartKoin\s*\{")
 _HILT_APP = re.compile(r"@HiltAndroidApp\b")
+# --- where anonymous threads are born -----------------------------------------
+#
+# The same rule as everything above: exact strings from somebody else's
+# library, here the JDK's. A pool made through `Executors` or a bare `Thread`
+# gets the default factory, and the default factory names its threads
+# `pool-3-thread-1` and `Thread-12`. Those names reach the trace, every
+# detector groups by them, and they say nothing.
+#
+# `HandlerThread(` is deliberately absent: it takes a name as its first
+# argument, so it is already answered. Leaving it in counted fifteen sites on
+# a real project where four were the real ones.
+_EXECUTORS = re.compile(r"\bExecutors\s*\.\s*new([A-Za-z]+)\s*\(")
+_POOL_CTOR = re.compile(r"\b(ThreadPoolExecutor|ScheduledThreadPoolExecutor|ForkJoinPool)\s*\(")
+_BARE_THREAD = re.compile(r"(?<![A-Za-z0-9_])Thread\s*\(")
+# Already named, and the reason each is not a finding.
+_NAMED_ALREADY = re.compile(
+    r"\bThreadFactoryBuilder\b|\bsetNameFormat\b|"
+    r"\bThread\.currentThread\(\)\s*\.\s*name\s*=|"
+    r"\bnewThread\s*\(")
+# Linux truncates a thread's `comm` to 15 characters, and the trace carries
+# what is left: `pool-12-thread-` and `kin.gloommaster` are both cut. A name
+# longer than this is a name you will not read back.
+COMM_MAX = 15
+
 _CLASS_DECL = re.compile(r"\b(?:class|object)\s+([A-Za-z_][A-Za-z0-9_]*)")
 _FUN_DECL = re.compile(r"\bfun\s+(?:<[^>]*>\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _RUNTIME_TRACING = re.compile(r"runtime[-.]tracing")
@@ -811,6 +840,110 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
     return out
 
 
+# --- naming the threads instead of marking the work ---------------------------
+#
+# A different question from everything above, and the one the other two cannot
+# answer. `plan` asks where instrumentation usually belongs; `plan_from_anr`
+# asks what was on the stack when it froze. Both start from a place in the
+# code. This one starts from the opposite end: the report says a thread burned
+# three seconds, the thread is called `pool-7-thread-1`, and nothing in the
+# repository is called that — because the JDK named it, not the project.
+#
+# Marking the work is the wrong first move there. You do not know what the
+# work is; that is the whole complaint. Naming the pool is cheaper and does
+# not need to know: one edit at the place the pool is made covers everything
+# that will ever run on it, and every detector already groups by thread name,
+# so one round turns the whole report from `pool-7-thread-1` into `cart-queue`.
+#
+# Only then are markers worth placing, and by then you know where.
+
+def _call_end(clean: str, open_paren: int, limit: int = 600) -> int:
+    """Index just past the `)` closing the call whose `(` is at `open_paren`.
+
+    Bounded: an unbalanced file must not drag the scan to the end of it.
+    """
+    depth = 0
+    for i in range(open_paren, min(len(clean), open_paren + limit)):
+        if clean[i] == "(":
+            depth += 1
+        elif clean[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return min(len(clean), open_paren + limit)
+
+
+def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
+    """Where a thread or pool is created with the JDK's default naming.
+
+    Nothing here is applicable. The tool can find the site — `Executors.new*`
+    is an exact string like `Room.databaseBuilder` — and it cannot write the
+    name. A name derived from the surrounding code came out as
+    `provideproductr`, `onauthenticatio` and `capacity` on two real projects:
+    the enclosing symbol is a Dagger provider or a local variable, and what
+    the pool is *for* is in the call it is passed to. That is a sentence to
+    read, not a pattern to match.
+    """
+    root = root.resolve()
+    allowed = list(allowed or [])
+    out = Plan(root=str(root), module=None, package=None)
+
+    for path in source_files(root):
+        rel = _rel(path, root)
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        clean = strip_noise(text)
+        for rx, name_of in ((_EXECUTORS, lambda m: f"Executors.new{m.group(1)}"),
+                            (_POOL_CTOR, lambda m: m.group(1)),
+                            (_BARE_THREAD, lambda m: "Thread")):
+          for m in rx.finditer(clean):
+            # The argument list, not the line. A naming factory is routinely
+            # passed on a continuation line — `newFixedThreadPool(\n  2,
+            # ThreadFactoryBuilder()…)` — and a per-line check called that an
+            # unnamed pool.
+            end = _call_end(clean, m.end() - 1)
+            if _NAMED_ALREADY.search(clean[m.start():end]):
+                continue
+            what = name_of(m)
+            line_no = clean.count("\n", 0, m.start()) + 1
+            kind = "thread_name" if what == "Thread" else "pool_name"
+            born = "Thread-N" if kind == "thread_name" else "pool-N-thread-M"
+            p = Proposal(
+                kind, rel, line_no,
+                f"{what} — its threads reach the trace as `{born}`, and the "
+                f"report groups by that",
+                # There is no marker to write here, and guessing a name is
+                # what this refuses to do.
+                "(name it)", "jdk", gradle_module(path, root),
+                applicable=False, reason="")
+            if not under_allowed(rel, allowed):
+                p.reason = ("outside instrumentation.allowed; "
+                            + p.reason)
+            out.proposals.append(p)
+
+    out.proposals.sort(key=lambda p: (p.file, p.line))
+    if not out.proposals:
+        out.notes.append(
+            "no thread or pool is created with the JDK's default naming under "
+            "this root — every thread in the trace already carries a name "
+            "somebody chose, so a nameless one comes from a library or from "
+            "the platform")
+    else:
+        out.notes.append(
+            f"give each one a name of at most {COMM_MAX} characters — Linux "
+            f"truncates the rest, and the trace carries what is left")
+        out.notes.append(
+            "naming a pool is not instrumentation and leaves no `AGENTTMP_` "
+            "behind: it changes what the existing report calls a row. Mark the "
+            "work inside only after the rows have names")
+    if len(out.proposals) > CAP:
+        out.hidden = len(out.proposals) - CAP
+        out.proposals = out.proposals[:CAP]
+    return out
+
+
 # --- apply / remove ------------------------------------------------------------
 
 def _indent_of(text: str, offset: int) -> str:
@@ -933,8 +1066,13 @@ def render(pl: Plan) -> list[str]:
             out.append(f"  … and {pl.hidden} more (the cap is {CAP}; a skeleton, not a survey)")
         out.append("")
         n_apply = sum(1 for p in pl.proposals if p.applicable)
-        out.append(f"# + = `echolot mark --apply` puts a begin/end pair there ({n_apply}); "
-                   f"· = proposed, mark by hand")
+        if any(p.kind in ("pool_name", "thread_name") for p in pl.proposals):
+            # Nothing here is a begin/end pair, so naming `--apply` would send
+            # a reader to a flag with nothing to do.
+            out.append("# · = a place to name, by hand — there is no marker to insert")
+        else:
+            out.append(f"# + = `echolot mark --apply` puts a begin/end pair there ({n_apply}); "
+                       f"· = proposed, mark by hand")
     if pl.notes:
         out.append("")
         for n in pl.notes:
