@@ -379,6 +379,87 @@ def _(report):
         + row["detail"])
 
 
+@check("repeated_work: a marker reached from three places is a helper, not a near miss")
+def _(report):
+    """Two callers exactly, where a finding is allowed three.
+
+    `max_callers` is soft for a finding because the equal cost carries the
+    claim on its own. A near miss has no equal cost to lean on — it is the
+    caller count and nothing else — and three callers is a shared helper.
+    The first live trace to produce one said so: `AGENTTMP_json_parse` under
+    all three seeding stages, and "wrap the unit instead" is advice about a
+    unit that does not exist.
+
+    `AGENTTMP_parse_json` is that shape here: marked, over the floor, spread
+    far past the gate, and reached from three places instead of two.
+    """
+    found = {r["location"] for r in rows(report, "repeated_work")}
+    assert "AGENTTMP_parse_json" not in found, (
+        "a marker entered from three callers was reported as a near miss; it "
+        "is planted as a control and clears every other gate on purpose")
+
+
+@check("repeated_work: a name another detector speaks for is not its business")
+def _(report):
+    """The rows this detector produced the first two times it ever fired.
+
+    ART writes a contention as two nested slices, the outer one carrying how
+    many threads are queued behind the lock. So one wait arrives under a
+    different parent each time the queue is a different length: one name, two
+    callers, the same price both times — every gate held, and nothing was
+    entered from anywhere twice. The same shape came back from garbage
+    collection on the first app nobody had tuned for, which is why the fix is
+    a rule and not a list: this detector works the names no `*name_glob*`
+    claims.
+
+    The fixture plants the wait whole — `Lock contention on a monitor lock
+    (owner tid: 4455)` twice, 24 and 25 ms, under two `monitor contention
+    with owner …` parents differing only in `waiters=`. Both halves are
+    `monitor_contention`'s by its mask, so both are out of reach here.
+
+    The second half of the check is where the signal went. It must arrive
+    under the heading that reads it correctly rather than disappear, and of
+    the two headings this was never the right one.
+    """
+    for r in rows(report, "repeated_work"):
+        assert "contention" not in str(r["location"]), (
+            f"a lock wait came back as work done twice: {r}")
+        assert "contention" not in str(r["detail"]), (
+            f"a lock wait came back as a place work is called from: {r}")
+    waiter = one_row(report, "monitor_contention", "LockWaiter")
+    assert waiter["count"] == 4 and waiter["total_ms"] == 102.0, (
+        "the planted wait must still be reported by the detector that owns "
+        f"it, or the fixture proves nothing: {waiter}")
+
+
+@check("repeated_work: the boundary moves when a mask does")
+def _(report):
+    """The rule is only a rule if it follows the masks rather than copies them.
+
+    `_claimed_name` is built from what the detectors declare, the project's
+    overrides included. Narrow `monitor_contention` to something that matches
+    nothing and the wait stops being its business — at which point it becomes
+    this detector's, and the row the fixture plants comes straight back.
+
+    That is the control the whole rule rests on. Silence proves nothing on its
+    own: a detector that had simply stopped working would be just as quiet,
+    and so would one carrying a hand-written copy of somebody else's glob.
+    Costs a second session over the fixture, which is what it takes to run the
+    pipeline with one mask moved.
+    """
+    from .main import analyze_trace
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        freed = analyze_trace(trace, Config(FIXTURE_CONFIG), cli_overrides={
+            "monitor_contention": {"name_glob": "no-such-name*",
+                                   "name_glob_alt": "no-such-name*"}})
+    names = {r["location"] for r in rows(freed, "repeated_work")}
+    assert "Lock contention on a monitor lock (owner tid: 4455)" in names, (
+        "with no mask claiming the wait, `repeated_work` should see it again "
+        f"— the exclusion is not following the masks: {sorted(names)}")
+
+
 @check("repeated_work: a loop, a shared helper and unequal work are not repeats")
 def _(report):
     """The three shapes that share one feature with a duplicate.

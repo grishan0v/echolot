@@ -51,6 +51,7 @@ TID_INSTR = 4204
 TID_BLOCKED = 4205
 TID_STUCK = 4206
 TID_SEED = 4207
+TID_LOCKED = 4208
 
 THREADS = {
     TID_MAIN: "m.example.app",  # Linux truncates comm to 15 characters
@@ -61,6 +62,7 @@ THREADS = {
     TID_BLOCKED: "BlockingIO-1",
     TID_STUCK: "StuckForever",
     TID_SEED: "SeedWorker",
+    TID_LOCKED: "LockWaiter",
 }
 
 # --- a foreign process: the process-isolation control ----------------------
@@ -185,23 +187,55 @@ SLICES = {
         # `shared_helper` below is its control: two callers and a spread just
         # as wide, without the prefix. Nobody can re-wrap a slice they did not
         # plant, so that one stays silent and this one does not.
+        # `AGENTTMP_parse_json` rides along in three of these as the near
+        # miss's own control: the same shape from three callers instead of
+        # two, which is a helper doing its job rather than a unit somebody
+        # ran twice. A finding is allowed three callers because equal cost
+        # carries the claim; a near miss has no equal cost to lean on.
         ("AGENTTMP_seed_first", 330, 60, [
             ("AGENTTMP_insert_card", 331, 2, []),
             ("AGENTTMP_insert_card", 334, 2, []),
             ("AGENTTMP_insert_card", 337, 24, []),
+            ("AGENTTMP_parse_json", 362, 24, []),
         ]),
         ("stage_first", 400, 200, [("insert_decks", 410, 90, [])]),
         ("AGENTTMP_seed_again", 610, 60, [
             ("AGENTTMP_insert_card", 611, 2, []),
             ("AGENTTMP_insert_card", 614, 2, []),
             ("AGENTTMP_insert_card", 617, 20, []),
+            ("AGENTTMP_parse_json", 640, 3, []),
         ]),
         ("stage_again", 700, 200, [("insert_decks", 710, 95, [])]),
         ("stage_light", 920, 30, [("shared_helper", 922, 5, [])]),
         ("stage_heavy", 960, 90, [("shared_helper", 962, 80, [])]),
+        ("AGENTTMP_seed_third", 1052, 45, [
+            ("AGENTTMP_parse_json", 1054, 20, []),
+        ]),
     ],
     TID_STUCK: [
         ("Lock contention on a monitor lock (owner tid: 4444)", 1045, None, []),
+    ],
+    # ART writes a contention as two nested slices, and the outer one carries
+    # the number of threads queued behind the lock. So one wait comes back
+    # under a different parent every time the queue is a different length —
+    # one name, two callers, the same price both times, which is the shape
+    # `repeated_work` is built for and is not two callers at all. It cost that
+    # detector its first two rows on a live trace.
+    #
+    # The wait itself is real and belongs to `monitor_contention`, which is
+    # the point: a thread stopped working is not work done twice, and one
+    # signal must not arrive in the report under two headings.
+    TID_LOCKED: [
+        ("monitor contention with owner Thread-3 (4455) at void "
+         "com.example.Store.put(java.lang.String)(Store.java:41) waiters=0 "
+         "blocking from java.lang.Object com.example.Store.get()(:-1)", 300, 26, [
+             ("Lock contention on a monitor lock (owner tid: 4455)", 301, 24, []),
+         ]),
+        ("monitor contention with owner Thread-3 (4455) at void "
+         "com.example.Store.put(java.lang.String)(Store.java:41) waiters=1 "
+         "blocking from java.lang.Object com.example.Store.get()(:-1)", 400, 27, [
+             ("Lock contention on a monitor lock (owner tid: 4455)", 401, 25, []),
+         ]),
     ],
     TID_MAIN: [
         # BEFORE the window — main_thread_block must not see it
@@ -376,6 +410,11 @@ SCHED = [
     # `repeated_work`, and a thread planted for one detector must not turn up
     # in another's answer.
     (7, TID_SEED, 400, 600, S),
+
+    # LockWaiter: 10 ms on a CPU, enough to give the thread a place in the
+    # schedule and far too little to interest uninstrumented_cpu. It spends
+    # the scenario blocked, which is what its slices say.
+    (8, TID_LOCKED, 200, 210, S),
 
     # the foreign process
     (5, OTHER_PID, 200, 700, S),

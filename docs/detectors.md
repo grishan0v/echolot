@@ -41,6 +41,16 @@ project-specific belongs inside a detector.
 | `_slice_win` | slices **overlapping** the window |
 | `_tstate_win` | thread states **clipped** to the window |
 | `_cpu_in_slice` | time **on CPU inside** top-level slices |
+| `_claimed_name` | slice names a `*name_glob*` already speaks for |
+
+`_claimed_name` is the set's own vocabulary, collected from every shipped
+detector's masks with the project's overrides applied. It is there for
+`repeated_work`, the one detector with no mask of its own: it asks a question
+about shape, so it looks at every name there is, and `NOT IN (SELECT name FROM
+_claimed_name)` is how it stays off names that belong to another question.
+Twice it reported a finding that was already in the report under its own
+heading — an ART lock wait, then a GC phase — and this is the rule that
+replaced naming those families one at a time.
 
 Not everything worth detecting is a slice. `frame_jank` reads
 `actual_frame_timeline_slice` and `expected_frame_timeline_slice` directly —
