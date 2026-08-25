@@ -399,24 +399,27 @@ def _(report):
         "is planted as a control and clears every other gate on purpose")
 
 
-@check("repeated_work: a lock wait is not work, and its two spellings are not two callers")
+@check("repeated_work: a name another detector speaks for is not its business")
 def _(report):
-    """The two rows this detector produced the first time it ever fired.
+    """The rows this detector produced the first two times it ever fired.
 
     ART writes a contention as two nested slices, the outer one carrying how
     many threads are queued behind the lock. So one wait arrives under a
     different parent each time the queue is a different length: one name, two
     callers, the same price both times — every gate held, and nothing was
-    entered from anywhere twice.
+    entered from anywhere twice. The same shape came back from garbage
+    collection on the first app nobody had tuned for, which is why the fix is
+    a rule and not a list: this detector works the names no `*name_glob*`
+    claims.
 
-    The fixture plants it whole: `Lock contention on a monitor lock (owner
-    tid: 4455)` twice, 24 and 25 ms, under two `monitor contention with owner
-    …` parents that differ only in `waiters=`. Disable `skip_glob` and the
-    row comes straight back.
+    The fixture plants the wait whole — `Lock contention on a monitor lock
+    (owner tid: 4455)` twice, 24 and 25 ms, under two `monitor contention
+    with owner …` parents differing only in `waiters=`. Both halves are
+    `monitor_contention`'s by its mask, so both are out of reach here.
 
-    The wait is real, and the second half of the check is where it belongs.
-    A signal must not reach the report under two headings, and of the two
-    this is not the one that reads it correctly.
+    The second half of the check is where the signal went. It must arrive
+    under the heading that reads it correctly rather than disappear, and of
+    the two headings this was never the right one.
     """
     for r in rows(report, "repeated_work"):
         assert "contention" not in str(r["location"]), (
@@ -427,6 +430,34 @@ def _(report):
     assert waiter["count"] == 4 and waiter["total_ms"] == 102.0, (
         "the planted wait must still be reported by the detector that owns "
         f"it, or the fixture proves nothing: {waiter}")
+
+
+@check("repeated_work: the boundary moves when a mask does")
+def _(report):
+    """The rule is only a rule if it follows the masks rather than copies them.
+
+    `_claimed_name` is built from what the detectors declare, the project's
+    overrides included. Narrow `monitor_contention` to something that matches
+    nothing and the wait stops being its business — at which point it becomes
+    this detector's, and the row the fixture plants comes straight back.
+
+    That is the control the whole rule rests on. Silence proves nothing on its
+    own: a detector that had simply stopped working would be just as quiet,
+    and so would one carrying a hand-written copy of somebody else's glob.
+    Costs a second session over the fixture, which is what it takes to run the
+    pipeline with one mask moved.
+    """
+    from .main import analyze_trace
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        freed = analyze_trace(trace, Config(FIXTURE_CONFIG), cli_overrides={
+            "monitor_contention": {"name_glob": "no-such-name*",
+                                   "name_glob_alt": "no-such-name*"}})
+    names = {r["location"] for r in rows(freed, "repeated_work")}
+    assert "Lock contention on a monitor lock (owner tid: 4455)" in names, (
+        "with no mask claiming the wait, `repeated_work` should see it again "
+        f"— the exclusion is not following the masks: {sorted(names)}")
 
 
 @check("repeated_work: a loop, a shared helper and unequal work are not repeats")

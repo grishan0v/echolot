@@ -8,7 +8,6 @@
 -- @param: max_callers = 3
 -- @param: max_spread = 1.5
 -- @param: marker_prefix = AGENTTMP_
--- @param: skip_glob = *contention*
 -- @calibrate: min_total_ms = top5(total_ms) * 1.5
 -- @identity: location, detail
 --
@@ -60,10 +59,46 @@
 -- about how code is usually written rather than about the trace, so the
 -- fixture plants a four-caller helper to keep it honest.
 --
--- ## A lock wait is not work, and ART spells it twice
+-- ### Why neither of the two is calibrated, and what was done instead
 --
--- The first two rounds on which this detector fired at all returned three
--- rows of lock contention between them. One of them read like this:
+-- `min_total_ms` is a size, so it calibrates like every other size in the
+-- set. The other two are not sizes, and the machinery says so itself: a
+-- calibrated threshold is opened by setting it to zero, which works for a
+-- floor and shuts a ceiling completely. Both of these are ceilings with a
+-- floor of their own — the caller count cannot go below the 2 the gate above
+-- already demands, and a max/min ratio cannot go below 1 — so any statistic
+-- divided by a safety factor lands beneath the gate and closes it for good.
+-- That is the same reason `uninstrumented_cpu` leaves `max_covered_pct`
+-- alone.
+--
+-- Numbers picked by looking at one app are worth no more for being left
+-- alone, so they were measured against four more. One trace, five processes
+-- — `system_server`, `com.instagram.android`, `ru.dodopizza.app.beta`,
+-- surfaceflinger and the app itself — whole trace, shipped thresholds, 25
+-- groups clearing the floor with two callers or more.
+--
+--     callers   2 ×6   3 ×3   4   9  10  16  17  19  26  46  51 …  221  934
+--
+-- Three sits in the gap. Below it, candidates; above it, helpers reached from
+-- tens to hundreds of places, which is the claim `max_callers` was making all
+-- along, now on five codebases rather than one.
+--
+--     spread of the 9 groups that clear the caller gate
+--     12.2   57.9   64.4   181   365   408   932   1088   4793
+--
+-- Not one of them is near 1.5, and the closest is eight times past it. The
+-- duplicates this detector was built for measure 1.07 and 1.21. An order of
+-- magnitude separates the two populations, which is why the number does not
+-- need to move per project — and why calibrating it would have been machinery
+-- in search of a problem.
+--
+-- ## This detector works what the others left
+--
+-- Ten of the eleven detectors know what they are looking for and say so in a
+-- `*name_glob*` param. This one does not: it asks a question about shape, so
+-- it has to look at every name there is — which means it also looks at names
+-- that belong to somebody else. Twice that produced a row already in the
+-- report under its own heading.
 --
 --     Lock contention on a monitor lock (owner tid: 17403)   3 × 56.5 ms
 --       under  monitor contention with owner … waiters=0 …
@@ -71,24 +106,37 @@
 --       under  monitor contention with owner … waiters=2 …
 --
 -- Every gate held. One name, three callers, all costing about the same — the
--- shape this detector is built for, and it is not three callers at all. ART
--- writes a contention as two nested slices, the outer one carrying the number
--- of threads queued behind the lock, so the same wait comes back under a
--- different parent each time it happens with a different queue behind it.
--- Nothing was entered from anywhere twice.
+-- shape this is built for, and not three callers at all. ART writes a
+-- contention as two nested slices and the outer one carries how many threads
+-- are queued behind the lock, so one wait comes back under a different parent
+-- each time the queue is a different length. `monitor_contention` had already
+-- reported it with the owner and the blocking frame, which is the reading it
+-- has.
 --
--- The rule the row broke is the detector's first word. It asks whether work
--- needed doing, and a thread waiting on a lock is the platform saying that
--- work stopped. There is no second call to remove and no first one to keep.
--- `monitor_contention` reports exactly these slices with the owner and the
--- blocking frame, which is the reading they have — so the same wait was in
--- the report twice, under two headings, one of them wrong.
+-- That was first fixed by naming the family — `*contention*` — and the fix
+-- lasted until the next trace. Run against four processes nobody had ever
+-- tuned for, the same shape came back from a different family:
 --
--- `*contention*` is the same word `names` matches on for its "Locks and
--- waiting" section, and for the reason written there: `lock` also matches
--- `block`, and `contention` is what the real names have in common. The skip
--- covers the slice and its caller alike — a wait is no more a place work is
--- called from than it is work.
+--     ReclaimPhase                                          2 × 344.0 ms
+--       under  NativeAlloc concurrent copying GC
+--       under  Background concurrent copying GC
+--
+-- Also already in the report: `gc_pressure` had both parents at 2423 and 977
+-- ms. Naming families is a list somebody has to keep adding to, and the list
+-- is always one app behind.
+--
+-- So the rule instead of the list: the set has already divided the platform's
+-- vocabulary between its detectors, and this one works the leftovers. Anything
+-- a `*name_glob*` speaks for is not its business, as the slice and as the
+-- caller alike. `_claimed_name` is that set of names, built once per session
+-- from the masks the detectors declare — including whatever the project
+-- widened them to, so moving a mask in `echolot.yml` moves this boundary with
+-- it.
+--
+-- What it still does not cover: a platform name no mask claims, `Compose:
+-- recompose` or a Skia flush. For the near miss the prefix keeps those out;
+-- for a finding they would have to cost the same from two callers, which is a
+-- higher bar than it sounds.
 --
 -- ## The near miss, and why it only ever speaks about your own markers
 --
@@ -171,11 +219,12 @@ SELECT
 FROM _slice_win s
 JOIN slice raw    ON raw.id = s.slice_id
 LEFT JOIN slice p ON p.id = raw.parent_id
--- Waiting is not work, and it is not a place work is called from either — see
--- "A lock wait is not work". Applied to the slice and to its caller, because
--- ART's contention is a pair and either half can be the one that lands here.
-WHERE s.name NOT GLOB '{{skip_glob}}'
-  AND COALESCE(p.name, '') NOT GLOB '{{skip_glob}}'
+-- The leftovers, and only the leftovers — see "This detector works what the
+-- others left". Applied to the slice and to its caller alike: a name that
+-- belongs to another detector is no more a place work is called from than it
+-- is work.
+WHERE s.name NOT IN (SELECT name FROM _claimed_name)
+  AND COALESCE(p.name, '') NOT IN (SELECT name FROM _claimed_name)
 GROUP BY s.name, s.thread_name
 HAVING COUNT(DISTINCT COALESCE(p.name, '(top level)')) >= 2
    AND COUNT(DISTINCT COALESCE(p.name, '(top level)')) <= {{max_callers}}

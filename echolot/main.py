@@ -312,7 +312,11 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
 
     with TraceSession(trace, tp_binary) as tp:
         procs = _resolve_process(tp, cfg.process)
-        _setup_context(tp, cfg, procs[0]["upid"])
+        # The masks as this run has them: `--set` moves a boundary the same
+        # way the config does, and `_claimed_name` is drawn from where they
+        # stand rather than from where the file left them.
+        _setup_context(tp, cfg, procs[0]["upid"],
+                       {d.id: ov for d, ov, _ in plan if ov})
         window = _window_info(tp, cfg, procs)
 
         # Stdlib modules the detectors declared, loaded once for the session.
@@ -593,13 +597,18 @@ def _resolve_process(tp, glob: str) -> list[dict]:
     return rows
 
 
-def _setup_context(tp, cfg: Config, upid: int) -> dict:
+def _setup_context(tp, cfg: Config, upid: int,
+                   mask_overrides: dict | None = None) -> dict:
     """Prepares the views in two passes and returns the window bounds.
 
     Between the passes the CLI grabs ts_start/ts_end and substitutes them into
     window.sql as plain numbers. While the window was a view it was recomputed
     on every reference to _slice_win: on a trace with 475k slices the run did
     not finish within ten minutes.
+
+    `mask_overrides` is where the name masks stand for this run — the config's
+    plus whatever `--set` moved. It reaches `_claimed_name`, and the default
+    is the config alone, which is what a caller with no plan of its own has.
     """
     tp.exec_script(render_sql(
         (SQL_DIR / "context.sql").read_text(encoding="utf-8"),
@@ -610,7 +619,58 @@ def _setup_context(tp, cfg: Config, upid: int) -> dict:
         (SQL_DIR / "window.sql").read_text(encoding="utf-8"),
         {"ts_start": bounds["ts_start"], "ts_end": bounds["ts_end"]},
     ))
+    _claim_names(tp, cfg.detector_overrides if mask_overrides is None
+                 else mask_overrides)
     return bounds
+
+
+def _claim_names(tp, overrides: dict) -> None:
+    """`_claimed_name` — every slice name a detector's mask already speaks for.
+
+    Ten of the eleven detectors know what they are looking for and say so in a
+    `*name_glob*` param: `*GC`, `Lock contention on a monitor lock*`, `binder
+    transaction`. `repeated_work` is the one that does not — it asks a
+    question about shape and so has to look at every name there is, which
+    means it also looks at names that belong to somebody else.
+
+    Twice that produced a row that was already in the report under its own
+    heading, and both times the shape was the same: a slice the platform
+    named, under parents the platform named.
+
+        Lock contention on a monitor lock (owner tid: …)
+          under  monitor contention with owner … waiters=0 …
+          under  monitor contention with owner … waiters=1 …
+
+        ReclaimPhase
+          under  NativeAlloc concurrent copying GC
+          under  Background concurrent copying GC
+
+    The first was fixed by naming the family, and then the second one turned
+    up on the first app nobody had tuned for — because naming families is a
+    list somebody has to keep adding to. This is the rule the list was
+    approximating: the set has already divided the platform's vocabulary
+    between its detectors, and `repeated_work` works the leftovers.
+
+    Built here rather than in the detector because the globs belong to their
+    owners and must stay in one place — including the overrides, so that
+    widening a mask in `echolot.yml` moves this boundary with it.
+
+    From every shipped detector, not from the ones this run happens to plan.
+    Switching `monitor_contention` off is a decision not to ask that question
+    today, and it does not turn a lock wait into work somebody did twice.
+    """
+    globs = [g for _, kind, g in _detector_masks(overrides) if kind == "name"]
+    tp.exec_script("DROP TABLE IF EXISTS _claimed_name;")
+    if not globs:
+        tp.exec_script("CREATE TABLE _claimed_name (name TEXT);")
+        return
+    where = " OR ".join(f"name GLOB '{sql_value(g)}'" for g in globs)
+    # Materialised, not a view: the consumer tests every slice name against
+    # it, and a view would re-run the GLOBs each time.
+    tp.exec_script(
+        f"CREATE TABLE _claimed_name AS "
+        f"SELECT DISTINCT name FROM _slice WHERE {where};"
+    )
 
 
 def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
