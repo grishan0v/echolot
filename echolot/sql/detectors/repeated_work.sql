@@ -8,6 +8,7 @@
 -- @param: max_callers = 3
 -- @param: max_spread = 1.5
 -- @param: marker_prefix = AGENTTMP_
+-- @param: skip_glob = *contention*
 -- @calibrate: min_total_ms = top5(total_ms) * 1.5
 -- @identity: location, detail
 --
@@ -59,6 +60,36 @@
 -- about how code is usually written rather than about the trace, so the
 -- fixture plants a four-caller helper to keep it honest.
 --
+-- ## A lock wait is not work, and ART spells it twice
+--
+-- The first two rounds on which this detector fired at all returned three
+-- rows of lock contention between them. One of them read like this:
+--
+--     Lock contention on a monitor lock (owner tid: 17403)   3 × 56.5 ms
+--       under  monitor contention with owner … waiters=0 …
+--       under  monitor contention with owner … waiters=1 …
+--       under  monitor contention with owner … waiters=2 …
+--
+-- Every gate held. One name, three callers, all costing about the same — the
+-- shape this detector is built for, and it is not three callers at all. ART
+-- writes a contention as two nested slices, the outer one carrying the number
+-- of threads queued behind the lock, so the same wait comes back under a
+-- different parent each time it happens with a different queue behind it.
+-- Nothing was entered from anywhere twice.
+--
+-- The rule the row broke is the detector's first word. It asks whether work
+-- needed doing, and a thread waiting on a lock is the platform saying that
+-- work stopped. There is no second call to remove and no first one to keep.
+-- `monitor_contention` reports exactly these slices with the owner and the
+-- blocking frame, which is the reading they have — so the same wait was in
+-- the report twice, under two headings, one of them wrong.
+--
+-- `*contention*` is the same word `names` matches on for its "Locks and
+-- waiting" section, and for the reason written there: `lock` also matches
+-- `block`, and `contention` is what the real names have in common. The skip
+-- covers the slice and its caller alike — a wait is no more a place work is
+-- called from than it is work.
+--
 -- ## The near miss, and why it only ever speaks about your own markers
 --
 -- A marker in the wrong place fails the spread gate rather than the caller
@@ -81,6 +112,15 @@
 -- report saying that a name planted by this hunt is entered from two places
 -- and its occurrences do not look alike, which is what a marker around a loop
 -- looks like from here.
+--
+-- Two callers exactly, where a finding is allowed three. `max_callers` is
+-- soft for a finding because the cost-equality carries the claim on its own:
+-- three callers paying the same price is still a repeat worth a look. A near
+-- miss has no equality to lean on, so the caller count is all it has, and
+-- three of them is a shared helper. The first trace to produce one proved
+-- that: `AGENTTMP_json_parse`, entered from all three seeding stages, 58
+-- occurrences of it — a helper doing its job, and "wrap the unit instead"
+-- is advice about a unit that does not exist.
 --
 -- Only names carrying the temporary prefix, and that restriction is what
 -- makes it a hint rather than noise. A platform slice with two callers and a
@@ -131,6 +171,11 @@ SELECT
 FROM _slice_win s
 JOIN slice raw    ON raw.id = s.slice_id
 LEFT JOIN slice p ON p.id = raw.parent_id
+-- Waiting is not work, and it is not a place work is called from either — see
+-- "A lock wait is not work". Applied to the slice and to its caller, because
+-- ART's contention is a pair and either half can be the one that lands here.
+WHERE s.name NOT GLOB '{{skip_glob}}'
+  AND COALESCE(p.name, '') NOT GLOB '{{skip_glob}}'
 GROUP BY s.name, s.thread_name
 HAVING COUNT(DISTINCT COALESCE(p.name, '(top level)')) >= 2
    AND COUNT(DISTINCT COALESCE(p.name, '(top level)')) <= {{max_callers}}
@@ -138,10 +183,11 @@ HAVING COUNT(DISTINCT COALESCE(p.name, '(top level)')) >= 2
    -- A slice still open when the trace stopped reads as zero here; dividing
    -- by it would be a ratio about nothing.
    AND MIN(MAX(s.dur, 0)) > 0
-   -- Equal cost, or a name this hunt planted itself — see "The near miss".
-   -- `substr` rather than LIKE: `_` is a wildcard there, and every prefix
-   -- anyone uses ends in one.
+   -- Equal cost, or a marker this hunt planted itself from exactly two places
+   -- — see "The near miss". `substr` rather than LIKE: `_` is a wildcard
+   -- there, and every prefix anyone uses ends in one.
    AND ((MAX(MAX(s.dur, 0)) * 1.0) / MIN(MAX(s.dur, 0)) <= {{max_spread}}
-        OR SUBSTR(s.name, 1, LENGTH('{{marker_prefix}}')) = '{{marker_prefix}}')
+        OR (SUBSTR(s.name, 1, LENGTH('{{marker_prefix}}')) = '{{marker_prefix}}'
+            AND COUNT(DISTINCT COALESCE(p.name, '(top level)')) = 2))
 ORDER BY total_ms DESC
 LIMIT 20;

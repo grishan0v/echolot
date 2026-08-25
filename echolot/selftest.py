@@ -379,6 +379,56 @@ def _(report):
         + row["detail"])
 
 
+@check("repeated_work: a marker reached from three places is a helper, not a near miss")
+def _(report):
+    """Two callers exactly, where a finding is allowed three.
+
+    `max_callers` is soft for a finding because the equal cost carries the
+    claim on its own. A near miss has no equal cost to lean on — it is the
+    caller count and nothing else — and three callers is a shared helper.
+    The first live trace to produce one said so: `AGENTTMP_json_parse` under
+    all three seeding stages, and "wrap the unit instead" is advice about a
+    unit that does not exist.
+
+    `AGENTTMP_parse_json` is that shape here: marked, over the floor, spread
+    far past the gate, and reached from three places instead of two.
+    """
+    found = {r["location"] for r in rows(report, "repeated_work")}
+    assert "AGENTTMP_parse_json" not in found, (
+        "a marker entered from three callers was reported as a near miss; it "
+        "is planted as a control and clears every other gate on purpose")
+
+
+@check("repeated_work: a lock wait is not work, and its two spellings are not two callers")
+def _(report):
+    """The two rows this detector produced the first time it ever fired.
+
+    ART writes a contention as two nested slices, the outer one carrying how
+    many threads are queued behind the lock. So one wait arrives under a
+    different parent each time the queue is a different length: one name, two
+    callers, the same price both times — every gate held, and nothing was
+    entered from anywhere twice.
+
+    The fixture plants it whole: `Lock contention on a monitor lock (owner
+    tid: 4455)` twice, 24 and 25 ms, under two `monitor contention with owner
+    …` parents that differ only in `waiters=`. Disable `skip_glob` and the
+    row comes straight back.
+
+    The wait is real, and the second half of the check is where it belongs.
+    A signal must not reach the report under two headings, and of the two
+    this is not the one that reads it correctly.
+    """
+    for r in rows(report, "repeated_work"):
+        assert "contention" not in str(r["location"]), (
+            f"a lock wait came back as work done twice: {r}")
+        assert "contention" not in str(r["detail"]), (
+            f"a lock wait came back as a place work is called from: {r}")
+    waiter = one_row(report, "monitor_contention", "LockWaiter")
+    assert waiter["count"] == 4 and waiter["total_ms"] == 102.0, (
+        "the planted wait must still be reported by the detector that owns "
+        f"it, or the fixture proves nothing: {waiter}")
+
+
 @check("repeated_work: a loop, a shared helper and unequal work are not repeats")
 def _(report):
     """The three shapes that share one feature with a duplicate.
