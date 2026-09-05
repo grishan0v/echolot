@@ -154,7 +154,7 @@ _the only detector that finds a problem inside uninstrumented code_
 
 | Where | Total, ms | Instrumented, ms | Evidence |
 |---|---|---|---|
-| DefaultDispatcher-worker-2 | 340.2 | 0.0 | 0 slices |
+| DefaultDispatch | 340.2 | 0.0 | 0 slices |
 
 ## Monitor contention
 
@@ -326,9 +326,12 @@ Two of them find something where nobody wrote a `trace{}` call.
 
 `uninstrumented_cpu` does not guess — it states a fact:
 
-> thread `DefaultDispatcher-worker-2` was Running for 340 ms, zero slices
+> thread `DefaultDispatch` was Running for 340 ms, zero slices
 
-Which is exactly where to add `trace{}` and record again.
+Which is exactly where to add `trace{}` and record again. The name is cut
+at fifteen characters by Linux rather than by echolot: every worker of that
+pool reaches the trace as `DefaultDispatch`, so write thread masks with the
+truncation in mind.
 
 `frame_jank` needs no instrumentation at all: SurfaceFlinger records every
 frame's deadline and what it actually took, and says whose fault a miss was.

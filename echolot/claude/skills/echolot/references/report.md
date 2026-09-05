@@ -279,7 +279,7 @@ inside". `inflate` at 12 → 31 occurrences and `loadAll` growing 73× at one
 occurrence are different bugs in different places.
 
 **`matched_by`** is `exact` or `family`. Rows are paired by name first and by
-name family second — `DefaultDispatcher-worker-2` and `-worker-5` are one pool.
+name family second — `arch_disk_io_0` and `arch_disk_io_3` are one pool.
 The family pass only fires when exactly one row on each side is unmatched;
 otherwise the rows stay listed as appeared and gone rather than guessed at.
 

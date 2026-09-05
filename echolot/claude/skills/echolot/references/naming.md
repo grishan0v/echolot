@@ -97,6 +97,12 @@ Linux truncates `comm` to **15 characters**. So the trace holds not
 `com.example.app` but `m.example.app`, not `DefaultDispatcher-worker-1` but
 `DefaultDispatch`. Write thread masks with the truncation in mind.
 
+The consequence worth holding on to: a pool whose workers differ only past
+the fifteenth character arrives as **one** name, so every
+`DefaultDispatcher-worker-N` is a single `DefaultDispatch` row. One whose
+digits fall inside the cut stays several — `arch_disk_io_0` … `arch_disk_io_3`
+are four rows and one pool.
+
 ## System slices of a cold start
 
 These appear by themselves, need no instrumentation, and have no counterpart in

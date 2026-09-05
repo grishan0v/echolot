@@ -80,9 +80,10 @@ under **Steady**. Nothing is dropped silently.
 
 ## The same thing under a new name
 
-Thread pools hand work to whichever worker is free, so
-`DefaultDispatcher-worker-2` in one set and `-worker-5` in the next is one
-phenomenon under two names. Matching on the literal name reports a large row
+Thread pools hand work to whichever worker is free, so `arch_disk_io_0` in
+one set and `arch_disk_io_3` in the next is one phenomenon under two names.
+(A pool whose workers differ only past the fifteenth character never reaches
+this pass — Linux has already cut them to one shared name.) Matching on the literal name reports a large row
 gone and an unrelated large row appeared — twice wrong, in the two places it
 matters most.
 
