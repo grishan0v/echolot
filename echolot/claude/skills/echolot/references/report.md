@@ -135,8 +135,21 @@ nest. Adding `self_ms` is fine — self times do not overlap.
 | `main_thread_outlier` | one occurrence far longer than usual | `detail` carries the median it is measured against |
 | `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |
 | `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
+| `repeated_work` | the same named work entered from more than one caller | `detail` names the callers; a `near miss` row means the occurrences are too unlike to be one work |
 
 ### What matters about individual ones
+
+**`repeated_work`** asks a question of shape rather than of size. Every other
+detector gates on a magnitude — a sum, a maximum, a count — and a duplicate is
+not a magnitude problem: the repeated half of one real finding was 270 ms among
+a dozen other three-hundred-millisecond things. What made it a bug is that the
+work had already been done.
+
+Two things follow. It looks only at names no other detector claimed, so a row
+here is never a restatement of one above it. And it depends on how markers are
+named: a marker takes the name of the work it wraps, never of the place it was
+put, or the two entries arrive under two names and there is nothing left to
+compare.
 
 **`runnable_starvation`** talks about hardware, not code. A thread in state `R`
 is ready to work but the scheduler will not let it in. On an emulator it fires

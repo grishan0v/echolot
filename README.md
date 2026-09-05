@@ -176,7 +176,7 @@ _time past the deadline; frame duration is in the evidence_
 |---|---|---|---|---|
 | inflate | 2 | 149.3 | 86.2 | median 12.9 ms of 312 · worst 6.7× |
 
-**Silent:** gc_pressure, binder_txn, runnable_starvation, anr_risk, anr
+**Silent:** gc_pressure, binder_txn, runnable_starvation, repeated_work, anr_risk, anr
 ```
 
 </details>
@@ -321,6 +321,7 @@ which re-records and re-instruments on purpose.
 | `anr_risk` | stretches where the main thread never got back to the message queue |
 | `anr` | ANRs the system recorded during the trace, with its own reason |
 | `main_thread_outlier` | one occurrence far longer than that work usually takes |
+| `repeated_work` | the same work reached from more than one caller, costing about the same both times |
 
 Two of them find something where nobody wrote a `trace{}` call.
 
