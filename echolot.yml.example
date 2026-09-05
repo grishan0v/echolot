@@ -5,10 +5,12 @@
 # trace_processor_shell — go into local.yml next to this file. That one stays
 # in .gitignore; the merge is recursive and local wins.
 #
-# Sections marked [read] are consumed by the code today. The rest are the
-# contract for parts still to come.
+# The file has three readers, and the headers below say which is which:
+# the code, the agent running the loop, and — for one section so far — nobody
+# yet. A section nothing reads is still worth writing down; it just must not
+# be mistaken for one that changes a run.
 
-# --- [read] ----------------------------------------------------------------
+# --- read by the code ------------------------------------------------------
 project:
   package: com.example.app
   # A GLOB over process.name. If the app lives in several processes
@@ -61,14 +63,15 @@ runner:
 
 # Detector thresholds. Values override the @param defaults in the .sql files.
 #
-# CAREFUL: listing keys means enabling ONLY those detectors. To adjust one
-# threshold without disabling the rest, list them all. An empty section, or no
-# section at all, means every detector found is enabled.
+# Naming one detector does not switch off the others: they run on the numbers
+# they shipped with, and one added after this file was written runs too. To
+# turn a detector off, write `<detector>: false` — that is the only way out, so
+# nothing leaves the run because a section was tidied, and the report names
+# what was turned off at the top of every run.
 #
-# That also means a detector shipped after this file was written never runs
-# here. The report says so — "N shipped detector(s) are not in this config" —
-# because on a real project two of eight were missing for months and nothing
-# mentioned it.
+# Until 0.5.4 this section doubled as an allowlist. On a real project a
+# calibrated section was pasted in and tidied, and four of ten detectors then
+# sat out three runs in a row.
 #
 # Do not pick these numbers by hand — `echolot calibrate run*.perfetto-trace`
 # derives them from known-healthy runs and prints a ready section with the
@@ -79,10 +82,6 @@ runner:
 # versions: adapting to a device must not require editing a query. What is
 # actually in the trace, and which masks land on it, is shown by
 #   echolot names <trace> --process '...'
-# Thresholds, per detector. Naming one does not switch off the others: they
-# run on the numbers they shipped with, and the report says which is which.
-# To turn one off, write `<detector>: false` — that is the only way out, so
-# nothing leaves the run because a section was tidied.
 detectors:
   main_thread_block:
     min_slice_ms: 16
@@ -128,25 +127,45 @@ detectors:
     min_abs_ms: 40            # and never mind the ratio below this
     min_occurrences: 5        # fewer than this is no history to be an outlier from
 
-# --- the contract for later (not read by the code yet) ---------------------
+# Where the agent may write temporary markers, and what to prefix them with.
+# `mark` reads both: it refuses a candidate outside `allowed` and names the
+# nearest allowed caller instead, and `--remove` takes out exactly what carries
+# the prefix. `compare` reads the prefix too, to say which rows appeared
+# because markers were added between the rounds rather than because the app did
+# something new.
+instrumentation:
+  allowed: ["app/src/main", "feature/*/src/main"]
+  temp_prefix: AGENTTMP_
+  cleanup: always               # on success and on running out of rounds alike
+
+# --- read by the agent, never by the code ----------------------------------
 
 # The slice-to-code map. Turns a marker into a hypothesis without scanning the
-# repository blindly. `echolot domains --root .` pre-fills it from the sources.
+# repository blindly, and blind scanning is what eats an agent's context.
+# `echolot domains --root .` pre-fills it from the sources.
 domains:
   - slice: "collection_mapping"
     module: ":feature:collection"
     hint: "CollectionMapper.kt — entity→domain"
 
-threads:
-  # comm is truncated to 15 characters, so write masks accordingly.
-  own: ["DefaultDispatch*", "OkHttp*"]
-  ignore: ["HeapTaskDaemon", "Jit thread pool", "FinalizerDaemon"]
-
+# The one number a human sets to bound a hunt. The agent has no goal of its own
+# to economise, so the limit is not left to its judgement.
 loop:
   max_rounds: 3
   on_exhausted: report          # an interim conclusion from the data at hand
 
-instrumentation:
-  allowed: ["app/src/main", "feature/*/src/main"]
-  temp_prefix: AGENTTMP_
-  cleanup: always               # on success and on running out of rounds alike
+# --- read by nobody yet -----------------------------------------------------
+
+# Which threads carry the application's own work, and which are the runtime's
+# housekeeping. Nothing consumes this today — not the code, not the agent — so
+# it records an intention and changes no run. Worth keeping: `uninstrumented_cpu`
+# reports any thread over its bar, and sorting the housekeeping out of the
+# result is currently left to whoever reads the report.
+#
+# Masks, not names: comm is truncated to 15 characters, so
+# `DefaultDispatcher-worker-1` arrives as `DefaultDispatch` and the whole pool
+# comes under that one name. Digits inside the cut survive, so `arch_disk_io_*`
+# still matches four distinct threads.
+threads:
+  own: ["DefaultDispatch*", "arch_disk_io_*"]
+  ignore: ["HeapTaskDaemon", "Jit thread pool", "FinalizerDaemon"]

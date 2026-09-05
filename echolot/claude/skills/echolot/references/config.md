@@ -36,6 +36,10 @@ runner:
 detectors:
   main_thread_block:
     min_slice_ms: 26.6
+
+instrumentation:
+  allowed: ["app/src/main", "feature/*/src/main"]
+  temp_prefix: AGENTTMP_
 ```
 
 ### `project.process`
@@ -114,6 +118,18 @@ must not require editing a query.
 Thresholds are not picked by hand: `echolot calibrate` derives them from
 healthy runs and prints a ready section with the reasoning attached.
 
+### `instrumentation`
+
+Where the agent may write temporary markers, and what to prefix them with.
+`mark` reads both: a candidate outside `allowed` is refused with the nearest
+allowed caller named instead, and `--remove` takes out exactly what carries the
+prefix. `compare` reads the prefix too, to tell rows that appeared because
+markers were added between the rounds from rows that appeared because the app
+did something new.
+
+`cleanup: always` is for the agent, and says the markers come out whether the
+hunt concluded or ran out of rounds.
+
 ### Provenance
 
 `_source` and `_evidence` give three things: a human sees what to double-check,
@@ -125,7 +141,7 @@ was found in the code or in the trace, with a `file:line` or a table row.
 Nothing found — write `null` and say so out loud, do not invent something
 plausible.
 
-## The contract for later (not read by the code yet)
+## What the agent reads, and the code never does
 
 ```yaml
 domains:                        # the slice-to-code map
@@ -133,20 +149,37 @@ domains:                        # the slice-to-code map
     module: ":feature:collection"
     hint: "CollectionMapper.kt — entity→domain"
 
-threads:
-  own: ["DefaultDispatch*", "OkHttp*"]   # comm is truncated to 15 characters
-  ignore: ["HeapTaskDaemon", "Jit thread pool"]
-
 loop:
   max_rounds: 3
   on_exhausted: report
-
-instrumentation:
-  allowed: ["app/src/main", "feature/*/src/main"]
-  temp_prefix: AGENTTMP_
-  cleanup: always
 ```
 
 `domains` is the central abstraction: it turns a marker into a hypothesis
 without scanning the repository blindly, and blind scanning is the main context
 eater. `echolot domains` pre-fills it from the sources.
+
+`loop.max_rounds` is the one number a human sets to bound a hunt. Stopping is
+not left to the agent's judgement: it has no goal of its own to economise.
+
+## Read by nobody yet
+
+```yaml
+threads:
+  own: ["DefaultDispatch*", "arch_disk_io_*"]
+  ignore: ["HeapTaskDaemon", "Jit thread pool"]
+```
+
+Which threads carry the application's own work, and which are the runtime's
+housekeeping. Nothing consumes it today — not the CLI, not the agent — so it
+records an intention and changes no run. Do not read a finding out of it, and
+do not tell anyone a thread was ignored because it is listed here.
+
+It is worth writing down anyway: `uninstrumented_cpu` reports any thread over
+its bar, and separating the housekeeping from the application's own work is
+currently left to whoever reads the report.
+
+Masks rather than names, because `comm` is truncated to fifteen characters:
+`DefaultDispatcher-worker-1` arrives as `DefaultDispatch` and the whole pool
+comes under that single name, while digits inside the cut survive and
+`arch_disk_io_*` still matches four distinct threads. See
+[naming.md](naming.md).
