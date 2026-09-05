@@ -128,6 +128,60 @@ recorder log, which every command writes from every caller — so the report
 exists, it is smaller, and it says which checks it could not make. See
 [reflect.md](reflect.md) under "Without a transcript".
 
+## What calls what
+
+Left is a file an agent reads; right is what it may run once it has. There is
+one executable in the whole design — `echolot` — so every arrow lands on a verb
+of the same CLI a human types.
+
+```
+/echolot                             what the file lets an agent run
+ └─ skills/echolot/SKILL.md          status --next · init · doctor · analyze
+    │                                compare · probe · anr · mark · calibrate · hunt
+    │
+    ├─ references/report.md          analyze · compare · collect · probe
+    ├─ references/config.md          domains · calibrate
+    ├─ references/naming.md          names
+    ├─ references/collect.md         collect · calibrate
+    │
+    ├─ commands/echolot-setup.md     probe · names · domains · collect
+    │                                analyze · mark · calibrate      → echolot.yml
+    │
+    ├─ commands/echolot-hunt.md      doctor · init · domains · collect · hunt · mark
+    │  │
+    │  └─ agents/perf-hunter.md      doctor · analyze · compare · names · domains
+    │     its own window             mark · anr · explain · collect   + Read Edit Grep
+    │
+    └─ commands/echolot-reflect.md   reflect          → .echolot/reflect/<id>.json
+
+echolot guide                        the same map, for a client without `.claude/`
+ └─ guide/overview.md                every verb
+    ├─ guide/setup.md                status · collect · analyze · probe · names · domains
+    ├─ guide/hunt.md                 status · hunt · doctor · collect · analyze
+    │                                compare · names · domains · mark
+    └─ guide/anr.md                  anr · mark
+```
+
+Four things the shape says.
+
+**The first call is always the same.** Every path out of the door begins with
+`echolot status --next`, and the skill switches on the word it comes back with
+rather than on the look of the project.
+
+**The references are leaves.** They name verbs and lead to no further file, so
+nothing in the layer sits more than three hops from `/echolot`. Two of them are
+opened from below as well: `perf-hunter` reads `references/report.md` instead of
+working the schema out by hand, and setup reads `references/collect.md` to
+capture the probe trace while there is still no config.
+
+**One file reaches `Edit`.** `perf-hunter` is the only place allowed to write
+into the sources, which is what makes `AGENTTMP_` a prefix one agent owns rather
+than a convention several of them have to keep.
+
+**One file points back at the others.** `echolot-reflect` proposes changes to
+`SKILL.md`, `perf-hunter.md` and the CLI itself — the only arrow here that
+returns to where it started.
+
 ## Why the loop lives in a subagent
 
 This is the most important of the four decisions.
