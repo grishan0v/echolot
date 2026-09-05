@@ -268,17 +268,30 @@ def harvest(search_root: Path, since: float, out_dir: Path,
 
 def set_aside(out_dir: Path, name: str,
               log: Callable[[str], None] = print) -> Path | None:
-    """Moves an existing set of `<name>_iter*` traces out of the way.
+    """Moves an existing set of `<name>_*` traces out of the way.
 
     The set before a change is the baseline the whole hunt compares against,
     and it is the first thing lost: a re-record writes the same file names.
     So a previous set is never overwritten — it moves into a sibling
     directory stamped with when it was recorded, and the log says where.
     Returns that directory, or None when there was nothing to move.
+
+    Everything of this scenario moves, not only what `collect` itself wrote.
+    It used to take `<name>_iter*` alone, and a probe capture a setup had
+    saved beside them — `coldStart_probe_2026-09-05.perfetto-trace` — stayed
+    behind through every later round. The documented
+    `analyze .echolot/traces/*.perfetto-trace` then merged it with each fresh
+    set: medians across four traces of two different sittings, one detector
+    row coming from the stray file alone, and a report reading `Runs: 4`
+    after a `collect` that had just recorded three.
+
+    Traces of another scenario are still left alone. A project that records
+    `coldStart` and `scroll` into one directory keeps both, and re-recording
+    one must not sweep away the other.
     """
     import time
 
-    existing = sorted(out_dir.glob(f"{name}_iter*.perfetto-trace")) \
+    existing = sorted(out_dir.glob(f"{name}_*.perfetto-trace")) \
         if out_dir.exists() else []
     if not existing:
         return None

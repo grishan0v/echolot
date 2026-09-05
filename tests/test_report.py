@@ -145,3 +145,52 @@ def test_the_absent_set_survives_merging_repeats():
     merged = report_mod.aggregate(runs)
     check("carried through the merge",
           merged["summary"]["absent_ids"] == ["frame_jank"], merged["summary"])
+
+
+# --- the files behind "Runs: N" ---------------------------------------------
+
+def _merged(*paths: str) -> dict:
+    runs = []
+    for p in paths:
+        r = one([{"location": "x", "total_ms": 1.0}])
+        r["trace"] = p
+        runs.append(r)
+    return report_mod.aggregate(runs)
+
+
+def test_the_header_names_the_traces_it_merged():
+    """A count alone hid a stray trace for a whole session.
+
+    A probe capture left in `.echolot/traces/` was swept up by the documented
+    `analyze .echolot/traces/*.perfetto-trace`. `Runs: 4` after a `collect`
+    that recorded three read as ordinary; the medians spanned two sittings and
+    one detector row came from the stray file alone.
+    """
+    text = report_mod.to_markdown(_merged(
+        ".echolot/traces/coldStart_iter000.perfetto-trace",
+        ".echolot/traces/coldStart_iter001.perfetto-trace",
+        ".echolot/traces/coldStart_probe_2026-09-05.perfetto-trace"))
+
+    check("the count is still there", "Runs: **3**" in text, text[:200])
+    check("and every basename under it",
+          all(f"`coldStart_{n}`" in text
+              for n in ("iter000", "iter001", "probe_2026-09-05")), text[:300])
+    check("without the directory or the suffix",
+          ".echolot/traces" not in text and ".perfetto-trace" not in text,
+          text[:300])
+
+
+def test_a_long_set_of_traces_is_cut_rather_than_wrapped():
+    """Twenty repeats is a legitimate round; twenty names is not a header."""
+    text = report_mod.to_markdown(_merged(
+        *[f"run_iter{i:03d}.perfetto-trace" for i in range(20)]))
+
+    check("the first seven are named", "`run_iter006`" in text, text[:400])
+    check("the rest are counted", "and 13 more" in text, text[:400])
+    check("the count is the real one", "Runs: **20**" in text, text[:200])
+
+
+def test_a_single_trace_gets_no_traces_line():
+    """One trace is already named on the `Trace:` line above."""
+    text = report_mod.to_markdown(one([{"location": "x", "total_ms": 1.0}]))
+    check("no list", "Traces:" not in text, text[:200])

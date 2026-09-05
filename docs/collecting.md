@@ -16,7 +16,7 @@ of percent. Both threshold calibration and report merging stand on the
 distribution across repeats; without them, both are guessing.
 
 A second `collect` into the same directory does not overwrite the first: the
-existing `<scenario>_iter*` set moves into a sibling directory stamped with
+existing `<scenario>_*` set moves into a sibling directory stamped with
 when it was recorded (`traces/cold_start-20260815-153720/`), and the log says
 so. The set from before a change is the baseline every after-the-fix
 comparison stands on, and it is the first thing lost otherwise — a

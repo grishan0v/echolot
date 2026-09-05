@@ -134,6 +134,7 @@ A **Marker Report**: one section per detector that fired, nothing else.
 # Marker Report
 
 Runs: **5**, numbers are medians across them
+Traces: `coldStart_iter000`, `coldStart_iter001`, `coldStart_iter002`, `coldStart_iter003`, `coldStart_iter004`
 Process: `com.example.app` (pid 12903)
 Scenario window: **1184 ms** (from 1102 to 1291)
 Detectors fired: **5 of 11**

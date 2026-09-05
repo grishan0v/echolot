@@ -595,13 +595,18 @@ def _(report):
         out.mkdir()
         for i in range(3):
             (out / f"run_iter{i:03d}.perfetto-trace").write_bytes(b"x")
+        # A capture of this scenario that `collect` did not write. One of
+        # these sat in a live project through every round, and the documented
+        # glob merged it into each report.
+        (out / "run_probe_2026-09-05.perfetto-trace").write_bytes(b"p")
         (out / "other_iter000.perfetto-trace").write_bytes(b"y")
         said = []
         aside = set_aside(out, "run", log=said.append)
         assert aside and aside.parent == out and aside.name.startswith("run-"), aside
         assert sorted(p.name for p in aside.iterdir()) == [
-            f"run_iter{i:03d}.perfetto-trace" for i in range(3)], list(aside.iterdir())
-        assert not list(out.glob("run_iter*.perfetto-trace")), "the old names are free again"
+            f"run_iter{i:03d}.perfetto-trace" for i in range(3)
+        ] + ["run_probe_2026-09-05.perfetto-trace"], list(aside.iterdir())
+        assert not list(out.glob("run_*.perfetto-trace")), "the old names are free again"
         assert (out / "other_iter000.perfetto-trace").exists(), "another scenario is not touched"
         assert said and "set aside" in said[0], said
 

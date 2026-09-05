@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from datetime import datetime, timezone
 from statistics import median
 from typing import Any
@@ -230,6 +231,29 @@ def to_json(report: dict[str, Any]) -> str:
     return json.dumps(report, ensure_ascii=False, indent=2)
 
 
+def _traces_line(traces: list[str], limit: int = 8) -> str:
+    """The files behind `Runs: N`, so a stranger among them is visible.
+
+    The count alone hid the failure this exists for. A probe capture left in
+    `.echolot/traces/` was picked up by the documented
+    `analyze .echolot/traces/*.perfetto-trace`, and `Runs: 4` after a
+    `collect` that recorded three read as ordinary. The medians were taken
+    across two sittings, one row came from the stray trace alone, and the
+    header said nothing a reader could act on. Named, it is obvious at a
+    glance which file does not belong.
+
+    A pid would have been the precise signal and is not available: every cold
+    start launches the process again, so the repeats of one healthy round
+    already carry three different pids.
+    """
+    names = [Path(t).name.removesuffix(".perfetto-trace") for t in traces]
+    shown = names if len(names) <= limit else names[:limit - 1]
+    line = ", ".join(f"`{n}`" for n in shown)
+    if len(shown) < len(names):
+        line += f" and {len(names) - len(shown)} more"
+    return "Traces: " + line
+
+
 def to_markdown(report: dict[str, Any]) -> str:
     w = report["window"]
     out: list[str] = []
@@ -238,6 +262,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     traces = report.get("traces")
     if traces:
         out.append(f"Runs: **{len(traces)}**, numbers are medians across them")
+        out.append(_traces_line(traces))
     else:
         out.append(f"Trace: `{report['trace']}`")
     if w.get("process"):
