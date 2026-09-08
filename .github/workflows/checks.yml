@@ -66,8 +66,47 @@ jobs:
       # what CI and the agent layer both route on — and so is every check it
       # runs, one pytest test each, so a failure names the claim rather than a
       # count.
+      #
+      # Coverage runs on every leg, because the threshold in pyproject.toml
+      # (`[tool.coverage.report] fail_under`) is a gate, not a report: a drop
+      # below the measured baseline should fail the same version it dropped
+      # on, not just whichever leg happens to render the summary.
       - name: pytest
-        run: pytest -q
+        run: pytest -q --cov=echolot --cov-report=term-missing
+
+      # The summary and the XML are only worth producing once — the percentage
+      # barely moves between supported Python versions, and five copies of the
+      # same file would be noise. 3.12 is the version `lint` and `package`
+      # already use elsewhere in this file.
+      #
+      # It runs after a failing pytest too, and that is the point: the run that
+      # trips the gate is the one where the missing lines are worth reading.
+      # Hence `--fail-under=0` on both commands — the gate belongs to the step
+      # above, and coverage would otherwise apply the threshold from
+      # pyproject.toml a second time and paint this step red as well.
+      - name: Coverage summary
+        if: always() && matrix.python == '3.12'
+        run: |
+          if [ ! -f .coverage ]; then
+            echo "no coverage data — pytest did not get that far"
+            exit 0
+          fi
+          python -m coverage xml --fail-under=0
+          {
+            echo "### Coverage"
+            echo
+            echo '```'
+            python -m coverage report --fail-under=0
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always() && matrix.python == '3.12'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
 
   # Static analysis over the Python. codeql reads the same files for a
   # different thing — shapes known to be exploitable — and has no opinion on a

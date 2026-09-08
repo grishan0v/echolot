@@ -62,7 +62,7 @@ dependencies = [
 # own dependencies and no pytest anywhere near it, because it runs on a user's
 # laptop.
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.14"]
+dev = ["pytest>=8", "pytest-cov>=7", "ruff>=0.14"]
 
 # What a linter is here for, and what it is not.
 #
@@ -88,6 +88,17 @@ testpaths = ["tests"]
 # from the standard library is how a future Python announces a breakage, and the
 # only cheap moment to hear it is now.
 filterwarnings = ["error::DeprecationWarning:echolot.*"]
+
+[tool.coverage.run]
+source = ["echolot"]
+
+[tool.coverage.report]
+show_missing = true
+# Measured 2026-09-08 with `pytest --cov=echolot`: 85.56%, 1046 of 7244
+# statements missed. The gate sits a point and a half below that — enough that
+# an unrelated line here or there doesn't fail CI, not so much that coverage
+# can drift downward release after release without anyone noticing.
+fail_under = 84
 
 [tool.setuptools.dynamic]
 version = { attr = "echolot.__version__" }

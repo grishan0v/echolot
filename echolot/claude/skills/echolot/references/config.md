@@ -66,9 +66,9 @@ the CLI puts `matches` into `window`. Check it before drawing conclusions.
 
 ### `scenario.budget_ms`
 
-Declared and **not read by the code**, deliberately: there is no CI gate and
-none is planned. Do not build logic on it and do not expect a run to fail when
-it is exceeded.
+Declared and **not read by the code**, deliberately: there is no performance
+gate and none is planned. Do not build logic on it and do not expect a run to
+fail when it is exceeded.
 
 The question a budget answers — "did it get slower" — is already answered by
 the benchmark that produced the trace, and thresholds evaluated on a shared CI
