@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest an improvement to echolot.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What workflow is difficult or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or interface you would like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or other approaches have you tried?
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and determinism impact
+      description: Explain whether this changes detector semantics, report output, supported Python versions, or trace reproducibility.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Request checks
+      options:
+        - label: I have searched existing issues for duplicates.
+          required: true
