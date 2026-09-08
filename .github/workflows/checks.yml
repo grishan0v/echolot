@@ -289,3 +289,80 @@ jobs:
           python -m pip install --upgrade build twine
           python -m build
           python -m twine check dist/*
+
+      # `pip install -e '.[dev]'` in `selfchecks` above proves the source tree
+      # works and never touches this. Only `sql/*.sql`, `guide/*.md` and
+      # `claude/**/*.md` in `[tool.setuptools.package-data]` decide whether the
+      # wheel and the sdist built just above actually carry the detectors
+      # `doctor` runs, the pages `guide` prints and the layer `init` installs
+      # — an editable install answers all three from the checkout regardless
+      # of what that list says, so it cannot catch a name dropped from it.
+      #
+      # Cached under the same key `selfchecks` uses: `doctor` below downloads
+      # the same pinned trace_processor_shell, and a second unrelated 40 MB
+      # fetch would prove nothing this key doesn't already cover.
+      - name: Cache trace_processor
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.local/share/perfetto/prebuilts
+          key: tp-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+
+      - name: Install the sdist and the wheel into clean environments and smoke-test them
+        run: |
+          set -euo pipefail
+
+          # tp.py, layer.py and cmd_guide all find their files by a path next
+          # to `echolot/__file__` — none of them raises ImportError if
+          # package-data was left out of the build; the directory is just
+          # empty on whoever installs it. Emptiness is what this asserts.
+          cat > "$RUNNER_TEMP/smoke.py" <<'PY'
+          import sys
+          from pathlib import Path
+
+          import echolot
+
+          print(f"echolot {echolot.__version__} imported from {echolot.__file__}")
+
+          root = Path(echolot.__file__).parent
+          checks = {
+              "sql/detectors/*.sql": sorted((root / "sql" / "detectors").glob("*.sql")),
+              "guide/*.md": sorted((root / "guide").glob("*.md")),
+              "claude/": [p for p in (root / "claude").rglob("*") if p.is_file()],
+          }
+          missing = [name for name, files in checks.items() if not files]
+          if missing:
+              sys.exit(f"package-data missing from the installed package: {', '.join(missing)}")
+
+          for name, files in checks.items():
+              print(f"  {len(files)} file(s) under {name}")
+          PY
+
+          workdir="$RUNNER_TEMP/package-smoke"
+          rm -rf "$workdir"
+          mkdir -p "$workdir"
+
+          for artefact in sdist wheel; do
+            case "$artefact" in
+              sdist) file=$(ls dist/*.tar.gz) ;;
+              wheel) file=$(ls dist/*.whl) ;;
+            esac
+
+            echo "::group::$artefact ($(basename "$file"))"
+            venv="$workdir/venv-$artefact"
+            python -m venv "$venv"
+            "$venv/bin/pip" install --upgrade pip --quiet
+            "$venv/bin/pip" install --quiet "$PWD/$file"
+
+            # Every command below runs from outside the checkout: `echolot/`
+            # sits right next to `dist/` here, and running from that directory
+            # would let a bug in package-data hide behind the source tree
+            # quietly answering the import instead of the installed artefact.
+            ( cd "$workdir" && "$venv/bin/python" "$RUNNER_TEMP/smoke.py" )
+            ( cd "$workdir" && "$venv/bin/echolot" --help > /dev/null )
+            # The CLI's actual behaviour, not a stand-in for it: `doctor -q`
+            # is the same three lines and the same exit code an agent or a
+            # user's CI routes on, built on a synthetic trace rather than one
+            # that would have to ship inside the package.
+            ( cd "$workdir" && "$venv/bin/echolot" doctor -q )
+            echo "::endgroup::"
+          done
