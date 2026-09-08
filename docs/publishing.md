@@ -12,24 +12,29 @@ never disagree about which versions exist.
 
 ## One-time setup on PyPI
 
-Done once, before the first tag. The project does not exist on PyPI yet, so
-this is registered as a *pending* publisher; the first successful upload
-creates the project and the publisher becomes permanent.
+This was completed before the first release. The project is already published
+as `echolot`, and the `pypi` environment is configured for Trusted Publishing.
+If the publisher ever needs to be recreated, register it with the following
+values:
 
 1. Sign in at <https://pypi.org> and open
-   <https://pypi.org/manage/account/publishing/>.
-2. Under **Add a new pending publisher → GitHub**, fill in:
+   <https://pypi.org/manage/project/echolot/settings/publishing/>. The
+   publisher of a project that already exists lives on the page of that
+   project; the pending publishers in the account settings are for a name
+   nobody has uploaded yet.
+2. Under **Add a new publisher → GitHub**, fill in:
 
    | field | value |
    |---|---|
-   | PyPI project name | `echolot` |
    | Owner | `grishan0v` |
    | Repository name | `echolot` |
    | Workflow name | `publish.yml` |
    | Environment name | `pypi` |
 
    The environment name must match the `environment: name:` in the workflow.
-   GitHub creates the environment on the first run; nothing to configure there.
+   GitHub creates the environment on the first run, and here it carries no
+   protection rules — nothing to configure. A rule added to it later, a
+   required reviewer or a wait timer, would hold the upload on every tag.
 
 ## Before a release: what CI already checked
 
@@ -66,10 +71,11 @@ while every build stayed green.
 ## Cutting a release
 
 ```bash
-# 1. bump the version in pyproject.toml, commit
+# 1. bump __version__ in echolot/__init__.py, commit
+#    (pyproject.toml reads the version from that attribute)
 # 2. tag it — the tag must be "v" + that version, the workflow checks
-git tag v0.1.0
-git push origin v0.1.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 Watch the run under **Actions**. When it is green the package is at

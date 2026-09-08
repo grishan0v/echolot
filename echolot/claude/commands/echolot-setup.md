@@ -6,7 +6,7 @@ Your job is to assemble `echolot.yml` in the project root.
 
 The guiding principle: **the user does not open the config**. You obtain
 everything obtainable and ask only about what exists neither in the repository
-nor in the trace. Of roughly 25 fields, two need a human decision.
+nor in the trace. Of roughly 25 fields, four need a human decision.
 
 ## The order: actions first, conversation after
 
