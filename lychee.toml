@@ -1,0 +1,29 @@
+# Configuration for the `lychee` link checker (.github/workflows/linkcheck.yml).
+#
+# Scope is README.md and docs/**/*.md — the same paths the workflow triggers
+# on and passes on its command line. No other Markdown in the repository is
+# user-facing documentation.
+
+# A CI runner is not a browser with a person waiting on it: give a slow or
+# momentarily rate-limited server room to answer before calling it dead.
+timeout = 20
+max_retries = 3
+retry_wait_time = 2
+
+# `checks.yml` already fails the build on a relative link in README.md — see
+# its "Check that the README has no relative links" step — so link rot in an
+# absolute URL is the failure mode left for this checker to catch.
+exclude = [
+  # shields.io renders the README's badges (build status is served straight
+  # off github.com and is excluded separately below). Each SVG is generated
+  # per request from live data — PyPI's current version, this repo's licence
+  # — and GitHub Actions runners share IP ranges shields.io rate-limits under
+  # load. A 429 here is about shared traffic, not a broken link.
+  '^https://img\.shields\.io/',
+
+  # The two workflow-status badges: `badge.svg?branch=main` is regenerated
+  # from whatever the latest run on that branch happens to be, not a fixed
+  # asset. There is no "broken" for this checker to find here, only today's
+  # colour.
+  '^https://github\.com/grishan0v/echolot/actions/workflows/[^/]+/badge\.svg',
+]
