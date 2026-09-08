@@ -2,7 +2,7 @@ name: publish
 
 # A version tag is the release:
 #
-#     git tag v0.1.0 && git push origin v0.1.0
+#     git tag vX.Y.Z && git push origin vX.Y.Z
 #
 # Three jobs, in order: build the sdist and wheel; upload them to PyPI; create
 # the GitHub Release for the tag with the same two files attached and the

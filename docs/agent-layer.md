@@ -341,7 +341,7 @@ project.
 
 `/echolot-setup` exists so the user never opens the config. The agent obtains
 everything obtainable and asks only about what exists neither in the repository
-nor in the trace — of roughly 25 fields, two need a human decision.
+nor in the trace — of roughly 25 fields, four need a human decision.
 
 The order matters: scan, capture, reconnaissance, and only then conversation.
 By the time of the first question the agent holds real options from a real
