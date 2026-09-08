@@ -1,0 +1,69 @@
+name: workflowlint
+
+# The workflows in this repository are the one part of it that ships without a
+# test suite of its own: `pytest` and `ruff` read Python, and nothing here reads
+# YAML. A stray tab, a misspelled key, an input that stopped existing two
+# releases ago — none of that fails until the workflow it broke happens to run,
+# which for a `schedule:` trigger or an error path can be months after the
+# change that caused it.
+#
+# actionlint covers both halves of that at once. A file that does not parse is
+# reported as one line naming the file, the line and the column, and the files
+# beside it are still checked. Everything a parser has no opinion on is the rest
+# of its job: unknown keys, `${{ }}` expressions typed against the wrong
+# context, `uses:` inputs that do not exist on the action being called, unknown
+# runner labels, inline expressions open to script injection. shellcheck and
+# pyflakes travel inside the same image, so a `run:` block is read as a script
+# instead of as a string.
+#
+# No schedule here, where codeql.yml and linkcheck.yml both have one. Theirs
+# have something to discover between pushes: codeql's queries are updated on the
+# service's side, and the pages linkcheck follows belong to other people. This
+# check has nothing of the sort. The action is pinned by commit, its image by
+# digest, and actionlint's tables of runner labels and action inputs ship inside
+# that binary — a run over unchanged files repeats the previous one exactly.
+# Those tables move when the pin moves, and the pin moves in a dependabot pull
+# request that edits a file under .github/workflows, which the filter below
+# already catches.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
+
+permissions:
+  contents: read
+
+# A second push to the same PR makes the first run pointless.
+concurrency:
+  group: workflowlint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflowlint:
+    name: workflowlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # `reporter: local` prints straight to the job log and needs nothing
+      # beyond the `contents: read` this job already has — no checks or
+      # pull-requests write permission for a reporter that would post back to
+      # GitHub. `filter_mode: nofilter` reports every finding in every workflow
+      # file rather than only the lines a diff touched, so a push run gets the
+      # same coverage as a pull request. `fail_level` matters most of the three:
+      # it defaults to `none`, which means "always exit 0", and `error` is what
+      # makes this a check instead of a printout.
+      - name: actionlint
+        uses: reviewdog/action-actionlint@d290e336d5a743810aef4404f757dc862276d2ae  # v1.73.4
+        with:
+          reporter: local
+          filter_mode: nofilter
+          fail_level: error
