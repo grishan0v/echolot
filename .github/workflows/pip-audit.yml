@@ -1,0 +1,97 @@
+name: pip-audit
+
+# Dependency vulnerability scanning, kept separate from checks.yml because it
+# answers a different question: not "does the code work" but "does anything it
+# depends on have a known advisory".
+#
+# Two triggers, doing two different jobs. On a pull request that touches the
+# files where dependencies are declared, a red run means the change in that
+# pull request meets a known advisory, and whoever made it is who acts. The
+# weekly run is the other case entirely — an advisory published against a pin
+# that has not moved, which no pull request caused and none should be blocked
+# by. It notifies whoever watches the repository and stops nobody. codeql.yml
+# gives the same reasoning for its own schedule.
+#
+# perfetto is pinned exactly (`==0.57.2`) for reasons pyproject.toml explains
+# at length: the pin is a specific trace_processor_shell binary, and raising it
+# is a deliberate act with a doctor check attached. This workflow only reports;
+# it never runs with `--fix`, so it cannot touch that pin. dependabot.yml keeps
+# the pip ecosystem out for the same reason, and the split above is what keeps
+# this workflow on the same side of that decision: should an advisory ever land
+# against perfetto==0.57.2, it arrives as a Wednesday notification instead of a
+# wall across everyone's work. No `--ignore-vuln` is configured ahead of time.
+# If one is ever accepted as a deliberate exception, add it here with the
+# advisory ID and the reason.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "requirements.txt"
+      - ".github/workflows/pip-audit.yml"
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "requirements.txt"
+      - ".github/workflows/pip-audit.yml"
+  schedule:
+    # Wednesdays, off the hour — clear of codeql's Monday run.
+    - cron: "17 5 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pip-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # requirements.txt is a single `-e .` and pins nothing of its own, so
+      # there is nothing in it to audit. What can be audited is the environment
+      # pyproject.toml produces, dev extras included — ruff and pytest run in CI
+      # too, and a vulnerable version of either is worth knowing about. The
+      # freeze writes down exactly the versions that were resolved.
+      #
+      # `--exclude-editable` drops echolot itself: auditing the package under
+      # development against advisories published for it says nothing, and an
+      # editable install reports whatever version its dist-info was first
+      # written with — pyproject.toml describes that trap in its own comment.
+      - name: Install and freeze
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip freeze --exclude-editable > "$RUNNER_TEMP/env.txt"
+
+      # pip-audit lives in a virtualenv of its own. Installed beside the
+      # project it audits the current environment, which by then holds its own
+      # two dozen dependencies — cyclonedx, defusedxml, msgpack and the rest,
+      # none of which echolot uses. An advisory against any of them would fail
+      # this job in a repository that does not depend on them.
+      #
+      # A floor rather than an exact pin: dependabot watches actions and does
+      # not read a `pip install` inside a run step, so a pin here would freeze
+      # with nothing left to raise it. The client version does not decide what
+      # gets found either — advisories come from PyPI's API at request time.
+      #
+      # `--desc` prints the advisory summary inline, so a failure names the
+      # problem instead of sending a reader to look it up. `--strict` fails on a
+      # dependency that could not be collected, because a run that quietly
+      # audits less than it claims is worse than a red one. No `--fix`: this job
+      # reports, it does not rewrite pins — least of all the perfetto one.
+      - name: pip-audit
+        run: |
+          python -m venv "$RUNNER_TEMP/audit"
+          "$RUNNER_TEMP/audit/bin/pip" install --quiet 'pip-audit>=2.10'
+          "$RUNNER_TEMP/audit/bin/pip-audit" --desc --strict -r "$RUNNER_TEMP/env.txt"
