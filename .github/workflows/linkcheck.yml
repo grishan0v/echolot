@@ -1,19 +1,20 @@
 name: linkcheck
 
-# README.md and docs/**/*.md are the only user-facing documentation this
-# repository ships; everything else is code the other workflows already
-# cover. A link inside them going dead is not caught by `pytest` or `ruff` —
-# nothing exercises a URL until something tries to follow it — so this
-# workflow is that: pull requests and pushes to main catch a link broken by
-# the change that touches it, and the schedule catches one broken by nothing
-# in this repository at all — the page it pointed to moved or disappeared on
-# its own.
+# README.md, SECURITY.md and docs/**/*.md are the documentation this
+# repository ships to people; everything else is code the other workflows
+# already cover. A link inside them going dead is not caught by `pytest` or
+# `ruff` — nothing exercises a URL until something tries to follow it — so
+# this workflow is that: pull requests and pushes to main catch a link broken
+# by the change that touches it, and the schedule catches one broken by
+# nothing in this repository at all — the page it pointed to moved or
+# disappeared on its own.
 
 on:
   pull_request:
     branches: [main]
     paths:
       - "README.md"
+      - "SECURITY.md"
       - "docs/**/*.md"
       - "lychee.toml"
       - ".github/workflows/linkcheck.yml"
@@ -21,6 +22,7 @@ on:
     branches: [main]
     paths:
       - "README.md"
+      - "SECURITY.md"
       - "docs/**/*.md"
       - "lychee.toml"
       - ".github/workflows/linkcheck.yml"
@@ -46,14 +48,15 @@ jobs:
       # lychee.toml carries the exclude list — the badges and the two
       # workflow-status images — and the reasoning for each entry; nothing
       # here overrides it. `args` only narrows which files get read: this
-      # workflow's job is README.md and docs/**/*.md, not this repository's
-      # generated HTML or its Python docstrings.
-      - name: Check links in README.md and docs/**/*.md
+      # workflow's job is the Markdown a reader is pointed at, not this
+      # repository's generated HTML or its Python docstrings.
+      - name: Check links in the documentation
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8  # v2.9.0
         with:
           args: >-
             --config lychee.toml
             --no-progress
             README.md
+            SECURITY.md
             "docs/**/*.md"
           fail: true

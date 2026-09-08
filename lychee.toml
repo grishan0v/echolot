@@ -1,8 +1,8 @@
 # Configuration for the `lychee` link checker (.github/workflows/linkcheck.yml).
 #
-# Scope is README.md and docs/**/*.md — the same paths the workflow triggers
-# on and passes on its command line. No other Markdown in the repository is
-# user-facing documentation.
+# Scope is README.md, SECURITY.md and docs/**/*.md — the same paths the
+# workflow triggers on and passes on its command line. No other Markdown in
+# the repository is written for a reader outside it.
 
 # A CI runner is not a browser with a person waiting on it: give a slow or
 # momentarily rate-limited server room to answer before calling it dead.
