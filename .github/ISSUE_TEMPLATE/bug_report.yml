@@ -1,0 +1,96 @@
+name: Bug report
+description: Report a reproducible problem in echolot.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Please avoid
+        attaching traces that contain sensitive application or user data.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        The output of `echolot doctor -q`. One line, and it carries every
+        version that can change the answer:
+        `echolot 0.6.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7`
+
+        The trace_processor version is the one that matters most: the
+        detectors match on strings that binary invents, so a different version
+        means different trace semantics with the SQL unchanged.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: android
+    attributes:
+      label: Android version and device
+      description: Include the emulator or physical device model if relevant.
+      placeholder: "Android 14, Pixel 7 emulator"
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The smallest command that shows the problem.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: The part of `echolot.yml` the run read, if the problem depends on it.
+      render: yaml
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the complete error output and traceback, if available.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction details
+      description: List the steps, fixture, or safe sample needed to reproduce the problem.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Report checks
+      options:
+        - label: I have searched existing issues for duplicates.
+          required: true
+        - label: I have removed secrets and sensitive trace data from this report.
+          required: true
