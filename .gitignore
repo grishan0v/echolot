@@ -9,6 +9,12 @@ build/
 dist/
 *.egg-info/
 
+# coverage output (pytest-cov / coverage.py)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 # detector output
 .echolot/
 

@@ -440,7 +440,7 @@ pytest -k uninstrumented     # one detector's claims, by name
 `doctor` stays dependency-free: it walks the same list itself, because it runs
 on a user's laptop where pytest is not installed.
 
-### There is no CI gate, on purpose
+### There is no performance gate, on purpose
 
 An earlier plan had `analyze` exit non-zero against `scenario.budget_ms`, so a
 build could fail on a slow run. It is not being built, and this is the reason.
@@ -466,6 +466,11 @@ not stand guard.
 
 `scenario.budget_ms` stays in the config. It records what a team considers
 acceptable, which is worth writing down whether or not anything enforces it.
+
+CI does hold one gate, and it measures this repository rather than a device:
+`pytest` fails when statement coverage drops below the threshold in
+`pyproject.toml`. That number comes out the same on every runner, which is
+exactly what a trace threshold does not.
 
 ## License
 
