@@ -54,6 +54,10 @@ _CONCLUSION_FIELDS = {
     # at 252.7 ms, and returned a conclusion about something else. A finding
     # held and not passed on is a finding nobody has.
     "also_measured": r"Also measured|Ещё измер|Также измер",
+    # Candidates looked at and not carried to a cause. An unproven suspect is
+    # not a wrong one, and without this line the next hunt spends a round
+    # rediscovering that somebody already looked there.
+    "ruled_out": r"Ruled out|Отброшен|Исключен|Исключён|Проверено и отброшен",
     "cleanup": r"\bCleanup\b|Уборк|Очистк",
 }
 # The value after "Confidence:", up to the end of the phrase — markdown

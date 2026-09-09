@@ -196,7 +196,9 @@ def build(root: Path, project: Path) -> Path:
     m.append(user_text(900, cwd,
              f"<task-notification>\n<task-id>{AGENT}</task-id>\n<status>completed</status>\n"
              f"<result>Place: Foo.kt:12\nEvidence: main_thread_block 120 ms\n"
-             f"Mechanism: sync IO\nSuggestion: move it\nConfidence: high\n"
+             f"Mechanism: sync IO on the main thread (inferred)\n"
+             f"Suggestion: move it\nConfidence: high\n"
+             f"Ruled out: gc_pressure — 8 ms total, too small to matter\n"
              f"Also measured: AGENTTMP_read 41 ms · AGENTTMP_parse 12 ms\n"
              f"Cleanup: removed</result>\n</task-notification>"))
     m.append(user_text(950, cwd, "thanks, implement the fix"))
@@ -281,6 +283,7 @@ def build(root: Path, project: Path) -> Path:
              "Place: Foo.kt:12\nEvidence: main_thread_block 120 ms\nMechanism: sync IO\n"
              + "the mechanism, at length: the file is read on the main thread\n" * 80
              + "## Что чинить\nmove it\nConfidence: high\n"
+             + "Отброшено: gc_pressure, 8 ms\n"
              + "Ещё измерено: AGENTTMP_read 41 ms\nCleanup: removed"}], output_tokens=400))
     (pdir / SESSION / "subagents" / f"agent-{AGENT}.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in s) + "\n", encoding="utf-8")

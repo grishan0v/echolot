@@ -214,13 +214,29 @@ needed.
 
 ```
 Place:         <file:line or module>
-Evidence:      <detector, numbers from the report>
-Mechanism:     <why this costs that much time>
+Evidence:      <detector, numbers from the report — measured, nothing else>
+Mechanism:     <why this costs that much time; mark a step you did not
+               measure (inferred), and one you could not check (gap)>
 Suggestion:    <what to do>
 Confidence:    high | medium | low — and why
+Ruled out:     <what you checked and did not carry to a cause, strongest
+               evidence first — or `nothing else was checked`>
 Also measured: <every marker you planted, one line and one number each>
 Cleanup:       temporary instrumentation removed | none was added
 ```
+
+**`Evidence` is measured and `Mechanism` is usually not.** They sit next to
+each other and read alike, and a reader who takes both as measured has been
+misled by the form rather than by you. So keep `Evidence` to numbers that came
+out of `report.json` or off a marker you planted, and mark the steps of the
+`Mechanism` you did not measure: `(inferred)` for a step you worked out,
+`(gap)` for one you could not check at all. One coherent story where half the
+links are reasoning is the easiest kind of wrong answer to act on.
+
+`(gap)` is not an admission of failure — the tool says the same thing
+everywhere else. A detector that stayed silent is in the report with empty
+`rows` rather than left out, and `reflect` without a transcript names every
+check it could not make.
 
 **`Also measured` is not padding, and it is the one line here that is not
 about your conclusion.** Everything you bracketed, with its number, whether or
@@ -233,7 +249,19 @@ redundant work the hunt was looking for — and returned a conclusion about
 something else. The number was on its screen and never reached the human. A
 finding you hold and do not pass on is a finding nobody has.
 
-"Keep it short" is about the search, not about the measurements. Six numbers
+**`Ruled out` is the other half of that, and it costs the next round.** Every
+candidate you looked at and did not carry to a cause, strongest evidence
+first, one line each — even when you did find the answer somewhere else. An
+unproven suspect is not a wrong suspect; it is one nobody measured to the end,
+and the next hunt will spend a round rediscovering that you already looked
+there. Write `nothing else was checked` when that is the truth, which is
+itself worth knowing.
+
+And when the evidence splits evenly between two candidates, return both with
+their numbers. Picking a winner because the shape wants one turns a coin toss
+into a conclusion, and the human loses the fact that it was a coin toss.
+
+"Keep it short" is about the search, not about the measurements. Seven numbers
 are short. Retelling how you got them is not.
 
 If it did not come together within the rounds allowed, return the same shape
