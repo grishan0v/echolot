@@ -55,6 +55,22 @@ dependencies = [
     # No pin needed here: PyYAML reads the config and does not affect trace
     # semantics.
     "PyYAML>=6.0",
+
+    # Colour in `--help` and in the usage line argparse prints before an error.
+    # It touches nothing a detector computes, and Rich falls back to plain text
+    # on its own when stdout is not a terminal — which is how an agent, a pipe
+    # and CI all see it.
+    #
+    # Worth saying out loud what one line here installs: rich-argparse pulls in
+    # rich, and rich pulls in pygments, markdown-it-py and mdurl. Four
+    # distributions for help text, against the two this package had. The trade
+    # was taken because none of them is imported until help is actually
+    # rendered — `import echolot.main` costs 4 ms more, and `echolot status`
+    # never touches rich at all — and because all four are MIT or BSD-2.
+    #
+    # The cap is on the major version, not the minor: the formatter class names
+    # and `group_name_formatter` are the API this uses, and 1.x keeps them.
+    "rich-argparse>=1.7,<2",
 ]
 
 # Development only. Nothing here reaches a wheel, and nothing here can change

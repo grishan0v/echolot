@@ -131,7 +131,7 @@ def test_the_documented_block_lists_only_real_dependencies() -> None:
     )
 
 
-def test_importing_the_cli_pulls_in_one_distribution() -> None:
+def test_importing_the_cli_pulls_in_two_distributions() -> None:
     """Every command pays for whatever the import chain drags along.
 
     `questionary` went in at the top of `hosts.py`, which `layer` imports and
@@ -155,7 +155,15 @@ def test_importing_the_cli_pulls_in_one_distribution() -> None:
     whose import name and installed name differ still lines up with what
     `[project.dependencies]` says.
     """
-    allowed = {"PyYAML"}
+    # rich-argparse is the decision this test exists to force, and it was made
+    # rather than avoided. `build_parser()` runs on every invocation and needs
+    # the formatter class to construct the parsers, so moving the import inside
+    # a function would relocate the cost, not remove it. What keeps it cheap is
+    # that rich-argparse imports rich lazily: `import echolot.main` costs 4 ms
+    # more, and no command that does not print help ever loads rich, pygments,
+    # markdown-it-py or mdurl at all. Measured, and the reason it is one name
+    # here rather than five.
+    allowed = {"PyYAML", "rich-argparse"}
     probe = (
         "import sys\n"
         "from importlib.metadata import packages_distributions\n"

@@ -19,6 +19,7 @@ echolot doctor
   platform         Darwin / x86_64
   perfetto         0.57.2
   PyYAML           6.0.3
+  rich-argparse    1.8.0
   trace_processor  v56.1
 
   binary: ~/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46
