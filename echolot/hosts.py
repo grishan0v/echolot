@@ -260,14 +260,67 @@ def interactive(stream) -> bool:
         return False
 
 
+def _host_for(token: str) -> Host | None:
+    """One typed word to a host, or nothing — the whole vocabulary of `pick()`.
+
+    `isascii()` before `isdigit()` because they disagree: `"²".isdigit()` is
+    true and `int("²")` raises, so the pair without the guard turns a pasted
+    superscript into a crash rather than an unknown word.
+    """
+    if token.isascii() and token.isdigit() and 1 <= int(token) <= len(HOSTS):
+        return HOSTS[int(token) - 1]
+    return BY_KEY.get(token)
+
+
+def _parse(line: str) -> tuple[list[Host], list[str]]:
+    """The hosts a line names, and the words in it that name nothing.
+
+    Split out of `pick()` so the rule can be read and tested without a
+    terminal in the way. `pick()` is the only caller; the tests are the only
+    other reader.
+    """
+    picked: list[Host] = []
+    bad: list[str] = []
+    for token in line.replace(",", " ").split():
+        host = _host_for(token)
+        if host is None:
+            bad.append(token)
+        elif host not in picked:
+            picked.append(host)
+    return picked, bad
+
+
 def pick(detected: list[Host], stream=sys.stdout) -> list[Host]:
     """Confirm a guess rather than ask a blank question.
 
     Detection has already looked at the project, so the common answer is
-    Enter. Numbered input rather than an arrow-key menu: no raw terminal mode
-    to enter and leave, it survives a pipe, and a process dying mid-screen
-    cannot leave the terminal wedged.
+    Enter. The answer is a typed line and not an arrow-key menu: "1 3", "all"
+    and "none" are one keystroke apart, and what was chosen stays readable in
+    a transcript an agent reads back later.
+
+    `readline` is loaded for its effect on `input()` rather than for anything
+    called here. Without it the left arrow arrives inside the answer as the
+    escape sequence the key sends, so typing "abc", pressing left twice and
+    typing "X" reads back with that punctuation in the middle of it instead of
+    "aXbc". With it the line edits the way every other prompt on the machine
+    does.
+
+    That costs one of the three things the bare read could claim. readline
+    takes the terminal out of its line-at-a-time mode while it waits, so a
+    process killed mid-prompt can leave it that way. The other two hold: no
+    screen is drawn and no menu is entered, and a piped answer still reads
+    straight through. The two gates in `interactive()` keep the exposure down
+    to a real terminal with a person in front of it.
     """
+    # Imported for its effect and not for anything called here: loading it is
+    # what puts `input()` behind it. Inside the function because that is the
+    # only place the effect is wanted, and in a try because Windows has no
+    # readline — there the console edits the line itself.
+    try:
+        import readline  # noqa: F401
+    except ImportError:
+        pass
+
     bold, dim, off = _colour(stream)
     pre = {h.key for h in detected}
     print(f"\n{bold}Point which agents at echolot?{off}\n", file=stream)
@@ -283,6 +336,9 @@ def pick(detected: list[Host], stream=sys.stdout) -> list[Host]:
     default = ",".join(str(i) for i, h in enumerate(HOSTS, 1) if h.key in pre)
     print(f'\n  {dim}Enter — keep {default} · numbers — "1 3" · "all" · "none"{off}',
           file=stream)
+    # Both interrupts land here: Ctrl-D raises EOFError and Ctrl-C raises
+    # KeyboardInterrupt, and either one means the person left without
+    # choosing, which is answered with the guess they were already looking at.
     try:
         raw = input("› ").strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -295,17 +351,7 @@ def pick(detected: list[Host], stream=sys.stdout) -> list[Host]:
         return list(HOSTS)
     if raw == "none":
         return []
-    picked, bad = [], []
-    for token in raw.replace(",", " ").split():
-        host = None
-        if token.isdigit() and 1 <= int(token) <= len(HOSTS):
-            host = HOSTS[int(token) - 1]
-        elif token in BY_KEY:
-            host = BY_KEY[token]
-        else:
-            bad.append(token)
-        if host is not None and host not in picked:
-            picked.append(host)
+    picked, bad = _parse(raw)
     if bad:
         print(f"  ignored: {', '.join(bad)}", file=stream)
     return picked or detected
