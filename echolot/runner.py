@@ -134,6 +134,13 @@ data_sources: {
 
 DEVICE_TRACE = "/data/misc/perfetto-traces/echolot.pftrace"
 
+# Config keys that describe a recording we make ourselves. In gradle mode the
+# macrobenchmark has already made it, so every one of these is inert — and
+# they are the keys most likely to be copied in from a launch-mode config and
+# believed.
+RECORDING_KNOBS = ("environment", "atrace_categories", "buffer_kb",
+                   "duration_ms", "reset_policy")
+
 
 class RunnerError(Exception):
     pass
@@ -246,12 +253,19 @@ def trace_config(package: str, duration_ms: int, categories: list[str],
         sys_stats=SYS_STATS_SOURCE if environment else "")
 
 
-def run_command(command: str, timeout: float, knob: str = "runner.timeout_s") -> float:
+def run_command(command: str, timeout: float, knob: str = "runner.timeout_s",
+                cwd: Path | None = None) -> float:
     """Lets something else drive the scenario while we record the trace.
 
     The command comes from the project's own config — the same level of trust
     as the gradle task next to it. Anything that can move the app goes here:
     adb input, uiautomator, maestro, your own script.
+
+    `cwd` is where it runs. Gradle mode passes `runner.project_root`, because
+    `./gradlew` is a path and a relative path means nothing until you say what
+    it is relative to. Without it the wrapper resolved against wherever
+    `echolot` happened to be started, which is the directory holding
+    `echolot.yml` and need not be the one holding the app.
 
     Two things about the timeout, both learned the hard way.
 
@@ -268,9 +282,14 @@ def run_command(command: str, timeout: float, knob: str = "runner.timeout_s") ->
     """
     import time
     started = time.monotonic()
+    if cwd is not None and not Path(cwd).is_dir():
+        raise RunnerError(
+            f"runner.project_root: {cwd} is not a directory. That is where the "
+            f"gradle task would have run, and the wrapper is found relative "
+            f"to it.")
     proc = subprocess.Popen(
         command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True,
+        text=True, cwd=str(cwd) if cwd is not None else None,
         # POSIX only, and the reason the kill below can reach the whole tree.
         start_new_session=(os.name == "posix"))
     try:
@@ -412,14 +431,30 @@ def collect(package: str, out_dir: Path, iterations: int,
         command = " ".join([str(section.get("gradle", "./gradlew")), str(task),
                             *(section.get("gradle_args") or [])])
         log(f"gradle: {command}")
+        log(f"  in {root.resolve()}")
+        ignored = [k for k in RECORDING_KNOBS if k in section]
+        if ignored:
+            # Nothing here builds a trace config: the macrobenchmark wrote
+            # these traces and chose what went into them. Said out loud
+            # because the knobs look like they apply and do not — on the first
+            # real run of this mode, `environment: true` sat in the config
+            # while the report came back with the thermal counters missing,
+            # and the config was not the reason for either half of that.
+            log(f"  [!] the macrobenchmark chose what to record, so "
+                f"{', '.join('runner.' + k for k in ignored)} "
+                f"{'does' if len(ignored) == 1 else 'do'} not apply here. "
+                f"What the traces carry is up to the benchmark's own perfetto "
+                f"config; the report says which platform state it found.")
         since = time.time()
         spent = run_command(command, timeout=int(section.get("timeout_s", 3600)),
-                            knob="runner.timeout_s")
+                            knob="runner.timeout_s", cwd=root)
         results = harvest(root, since, out_dir, name)
         if not results:
             raise RunnerError(
-                "gradle finished but no new traces appeared. Check that the "
-                "task really is a macrobenchmark and that it actually ran.")
+                f"gradle finished but no new traces appeared under "
+                f"{root.resolve()}. Check that the task really is a "
+                f"macrobenchmark, that it actually ran, and that "
+                f"runner.project_root points at the project that wrote them.")
         log(f"  traces collected: {len(results)} in {spent:.0f}s")
         for r in results:
             log(f"    {r['path'].name}  {r['size'] / 1e6:.1f} MB")
