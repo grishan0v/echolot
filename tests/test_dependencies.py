@@ -143,17 +143,27 @@ def test_importing_the_cli_pulls_in_one_distribution() -> None:
     name in it should be a decision somebody made on purpose, and this test
     turning red is what makes it one.
 
-    Asked by distribution rather than by module name: an environment can put a
-    `sitecustomize` or a Cython shim in `sys.modules` that nobody imported,
-    and those are not something echolot depends on.
+    What is measured is the difference the import makes, taken across it
+    rather than read off the end. An interpreter arrives with things in
+    `sys.modules` that nobody asked for — on 3.10 a setuptools `.pth` file
+    runs before the first line of the program, and a `sitecustomize` or a
+    Cython shim can appear on any version. Those cost their time whether or
+    not echolot exists, and the first version of this test failed on 3.10 for
+    reporting one of them.
+
+    Counted by distribution rather than by module name, so that a package
+    whose import name and installed name differ still lines up with what
+    `[project.dependencies]` says.
     """
     allowed = {"PyYAML"}
     probe = (
-        "import sys, echolot.main\n"
+        "import sys\n"
         "from importlib.metadata import packages_distributions\n"
         "owner = packages_distributions()\n"
-        "tops = {n.partition('.')[0] for n in sys.modules}\n"
-        "print(' '.join(sorted({d for t in tops for d in owner.get(t, ())\n"
+        "before = {n.partition('.')[0] for n in sys.modules}\n"
+        "import echolot.main\n"
+        "added = {n.partition('.')[0] for n in sys.modules} - before\n"
+        "print(' '.join(sorted({d for t in added for d in owner.get(t, ())\n"
         "                       if d != 'echolot'})))\n"
     )
     run = subprocess.run([sys.executable, "-c", probe], cwd=ROOT,
