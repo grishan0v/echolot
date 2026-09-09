@@ -141,11 +141,23 @@ def _merge_budget(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
 
     The median per bucket rather than the budget of the median run: the
     question a reader asks of it is "how much of a typical run went here",
-    one bucket at a time. A consequence worth knowing is that the medians
-    need not add up to the median window — three runs whose kernel time
-    happened to peak in different ones each contribute their middle value —
-    so `accounted_ms` is recomputed from the merged buckets rather than
-    medianed itself, and it is the sum of what is printed.
+    one bucket at a time.
+
+    The consequence is that the medians need not add up to the median window.
+    Three runs whose kernel time peaked in different ones each contribute
+    their middle value, and the sum of those lands wherever it lands — on a
+    live three-run set it came to 383.09 ms against a median window of 380.54,
+    and the report said it had accounted for 100.7% of the scenario. Every one
+    of those runs accounted for exactly 100.0% on its own.
+
+    So the share is the median of the per-run shares rather than a ratio of
+    two independent medians. Coverage is a property of a run — this run
+    explained this much of its own window — and a typical run's coverage is
+    the answer to the question being asked. `accounted_ms` stays the sum of
+    the buckets above it, because that is what makes the printed numbers add
+    up, and it is deliberately not the numerator of the percentage: those are
+    two different questions and only one of them can be answered by a
+    division.
     """
     budgets = [r["window"].get("main_thread") for r in reports
                if (r.get("window") or {}).get("main_thread")]
@@ -157,8 +169,9 @@ def _merge_budget(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     windows = [b["window_ms"] for b in budgets if b.get("window_ms")]
     out["accounted_ms"] = round(sum(out.values()), 2)
     out["window_ms"] = round(median(windows), 2) if windows else None
-    out["accounted_pct"] = (round(out["accounted_ms"] / out["window_ms"] * 100, 1)
-                            if out["window_ms"] else None)
+    shares = [b["accounted_pct"] for b in budgets
+              if b.get("accounted_pct") is not None]
+    out["accounted_pct"] = round(median(shares), 1) if shares else None
     out["runs"] = f"{len(budgets)}/{len(reports)}"
     return out
 
