@@ -226,6 +226,52 @@ def test_a_project_with_neither_source_says_so(tmp_path):
     check("naming both places it looked", named_both, done.stderr[-300:])
 
 
+def test_a_session_id_against_the_log_is_told_why_it_cannot_match(tmp_path):
+    """The failure the first live run of `reflect` walked into.
+
+    `reflect --session 98b32f6a --from-log` answered "no session starting with
+    '98b32f6a'". True, and it sends the reader to check the id they copied
+    correctly. The actual answer is that the log holds no session ids at all —
+    it is cut into sittings by the gaps between runs, each named by a hash of
+    its own — so no spelling of an agent's id could ever have matched.
+    """
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    write_log(tmp_path, [
+        line("2026-08-19T10:00:00+00:00", "analyze", ["analyze", "a"])])
+    done = subprocess.run(
+        [sys.executable, "-m", "echolot.main", "reflect", "--session",
+         "98b32f6a", "--from-log", "--project", str(tmp_path)],
+        capture_output=True, text=True, cwd=tmp_path,
+        env=dict(os.environ, ECHOLOT_NO_RECORD="1"))
+
+    check("still refused", done.returncode == 2, f"exit {done.returncode}")
+    check("it names the unit the log actually has",
+          "sitting" in done.stderr, done.stderr)
+    check("says why an id from elsewhere cannot match",
+          "no session ids" in done.stderr, done.stderr)
+    check("and hands over the command that lists them",
+          "--from-log --list" in done.stderr, done.stderr)
+
+
+def test_the_listing_names_its_rows_by_what_they_are(tmp_path):
+    """Where the message above sends the reader.
+
+    Telling somebody an id did not name a sitting and then heading the
+    listing `session` is how the misunderstanding survives being corrected.
+    """
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    write_log(tmp_path, [
+        line("2026-08-19T10:00:00+00:00", "analyze", ["analyze", "a"])])
+    done = subprocess.run(
+        [sys.executable, "-m", "echolot.main", "reflect", "--list",
+         "--from-log", "--project", str(tmp_path)],
+        capture_output=True, text=True, cwd=tmp_path,
+        env=dict(os.environ, ECHOLOT_NO_RECORD="1"))
+
+    header = done.stdout.splitlines()[0] if done.stdout else ""
+    check("the log's rows are sittings", header.startswith("sitting"), header)
+
+
 # --- a session that was building the tool, not using it ----------------------
 
 ECHOLOT_PYPROJECT = """\

@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import os
 import select
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -126,18 +127,55 @@ def _on_a_terminal(keys: bytes, timeout: float = 15.0) -> str:
 
     The handshake waits for the prompt to appear before typing, so the test
     does not depend on how long an interpreter takes to start.
-    """
-    import pty
 
+    The pty is opened here and handed to `subprocess` as the child's three
+    standard streams. The obvious spelling — `pty.fork()`, which is one call
+    and reads better — is the one thing this must not do, and `pty.spawn()`
+    is the same call underneath.
+
+    `pty.fork()` is `os.forkpty()`: it copies this process, the copy gets one
+    thread out of however many this one had, and then it keeps running Python
+    in that copy until `execve` replaces it. Any thread that held a lock at
+    the moment of the copy still holds it there, and nothing is left to
+    release it. This process is not single-threaded by the time the test
+    runs: opening an `echolot.tp.TraceSession` takes it from one OS thread to
+    three, and those are threads inside the perfetto library rather than
+    Python `threading` objects, so `TraceProcessor.close()` does not join
+    them, `TraceSession.close()` has nothing it could join, and every test
+    that reads a trace leaves them behind for the rest of the session.
+
+    Today the copy happens with one thread anyway, and only because
+    `test_hosts` sorts before `test_selftest`. That is not a property of
+    anything — the first test file that reads a trace and sorts before this
+    one takes it away — and what it is protecting against is not a red test.
+    A child wedged between the fork and the exec prints nothing, so the loop
+    below waits out its full timeout and then reports that the prompt never
+    answered: fifteen seconds of silence and a message about the prompt, for
+    a problem that is not in the prompt.
+
+    `subprocess` replaces the child with the interpreter immediately, with no
+    Python running in between, so there is no window for an inherited lock to
+    matter. `start_new_session` puts the child in a session of its own, which
+    it wants for a second reason: `pick()` loads readline, readline takes a
+    terminal out of line-at-a-time mode while it waits, and the only terminal
+    this child can reach should be the one opened for it here rather than the
+    one somebody is running pytest in.
+    """
     program = (
         "from echolot import hosts\n"
         "chosen = hosts.pick([hosts.BY_KEY['claude']])\n"
         "print('RESULT:' + ','.join(h.key for h in chosen))\n"
     )
-    pid, fd = pty.fork()
-    if pid == 0:                                    # pragma: no cover — the child
-        os.execve(sys.executable, [sys.executable, "-c", program],
-                  {**os.environ, "PYTHONPATH": str(ROOT)})
+    fd, child_fd = os.openpty()
+    child = subprocess.Popen(
+        [sys.executable, "-c", program],
+        stdin=child_fd, stdout=child_fd, stderr=child_fd,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        start_new_session=True,
+    )
+    # Ours is closed straight away so the read below sees the end of the
+    # stream when the child exits, rather than a pty nobody will write to.
+    os.close(child_fd)
 
     seen, typed, deadline = "", False, time.monotonic() + timeout
     try:
@@ -155,11 +193,8 @@ def _on_a_terminal(keys: bytes, timeout: float = 15.0) -> str:
                 os.write(fd, keys)
                 typed = True
     finally:
-        try:
-            os.kill(pid, 9)
-        except ProcessLookupError:
-            pass
-        os.waitpid(pid, 0)
+        child.kill()
+        child.wait()
         os.close(fd)
     return seen
 
