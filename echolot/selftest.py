@@ -2272,6 +2272,81 @@ def _(report):
     assert "RuntimeError" in got[0].why, got[0].why
 
 
+@check("reflect: writing local.yml is the project's config, not somebody else's")
+def _(report):
+    """`config_bypassed` is about analysis that did not use the project's
+    config. `local.yml` IS the project's config — the half that is merged on
+    top, holds the device serial and the path to this machine's
+    trace_processor, and is gitignored precisely because it is per-machine.
+    Every session that set a device serial was reported as having gone around
+    the config it had just finished filling in.
+    """
+    from .reflect import signals as sig_mod
+    from .reflect.model import Call, Session
+
+    def session(*calls):
+        s = Session(id="s", agent="claude-code")
+        s.calls = list(calls)
+        return s
+
+    ts = "2026-01-01T10:00:00.000Z"
+    local = Call(id="1", ts=ts, tool="Write", input={"content": "runner:\n  device: R5\n"},
+                 path="/p/local.yml")
+    shell = Call(id="2", ts=ts, tool="Bash", input={},
+                 command="cat > local.yml <<'YML'\nrunner:\n  device: R5\nYML")
+    assert sig_mod.config_bypassed(session(local, shell), sig_mod.Facts(), None) is None, \
+        "the project's own local overlay was reported as a config of the agent's own"
+
+    mine = Call(id="3", ts=ts, tool="Write", input={"content": "project:\n  process: x\n"},
+                path="/tmp/mine.yml")
+    got = sig_mod.config_bypassed(session(local, mine), sig_mod.Facts(), None)
+    assert got and got.severity == "warn" and len(got.rows) == 1, got
+    assert got.rows[0]["config"].endswith("mine.yml"), got.rows
+
+
+@check("reflect: a config rewrite that leaves the numbers alone is not a threshold edit")
+def _(report):
+    """The test was "the written text mentions a min_* key", and a `Write`
+    carries the whole file. An agent that rewrote echolot.yml to add a domain
+    shipped the untouched detectors section with it, and the edit came back as
+    thresholds tuned by hand — on a session where no number had moved.
+
+    The numbers have to move. Each write is compared with what the file said
+    before it: the previous write in the session, or the config on disk.
+    """
+    from .reflect import signals as sig_mod
+    from .reflect.model import Call, Session
+
+    body = ("project:\n  process: com.example.app\n"
+            "detectors:\n  main_thread_block:\n    min_slice_ms: 40\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "echolot.yml"
+        path.write_text(body, encoding="utf-8")
+        cfg = Config.load(path)
+
+        def wrote(content, tool="Write", before=None):
+            s = Session(id="s", agent="claude-code")
+            inp = {"content": content} if tool == "Write" else \
+                {"new_string": content, "old_string": before or ""}
+            s.calls = [Call(id="1", ts="2026-01-01T10:00:00.000Z", tool=tool,
+                            input=inp, path=str(path))]
+            return sig_mod.thresholds_by_hand(s, sig_mod.Facts(), cfg)
+
+        assert wrote(body + "domains:\n  - slice: \"x\"\n") is None, \
+            "a rewrite that carried the same thresholds was read as tuning them"
+        moved = wrote(body.replace("40", "12"))
+        assert moved and moved.severity == "warn", moved
+        assert wrote("  process: com.example.other\n", tool="Edit",
+                     before="  process: com.example.app\n") is None, \
+            "an edit that never touched a threshold line"
+        edited = wrote("    min_slice_ms: 12\n", tool="Edit",
+                       before="    min_slice_ms: 40\n")
+        assert edited and edited.severity == "warn", edited
+        # a key the config did not have is a new threshold, not a rewrite
+        added = wrote(body + "  frame_jank:\n    min_frames: 3\n")
+        assert added and added.severity == "warn", added
+
+
 @check("CLI: what the user typed wrong is a sentence and an exit code, never a traceback")
 def _(report):
     """Four ways the tool used to end in a Python traceback.
