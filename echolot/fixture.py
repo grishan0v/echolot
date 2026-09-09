@@ -226,6 +226,31 @@ SLICES = {
     # the point: a thread stopped working is not work done twice, and one
     # signal must not arrive in the report under two headings.
     TID_LOCKED: [
+        # Two anchors a later scenario could legitimately use, both inside
+        # the 800..860 stretch the main thread spends asleep, and they must
+        # be read differently — which is the whole point of them.
+        #
+        # At 840 the main thread's `Steady_heavy` message (833..845) is still
+        # open: it is asleep INSIDE a message, which is a blocking call, and
+        # 40 of those 60 ms happened before the window. That is what
+        # `window.opened_inside` is for.
+        #
+        # At 847 nothing is open below `AppStart`: `Steady_heavy` ended at 845
+        # and `binder reply` does not start until 850. The looper had reached
+        # the queue, the app is behaving correctly, and a rule reading the
+        # sleep alone would call this a stall. On a real command-driven
+        # scenario the main thread sat in exactly this state for 1615 ms
+        # waiting for a finger.
+        #
+        # That 845..850 gap is the only clear moment in this sleep, so a
+        # main-thread slice moved over it turns this control into a duplicate
+        # of the one above.
+        #
+        # On this thread because its slices are all lock names, so an extra
+        # name matches no detector's mask, and because its 10 ms of CPU is far
+        # below anything that reads coverage.
+        ("LateAnchor", 840, 5, []),
+        ("IdleAnchor", 847, 2, []),
         ("monitor contention with owner Thread-3 (4455) at void "
          "com.example.Store.put(java.lang.String)(Store.java:41) waiters=0 "
          "blocking from java.lang.Object com.example.Store.get()(:-1)", 300, 26, [

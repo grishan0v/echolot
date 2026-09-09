@@ -711,7 +711,86 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
             "glob": glob,
             "matches": hits[0]["n"] if hits else 0,
         }
+    window["opened_inside"] = _opened_inside(tp, window)
     return window
+
+
+# When the part of a block that fell outside the window is worth saying.
+#
+# The rule is a comparison rather than a threshold: warn once more of the
+# block happened before the window than inside it, which is the point where
+# the number in the report is at most half the truth. Nothing to calibrate and
+# nothing that changes with the length of the scenario — a share of the window
+# would let 300 ms of hidden stall pass unmentioned on a twelve-second
+# recording and shout about 2 ms on a twenty-millisecond one.
+#
+# The floor underneath it is `compare.FLOOR_MS`, the smallest movement this
+# tool already refuses to call a finding.
+
+
+def _opened_inside(tp, window: dict) -> dict | None:
+    """Whether the scenario window opened with the main thread already blocked.
+
+    Slices are safe here — they keep their real duration across the boundary,
+    which is what `_slice_win` exists to do. Thread states are not: they are
+    clipped, so a main thread that went to sleep 400 ms before the anchor and
+    woke 100 ms after it reaches the report as 100 ms of waiting, and the
+    reason it was waiting never appears at all.
+
+    That is a partial account rather than a wrong one, and it looks exactly
+    like a complete one. Hence a fact in the window rather than a correction
+    to the numbers: nothing here moves a measurement, it says which end of the
+    stall the window cut off.
+
+    Which states count as a block is `anr_risk`'s question already answered,
+    and the answer is reused rather than invented again. `Running` is working.
+    `R`, `R+`, `D` and `DK` are unambiguous: ready and denied a CPU, or parked
+    in the kernel. `S` is the one that needs deciding, because an idle looper
+    waiting on the message queue and a blocking call inside a message look
+    identical in the state alone — and the discriminator is whether a slice
+    deeper than the anchor is open at that moment.
+
+    Getting this wrong is not theoretical. On a real command-driven scenario
+    the main thread sat in `S` for 1615 ms waiting for the user to touch the
+    screen; a rule reading the state alone would have called that "already
+    blocked" and sent someone looking for a stall that was the app behaving
+    correctly.
+    """
+    start = window.get("ts_start")
+    if start is None:
+        return None
+    rows = tp.query(f"""
+        SELECT ts.state                              AS state,
+               th.name                               AS thread_name,
+               ROUND(({start} - ts.ts) / 1e6, 2)     AS before_ms,
+               ROUND(ts.dur / 1e6, 2)                AS total_ms
+        FROM thread_state ts
+        JOIN thread th ON ts.utid = th.utid
+        JOIN _proc p   ON th.upid = p.upid
+        WHERE th.tid = p.pid
+          AND ts.dur > 0
+          AND ts.ts < {start}
+          AND ts.ts + ts.dur > {start}
+    """)
+    if not rows or rows[0]["state"] == "Running":
+        return None
+    if rows[0]["state"] not in ("R", "R+", "D", "DK"):
+        # Sleeping. Only a block if a message was open at the time — otherwise
+        # the looper had reached the queue, which is the app working properly.
+        inside_message = tp.query(f"""
+            SELECT COUNT(*) AS n
+            FROM _slice s
+            WHERE s.is_main_thread = 1 AND s.depth >= 1 AND s.dur > 0
+              AND s.ts < {start} AND s.ts + s.dur > {start}
+        """)
+        if not inside_message or not inside_message[0]["n"]:
+            return None
+    found = dict(rows[0])
+    inside = found["total_ms"] - found["before_ms"]
+    found["inside_ms"] = round(inside, 2)
+    found["material"] = bool(found["before_ms"] >= inside
+                             and found["before_ms"] >= compare_mod.FLOOR_MS)
+    return found
 
 
 def _environment_info(tp) -> dict:

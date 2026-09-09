@@ -1060,6 +1060,65 @@ def _(report):
         == _shipped() - 1 - len(SILENT_ON_FIXTURE), plain["summary"]
 
 
+# --- the window opening inside a block --------------------------------------
+
+def _anchored_at(anchor: str):
+    """The fixture with the window pointed at one of the two late anchors.
+
+    Both sit inside the 800..860 stretch the main thread spends asleep, and
+    they differ only in whether a message was open at that moment. Everything
+    else is the shipped behaviour: this is a config a project could
+    legitimately have, not a special mode.
+    """
+    from .main import analyze_trace
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "late.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        return analyze_trace(trace, Config({
+            **FIXTURE_CONFIG,
+            "scenario": {**FIXTURE_CONFIG["scenario"],
+                         "start": {"name": anchor}},
+        }))
+
+
+@check("a window that opened mid-block says how much of it is outside")
+def _(report):
+    # A partial account looks exactly like a complete one, which is the whole
+    # reason this exists. The main thread sleeps 800..860; anchored at 840,
+    # 40 ms of that sleep is behind the window and 20 ms inside it, and the
+    # report would otherwise show the 20 with nothing to say the 40 happened.
+    got = _anchored_at("LateAnchor")["window"]["opened_inside"]
+    assert got["state"] == "S", got
+    assert (got["before_ms"], got["inside_ms"]) == (40.0, 20.0), got
+    assert got["material"] is True, (
+        f"more of the block fell outside the window than inside it: {got}")
+
+
+@check("a main thread idle at the message queue is not a block")
+def _(report):
+    # Twelve milliseconds later in the same sleep, and the opposite answer:
+    # `Steady_heavy` has ended, nothing is open below the anchor, and the
+    # looper had reached the queue. The state alone cannot tell these apart —
+    # on a real command-driven scenario the main thread sat in this exact
+    # state for 1615 ms waiting for a finger, and a rule reading the sleep
+    # would have called that a stall.
+    got = _anchored_at("IdleAnchor")["window"]["opened_inside"]
+    assert got is None, (
+        f"an idle looper was reported as a block: {got}. `IdleAnchor` sits at "
+        f"ms 847, in the only stretch of that sleep with no message open "
+        f"(845..850). A main-thread slice moved over it makes this control a "
+        f"duplicate of the check above rather than its opposite.")
+
+
+@check("a window that opened on a working main thread says nothing")
+def _(report):
+    # The fixture's own window opens at ms 100 with the main thread on a CPU
+    # since 50. Being busy before the scenario is not a stall the report is
+    # missing — and the slices covering it kept their full length anyway, so
+    # there is nothing truncated to warn about.
+    assert report["window"]["opened_inside"] is None, report["window"]
+
+
 # --- anr, anr_risk ---------------------------------------------------------
 
 def _lowered_bar():
