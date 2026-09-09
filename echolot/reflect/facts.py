@@ -315,7 +315,11 @@ def config_writes(session: Session, names: tuple[str, ...] = ("echolot.yml", "lo
     Write/Edit on the file is the obvious way; agents also do it with a
     python heredoc, `sed -i`, or a redirect, and that used to be invisible.
     Each entry: ts, agent, file, tool ("Bash" for the shell), text — the new
-    content or the command, for whoever wants to look for detector keys.
+    content or the command, for whoever wants to look for detector keys — and
+    `before`, the text an Edit replaced. Only an Edit has one: a Write and a
+    shell redirect say what the file will hold and nothing about what it held,
+    which is why a reader of these entries cannot tell a changed threshold
+    from an untouched one on the write alone.
     """
     out = []
     for c in session.calls:
@@ -324,13 +328,14 @@ def config_writes(session: Session, names: tuple[str, ...] = ("echolot.yml", "lo
             inp = c.input or {}
             out.append({"ts": c.ts, "agent": c.agent, "file": Path(c.path).name,
                         "tool": c.tool,
-                        "text": str(inp.get("new_string") or inp.get("content") or "")})
+                        "text": str(inp.get("new_string") or inp.get("content") or ""),
+                        "before": str(inp.get("old_string") or "")})
             continue
         if c.command is not None:
             for name in names:
                 if writes_file(c.command, name):
                     out.append({"ts": c.ts, "agent": c.agent, "file": name,
-                                "tool": c.tool, "text": c.command})
+                                "tool": c.tool, "text": c.command, "before": ""})
                     break
     out.sort(key=lambda e: ts_to_epoch(e["ts"]))
     return out

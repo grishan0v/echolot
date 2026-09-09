@@ -50,7 +50,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .domains import SKIP_DIRS, gradle_module
+from .domains import files_ending, files_named, gradle_module
 from .domains import source_files as domains_source_files
 
 DEFAULT_PREFIX = "AGENTTMP_"
@@ -113,6 +113,10 @@ COMM_MAX = 15
 _CLASS_DECL = re.compile(r"\b(?:class|object)\s+([A-Za-z_][A-Za-z0-9_]*)")
 _FUN_DECL = re.compile(r"\bfun\s+(?:<[^>]*>\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _RUNTIME_TRACING = re.compile(r"runtime[-.]tracing")
+# The library runtime-tracing is built on. A project that has it has done the
+# Perfetto SDK half of composition tracing already, and telling that project
+# it has nothing is both wrong and the fastest way to be ignored.
+_TRACING_PERFETTO = re.compile(r"tracing[-.]perfetto")
 _CALL = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=[({])")
 _KEYWORDS = {"if", "for", "while", "when", "try", "catch", "finally", "return", "else",
              "do", "run", "let", "also", "apply", "with", "repeat", "synchronized",
@@ -285,8 +289,14 @@ def source_files(root: Path) -> list[Path]:
 
 
 def manifests(root: Path) -> list[Path]:
-    return [p for p in sorted(root.rglob("AndroidManifest.xml"))
-            if not (SKIP_DIRS & set(p.parts)) and "main" in p.parts]
+    """Every src/main manifest in the project, from the pruned walk.
+
+    `rglob` found them inside a git worktree parked under `.claude/` too, so
+    the app module appeared twice and `plan` asked for `--module` to tell two
+    copies of the same manifest apart.
+    """
+    return [p for p in files_named(root, "AndroidManifest.xml")
+            if "main" in p.parts]
 
 
 def launcher_activities(text: str) -> list[str]:
@@ -464,6 +474,63 @@ def under_allowed(rel: str, allowed: list[str]) -> bool:
     return any(rel == a.rstrip("/") or rel.startswith(a.rstrip("/") + "/") for a in allowed)
 
 
+def _build_files(root: Path, mdir: Path) -> tuple[list[Path], list[Path]]:
+    """(the app module's build scripts, every other one in the project)."""
+    mine = [mdir / n for n in ("build.gradle.kts", "build.gradle") if (mdir / n).exists()]
+    others = [p for p in files_named(root, "build.gradle.kts") + files_named(root, "build.gradle")
+              if p not in mine]
+    return mine, others
+
+
+def _seen_in(paths: list[Path], pattern) -> Path | None:
+    for p in paths:
+        try:
+            if pattern.search(p.read_text(encoding="utf-8", errors="replace")):
+                return p
+        except OSError:
+            continue
+    return None
+
+
+def _tracing_note(root: Path, mdir: Path) -> str:
+    """What composition tracing needs, against what the project already has.
+
+    The check used to read the app module's two build scripts and nothing
+    else, so it said "not among the dependencies" about a project that
+    declares the library in `gradle/libs.versions.toml` and applies it from a
+    convention plugin — and about one that has `androidx.tracing:tracing-perfetto`
+    in the catalog, which is what runtime-tracing is built on. Being told to
+    start from zero by a tool that did not look is worse than not being told.
+
+    Empty string when there is nothing to say.
+    """
+    mine, others = _build_files(root, mdir)
+    catalogs = files_ending(root, ".versions.toml")
+    if _seen_in(mine, _RUNTIME_TRACING):
+        return ""
+    elsewhere = _seen_in(others, _RUNTIME_TRACING)
+    if elsewhere:
+        return (f"androidx.compose.runtime:runtime-tracing is in "
+                f"{_rel(elsewhere, root)} but not in the app module's build script — "
+                f"check that :{_rel(mdir, root)} ends up with it, or composable names "
+                f"will not be in the trace")
+    if _seen_in(catalogs, _RUNTIME_TRACING):
+        return ("androidx.compose.runtime:runtime-tracing is in the version catalog "
+                "and not applied in the app module — one line in its dependencies "
+                "and composable names appear in the trace with no markers at all")
+    perfetto = _seen_in(mine + others + catalogs, _TRACING_PERFETTO)
+    where = f" ({_rel(perfetto, root)})" if perfetto else ""
+    if perfetto:
+        return (f"androidx.tracing:tracing-perfetto is already here{where}, and "
+                f"androidx.compose.runtime:runtime-tracing is the artifact on top of "
+                f"it that names composables — with it they appear in the trace with "
+                f"no markers at all; the one line left to add for a Compose app")
+    return ("androidx.compose.runtime:runtime-tracing is not among the app module's "
+            "dependencies, the version catalog, or any build script here — with it, "
+            "composable names appear in the trace with no markers at all; the first "
+            "thing to add for a Compose app")
+
+
 # --- the plan ------------------------------------------------------------------
 
 def plan(root: Path, package: str | None = None, allowed: list[str] | None = None,
@@ -624,15 +691,9 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
                              f"inside Application.onCreate (super.onCreate), nothing separate to mark")
 
     # 5. what would give names for free
-    tracing = False
-    for name in ("build.gradle.kts", "build.gradle"):
-        bf = mdir / name
-        if bf.exists() and _RUNTIME_TRACING.search(bf.read_text(encoding="utf-8", errors="replace")):
-            tracing = True
-    if not tracing:
-        out.notes.append("androidx.compose.runtime:runtime-tracing is not among the app module's "
-                         "dependencies — with it, composable names appear in the trace with no "
-                         "markers at all; the first thing to add for a Compose app")
+    note = _tracing_note(root, mdir)
+    if note:
+        out.notes.append(note)
 
     # deterministic order: by kind rank, then path, then line; then the cap
     rank = {k: i for i, k in enumerate(("app_oncreate", "activity_oncreate", "set_content",

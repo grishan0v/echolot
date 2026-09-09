@@ -1428,6 +1428,35 @@ def _(report):
     assert sum(1 for why in out.values() if why) == 3, out
 
 
+@check("doctor: what a check prints stays out of the run hosting it, stderr too")
+def _(report):
+    """The self-check's own noise, on the terminal of whoever ran `init`.
+
+    Several checks feed the CLI a trace that is not there and assert the exit
+    code is 2. The error proving it goes to stderr, and only stdout was
+    redirected — so `echolot init`, which ends in `doctor -q`, printed
+    `error: no such trace: nosuch.perfetto-trace` four times in the middle of
+    installing a layer that was fine. On a terminal a deliberate error looks
+    exactly like a real one.
+    """
+    import contextlib
+    import io
+    import sys
+
+    from . import selftest as st
+
+    def noisy(_report):
+        print("the layer went into /tmp/nowhere")
+        print("error: no such trace: nosuch.perfetto-trace", file=sys.stderr)
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        results = st.run_checks({}, [("noisy", noisy)])
+    assert results == [("noisy", None)], results
+    assert not out.getvalue(), f"stdout leaked: {out.getvalue()!r}"
+    assert not err.getvalue(), f"stderr leaked: {err.getvalue()!r}"
+
+
 @check("reflect: a word after `echolot` is not a subcommand")
 def _(report):
     """The readers and the facts disagreed on what counts as a call.
@@ -2034,6 +2063,58 @@ def _(report):
         assert a == b
 
 
+@check("mark: what the project has for composition tracing is looked up, not assumed")
+def _(report):
+    """The note read two build scripts and spoke about the whole project.
+
+    `runtime-tracing` is what puts composable names in a trace, and the check
+    for it read `app/build.gradle{.kts}` and nothing else. A project that
+    declares the library in `gradle/libs.versions.toml`, or applies it from a
+    convention plugin in another module, was told it had nothing — and so was
+    a project carrying `androidx.tracing:tracing-perfetto`, the library
+    runtime-tracing is built on. Being told to start from zero by a tool that
+    did not look is worse than not being told.
+    """
+    from . import mark as mk
+
+    def note(root):
+        return next((n for n in mk.plan(root, package="com.example.app").notes
+                     if "tracing" in n), "")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root)
+        assert "not among the app module's" in note(root), note(root)
+
+        catalog = root / "gradle" / "libs.versions.toml"
+        catalog.parent.mkdir()
+        catalog.write_text('androidx-tracing-perfetto = { module = '
+                           '"androidx.tracing:tracing-perfetto" }\n', encoding="utf-8")
+        said = note(root)
+        assert "tracing-perfetto is already here" in said and "libs.versions.toml" in said, said
+
+        catalog.write_text(catalog.read_text(encoding="utf-8")
+                           + 'androidx-compose-runtime-tracing = { module = '
+                             '"androidx.compose.runtime:runtime-tracing" }\n',
+                           encoding="utf-8")
+        assert "in the version catalog" in note(root), note(root)
+
+        # applied somewhere else in the build: named, not called absent
+        home = root / "feature" / "home" / "build.gradle.kts"
+        home.write_text(home.read_text(encoding="utf-8")
+                        + "dependencies { implementation(libs.androidx.compose.runtime.tracing) }\n",
+                        encoding="utf-8")
+        said = note(root)
+        assert "feature/home/build.gradle.kts" in said and ":app" in said, said
+
+        # and in the app module itself: nothing left to say
+        app = root / "app" / "build.gradle.kts"
+        app.write_text(app.read_text(encoding="utf-8")
+                       + "dependencies { implementation(libs.androidx.compose.runtime.tracing) }\n",
+                       encoding="utf-8")
+        assert note(root) == "", note(root)
+
+
 @check("mark --pools: the places the JDK will name, and the ones already named")
 def _(report):
     """The third way in, and the only one that starts from the report.
@@ -2241,6 +2322,81 @@ def _(report):
 
     assert len(got) == 1 and got[0].severity == "skip", got
     assert "RuntimeError" in got[0].why, got[0].why
+
+
+@check("reflect: writing local.yml is the project's config, not somebody else's")
+def _(report):
+    """`config_bypassed` is about analysis that did not use the project's
+    config. `local.yml` IS the project's config — the half that is merged on
+    top, holds the device serial and the path to this machine's
+    trace_processor, and is gitignored precisely because it is per-machine.
+    Every session that set a device serial was reported as having gone around
+    the config it had just finished filling in.
+    """
+    from .reflect import signals as sig_mod
+    from .reflect.model import Call, Session
+
+    def session(*calls):
+        s = Session(id="s", agent="claude-code")
+        s.calls = list(calls)
+        return s
+
+    ts = "2026-01-01T10:00:00.000Z"
+    local = Call(id="1", ts=ts, tool="Write", input={"content": "runner:\n  device: R5\n"},
+                 path="/p/local.yml")
+    shell = Call(id="2", ts=ts, tool="Bash", input={},
+                 command="cat > local.yml <<'YML'\nrunner:\n  device: R5\nYML")
+    assert sig_mod.config_bypassed(session(local, shell), sig_mod.Facts(), None) is None, \
+        "the project's own local overlay was reported as a config of the agent's own"
+
+    mine = Call(id="3", ts=ts, tool="Write", input={"content": "project:\n  process: x\n"},
+                path="/tmp/mine.yml")
+    got = sig_mod.config_bypassed(session(local, mine), sig_mod.Facts(), None)
+    assert got and got.severity == "warn" and len(got.rows) == 1, got
+    assert got.rows[0]["config"].endswith("mine.yml"), got.rows
+
+
+@check("reflect: a config rewrite that leaves the numbers alone is not a threshold edit")
+def _(report):
+    """The test was "the written text mentions a min_* key", and a `Write`
+    carries the whole file. An agent that rewrote echolot.yml to add a domain
+    shipped the untouched detectors section with it, and the edit came back as
+    thresholds tuned by hand — on a session where no number had moved.
+
+    The numbers have to move. Each write is compared with what the file said
+    before it: the previous write in the session, or the config on disk.
+    """
+    from .reflect import signals as sig_mod
+    from .reflect.model import Call, Session
+
+    body = ("project:\n  process: com.example.app\n"
+            "detectors:\n  main_thread_block:\n    min_slice_ms: 40\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "echolot.yml"
+        path.write_text(body, encoding="utf-8")
+        cfg = Config.load(path)
+
+        def wrote(content, tool="Write", before=None):
+            s = Session(id="s", agent="claude-code")
+            inp = {"content": content} if tool == "Write" else \
+                {"new_string": content, "old_string": before or ""}
+            s.calls = [Call(id="1", ts="2026-01-01T10:00:00.000Z", tool=tool,
+                            input=inp, path=str(path))]
+            return sig_mod.thresholds_by_hand(s, sig_mod.Facts(), cfg)
+
+        assert wrote(body + "domains:\n  - slice: \"x\"\n") is None, \
+            "a rewrite that carried the same thresholds was read as tuning them"
+        moved = wrote(body.replace("40", "12"))
+        assert moved and moved.severity == "warn", moved
+        assert wrote("  process: com.example.other\n", tool="Edit",
+                     before="  process: com.example.app\n") is None, \
+            "an edit that never touched a threshold line"
+        edited = wrote("    min_slice_ms: 12\n", tool="Edit",
+                       before="    min_slice_ms: 40\n")
+        assert edited and edited.severity == "warn", edited
+        # a key the config did not have is a new threshold, not a rewrite
+        added = wrote(body + "  frame_jank:\n    min_frames: 3\n")
+        assert added and added.severity == "warn", added
 
 
 @check("CLI: what the user typed wrong is a sentence and an exit code, never a traceback")
@@ -2462,6 +2618,58 @@ def _(report):
     assert aggregate([report]) is report, "a needless wrapper on a single run"
 
 
+@check("the source walk stops at a worktree, and goes on into a submodule")
+def _(report):
+    """A checkout parked inside the project is not more of the project.
+
+    Claude Code keeps its worktrees under `.claude/worktrees/`, and each one
+    is a full copy of the tree. `domains` counted every module twice — `:app`
+    and `:.claude:worktrees:feature-x:app`, the same code under two names —
+    and `mark` found two manifests declaring the same launcher Activity and
+    refused to pick without `--module`, on a project with exactly one app
+    module.
+
+    A submodule is the opposite case: its `.git` is a file too, but its
+    sources are built into the app and belong in the map. The two are told
+    apart by where that file points — `.git/worktrees/` against
+    `.git/modules/` — and not by the presence of the file.
+    """
+    import shutil
+
+    from . import domains
+    from . import mark as mk
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root)
+        alone = len(domains.source_files(root))
+        assert mk.plan(root, package="com.example.app").module == ":app"
+
+        # where Claude Code puts them, and one somewhere else entirely: the
+        # rule is what the .git file says, not the directory it sits in.
+        for where, name in ((root / ".claude" / "worktrees" / "feature-x", "feature-x"),
+                            (root / "wt" / "feature-y", "feature-y")):
+            where.mkdir(parents=True)
+            shutil.copytree(root / "app", where / "app")
+            (where / ".git").write_text(
+                f"gitdir: /repo/.git/worktrees/{name}\n", encoding="utf-8")
+
+        assert len(domains.source_files(root)) == alone, \
+            "a worktree's copies of the sources were counted as the project's"
+        assert [str(m.relative_to(root)) for m in mk.manifests(root)] == \
+            ["app/src/main/AndroidManifest.xml"], mk.manifests(root)
+        pl = mk.plan(root, package="com.example.app")
+        assert pl.module == ":app" and not pl.ambiguity, pl.ambiguity
+
+        sub = root / "vendor" / "shared"
+        sub.mkdir(parents=True)
+        shutil.copytree(root / "core" / "ui", sub / "core" / "ui")
+        (sub / ".git").write_text("gitdir: /repo/.git/modules/shared\n",
+                                  encoding="utf-8")
+        assert len(domains.source_files(root)) > alone, \
+            "a submodule's sources are the project's own and must be walked"
+
+
 # --- the .claude/ layer ----------------------------------------------------
 
 @check(".claude/ layer: every part of the template is present")
@@ -2539,6 +2747,139 @@ def _(report):
         assert not st["manifest"]
         by = {r["file"]: r["state"] for r in st["rows"]}
         assert by["skills/echolot/SKILL.md"] == "differs", by
+
+
+@check("init: the traces and the machine-local config go into .gitignore")
+def _(report):
+    """Both have been documented as gitignored since the first commit.
+
+    "`.echolot/` ← traces, reports, run log; in .gitignore", says the project
+    layout, and `local.yml` beside it — "device serials, binary path; in
+    .gitignore". Nothing ever put them there. A trace is tens of megabytes and
+    a collect writes five, so the first `git add -A` after a run staged
+    thirty-five megabytes of binary, and the person found out from git.
+
+    Appended, never rewritten, and only what is missing: a .gitignore is the
+    project's file, the same as settings.json.
+    """
+    from . import ignore as ig
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        # not a checkout: nothing to ignore into
+        assert ig.ensure(project) is None, "wrote a .gitignore outside a repository"
+        assert not (project / ".gitignore").exists()
+
+        (project / ".git").mkdir()
+        (project / ".gitignore").write_text("build/\n*.iml\n", encoding="utf-8")
+        said = ig.ensure(project)
+        text = (project / ".gitignore").read_text(encoding="utf-8")
+        assert said and "/.echolot/" in said and "/local.yml" in said, said
+        assert text.startswith("build/\n*.iml\n"), text
+        assert "/.echolot/" in text and "/local.yml" in text, text
+
+        # twice is once: the second run has nothing to add
+        assert ig.ensure(project) is None, "added the same lines again"
+        assert (project / ".gitignore").read_text(encoding="utf-8") == text
+
+    # the spellings a person may already have used, and the one that says no
+    for line in (".echolot/", ".echolot", "/.echolot", "**/.echolot/"):
+        assert ig.missing(line + "\n") == ["/local.yml"], line
+    assert ig.missing("!local.yml\n") == ["/.echolot/"], \
+        "a project that deliberately tracks local.yml is not overruled"
+    assert ig.missing("# local.yml\n") == list(ig.PATTERNS), "a comment is not a rule"
+    # a worktree's .git is a file, and a worktree is still a checkout
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        (project / ".git").write_text("gitdir: /repo/.git/worktrees/x\n", encoding="utf-8")
+        assert ig.ensure(project), "a worktree has a history to keep traces out of"
+
+
+@check(".claude/ layer: settings.json is merged into, never written over")
+def _(report):
+    """The file is the project's, and `--force` was taking it.
+
+    `.claude/settings.json` is Claude Code's own configuration: a project
+    keeps its hooks and its enabled plugins there. The template contributes
+    one permission, so the agent can call `echolot` without asking for
+    confirmation every time. Copied like the rest of the layer, `init
+    --force` handed the project back that one permission and took a wiki hook
+    and two plugins with it. Recovered from git — which is not where a tool
+    should leave the person who ran it.
+
+    So the file is merged: our part goes in, everything else stays, and a
+    file that will not parse is left alone rather than replaced.
+    """
+    import argparse
+    import contextlib
+    import io
+    import json as _json
+    from .layer import audit
+    from .main import cmd_init
+
+    theirs = {
+        "hooks": {"SessionStart": [{"hooks": [{"type": "command",
+                                               "command": "wiki.sh"}]}]},
+        "enabledPlugins": {"kaiten@hub": True, "ktalk@hub": True},
+        "permissions": {"allow": ["Bash(git status)"]},
+    }
+
+    def state_of(project):
+        return {r["file"]: r["state"] for r in audit(project)["rows"]}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        (project / ".claude").mkdir()
+        settings = project / ".claude" / "settings.json"
+        settings.write_text(_json.dumps(theirs, indent=2), encoding="utf-8")
+
+        def init(force=False):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cmd_init(argparse.Namespace(into=str(project), force=force,
+                                            no_doctor=True))
+            return out.getvalue()
+
+        init()
+        after = _json.loads(settings.read_text(encoding="utf-8"))
+        assert after["hooks"] == theirs["hooks"], after
+        assert after["enabledPlugins"] == theirs["enabledPlugins"], after
+        assert after["permissions"]["allow"] == ["Bash(git status)",
+                                                 "Bash(echolot:*)"], after
+        assert state_of(project)["settings.json"] == "current", state_of(project)
+
+        # --force is about the copies of our files, not about theirs
+        init(force=True)
+        assert _json.loads(settings.read_text(encoding="utf-8")) == after, \
+            "`init --force` overwrote the project's settings.json"
+
+        # the permission is added once, not once per run
+        init()
+        assert _json.loads(settings.read_text(encoding="utf-8")) == after, after
+
+        # taking it back out is a stale file, and plain `init` puts it back
+        del after["permissions"]["allow"][1]
+        settings.write_text(_json.dumps(after, indent=2), encoding="utf-8")
+        assert state_of(project)["settings.json"] == "stale", state_of(project)
+        init()
+        assert "Bash(echolot:*)" in _json.loads(
+            settings.read_text(encoding="utf-8"))["permissions"]["allow"]
+
+        # a key set to null holds no configuration and is filled in
+        settings.write_text('{"permissions": null, "model": "opus"}',
+                            encoding="utf-8")
+        init()
+        filled = _json.loads(settings.read_text(encoding="utf-8"))
+        assert filled["permissions"]["allow"] == ["Bash(echolot:*)"], filled
+        assert filled["model"] == "opus", filled
+
+        # and a file we cannot parse is reported, not replaced
+        settings.write_text("{ hooks: 'not json' }", encoding="utf-8")
+        assert state_of(project)["settings.json"] == "unreadable", state_of(project)
+        said = init(force=True)
+        assert settings.read_text(encoding="utf-8") == "{ hooks: 'not json' }", \
+            "a settings.json that could not be read was written anyway"
+        assert "not valid JSON" in said, said
+        assert '"Bash(echolot:*)"' in said, said
 
 
 @check("status: the next step follows the project's state, first visit to return")
@@ -3145,14 +3486,20 @@ def run_checks(report: dict, checks) -> list[tuple[str, str | None]]:
     Separated from `run` so that what happens to a check that breaks can be
     checked over made-up checks, rather than by breaking a real one.
 
-    What the checks print is swallowed. Several of them run real commands —
-    `init` into a temp directory, `status` against a config in another one —
-    and those commands print, into the output of the run hosting them.
-    `doctor -q` promises three lines and the failures and was printing
+    What the checks print is swallowed — both streams. Several of them run
+    real commands — `init` into a temp directory, `status` against a config in
+    another one — and those commands print, into the output of the run hosting
+    them. `doctor -q` promises three lines and the failures and was printing
     thirty-one: the layer `init` installed somewhere in /tmp, a `next` step
     for a project that no longer exists, a Cursor stub. All of it true about
     a directory nobody will ever see again, and all of it between a reader
     and the verdict.
+
+    stderr was left out of that, and the checks that feed the CLI a trace
+    which is not there put `error: no such trace: nosuch.perfetto-trace` in
+    front of everyone who ran `echolot init`. A deliberate error, proof that
+    the exit code is 2 — and indistinguishable, on the terminal, from the
+    run having gone wrong.
 
     Same argument as `recorder.isolated()` below, which exists so those
     commands' notes do not land in the log entry of the run hosting them.
@@ -3165,7 +3512,8 @@ def run_checks(report: dict, checks) -> list[tuple[str, str | None]]:
     out = []
     # Checks call commands of their own (`init` into a temp dir); their notes
     # must not land in the log line of the doctor run that hosts them.
-    with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()):
+    with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
         for name, fn in checks:
             try:
                 fn(report)

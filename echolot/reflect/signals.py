@@ -67,7 +67,7 @@ _ENV_KINDS = [
     ("permission denied", re.compile(r"Permission denied", re.I)),
     ("timeout", re.compile(r"timed out|timeout", re.I)),
 ]
-_DETECTOR_KEY = re.compile(r"\b(?:min|max)_[a-z_]+\s*:")
+_DETECTOR_VALUE = re.compile(r"\b((?:min|max)_[a-z_]+)\s*:\s*([^\s#,}\]]+)")
 _YAML_REDIRECT = re.compile(r">>?\s*[\"']?([^\s\"'<>|;&]+\.ya?ml)")
 
 
@@ -338,6 +338,14 @@ def conclusion_shape(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 
 def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     project_cfg = Path(cfg.path).name if cfg and cfg.path else "echolot.yml"
+    # `local.yml` is the other half of the project's config, not a config of
+    # the agent's own: it sits beside echolot.yml, is merged on top of it, and
+    # holds the device serial and the path to this machine's
+    # trace_processor. Writing it is how a session gets a device — and every
+    # one of those writes was being reported as analysis run against
+    # somebody else's config.
+    local_cfg = Path(cfg.local_path).name if cfg and cfg.local_path else "local.yml"
+    ours = {project_cfg, local_cfg}
     rows = []
     seen: set[tuple[str, str, str]] = set()
     for c in f.echolot_calls:
@@ -356,7 +364,7 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     written = []
     for c in s.calls:
         if c.tool == "Write" and c.path and c.path.endswith((".yml", ".yaml")) \
-                and Path(c.path).name != project_cfg:
+                and Path(c.path).name not in ours:
             written.append({"ts": c.ts, "agent": c.agent, "sub": "Write",
                             "config": c.path[-80:]})
     for c in s.bash():
@@ -365,7 +373,7 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         # heredocs, `sed … > /tmp/x.yml`, `>>` appends.
         for m in _YAML_REDIRECT.finditer(cmd):
             p = m.group(1)
-            if Path(p).name == project_cfg or (c.ts, "w", p) in seen:
+            if Path(p).name in ours or (c.ts, "w", p) in seen:
                 continue
             seen.add((c.ts, "w", p))
             written.append({"ts": c.ts, "agent": c.agent, "sub": "Bash redirect",
@@ -407,8 +415,39 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                   "calibrate problem, not a discipline problem.")
 
 
+def _threshold_values(text: str) -> dict[str, str]:
+    """The `min_*` / `max_*` keys a piece of config text carries, with values."""
+    return {m.group(1): m.group(2) for m in _DETECTOR_VALUE.finditer(text or "")}
+
+
 def thresholds_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    touched = [w for w in config_writes(s) if _DETECTOR_KEY.search(w["text"])]
+    """A threshold that changed — not a file that happens to contain one.
+
+    The test was "the written text mentions a `min_*` key", and a `Write`
+    carries the whole file: an agent that rewrote echolot.yml to add a domain
+    or fix the process name shipped the untouched detectors section along with
+    it, and every such edit was reported as thresholds tuned by hand. The
+    numbers have to move for that claim to hold, so each write is compared
+    with what the file said before it — the previous write in this session, or
+    failing that the config as it now stands on disk.
+    """
+    on_disk = {}
+    if cfg and cfg.path and Path(cfg.path).exists():
+        on_disk = _threshold_values(
+            Path(cfg.path).read_text(encoding="utf-8", errors="replace"))
+    before: dict[str, dict[str, str]] = {}
+    touched = []
+    for w in config_writes(s):
+        now = _threshold_values(w["text"])
+        if not now:
+            continue
+        # An Edit carries both sides of the change; a Write or a shell command
+        # carries only the result, so the baseline is what the file last said.
+        was = _threshold_values(w.get("before", "")) if w["tool"] == "Edit" \
+            else before.get(w["file"], on_disk)
+        before[w["file"]] = {**before.get(w["file"], on_disk), **now}
+        if any(was.get(k) != v for k, v in now.items()):
+            touched.append(w)
     if not touched:
         return None
     calibrates = [c for c in f.echolot_calls if c.sub == "calibrate"]

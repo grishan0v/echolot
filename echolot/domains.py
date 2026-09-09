@@ -29,6 +29,8 @@ SOURCE_EXT = (".kt", ".java")
 SKIP_DIRS = {
     "build", ".git", ".gradle", "generated", ".echolot", "node_modules",
     ".venv", "venv", ".idea", "__pycache__", ".tox",
+    # The agent layer: markdown for a model to read, never application source.
+    ".claude",
 }
 
 
@@ -50,13 +52,55 @@ def source_files(root: Path, *, under_src: bool = False) -> list[Path]:
     the global `sorted(rglob(...))` produced — `domains` names the first site
     of each slice name in its map, and that must not move.
     """
+    return _walk(root, lambda n: n.endswith(SOURCE_EXT), under_src=under_src)
+
+
+def files_named(root: Path, name: str) -> list[Path]:
+    """Every file with this name, from the same pruned walk.
+
+    `mark` looks for AndroidManifest.xml and used `rglob` for it, which walks
+    everything the source walk is careful not to enter.
+    """
+    return _walk(root, lambda n: n == name)
+
+
+def files_ending(root: Path, suffix: str) -> list[Path]:
+    """Every file whose name ends with this, from the same pruned walk."""
+    return _walk(root, lambda n: n.endswith(suffix))
+
+
+def _is_worktree(path: Path) -> bool:
+    """A second checkout of the same repository, parked inside it.
+
+    Claude Code keeps its worktrees under `.claude/worktrees/`, and a worktree
+    is a full copy of the tree. Walking into one counts every module twice:
+    the coverage report lists `:app` and `:.claude:worktrees:x:app` side by
+    side, and `mark` sees two modules declaring the same launcher Activity and
+    refuses to pick one without `--module`.
+
+    A worktree carries a `.git` file pointing into `.git/worktrees/`. A
+    submodule's `.git` file points into `.git/modules/` and is part of the
+    build — its sources are the project's own, so it is walked like the rest.
+    """
+    marker = path / ".git"
+    try:
+        if not marker.is_file():
+            return False
+        head = marker.read_text(encoding="utf-8", errors="replace")[:4096]
+    except OSError:
+        return False
+    return "/worktrees/" in head.replace("\\", "/")
+
+
+def _walk(root: Path, wanted, *, under_src: bool = False) -> list[Path]:
     found: list[Path] = []
     for base, dirs, names in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         here = Path(base)
+        dirs[:] = [d for d in dirs
+                   if d not in SKIP_DIRS and not _is_worktree(here / d)]
         if under_src and "src" not in here.parts:
             continue
-        found += [here / n for n in names if n.endswith(SOURCE_EXT)]
+        found += [here / n for n in names if wanted(n)]
     return sorted(found)
 
 # Qualified forms are unambiguous and count everywhere.

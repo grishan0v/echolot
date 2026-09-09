@@ -38,13 +38,28 @@ the project is a copy — edit it for your modules and commit it. A repeated
 `init` brings up to date what you did not touch and leaves what you edited
 alone; `--force` overwrites those too.
 
+`init` also adds `/.echolot/` and `/local.yml` to the project's `.gitignore`,
+appended as a two-line block and only when they are not already covered — the
+traces are tens of megabytes each and `local.yml` holds a device serial, and
+both have been documented as gitignored since before anything wrote them there.
+
+One file in that list is not echolot's copy. `settings.json` is Claude Code's
+own configuration — the project keeps its hooks and its enabled plugins there
+— and the template contributes a single permission to it. So it is **merged,
+never overwritten**, `--force` included: the permission goes in, everything
+else in the file stays, and lists gain what they are missing instead of being
+replaced. A `settings.json` that does not parse as JSON is reported and left
+untouched, with the line to add printed for a human — a file that could not be
+read is not a file to rewrite.
+
 The copy goes stale the moment the package moves on, and nothing in the
 project would say so — a session ran with a `collect.md` that said "there is
 no runner yet" while the binary had one, and the agent drove gradle by hand.
 So `init` writes a small manifest of what it installed, and `doctor` (and
 `echolot` with no arguments) compares the layer with the template: `current`,
 `stale` (untouched since install, template moved on), `customised` (edited
-here, template did not move), `conflict` (both), `missing`. Stale is a line
+here, template did not move), `conflict` (both), `missing`, and — for the
+merged file above — `unreadable`. Stale is a line
 in the output and `echolot init`, not a failed check — a project may have
 edited its copy on purpose, and the manifest is what lets the tool tell the
 two apart. A layer installed before the manifest existed can only be

@@ -22,11 +22,67 @@ CLAUDE_DIR = Path(__file__).parent / "claude"
 # What `init` installed, file by file: the manifest lets `doctor` tell a file
 # the project customised from one the package has since moved on from.
 LAYER_MANIFEST = "echolot-layer.json"
+# Files echolot does not own outright. `.claude/settings.json` is Claude
+# Code's, and a project keeps its hooks and its enabled plugins in it; the
+# template contributes one permission line and nothing else. Copying the
+# template over it — which is what `init --force` did — hands the project
+# back that one line and takes the rest of its configuration with it.
+MERGED = ("settings.json",)
 
 
 def sha(path: Path) -> str:
     """Enough of a hash to say: this is not the file we installed."""
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def _fold(template, existing):
+    """The template's contribution folded into what the project already has.
+
+    Dictionaries merge key by key, lists gain the entries they are missing,
+    and where both sides carry a value the project's wins — it is the
+    project's file. Anything the template does not mention is untouched.
+    """
+    if isinstance(template, dict) and isinstance(existing, dict):
+        out = dict(existing)
+        for key, value in template.items():
+            out[key] = _fold(value, existing[key]) if key in existing else value
+        return out
+    if isinstance(template, list) and isinstance(existing, list):
+        return existing + [v for v in template if v not in existing]
+    if existing is None:
+        # A key set to null carries no configuration, so filling it in takes
+        # nothing away — where the project wrote a value, ours stays out.
+        return template
+    return existing
+
+
+def merge(src: Path, dst: Path) -> tuple[str, str | None]:
+    """(verdict, the text to write) for a file the project owns too.
+
+    "current" — the template's part is already in there, nothing to do.
+    "merged"  — the text to write, the project's own content kept.
+    "unreadable" — not JSON we can parse, or not an object; nothing is
+                   written. Rewriting a file we could not read is how one
+                   permission line would be added at the cost of everything
+                   around it.
+    """
+    try:
+        existing = json.loads(dst.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "unreadable", None
+    if not isinstance(existing, dict):
+        return "unreadable", None
+    template = json.loads(src.read_text(encoding="utf-8"))
+    folded = _fold(template, existing)
+    if folded == existing:
+        return "current", None
+    return "merged", json.dumps(folded, indent=2, ensure_ascii=False) + "\n"
+
+
+def contribution(src: Path) -> str:
+    """The template's part on one line — for the message when we cannot merge."""
+    return json.dumps(json.loads(src.read_text(encoding="utf-8")),
+                      ensure_ascii=False)
 
 
 def template_files() -> list[Path]:
@@ -95,6 +151,10 @@ def write_manifest(root: Path, files: dict[str, str]) -> None:
     old = _read_manifest(root)
     merged = dict(old.get("files") or {})
     merged.update(files)
+    # A merged file's hash says nothing: the project's copy is meant to differ,
+    # and an install from before the merge existed recorded one anyway.
+    for rel in MERGED:
+        merged.pop(rel, None)
     (root / LAYER_MANIFEST).write_text(json.dumps({
         "echolot": recorder.version(),
         "files": dict(sorted(merged.items())),
@@ -112,9 +172,14 @@ def audit(project: Path) -> dict | None:
         conflict     edited in the project AND the template has moved on
         differs      not identical, and no manifest to say which of the two
         missing      the template has it, the project does not
+        unreadable   a merged file that is not JSON we can add to
 
     The manifest is what makes stale and customised distinguishable; a layer
     installed before it existed can only be "differs".
+
+    A file in MERGED is not compared byte for byte — the project's hooks and
+    plugins live in it too. The only question about it is whether echolot's
+    part is there ("current") or not yet ("stale", which plain `init` fixes).
     """
     root = project / ".claude"
     if not (root / "skills" / "echolot" / "SKILL.md").exists():
@@ -128,6 +193,9 @@ def audit(project: Path) -> dict | None:
         t_sha = sha(src)
         if not dst.exists():
             state = "missing"
+        elif rel in MERGED:
+            verdict, _ = merge(src, dst)
+            state = "stale" if verdict == "merged" else verdict
         else:
             d_sha = sha(dst)
             if d_sha == t_sha:
@@ -167,13 +235,15 @@ def one_line(project: Path) -> tuple[str, str]:
     for r in status["rows"]:
         by_state[r["state"]] = by_state.get(r["state"], 0) + 1
     needs = {k: v for k, v in by_state.items()
-             if k in ("stale", "conflict", "differs", "missing")}
+             if k in ("stale", "conflict", "differs", "missing", "unreadable")}
     if not needs:
         return "current", f"layer: current ({len(status['rows'])} files)"
     what = ", ".join(f"{v} {k}" for k, v in needs.items())
     # stale and missing files `init` updates on its own; files that differ
     # with no manifest to say why, or that were edited here, need --force.
-    if set(needs) <= {"stale", "missing"}:
+    # `--force` has nothing to offer an unreadable one: that file is merged,
+    # never overwritten, so it is a job for a human either way.
+    if set(needs) <= {"stale", "missing", "unreadable"}:
         return "stale", f"layer: STALE — {what} → `echolot init`"
     return "differs", f"layer: STALE — {what} → `echolot init --force`"
 
@@ -192,13 +262,15 @@ def print_status(project: Path) -> str | None:
     total = len(status["rows"])
     counts = ", ".join(f"{len(v)} {k}" for k, v in by_state.items())
     print(f"  {total} template files: {counts}")
-    for state in ("stale", "conflict", "customised", "differs", "missing"):
+    for state in ("stale", "conflict", "customised", "differs", "missing",
+                  "unreadable"):
         for rel in by_state.get(state, []):
             print(f"    {state:<10} {rel}")
     if status["installed_by"]:
         print(f"  installed by echolot {status['installed_by']}, "
               f"this is {recorder.version()}")
-    needs_update = set(by_state) & {"stale", "conflict", "differs", "missing"}
+    needs_update = set(by_state) & {"stale", "conflict", "differs", "missing",
+                                    "unreadable"}
     if not needs_update:
         print("  the layer is current.")
         return "current"
@@ -206,8 +278,13 @@ def print_status(project: Path) -> str | None:
         print("  installed before echolot kept a manifest, so a file that differs "
               "cannot be told\n  customised from stale. `echolot init --force` "
               "overwrites; keep the project's edits with git.")
+    elif needs_update == {"unreadable"}:
+        print("  → the file above is not JSON echolot can add to, and it is "
+              "merged rather than\n    overwritten — `--force` will not touch "
+              "it either. Fix the JSON and run `echolot init`.")
     else:
         print("  → `echolot init --force` updates it. Customised files are "
               "listed above and are\n    overwritten too — carry the edits "
-              "over afterwards.")
+              "over afterwards. settings.json is merged,\n    never "
+              "overwritten: the project's hooks and plugins stay.")
     return "stale"
