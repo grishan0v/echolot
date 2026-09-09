@@ -52,6 +52,8 @@ TID_BLOCKED = 4205
 TID_STUCK = 4206
 TID_SEED = 4207
 TID_LOCKED = 4208
+TID_DISK = 4209
+TID_DISK_BG = 4210
 
 THREADS = {
     TID_MAIN: "m.example.app",  # Linux truncates comm to 15 characters
@@ -63,6 +65,8 @@ THREADS = {
     TID_STUCK: "StuckForever",
     TID_SEED: "SeedWorker",
     TID_LOCKED: "LockWaiter",
+    TID_DISK: "DiskWaiter",
+    TID_DISK_BG: "OtherBlocked",
 }
 
 # --- a foreign process: the process-isolation control ----------------------
@@ -384,18 +388,29 @@ OTHER_SLICES = {
 
 # --- the scheduler ---------------------------------------------------------
 # (cpu, tid, start_ms, end_ms, state_after_being_switched_out)
-#   0 → R (ready but preempted), 1 → S (sleeping)
+#   0 → R (ready but preempted), 1 → S (sleeping), 2 → D (uninterruptible)
 #
 # One CPU per thread — simpler, and realistic for a multicore device.
 
-R, S = 0, 1
+# D is 2 in the same bitmask: uninterruptible sleep, which is where a thread
+# goes while it waits for a block device. The kernel says which of those
+# sleeps was disk in a separate event — see BLOCKED_REASON below.
+R, S, D = 0, 1, 2
 
 SCHED = [
     # main: two chunks, both deliberately crossing the window bounds
     # [100, 1105]. The first starts BEFORE the window opens, the second ends
     # AFTER it closes. This checks whether context.sql clips intervals to the
     # window or merely filters them by their start point.
-    (0, TID_MAIN, 50, 600, S),
+    #
+    # The first chunk is cut in two by 60 ms of io_wait at 200: the main
+    # thread waits for a block device, which is the headline case of the
+    # `io_wait` detector and the one that costs a user a visibly frozen start.
+    # It stays a single busy stretch for `anr_risk`, which counts D as busy —
+    # correctly, since a thread parked in the kernel is not serving the looper
+    # either.
+    (0, TID_MAIN, 50, 200, D),
+    (0, TID_MAIN, 260, 600, S),
     (0, TID_MAIN, 610, 800, S),
     # An idle moment inside the scenario: 60 ms asleep with no slice open
     # below the anchor. anr_risk must break its stretch here — the looper
@@ -441,8 +456,40 @@ SCHED = [
     # the scenario blocked, which is what its slices say.
     (8, TID_LOCKED, 200, 210, S),
 
+    # io_wait: DiskWaiter runs briefly and then the kernel parks it three
+    # times waiting for a block device — 150 + 90 + 60 = 300 ms of the window
+    # in state D. Nothing else in the fixture can see this: there is no slice,
+    # no CPU time, and `uninstrumented_cpu` is silent by construction because
+    # a thread waiting on the disk burns nothing.
+    (1, TID_DISK, 150, 160, D),
+    (1, TID_DISK, 310, 320, D),
+    (1, TID_DISK, 410, 420, D),
+    (1, TID_DISK, 480, 490, S),
+
+    # Negative control: OtherBlocked spends 400 ms in the same D state, and
+    # the kernel does NOT call it io_wait. Uninterruptible sleep is not the
+    # signal — the disk is. A detector matching on the state alone would
+    # report this thread as waiting for a disk it never touched.
+    (2, TID_DISK_BG, 200, 210, D),
+    (2, TID_DISK_BG, 610, 620, S),
+
     # the foreign process
     (5, OTHER_PID, 200, 700, S),
+]
+
+# Which sleeps the kernel blamed on a block device: (tid, at_ms, io_wait).
+#
+# Emitted as `sched/sched_blocked_reason` at the moment the thread leaves the
+# CPU, which is where a real kernel writes it. The `caller` address is
+# deliberately absent: on a production build /proc/kallsyms cannot be read, so
+# `blocked_function` is NULL for every interval — measured on an SM-A515F,
+# 6683 of 6683 — and the fixture reproduces the phone rather than the ideal.
+BLOCKED_REASON = [
+    (TID_MAIN, 200, 1),
+    (TID_DISK, 160, 1),
+    (TID_DISK, 320, 1),
+    (TID_DISK, 420, 1),
+    (TID_DISK_BG, 210, 0),
 ]
 
 # --- the platform state ----------------------------------------------------
@@ -696,6 +743,10 @@ def build(frames: bool = True, environment: bool = True) -> bytes:
     # The platform state. Frequency belongs to its own CPU's bundle — that is
     # where a real kernel writes it. Thermal is a property of the device rather
     # than of a core, so it goes on CPU 0 like any other global event.
+    for tid, at, io in BLOCKED_REASON:
+        by_cpu.setdefault(tid_to_cpu[tid], []).append(
+            (ms(at), next(seq), "blocked", tid, io))
+
     if environment:
         for cpu, at, khz in CPU_FREQ:
             by_cpu.setdefault(cpu, []).append((ms(at), next(seq), "freq", cpu, khz))
@@ -724,6 +775,11 @@ def build(frames: bool = True, environment: bool = True) -> bytes:
                 sw.next_comm = next_comm
                 sw.next_pid = next_pid
                 sw.next_prio = 120
+            elif kind == "blocked":
+                _, _, _, tid, io = item
+                event.pid = tid
+                event.sched_blocked_reason.pid = tid
+                event.sched_blocked_reason.io_wait = io
             elif kind == "freq":
                 _, _, _, freq_cpu, khz = item
                 event.pid = 0

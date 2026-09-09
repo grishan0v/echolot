@@ -135,7 +135,22 @@ def _probe(args) -> int:
 
 def _tp_binary(args, cfg: Config | None = None) -> str | None:
     """Precedence: the flag, then local.yml, then the pin in requirements."""
-    return getattr(args, "tp_binary", None) or (cfg.tp_binary if cfg else None)
+    return _tp_binary_source(args, cfg)[0]
+
+
+def _tp_binary_source(args, cfg: Config | None = None) -> tuple[str | None, str | None]:
+    """The binary and who asked for it, since the report names both.
+
+    Two callers want different halves of this and the second one used to be
+    guessed at: every custom binary was reported as `--tp-binary` whether or
+    not a flag was involved. See `toolchain_info`.
+    """
+    from_flag = getattr(args, "tp_binary", None)
+    if from_flag:
+        return from_flag, "--tp-binary"
+    if cfg and cfg.tp_binary:
+        return cfg.tp_binary, "toolchain.tp_binary"
+    return None, None
 
 
 def _note_local(cfg: Config) -> None:
@@ -294,7 +309,8 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
 
 def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                   cli_overrides: dict[str, dict] | None = None,
-                  use_defaults: bool = False) -> dict:
+                  use_defaults: bool = False,
+                  tp_source: str | None = None) -> dict:
     """The core of a run: trace + config → Marker Report.
 
     Separate from cmd_analyze because it has two callers: the command, which
@@ -313,7 +329,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     results = []
 
     with TraceSession(trace, tp_binary) as tp:
-        procs = _resolve_process(tp, cfg.process)
+        procs = _resolve_process(tp, cfg.process, str(trace))
         # The masks as this run has them: `--set` moves a boundary the same
         # way the config does, and `_claimed_name` is drawn from where they
         # stand rather than from where the file left them.
@@ -368,14 +384,14 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     absent = [d.id for d in load_detectors(DETECTOR_DIR) if d.id not in planned]
 
     return report_mod.build(str(trace), window, results,
-                            toolchain=toolchain_info(tp_binary),
+                            toolchain=toolchain_info(tp_binary, tp_source),
                             absent=absent, environment=environment)
 
 
 def cmd_analyze(args) -> int:
     try:
         cfg = Config.load(args.config, args.local)
-        tp_binary = _tp_binary(args, cfg)
+        tp_binary, tp_source = _tp_binary_source(args, cfg)
         _note_local(cfg)
         if not args.defaults:
             _note_detectors(cfg)
@@ -388,7 +404,7 @@ def cmd_analyze(args) -> int:
         # conclusion along, and the "Runs" column separates the reproducible
         # from the one-off.
         reports = [analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
-                                 use_defaults=args.defaults)
+                                 use_defaults=args.defaults, tp_source=tp_source)
                    for t in args.traces]
         rep = report_mod.aggregate(reports)
     except ConfigError as e:
@@ -557,7 +573,7 @@ def cmd_compare(args) -> int:
     return 0
 
 
-def _resolve_process(tp, glob: str) -> list[dict]:
+def _resolve_process(tp, glob: str, trace: str | None = None) -> list[dict]:
     """Target process candidates, the fattest by slice count first.
 
     An Android app usually has more than one process: `com.example.app*` also
@@ -565,6 +581,12 @@ def _resolve_process(tp, glob: str) -> list[dict]:
     first by upid — silently, and often the wrong one. The choice is now
     deliberate and said out loud: to humans on stderr, to the agent in
     report.json.
+
+    `trace` is named in the failure because a run is usually a set. A
+    macrobenchmark round of fifteen where one trace carries a truncated
+    process name fails on that one and stops everything, and "no process
+    matches" without a filename sends the reader to check a config that is
+    right about fourteen of them.
     """
     rows = tp.query(f"""
         SELECT p.upid AS upid, p.pid AS pid, p.name AS name,
@@ -578,9 +600,20 @@ def _resolve_process(tp, glob: str) -> list[dict]:
         ORDER BY slices DESC, p.upid
     """)
     if not rows:
+        where = f" {Path(trace).name}" if trace else ""
+        # The name a trace carries is not always the one the package has.
+        # Linux truncates comm to 15 characters and keeps the TAIL, so
+        # `com.rumpilstilstkin.gloommaster` can arrive as `kin.gloommaster`
+        # — which a trailing-wildcard glob does not match either. Seen on one
+        # trace out of fifteen from a single macrobenchmark round, where the
+        # other fourteen carried the full name.
+        tail = glob.rstrip("*")[-15:]
         raise ConfigError(
-            f"no process in the trace matches project.process = '{glob}'. "
-            f"Look at the real names: echolot probe <trace>"
+            f"no process in trace{where} matches project.process = '{glob}'. "
+            f"Look at the real names: echolot probe <trace>. If the name is "
+            f"there but cut to fifteen characters, the trace has it from "
+            f"comm rather than from the process list, and the head is what "
+            f"was cut — try project.process = '*{tail}'."
         )
     if len(rows) > 1:
         # A `*` on a real device matches six hundred processes; naming them

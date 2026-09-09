@@ -1213,6 +1213,56 @@ def _(report):
     assert f"{expected}" in row["detail"], (row["detail"], expected)
 
 
+# --- io_wait ---------------------------------------------------------------
+
+@check("io_wait: the main thread waiting for a block device is found")
+def _(report):
+    # The headline case, and the one no other detector can reach: there is no
+    # slice, no CPU time and nothing to profile. 60 ms planted at ms 200.
+    row = one_row(report, "io_wait", "m.example.app")
+    assert row["total_ms"] == 60.0, row
+    assert row["detail"] == "main", (
+        f"the main thread has to be marked as such — a background thread "
+        f"waiting on the disk is a different sentence: {row}")
+
+
+@check("io_wait: uninterruptible sleep is not the signal, the disk is")
+def _(report):
+    # OtherBlocked spends 400 ms in state D and the kernel does not call it
+    # io_wait: it is parked in the kernel for some other reason. A detector
+    # matching on the state alone would report a thread waiting for a disk it
+    # never touched — and it would outrank every real finding here, being the
+    # longest such interval in the fixture.
+    got = locations(report, "io_wait")
+    assert "OtherBlocked" not in got, (
+        f"400 ms of non-disk uninterruptible sleep reached the answer: {got}")
+    assert "DiskWaiter" in got, got
+
+
+@check("io_wait: the waits are counted, not merged")
+def _(report):
+    # Three separate parks of 150, 90 and 60 ms. A reader picks the next step
+    # from whether this was one long stall or many small ones, so the count
+    # and the largest have to survive alongside the total.
+    row = one_row(report, "io_wait", "DiskWaiter")
+    assert (row["count"], row["total_ms"], row["max_ms"]) == (3, 300.0, 150.0), row
+
+
+@check("io_wait: does not repeat what the other state detectors already say")
+def _(report):
+    # Three detectors read thread_state and they must not answer each other's
+    # question. `runnable_starvation` is state R — ready and held off by the
+    # scheduler. `uninstrumented_cpu` is Running with nothing instrumented.
+    # This one is D, where the thread burns no CPU at all and is not ready
+    # either, so a thread found here has no business in either of those.
+    waiting = set(locations(report, "io_wait"))
+    for other in ("runnable_starvation", "uninstrumented_cpu"):
+        overlap = waiting & set(locations(report, other))
+        assert not overlap, (
+            f"{other} and io_wait both claim {overlap}, so one of them is "
+            f"answering the other's question")
+
+
 @check("anr_risk: silent at the bar the platform sets")
 def _(report):
     # Five seconds cannot happen inside a one-second scenario, and a detector

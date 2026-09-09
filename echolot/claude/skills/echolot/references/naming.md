@@ -123,6 +123,30 @@ createClassloaderNamespace
 `Choreographer#doFrame` carries a number inside its name, so a scenario anchor
 needs a wildcard: `Choreographer#doFrame*`.
 
+## Waiting on the disk
+
+There are no names here to match on, which is the point: a thread waiting for
+a block device has no slice, no CPU time and nothing written down. It shows up
+as thread state `D` — uninterruptible sleep — with the kernel's disk flag set,
+and `io_wait` is the only detector that reads it.
+
+What to make of what it reports:
+
+- **the main thread in `io_wait`** is a frozen frame, and making the code
+  faster does not help, because the code is not running. The fix is to read
+  less, read it off the main thread, or read it later;
+- **clean on the second run** means the first was populating the page cache.
+  That is a first-launch problem rather than a code one, and comparing a cold
+  first launch against a warm one says nothing about either;
+- **a thread in `D` that `io_wait` does not claim** was parked for some other
+  reason. Look for threads holding a memory lock — `jit-thread-pool` and
+  work that maps files are the usual pair;
+- **the kernel function is normally absent.** Turning the blocking address
+  into a name needs `/proc/kallsyms`, which a production build does not let
+  anyone read. Measured on an SM-A515F running Android 13: empty for all 6683
+  uninterruptible sleeps in a trace, while the disk flag was set on 6486 of
+  them. A function name in `detail` means a userdebug kernel.
+
 ## Compose
 
 ```
