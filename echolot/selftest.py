@@ -2622,6 +2622,51 @@ def _(report):
         assert by["skills/echolot/SKILL.md"] == "differs", by
 
 
+@check("init: the traces and the machine-local config go into .gitignore")
+def _(report):
+    """Both have been documented as gitignored since the first commit.
+
+    "`.echolot/` ← traces, reports, run log; in .gitignore", says the project
+    layout, and `local.yml` beside it — "device serials, binary path; in
+    .gitignore". Nothing ever put them there. A trace is tens of megabytes and
+    a collect writes five, so the first `git add -A` after a run staged
+    thirty-five megabytes of binary, and the person found out from git.
+
+    Appended, never rewritten, and only what is missing: a .gitignore is the
+    project's file, the same as settings.json.
+    """
+    from . import ignore as ig
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        # not a checkout: nothing to ignore into
+        assert ig.ensure(project) is None, "wrote a .gitignore outside a repository"
+        assert not (project / ".gitignore").exists()
+
+        (project / ".git").mkdir()
+        (project / ".gitignore").write_text("build/\n*.iml\n", encoding="utf-8")
+        said = ig.ensure(project)
+        text = (project / ".gitignore").read_text(encoding="utf-8")
+        assert said and "/.echolot/" in said and "/local.yml" in said, said
+        assert text.startswith("build/\n*.iml\n"), text
+        assert "/.echolot/" in text and "/local.yml" in text, text
+
+        # twice is once: the second run has nothing to add
+        assert ig.ensure(project) is None, "added the same lines again"
+        assert (project / ".gitignore").read_text(encoding="utf-8") == text
+
+    # the spellings a person may already have used, and the one that says no
+    for line in (".echolot/", ".echolot", "/.echolot", "**/.echolot/"):
+        assert ig.missing(line + "\n") == ["/local.yml"], line
+    assert ig.missing("!local.yml\n") == ["/.echolot/"], \
+        "a project that deliberately tracks local.yml is not overruled"
+    assert ig.missing("# local.yml\n") == list(ig.PATTERNS), "a comment is not a rule"
+    # a worktree's .git is a file, and a worktree is still a checkout
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        (project / ".git").write_text("gitdir: /repo/.git/worktrees/x\n", encoding="utf-8")
+        assert ig.ensure(project), "a worktree has a history to keep traces out of"
+
+
 @check(".claude/ layer: settings.json is merged into, never written over")
 def _(report):
     """The file is the project's, and `--force` was taking it.

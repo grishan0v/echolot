@@ -38,6 +38,11 @@ the project is a copy — edit it for your modules and commit it. A repeated
 `init` brings up to date what you did not touch and leaves what you edited
 alone; `--force` overwrites those too.
 
+`init` also adds `/.echolot/` and `/local.yml` to the project's `.gitignore`,
+appended as a two-line block and only when they are not already covered — the
+traces are tens of megabytes each and `local.yml` holds a device serial, and
+both have been documented as gitignored since before anything wrote them there.
+
 One file in that list is not echolot's copy. `settings.json` is Claude Code's
 own configuration — the project keeps its hooks and its enabled plugins there
 — and the template contributes a single permission to it. So it is **merged,

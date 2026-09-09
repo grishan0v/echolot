@@ -1695,6 +1695,9 @@ def cmd_init(args) -> int:
     and the environment is checked (`doctor -q`). It ends with the next step,
     the same line `echolot` with no arguments prints.
 
+    It also puts `.echolot/` and `local.yml` into the project's .gitignore —
+    see `ignore.py` for why that is init's job and not the reader's.
+
     One file is not a copy of ours: `.claude/settings.json` is the project's,
     and echolot only adds its permission to it. See `layer.MERGED`.
     """
@@ -1720,6 +1723,14 @@ def cmd_init(args) -> int:
         if getattr(args, "interactive", False) and hosts_mod.interactive(sys.stdout):
             chosen = hosts_mod.pick(chosen)
     hosts_mod.save_choice(target, chosen)
+
+    # Before the layer, and whatever client was chosen: the traces and the
+    # machine-local config are echolot's own leavings, and a repository is
+    # where they must not end up.
+    from . import ignore as ignore_mod
+    ignored = ignore_mod.ensure(target)
+    if ignored:
+        print(f"\n  {ignored}")
 
     if not any(h.key == "claude" for h in chosen):
         print("\nClaude Code not selected — .claude/ stays out of this project.")

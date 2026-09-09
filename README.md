@@ -75,7 +75,8 @@ cd ~/my-app && echolot init
 ```
 
 This installs the `.claude/` layer — a skill, the `perf-hunter` agent and three
-commands — then checks that this machine computes traces correctly.
+commands — adds `.echolot/` and `local.yml` to the project's `.gitignore`, and
+checks that this machine computes traces correctly.
 
 ### 3. Open the agent and type one word
 
@@ -238,7 +239,7 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 | command | what it does |
 |---|---|
 | `echolot` | where this project stands, and the next step |
-| `echolot init` | install or update the `.claude/` layer; checks the environment |
+| `echolot init` | install or update the `.claude/` layer; .gitignore, and checks the environment |
 | `echolot hunt "<what regressed>"` | open an investigation — see [below](#the-investigation) |
 | `echolot doctor` | environment + self-check on a synthetic trace; exit 0/1, `-q` for three lines |
 
@@ -406,6 +407,10 @@ android-project/
 └── .echolot/         ← traces, reports, run log, reflect reports; in .gitignore
 ```
 
+`echolot init` writes those two .gitignore lines. A trace is tens of megabytes
+and a collect writes five, so without them the first `git add -A` after a run
+stages the lot.
+
 Read it the way you read `gradle.properties` and `local.properties`: one tool
 per machine, and the binding to a project living inside that project's
 repository.
@@ -435,7 +440,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 127 checks inside
+The detectors were validated against a synthetic trace — 128 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
