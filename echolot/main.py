@@ -33,6 +33,8 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
+
 from . import compare as compare_mod
 from . import hunt as hunt_mod
 from . import layer, recorder, state, table, when
@@ -1679,6 +1681,7 @@ def cmd_doctor(args) -> int:
         ("platform", f"{py_platform.system()} / {py_platform.machine()}"),
         ("perfetto", info.get("perfetto_package") or "unknown"),
         ("PyYAML", _pkg_version("PyYAML")),
+        ("rich-argparse", _pkg_version("rich-argparse")),
     ]
     tp_version = info.get("trace_processor") or "unknown"
     if info.get("source") == "--tp-binary":
@@ -1826,11 +1829,18 @@ def _describe(entries: list[tuple[str, str, str, str]]) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # rich-argparse title-cases the section headings — "Usage:", "Options:",
+    # "Positional Arguments:". Every other Python program on the same machine
+    # writes them the way argparse does, and colour is the whole reason the
+    # formatter is here; the wording is not part of the deal. `str` leaves the
+    # headings alone. Set on the base class, which the Raw variant inherits.
+    RichHelpFormatter.group_name_formatter = str
+
     p = argparse.ArgumentParser(
         prog="echolot", description=__doc__,
         # Without Raw, argparse collapses the newlines and the command list in
         # the header congeals into a single paragraph.
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+        formatter_class=RawDescriptionRichHelpFormatter)
     p.add_argument("--tp-binary", help="path to your own trace_processor_shell")
 
     # The same flag is also allowed AFTER the subcommand: `doctor --tp-binary X`
@@ -1843,9 +1853,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # `echolot` alone is `echolot status`: where things stand, and the next
     # step. The subcommand is not required so that the bare form works.
+    # Deliberately NOT the Raw variant here. The header above is a table built
+    # by hand and its line breaks are the layout; a subcommand's description is
+    # an English paragraph written as a wrapped Python string, and Raw would
+    # print it as one 290-character line for `anr` to hard-wrap mid-word.
     sub = p.add_subparsers(dest="cmd", required=False, metavar="<command>",
                            help="one of the above", parser_class=(
-        lambda **kw: argparse.ArgumentParser(parents=[common], **kw)))
+        lambda **kw: argparse.ArgumentParser(
+            parents=[common], formatter_class=RichHelpFormatter, **kw)))
     p.set_defaults(func=cmd_status, cmd="status")
 
     # Each verb declares its audience here and nowhere else, and the header
