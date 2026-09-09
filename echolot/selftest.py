@@ -2063,6 +2063,58 @@ def _(report):
         assert a == b
 
 
+@check("mark: what the project has for composition tracing is looked up, not assumed")
+def _(report):
+    """The note read two build scripts and spoke about the whole project.
+
+    `runtime-tracing` is what puts composable names in a trace, and the check
+    for it read `app/build.gradle{.kts}` and nothing else. A project that
+    declares the library in `gradle/libs.versions.toml`, or applies it from a
+    convention plugin in another module, was told it had nothing — and so was
+    a project carrying `androidx.tracing:tracing-perfetto`, the library
+    runtime-tracing is built on. Being told to start from zero by a tool that
+    did not look is worse than not being told.
+    """
+    from . import mark as mk
+
+    def note(root):
+        return next((n for n in mk.plan(root, package="com.example.app").notes
+                     if "tracing" in n), "")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root)
+        assert "not among the app module's" in note(root), note(root)
+
+        catalog = root / "gradle" / "libs.versions.toml"
+        catalog.parent.mkdir()
+        catalog.write_text('androidx-tracing-perfetto = { module = '
+                           '"androidx.tracing:tracing-perfetto" }\n', encoding="utf-8")
+        said = note(root)
+        assert "tracing-perfetto is already here" in said and "libs.versions.toml" in said, said
+
+        catalog.write_text(catalog.read_text(encoding="utf-8")
+                           + 'androidx-compose-runtime-tracing = { module = '
+                             '"androidx.compose.runtime:runtime-tracing" }\n',
+                           encoding="utf-8")
+        assert "in the version catalog" in note(root), note(root)
+
+        # applied somewhere else in the build: named, not called absent
+        home = root / "feature" / "home" / "build.gradle.kts"
+        home.write_text(home.read_text(encoding="utf-8")
+                        + "dependencies { implementation(libs.androidx.compose.runtime.tracing) }\n",
+                        encoding="utf-8")
+        said = note(root)
+        assert "feature/home/build.gradle.kts" in said and ":app" in said, said
+
+        # and in the app module itself: nothing left to say
+        app = root / "app" / "build.gradle.kts"
+        app.write_text(app.read_text(encoding="utf-8")
+                       + "dependencies { implementation(libs.androidx.compose.runtime.tracing) }\n",
+                       encoding="utf-8")
+        assert note(root) == "", note(root)
+
+
 @check("mark --pools: the places the JDK will name, and the ones already named")
 def _(report):
     """The third way in, and the only one that starts from the report.

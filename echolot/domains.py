@@ -64,6 +64,11 @@ def files_named(root: Path, name: str) -> list[Path]:
     return _walk(root, lambda n: n == name)
 
 
+def files_ending(root: Path, suffix: str) -> list[Path]:
+    """Every file whose name ends with this, from the same pruned walk."""
+    return _walk(root, lambda n: n.endswith(suffix))
+
+
 def _is_worktree(path: Path) -> bool:
     """A second checkout of the same repository, parked inside it.
 
