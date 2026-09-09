@@ -80,6 +80,14 @@ Macrobenchmark drops traces per iteration into an artifact directory whose path
 depends on the build variant and the device model — awkward to find by hand.
 The runner takes everything that appeared after the run started.
 
+The macrobenchmark chose what to record, so this mode builds no trace config
+of its own. `environment`, `atrace_categories`, `buffer_kb`, `duration_ms` and
+`reset_policy` are inert here, and `collect` says so when it finds them —
+they look like they apply, and copying them in from a launch-mode config is
+the obvious mistake. What the traces carry is the benchmark's decision, and
+the report says which platform state it actually found. On the run these notes
+come from that was the clock and memory but no thermal.
+
 `project_root` is both where the task runs and where the traces are looked
 for, and it defaults to the current directory. It matters as soon as
 `echolot.yml` does not sit beside `gradlew`: `./gradlew` is a relative path,

@@ -88,3 +88,31 @@ def test_harvest_takes_what_appeared_and_leaves_what_was_there(tmp_path):
 
     assert len(got) == 1, [str(g["path"]) for g in got]
     assert got[0]["path"].read_bytes() == b"from this one"
+
+
+def test_a_gradle_run_says_which_knobs_it_ignored(tmp_path, monkeypatch):
+    """The macrobenchmark chose what to record, so half the runner config is moot.
+
+    Found on the first real run of the mode: `environment: true` sat in the
+    config while the report came back with the thermal counters missing, and
+    the config had nothing to do with either half of that. These are the keys
+    most likely to be copied in from a launch-mode config and believed.
+    """
+    project = tmp_path / "app"
+    project.mkdir()
+    said: list[str] = []
+
+    monkeypatch.setattr(runner, "run_command", lambda *a, **kw: 1.0)
+    monkeypatch.setattr(runner, "harvest",
+                        lambda *a, **kw: [{"path": tmp_path / "t", "size": 1}])
+
+    runner.collect(
+        package="com.example.app", out_dir=tmp_path / "out", iterations=1,
+        name="startup", log=said.append,
+        section={"mode": "gradle", "gradle_task": ":benchmark:connected",
+                 "project_root": str(project), "environment": True},
+    )
+
+    warned = [line for line in said if "does not apply" in line]
+    assert warned, said
+    assert "runner.environment" in warned[0], warned[0]
