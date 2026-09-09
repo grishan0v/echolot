@@ -2978,16 +2978,43 @@ def _(report):
     assert "repeated_work" in hunter, \
         "the rule is stated without the detector that depends on it"
 
-    assert "Also measured" in hunter, (
+    # The fenced block under "What to return upward", not the page. Prose
+    # about a field is not a field: dropping `Ruled out:` from the shape while
+    # leaving the paragraph that argues for it kept this check green, which
+    # made it a check on the argument rather than on the form.
+    shape = hunter.split("## What to return upward", 1)[-1].split("```")[1]
+
+    assert "Also measured" in shape, (
         "the return shape has no room for a measurement that was not the "
         "finding — which is how 252.7 ms of the answer stayed on one screen")
     assert "also_measured" in _CONCLUSION_FIELDS, \
         "reflect does not check the field the agent is asked to fill"
-    # And the field is recognised in both languages the others are.
+
+    # **Say what you ruled out.** An unproven suspect is not a wrong suspect,
+    # it is one nobody measured to the end — and without the line the next
+    # hunt spends a round rediscovering that this one already looked there.
+    assert "Ruled out" in shape, (
+        "the return shape has no room for a candidate that was checked and "
+        "not carried to a cause")
+    assert "ruled_out" in _CONCLUSION_FIELDS, \
+        "reflect does not check the field the agent is asked to fill"
+
+    # **Measured and reasoned do not look alike.** `Evidence` is numbers and
+    # `Mechanism` is usually not, they sit next to each other, and a reader
+    # who takes both as measured was misled by the shape rather than by the
+    # agent.
+    assert "(inferred)" in shape and "(gap)" in shape, (
+        "the shape does not ask the hunter to mark the steps it did not "
+        "measure, so a story half made of reasoning reads as a measurement")
+
+    # And every field is recognised in both languages.
     import re
-    pattern = _CONCLUSION_FIELDS["also_measured"]
-    for said in ("Also measured: x 4 ms", "Ещё измерено: x 4 ms"):
-        assert re.search(pattern, said), said
+    for field, said in (
+            ("also_measured", ("Also measured: x 4 ms", "Ещё измерено: x 4 ms")),
+            ("ruled_out", ("Ruled out: gc_pressure", "Отброшено: gc_pressure")),
+    ):
+        for phrase in said:
+            assert re.search(_CONCLUSION_FIELDS[field], phrase), (field, phrase)
 
 
 @check(".claude/ layer: the skill and the agent have frontmatter")
