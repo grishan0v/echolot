@@ -156,6 +156,29 @@ at the same sitting before asking a question. The gap is measured from the end
 of the last run, so `collect -n 5` on a real device does not split one sitting
 in two.
 
+## A session that was building the tool
+
+Every protocol signal is a rule for a hunt: do not open the trace yourself,
+analyse against the project's config, capture through the tool. A session
+spent writing detectors breaks all three by definition, and the report then
+leads with warnings about a hunt that never happened.
+
+Two conditions decide it, both cheap. The project is a checkout of echolot
+itself, which its own `pyproject.toml` says, and the session ran neither
+`collect` nor `hunt` — those are what using it looks like, so somebody
+dogfooding a real hunt from inside the source tree still gets the ordinary
+report.
+
+The protocol checks are then held back the same way a missing source holds
+them back: listed under **Not checked**, with the reason, because silence
+there is no verdict rather than a clean one. What still runs is everything
+about friction — a failing call, a retry, a tool error, a long silence, an
+output that ate the window. A tool that misbehaves under its own author is
+exactly as broken as one that misbehaves under a user.
+
+This was found by pointing `reflect` at the session that wrote it: three
+findings came back, all true, none about anything anyone did wrong.
+
 ## Another agent's transcript
 
 Everything above the reader — facts, signals, report — works on the normalised

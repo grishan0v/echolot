@@ -107,6 +107,7 @@ class Facts:
     entry: dict[str, Any] = field(default_factory=dict)
     config: dict[str, Any] = field(default_factory=dict)
     runs: list[dict[str, Any]] = field(default_factory=list)
+    building: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -834,8 +835,48 @@ def config_snapshot(cfg: Config | None) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ gather
 
+# The tool's own package name, as its own build declares it. Read from
+# pyproject rather than hardcoded twice: a rename that misses this line would
+# quietly turn the check below off, and nothing would say so.
+_OWN_NAME = re.compile(r"^\s*name\s*=\s*[\"']echolot[\"']", re.M)
+
+
+def building_the_tool(project: Path | None,
+                      calls: list[EcholotCall]) -> dict[str, Any]:
+    """Whether this session was building echolot rather than using it.
+
+    Every protocol signal is a rule for a hunt: do not open the trace
+    yourself, analyse against the project's config, capture through the tool.
+    A session spent writing detectors breaks all three by definition, and the
+    report then leads with warnings about a hunt that never happened.
+
+    That is not hypothetical. Run against the transcript of the session that
+    wrote this function, reflect returned `trace_opened_directly` and
+    `config_bypassed` as warnings, plus `bypass_tools` — three findings, all
+    true, none of them about anything anyone did wrong.
+
+    Two conditions, both cheap. The project is a checkout of echolot itself,
+    which its own `pyproject.toml` says. And the session ran neither `collect`
+    nor `hunt`: those are what using it looks like, and somebody dogfooding a
+    real hunt from inside the checkout should get the ordinary report.
+    """
+    if project is None:
+        return {}
+    try:
+        text = (project / "pyproject.toml").read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not _OWN_NAME.search(text):
+        return {}
+    used = sorted({c.sub for c in calls})
+    if {"collect", "hunt"} & set(used):
+        return {}
+    return {"project": str(project), "subcommands": used}
+
+
 def gather(session: Session, cfg: Config | None,
-           runs: list[dict[str, Any]]) -> Facts:
+           runs: list[dict[str, Any]],
+           project: Path | None = None) -> Facts:
     calls = echolot_calls(session)
     window = None
     if session.started and session.ended:
@@ -852,4 +893,5 @@ def gather(session: Session, cfg: Config | None,
         entry=entry(session, calls),
         config=config_snapshot(cfg),
         runs=inside,
+        building=building_the_tool(project, calls),
     )

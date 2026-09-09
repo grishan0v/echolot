@@ -270,3 +270,80 @@ def test_the_listing_names_its_rows_by_what_they_are(tmp_path):
 
     header = done.stdout.splitlines()[0] if done.stdout else ""
     check("the log's rows are sittings", header.startswith("sitting"), header)
+
+
+# --- a session that was building the tool, not using it ----------------------
+
+ECHOLOT_PYPROJECT = """\
+[project]
+name = "echolot"
+version = "0.6.0"
+"""
+
+
+def _reflect(project: Path) -> dict:
+    """The report as JSON, from whatever this project has."""
+    subprocess.run(
+        [sys.executable, "-m", "echolot.main", "reflect", "--last", "--from-log",
+         "--project", str(project), "--out", str(project / "out")],
+        capture_output=True, text=True, cwd=project,
+        env=dict(os.environ, ECHOLOT_NO_RECORD="1"))
+    written = sorted((project / "out").glob("*.json"))
+    return json.loads(written[-1].read_text(encoding="utf-8"))
+
+
+def test_the_report_says_when_the_session_was_building_the_tool(tmp_path):
+    """The condition, on its own. What it then holds back is checked against a
+    transcript in test_reflect.py — from a log every protocol signal is
+    already skipped for want of a source, so this file cannot tell the two
+    reasons apart."""
+    (tmp_path / "pyproject.toml").write_text(ECHOLOT_PYPROJECT, encoding="utf-8")
+    write_log(tmp_path, [
+        line("2026-08-19T10:00:00+00:00", "doctor", ["doctor"]),
+        line("2026-08-19T10:01:00+00:00", "explain", ["explain", "io_wait"])])
+
+    got = _reflect(tmp_path)["context"]["building"]
+    check("the session is named as a build", got, got)
+    check("with what it actually ran", got["subcommands"] == ["doctor", "explain"],
+          got)
+
+
+def test_friction_still_counts_while_building(tmp_path):
+    """Held back is not switched off. A tool that fails under its own author
+    is exactly as broken as one that fails under a user, and those signals are
+    the reason to read the report at all."""
+    (tmp_path / "pyproject.toml").write_text(ECHOLOT_PYPROJECT, encoding="utf-8")
+    write_log(tmp_path, [
+        line("2026-08-19T10:00:00+00:00", "analyze", ["analyze", "t"], exit_code=2),
+        line("2026-08-19T10:00:10+00:00", "analyze", ["analyze", "t"], exit_code=0)])
+
+    report = _reflect(tmp_path)
+    fired = {s["id"] for s in report["signals"] if s["severity"] != "skip"}
+    check("a failing call is still reported", "echolot_failures" in fired, fired)
+    check("and so is the retry after it", "retries" in fired, fired)
+
+
+def test_a_real_hunt_inside_the_checkout_gets_the_ordinary_report(tmp_path):
+    """Somebody dogfooding a hunt from inside the source tree is using the
+    tool, whatever directory they are standing in — so the protocol applies
+    and the checks come back."""
+    (tmp_path / "pyproject.toml").write_text(ECHOLOT_PYPROJECT, encoding="utf-8")
+    write_log(tmp_path, [
+        line("2026-08-19T10:00:00+00:00", "collect", ["collect"]),
+        line("2026-08-19T10:01:00+00:00", "analyze", ["analyze", "t"])])
+
+    report = _reflect(tmp_path)
+    check("not called a build", not report["context"]["building"],
+          report["context"])
+
+
+def test_somebody_elses_project_is_never_mistaken_for_the_checkout(tmp_path):
+    """The condition is the tool's own package name in its own build file, so
+    a project that merely has a pyproject.toml is not it."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "their-app"\n', encoding="utf-8")
+    write_log(tmp_path, [
+        line("2026-08-19T10:00:00+00:00", "doctor", ["doctor"])])
+
+    check("their project is their project",
+          not _reflect(tmp_path)["context"]["building"])

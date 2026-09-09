@@ -873,11 +873,40 @@ FROM_CALLS_ALONE = {
     "long_gaps",
 }
 
+# What still means something when the session was building echolot rather
+# than using it. Everything else here is a rule for a hunt — do not open the
+# trace yourself, analyse against the project's config, capture through the
+# tool — and a session spent writing detectors breaks all of them by
+# definition. See `facts.building_the_tool` for the shape that produced.
+#
+# An allowlist rather than a list of what to drop, and the same shape as the
+# set above, so a signal added later is held back here until somebody decides
+# it means something in this mode. The other default is a new signal quietly
+# misfiring on every session that touches this repository.
+MEANS_SOMETHING_WHILE_BUILDING = {
+    "echolot_failures",
+    "retries",
+    "env_friction",
+    "long_gaps",
+    "context_hogs",
+    "help_lookups",
+}
+
 
 def run(session: Session, facts: Facts, cfg: Config | None) -> list[Signal]:
     out: list[Signal] = []
     partial = not session.shows(TOOLS)
+    building = bool(facts.building)
     for det in SIGNALS:
+        if building and det.__name__ not in MEANS_SOMETHING_WHILE_BUILDING:
+            out.append(Signal(
+                det.__name__, "skip", f"{det.__name__} — not checked",
+                "This session was building echolot rather than using it: the "
+                "project is the tool's own checkout and nothing was collected "
+                "or hunted. Every check held back here is a rule for a hunt, "
+                "and a session spent writing detectors breaks them by "
+                "definition. Silence is no verdict, the same as above."))
+            continue
         if partial and det.__name__ not in FROM_CALLS_ALONE:
             out.append(Signal(
                 det.__name__, "skip", f"{det.__name__} — not checked",

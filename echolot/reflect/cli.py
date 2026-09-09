@@ -154,7 +154,7 @@ def cmd_reflect(args) -> int:
     reports = []
     written = []
     for ref, session in picked:
-        facts = facts_mod.gather(session, cfg, runs)
+        facts = facts_mod.gather(session, cfg, runs, project)
         sigs = signals_mod.run(session, facts, cfg)
         rep = reflect_render.build(session, facts, sigs)
         stem = ref.id[:8]
