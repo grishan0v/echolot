@@ -156,6 +156,89 @@ def _(report):
     no_slice_named(report, "After_OUTSIDE")       # 200 ms after the window
 
 
+# --- the platform state ----------------------------------------------------
+#
+# Not findings: the denominator under every duration above. Each check is
+# arithmetic over numbers fixture.py planted, so a wrong answer here is a
+# wrong answer, not a judgement call about a threshold.
+
+@check("clock: weighted by the cores this app actually held")
+def _(report):
+    cpu = report["environment"]["cpu"]
+    # 1945 ms on a CPU inside the window, of which 435 ms on CPU 0 after it
+    # doubled at ms 600: (1510 × 1000 + 435 × 2000) / 1945.
+    assert cpu["on_cpu_ms"] == 1945.0, cpu
+    assert cpu["mean_mhz"] == 1223.7, cpu
+    assert cpu["max_mhz"] == 2000.0, cpu
+
+
+@check("clock: a core nothing of ours ran on is not part of the answer")
+def _(report):
+    # CPU 9 sits at 300 MHz for the whole trace and never runs a thread of
+    # ours. Averaging the CPU tracks instead of weighting by our own on-CPU
+    # time would report 930 MHz and a minimum of 300 — a true statement about
+    # the device and a false one about this app.
+    cpu = report["environment"]["cpu"]
+    assert cpu["min_mhz"] == 1000.0, (
+        f"300 MHz reached the answer from a core we never ran on: {cpu}")
+    assert cpu["measured_ms"] == cpu["on_cpu_ms"], (
+        f"every core here carries a frequency, so all on-CPU time is "
+        f"measured: {cpu}")
+
+
+@check("clock: the sample that opens the window was emitted before it")
+def _(report):
+    # Every CPU's first sample is at ms 0 and the window opens at 100. Read
+    # with the window applied first, there would be no frequency for the
+    # beginning of the scenario and the coverage below would fall short.
+    cpu = report["environment"]["cpu"]
+    assert cpu["measured_ms"] == 1945.0, (
+        f"the pre-window sample did not carry into the window: {cpu}")
+
+
+@check("thermal: hot is reported, throttled is not claimed")
+def _(report):
+    t = report["environment"]["thermal"]
+    assert t["max_celsius"] == 61.5, (
+        f"80 °C is in the trace 95 ms after the window closes and is none of "
+        f"the scenario's business: {t}")
+    assert t["hottest_zone"] == "cpu-therm", t
+    # The cooling device is present and idle through the window, and rises
+    # only afterwards. Present must not read as active.
+    assert t["throttled"] is False, (
+        f"a cooling device sitting at zero is not throttling: {t}")
+
+
+@check("memory: the low-water mark inside the window, and what the faults cost")
+def _(report):
+    m = report["environment"]["memory"]
+    assert m["available_mb_min"] == 1536.0, (
+        f"the 100 MB sample lands after the window closes: {m}")
+    # A running total: 1250 at ms 900 against 1000 at ms 200.
+    assert m["major_faults"] == 250, m
+
+
+@check("platform state: not recorded reads as unknown, never as steady")
+def _(report):
+    # The whole point of the block. A trace taken without those data sources
+    # — anything recorded before echolot asked for them — must come back with
+    # the three facts named as missing rather than as zeroes, because
+    # `compare` decides whether it may trust its own table on this.
+    from .config import Config
+    from .main import analyze_trace
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bare.perfetto-trace"
+        path.write_bytes(fixture.build(environment=False))
+        bare = analyze_trace(path, Config(FIXTURE_CONFIG))
+    env = bare["environment"]
+    assert env["missing"] == ["cpu", "memory", "thermal"], env
+    assert env["cpu"] is None and env["thermal"] is None, env
+    # And the rest of the report is unaffected: platform state is context, and
+    # its absence must not cost a single finding.
+    assert bare["summary"]["fired_ids"] == report["summary"]["fired_ids"], (
+        bare["summary"]["fired_ids"], report["summary"]["fired_ids"])
+
+
 # --- detectors -------------------------------------------------------------
 
 @check("main_thread_block: found the 120 ms, skipped the 5 ms")

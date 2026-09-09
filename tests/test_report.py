@@ -17,15 +17,29 @@ from echolot import report as report_mod  # noqa: E402
 from tests.support import check  # noqa: E402
 
 
-def one(rows: list[dict], det_id: str = "d") -> dict:
+def one(rows: list[dict], det_id: str = "d",
+        environment: dict | None = None) -> dict:
     return {
         "schema": 1, "generated_at": "2026-08-19T10:00:00+00:00",
         "trace": "t.perfetto-trace", "toolchain": {},
         "window": {"process": "com.example.app", "duration_ms": 1000.0},
+        "environment": environment or {},
         "summary": {"detectors_run": 1, "detectors_fired": int(bool(rows)),
                     "fired_ids": [det_id] if rows else []},
         "detectors": [{"id": det_id, "title": det_id, "why": "", "params": {},
                        "params_source": "default", "error": None, "rows": rows}],
+    }
+
+
+def env(mhz: float, *, throttled: bool = False) -> dict:
+    return {
+        "cpu": {"mean_mhz": mhz, "min_mhz": 300.0, "max_mhz": 2400.0,
+                "on_cpu_ms": 900.0, "measured_ms": 900.0},
+        "thermal": {"max_celsius": 55.0 if not throttled else 78.0,
+                    "hottest_zone": "cpu-therm", "throttled": throttled,
+                    "throttle_device": "thermal-cpufreq-0" if throttled else None},
+        "memory": None,
+        "missing": ["memory"],
     }
 
 
@@ -61,6 +75,47 @@ def test_an_outlier_seen_in_one_run_of_three_survives_the_merge():
           got["inflate"])
     check("and the merge says how rare it was",
           got["inflate"]["runs"] == "1/3", got["inflate"])
+
+
+def test_the_clock_is_merged_across_repeats_and_keeps_its_spread():
+    """A median clock, and the range that says whether the median means anything."""
+    got = report_mod.aggregate([one([], environment=env(mhz)) for mhz in
+                                (900.0, 1800.0, 2000.0)])["environment"]
+
+    check("the typical repeat, like every other number in a merged report",
+          got["cpu"]["mean_mhz"] == 1800.0, got["cpu"])
+    check("and the range, because a set spanning 900 to 2000 MHz is a set to "
+          "throw away",
+          (got["cpu"]["mean_mhz_min"], got["cpu"]["mean_mhz_max"]) == (900.0, 2000.0),
+          got["cpu"])
+    check("every repeat carried a clock", got["cpu"]["runs"] == "3/3", got["cpu"])
+
+
+def test_one_throttled_repeat_is_not_outvoted_by_the_others():
+    """Throttling does not take a median.
+
+    Nine clean repeats and one throttled one is a fact about the set. A
+    majority vote would round it away, and the reader would never learn that
+    a tenth of the numbers were measured on a machine that had capacity taken
+    from it.
+    """
+    got = report_mod.aggregate(
+        [one([], environment=env(1800.0)) for _ in range(9)]
+        + [one([], environment=env(1800.0, throttled=True))])["environment"]
+
+    check("one throttled repeat carries", got["thermal"]["throttled"] is True,
+          got["thermal"])
+    check("and it says how many", got["thermal"]["throttled_runs"] == "1/10",
+          got["thermal"])
+    check("the peak temperature is the worst seen, not the typical one",
+          got["thermal"]["max_celsius"] == 78.0, got["thermal"])
+
+
+def test_repeats_without_platform_state_merge_to_not_recorded():
+    got = report_mod.aggregate([one([]) for _ in range(3)])["environment"]
+    check("nothing recorded stays nothing recorded",
+          got["missing"] == ["cpu", "memory", "thermal"], got)
+    check("and never becomes a zero", got["cpu"] is None, got)
 
 
 def test_a_spike_inside_a_row_that_is_always_there_is_smoothed_and_kept():

@@ -100,7 +100,8 @@ measuring.
 
 The runner builds the perfetto config itself, but if you capture by hand
 (recipe in `echolot/claude/skills/echolot/references/collect.md`), four things
-are mandatory:
+are mandatory and a fifth decides whether the report can tell a slower machine
+from a slower app:
 
 **`sched/sched_switch`** — without it there is no `thread_state`, and the two
 detectors built on it, `runnable_starvation` and `uninstrumented_cpu`, both go
@@ -126,6 +127,36 @@ Android 12 and up. On anything older the data source does not exist, perfetto
 records the rest without complaining, and the detector is silent — which reads
 exactly like "no bad frames". If jank is the question and the report says
 nothing, check the Android version before believing it.
+
+**The platform state** — `power/cpu_frequency`, `thermal/thermal_temperature`,
+`thermal/cdev_update`, `sched/sched_blocked_reason`, and `linux.sys_stats`
+polling memory once a second:
+
+```
+      ftrace_events: "power/cpu_frequency"
+      ftrace_events: "sched/sched_blocked_reason"
+      ftrace_events: "thermal/thermal_temperature"
+      ftrace_events: "thermal/cdev_update"
+```
+```
+data_sources: { config {
+    name: "linux.sys_stats"
+    sys_stats_config { meminfo_period_ms: 1000 vmstat_period_ms: 1000 }
+} }
+```
+
+Not mandatory, and the one thing on this page that changes what a comparison
+means. A duration is the work done divided by the speed the machine was doing
+it at: the same code on a lower clock takes longer, and `compare` without
+these numbers reports that as a regression. With them it says the clock moved
+instead. `runner.environment: false` leaves them out for a device whose buffer
+cannot afford them, and the report then says the device state was not
+recorded — never that it held steady.
+
+`power/cpu_idle` is deliberately not in that list. It fires on every idle
+transition on every core, which is the largest source of events on the page,
+and it would add nothing: the clock is read only over intervals where the
+app's own threads held a core, and a core running a thread is not idle.
 
 There is also a requirement on the app itself: slices arrive only if it is
 **profileable or debuggable**. The manifest needs

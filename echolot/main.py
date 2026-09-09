@@ -320,6 +320,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         _setup_context(tp, cfg, procs[0]["upid"],
                        {d.id: ov for d, ov, _ in plan if ov})
         window = _window_info(tp, cfg, procs)
+        environment = _environment_info(tp)
 
         # Stdlib modules the detectors declared, loaded once for the session.
         # A module that is not in this trace_processor is not fatal here: the
@@ -368,7 +369,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
 
     return report_mod.build(str(trace), window, results,
                             toolchain=toolchain_info(tp_binary),
-                            absent=absent)
+                            absent=absent, environment=environment)
 
 
 def cmd_analyze(args) -> int:
@@ -617,10 +618,11 @@ def _setup_context(tp, cfg: Config, upid: int,
         cfg.context_params(upid),
     ))
     bounds = tp.query("SELECT ts_start, ts_end FROM _window")[0]
-    tp.exec_script(render_sql(
-        (SQL_DIR / "window.sql").read_text(encoding="utf-8"),
-        {"ts_start": bounds["ts_start"], "ts_end": bounds["ts_end"]},
-    ))
+    for phase in ("window.sql", "environment.sql"):
+        tp.exec_script(render_sql(
+            (SQL_DIR / phase).read_text(encoding="utf-8"),
+            {"ts_start": bounds["ts_start"], "ts_end": bounds["ts_end"]},
+        ))
     _claim_names(tp, cfg.detector_overrides if mask_overrides is None
                  else mask_overrides)
     return bounds
@@ -710,6 +712,90 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
             "matches": hits[0]["n"] if hits else 0,
         }
     return window
+
+
+def _environment_info(tp) -> dict:
+    """What the platform was doing to the app, from the views environment.sql left.
+
+    Three blocks, each one either measured or absent. Absent means the trace
+    was recorded without that data source — by an older echolot, by a config
+    with `runner.environment: false`, or on a kernel that does not carry the
+    event — and it is a different answer from "the device was fine". A block
+    that could not be measured is `None` and its name goes into `missing`, so
+    that a reader who wants to know whether the clock held steady can tell
+    "it did" from "nobody looked".
+
+    None of this is a finding. It is the denominator under every duration in
+    the report: the same code on a lower clock takes longer, and `compare`
+    reads these numbers to avoid calling that a regression.
+    """
+    def one(sql: str) -> dict:
+        try:
+            rows = tp.query(sql)
+        except Exception as e:  # a view over a table this trace has no rows for
+            print(f"[!] environment: {e}", file=sys.stderr)
+            return {}
+        return dict(rows[0]) if rows else {}
+
+    env: dict = {}
+
+    # The clock, weighted by the time our own threads held a core. Weighting
+    # matters: the little cores idle at 300 MHz through the whole scenario,
+    # and a plain average over CPUs would report that as the machine we ran on.
+    cpu = one(
+        "SELECT SUM(dur) AS measured_ns, SUM(dur * khz) AS weighted, "
+        "       MIN(khz) AS min_khz, MAX(khz) AS max_khz "
+        "FROM _freq_on_cpu"
+    )
+    on_cpu = one("SELECT SUM(dur) AS ns FROM _on_cpu")
+    if cpu.get("measured_ns"):
+        env["cpu"] = {
+            "mean_mhz": round(cpu["weighted"] / cpu["measured_ns"] / 1000.0, 1),
+            "min_mhz": round(cpu["min_khz"] / 1000.0, 1),
+            "max_mhz": round(cpu["max_khz"] / 1000.0, 1),
+            "on_cpu_ms": round((on_cpu.get("ns") or 0) / 1e6, 2),
+            # How much of that on-CPU time had a frequency to go with it. Below
+            # the whole, the mean is an average over the part we could see.
+            "measured_ms": round(cpu["measured_ns"] / 1e6, 2),
+        }
+    else:
+        env["cpu"] = None
+
+    hot = one("SELECT zone, MAX(celsius) AS celsius FROM _thermal_win")
+    throttle = one("SELECT device, MAX(level) AS level FROM _throttle_win")
+    if hot.get("celsius") is not None or throttle.get("level") is not None:
+        env["thermal"] = {
+            "max_celsius": round(hot["celsius"], 1)
+            if hot.get("celsius") is not None else None,
+            "hottest_zone": hot.get("zone"),
+            # A hot device is not evidence of anything on its own. A cooling
+            # device above zero is the kernel saying it took capacity away.
+            "throttled": bool(throttle.get("level")),
+            "throttle_device": throttle.get("device") if throttle.get("level") else None,
+        }
+    else:
+        env["thermal"] = None
+
+    avail = one(
+        "SELECT MIN(value) AS bytes FROM _meminfo_win WHERE key = 'MemAvailable'")
+    faults = one(
+        "SELECT MAX(value) - MIN(value) AS n, COUNT(*) AS samples "
+        "FROM _vmstat_win WHERE key = 'pgmajfault'")
+    if avail.get("bytes") is not None or faults.get("samples"):
+        env["memory"] = {
+            "available_mb_min": round(avail["bytes"] / 1e6, 1)
+            if avail.get("bytes") is not None else None,
+            # A running total, so the window's cost is the difference across
+            # it — and a single sample has no difference to give.
+            "major_faults": int(faults["n"])
+            if (faults.get("samples") or 0) >= 2 else None,
+        }
+    else:
+        env["memory"] = None
+
+    env["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
+                            if env[k] is None)
+    return env
 
 
 # Inventory sections. The keywords are deliberately broad: the job is to show

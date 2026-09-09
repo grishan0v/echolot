@@ -32,6 +32,7 @@ runner:
   iterations: 5
   duration_ms: 12000
   reset_policy: force-stop     # force-stop (cold) | none (warm)
+  environment: true            # record CPU clock, thermal, memory
 
 detectors:
   main_thread_block:
@@ -89,6 +90,13 @@ macrobenchmark task and gathers the traces it wrote.
 
 `reset_policy` is `force-stop` or `none`. `pm clear` is deliberately
 unsupported: wiping data changes the scenario rather than repeating it.
+
+`environment: true` records what the device was doing to the app while the
+scenario ran — CPU frequency, thermal throttling, free memory, and the kernel
+function a thread went to sleep on. It reaches the report as `environment`,
+and `compare` reads it to tell a slower machine from a slower app. Turning it
+off is for a device whose buffer overflows; the report then says the device
+state was not recorded, which is a different answer from "it held steady".
 
 ### `detectors`
 

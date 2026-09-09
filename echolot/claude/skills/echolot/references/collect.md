@@ -21,6 +21,10 @@ data_sources: {
       ftrace_events: "sched/sched_process_free"
       ftrace_events: "task/task_newtask"
       ftrace_events: "task/task_rename"
+      ftrace_events: "power/cpu_frequency"
+      ftrace_events: "sched/sched_blocked_reason"
+      ftrace_events: "thermal/thermal_temperature"
+      ftrace_events: "thermal/cdev_update"
       atrace_categories: "am"
       atrace_categories: "wm"
       atrace_categories: "gfx"
@@ -39,6 +43,10 @@ data_sources: { config {
 } }
 data_sources: { config {
     name: "android.surfaceflinger.frametimeline"
+} }
+data_sources: { config {
+    name: "linux.sys_stats"
+    sys_stats_config { meminfo_period_ms: 1000 vmstat_period_ms: 1000 }
 } }
 duration_ms: 12000
 EOF

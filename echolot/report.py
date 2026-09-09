@@ -94,8 +94,15 @@ def build(
     results: list[dict[str, Any]],
     toolchain: dict[str, Any] | None = None,
     absent: list[str] | None = None,
+    environment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """`absent` — shipped detectors this config left out. See `to_markdown`."""
+    """`absent` — shipped detectors this config left out. See `to_markdown`.
+
+    `environment` — the platform state every duration below is conditional on.
+    Optional because a report can be built from a trace recorded before those
+    sources existed; the key is then absent, which `compare` reads as "cannot
+    be checked" and never as "it held steady".
+    """
     fired = [r for r in results if r["rows"]]
     return {
         "schema": 1,
@@ -103,6 +110,7 @@ def build(
         "trace": trace,
         "toolchain": toolchain or {},
         "window": window,
+        "environment": environment or {},
         "summary": {
             "detectors_run": len(results),
             "detectors_fired": len(fired),
@@ -126,6 +134,66 @@ def identity_of(detector: dict[str, Any]) -> tuple[str, ...]:
     """
     cols = detector.get("identity") or ["location"]
     return tuple(cols)
+
+
+def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """The platform state across repeats — median for the clock, worst case for the rest.
+
+    The median matches what every other number in the merged report is: the
+    typical repeat rather than the luckiest or the unluckiest. Its `spread`
+    twin is here for the same reason it exists on the rows — a set whose clock
+    ran from 900 to 2000 MHz is a set to throw away, and a single median hides
+    exactly that.
+
+    Throttling does not take a median. One repeat out of ten recorded on a
+    throttled device is a fact about the set, and rounding it away by majority
+    would be the tool quietly deciding the reader did not need to know.
+    """
+    envs = [r.get("environment") or {} for r in reports]
+    cpus = [e["cpu"] for e in envs if e.get("cpu")]
+    thermals = [e["thermal"] for e in envs if e.get("thermal")]
+    memories = [e["memory"] for e in envs if e.get("memory")]
+
+    out: dict[str, Any] = {"cpu": None, "thermal": None, "memory": None}
+    if cpus:
+        means = [c["mean_mhz"] for c in cpus if c.get("mean_mhz")]
+        out["cpu"] = {
+            "mean_mhz": round(median(means), 1) if means else None,
+            "mean_mhz_min": min(means) if means else None,
+            "mean_mhz_max": max(means) if means else None,
+            "min_mhz": min(c["min_mhz"] for c in cpus),
+            "max_mhz": max(c["max_mhz"] for c in cpus),
+            "on_cpu_ms": round(median([c["on_cpu_ms"] for c in cpus]), 2),
+            "measured_ms": round(median([c["measured_ms"] for c in cpus]), 2),
+            # How many of the repeats had a clock to read at all, in the same
+            # form the rows use: a set where two traces of ten carry it is not
+            # a set the comparison may lean on.
+            "runs": f"{len(cpus)}/{len(reports)}",
+        }
+    if thermals:
+        hot = [t["max_celsius"] for t in thermals if t.get("max_celsius") is not None]
+        throttled = [t for t in thermals if t.get("throttled")]
+        out["thermal"] = {
+            "max_celsius": max(hot) if hot else None,
+            "hottest_zone": next((t.get("hottest_zone") for t in thermals
+                                  if t.get("max_celsius") == (max(hot) if hot else None)),
+                                 None),
+            "throttled": bool(throttled),
+            "throttle_device": throttled[0].get("throttle_device") if throttled else None,
+            "throttled_runs": f"{len(throttled)}/{len(reports)}",
+        }
+    if memories:
+        avail = [m["available_mb_min"] for m in memories
+                 if m.get("available_mb_min") is not None]
+        faults = [m["major_faults"] for m in memories
+                  if m.get("major_faults") is not None]
+        out["memory"] = {
+            "available_mb_min": min(avail) if avail else None,
+            "major_faults": round(median(faults)) if faults else None,
+        }
+    out["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
+                            if out[k] is None)
+    return out
 
 
 def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
@@ -153,6 +221,8 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"]["duration_ms"] = round(median(windows), 2)
         merged["window"]["duration_ms_min"] = min(windows)
         merged["window"]["duration_ms_max"] = max(windows)
+
+    merged["environment"] = _merge_environment(reports)
 
     by_id: dict[str, list[dict]] = {}
     for report in reports:
@@ -254,6 +324,69 @@ def _traces_line(traces: list[str], limit: int = 8) -> str:
     return "Traces: " + line
 
 
+def _environment_lines(env: dict[str, Any]) -> list[str]:
+    """One line for the machine the numbers below were measured on.
+
+    Placed above the findings rather than under them: it is the condition
+    every duration in the report is stated under, and a reader who learns
+    after the table that the device was throttled has already drawn the
+    conclusion.
+
+    Kept to one line while there is nothing wrong, because on a settled device
+    there is nothing to act on and a paragraph of context would push the
+    findings down the page for no reason. Throttling gets its own warning,
+    since it means the numbers below understate the app.
+    """
+    if not env:
+        return []
+    out: list[str] = []
+    cpu, thermal = env.get("cpu"), env.get("thermal")
+
+    bits: list[str] = []
+    if cpu and cpu.get("mean_mhz"):
+        bit = f"clock **{cpu['mean_mhz']:.0f} MHz**"
+        low, high = cpu.get("mean_mhz_min"), cpu.get("mean_mhz_max")
+        if low is not None and high is not None and high > low:
+            bit += f" (from {low:.0f} to {high:.0f} across repeats)"
+        # Below the whole, the mean is an average over the part we could see,
+        # and saying so is cheaper than having it believed of all of it.
+        covered, total = cpu.get("measured_ms"), cpu.get("on_cpu_ms")
+        if covered and total and covered < total * 0.99:
+            bit += f", measured over {covered / total * 100:.0f}% of on-CPU time"
+        bits.append(bit)
+    if thermal and thermal.get("max_celsius") is not None:
+        bits.append(f"peak {thermal['max_celsius']:.0f} °C")
+    memory = env.get("memory")
+    if memory and memory.get("available_mb_min") is not None:
+        bits.append(f"{memory['available_mb_min']:.0f} MB free at the low point")
+    if bits:
+        out.append("Device: " + ", ".join(bits))
+
+    if thermal and thermal.get("throttled"):
+        where = thermal.get("throttle_device")
+        runs = thermal.get("throttled_runs")
+        out.append(
+            "> ⚠️ The kernel throttled the device during this window"
+            + (f" (`{where}`)" if where else "")
+            + (f", in {runs} repeats" if runs else "")
+            + ". Capacity was taken away while these numbers were measured, "
+              "so they are the app on a slowed machine. Let it cool and "
+              "record again before comparing anything to them."
+        )
+
+    # Absence is a third answer and has to look like one. Without this the
+    # header simply says nothing about the device, which reads as a device
+    # with nothing to say.
+    missing = env.get("missing") or []
+    if missing:
+        out.append(
+            f"Device state not recorded: {', '.join(missing)} — this trace "
+            f"carries no platform-state sources, so `compare` cannot tell a "
+            f"slower machine from a slower app."
+        )
+    return out
+
+
 def to_markdown(report: dict[str, Any]) -> str:
     w = report["window"]
     out: list[str] = []
@@ -305,6 +438,8 @@ def to_markdown(report: dict[str, Any]) -> str:
                 f"trace — the window expanded to the whole trace. Check against "
                 f"`probe`; the numbers below are not about your scenario."
             )
+
+    out.extend(_environment_lines(report.get("environment") or {}))
 
     s = report["summary"]
     out.append(

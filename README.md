@@ -137,6 +137,7 @@ Runs: **5**, numbers are medians across them
 Traces: `coldStart_iter000`, `coldStart_iter001`, `coldStart_iter002`, `coldStart_iter003`, `coldStart_iter004`
 Process: `com.example.app` (pid 12903)
 Scenario window: **1184 ms** (from 1102 to 1291)
+Device: clock **1481 MHz** (from 1204 to 1622 across repeats), peak 54 °C, 1536 MB free at the low point
 Detectors fired: **5 of 11**
 
 ## Where the main thread spent its time
@@ -215,7 +216,12 @@ more than the medians moved, and the honest next step is another round of
 
 Reports built against different thresholds are compared with the reason printed
 above the table — a row can cross a moved bar without anything in the app
-changing. See [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md).
+changing. The same goes for the machine: a duration is the work done divided by
+the speed the device was doing it at, so a clock that dropped 10% or more
+between the rounds, or a kernel that throttled during one of them, is named
+above the table too. Silence there means the device was checked and held
+steady; a round recorded without the platform-state sources says that instead.
+See [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md).
 
 ## Commands
 
@@ -413,7 +419,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 109 checks inside
+The detectors were validated against a synthetic trace — 115 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.

@@ -51,6 +51,12 @@ WHERE s.ts < {{ts_end}}
 -- Here dur is already the clipped value: the question is always "how long did
 -- the thread spend in this state inside the scenario", never "how long was the
 -- interval".
+--
+-- `cpu` is filled in only while the thread is Running — off a CPU there is no
+-- CPU to name — and `blocked_function` only where the kernel recorded why the
+-- thread went to sleep. Both are carried rather than used here: environment.sql
+-- weighs the clock by the cores we actually ran on, and neither costs anything
+-- to a detector that does not select it.
 DROP VIEW IF EXISTS _tstate_win;
 CREATE VIEW _tstate_win AS
 SELECT
@@ -58,6 +64,8 @@ SELECT
     th.tid,
     th.name AS thread_name,
     ts.state,
+    ts.cpu,
+    ts.blocked_function,
     MAX(ts.ts, {{ts_start}})                                        AS ts,
     MIN(ts.ts + ts.dur, {{ts_end}}) - MAX(ts.ts, {{ts_start}})      AS dur
 FROM thread_state ts

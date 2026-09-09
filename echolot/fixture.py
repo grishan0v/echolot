@@ -420,6 +420,57 @@ SCHED = [
     (5, OTHER_PID, 200, 700, S),
 ]
 
+# --- the platform state ----------------------------------------------------
+#
+# Not a detector's problem: nothing here fires anything. These are the numbers
+# every duration in the report is conditional on, and the fixture plants them
+# so that the arithmetic which weights them has a known answer.
+#
+# (cpu, at_ms, khz). Three things are planted deliberately:
+#
+#   * the opening samples sit at ms 0, BEFORE the window opens at 100. A
+#     reader that filters samples by the window first would find no frequency
+#     for the start of the scenario and report the whole run unmeasured;
+#   * CPU 0 doubles at ms 600, mid-window, and CPU 0 is where the main thread
+#     spends 935 of its ms. The weighted mean has to move with it;
+#   * CPU 9 sits at 300 MHz and nothing of ours ever runs there. It is the
+#     negative control for the weighting: a plain average across CPU tracks
+#     would drag the answer down to 930 MHz and report a minimum of 300, and
+#     neither number would be about this app.
+CPU_FREQ = [
+    *[(cpu, 0, 1_000_000) for cpu in range(9)],
+    (0, 600, 2_000_000),
+    (9, 0, 300_000),
+]
+
+# (at_ms, zone, milli_celsius). The last one is outside the window [100, 1105]
+# and must not reach the report: a device that got hot after the scenario says
+# nothing about the scenario.
+THERMAL = [
+    (200, "cpu-therm", 45_000),
+    (700, "cpu-therm", 61_500),
+    (1200, "cpu-therm", 80_000),
+]
+
+# (at_ms, device, level). A cooling device that is present and idle is the
+# point: `throttled` has to read false here. The kernel took nothing away
+# during the window, and it took capacity away only afterwards.
+COOLING = [
+    (200, "thermal-cpufreq-0", 0),
+    (900, "thermal-cpufreq-0", 0),
+    (1200, "thermal-cpufreq-0", 3),
+]
+
+# (at_ms, MemAvailable_kb, pgmajfault_total). Polled once a second on a real
+# device; here the samples are placed by hand so the window holds two of them
+# and the third falls outside it. Major faults are a running total, so what
+# the window costs is the difference across it: 250.
+SYS_STATS = [
+    (200, 2_000_000, 1_000),
+    (900, 1_500_000, 1_250),
+    (1200, 100_000, 9_999),
+]
+
 
 def _flatten(slices, out, seq):
     """Unrolls the slice tree into B/E events with correct nesting.
@@ -538,13 +589,20 @@ ANR_COUNTERS = [
 ]
 
 
-def build(frames: bool = True) -> bytes:
+def build(frames: bool = True, environment: bool = True) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
     android.surfaceflinger.frametimeline data source, have no frame timeline
     at all. That is the common case for a while yet, and frame_jank has to
     meet it with silence rather than an error.
+
+    `environment=False` leaves out the platform state the same way: every
+    trace recorded before echolot asked for those sources, and every one
+    recorded with `runner.environment: false`, arrives without them. The
+    report has to say "not recorded" for those and never "the device held
+    steady", which is a different sentence and the one a comparison would act
+    on.
     """
     builder = TraceProtoBuilder()
 
@@ -610,6 +668,17 @@ def build(frames: bool = True) -> bytes:
             (ms(at), next(seq), "print", SS_PID, f"C|{SS_PID}|{name}|1\n")
         )
 
+    # The platform state. Frequency belongs to its own CPU's bundle — that is
+    # where a real kernel writes it. Thermal is a property of the device rather
+    # than of a core, so it goes on CPU 0 like any other global event.
+    if environment:
+        for cpu, at, khz in CPU_FREQ:
+            by_cpu.setdefault(cpu, []).append((ms(at), next(seq), "freq", cpu, khz))
+        for at, zone, milli_c in THERMAL:
+            by_cpu.setdefault(0, []).append((ms(at), next(seq), "temp", zone, milli_c))
+        for at, device, level in COOLING:
+            by_cpu.setdefault(0, []).append((ms(at), next(seq), "cdev", device, level))
+
     for cpu in sorted(by_cpu):
         packet = builder.add_packet()
         packet.trusted_packet_sequence_id = 1000 + cpu
@@ -630,10 +699,38 @@ def build(frames: bool = True) -> bytes:
                 sw.next_comm = next_comm
                 sw.next_pid = next_pid
                 sw.next_prio = 120
+            elif kind == "freq":
+                _, _, _, freq_cpu, khz = item
+                event.pid = 0
+                event.cpu_frequency.cpu_id = freq_cpu
+                event.cpu_frequency.state = khz
+            elif kind == "temp":
+                _, _, _, zone, milli_c = item
+                event.pid = 0
+                event.thermal_temperature.thermal_zone = zone
+                event.thermal_temperature.temp = milli_c
+            elif kind == "cdev":
+                _, _, _, device, level = item
+                event.pid = 0
+                event.cdev_update.type = device
+                event.cdev_update.target = level
             else:
                 _, _, _, tid, buf = item
                 event.pid = tid
                 event.print.buf = buf
+
+    # Memory, as its own packets rather than ftrace events: on a device this
+    # is linux.sys_stats polling /proc, and it arrives the same way here.
+    for at, avail_kb, faults in (SYS_STATS if environment else []):
+        packet = builder.add_packet()
+        packet.timestamp = ms(at)
+        packet.trusted_packet_sequence_id = 2000
+        meminfo = packet.sys_stats.meminfo.add()
+        meminfo.key = pb.MEMINFO_MEM_AVAILABLE
+        meminfo.value = avail_kb
+        vmstat = packet.sys_stats.vmstat.add()
+        vmstat.key = pb.VMSTAT_PGMAJFAULT
+        vmstat.value = faults
 
     return builder.serialize()
 

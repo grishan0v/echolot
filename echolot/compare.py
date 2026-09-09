@@ -198,6 +198,8 @@ def _check(before: dict, after: dict) -> tuple[list[dict[str, str]], bool]:
                       "with like.",
         })
 
+    out.extend(_environment_moved(before, after))
+
     nb, na = _runs(before), _runs(after)
     if nb != na:
         out.append({
@@ -231,6 +233,86 @@ def _check(before: dict, after: dict) -> tuple[list[dict[str, str]], bool]:
                     "are listed as appeared or gone for that reason alone.",
         })
     return out, comparable
+
+
+# How far the clock may drift before the table below stops being about the
+# app. Deliberately the same number as FLOOR_RATIO: that is the bar a row has
+# to clear to be called moved at all, so a clock that differs by as much can
+# produce every row in the table on code nobody touched.
+CLOCK_TOLERANCE = FLOOR_RATIO
+
+
+def _environment_moved(before: dict, after: dict) -> list[dict[str, str]]:
+    """The platform state the two rounds were measured under.
+
+    This is the warning the whole comparison rests on and the one it went
+    longest without. A comparison subtracts durations, and a duration is the
+    work done divided by the speed the machine was doing it at. Drop the clock
+    by a third between rounds and every row grows by half, the table reads as
+    a regression, and the honest answer is that nothing in the app moved.
+
+    Two facts get a warning, and only these two: the clock our own threads ran
+    at, and whether the kernel throttled. Both are measurements. Temperature
+    on its own is not — a warm device that was never throttled lost nothing —
+    and it stays in the report as context rather than becoming a caution here.
+
+    Silence has to mean "checked and steady", so a side with nothing recorded
+    says so instead. `analyze` only fills this in from a trace that carried
+    the platform-state sources; anything recorded without them, or before they
+    existed, arrives here empty.
+    """
+    eb, ea = before.get("environment") or {}, after.get("environment") or {}
+    if not eb and not ea:
+        # Neither side carries it. The reports say so on their own pages, and
+        # repeating it on every comparison of two older reports would be noise
+        # about a config rather than about these two rounds.
+        return []
+
+    out: list[dict[str, str]] = []
+    cb, ca = eb.get("cpu") or {}, ea.get("cpu") or {}
+    mb, ma = cb.get("mean_mhz"), ca.get("mean_mhz")
+    if not mb or not ma:
+        # One side has a clock and the other does not. Thermal is still worth
+        # checking below — a missing clock is not a missing device.
+        blank = [side for side, mhz in (("before", mb), ("after", ma)) if not mhz]
+        out.append({
+            "id": "environment",
+            "text": "The clock could not be checked: the "
+                    + " and ".join(blank) + " side carries no CPU frequency. "
+                    "Whether the two rounds ran on the same machine speed is "
+                    "unknown, so a grown row below may be the app or may be "
+                    "the device. Record both sides with `runner.environment` "
+                    "on to have this answered.",
+        })
+    else:
+        drift = (ma - mb) / mb
+        if abs(drift) >= CLOCK_TOLERANCE:
+            slower, faster = ("after", "before") if drift < 0 else ("before", "after")
+            out.append({
+                "id": "environment",
+                "text": f"The clock moved between the rounds: {mb:.0f} MHz "
+                        f"before, {ma:.0f} MHz after — {abs(drift) * 100:.0f}% "
+                        f"apart, weighted by the time this app held a core. "
+                        f"That is at or above the {CLOCK_TOLERANCE * 100:.0f}% "
+                        f"a row must move to be called moved at all, so the "
+                        f"table below cannot separate the app from the machine. "
+                        f"The {slower} round ran slower than the {faster} one "
+                        f"on the same code. Re-run both on a settled device.",
+            })
+
+    tb, ta = eb.get("thermal") or {}, ea.get("thermal") or {}
+    if tb.get("throttled") != ta.get("throttled") and (
+            tb.get("throttled") or ta.get("throttled")):
+        hot = "before" if tb.get("throttled") else "after"
+        out.append({
+            "id": "environment-thermal",
+            "text": f"The kernel throttled the device during the {hot} round "
+                    f"and not the other one. Throttling takes capacity away, "
+                    f"so the {hot} side is slower for a reason that has "
+                    f"nothing to do with the code. Let the device cool and "
+                    f"record that side again.",
+        })
+    return out
 
 
 def _params_moved(before: dict, after: dict) -> list[str]:
