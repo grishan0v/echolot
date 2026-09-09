@@ -233,6 +233,75 @@ appeared with locks: 200 blocks of a quarter of a millisecond each.
 
 Death by a thousand cuts is no less real than one long call.
 
+## What trips people up
+
+Three things that cost an afternoon each. All three are about trace_processor
+rather than about SQL, which is why knowing SQL does not save you from them,
+and all three were checked against the pinned version rather than taken on
+trust.
+
+### `SPAN_JOIN` does not fail on overlapping input — it double-counts
+
+It merges two sets of intervals and needs them not to overlap **within a
+partition**. Feed it overlap and there is no error: it produces rows, they
+look ordinary, and the durations are wrong.
+
+Two intervals of one partition, `[0,100)` and `[50,150)`, joined against
+`[0,200)`:
+
+| ts | dur | tag |
+|---|---|---|
+| 0 | 100 | first |
+| 50 | 100 | second |
+
+That sums to 200 against a true union of 150. The overlapping fifty is
+counted twice, and any detector that sums durations — coverage, on-CPU time,
+a share of the window — reports a number that is too large with nothing
+anywhere saying so.
+
+So the guarantee has to come from the input, and it has to be written down:
+
+    DROP TABLE IF EXISTS _cpu_in_slice;
+    CREATE VIRTUAL TABLE _cpu_in_slice
+    USING SPAN_JOIN(_running_span PARTITIONED utid, _top_slice_span PARTITIONED utid);
+
+`PARTITIONED utid` is safe here because two Running intervals of one thread
+cannot overlap. `PARTITIONED cpu` in `environment.sql` is safe for a different
+reason: one core runs one thread at a time. Both are properties of the machine
+rather than of the query, so say which one you are leaning on — the next
+person cannot re-derive it from the SQL, and nothing will tell them they were
+wrong.
+
+### Read the schema, do not guess it
+
+`SELECT * FROM <table> LIMIT 1` prints the column names along with a row.
+`LIMIT 0` is the tidier-looking version and is useless through the Python API:
+zero rows means zero column names, because the columns arrive as the keys of
+the rows.
+
+Two minutes of this beats twenty minutes of a query that runs and answers the
+wrong question. `thread_state.cpu` is filled in only while the thread is
+Running; `counter_track.type` says which kind of counter a track is; neither
+is guessable.
+
+The same goes for what a value looks like after trace_processor has finished
+with it. A thermal zone arrives as a track named `cpu-therm Temperature` and
+not `cpu-therm`. Temperatures arrive in degrees where the kernel wrote
+millidegrees, and meminfo in bytes where `/proc` wrote kilobytes. Build a
+five-line trace carrying the events you care about, query it, and look.
+
+### Everything must survive being run twice
+
+A detector runs against a session that already holds the views from the last
+one, and a plain `CREATE VIEW` fails the second time. Hence `DROP VIEW IF
+EXISTS` in front of every view in the context files.
+`CREATE OR REPLACE PERFETTO {TABLE|VIEW|MACRO|FUNCTION}` does the same job for
+the Perfetto forms. A virtual table from `SPAN_JOIN` has no `OR REPLACE` and needs the
+explicit `DROP TABLE IF EXISTS` shown above.
+
+The symptom is a detector that works alone and fails in a full run, which
+sends you reading the query instead of the session.
+
 ## Robustness
 
 A failed detector never fails the run: the error goes to stderr and into
