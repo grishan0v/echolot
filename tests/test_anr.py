@@ -1062,3 +1062,52 @@ def test_a_source_that_does_record_ownership_is_not_second_guessed():
     for dump in (DUMP, DROPBOX):
         for chain in anr.chains(anr.parse(dump)):
             check("read, not worked out", not chain.inferred, chain)
+
+
+# The sixth state. Five of the six a Crashlytics export can carry are in the
+# dumps above; this one appeared in the sample reports and in no fixture, so
+# nothing held the reader to still reading it.
+UNKNOWN_STATE = """\
+# Crashlytics -
+# Application: com.example.app
+# Platform: android
+# Version: 1.2.3 (45)
+
+main (unknown):tid=1 systid=1001
+       at com.example.app.Boot.start(Boot.kt:9)
+       at android.app.ActivityThread.main(ActivityThread.java:8100)
+
+Worker-1 (native):tid=2 systid=1002
+       at jdk.internal.misc.Unsafe.park(Native method)
+       at java.util.concurrent.LinkedBlockingQueue.take(LinkedBlockingQueue.java:1)
+       at java.util.concurrent.ThreadPoolExecutor.getTask(ThreadPoolExecutor.java:1)
+"""
+
+
+def test_a_state_the_reader_has_no_rule_for_still_yields_a_thread():
+    """`unknown` is one of the six a real export carries, and the least likely
+    to be thought of: it is what the exporter writes when it could not work
+    out what the thread was doing.
+
+    The failure it guards against is silent. A signature the reader declines
+    leaves its frames to be swallowed by the thread above it — that is how two
+    threads vanished from the device dump before its own shapes were known —
+    and a report short of a thread looks exactly like a report of a quiet app.
+    """
+    report = anr.parse(UNKNOWN_STATE)
+    check("both threads are there", len(report.threads) == 2,
+          [t.name for t in report.threads])
+
+    main = next(t for t in report.threads if t.name == "main")
+    check("the state is carried as written", main.state == "unknown", main.state)
+    check("and its frames stayed with it", len(main.frames) == 2, main.frames)
+
+
+def test_a_state_with_no_rule_is_not_mistaken_for_an_idle_one():
+    """Not knowing what a thread was doing is not knowing that it was doing
+    nothing. Struck out as idle, the one thread the exporter could not read
+    would be the one the report never mentions."""
+    left = {t.name for t in anr.working(anr.parse(UNKNOWN_STATE))}
+    check("the unreadable one is kept", "main" in left, left)
+    check("while a pool thread waiting to be given work still is",
+          "Worker-1" not in left, left)
