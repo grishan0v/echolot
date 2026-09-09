@@ -73,11 +73,24 @@ runner:
   mode: gradle
   gradle_task: ":benchmark:connectedBenchmarkBenchmarkAndroidTest"
   gradle_args: ["-Pandroid.testInstrumentationRunnerArguments.class=…"]
+  project_root: ../my-app        # where ./gradlew lives
 ```
 
 Macrobenchmark drops traces per iteration into an artifact directory whose path
 depends on the build variant and the device model — awkward to find by hand.
 The runner takes everything that appeared after the run started.
+
+`project_root` is both where the task runs and where the traces are looked
+for, and it defaults to the current directory. It matters as soon as
+`echolot.yml` does not sit beside `gradlew`: `./gradlew` is a relative path,
+and the run would otherwise look for a wrapper in the directory you happened
+to start `echolot` from.
+
+"Everything that appeared after the run started" is a deliberate rule rather
+than a convenience. A benchmark module keeps every trace it has ever written
+— the directory this was first run in held fifteen from twelve days earlier —
+and gathering by name would quietly merge two sittings into one report and
+take medians across them.
 
 Two practical notes. On an emulator the run refuses to start without a
 suppress:

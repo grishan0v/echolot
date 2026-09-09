@@ -71,6 +71,10 @@ runner:
   #
   # mode: gradle
   # gradle_task: ":benchmark:connectedBenchmarkBenchmarkAndroidTest"
+  # Where ./gradlew lives, and where the traces are looked for afterwards.
+  # Defaults to the current directory, which is only right when this file
+  # sits beside the wrapper.
+  # project_root: ../my-app
   # gradle_args: ["-Pandroid.testInstrumentationRunnerArguments.class=..."]
 
 # Detector thresholds. Values override the @param defaults in the .sql files.

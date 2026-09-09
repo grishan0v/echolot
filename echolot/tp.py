@@ -314,7 +314,8 @@ def sql_value(value: Any) -> str:
     return str(value).replace("'", "''")
 
 
-def toolchain_info(bin_path: str | None = None) -> dict[str, Any]:
+def toolchain_info(bin_path: str | None = None,
+                   source: str | None = None) -> dict[str, Any]:
     """What exactly parsed the trace.
 
     This rides into report.json for a reason. The strings 'Running', 'R' and
@@ -323,6 +324,13 @@ def toolchain_info(bin_path: str | None = None) -> dict[str, Any]:
     diverge between two runs, the first question is whether anything underneath
     changed; this field answers it immediately rather than after an hour of
     digging.
+
+    `source` is who asked for `bin_path`, and it has to be told rather than
+    assumed. The field used to read `--tp-binary` for every custom binary,
+    including the ones that came from `toolchain.tp_binary` in a `local.yml`
+    — a file that is normally gitignored and therefore invisible to whoever
+    reads the report next. They would search their history for a flag nobody
+    typed while the answer sat in a file beside the config.
     """
     info: dict[str, Any] = {"perfetto_package": None,
                             "trace_processor": None,
@@ -337,7 +345,7 @@ def toolchain_info(bin_path: str | None = None) -> dict[str, Any]:
     if bin_path:
         # A custom binary bypasses the pin: asking for the package version here
         # would be meaningless.
-        info["source"] = "--tp-binary"
+        info["source"] = source or "--tp-binary"
         info["binary"] = str(bin_path)
         info["trace_processor"] = _binary_version(bin_path)
         return info

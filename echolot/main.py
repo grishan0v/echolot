@@ -135,7 +135,22 @@ def _probe(args) -> int:
 
 def _tp_binary(args, cfg: Config | None = None) -> str | None:
     """Precedence: the flag, then local.yml, then the pin in requirements."""
-    return getattr(args, "tp_binary", None) or (cfg.tp_binary if cfg else None)
+    return _tp_binary_source(args, cfg)[0]
+
+
+def _tp_binary_source(args, cfg: Config | None = None) -> tuple[str | None, str | None]:
+    """The binary and who asked for it, since the report names both.
+
+    Two callers want different halves of this and the second one used to be
+    guessed at: every custom binary was reported as `--tp-binary` whether or
+    not a flag was involved. See `toolchain_info`.
+    """
+    from_flag = getattr(args, "tp_binary", None)
+    if from_flag:
+        return from_flag, "--tp-binary"
+    if cfg and cfg.tp_binary:
+        return cfg.tp_binary, "toolchain.tp_binary"
+    return None, None
 
 
 def _note_local(cfg: Config) -> None:
@@ -294,7 +309,8 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
 
 def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                   cli_overrides: dict[str, dict] | None = None,
-                  use_defaults: bool = False) -> dict:
+                  use_defaults: bool = False,
+                  tp_source: str | None = None) -> dict:
     """The core of a run: trace + config → Marker Report.
 
     Separate from cmd_analyze because it has two callers: the command, which
@@ -368,14 +384,14 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     absent = [d.id for d in load_detectors(DETECTOR_DIR) if d.id not in planned]
 
     return report_mod.build(str(trace), window, results,
-                            toolchain=toolchain_info(tp_binary),
+                            toolchain=toolchain_info(tp_binary, tp_source),
                             absent=absent, environment=environment)
 
 
 def cmd_analyze(args) -> int:
     try:
         cfg = Config.load(args.config, args.local)
-        tp_binary = _tp_binary(args, cfg)
+        tp_binary, tp_source = _tp_binary_source(args, cfg)
         _note_local(cfg)
         if not args.defaults:
             _note_detectors(cfg)
@@ -388,7 +404,7 @@ def cmd_analyze(args) -> int:
         # conclusion along, and the "Runs" column separates the reproducible
         # from the one-off.
         reports = [analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
-                                 use_defaults=args.defaults)
+                                 use_defaults=args.defaults, tp_source=tp_source)
                    for t in args.traces]
         rep = report_mod.aggregate(reports)
     except ConfigError as e:
