@@ -2462,6 +2462,58 @@ def _(report):
     assert aggregate([report]) is report, "a needless wrapper on a single run"
 
 
+@check("the source walk stops at a worktree, and goes on into a submodule")
+def _(report):
+    """A checkout parked inside the project is not more of the project.
+
+    Claude Code keeps its worktrees under `.claude/worktrees/`, and each one
+    is a full copy of the tree. `domains` counted every module twice — `:app`
+    and `:.claude:worktrees:feature-x:app`, the same code under two names —
+    and `mark` found two manifests declaring the same launcher Activity and
+    refused to pick without `--module`, on a project with exactly one app
+    module.
+
+    A submodule is the opposite case: its `.git` is a file too, but its
+    sources are built into the app and belong in the map. The two are told
+    apart by where that file points — `.git/worktrees/` against
+    `.git/modules/` — and not by the presence of the file.
+    """
+    import shutil
+
+    from . import domains
+    from . import mark as mk
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _mark_repo(root)
+        alone = len(domains.source_files(root))
+        assert mk.plan(root, package="com.example.app").module == ":app"
+
+        # where Claude Code puts them, and one somewhere else entirely: the
+        # rule is what the .git file says, not the directory it sits in.
+        for where, name in ((root / ".claude" / "worktrees" / "feature-x", "feature-x"),
+                            (root / "wt" / "feature-y", "feature-y")):
+            where.mkdir(parents=True)
+            shutil.copytree(root / "app", where / "app")
+            (where / ".git").write_text(
+                f"gitdir: /repo/.git/worktrees/{name}\n", encoding="utf-8")
+
+        assert len(domains.source_files(root)) == alone, \
+            "a worktree's copies of the sources were counted as the project's"
+        assert [str(m.relative_to(root)) for m in mk.manifests(root)] == \
+            ["app/src/main/AndroidManifest.xml"], mk.manifests(root)
+        pl = mk.plan(root, package="com.example.app")
+        assert pl.module == ":app" and not pl.ambiguity, pl.ambiguity
+
+        sub = root / "vendor" / "shared"
+        sub.mkdir(parents=True)
+        shutil.copytree(root / "core" / "ui", sub / "core" / "ui")
+        (sub / ".git").write_text("gitdir: /repo/.git/modules/shared\n",
+                                  encoding="utf-8")
+        assert len(domains.source_files(root)) > alone, \
+            "a submodule's sources are the project's own and must be walked"
+
+
 # --- the .claude/ layer ----------------------------------------------------
 
 @check(".claude/ layer: every part of the template is present")

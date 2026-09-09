@@ -50,7 +50,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .domains import SKIP_DIRS, gradle_module
+from .domains import files_named, gradle_module
 from .domains import source_files as domains_source_files
 
 DEFAULT_PREFIX = "AGENTTMP_"
@@ -285,8 +285,14 @@ def source_files(root: Path) -> list[Path]:
 
 
 def manifests(root: Path) -> list[Path]:
-    return [p for p in sorted(root.rglob("AndroidManifest.xml"))
-            if not (SKIP_DIRS & set(p.parts)) and "main" in p.parts]
+    """Every src/main manifest in the project, from the pruned walk.
+
+    `rglob` found them inside a git worktree parked under `.claude/` too, so
+    the app module appeared twice and `plan` asked for `--module` to tell two
+    copies of the same manifest apart.
+    """
+    return [p for p in files_named(root, "AndroidManifest.xml")
+            if "main" in p.parts]
 
 
 def launcher_activities(text: str) -> list[str]:
