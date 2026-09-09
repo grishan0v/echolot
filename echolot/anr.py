@@ -907,8 +907,14 @@ def locate(report: Report, root: Path) -> tuple[list[Located], list[str]]:
             found = place(frame, index, root)
             if found:
                 placed.append(found)
-            elif _FRAME.match(frame) and _WHERE.match(
-                    _FRAME.match(frame).group("where").strip()):
+                continue
+            # Matched once and kept. The same regex ran twice here — once to
+            # ask whether the frame parses and once to read the group out of
+            # it — which is a second pass over every frame this checkout could
+            # not place, and a shape that reads as if the two calls could
+            # disagree.
+            named = _FRAME.match(frame)
+            if named and _WHERE.match(named.group("where").strip()):
                 # It named a source file, and this checkout has no such file.
                 missing.append(frame)
     return placed, missing
