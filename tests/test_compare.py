@@ -56,8 +56,23 @@ def det(det_id: str, rows: list[dict], params: dict | None = None,
     return out
 
 
+def env(mhz: float | None = 1800.0, *, throttled: bool | None = False) -> dict:
+    """A platform-state block. `mhz=None` is a trace recorded without it."""
+    return {
+        "cpu": {"mean_mhz": mhz, "min_mhz": 300.0, "max_mhz": 2400.0,
+                "on_cpu_ms": 900.0, "measured_ms": 900.0} if mhz else None,
+        "thermal": {"max_celsius": 40.0, "hottest_zone": "cpu-therm",
+                    "throttled": throttled, "throttle_device":
+                        "thermal-cpufreq-0" if throttled else None}
+        if throttled is not None else None,
+        "memory": None,
+        "missing": [],
+    }
+
+
 def report(detectors: list[dict], *, window: dict | None = None,
-           config: dict | None = None, runs: int = 3) -> dict:
+           config: dict | None = None, runs: int = 3,
+           environment: dict | None = None) -> dict:
     fired = [d["id"] for d in detectors if d["rows"]]
     return {
         "schema": 1,
@@ -68,6 +83,10 @@ def report(detectors: list[dict], *, window: dict | None = None,
         "toolchain": {},
         "window": window or {"process": "com.example.app", "duration_ms": 1000.0},
         "config": config or {"sha": "aaaa", "defaults": False},
+        # Absent unless asked for: that is what every report written before
+        # the platform-state sources existed looks like, and the default here
+        # keeps the other hundred cases honest about the shape they read.
+        "environment": environment if environment is not None else {},
         "summary": {"detectors_run": len(detectors),
                     "detectors_fired": len(fired), "fired_ids": fired},
         "detectors": detectors,
@@ -397,6 +416,63 @@ def test_unequal_repeats() -> None:
           str(warned(compare(before, after))))
 
 
+def test_a_steady_clock_says_nothing() -> None:
+    """Silence has to be earned, and a settled device earns it."""
+    before = report([det("d", [row("A", 100.0)])], environment=env(1800.0))
+    after = report([det("d", [row("A", 100.0)])], environment=env(1750.0))
+    w = warned(compare(before, after))
+    check("a 3% drift is not worth a word", "environment" not in w, str(w))
+
+
+def test_a_dropped_clock_is_not_a_regression() -> None:
+    """The failure this whole block exists for.
+
+    The same code on a slower machine grows in the table exactly the way a
+    regression does. The comparison cannot refuse to subtract — the numbers
+    stay on the page — but it must not let the reader take the table for a
+    statement about the app.
+    """
+    before = report([det("d", [row("A", 100.0)])], environment=env(1800.0))
+    after = report([det("d", [row("A", 258.0)])], environment=env(700.0))
+    cmp = compare(before, after)
+
+    check("the row still grows — nothing is hidden",
+          changes(cmp)["A"] == "grew", str(changes(cmp)))
+    check("and the clock is named as the reason it might not be the app",
+          "environment" in warned(cmp), str(warned(cmp)))
+    text = next(w["text"] for w in cmp["warnings"] if w["id"] == "environment")
+    check("with both speeds in it", "1800" in text and "700" in text, text)
+
+
+def test_a_clock_nobody_recorded_is_unknown_not_steady() -> None:
+    """The distinction the block is built on: not measured is a third answer."""
+    both_old = compare(report([det("d", [row("A", 100.0)])]),
+                       report([det("d", [row("A", 100.0)])]))
+    check("two reports from before the sources existed stay quiet",
+          "environment" not in warned(both_old), str(warned(both_old)))
+
+    half = compare(report([det("d", [row("A", 100.0)])], environment=env(1800.0)),
+                   report([det("d", [row("A", 100.0)])], environment=env(None)))
+    check("one side without a clock is said out loud",
+          "environment" in warned(half), str(warned(half)))
+    text = next(w["text"] for w in half["warnings"] if w["id"] == "environment")
+    check("and it says which side and that the answer is unknown",
+          "after" in text and "unknown" in text, text)
+
+
+def test_throttling_on_one_side_only() -> None:
+    before = report([det("d", [row("A", 100.0)])],
+                    environment=env(1800.0, throttled=False))
+    after = report([det("d", [row("A", 140.0)])],
+                   environment=env(1780.0, throttled=True))
+    cmp = compare(before, after)
+    check("a throttled round is not comparable to a cool one",
+          "environment-thermal" in warned(cmp), str(warned(cmp)))
+    text = next(w["text"] for w in cmp["warnings"]
+                if w["id"] == "environment-thermal")
+    check("and the slowed side is named", "after" in text, text)
+
+
 def test_detector_sets_differ() -> None:
     before = report([det("one", [row("A", 100.0)])])
     after = report([det("one", [row("A", 100.0)]), det("two", [row("B", 50.0)])])
@@ -633,3 +709,40 @@ def test_nothing_to_compare(tmp_path: Path) -> None:
           "--hunt" in done.stderr and "two reports" in done.stderr,
           done.stderr[-250:])
 
+
+
+def test_a_missing_clock_does_not_hide_throttling() -> None:
+    """Two independent facts, and the first one going unmeasured hides neither.
+
+    The clock and the cooling device come from different sources, so one side
+    can carry the second without the first. An early return on the missing
+    clock swallowed the throttling warning, which is the more actionable of
+    the two.
+    """
+    before = report([det("d", [row("A", 100.0)])],
+                    environment=env(None, throttled=False))
+    after = report([det("d", [row("A", 140.0)])],
+                   environment=env(1800.0, throttled=True))
+    w = warned(compare(before, after))
+    check("the unmeasured clock is said", "environment" in w, str(w))
+    check("and the throttling is not lost with it",
+          "environment-thermal" in w, str(w))
+
+
+def test_an_unmeasured_side_is_never_called_cool() -> None:
+    """Found on a live pair, not by reading the code.
+
+    One round on an A51 that was throttling against one recorded with
+    `runner.environment: false` produced "the kernel throttled during the
+    before round and not the other one" — a confident sentence about a device
+    nobody had looked at. A side with no thermal block has not reported a cool
+    device; it has reported nothing.
+    """
+    hot = report([det("d", [row("A", 140.0)])], environment=env(1800.0, throttled=True))
+    unmeasured = report([det("d", [row("A", 100.0)])],
+                        environment=env(None, throttled=None))
+    w = warned(compare(hot, unmeasured))
+    check("no claim about the side that was not measured",
+          "environment-thermal" not in w, str(w))
+    check("and the missing platform state is still said",
+          "environment" in w, str(w))

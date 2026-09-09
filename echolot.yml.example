@@ -50,6 +50,18 @@ runner:
   # force-stop (cold) or none (warm). pm clear is deliberately unsupported:
   # wiping data changes the scenario rather than repeating it.
   reset_policy: force-stop
+  # Record what the device was doing to the app: CPU frequency, thermal
+  # throttling, free memory, and the kernel function a thread blocked on.
+  #
+  # On by default because `compare` depends on it. The same code on a lower
+  # clock takes longer, and a comparison that cannot see the clock reports
+  # that as a regression — a table full of grown rows for an app nobody
+  # touched. With these recorded, `compare` says so instead.
+  #
+  # Turn it off if the buffer overflows on your device. What you lose is the
+  # ability to tell a slower machine from a slower app: the report then says
+  # the device state was not recorded, and never that it held steady.
+  environment: true
   # activity: com.example.app/.MainActivity   # resolved automatically if absent
   #
   # mode: command

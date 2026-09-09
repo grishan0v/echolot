@@ -24,6 +24,13 @@ cannot be mistaken for the project's.
               "process": "com.example.app", "pid": 4100,
               "start_anchor": { "glob": "bindApplication", "matches": 1 },
               "end_anchor":   { "glob": "…", "matches": 1 } },
+  "environment": { "cpu": { "mean_mhz": 1481.2, "min_mhz": 300.0,
+                            "max_mhz": 2400.0, "on_cpu_ms": 1945.0,
+                            "measured_ms": 1902.4 },
+                   "thermal": { "max_celsius": 61.5, "hottest_zone": "cpu-therm",
+                                "throttled": false, "throttle_device": null },
+                   "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
+                   "missing": [] },
   "summary": { "detectors_run": 6, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
@@ -46,6 +53,24 @@ cannot be mistaken for the project's.
 reports with different `sha` were not made against the same thresholds;
 `defaults: true` means `--defaults` ran every detector with its built-in
 numbers, `set` lists what `--set` overrode for that run.
+
+**`environment`** — what the device was doing to the app while the scenario
+ran. Not a finding: it is the condition every duration in this report is
+stated under. A slice is 40 ms partly because of the code in it and partly
+because of the clock it ran on, and this is the only place that says which
+clock. `cpu.mean_mhz` is weighted by the time this app's own threads held a
+core, so it describes the machine the app got rather than the machine.
+
+Each of `cpu`, `thermal` and `memory` is either a measurement or `null`, and
+`missing` names the null ones. **`null` means the trace was recorded without
+those sources, never that the device was fine** — a trace from an older
+echolot, or from a config with `runner.environment: false`, arrives this way.
+Treat a missing clock as "unknown", and say so rather than calling a run
+clean.
+
+`thermal.throttled` is the one to act on. A hot device is not a slowed device;
+a cooling device above zero is the kernel saying it took capacity away, and
+the numbers below then understate the app.
 
 **`detectors[].params_source`** — where this detector's thresholds came from:
 `default` (the numbers shipped in the .sql), `config` (calibrated or
@@ -76,6 +101,13 @@ what they would have said.
 **`detectors[].error != null`** — that detector failed while the rest ran. SQL
 is version-fragile; report the error, but do not treat the absence of findings
 as an answer.
+
+**`environment.cpu` is `null`, or `environment.thermal.throttled` is true** —
+in the first case nobody measured the machine, so a duration cannot be read as
+a statement about the code alone; in the second the kernel was taking capacity
+away while these numbers were made. Neither is a reason to discard the report,
+and both are a reason to say so out loud before drawing a conclusion from a
+number that moved.
 
 **`toolchain.trace_processor`** — the parser version. If the numbers diverge
 between two reports, check this first: a version change alters trace semantics

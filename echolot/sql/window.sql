@@ -51,6 +51,18 @@ WHERE s.ts < {{ts_end}}
 -- Here dur is already the clipped value: the question is always "how long did
 -- the thread spend in this state inside the scenario", never "how long was the
 -- interval".
+--
+-- `cpu` is filled in only while the thread is Running — off a CPU there is no
+-- CPU to name. `io_wait` and `blocked_function` come from
+-- sched/sched_blocked_reason and say why a thread went to uninterruptible
+-- sleep, but only the first of them survives a production device: the second
+-- needs kernel symbols, and /proc/kallsyms is unreadable there, so on an
+-- SM-A515F running Android 13 it was NULL for all 6683 D intervals in the
+-- trace while `io_wait` was filled in for 6486 of them.
+--
+-- All three are carried rather than used here: environment.sql weighs the
+-- clock by the cores we actually ran on, and none of them costs anything to a
+-- detector that does not select it.
 DROP VIEW IF EXISTS _tstate_win;
 CREATE VIEW _tstate_win AS
 SELECT
@@ -58,6 +70,9 @@ SELECT
     th.tid,
     th.name AS thread_name,
     ts.state,
+    ts.cpu,
+    ts.io_wait,
+    ts.blocked_function,
     MAX(ts.ts, {{ts_start}})                                        AS ts,
     MIN(ts.ts + ts.dur, {{ts_end}}) - MAX(ts.ts, {{ts_start}})      AS dur
 FROM thread_state ts

@@ -114,8 +114,35 @@ top, the way the Marker Report already states an anchor that never matched.
 | `runs` | different numbers of repeats; the narrower range is the smaller sample |
 | `single` | one trace on a side: no spread, so the Ranges column is empty throughout |
 | `detectors` | the two runs did not use the same set of detectors |
+| `environment` | the clock the two rounds ran at differs by 10% or more, or one side has no clock recorded at all |
+| `environment-thermal` | the kernel throttled the device during one round and not the other |
 
-The one to read first is `thresholds`. After `echolot calibrate` the numbers in
+The one to read first is `environment`, because it is the only one that can
+make the whole table say the opposite of what it looks like. A duration is the
+work done divided by the speed the machine was doing it at. Drop the clock by a
+third between rounds and every row grows by half: the table reads as a
+regression, and nothing in the app moved.
+
+The bar is 10%, the same number a row has to clear to be called moved at all —
+a clock that differs by as much can produce every row on the page. The clock is
+weighted by the time this app's own threads held a core, so a device whose
+little cores idled through the scenario is not reported as a slow device.
+
+The clock and the throttle are checked separately because they do not move
+together. The same scenario on an SM-A515F, once at 76 °C with the big cluster
+throttled in two runs of three and again at 55 °C with none, came back at
+2220 MHz against 2209 MHz — half a percent apart. Throttling takes away the
+headroom rather than the frequency the app was actually using, so the clock
+check alone would have passed that pair without a word. The same pair is why
+temperature on its own earns no warning: 21 °C of difference, and the speed
+did not move.
+
+Silence here means checked and steady. A side recorded without the
+platform-state sources — an older echolot, or `runner.environment: false` —
+says so instead, and two such reports say nothing at all rather than repeating
+a config problem on every comparison.
+
+Then `thresholds`. After `echolot calibrate` the numbers in
 `echolot.yml` are derived from particular runs, and comparing a calibrated
 report against a default one produces a page of rows that appeared and vanished
 without anything in the app changing. Re-run both sides with `--defaults` when

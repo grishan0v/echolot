@@ -244,3 +244,15 @@ If the finding is about the device rather than the code
 (`runnable_starvation` on a loaded machine or an emulator) — say so. Sending
 someone to hunt a bug in code where the scheduler is at fault costs more than
 staying quiet.
+
+Check that against `environment` in `report.json` rather than guessing at it.
+It carries the clock this app's own threads ran at, whether the kernel
+throttled, and how much memory was free. A duration is the work done divided
+by the speed the machine was doing it at, so a low `cpu.mean_mhz` or
+`thermal.throttled: true` is the device showing up in numbers that look like
+code.
+
+Read `null` there as unknown. Each of `cpu`, `thermal` and `memory` is either
+measured or absent, and `missing` names the absent ones — a trace recorded
+without those sources tells you nothing about the device, which is a different
+answer from a device that behaved. Say which of the two you have.

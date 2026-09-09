@@ -261,3 +261,54 @@ def test_the_publish_workflow_can_read_the_version():
     assert bad.returncode != 0, (
         "the publish workflow accepted a tag that does not match the version"
     )
+
+
+# --- the trace config, written down twice -----------------------------------
+
+# The runner builds it, and `references/collect.md` prints it verbatim so that
+# a capture by hand records the same thing. Two copies of one fact, and the one
+# in prose has no way of noticing when the other moves.
+RECIPE = "echolot/claude/skills/echolot/references/collect.md"
+
+
+def test_the_documented_capture_records_what_the_runner_records():
+    """Every source the runner asks for is named in the copy-paste recipe.
+
+    A capture by hand that leaves one out produces a trace that analyses
+    cleanly and answers a narrower question than the reader thinks — a missing
+    `power/cpu_frequency` costs no detector and quietly turns `compare` back
+    into something that cannot tell a slower machine from a slower app. The
+    difference never surfaces as an error, which is exactly the kind of drift
+    this file exists for.
+    """
+    from echolot import runner
+
+    text = (ROOT / RECIPE).read_text(encoding="utf-8")
+    wanted = re.findall(r'ftrace_events: "([^"]+)"', runner.TRACE_CONFIG)
+    wanted += runner.ENVIRONMENT_EVENTS
+    wanted += re.findall(r'name: "([^"]+)"', runner.TRACE_CONFIG)
+    wanted += re.findall(r'name: "([^"]+)"', runner.SYS_STATS_SOURCE)
+    wanted += runner.DEFAULT_CATEGORIES
+
+    absent = sorted({w for w in wanted if w not in text})
+    assert not absent, (
+        f"{RECIPE} does not mention what the runner records: "
+        f"{', '.join(absent)}"
+    )
+
+
+def test_the_prose_names_the_platform_state_it_explains():
+    """`docs/collecting.md` argues for these four events; it has to name them.
+
+    Narrower than the recipe above on purpose: this document is prose about
+    what a config must contain rather than a config to paste, and holding it
+    to every line of the template would make it one.
+    """
+    from echolot import runner
+
+    text = (ROOT / "docs/collecting.md").read_text(encoding="utf-8")
+    absent = [e for e in runner.ENVIRONMENT_EVENTS if e not in text]
+    assert not absent, (
+        f"docs/collecting.md explains the platform state without naming: "
+        f"{', '.join(absent)}"
+    )
