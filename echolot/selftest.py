@@ -1428,6 +1428,35 @@ def _(report):
     assert sum(1 for why in out.values() if why) == 3, out
 
 
+@check("doctor: what a check prints stays out of the run hosting it, stderr too")
+def _(report):
+    """The self-check's own noise, on the terminal of whoever ran `init`.
+
+    Several checks feed the CLI a trace that is not there and assert the exit
+    code is 2. The error proving it goes to stderr, and only stdout was
+    redirected — so `echolot init`, which ends in `doctor -q`, printed
+    `error: no such trace: nosuch.perfetto-trace` four times in the middle of
+    installing a layer that was fine. On a terminal a deliberate error looks
+    exactly like a real one.
+    """
+    import contextlib
+    import io
+    import sys
+
+    from . import selftest as st
+
+    def noisy(_report):
+        print("the layer went into /tmp/nowhere")
+        print("error: no such trace: nosuch.perfetto-trace", file=sys.stderr)
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        results = st.run_checks({}, [("noisy", noisy)])
+    assert results == [("noisy", None)], results
+    assert not out.getvalue(), f"stdout leaked: {out.getvalue()!r}"
+    assert not err.getvalue(), f"stderr leaked: {err.getvalue()!r}"
+
+
 @check("reflect: a word after `echolot` is not a subcommand")
 def _(report):
     """The readers and the facts disagreed on what counts as a call.
@@ -3285,14 +3314,20 @@ def run_checks(report: dict, checks) -> list[tuple[str, str | None]]:
     Separated from `run` so that what happens to a check that breaks can be
     checked over made-up checks, rather than by breaking a real one.
 
-    What the checks print is swallowed. Several of them run real commands —
-    `init` into a temp directory, `status` against a config in another one —
-    and those commands print, into the output of the run hosting them.
-    `doctor -q` promises three lines and the failures and was printing
+    What the checks print is swallowed — both streams. Several of them run
+    real commands — `init` into a temp directory, `status` against a config in
+    another one — and those commands print, into the output of the run hosting
+    them. `doctor -q` promises three lines and the failures and was printing
     thirty-one: the layer `init` installed somewhere in /tmp, a `next` step
     for a project that no longer exists, a Cursor stub. All of it true about
     a directory nobody will ever see again, and all of it between a reader
     and the verdict.
+
+    stderr was left out of that, and the checks that feed the CLI a trace
+    which is not there put `error: no such trace: nosuch.perfetto-trace` in
+    front of everyone who ran `echolot init`. A deliberate error, proof that
+    the exit code is 2 — and indistinguishable, on the terminal, from the
+    run having gone wrong.
 
     Same argument as `recorder.isolated()` below, which exists so those
     commands' notes do not land in the log entry of the run hosting them.
@@ -3305,7 +3340,8 @@ def run_checks(report: dict, checks) -> list[tuple[str, str | None]]:
     out = []
     # Checks call commands of their own (`init` into a temp dir); their notes
     # must not land in the log line of the doctor run that hosts them.
-    with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()):
+    with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
         for name, fn in checks:
             try:
                 fn(report)

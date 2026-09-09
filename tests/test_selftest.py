@@ -66,17 +66,26 @@ def test_doctor_q_is_actually_quiet(capsys, tmp_path, monkeypatch):
 
     Bounded rather than pinned to a number: the three lines are a promise
     about the shape, and a failure adds two lines per failing check.
+
+    stderr counts. It was not redirected, and the checks that hand the CLI a
+    trace which is not there — proving it exits 2 — printed `error: no such
+    trace: nosuch.perfetto-trace` at everyone who ran `echolot init`, which
+    ends in this same `doctor -q`.
     """
     from echolot.main import main
 
     monkeypatch.chdir(tmp_path)
     assert main(["doctor", "-q"]) == 0
-    printed = capsys.readouterr().out.strip().splitlines()
+    captured = capsys.readouterr()
+    printed = captured.out.strip().splitlines()
     assert len(printed) <= 4, (
         f"`doctor -q` printed {len(printed)} lines:\n  "
         + "\n  ".join(printed))
     assert printed[0].startswith("echolot "), printed
     assert printed[-1].startswith("self-check:"), printed
+    assert captured.err == "", (
+        "the self-check's own errors reached stderr:\n  "
+        + "\n  ".join(captured.err.strip().splitlines()))
 
 
 def test_a_failing_bare_assert_is_not_reported_as_a_pass(monkeypatch):
