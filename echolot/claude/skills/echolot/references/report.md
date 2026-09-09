@@ -168,6 +168,7 @@ nest. Adding `self_ms` is fine — self times do not overlap.
 | `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |
 | `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
 | `repeated_work` | the same named work entered from more than one caller | `detail` names the callers; a `near miss` row means the occurrences are too unlike to be one work |
+| `io_wait` | threads the kernel parked waiting for a block device | `detail` says `main` or `background`; there is no code to look at, only I/O to remove or move |
 
 ### What matters about individual ones
 
@@ -193,6 +194,32 @@ uninstrumented code. `covered_ms` far below `total_ms` means the thread worked
 and what it did is unknown. This is where adding `AGENTTMP_` instrumentation
 and re-recording makes sense. There is no code behind the finding yet; looking
 for it is pointless.
+
+**`io_wait`** is about work the app asked the disk to do, and it is the only
+detector whose finding has nothing to profile behind it. The thread is in
+state `D`, uninterruptible sleep, and the kernel has flagged that sleep as
+block I/O. It burns no CPU, holds no lock of yours, and has no slice around
+it — which is why a cold start can spend hundreds of milliseconds here while
+every other detector stays silent.
+
+`detail: main` is the one to act on first: the main thread parked on the disk
+is a frozen frame, and no amount of making the code faster helps, because the
+code is not running. The fix is upstream of the code — read less, read it off
+the main thread, or read it later.
+
+It names the thread, not the kernel function. The blocking address needs
+`/proc/kallsyms` to become a name and that file is unreadable on a production
+build: on an SM-A515F the function was empty for all 6683 uninterruptible
+sleeps in the trace while the disk flag was set on 6486 of them. If `detail`
+carries a function name, the run was on a userdebug kernel and you have a
+bonus, not the norm.
+
+Two readings that come with it. If the same scenario is clean on the second
+run, the first one was populating the page cache, and that is a first-launch
+problem rather than a code one. And a thread in `D` that this detector does
+*not* claim was parked for something other than the disk — look for other
+threads holding a memory lock, `jit-thread-pool` and file-mapping work being
+the usual pair.
 
 **`frame_jank`** is the only detector that answers "which frames stuttered"
 rather than "where did the total go", and the only one that needs no
