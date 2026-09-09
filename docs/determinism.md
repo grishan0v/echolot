@@ -102,6 +102,32 @@ The checks themselves do not move: pytest points at the same `CHECKS` list
 `doctor` walks, one test each. Nothing in `echolot/` imports pytest, and a user
 without it installed still gets all of them through `doctor`.
 
+### The tests that write their own input
+
+`tests/test_*_hypothesis.py` are the exception to "the checks do not move".
+They hand a pure function — the table renderer, the timestamp parser, the
+config merge, the ANR state vocabulary, the shell-command reader — generated
+input rather than a fixture, and check a property of the answer instead of the
+answer itself.
+
+Generated input in a project whose whole claim is repeatability needs saying
+out loud, so: it is generated, and it is the same every run.
+`tests/conftest.py` loads a hypothesis profile with `derandomize=True`, which
+picks the examples from a fixed hash of the test rather than from a random
+seed, and `database=None`, which stops a machine remembering a failure the
+next machine has never seen. Two people on two laptops and the runner all
+explore the same inputs, and a red run is reproducible from the diff.
+
+That pin buys repeatability and it costs coverage, in a way worth knowing
+before writing one of these. A fixed set of examples is a fixed set of blind
+spots: a property that is false for a rare input can pass every run for as
+long as the seed holds, and then fail on a hypothesis upgrade that reshuffles
+the choice — on a commit that changed nothing. The rule that follows is that
+the input a test exists to check is never left to the strategy. It is written
+down as an `@example`, and the strategy is weighted to reach it: the table
+tests draw `|` from an alphabet of their own, because one character in a
+million turns up in some runs and not others.
+
 ## Why the trace_processor version is pinned
 
 `pyproject.toml` holds `perfetto==0.57.2`, and that is not hygiene.
