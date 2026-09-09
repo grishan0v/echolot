@@ -254,6 +254,8 @@ def test_a_single_trace_gets_no_traces_line():
 def budget(**kw) -> dict:
     base = {"on_cpu": 0.0, "waiting_for_cpu": 0.0, "in_kernel": 0.0,
             "sleeping": 0.0, "other": 0.0, "window_ms": 1000.0}
+    # `window_ms` is a knob here because the merge only goes wrong when the
+    # windows differ between runs, which is every real set.
     base.update(kw)
     base["accounted_ms"] = round(sum(base[k] for k in (
         "on_cpu", "waiting_for_cpu", "in_kernel", "sleeping", "other")), 2)
@@ -316,3 +318,49 @@ def test_a_bucket_under_a_percent_stays_out_of_the_line():
     check("a rounding-error bucket would end the line being read",
           "kernel" not in line and "sleeping" not in line, line)
     check("and the one that matters is there", "99% on a CPU" in line, line)
+
+
+def test_a_merged_budget_never_claims_more_window_than_there_was():
+    """Found by running the tool on three real traces, not by reading it.
+
+    The buckets are medians and the window is a median, and the two need not
+    agree: three runs whose kernel time peaked in different ones each hand
+    over their middle value, and the sum lands wherever it lands. On the live
+    set it came to 383.09 ms against a median window of 380.54, and the report
+    announced it had accounted for 100.7% of the scenario — while every one of
+    those runs had accounted for exactly 100.0% of its own.
+
+    Nothing was double-counted. The division was between two numbers that do
+    not answer the same question, and a reader seeing more than the whole is
+    right to distrust the rest of the page.
+    """
+    # The three runs as they came off the phone. Invented numbers do not
+    # reproduce this: each run has to account for its own window exactly while
+    # the buckets peak in different runs, and that is easier to record than to
+    # construct.
+    got = report_mod.aggregate([
+        with_budget(budget(on_cpu=296.38, waiting_for_cpu=7.18, in_kernel=4.31,
+                           sleeping=72.68, window_ms=380.54)),
+        with_budget(budget(on_cpu=299.20, waiting_for_cpu=11.56, in_kernel=5.17,
+                           sleeping=72.39, window_ms=388.31)),
+        with_budget(budget(on_cpu=300.55, waiting_for_cpu=7.19, in_kernel=3.56,
+                           sleeping=55.09, window_ms=366.39)),
+    ])["window"]["main_thread"]
+
+    check("the sum of the medians does exceed the median window — that is the "
+          "shape, and it is not a mistake",
+          got["accounted_ms"] > got["window_ms"], got)
+    check("but the share is a typical run's, so it cannot exceed the whole",
+          got["accounted_pct"] <= 100.0, got)
+
+
+def test_a_merged_budget_still_reports_a_real_shortfall():
+    """Held to the whole is not clamped to it. Runs that genuinely left part
+    of the window unexplained must still say so."""
+    got = report_mod.aggregate([
+        with_budget(budget(on_cpu=200.0, sleeping=100.0, window_ms=400.0)),
+        with_budget(budget(on_cpu=190.0, sleeping=110.0, window_ms=400.0)),
+        with_budget(budget(on_cpu=210.0, sleeping=90.0, window_ms=400.0)),
+    ])["window"]["main_thread"]
+    check("three quarters explained is reported as three quarters",
+          got["accounted_pct"] == 75.0, got)
