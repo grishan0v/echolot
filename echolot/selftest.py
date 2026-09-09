@@ -2541,6 +2541,94 @@ def _(report):
         assert by["skills/echolot/SKILL.md"] == "differs", by
 
 
+@check(".claude/ layer: settings.json is merged into, never written over")
+def _(report):
+    """The file is the project's, and `--force` was taking it.
+
+    `.claude/settings.json` is Claude Code's own configuration: a project
+    keeps its hooks and its enabled plugins there. The template contributes
+    one permission, so the agent can call `echolot` without asking for
+    confirmation every time. Copied like the rest of the layer, `init
+    --force` handed the project back that one permission and took a wiki hook
+    and two plugins with it. Recovered from git — which is not where a tool
+    should leave the person who ran it.
+
+    So the file is merged: our part goes in, everything else stays, and a
+    file that will not parse is left alone rather than replaced.
+    """
+    import argparse
+    import contextlib
+    import io
+    import json as _json
+    from .layer import audit
+    from .main import cmd_init
+
+    theirs = {
+        "hooks": {"SessionStart": [{"hooks": [{"type": "command",
+                                               "command": "wiki.sh"}]}]},
+        "enabledPlugins": {"kaiten@hub": True, "ktalk@hub": True},
+        "permissions": {"allow": ["Bash(git status)"]},
+    }
+
+    def state_of(project):
+        return {r["file"]: r["state"] for r in audit(project)["rows"]}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        (project / ".claude").mkdir()
+        settings = project / ".claude" / "settings.json"
+        settings.write_text(_json.dumps(theirs, indent=2), encoding="utf-8")
+
+        def init(force=False):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cmd_init(argparse.Namespace(into=str(project), force=force,
+                                            no_doctor=True))
+            return out.getvalue()
+
+        init()
+        after = _json.loads(settings.read_text(encoding="utf-8"))
+        assert after["hooks"] == theirs["hooks"], after
+        assert after["enabledPlugins"] == theirs["enabledPlugins"], after
+        assert after["permissions"]["allow"] == ["Bash(git status)",
+                                                 "Bash(echolot:*)"], after
+        assert state_of(project)["settings.json"] == "current", state_of(project)
+
+        # --force is about the copies of our files, not about theirs
+        init(force=True)
+        assert _json.loads(settings.read_text(encoding="utf-8")) == after, \
+            "`init --force` overwrote the project's settings.json"
+
+        # the permission is added once, not once per run
+        init()
+        assert _json.loads(settings.read_text(encoding="utf-8")) == after, after
+
+        # taking it back out is a stale file, and plain `init` puts it back
+        del after["permissions"]["allow"][1]
+        settings.write_text(_json.dumps(after, indent=2), encoding="utf-8")
+        assert state_of(project)["settings.json"] == "stale", state_of(project)
+        init()
+        assert "Bash(echolot:*)" in _json.loads(
+            settings.read_text(encoding="utf-8"))["permissions"]["allow"]
+
+        # a key set to null holds no configuration and is filled in
+        settings.write_text('{"permissions": null, "model": "opus"}',
+                            encoding="utf-8")
+        init()
+        filled = _json.loads(settings.read_text(encoding="utf-8"))
+        assert filled["permissions"]["allow"] == ["Bash(echolot:*)"], filled
+        assert filled["model"] == "opus", filled
+
+        # and a file we cannot parse is reported, not replaced
+        settings.write_text("{ hooks: 'not json' }", encoding="utf-8")
+        assert state_of(project)["settings.json"] == "unreadable", state_of(project)
+        said = init(force=True)
+        assert settings.read_text(encoding="utf-8") == "{ hooks: 'not json' }", \
+            "a settings.json that could not be read was written anyway"
+        assert "not valid JSON" in said, said
+        assert '"Bash(echolot:*)"' in said, said
+
+
 @check("status: the next step follows the project's state, first visit to return")
 def _(report):
     import argparse

@@ -1694,6 +1694,9 @@ def cmd_init(args) -> int:
     up to date, files the project edited are left alone unless `--force`,
     and the environment is checked (`doctor -q`). It ends with the next step,
     the same line `echolot` with no arguments prints.
+
+    One file is not a copy of ours: `.claude/settings.json` is the project's,
+    and echolot only adds its permission to it. See `layer.MERGED`.
     """
     target = Path(args.into)
     if not target.is_dir():
@@ -1730,12 +1733,27 @@ def cmd_init(args) -> int:
     states = {r["file"]: r["state"] for r in (before or {}).get("rows", [])}
 
     written, updated, same, kept, overwritten = [], [], [], [], []
+    folded, unmergeable = [], []
     installed: dict[str, str] = {}
     for src in layer.template_files():
         rel = str(src.relative_to(layer.CLAUDE_DIR))
         dst = root / rel
         was = states.get(rel)
         if dst.exists():
+            if rel in layer.MERGED:
+                # settings.json belongs to the project — its hooks, its
+                # plugins, its own permissions. echolot adds a line to it and
+                # copies nothing over it, `--force` included: the flag says
+                # "overwrite the copies of my files", not "throw away yours".
+                verdict, text = layer.merge(src, dst)
+                if verdict == "current":
+                    same.append(rel)
+                elif verdict == "unreadable":
+                    unmergeable.append((rel, layer.contribution(src)))
+                else:
+                    dst.write_text(text, encoding="utf-8")
+                    folded.append(rel)
+                continue
             if was == "current":
                 same.append(rel)
                 installed[rel] = layer.sha(src)
@@ -1764,6 +1782,12 @@ def cmd_init(args) -> int:
             if rel in overwritten else ""))
     for rel in updated:
         print(f"  ↑ .claude/{rel} (updated)")
+    for rel in folded:
+        print(f"  ↑ .claude/{rel} (echolot's permission added; the rest of "
+              f"the file is the project's and was kept)")
+    for rel, wanted in unmergeable:
+        print(f"  ! .claude/{rel} is not valid JSON — left alone rather than "
+              f"replaced.\n      Merge this into it by hand: {wanted}")
     if same and (written or updated or kept):
         for rel in same:
             print(f"  = .claude/{rel} (current)")
@@ -1773,7 +1797,7 @@ def cmd_init(args) -> int:
         print(f"  ≠ .claude/{rel} (already there and {states.get(rel, 'differs')}, "
               f"untouched)")
 
-    if written or updated or same:
+    if written or updated or same or folded:
         # Only what was verified against the template goes into the manifest;
         # a file left untouched keeps whatever the old manifest said about it.
         layer.write_manifest(root, installed)
@@ -1786,14 +1810,15 @@ def cmd_init(args) -> int:
     recorder.note(hosts=[h.key for h in chosen])
     if before is None:
         print("\nLayer installed.")
-    elif written or updated:
+    elif written or updated or folded:
         print("\nLayer updated.")
     elif kept:
         print(f"\nLayer current, apart from the {len(kept)} kept above.")
     else:
         print("\nLayer is current.")
     recorder.note(written=len(written), updated=len(updated), kept=len(kept),
-                  overwritten=len(overwritten))
+                  overwritten=len(overwritten), merged=len(folded),
+                  unmergeable=[rel for rel, _ in unmergeable])
 
     # The environment, briefly, and where to go from here. The doctor lines
     # are the same three `doctor -q` prints; a failure is said and the exit
