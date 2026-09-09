@@ -256,6 +256,16 @@ def _environment_moved(before: dict, after: dict) -> list[dict[str, str]]:
     on its own is not — a warm device that was never throttled lost nothing —
     and it stays in the report as context rather than becoming a caution here.
 
+    They are kept independent because a live pair showed they do not move
+    together. The same scenario on an SM-A515F, once at 76 °C with
+    `thermal-cpufreq-1` throttled in two runs of three and again at 55 °C with
+    none, came back at 2220 MHz and 2209 MHz — half a percent apart, nowhere
+    near the bar below. Throttling takes away the headroom rather than the
+    frequency the app was actually using, so a clock check on its own would
+    have passed that pair in silence. It is also why 21 °C of difference
+    warrants no warning by itself: on that pair the temperature moved and the
+    speed did not.
+
     Silence has to mean "checked and steady", so a side with nothing recorded
     says so instead. `analyze` only fills this in from a trace that carried
     the platform-state sources; anything recorded without them, or before they

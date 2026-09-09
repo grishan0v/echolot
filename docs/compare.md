@@ -128,6 +128,15 @@ a clock that differs by as much can produce every row on the page. The clock is
 weighted by the time this app's own threads held a core, so a device whose
 little cores idled through the scenario is not reported as a slow device.
 
+The clock and the throttle are checked separately because they do not move
+together. The same scenario on an SM-A515F, once at 76 °C with the big cluster
+throttled in two runs of three and again at 55 °C with none, came back at
+2220 MHz against 2209 MHz — half a percent apart. Throttling takes away the
+headroom rather than the frequency the app was actually using, so the clock
+check alone would have passed that pair without a word. The same pair is why
+temperature on its own earns no warning: 21 °C of difference, and the speed
+did not move.
+
 Silence here means checked and steady. A side recorded without the
 platform-state sources — an older echolot, or `runner.environment: false` —
 says so instead, and two such reports say nothing at all rather than repeating
