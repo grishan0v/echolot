@@ -168,12 +168,28 @@ def _(report):
 
 @check("the window budget is the main thread and nothing else")
 def _(report):
-    # 935 ms on a CPU and 70 ms asleep, planted in SCHED. The tempting wrong
-    # version — adding up `main_thread_block` self times — would count other
-    # threads' work and nested slices twice, and the fixture's own numbers are
-    # what tells the two apart.
+    # The time on a CPU is read out of the fixture's own scheduler table
+    # rather than copied from it as a constant. The tempting wrong version of
+    # this budget — adding up `main_thread_block` self times — would count
+    # other threads' work and nested slices twice, and only the planted
+    # schedule can tell the two apart.
+    #
+    # Derived rather than hardcoded because the main thread's schedule is
+    # shared ground: a change made for another detector moves these numbers
+    # legitimately, and a constant here would turn that into a failure about
+    # nothing. What must not move is that the budget equals what the scheduler
+    # was told to do.
+    window_start, window_end = 100.0, 1105.0
+    on_cpu = sum(
+        min(end, window_end) - max(start, window_start)
+        for _cpu, tid, start, end, _after in fixture.SCHED
+        if tid == fixture.TID_MAIN
+        and start < window_end and end > window_start)
+
     b = report["window"]["main_thread"]
-    assert (b["on_cpu"], b["sleeping"]) == (935.0, 70.0), b
+    assert b["on_cpu"] == round(on_cpu, 2), (
+        f"the budget says {b['on_cpu']} ms on a CPU, the fixture's schedule "
+        f"says {on_cpu}: {b}")
     assert b["waiting_for_cpu"] == 0.0, (
         f"the main thread is never preempted in this fixture: {b}")
     assert b["other"] == 0, (
