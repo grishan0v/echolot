@@ -249,3 +249,70 @@ def test_a_single_trace_gets_no_traces_line():
     """One trace is already named on the `Trace:` line above."""
     text = report_mod.to_markdown(one([{"location": "x", "total_ms": 1.0}]))
     check("no list", "Traces:" not in text, text[:200])
+
+
+def budget(**kw) -> dict:
+    base = {"on_cpu": 0.0, "waiting_for_cpu": 0.0, "in_kernel": 0.0,
+            "sleeping": 0.0, "other": 0.0, "window_ms": 1000.0}
+    base.update(kw)
+    base["accounted_ms"] = round(sum(base[k] for k in (
+        "on_cpu", "waiting_for_cpu", "in_kernel", "sleeping", "other")), 2)
+    base["accounted_pct"] = round(base["accounted_ms"] / base["window_ms"] * 100, 1)
+    return base
+
+
+def with_budget(b: dict) -> dict:
+    r = one([])
+    r["window"] = {**r["window"], "main_thread": b}
+    return r
+
+
+def test_the_budget_is_merged_bucket_by_bucket():
+    """A typical run's kernel time, not the kernel time of a typical run.
+
+    Taken from the first report — which is what every key of `window` used to
+    be — three repeats would be described by whichever one happened to be
+    analysed first.
+    """
+    got = report_mod.aggregate([
+        with_budget(budget(on_cpu=500.0, in_kernel=100.0, sleeping=400.0)),
+        with_budget(budget(on_cpu=600.0, in_kernel=50.0, sleeping=350.0)),
+        with_budget(budget(on_cpu=550.0, in_kernel=90.0, sleeping=360.0)),
+    ])["window"]["main_thread"]
+
+    check("each bucket takes its own median",
+          (got["on_cpu"], got["in_kernel"]) == (550.0, 90.0), got)
+    check("and the total is the sum of what is printed, not a median of totals",
+          got["accounted_ms"] == round(550.0 + 90.0 + 360.0, 2), got)
+    check("with the repeats it was built from", got["runs"] == "3/3", got)
+
+
+def test_repeats_without_a_budget_merge_to_nothing():
+    check("a report from before the budget existed stays that way",
+          report_mod.aggregate([one([]) for _ in range(3)])["window"]
+          .get("main_thread") is None)
+
+
+def test_a_budget_short_of_the_window_is_called_out():
+    """The main thread was not there for the whole scenario.
+
+    Shares of a smaller total look exactly like shares of the window, so the
+    shortfall has to be a sentence rather than arithmetic the reader is
+    invited to do.
+    """
+    r = with_budget(budget(on_cpu=300.0, sleeping=200.0))
+    lines = report_mod.to_markdown(r).splitlines()
+    check("the shares are still printed",
+          any(line.startswith("Main thread:") for line in lines), lines[:8])
+    warned = [line for line in lines if "accounted for" in line]
+    check("and the half nobody saw is named", warned, lines[:8])
+    check("with the number in it", "50" in warned[0], warned[0])
+
+
+def test_a_bucket_under_a_percent_stays_out_of_the_line():
+    r = with_budget(budget(on_cpu=990.0, in_kernel=5.0, sleeping=5.0))
+    line = next(x for x in report_mod.to_markdown(r).splitlines()
+                if x.startswith("Main thread:"))
+    check("a rounding-error bucket would end the line being read",
+          "kernel" not in line and "sleeping" not in line, line)
+    check("and the one that matters is there", "99% on a CPU" in line, line)

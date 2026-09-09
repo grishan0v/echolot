@@ -31,6 +31,11 @@ cannot be mistaken for the project's.
                                 "throttled": false, "throttle_device": null },
                    "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
                    "missing": [] },
+  "window": { "…": "…",
+              "main_thread": { "on_cpu": 268.4, "waiting_for_cpu": 21.5,
+                               "in_kernel": 55.0, "sleeping": 195.1,
+                               "other": 0.0, "accounted_ms": 540.0,
+                               "window_ms": 541.5, "accounted_pct": 99.7 } },
   "summary": { "detectors_run": 6, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
@@ -79,6 +84,28 @@ hand-set in `echolot.yml`), `cli` (`--set`), or `config+cli`. When it is not
 so you can see how far the bar moved without running `explain`. A silent
 detector with calibrated thresholds means "nothing above the calibrated
 bar" — not necessarily "nothing above the default one".
+
+**`window.main_thread`** — where the window went, in milliseconds, for the
+main thread only. `summary` counts detectors; this counts time, and it is the
+number that decides whether a quiet report means a clean run. Four buckets and
+a remainder, summed from thread states clipped to the window, so the parts
+cannot exceed the whole.
+
+Read it before the tables. A compound stall — 40% waiting for a CPU beside 35%
+blocked in the kernel — is one line here and two unrelated rows in different
+sections anywhere else. And the contrast between two runs is often the finding
+itself: on the same phone a freshly installed app spent 10% of its cold start
+blocked in the kernel against 1% for one whose pages were already cached.
+
+`sleeping` is one bucket and stays ambiguous on purpose: an idle looper and a
+blocking call inside a message are both `S`, and telling them apart needs the
+slices rather than the states. A high `sleeping` share is a question, not a
+finding.
+
+`accounted_pct` short of 100 means the main thread was not there for the whole
+window — the process started inside it, or the recording has a hole. The
+shares are then of what was seen rather than of the scenario, and the report
+says so.
 
 ## Check these before drawing conclusions
 

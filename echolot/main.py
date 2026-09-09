@@ -733,6 +733,14 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
             for p in procs[1:1 + _OTHERS_SHOWN]
         ]
         window["process_alternatives_total"] = len(procs) - 1
+
+    # Before the anchors rather than after: the budget reads thread states and
+    # the window bounds, and the anchor lookup touches neither. Placed here
+    # and defined below `_environment_info` so that a second fact added to
+    # this function lands somewhere else in the file — two of them arriving on
+    # separate branches should not have to be merged by hand.
+    window["main_thread"] = _main_thread_budget(tp, window)
+
     for key, glob in (("start", cfg.scenario_start), ("end", cfg.scenario_end)):
         if glob == NO_ANCHOR:
             window[f"{key}_anchor"] = None
@@ -908,6 +916,73 @@ def _environment_info(tp) -> dict:
     env["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if env[k] is None)
     return env
+
+
+# The four things a thread can be doing, in trace_processor's vocabulary.
+# Anything it does not recognise lands in `other` rather than being dropped:
+# a bucket nobody can see is how a budget starts adding up to less than it
+# should without saying why.
+STATE_BUCKETS = {
+    "on_cpu": ("Running",),
+    "waiting_for_cpu": ("R", "R+"),
+    "in_kernel": ("D", "DK"),
+    "sleeping": ("S",),
+}
+
+
+def _main_thread_budget(tp, window: dict) -> dict | None:
+    """Where the window went, for the main thread, as time rather than findings.
+
+    The report has always been able to say "5 detectors of 12 fired" and never
+    "and that accounts for 300 ms of your 540". Those are different sentences,
+    and only the second one lets a reader call a run clean: a scenario whose
+    main thread spent 40% waiting for a CPU and 35% blocked in the kernel is a
+    compound problem that arrives today as unrelated rows in different
+    sections, if it arrives at all.
+
+    Arithmetic, and deliberately nothing else. No threshold, no judgement, no
+    row — every number here is a sum over `_tstate_win`, which is already
+    clipped to the window, so the parts cannot exceed the whole by
+    construction.
+
+    Strictly the main thread. Adding up `self_ms` across `main_thread_block`
+    and comparing that against the window is the tempting version and it is
+    wrong twice over: other threads are not in it, and slices nest.
+
+    `sleeping` is left as one bucket on purpose. Idle at the message queue and
+    blocked inside a message are both `S`, telling them apart needs the slices
+    (see `_opened_inside`), and a budget that starts making that call stops
+    being arithmetic.
+    """
+    duration = window.get("duration_ms")
+    if not duration:
+        return None
+    rows = tp.query("""
+        SELECT t.state AS state, SUM(t.dur) AS ns
+        FROM _tstate_win t
+        CROSS JOIN _proc p
+        WHERE t.tid = p.pid AND t.dur > 0
+        GROUP BY t.state
+    """)
+    if not rows:
+        return None
+
+    by_state = {r["state"]: (r["ns"] or 0) / 1e6 for r in rows}
+    named = {s for states in STATE_BUCKETS.values() for s in states}
+    out = {bucket: round(sum(by_state.get(s, 0.0) for s in states), 2)
+           for bucket, states in STATE_BUCKETS.items()}
+    out["other"] = round(
+        sum(ms for state, ms in by_state.items() if state not in named), 2)
+
+    accounted = round(sum(out.values()), 2)
+    out["accounted_ms"] = accounted
+    out["window_ms"] = duration
+    # Short of the window means the thread was not there for all of it — the
+    # process started inside the window, or the trace has a hole. Worth a
+    # number rather than a silent shortfall: it is the difference between "the
+    # scenario is explained" and "most of it was not looked at".
+    out["accounted_pct"] = round(accounted / duration * 100, 1) if duration else None
+    return out
 
 
 # Inventory sections. The keywords are deliberately broad: the job is to show

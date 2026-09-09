@@ -150,6 +150,52 @@ def _(report):
             f"that reason no longer holds")
 
 
+# --- where the window went --------------------------------------------------
+
+@check("the window budget adds up to the window, exactly")
+def _(report):
+    # The property that makes it a budget rather than four numbers. Every part
+    # is a sum over `_tstate_win`, which is already clipped to the window, so
+    # the parts cannot exceed the whole — and if they ever fall short, the
+    # thread was not there for all of it and the report says so instead of
+    # quietly showing shares of a smaller total.
+    b = report["window"]["main_thread"]
+    assert b["window_ms"] == report["window"]["duration_ms"], b
+    assert b["accounted_ms"] == b["window_ms"], (
+        f"the parts do not make the whole: {b}")
+    assert b["accounted_pct"] == 100.0, b
+
+
+@check("the window budget is the main thread and nothing else")
+def _(report):
+    # The time on a CPU is read out of the fixture's own scheduler table
+    # rather than copied from it as a constant. The tempting wrong version of
+    # this budget — adding up `main_thread_block` self times — would count
+    # other threads' work and nested slices twice, and only the planted
+    # schedule can tell the two apart.
+    #
+    # Derived rather than hardcoded because the main thread's schedule is
+    # shared ground: a change made for another detector moves these numbers
+    # legitimately, and a constant here would turn that into a failure about
+    # nothing. What must not move is that the budget equals what the scheduler
+    # was told to do.
+    window_start, window_end = 100.0, 1105.0
+    on_cpu = sum(
+        min(end, window_end) - max(start, window_start)
+        for _cpu, tid, start, end, _after in fixture.SCHED
+        if tid == fixture.TID_MAIN
+        and start < window_end and end > window_start)
+
+    b = report["window"]["main_thread"]
+    assert b["on_cpu"] == round(on_cpu, 2), (
+        f"the budget says {b['on_cpu']} ms on a CPU, the fixture's schedule "
+        f"says {on_cpu}: {b}")
+    assert b["waiting_for_cpu"] == 0.0, (
+        f"the main thread is never preempted in this fixture: {b}")
+    assert b["other"] == 0, (
+        f"a state nothing recognised reached the budget: {b}")
+
+
 @check("slices outside the window stayed out of the report")
 def _(report):
     no_slice_named(report, "Bootstrap_OUTSIDE")   # 50 ms before the window
