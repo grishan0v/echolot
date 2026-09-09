@@ -77,8 +77,26 @@ def cmd_reflect(args) -> int:
     if args.session:
         refs = [r for r in refs if r.id.startswith(args.session)]
         if not refs:
-            print(f"error: no session starting with '{args.session}'",
-                  file=sys.stderr)
+            # The log's units are not sessions, so an id from Claude Code
+            # cannot match one and never will. "No session starting with X"
+            # is true and sends the reader to check the id they copied
+            # correctly — the actual answer is that they are asking the wrong
+            # source for it.
+            if reader is from_log:
+                print(f"error: '{args.session}' does not name a sitting in "
+                      f"{recorder.LOG_FILE}.\n"
+                      f"  The run log carries no session ids. It is a stream, "
+                      f"cut into sittings wherever the tool was left alone for "
+                      f"a while, and each sitting is named by a hash of its "
+                      f"own — so an id from an agent transcript will never "
+                      f"match one, however it is spelled.\n"
+                      f"  `echolot reflect --from-log --list` names the "
+                      f"sittings this log has.",
+                      file=sys.stderr)
+            else:
+                print(f"error: no session starting with '{args.session}'\n"
+                      f"  `echolot reflect --list` names the sessions this "
+                      f"project has.", file=sys.stderr)
             return 2
 
     picked = []
@@ -100,7 +118,12 @@ def cmd_reflect(args) -> int:
         return 1
 
     if args.list:
-        print(f"{'session':10} {'started (UTC)':17} {'dur':>7} {'echolot':>7} "
+        # The log has no sessions in it, so the column that names its rows
+        # must not say "session" — this listing is where somebody comes after
+        # being told an id did not match, and telling them the same wrong word
+        # again is how the misunderstanding survives being corrected.
+        unit = "sitting" if reader is from_log else "session"
+        print(f"{unit:10} {'started (UTC)':17} {'dur':>7} {'echolot':>7} "
               f"{'hunt':>4}  first prompt")
         for ref, s in picked:
             subs = reader.echolot_subcommands(s)
