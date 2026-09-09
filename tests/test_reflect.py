@@ -519,3 +519,49 @@ def test_the_recorder_logged_the_reflect_run(reflected):
           r.get("exit") == 0 and "ms" in r and "argv" in r, r)
     check("and the facts reflect attached to it",
           (r.get("facts") or {}).get("sessions") == 1, r.get("facts"))
+
+
+def test_the_same_transcript_in_the_tools_own_checkout_is_not_judged_as_a_hunt(
+        tmp_path_factory):
+    """The transcript above, read as a session that was building echolot.
+
+    Everything the fixture plants is still there; the only difference is a
+    `pyproject.toml` naming echolot and no `collect` or `hunt` among the
+    calls. The protocol signals fire in the run above and must not fire here:
+    every one of them is a rule for a hunt, and a session spent writing
+    detectors breaks them by definition.
+
+    Checked against a transcript rather than a log, because from a log those
+    signals are skipped anyway for want of a source, and a test that cannot
+    tell the two reasons apart proves nothing about either.
+    """
+    root = tmp_path_factory.mktemp("building")
+    project = root / "echolot"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "echolot"\nversion = "0.6.0"\n', encoding="utf-8")
+    transcripts = build(root / "projects", project)
+
+    here = os.getcwd()
+    os.chdir(project)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            code = main(["reflect", "--last", "--transcripts", str(transcripts),
+                         "--project", str(project)])
+    finally:
+        os.chdir(here)
+    expect(code == 0, f"reflect exits 0, got {code}")
+
+    written = list((project / ".echolot" / "reflect").glob("*.json"))
+    report = json.loads(written[0].read_text(encoding="utf-8"))
+
+    expect(bool(report["context"]["building"]), "the session is named as a build")
+    held = set(report["summary"]["skipped_ids"])
+    for rule in ("trace_opened_directly", "config_bypassed", "doctor_first",
+                 "cleanup_balance", "conclusion_shape"):
+        expect(rule in held, f"{rule} is a rule for a hunt and is held back")
+
+    fired = {s["id"] for s in report["signals"] if s["severity"] != "skip"}
+    expect("trace_opened_directly" not in fired,
+           "no warning about a rule that does not apply")

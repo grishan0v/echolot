@@ -46,6 +46,10 @@ def build(session: Session, facts: Facts, signals: list[Signal]) -> dict[str, An
             "ended": session.ended,
             "duration_s": facts.cost.get("duration_s"),
             "config": facts.config,
+            # Whether this session was writing the tool rather than running
+            # it. Carried into the JSON because the reader that acts on the
+            # report needs the same reason the page gives a human.
+            "building": facts.building,
         },
         "summary": {
             "signals": by_sev,
@@ -105,6 +109,16 @@ def to_markdown(report: dict[str, Any]) -> str:
     else:
         out.append("Config: _none found in this directory — protocol checks that "
                    "need it were skipped_")
+    # Said here rather than left to the Not-checked section. Sixteen checks
+    # held back is the loudest number in the tally below, and a reader who
+    # does not know why reads it as a report that failed to do its job.
+    if (report.get("context") or {}).get("building"):
+        out.append("_This session was building echolot rather than using it — "
+                   "the project is the tool's own checkout and nothing was "
+                   "collected or hunted. The hunting-protocol checks are held "
+                   "back below: a session spent writing detectors breaks every "
+                   "one of them by definition._")
+
     s = report["summary"]
     out.append("")
     sig = s["signals"]
