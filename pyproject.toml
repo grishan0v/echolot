@@ -61,8 +61,13 @@ dependencies = [
 # what a detector computes — `doctor` still runs its checks with the package's
 # own dependencies and no pytest anywhere near it, because it runs on a user's
 # laptop.
+#
+# hypothesis generates inputs for the pure parsers/formatters (table, when,
+# config, anr, reflect.facts) — it never runs inside echolot/ itself, and the
+# seed is pinned in tests/conftest.py so a random failure there is still a
+# repeatable one in CI.
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=7", "ruff>=0.14"]
+dev = ["pytest>=8", "pytest-cov>=7", "ruff>=0.14", "hypothesis>=6.100"]
 
 # What a linter is here for, and what it is not.
 #
