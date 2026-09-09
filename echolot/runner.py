@@ -79,18 +79,31 @@ duration_ms: {duration_ms}
 # anybody reading it.
 #
 # `power/cpu_frequency` fires when the governor changes a frequency, so its
-# volume follows the governor rather than the workload: a few thousand events
-# per second across all policies in the worst case, which against the default
-# 128 MB buffer is under a percent. `power/cpu_idle` is the expensive one — it
-# fires on every idle-state transition on every core — and it is deliberately
-# NOT here: we read the clock only over intervals where our own threads were
-# on a CPU, and a CPU running our thread is by definition not idle.
+# volume follows the governor rather than the workload. Measured on an
+# SM-A515F (Android 13, 8 cores, two cpufreq policies) over three 12-second
+# cold starts: 4564–4940 samples per trace, about 400 a second, 1.6% of all
+# ftrace events in the same trace, and the buffer never overran. `power/
+# cpu_idle` is the expensive one — it fires on every idle-state transition on
+# every core — and it is deliberately NOT here: we read the clock only over
+# intervals where our own threads were on a CPU, and a CPU running our thread
+# is by definition not idle.
 #
-# `sched/sched_blocked_reason` fills in `thread_state.blocked_function` — the
-# kernel function a thread went to sleep on. Low volume by construction: it
-# fires when a task blocks, not while it runs.
+# `sched/sched_blocked_reason` fires when a task blocks, not while it runs, so
+# it is cheap. It carries two things and only one of them survives a
+# production device. `io_wait` reaches `thread_state.io_wait` and works: on
+# the A51 it was filled in for 6486 of 6683 uninterruptible-sleep intervals.
+# `caller` is a kernel address that perfetto turns into
+# `thread_state.blocked_function` by reading /proc/kallsyms — which is
+# unreadable on a production build, so `blocked_function` came back NULL for
+# every row, with and without `symbolize_ksyms`. Anything built on the name of
+# the blocking function is for a userdebug kernel; `io_wait` is what the rest
+# of us get, and it is enough to tell disk waiting from other blocking.
 #
 # The thermal pair is polled by the kernel and costs nothing worth measuring.
+# It is also the one that earned its place fastest: on the same three runs the
+# A51 reached 76 °C and the kernel throttled `thermal-cpufreq-1` during two of
+# them, so the numbers in that report are the app on a slowed machine — which
+# is precisely the sentence the report could not say before.
 #
 # An event the kernel does not have is not an error: perfetto records the rest
 # and lists it under unknown, the same tolerance frametimeline relies on above.

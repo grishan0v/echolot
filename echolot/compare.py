@@ -300,8 +300,14 @@ def _environment_moved(before: dict, after: dict) -> list[dict[str, str]]:
                         f"on the same code. Re-run both on a settled device.",
             })
 
+    # Both sides, or neither. A side that recorded no thermal at all has not
+    # said it ran cool, and "throttled here and not there" about a round
+    # nobody measured is the exact confusion the rest of this block exists to
+    # prevent. It took a live pair to find: one round on a throttling A51
+    # against one recorded with `runner.environment: false` produced a
+    # confident sentence about a device that was never looked at.
     tb, ta = eb.get("thermal") or {}, ea.get("thermal") or {}
-    if tb.get("throttled") != ta.get("throttled") and (
+    if tb and ta and tb.get("throttled") != ta.get("throttled") and (
             tb.get("throttled") or ta.get("throttled")):
         hot = "before" if tb.get("throttled") else "after"
         out.append({

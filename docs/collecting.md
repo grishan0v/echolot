@@ -158,6 +158,21 @@ transition on every core, which is the largest source of events on the page,
 and it would add nothing: the clock is read only over intervals where the
 app's own threads held a core, and a core running a thread is not idle.
 
+What this costs, measured on an SM-A515F (Android 13, eight cores, two cpufreq
+policies) over three twelve-second cold starts: `cpu_frequency` produced
+4564–4940 samples per trace — about 400 a second, 1.6% of all ftrace events in
+the same trace — and the buffer never overran. Thermal came to 160 samples and
+memory to 396. The cost is not the reason to turn this off.
+
+One of the four delivers less than it looks. `sched/sched_blocked_reason`
+carries `io_wait`, which works, and `caller`, which perfetto turns into a
+kernel function name by reading `/proc/kallsyms`. That file is unreadable on a
+production build, so `blocked_function` comes back empty there — on the A51 it
+was empty for all 6683 uninterruptible-sleep intervals in the trace, with and
+without `symbolize_ksyms`, while `io_wait` was filled in for 6486 of them.
+Expect the name of the blocking function on a userdebug kernel and nowhere
+else; `io_wait` is what tells disk waiting from other blocking everywhere.
+
 There is also a requirement on the app itself: slices arrive only if it is
 **profileable or debuggable**. The manifest needs
 `<profileable android:shell="true" />`.

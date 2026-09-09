@@ -727,3 +727,22 @@ def test_a_missing_clock_does_not_hide_throttling() -> None:
     check("the unmeasured clock is said", "environment" in w, str(w))
     check("and the throttling is not lost with it",
           "environment-thermal" in w, str(w))
+
+
+def test_an_unmeasured_side_is_never_called_cool() -> None:
+    """Found on a live pair, not by reading the code.
+
+    One round on an A51 that was throttling against one recorded with
+    `runner.environment: false` produced "the kernel throttled during the
+    before round and not the other one" — a confident sentence about a device
+    nobody had looked at. A side with no thermal block has not reported a cool
+    device; it has reported nothing.
+    """
+    hot = report([det("d", [row("A", 140.0)])], environment=env(1800.0, throttled=True))
+    unmeasured = report([det("d", [row("A", 100.0)])],
+                        environment=env(None, throttled=None))
+    w = warned(compare(hot, unmeasured))
+    check("no claim about the side that was not measured",
+          "environment-thermal" not in w, str(w))
+    check("and the missing platform state is still said",
+          "environment" in w, str(w))
