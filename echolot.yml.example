@@ -46,6 +46,10 @@ runner:
   # gradle  — a macrobenchmark writes traces itself, we only collect them.
   mode: launch
   iterations: 5
+  # Long enough for the scenario, and a cold start is seconds. A freeze is not:
+  # the platform waits five seconds before it calls anything an ANR, and then
+  # takes its own time writing the record down. Hunting one needs a window of
+  # its own — see docs/anr.md — and 12 seconds is not it.
   duration_ms: 12000
   # force-stop (cold) or none (warm). pm clear is deliberately unsupported:
   # wiping data changes the scenario rather than repeating it.
