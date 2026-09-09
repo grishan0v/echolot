@@ -150,6 +150,36 @@ def _(report):
             f"that reason no longer holds")
 
 
+# --- where the window went --------------------------------------------------
+
+@check("the window budget adds up to the window, exactly")
+def _(report):
+    # The property that makes it a budget rather than four numbers. Every part
+    # is a sum over `_tstate_win`, which is already clipped to the window, so
+    # the parts cannot exceed the whole — and if they ever fall short, the
+    # thread was not there for all of it and the report says so instead of
+    # quietly showing shares of a smaller total.
+    b = report["window"]["main_thread"]
+    assert b["window_ms"] == report["window"]["duration_ms"], b
+    assert b["accounted_ms"] == b["window_ms"], (
+        f"the parts do not make the whole: {b}")
+    assert b["accounted_pct"] == 100.0, b
+
+
+@check("the window budget is the main thread and nothing else")
+def _(report):
+    # 935 ms on a CPU and 70 ms asleep, planted in SCHED. The tempting wrong
+    # version — adding up `main_thread_block` self times — would count other
+    # threads' work and nested slices twice, and the fixture's own numbers are
+    # what tells the two apart.
+    b = report["window"]["main_thread"]
+    assert (b["on_cpu"], b["sleeping"]) == (935.0, 70.0), b
+    assert b["waiting_for_cpu"] == 0.0, (
+        f"the main thread is never preempted in this fixture: {b}")
+    assert b["other"] == 0, (
+        f"a state nothing recognised reached the budget: {b}")
+
+
 @check("slices outside the window stayed out of the report")
 def _(report):
     no_slice_named(report, "Bootstrap_OUTSIDE")   # 50 ms before the window

@@ -136,6 +136,33 @@ def identity_of(detector: dict[str, Any]) -> tuple[str, ...]:
     return tuple(cols)
 
 
+def _merge_budget(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The window budget across repeats, bucket by bucket, by median.
+
+    The median per bucket rather than the budget of the median run: the
+    question a reader asks of it is "how much of a typical run went here",
+    one bucket at a time. A consequence worth knowing is that the medians
+    need not add up to the median window — three runs whose kernel time
+    happened to peak in different ones each contribute their middle value —
+    so `accounted_ms` is recomputed from the merged buckets rather than
+    medianed itself, and it is the sum of what is printed.
+    """
+    budgets = [r["window"].get("main_thread") for r in reports
+               if (r.get("window") or {}).get("main_thread")]
+    if not budgets:
+        return None
+    out: dict[str, Any] = {}
+    for key in ("on_cpu", "waiting_for_cpu", "in_kernel", "sleeping", "other"):
+        out[key] = round(median([b.get(key) or 0.0 for b in budgets]), 2)
+    windows = [b["window_ms"] for b in budgets if b.get("window_ms")]
+    out["accounted_ms"] = round(sum(out.values()), 2)
+    out["window_ms"] = round(median(windows), 2) if windows else None
+    out["accounted_pct"] = (round(out["accounted_ms"] / out["window_ms"] * 100, 1)
+                            if out["window_ms"] else None)
+    out["runs"] = f"{len(budgets)}/{len(reports)}"
+    return out
+
+
 def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
     """The platform state across repeats — median for the clock, worst case for the rest.
 
@@ -221,6 +248,7 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"]["duration_ms"] = round(median(windows), 2)
         merged["window"]["duration_ms_min"] = min(windows)
         merged["window"]["duration_ms_max"] = max(windows)
+        merged["window"]["main_thread"] = _merge_budget(reports)
 
     merged["environment"] = _merge_environment(reports)
 
@@ -322,6 +350,60 @@ def _traces_line(traces: list[str], limit: int = 8) -> str:
     if len(shown) < len(names):
         line += f" and {len(names) - len(shown)} more"
     return "Traces: " + line
+
+
+# What each bucket is called on the page. Plain words rather than the state
+# letters: `D` means nothing to a reader who has not spent an afternoon in
+# thread_state, and the whole point of this line is that it is read at a
+# glance.
+BUDGET_LABELS = (
+    ("on_cpu", "on a CPU"),
+    ("waiting_for_cpu", "waiting for a CPU"),
+    ("in_kernel", "blocked in the kernel"),
+    ("sleeping", "sleeping"),
+    ("other", "other"),
+)
+
+
+def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
+    """One line saying where the window went, above the findings that explain part of it.
+
+    "Detectors fired: 5 of 12" counts detectors. This counts the window, which
+    is the number a reader actually needs to decide whether a quiet report
+    means a clean run. It also makes a compound stall legible: 40% waiting for
+    a CPU next to 35% blocked in the kernel is one sentence here and two
+    unrelated table rows anywhere else.
+
+    Buckets under a percent are dropped from the line and kept in the JSON.
+    A tail of "0% this, 0% that" is how a summary stops being read.
+    """
+    if not budget:
+        return []
+    window = budget.get("window_ms") or 0
+    if not window:
+        return []
+
+    parts = []
+    for key, label in BUDGET_LABELS:
+        ms = budget.get(key) or 0
+        share = ms / window * 100
+        if share >= 1:
+            parts.append(f"{share:.0f}% {label}")
+    if not parts:
+        return []
+
+    out = ["Main thread: " + " · ".join(parts)]
+    accounted = budget.get("accounted_pct")
+    # Anything much short of the whole window means the thread was not there
+    # for all of it. Silence would read as "the rest was nothing".
+    if accounted is not None and accounted < 95:
+        out.append(
+            f"> ⚠️ Only {accounted:.0f}% of the window is accounted for on the "
+            f"main thread. It did not exist for the rest of it — the process "
+            f"started inside the window, or the recording has a hole there — "
+            f"so the shares above are of what was seen, not of the scenario."
+        )
+    return out
 
 
 def _environment_lines(env: dict[str, Any]) -> list[str]:
@@ -426,6 +508,8 @@ def to_markdown(report: dict[str, Any]) -> str:
                 f"the runs did different things. A median over such numbers is "
                 f"meaningless."
             )
+
+    out.extend(_budget_lines(w.get("main_thread")))
 
     # An anchor that never matched silently collapses the window onto the whole
     # trace. That has to be shouted, not hidden: otherwise the report looks
