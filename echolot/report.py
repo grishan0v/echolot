@@ -523,6 +523,21 @@ def to_markdown(report: dict[str, Any]) -> str:
                 f"`probe`; the numbers below are not about your scenario."
             )
 
+    # A partial account looks exactly like a complete one, which is the only
+    # reason this is worth a line. Slices keep their real length across the
+    # boundary; thread states are clipped, so the beginning of a stall that
+    # started before the anchor is simply not in the report.
+    inside = w.get("opened_inside")
+    if inside and inside.get("material"):
+        out.append(
+            f"> ⚠️ The window opened with the main thread already blocked: "
+            f"state `{inside['state']}` for {inside['total_ms']} ms, of which "
+            f"{inside['before_ms']} ms happened before the anchor matched. "
+            f"Whatever put it there is outside this window, so the waiting "
+            f"below is the tail of it rather than the whole. Move "
+            f"`scenario.start` earlier to see the cause."
+        )
+
     out.extend(_environment_lines(report.get("environment") or {}))
 
     s = report["summary"]

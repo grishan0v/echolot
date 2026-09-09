@@ -114,6 +114,19 @@ window expanded to the whole trace. None of the numbers are about your
 scenario. Do not investigate, fix the config: look at the real names via
 `echolot probe` and correct `scenario.start`.
 
+**`window.opened_inside` with `material: true`** — the scenario window opened
+while the main thread was already blocked, and more of that block happened
+before the anchor matched than inside the window. Thread states are clipped to
+the window, so the waiting in the report is the tail of a stall whose cause is
+outside it. The numbers below are a partial account rather than a wrong one,
+which is why it is easy to miss. Move `scenario.start` earlier and analyse
+again if the cause is what you are after.
+
+Sleeping is only counted when a message was open at the time. A main thread
+idle at the message queue looks identical in the state alone — on one real
+scenario it sat there for 1615 ms waiting for a finger — and that is the app
+working, not a stall.
+
 **`window.process_alternatives` present** — the mask matched several processes
 and the largest by slice count was taken. If you are analysing `:pushservice`
 instead of the main process, narrow `project.process`. The list holds the
