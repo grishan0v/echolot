@@ -26,7 +26,7 @@ A Perfetto trace of one cold start holds around half a million slices in eighty
 megabytes. Nobody reads that, and an AI agent pointed at the raw file produces
 confident guesses instead of answers.
 
-echolot sits in between. It runs eleven SQL detectors over the trace and returns
+echolot sits in between. It runs twelve SQL detectors over the trace and returns
 about twenty rows: where the time went, how much of it, and the evidence behind
 each claim. Same trace in, same report out — the `trace_processor` version is
 pinned and verified on every run.
@@ -139,7 +139,7 @@ Process: `com.example.app` (pid 12903)
 Scenario window: **1184 ms** (from 1102 to 1291)
 Main thread: 49% on a CPU · 8% waiting for a CPU · 10% blocked in the kernel · 33% sleeping
 Device: clock **1481 MHz** (from 1204 to 1622 across repeats), peak 54 °C, 1536 MB free at the low point
-Detectors fired: **5 of 11**
+Detectors fired: **5 of 12**
 
 ## Where the main thread spent its time
 
@@ -330,8 +330,9 @@ which re-records and re-instruments on purpose.
 | `anr` | ANRs the system recorded during the trace, with its own reason |
 | `main_thread_outlier` | one occurrence far longer than that work usually takes |
 | `repeated_work` | the same work reached from more than one caller, costing about the same both times |
+| `io_wait` | **threads the kernel parked waiting for a block device** |
 
-Two of them find something where nobody wrote a `trace{}` call.
+Three of them find something where nobody wrote a `trace{}` call.
 
 `uninstrumented_cpu` does not guess — it states a fact:
 
@@ -341,6 +342,20 @@ Which is exactly where to add `trace{}` and record again. The name is cut
 at fifteen characters by Linux rather than by echolot: every worker of that
 pool reaches the trace as `DefaultDispatch`, so write thread masks with the
 truncation in mind.
+
+`io_wait` needs none either, and it is the one that answers a question the
+other two cannot even ask. A thread waiting for the disk burns no CPU, holds
+no lock of yours and has no slice around it: there is nothing to profile and
+nothing to instrument, so a cold start can spend hundreds of milliseconds
+there with every other detector silent. The kernel is the only witness, and
+it says so through `sched/sched_blocked_reason`.
+
+It names the thread and the milliseconds, not the kernel function. Turning the
+blocking address into a name needs `/proc/kallsyms`, which a production build
+does not let anyone read — on an SM-A515F the function came back empty for all
+6683 uninterruptible sleeps in the trace while the disk flag was set on 6486
+of them. The name appears on a userdebug kernel and the row is worth acting on
+without it.
 
 `frame_jank` needs no instrumentation at all: SurfaceFlinger records every
 frame's deadline and what it actually took, and says whose fault a miss was.
@@ -366,7 +381,7 @@ once not means the cause is the state it hit that once.
 flowchart LR
     A["Android device"]
     B["trace<br/>81 MB · 475k slices"]
-    C["11 SQL detectors<br/>pinned trace_processor"]
+    C["12 SQL detectors<br/>pinned trace_processor"]
     D["report.md<br/>~20 rows"]
     E["report.json<br/>14 KB"]
     H["comparison<br/>what moved, and by how much"]
@@ -420,7 +435,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 117 checks inside
+The detectors were validated against a synthetic trace — 121 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
