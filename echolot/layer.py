@@ -240,12 +240,12 @@ def one_line(project: Path) -> tuple[str, str]:
         return "current", f"layer: current ({len(status['rows'])} files)"
     what = ", ".join(f"{v} {k}" for k, v in needs.items())
     # stale and missing files `init` updates on its own; files that differ
-    # with no manifest to say why, or that were edited here, need --force.
-    # `--force` has nothing to offer an unreadable one: that file is merged,
+    # with no manifest to say why, or that were edited here, need --all.
+    # `--all` has nothing to offer an unreadable one: that file is merged,
     # never overwritten, so it is a job for a human either way.
     if set(needs) <= {"stale", "missing", "unreadable"}:
         return "stale", f"layer: STALE — {what} → `echolot init`"
-    return "differs", f"layer: STALE — {what} → `echolot init --force`"
+    return "differs", f"layer: STALE — {what} → `echolot init --all`"
 
 
 def print_status(project: Path) -> str | None:
@@ -276,14 +276,14 @@ def print_status(project: Path) -> str | None:
         return "current"
     if not status["manifest"]:
         print("  installed before echolot kept a manifest, so a file that differs "
-              "cannot be told\n  customised from stale. `echolot init --force` "
+              "cannot be told\n  customised from stale. `echolot init --all` "
               "overwrites; keep the project's edits with git.")
     elif needs_update == {"unreadable"}:
         print("  → the file above is not JSON echolot can add to, and it is "
-              "merged rather than\n    overwritten — `--force` will not touch "
+              "merged rather than\n    overwritten — `--all` will not touch "
               "it either. Fix the JSON and run `echolot init`.")
     else:
-        print("  → `echolot init --force` updates it. Customised files are "
+        print("  → `echolot init --all` updates it. Customised files are "
               "listed above and are\n    overwritten too — carry the edits "
               "over afterwards. settings.json is merged,\n    never "
               "overwritten: the project's hooks and plugins stay.")

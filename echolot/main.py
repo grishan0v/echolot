@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """echolot — a deterministic layer between the trace and the agent.
 
+Start with `echolot` alone: where this project stands, and the next step.
+In Claude Code, `/echolot` does the same and takes that step.
+
 The verbs, and the parser that registers them. The command list in `--help` is
 generated from that registration, so the grouping by audience cannot drift from
 it — it used to be kept by hand here, and by hand in the README, with argparse
@@ -1857,7 +1860,7 @@ def cmd_init(args) -> int:
 
     Idempotent, and the one command a person has to know. First time: the
     layer goes in. Any later time: files untouched since install are brought
-    up to date, files the project edited are left alone unless `--force`,
+    up to date, files the project edited are left alone unless `--all`,
     and the environment is checked (`doctor -q`). It ends with the next step,
     the same line `echolot` with no arguments prints.
 
@@ -1920,7 +1923,7 @@ def cmd_init(args) -> int:
             if rel in layer.MERGED:
                 # settings.json belongs to the project — its hooks, its
                 # plugins, its own permissions. echolot adds a line to it and
-                # copies nothing over it, `--force` included: the flag says
+                # copies nothing over it, `--all` included: the flag says
                 # "overwrite the copies of my files", not "throw away yours".
                 verdict, text = layer.merge(src, dst)
                 if verdict == "current":
@@ -1938,7 +1941,7 @@ def cmd_init(args) -> int:
             # Untouched since install and the template moved on: ours to
             # update, no flag needed. Anything the project may have edited
             # (customised, conflict, or differs with no manifest to tell)
-            # waits for --force.
+            # waits for --all.
             if was == "stale":
                 updated.append(rel)
             elif not args.force:
@@ -1981,7 +1984,7 @@ def cmd_init(args) -> int:
 
     if kept:
         print(f"\n{len(kept)} file(s) differ from the template and were kept. "
-              f"`echolot init --force` overwrites them; carry your edits over after.")
+              f"`echolot init --all` overwrites them; carry your edits over after.")
 
     layer.install_pointers(target, chosen)
     recorder.note(hosts=[h.key for h in chosen])
@@ -2356,7 +2359,9 @@ GROUP_TITLES = {
 
 def _describe(entries: list[tuple[str, str, str, str]]) -> str:
     """The header of `echolot --help`, grouped by who types the command."""
-    out = ["echolot — a deterministic layer between the trace and the agent.", ""]
+    out = ["echolot — a deterministic layer between the trace and the agent.",
+           "Start with `echolot` alone: where this project stands, and the next step. "
+           "In Claude Code, `/echolot` does the same and takes that step.", ""]
     width = max(len(f"{name} {usage}".rstrip()) for _, name, usage, _ in entries)
     for group, (title, note) in GROUP_TITLES.items():
         rows = sorted((e for e in entries if e[0] == group),
@@ -2535,8 +2540,17 @@ def build_parser() -> argparse.ArgumentParser:
                     "ones you edited, runs the environment check, and says what "
                     "to do next.")
     ini.add_argument("--into", default=".", help="Android project root")
-    ini.add_argument("--force", action="store_true",
-                     help="overwrite files the project has edited too")
+    # `--all`, and `--force` as the older spelling. The flag brings every
+    # file of the layer up to date, the ones this project edited included —
+    # they are echolot's copies, under the project's git. Named for what it
+    # does rather than for insistence: an agent's harness that screens shell
+    # commands for harm refused `init --force` twice on a real project, and
+    # the person had to type it. Nothing outside `.claude/` is touched
+    # either way, and settings.json is merged under both.
+    ini.add_argument("--all", dest="force", action="store_true",
+                     help="update every file of the layer, the ones you edited too "
+                          "(they are echolot's copies, under your git)")
+    ini.add_argument("--force", dest="force", action="store_true", help=argparse.SUPPRESS)
     ini.add_argument("--for", dest="for_hosts", metavar="CLIENTS",
                      help="which agents to point at the tool: claude, agents, "
                           "cursor, copilot — comma-separated, or `all`. "

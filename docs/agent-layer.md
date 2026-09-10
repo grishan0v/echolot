@@ -36,7 +36,7 @@ The template ships **inside the package** rather than living in the application
 repository: knowledge of how to use the tool belongs to the tool. What lands in
 the project is a copy — edit it for your modules and commit it. A repeated
 `init` brings up to date what you did not touch and leaves what you edited
-alone; `--force` overwrites those too.
+alone; `--all` overwrites those too — it is still `init`, and the flag says "every file".
 
 `init` also adds `/.echolot/` and `/local.yml` to the project's `.gitignore`,
 appended as a two-line block and only when they are not already covered — the
@@ -46,7 +46,7 @@ both have been documented as gitignored since before anything wrote them there.
 One file in that list is not echolot's copy. `settings.json` is Claude Code's
 own configuration — the project keeps its hooks and its enabled plugins there
 — and the template contributes a single permission to it. So it is **merged,
-never overwritten**, `--force` included: the permission goes in, everything
+never overwritten**, `--all` included: the permission goes in, everything
 else in the file stays, and lists gain what they are missing instead of being
 replaced. A `settings.json` that does not parse as JSON is reported and left
 untouched, with the line to add printed for a human — a file that could not be
@@ -63,7 +63,7 @@ merged file above — `unreadable`. Stale is a line
 in the output and `echolot init`, not a failed check — a project may have
 edited its copy on purpose, and the manifest is what lets the tool tell the
 two apart. A layer installed before the manifest existed can only be
-`differs`, and needs `--force`.
+`differs`, and needs `--all`.
 
 ## Why a CLI and not an MCP server
 

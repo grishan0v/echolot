@@ -3302,6 +3302,34 @@ def _(report):
                                    "fix-config", "resume-or-new", "hunt"}
 
 
+@check("init: `--all` is the flag, and `--force` still means the same")
+def _(report):
+    """A flag named for what it does, not for insistence.
+
+    An agent's harness that screens shell commands for harm refused
+    `echolot init --force` twice on a real project, and the person had to
+    type it themselves. The flag brings every file of the layer up to date,
+    the edited ones included — echolot's own copies, under the project's git
+    — and nothing outside `.claude/` is touched either way. `--all` says
+    that; `--force` stays for whoever has it in a script, and every message
+    that points at the flag names the new one.
+    """
+    from .main import build_parser
+    from .state import next_step
+    parser = build_parser()
+    assert parser.parse_args(["init", "--all"]).force is True
+    assert parser.parse_args(["init", "--force"]).force is True
+    assert parser.parse_args(["init"]).force is False
+    import argparse as _argparse
+    sub = next(a for a in parser._actions if isinstance(a, _argparse._SubParsersAction))
+    help_text = sub.choices["init"].format_help()
+    assert "--all" in help_text and "--force" not in help_text, help_text
+    line = next_step({"layer_verdict": "differs", "layer_line": "", "config": None,
+                      "traces": {"count": 0}, "report": None, "hunt": None,
+                      "collect": None})
+    assert "--all" in line and "--force" not in line, line
+
+
 @check("guide: printed knowledge covers every `next` the tool can produce")
 def _(report):
     """The guide is what an agent outside Claude Code has to work from.
