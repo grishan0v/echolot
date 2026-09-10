@@ -20,6 +20,14 @@ The thread table is sorted by **CPU time, not slice count**. A thread with zero
 slices and hundreds of milliseconds of Running is exactly the blind spot you
 are looking for; sorted by slice count it would sit at the bottom.
 
+The process table counts `async` apart from `slices`, and the anchor
+candidates carry `(async)` where a thread name would be. Those are the
+process's own `Trace.beginAsyncSection` spans, on a track of their own and on
+no thread — usually the app's hand-written markers, and almost always the
+macrobenchmark's end marker. An anchor may name one. A detector never sees
+one, and an agent reading the `slices` column alone would have reported an
+app with twenty-three named markers as uninstrumented.
+
 ## `names` — how ART names things here
 
 Most detectors are structural: duration, thread, scheduler state, or a fact
@@ -50,7 +58,9 @@ act on.
 Two subtleties in the output. Something excluded on purpose via `skip_glob` is
 marked as excluded rather than missed — it is a decision, not a gap. And the
 mask column speaks only about detectors that search by name; a dash next to
-`AppStart` does not mean nobody will find it.
+`AppStart` does not mean nobody will find it. The one place the dash is exact
+is a row whose thread reads `(async)`: an async section is listed here because
+an anchor may name it, and no detector reads it.
 
 ### Masks live in the config
 

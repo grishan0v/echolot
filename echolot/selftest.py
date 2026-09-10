@@ -134,6 +134,39 @@ def _(report):
     assert w["end_anchor"]["matches"] == 1, w["end_anchor"]
 
 
+@check("an async section closes the window like a thread's would")
+def _(report):
+    """The app's own markers are usually `beginAsyncSection`, and none matched.
+
+    On a real project all twenty-three named markers were async, the end
+    anchor found nothing, and the window silently became the whole trace —
+    ten detectors fired on a scenario that had not been cut out, and the agent
+    went and changed the app's tracing code so the tool could see it. The
+    anchor lookup reads the process's async tracks now, alongside the
+    threads', and `matches` counts the same set the window was built from.
+    """
+    from .config import Config
+    from .main import analyze_trace
+    cfg = {**FIXTURE_CONFIG,
+           "scenario": {**FIXTURE_CONFIG["scenario"], "end": {"name": "Menu.shown"}}}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "async.perfetto-trace"
+        path.write_bytes(fixture.build())
+        w = analyze_trace(path, Config(cfg))["window"]
+    assert w["end_anchor"]["matches"] == 1, w["end_anchor"]
+    assert w["duration_ms"] == 900.0, (
+        f"AppStart opens at 100 and Menu.shown closes at 1000: {w}")
+
+
+@check("async sections stay out of every detector")
+def _(report):
+    # They have no thread to be counted under. A detector that shows one has
+    # started reading the process's tracks as a thread's, and its sums are
+    # wrong by that section's length — see ASYNC_SLICES in fixture.py.
+    for name, *_ in fixture.ASYNC_SLICES:
+        no_slice_named(report, name)
+
+
 @check("every shipped detector ran, and every one fired")
 def _(report):
     # Counted rather than written down. The fixture's promise is that it plants

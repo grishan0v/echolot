@@ -71,8 +71,18 @@ def cmd_probe(args) -> int:
 def _probe(args) -> int:
     with TraceSession(args.trace, args.tp_binary) as tp:
         print("## Processes\n")
-        _dump(tp, """
-            SELECT p.name AS process, p.pid, COUNT(s.id) AS slices
+        # Two counts, because they are two kinds of section. `slices` are
+        # the threads' — what the detectors read. `async` are the process's
+        # own `beginAsyncSection` spans, on a track of their own: what an
+        # app's hand-written markers usually are, and what an agent reading
+        # only the first column would report as "the app has no
+        # instrumentation".
+        _dump(tp, f"""
+            SELECT p.name AS process, p.pid, COUNT(s.id) AS slices,
+                   (SELECT COUNT(*) FROM slice a
+                      JOIN process_track pt ON a.track_id = pt.id
+                     WHERE pt.upid = p.upid
+                       AND pt.type = '{ASYNC_TRACK}') AS async
             FROM process p
             LEFT JOIN thread t ON t.upid = p.upid
             LEFT JOIN thread_track tt ON tt.utid = t.utid
@@ -119,18 +129,41 @@ def _probe(args) -> int:
             """)
 
             print("\n## Longest slices (scenario anchor candidates)\n")
+            # Thread sections and async ones in one list, because an anchor
+            # may be either — and the end of a scenario is usually the
+            # second kind: a `beginAsyncSection` from wherever the screen
+            # was first drawn. An async section has no thread, and the
+            # column says so rather than leaving the cell blank.
             _dump(tp, f"""
-                SELECT s.name AS slice, t.name AS thread,
-                       COUNT(*) AS n,
-                       ROUND(MAX(s.dur)/1e6, 2) AS max_ms
-                FROM slice s
-                JOIN thread_track tt ON s.track_id = tt.id
-                JOIN thread t ON tt.utid = t.utid
-                JOIN process p ON t.upid = p.upid
-                WHERE p.name GLOB '{sql_value(args.process)}'
-                GROUP BY s.name ORDER BY max_ms DESC LIMIT 25
+                SELECT name AS slice, thread, COUNT(*) AS n,
+                       ROUND(MAX(dur)/1e6, 2) AS max_ms
+                FROM (
+                    SELECT s.name AS name, t.name AS thread, s.dur AS dur
+                    FROM slice s
+                    JOIN thread_track tt ON s.track_id = tt.id
+                    JOIN thread t ON tt.utid = t.utid
+                    JOIN process p ON t.upid = p.upid
+                    WHERE p.name GLOB '{sql_value(args.process)}'
+                    UNION ALL
+                    SELECT s.name, '{ASYNC_THREAD}', s.dur
+                    FROM slice s
+                    JOIN process_track pt ON s.track_id = pt.id
+                    JOIN process p ON pt.upid = p.upid
+                    WHERE p.name GLOB '{sql_value(args.process)}'
+                      AND pt.type = '{ASYNC_TRACK}'
+                )
+                GROUP BY name ORDER BY max_ms DESC LIMIT 25
             """)
     return 0
+
+
+# How trace_processor labels the tracks that `Trace.beginAsyncSection` writes
+# to, and what this tool prints in the thread column for a section that has
+# no thread. The label rather than a blank: an empty cell reads as a thread
+# whose name was lost, and this is a section that never had one. See
+# `_aslice` in context.sql for why those sections are read at all.
+ASYNC_TRACK = "atrace_async_slice"
+ASYNC_THREAD = "(async)"
 
 
 def _tp_binary(args, cfg: Config | None = None) -> str | None:
@@ -745,8 +778,11 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
         if glob == NO_ANCHOR:
             window[f"{key}_anchor"] = None
             continue
+        # `_anchor` rather than `_slice`: the same set the window was built
+        # from, async sections included. Counting the one and building from
+        # the other is how `matches` would say 0 for a window that closed.
         hits = tp.query(
-            f"SELECT COUNT(*) AS n FROM _slice WHERE name GLOB '{sql_value(glob)}'"
+            f"SELECT COUNT(*) AS n FROM _anchor WHERE name GLOB '{sql_value(glob)}'"
         )
         window[f"{key}_anchor"] = {
             "glob": glob,
@@ -1122,9 +1158,30 @@ def cmd_names(args) -> int:
             WHERE t.upid = {upid}
             GROUP BY s.name, t.name
         """)
+        # The process's own async sections, under a thread name that says
+        # there is none. They are listed with the rest because the question
+        # this command answers — "what is this slice called here" — is the
+        # one an anchor is chosen by, and the app's markers are usually
+        # async. The masks below do not apply to them: no detector reads a
+        # section that belongs to no thread, and the dash in the mask column
+        # is exact for once.
+        async_rows = tp.query(f"""
+            SELECT s.name AS name, '{ASYNC_THREAD}' AS thread, COUNT(*) AS n,
+                   SUM(MAX(s.dur, 0)) AS total_ns
+            FROM slice s
+            JOIN process_track pt ON s.track_id = pt.id
+            WHERE pt.upid = {upid} AND pt.type = '{ASYNC_TRACK}'
+            GROUP BY s.name
+        """)
+        rows += async_rows
         if not rows:
             print("_this process has no slices in the trace_")
             return 0
+        if async_rows:
+            print(f"{sum(r['n'] for r in async_rows)} async section(s) on "
+                  f"{len(async_rows)} name(s), shown as thread `{ASYNC_THREAD}`: "
+                  f"an anchor may name them and this inventory lists them; "
+                  f"the detectors read thread slices and never see them.\n")
 
         covered, skipped = _name_coverage(tp, upid, _detector_masks(overrides))
 

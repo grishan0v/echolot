@@ -26,7 +26,10 @@ should be holding real options from a real trace, not guesses.
 
 No instrumentation at all is normal and is an important fact. `echolot domains`
 prints the coverage and the modules with the most code and none of it; show
-that to the user. Then run `echolot mark`: it lists the entry points the
+that to the user. Before saying it, read the probe: an app whose markers are
+`Trace.beginAsyncSection` spans shows them in `probe`'s `async` column and as
+`(async)` rows in `names`, and those are instrumentation — anchors, in
+particular — even where `domains` found no literal to map. Then run `echolot mark`: it lists the entry points the
 first markers would go to — from the manifest and the SDK, with a source on
 each row — and says whether `androidx.compose.runtime:runtime-tracing` is
 missing. Show the list; do not apply anything during setup. The hunt applies
