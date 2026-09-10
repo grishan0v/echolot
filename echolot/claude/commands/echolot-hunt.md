@@ -16,7 +16,11 @@ and when, so it does not run it again.
 **Config.** No `echolot.yml` in the root? Go to `/echolot-setup` and come back.
 A loop on an invented config burns rounds for nothing.
 
-**Traces.** None? Capture them with `echolot collect -c echolot.yml -n 5`.
+**Traces.** None? Capture them with `echolot collect -c echolot.yml -n 5` —
+after `-n 1` once, if the runner config is new or was just changed: a wrong
+variant fails after the whole build, and once is enough to learn that. While
+it runs, `echolot` has a `collect` line saying how far it got; a failure's
+sentence is on that line and in the run log.
 Some already there? They belong to whatever investigation is open — `echolot`
 prints its question on the `hunt` line. If you arrived here through
 `resume-or-new` the human has already said which one applies; if you arrived

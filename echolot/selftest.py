@@ -819,6 +819,78 @@ def _(report):
         assert said and "set aside" in said[0], said
 
 
+@check("collect: a failed scenario command says the line that failed and what to do")
+def _(report):
+    """Gradle's useful half is on stdout, and the message showed stderr.
+
+    A macrobenchmark that could not set up the Perfetto SDK half of its
+    tracing printed the exception on stdout and "Build failed with an
+    exception" on stderr, and `collect` relayed the second. The agent
+    re-read the gradle output by hand to arrive at a flag it then wrote into
+    local.yml. The lines that matter come out of both streams now, and a
+    failure this tool knows comes with the one thing that fixes it.
+    """
+    from .runner import RunnerError, run_command
+    cmd = ("echo 'test FAILED'; "
+           "echo 'java.lang.IllegalStateException: Issue while enabling Perfetto SDK "
+           "tracing in com.example.app: binary verification error'; "
+           "echo 'FAILURE: Build failed with an exception.' >&2; "
+           "echo '* Try:' >&2; echo '> Run with --stacktrace' >&2; exit 1")
+    try:
+        run_command(cmd, timeout=20)
+    except RunnerError as e:
+        text = str(e)
+    else:
+        raise AssertionError("a command that exits 1 must be a RunnerError")
+    # The first two lines are the verdict and the command itself — which,
+    # being a shell one-liner here, spells out every line it will print.
+    # The lines picked out of the output start after them.
+    body = text.split("\n", 2)[2]
+    assert "binary verification error" in body, text
+    assert "--stacktrace" not in body, f"gradle's advice is not the failure: {text}"
+    assert "perfettoSdkTracing.enable=false" in body, f"no hint: {text}"
+
+
+@check("collect: the run log keeps the sentence a failure printed")
+def _(report):
+    """`exit: 2` and nothing else is a line nobody can read a cause off."""
+    import time as _time
+    with tempfile.TemporaryDirectory() as tmp, recorder.isolated():
+        root = Path(tmp)
+        recorder.at(root)
+        recorder.failed("collection error: no device")
+        os.environ.pop("ECHOLOT_NO_RECORD", None)
+        try:
+            recorder.record(type("A", (), {"cmd": "collect", "config": None})(),
+                            ["collect"], _time.time(), exit_code=2)
+        finally:
+            os.environ["ECHOLOT_NO_RECORD"] = "1"
+        runs = recorder.read(root / recorder.LOG_FILE)
+    assert runs and runs[0].get("error") == "collection error: no device", runs
+
+
+@check("status: a collect in flight, interrupted or failed is a line of its own")
+def _(report):
+    import time as _time
+    from . import state as state_mod
+    from .runner import PROGRESS_FILE, Progress
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # One writer for the run, as `collect` has: each update carries the
+        # state so far, and the file always holds the whole record.
+        progress = Progress(root / PROGRESS_FILE)
+        progress.update(scenario="cold", mode="launch", started=_time.time() - 30,
+                        pid=os.getpid(), iterations=5, done=3)
+        st = {"collect": state_mod.collect_state(root), "traces": {"newest": None}}
+        line = state_mod.collect_line(st)
+        assert line and "running: cold, 3/5 iterations" in line, line
+        progress.update(finished=_time.time(), exit=2,
+                        error="collection error: no device")
+        st = {"collect": state_mod.collect_state(root), "traces": {"newest": None}}
+        line = state_mod.collect_line(st)
+        assert line and line.startswith("failed") and "no device" in line, line
+
+
 @check("collect: a scenario that overruns is an error, and it stops")
 def _(report):
     """Two halves of one failure, and neither used to hold.
