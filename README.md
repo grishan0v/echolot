@@ -262,7 +262,7 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 | `anr` | an ANR report from the field — the lock chain, the few threads that were not idle, and where their frames are in this checkout. Crashlytics exports and the device's own `dumpsys dropbox` record |
 | `probe` | processes, threads by CPU, scenario anchor candidates — the threads' sections and the process's async ones |
 | `names` | slice name inventory and detector mask coverage |
-| `domains` | slice-to-code map and instrumentation coverage |
+| `domains` | slice-to-code map and instrumentation coverage — literals, and names kept in a `const val` and passed through the project's own wrapper |
 | `mark` | the first temporary markers for a project with none, from the manifest and the SDK, or from an ANR report's own frames with `--from-anr` — `--apply` / `--remove` |
 | `calibrate` | thresholds derived from known-healthy runs |
 | `explain` | list the detectors and their parameters |
@@ -440,7 +440,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 133 checks inside
+The detectors were validated against a synthetic trace — 134 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.

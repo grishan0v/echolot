@@ -121,6 +121,64 @@ _DYNAMIC = re.compile(
     r'\s*\(\s*(?!")[A-Za-z_$]'
 )
 
+# A name held in a constant. On a real project every marker was written this
+# way: `object TraceNames { const val MENU_LOADING_V5 = "menu_loading_v5" }`,
+# and the calls read `SharedTraces.start(MENU_LOADING_V5)` through a wrapper
+# of the project's own. Not one of the twenty-three was a literal at its
+# call, and the map came back empty over half a million lines — "no
+# instrumentation", to an agent that then asked the human how to make the
+# markers visible.
+#
+# `const val` and Java's `static final String` only. A plain `val` is a
+# literal just as often, but a local one shares its name with every other
+# local in the project, and a map keyed on the simple name would resolve
+# them into each other. The two forms below are the ones a project uses for
+# a name it means to share, which is what a marker's name is.
+_CONST = re.compile(
+    r'\bconst\s+val\s+([A-Za-z_]\w*)\s*(?::\s*String\s*)?=\s*"((?:[^"\\]|\\.)*)"'
+)
+_JAVA_CONST = re.compile(
+    r'\b(?:static\s+final|final\s+static)\s+String\s+([A-Za-z_]\w*)\s*=\s*"((?:[^"\\]|\\.)*)"'
+)
+# A call whose callee says "trace", with an identifier for a name:
+# `SharedTraces.start(APP_SCOPE_INIT)`,
+# `Traces.createTrace(TraceNames.MENU_LOADING_V5)`, `Trace.beginSection(TAG)`.
+# The callee is the filter, not the argument: `TimeProfiler.start(TraceNames.X)`
+# passes the same constant to something that writes no slice.
+#
+# Measured on the project this was built for, and every exclusion below is a
+# row that came back the first time. "section" alone let in a menu's
+# sections — `clickOnSection(DODOCOINS)`, `findValueByKey(APPEARANCE)` from a
+# `sectionItem` — so it counts only as `beginSection` and its kin. A callee
+# that puts, sets or gets is handing the trace an attribute or a counter, not
+# a name: `trace.putAttribute(TraceAttribute.COUNTRY, …)` mapped a slice
+# called `country`. And `TraceSectionMetric(TraceNames.X)` is a benchmark
+# reading the marker, not the app writing it; the word "metric" is the tell.
+# The optional `<…>` is a type argument: `traces.trace<State>(ACTUALIZE_STATE)`
+# is how a wrapper that returns what the block returns gets called.
+_NAMED_CALL = re.compile(
+    r'\b([A-Za-z_][\w.]*)\s*(?:<[^()]*>)?\s*\(\s*([A-Za-z_][\w.]*)\s*[,)]')
+_TRACING_CALLEE = re.compile(
+    r'trace|(?:begin|start|end|with|async)\w*section', re.IGNORECASE)
+_NOT_A_NAME = re.compile(
+    r'metric|attribute|counter|(?:^|\.)(?:put|set|get)\w*$', re.IGNORECASE)
+
+# Where a call cannot be the app's: tests read markers or fake them, and a
+# map that points a finding at `src/test` sends the reader to a file the
+# device never ran. The lines are still counted as source — they are — and
+# the calls in them are not sites.
+_TEST_SETS = {"test", "androidTest", "testFixtures"}
+
+
+def _test_source(path: Path) -> bool:
+    parts = path.parts
+    return any(parts[i] == "src" and parts[i + 1] in _TEST_SETS
+               for i in range(len(parts) - 1))
+
+
+def _names_a_slice(callee: str) -> bool:
+    return bool(_TRACING_CALLEE.search(callee)) and not _NOT_A_NAME.search(callee)
+
 _SYMBOL = re.compile(
     r'^\s*(?:@\w+\s+)*(?:(?:public|private|internal|protected|suspend|'
     r'inline|override|open|final|static|abstract)\s+)*'
@@ -142,6 +200,10 @@ class Site:
     line: int
     module: str
     symbol: str | None
+    # The identifier the call passed, as written, when the name reached the
+    # call through a constant rather than as a literal. What a reader greps
+    # for at that line, since the literal is not there.
+    via: str | None = None
 
 
 @dataclass
@@ -178,32 +240,74 @@ def _symbol_at(lines: list[str], index: int) -> str | None:
     return None
 
 
+def constants(texts: dict[Path, str]) -> dict[str, str | None]:
+    """Simple name → the string it holds, across the whole project.
+
+    Keyed on the simple name because that is what a call site shows:
+    `SharedTraces.start(APP_SCOPE_INIT)` after an import, or
+    `TraceNames.APP_SCOPE_INIT` qualified, and either way the owner is not
+    worth resolving for a map whose reader will grep the name anyway. Two
+    constants of one name holding different strings resolve to neither —
+    None, kept in the map so a later same-name declaration cannot quietly
+    win — because a guess between them would send the reader to the wrong
+    file with a confident hint.
+    """
+    out: dict[str, str | None] = {}
+    for text in texts.values():
+        for pattern in (_CONST, _JAVA_CONST):
+            for m in pattern.finditer(text):
+                name, value = m.group(1), m.group(2)
+                if name in out and out[name] != value:
+                    out[name] = None
+                elif name not in out:
+                    out[name] = value
+    return out
+
+
 def scan(root: Path) -> tuple[list[Site], dict[str, ModuleStat]]:
     sites: list[Site] = []
     stats: dict[str, ModuleStat] = {}
 
+    # Read everything first: a call resolves through a constant declared in
+    # another module, and the walk is in path order, which is not dependency
+    # order.
+    texts: dict[Path, str] = {}
     for path in source_files(root):
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            texts[path] = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+    names = constants(texts)
 
+    for path, text in texts.items():
         module = gradle_module(path, root)
         stat = stats.setdefault(module, ModuleStat(module))
         lines = text.splitlines()
         stat.files += 1
         stat.lines += len(lines)
 
+        if _test_source(path):
+            continue
         bare_ok = bool(_BARE_IMPORT.search(text))
         for index, line in enumerate(lines):
-            found = [m.group(1) for m in _QUALIFIED.finditer(line)]
+            found: list[tuple[str, str | None]] = \
+                [(m.group(1), None) for m in _QUALIFIED.finditer(line)]
             if bare_ok:
-                found += [m.group(1) for m in _BARE.finditer(line)]
-            for name in found:
+                found += [(m.group(1), None) for m in _BARE.finditer(line)]
+            for m in _NAMED_CALL.finditer(line):
+                if not _names_a_slice(m.group(1)):
+                    continue
+                literal = names.get(m.group(2).rsplit(".", 1)[-1])
+                if literal is not None:
+                    found.append((literal, m.group(2)))
+            for name, via in found:
                 sites.append(Site(name, path, index + 1, module,
-                                  _symbol_at(lines, index)))
+                                  _symbol_at(lines, index), via))
                 stat.sites += 1
-            if _DYNAMIC.search(line):
+            # A name that resolved is not one built at runtime, whatever
+            # the call looks like: `Trace.beginSection(TAG)` with TAG a
+            # constant is a literal at one remove, not a gap.
+            if _DYNAMIC.search(line) and not any(via for _, via in found):
                 stat.dynamic += 1
 
     return sites, stats
@@ -219,6 +323,10 @@ def render(sites: list[Site], stats: dict[str, ModuleStat],
 
     out.append(f"# Instrumentation: {total_sites} tracing calls "
                f"across {total_lines} lines of source.")
+    via = sum(1 for s in sites if s.via)
+    if via:
+        out.append(f"# {via} of them name the slice through a constant — "
+                   f"mapped to the call, not to the declaration.")
     if total_dynamic:
         out.append(f"# Another {total_dynamic} calls build the name at runtime "
                    f"— visible in the trace, absent from this map.")
@@ -255,6 +363,9 @@ def render(sites: list[Site], stats: dict[str, ModuleStat],
         hint = f"{rel.name}:{first.line}"
         if first.symbol:
             hint += f" — {first.symbol}"
+        if first.via:
+            # The literal is not on that line; this is what is.
+            hint += f", via {first.via}"
         out.append(f'  - slice: "{name}"')
         out.append(f'    module: "{first.module}"')
         out.append(f'    hint: "{hint}"')

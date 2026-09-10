@@ -16,8 +16,10 @@ iterations in a row. It stays here. Only the result goes up.
 thousands of slices, and trying to look yourself will eat the window in one go.
 
 **Do not scan the repository blindly.** First `domains` from `echolot.yml`,
-then an exact grep for the slice name. A slice name is a string literal inside
-`trace("…")`; it survives minification and is found precisely.
+then `echolot domains --root .`, then an exact grep for the slice name. A
+slice name is a string literal inside `trace("…")` or a `const val` passed to
+the project's own wrapper; `domains` maps both to the call, and a hint ending
+in `via X` names what to grep for at that line.
 
 **Do not read the application to find the problem.** Reading source is where
 your window goes: in two hunts out of two, twenty-odd `cat` and `sed -n` calls

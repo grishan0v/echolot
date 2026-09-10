@@ -1826,6 +1826,43 @@ def _sample_repo(root: Path) -> None:
         "fun handle() { trace(\"this is a log line, not instrumentation\") }\n",
         encoding="utf-8")
 
+    # Names held in constants and passed through a wrapper of the project's
+    # own — the shape every marker took on a real project, where the map
+    # came back empty over half a million lines. The declaration is one
+    # module, the calls another, and one constant is split across two lines
+    # the way a formatter leaves a long one.
+    (src / "TraceNames.kt").write_text(
+        "package feature.collection\n"
+        "object TraceNames {\n"
+        "    const val MENU_LOADING = \"menu_loading\"\n"
+        "    const val MENU_SPLIT =\n"
+        "        \"menu_split\"\n"
+        "    const val OUTCOME = \"outcome_error\"\n"
+        "}\n", encoding="utf-8")
+    (java / "Loader.kt").write_text(
+        "package app\n"
+        "import feature.collection.TraceNames\n"
+        "import feature.collection.TraceNames.MENU_LOADING\n"
+        "class MenuLoader(private val traces: Traces) {\n"
+        "    fun load(): Menu {\n"
+        "        SharedTraces.start(MENU_LOADING)\n"
+        "        TimeProfiler.start(TraceNames.MENU_LOADING)\n"
+        "        trace.putAttribute(TraceNames.OUTCOME, \"x\")\n"
+        "        SharedTraces.start(NOT_A_CONSTANT)\n"
+        "        return traces.trace<Menu>(TraceNames.MENU_SPLIT) { fetch() }\n"
+        "    }\n"
+        "}\n", encoding="utf-8")
+    # A benchmark reading the marker is not the app writing it, and a test
+    # faking it is not either.
+    bench = root / "app/src/androidTest/java"
+    bench.mkdir(parents=True)
+    (bench / "Bench.kt").write_text(
+        "package app\n"
+        "import feature.collection.TraceNames\n"
+        "val metrics = listOf(TraceSectionMetric(TraceNames.MENU_LOADING))\n"
+        "fun fake() { SharedTraces.start(TraceNames.MENU_LOADING) }\n",
+        encoding="utf-8")
+
     # The build directory must not be scanned.
     build = root / "app/build/generated"
     build.mkdir(parents=True)
@@ -1843,13 +1880,52 @@ def _(report):
         sites, _ = dm.scan(root)
         found = {s.name: s for s in sites}
 
-    assert set(found) == {"collection_mapping", "di_graph_init"}, sorted(found)
+    assert set(found) == {"collection_mapping", "di_graph_init",
+                          "menu_loading", "menu_split"}, sorted(found)
     assert found["collection_mapping"].module == ":feature:collection"
     assert found["di_graph_init"].module == ":app"
     # The hint must lead into the method, not the class: otherwise it is
     # useless in a file with two dozen methods.
     assert found["di_graph_init"].symbol == "method initGraph", found
     assert found["collection_mapping"].symbol == "fun mapEntities", found
+
+
+@check("domains: a name held in a constant is mapped to the call, not the declaration")
+def _(report):
+    """`object TraceNames { const val X = "x" }` and `SharedTraces.start(X)`.
+
+    Every marker on a real project was written this way, through a wrapper
+    of the project's own, and the map came back empty over half a million
+    lines: "no instrumentation", to an agent that then asked the human how
+    to make the markers visible. The literal is at the declaration; the
+    place worth naming is the call, which is where the work is.
+    """
+    from . import domains as dm
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _sample_repo(root)
+        sites, stats = dm.scan(root)
+        by_name = {}
+        for s in sites:
+            by_name.setdefault(s.name, []).append(s)
+        text = "\n".join(dm.render(sites, stats, root))
+
+    loading = by_name["menu_loading"]
+    assert [s.path.name for s in loading] == ["Loader.kt"], loading
+    assert loading[0].line == 6 and loading[0].via == "MENU_LOADING", loading
+    assert loading[0].symbol == "fun load", loading
+    # The one across two lines, called with a type argument and qualified.
+    split = by_name["menu_split"]
+    assert len(split) == 1 and split[0].via == "TraceNames.MENU_SPLIT", split
+    # What must not be a site: a profiler handed the same constant, an
+    # attribute the trace was given, an identifier no constant declares, a
+    # benchmark reading the marker, a test faking it.
+    assert "outcome_error" not in by_name, sorted(by_name)
+    assert len(loading) == 1, "the profiler, the benchmark or the test got in"
+    # And the reader is told at the line what to grep for, since the literal
+    # is not there.
+    assert "Loader.kt:6 — fun load, via MENU_LOADING" in text, text
+    assert "2 of them name the slice through a constant" in text, text
 
 
 @check("domains: a logger named trace is not mistaken for instrumentation")
