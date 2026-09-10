@@ -29,7 +29,8 @@ prints the coverage and the modules with the most code and none of it; show
 that to the user. Before saying it, read the probe: an app whose markers are
 `Trace.beginAsyncSection` spans shows them in `probe`'s `async` column and as
 `(async)` rows in `names`, and those are instrumentation — anchors, in
-particular — even where `domains` found no literal to map. Then run `echolot mark`: it lists the entry points the
+particular. `domains` maps them when their names are `const val`s passed to
+the app's own wrapper; a hint ending in `via X` is that case. Then run `echolot mark`: it lists the entry points the
 first markers would go to — from the manifest and the SDK, with a source on
 each row — and says whether `androidx.compose.runtime:runtime-tracing` is
 missing. Show the list; do not apply anything during setup. The hunt applies

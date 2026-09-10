@@ -171,7 +171,11 @@ loop:
 
 `domains` is the central abstraction: it turns a marker into a hypothesis
 without scanning the repository blindly, and blind scanning is the main context
-eater. `echolot domains` pre-fills it from the sources.
+eater. `echolot domains` pre-fills it from the sources — literals inside
+tracing calls, and names kept in a `const val` and passed to the project's
+own wrapper (`SharedTraces.start(MENU_LOADING)`), which is how most apps that
+name their markers write them. A hint ending in `via X` says the literal is
+not on that line: `X` is.
 
 `loop.max_rounds` is the one number a human sets to bound a hunt. Stopping is
 not left to the agent's judgement: it has no goal of its own to economise.

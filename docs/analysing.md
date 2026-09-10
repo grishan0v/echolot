@@ -101,17 +101,46 @@ domains:
 The module comes from the nearest ancestor holding a build script. `hint` is
 for humans; the engine never reads it, so fix the wording when it is imprecise.
 
-Two precision rules worth knowing:
+A name held in a constant reaches the map too. Most projects that name their
+markers keep them in one place — `object TraceNames { const val MENU_LOADING_V5
+= "menu_loading_v5" }` — and call a wrapper of their own with the constant:
+`SharedTraces.start(MENU_LOADING_V5)`, `traces.trace<Menu>(TraceNames.MENU_LOADING_V5)`.
+The literal is at the declaration; the place worth naming is the call, and
+that is what the map points at, with the identifier the call used so you know
+what to grep for at that line:
+
+```yaml
+  - slice: "menu_loading_v5"
+    module: ":domain:base"
+    hint: "MenuService.kt:492 — method startMenuLoadingTracing, via TraceNames.MENU_LOADING_V5"
+```
+
+On the project this was built for, every one of the twenty-three markers was
+written that way, and the map came back empty over half a million lines.
+
+Precision rules worth knowing:
 
 - a bare `trace("…")` counts only in files that import `androidx.tracing`,
   otherwise every logging function with that name lands in the map;
+- a constant resolves only through a call whose name says `trace` (or
+  `beginSection` and its kin): `TimeProfiler.start(TraceNames.X)` writes no
+  slice. A callee that puts, sets or gets, or says metric, attribute or
+  counter, is handing the trace something other than a name;
+- `const val` and Java's `static final String` only. A plain `val` shares
+  its name with every local in the project, and a map keyed on the simple
+  name would resolve them into each other. Two constants of one name
+  holding different strings resolve to neither;
+- `src/test`, `src/androidTest` and `src/testFixtures` hold no sites: a
+  benchmark reading a marker with `TraceSectionMetric` is not the app
+  writing it. Their lines still count as source;
 - `build` and `generated` are not scanned — generated code is no place for
   hypotheses.
 
-Calls with a non-literal name (`Trace.beginSection(tag)`) cannot reach the map
-at all. They are counted separately and mentioned in the header: they are
-visible in the trace, and staying quiet about them would pass a gap off as its
-absence.
+Calls with a non-literal name that no constant explains
+(`Trace.beginSection(tag)`, `Traces.createTrace("OkHttp CALL $path")`) cannot
+reach the map at all. They are counted separately and mentioned in the header:
+they are visible in the trace, and staying quiet about them would pass a gap
+off as its absence.
 
 ### When there is no instrumentation
 

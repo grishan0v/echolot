@@ -222,8 +222,11 @@ that did not ask for it. Check before calling a scenario smooth.
 
 1. A firing detector gives you a `location` — a slice or thread name.
 2. The `domains` section of `echolot.yml` maps that name to a module and file.
-3. Not in `domains`? Grep the repository for the slice name: it is a string
-   literal inside `trace("...")`, survives minification, and is found exactly.
+3. Not in `domains`? Run `echolot domains --root .` — it maps literals inside
+   `trace("...")` and names kept in a `const val` and passed through the
+   project's own wrapper. Still nothing? Grep the repository for the slice
+   name: a literal survives minification and is found exactly, and a
+   constant's declaration is one grep away from its calls.
 4. Nothing found? The slice is most likely a system one (`bindApplication`,
    `Choreographer#doFrame`, `binder transaction`). See `references/naming.md`.
 
