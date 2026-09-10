@@ -394,7 +394,7 @@ OTHER_SLICES = {
 # of them was visible: the end anchor matched nothing and the window became
 # the whole trace.
 #
-# `Menu.shown` is what a project's own end marker looks like — a span across
+# `Screen.loaded` is what a project's own end marker looks like — a span across
 # the load, closing at 1000, well inside the sync anchor's window. A config
 # that ends the scenario on it must get a window of [100, 1000]: 900 ms, and
 # `end_anchor.matches` of 1. `Async.mark` is the zero-length shape, a point
@@ -409,7 +409,7 @@ OTHER_SLICES = {
 # unique per name; here every name has one section, and the numbers only
 # have to differ.
 ASYNC_SLICES = [
-    ("Menu.shown", 300, 700, 1),
+    ("Screen.loaded", 300, 700, 1),
     ("Async.mark", 350, 0, 2),
 ]
 

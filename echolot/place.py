@@ -5,9 +5,9 @@ and where it is, the method waiting for it and where that is — with the
 file and line the runtime had for each. The report carried that string as
 evidence and stopped there, so the reader's next move was a grep: on a real
 hunt the subagent spent forty-six percent of its window reading the
-application to find `PizzeriaService.updatePizzeriasForCountry`, whose file
+application to find `StoreRepository.update`, whose file
 name was in the row all along. `main_thread_block` names a class the same
-way — `com.dodopizza.android.rive.RiveAnimationNonInteractiveView` is a file
+way — `com.example.app.ui.AnimatedBanner` is a file
 in the checkout, and the row did not say which.
 
 This module reads those names off a row and puts the file next to them:
@@ -126,8 +126,8 @@ def declared_at(path: Path, method: str) -> int | None:
     A release build strips line numbers, and `(File.kt:-1)` is what every
     frame then says. The declaration is the next best address: it is where
     a reader opens the file anyway. Kotlin's synthetic names are cut back to
-    what was written — `fileStorage_delegate$lambda$0` is the initialiser
-    of `val fileStorage by lazy`.
+    what was written — `store_delegate$lambda$0` is the initialiser
+    of `val store by lazy`.
     """
     name = method.split("$", 1)[0]
     if not name or name.startswith("<"):

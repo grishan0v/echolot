@@ -128,16 +128,16 @@ needs a wildcard: `Choreographer#doFrame*`.
 ## The app's own async sections
 
 ```
-menu_loading_v5          (async)    ← Trace.beginAsyncSection, on no thread
-cold_startup_menu_shown  (async)
+collection_load          (async)    ← Trace.beginAsyncSection, on no thread
+screen_shown  (async)
 ```
 
 `Trace.beginAsyncSection` and `endAsyncSection` are what an app writes for
 work that starts on one thread and ends on another, and what most hand-rolled
 tracing wrappers write for everything. The section lands on a track owned by
 the process rather than by a thread, and `names` and `probe` list it with
-`(async)` where a thread name would be. On one real project all twenty-three
-named markers were this kind.
+`(async)` where a thread name would be. On one real project every named
+marker was this kind.
 
 What reads them: the scenario anchors — `scenario.end` is usually one — and
 this inventory. What does not: every detector. They read thread slices, and a

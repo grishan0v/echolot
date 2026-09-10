@@ -138,8 +138,8 @@ def _(report):
 def _(report):
     """The app's own markers are usually `beginAsyncSection`, and none matched.
 
-    On a real project all twenty-three named markers were async, the end
-    anchor found nothing, and the window silently became the whole trace —
+    On a real project every named marker was async, the end anchor found
+    nothing, and the window silently became the whole trace —
     ten detectors fired on a scenario that had not been cut out, and the agent
     went and changed the app's tracing code so the tool could see it. The
     anchor lookup reads the process's async tracks now, alongside the
@@ -148,14 +148,14 @@ def _(report):
     from .config import Config
     from .main import analyze_trace
     cfg = {**FIXTURE_CONFIG,
-           "scenario": {**FIXTURE_CONFIG["scenario"], "end": {"name": "Menu.shown"}}}
+           "scenario": {**FIXTURE_CONFIG["scenario"], "end": {"name": "Screen.loaded"}}}
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "async.perfetto-trace"
         path.write_bytes(fixture.build())
         w = analyze_trace(path, Config(cfg))["window"]
     assert w["end_anchor"]["matches"] == 1, w["end_anchor"]
     assert w["duration_ms"] == 900.0, (
-        f"AppStart opens at 100 and Menu.shown closes at 1000: {w}")
+        f"AppStart opens at 100 and Screen.loaded closes at 1000: {w}")
 
 
 @check("async sections stay out of every detector")
@@ -172,7 +172,7 @@ def _(report):
     """The frames were in the evidence all along; the file was not.
 
     On a real hunt the subagent spent forty-six percent of its window
-    reading the application to find `PizzeriaService.updatePizzeriasForCountry`,
+    reading the application to find `StoreRepository.update`,
     whose file name sat in the contention slice it had just been shown.
     `analyze` places both frames now: the owner, and the method that waited
     — with the line the runtime had, or the declaration's when a release
@@ -1874,28 +1874,28 @@ def _sample_repo(root: Path) -> None:
 
     # Names held in constants and passed through a wrapper of the project's
     # own — the shape every marker took on a real project, where the map
-    # came back empty over half a million lines. The declaration is one
+    # came back empty over the whole tree. The declaration is one
     # module, the calls another, and one constant is split across two lines
     # the way a formatter leaves a long one.
-    (src / "TraceNames.kt").write_text(
+    (src / "Marks.kt").write_text(
         "package feature.collection\n"
-        "object TraceNames {\n"
-        "    const val MENU_LOADING = \"menu_loading\"\n"
-        "    const val MENU_SPLIT =\n"
-        "        \"menu_split\"\n"
-        "    const val OUTCOME = \"outcome_error\"\n"
+        "object Marks {\n"
+        "    const val LOAD = \"collection_load\"\n"
+        "    const val SPLIT =\n"
+        "        \"collection_split\"\n"
+        "    const val RESULT = \"result_error\"\n"
         "}\n", encoding="utf-8")
     (java / "Loader.kt").write_text(
         "package app\n"
-        "import feature.collection.TraceNames\n"
-        "import feature.collection.TraceNames.MENU_LOADING\n"
-        "class MenuLoader(private val traces: Traces) {\n"
-        "    fun load(): Menu {\n"
-        "        SharedTraces.start(MENU_LOADING)\n"
-        "        TimeProfiler.start(TraceNames.MENU_LOADING)\n"
-        "        trace.putAttribute(TraceNames.OUTCOME, \"x\")\n"
-        "        SharedTraces.start(NOT_A_CONSTANT)\n"
-        "        return traces.trace<Menu>(TraceNames.MENU_SPLIT) { fetch() }\n"
+        "import feature.collection.Marks\n"
+        "import feature.collection.Marks.LOAD\n"
+        "class CollectionLoader(private val traces: Traces) {\n"
+        "    fun load(): Items {\n"
+        "        AppTraces.start(LOAD)\n"
+        "        TimeProfiler.start(Marks.LOAD)\n"
+        "        trace.putAttribute(Marks.RESULT, \"x\")\n"
+        "        AppTraces.start(NOT_A_CONSTANT)\n"
+        "        return traces.trace<Items>(Marks.SPLIT) { fetch() }\n"
         "    }\n"
         "}\n", encoding="utf-8")
     # A benchmark reading the marker is not the app writing it, and a test
@@ -1904,9 +1904,9 @@ def _sample_repo(root: Path) -> None:
     bench.mkdir(parents=True)
     (bench / "Bench.kt").write_text(
         "package app\n"
-        "import feature.collection.TraceNames\n"
-        "val metrics = listOf(TraceSectionMetric(TraceNames.MENU_LOADING))\n"
-        "fun fake() { SharedTraces.start(TraceNames.MENU_LOADING) }\n",
+        "import feature.collection.Marks\n"
+        "val metrics = listOf(TraceSectionMetric(Marks.LOAD))\n"
+        "fun fake() { AppTraces.start(Marks.LOAD) }\n",
         encoding="utf-8")
 
     # The build directory must not be scanned.
@@ -1927,7 +1927,7 @@ def _(report):
         found = {s.name: s for s in sites}
 
     assert set(found) == {"collection_mapping", "di_graph_init",
-                          "menu_loading", "menu_split"}, sorted(found)
+                          "collection_load", "collection_split"}, sorted(found)
     assert found["collection_mapping"].module == ":feature:collection"
     assert found["di_graph_init"].module == ":app"
     # The hint must lead into the method, not the class: otherwise it is
@@ -1938,11 +1938,11 @@ def _(report):
 
 @check("domains: a name held in a constant is mapped to the call, not the declaration")
 def _(report):
-    """`object TraceNames { const val X = "x" }` and `SharedTraces.start(X)`.
+    """`object Marks { const val X = "x" }` and `AppTraces.start(X)`.
 
     Every marker on a real project was written this way, through a wrapper
-    of the project's own, and the map came back empty over half a million
-    lines: "no instrumentation", to an agent that then asked the human how
+    of the project's own, and the map came back empty over the whole
+    tree: "no instrumentation", to an agent that then asked the human how
     to make the markers visible. The literal is at the declaration; the
     place worth naming is the call, which is where the work is.
     """
@@ -1956,21 +1956,21 @@ def _(report):
             by_name.setdefault(s.name, []).append(s)
         text = "\n".join(dm.render(sites, stats, root))
 
-    loading = by_name["menu_loading"]
+    loading = by_name["collection_load"]
     assert [s.path.name for s in loading] == ["Loader.kt"], loading
-    assert loading[0].line == 6 and loading[0].via == "MENU_LOADING", loading
+    assert loading[0].line == 6 and loading[0].via == "LOAD", loading
     assert loading[0].symbol == "fun load", loading
     # The one across two lines, called with a type argument and qualified.
-    split = by_name["menu_split"]
-    assert len(split) == 1 and split[0].via == "TraceNames.MENU_SPLIT", split
+    split = by_name["collection_split"]
+    assert len(split) == 1 and split[0].via == "Marks.SPLIT", split
     # What must not be a site: a profiler handed the same constant, an
     # attribute the trace was given, an identifier no constant declares, a
     # benchmark reading the marker, a test faking it.
-    assert "outcome_error" not in by_name, sorted(by_name)
+    assert "result_error" not in by_name, sorted(by_name)
     assert len(loading) == 1, "the profiler, the benchmark or the test got in"
     # And the reader is told at the line what to grep for, since the literal
     # is not there.
-    assert "Loader.kt:6 — fun load, via MENU_LOADING" in text, text
+    assert "Loader.kt:6 — fun load, via LOAD" in text, text
     assert "2 of them name the slice through a constant" in text, text
 
 

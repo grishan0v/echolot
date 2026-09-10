@@ -177,13 +177,13 @@ View being inflated. `analyze` looks those up in the checkout the config
 sits in and writes what it found:
 
 ```json
-"code": "owner at PizzeriaService.kt:30 · blocked at PizzeriaService.kt:66",
+"code": "owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:66",
 "places": [
-  { "role": "owner",   "symbol": "ru.dodopizza.app.domain.pizzerias.PizzeriaService.updatePizzeriasForCountry",
-    "file": "domain/base/src/main/java/ru/dodopizza/app/domain/pizzerias/PizzeriaService.kt",
+  { "role": "owner",   "symbol": "com.example.app.data.StoreRepository.update",
+    "file": "data/src/main/java/com/example/app/data/StoreRepository.kt",
     "line": 30, "exact": true },
-  { "role": "blocked", "symbol": "ru.dodopizza.app.domain.pizzerias.PizzeriaService.findSelectedPizzeria",
-    "file": "…/PizzeriaService.kt", "line": 66, "exact": true }
+  { "role": "blocked", "symbol": "com.example.app.data.StoreRepository.find",
+    "file": "…/StoreRepository.kt", "line": 66, "exact": true }
 ]
 ```
 
