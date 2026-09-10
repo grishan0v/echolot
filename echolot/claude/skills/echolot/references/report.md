@@ -165,8 +165,36 @@ The contract is shared, but not every detector fills every column.
 | `total_ms` | total time, children included |
 | `max_ms` | the longest single occurrence |
 | `covered_ms` | how much on-CPU time ran inside instrumented code |
+| `code` | where that is in the checkout, when the row names a method or a class — see below |
 | `detail` | the evidence: thread, state, lock name with the owner's tid |
+| `places` | the json behind `code`: every symbol the row names, with `file`, `line` and `role` |
 | `spread` | the per-run values behind the medians, for two columns — see below |
+
+**`code` and `places` save the grep.** A contention slice names both sides of
+the lock — the thread holding it and where it is, the method that waited and
+where that is — and `main_thread_block` names a class when the slice is a
+View being inflated. `analyze` looks those up in the checkout the config
+sits in and writes what it found:
+
+```json
+"code": "owner at PizzeriaService.kt:30 · blocked at PizzeriaService.kt:66",
+"places": [
+  { "role": "owner",   "symbol": "ru.dodopizza.app.domain.pizzerias.PizzeriaService.updatePizzeriasForCountry",
+    "file": "domain/base/src/main/java/ru/dodopizza/app/domain/pizzerias/PizzeriaService.kt",
+    "line": 30, "exact": true },
+  { "role": "blocked", "symbol": "ru.dodopizza.app.domain.pizzerias.PizzeriaService.findSelectedPizzeria",
+    "file": "…/PizzeriaService.kt", "line": 66, "exact": true }
+]
+```
+
+Open `places[].file` at `places[].line`; do not grep for the symbol first.
+`line` is the runtime's when the build kept line numbers and the
+declaration's when it did not (`(File.kt:-1)` is what a release build says).
+A place with `file: null` is a symbol outside this checkout — an owner
+parked in `jdk.internal.misc.Unsafe.park` is the holder waiting on something
+else while holding the lock, which is the finding, not a gap. `exact: false`
+means two files of that name and no package to choose by: check before
+opening. Rows with nothing to place carry neither key.
 
 **`spread` is what makes a number checkable.** Merging repeats reduces each row
 to a median, and a median cannot say whether a number is steady: 120 ms from
@@ -199,7 +227,7 @@ nest. Adding `self_ms` is fine — self times do not overlap.
 |---|---|---|
 | `main_thread_block` | where the main thread spent its time | `location` — the slice name |
 | `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects |
-| `monitor_contention` | monitor contention | `detail` carries the owner's tid |
+| `monitor_contention` | monitor contention | `places` names both sides of the lock in the checkout; `detail` carries the owner's tid |
 | `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |
 | `runnable_starvation` | thread ready but preempted | this is about the device, not the code |
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}` |

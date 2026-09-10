@@ -444,6 +444,15 @@ def cmd_analyze(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    # After the merge rather than per trace: the evidence a merged row
+    # carries is the worst repeat's, and that is the string worth placing.
+    # The checkout is the config's directory — where `analyze` was run from
+    # is a macrobenchmark's output directory as often as not.
+    from . import place as place_mod
+    placed = place_mod.annotate(rep, _project_root(cfg))
+    if placed:
+        recorder.note(placed=placed)
+
     # Which config made this report. Without it the next reader of
     # report.json cannot tell the project's run from one against an ad-hoc
     # config in /tmp — they look the same.

@@ -167,6 +167,52 @@ def _(report):
         no_slice_named(report, name)
 
 
+@check("a contention row names both sides of the lock in the checkout")
+def _(report):
+    """The frames were in the evidence all along; the file was not.
+
+    On a real hunt the subagent spent forty-six percent of its window
+    reading the application to find `PizzeriaService.updatePizzeriasForCountry`,
+    whose file name sat in the contention slice it had just been shown.
+    `analyze` places both frames now: the owner, and the method that waited
+    — with the line the runtime had, or the declaration's when a release
+    build stripped it. A class named by `main_thread_block` is placed the
+    same way.
+    """
+    import copy
+    from . import place
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "build.gradle.kts").write_text("", encoding="utf-8")
+        src = root / "app/src/main/java/com/example"
+        src.mkdir(parents=True)
+        (root / "app/build.gradle.kts").write_text("", encoding="utf-8")
+        (src / "Store.java").write_text(
+            "package com.example;\n"
+            "public class Store {\n"
+            "    public void put(String key) { get(); }\n"
+            "    public Object get() { return null; }\n"
+            "}\n", encoding="utf-8")
+        rep = copy.deepcopy(report)
+        placed = place.annotate(rep, root)
+    assert placed >= 1, "the fixture's contention row was not placed"
+    row = one_row(rep, "monitor_contention", "LockWaiter")
+    roles = {p["role"]: p for p in row["places"]}
+    assert roles["owner"]["file"] == "app/src/main/java/com/example/Store.java", roles
+    assert roles["owner"]["line"] == 41, "the runtime's own line is kept as is"
+    # `(:-1)`: no file and no line from the runtime. The class names the
+    # file, and the declaration is the line — not the call inside `put`.
+    assert roles["blocked"]["file"] == roles["owner"]["file"], roles
+    assert roles["blocked"]["line"] == 4, roles
+    assert row["code"] == "owner at Store.java:41 · blocked at Store.java:4", row["code"]
+    # And the same report against a checkout with nothing of the sort says
+    # nothing rather than guessing.
+    with tempfile.TemporaryDirectory() as tmp:
+        bare = copy.deepcopy(report)
+        assert place.annotate(bare, Path(tmp)) == 0
+    assert "code" not in one_row(bare, "monitor_contention", "LockWaiter")
+
+
 @check("every shipped detector ran, and every one fired")
 def _(report):
     # Counted rather than written down. The fixture's promise is that it plants

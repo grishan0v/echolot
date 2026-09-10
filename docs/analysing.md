@@ -164,6 +164,33 @@ which of those modules actually burns CPU. And where the first markers go —
 the entry points, from the manifest and the SDK, with a source on every row
 — is `echolot mark`, in [mark.md](mark.md).
 
+## From a row to a line, without `domains`
+
+Some rows name the code themselves. ART's contention slice carries both
+sides of the lock as frames — `at void pkg.PizzeriaService.update(…)(PizzeriaService.kt:30)
+waiters=0 blocking from … PizzeriaService.find()(PizzeriaService.kt:66)` — and
+`main_thread_block` names a class when the slice is a View being inflated.
+`analyze` looks those up in the checkout the config sits in and writes the
+answer into the row: a `code` column in the markdown, and `places` in the
+json with the symbol, the file relative to the project, the line and which
+side it is (`owner`, `blocked`, or the `location` itself).
+
+The line is the runtime's when the build kept line numbers and the
+declaration's when it did not — a release build says `(File.kt:-1)` for
+everything, and the declaration is where a reader opens the file anyway.
+A symbol outside the checkout keeps its name and gets no file: an owner
+parked in `jdk.internal.misc.Unsafe.park` is the holder waiting on something
+else while holding the lock, which is a finding rather than a gap. Two files
+of one name are told apart by the package in the symbol; when nothing tells
+them apart the first is taken and `exact` is false.
+
+On the hunt this was built from, the subagent spent forty-six percent of its
+window reading the application to find a method whose file name had been in
+the row it was shown. The whole checkout is indexed — once per `analyze`, and
+only when a row has something to place — rather than `project.source_root`:
+a lock in `domain/` is exactly the kind of place a project with several
+modules has, and that key's example value names one module.
+
 ## Two rows about one name
 
 A name can appear under both `main_thread_block` and `main_thread_outlier`,
