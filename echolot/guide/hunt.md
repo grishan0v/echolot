@@ -45,7 +45,9 @@ none, the report will name system slices and threads, and your first move is
 round = 1
 
 1. echolot analyze <traces> -c echolot.yml
-   read .echolot/out/report.json
+   echolot report                       what fired, one line per detector
+   echolot report -d <id> --top 5       one detector's rows; --json for the rest
+   (the views of .echolot/out/report.json — do not cut the json up by hand)
 
 2. check the config before concluding anything:
    window.start_anchor.matches == 0     → the anchor missed; the window is not the scenario

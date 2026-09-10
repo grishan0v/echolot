@@ -186,7 +186,11 @@ five-second freeze plus the five the system waits before declaring anything.
 ## Reading the report
 
 Details live in `references/report.md`; three things here that you will get
-wrong without them.
+wrong without them. And one habit to drop: do not cut `report.json` up with
+jq or python one-liners. `echolot report` prints what fired,
+`echolot report --detector <id> --top 5` one detector's rows with the
+evidence kept short, `--window` and `--markers` the rest, `--json` any of
+them as a small json.
 
 **Silent detectors matter as much as firing ones.** They stay in the report
 with empty `rows`. Silence means that ground was checked and is clean — do not

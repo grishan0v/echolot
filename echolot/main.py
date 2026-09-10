@@ -2229,6 +2229,46 @@ def _pkg_version(name: str) -> str:
         return "unknown"
 
 
+def cmd_report(args) -> int:
+    """Views of a report that is already on disk.
+
+    On a real hunt the agent cut report.json up sixteen times with jq and
+    python one-liners — the keys, the window, which detectors fired with
+    which thresholds, the top rows of one detector with the evidence cut
+    short. Each is a view, and each one-liner put a window's worth of json
+    into the context to get at a line. Reads and prints; writes nothing.
+    """
+    project = project_of(args)
+    path = Path(args.report) if args.report else project / ".echolot" / "out" / "report.json"
+    try:
+        rep = _load_report(path)
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    detectors = list(args.detector or [])
+    known = {d["id"] for d in rep.get("detectors") or []}
+    unknown = [d for d in detectors if d not in known]
+    if unknown:
+        print(f"error: no detector {', '.join(unknown)} in {path} — it has: "
+              f"{', '.join(sorted(known))}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(report_mod.select(rep, detectors, args.top, args.window, args.markers),
+                         ensure_ascii=False, indent=2))
+        return 0
+    parts = []
+    if args.window:
+        parts.append(report_mod.window_view(rep))
+    if args.markers:
+        parts.append(report_mod.markers_view(rep, top=args.top or 15))
+    for det in detectors:
+        parts.append(report_mod.detector_view(rep, det, top=args.top or 5, wide=args.wide))
+    if not parts:
+        parts.append(report_mod.overview(rep))
+    print("\n\n".join(parts))
+    return 0
+
+
 def cmd_explain(args) -> int:
     for d in load_detectors(DETECTOR_DIR):
         print(f"{d.id}\n  {d.title}")
@@ -2254,7 +2294,7 @@ def _dump(tp, sql: str) -> None:
 # The agent's half is ordered by the working flow. `anr` sits at its head
 # because a report from the field arrives before there is a trace to probe.
 ORDER = ("status", "init", "hunt", "doctor", "collect", "analyze", "compare",
-         "guide", "anr", "probe", "names", "domains", "mark", "calibrate",
+         "guide", "report", "anr", "probe", "names", "domains", "mark", "calibrate",
          "explain", "reflect")
 
 GROUP_TITLES = {
@@ -2530,6 +2570,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     ex = add("explain", "agent", "", "the detectors and their parameters")
     ex.set_defaults(func=cmd_explain)
+
+    rp = add("report", "agent", "[--detector <id>] [--top N]",
+             "views of the last report: one detector's rows, the window, the markers",
+             description="Reads a Marker Report that is already on disk and prints "
+                         "one view of it: an overview of what fired, one "
+                         "detector's rows with the evidence kept short, the "
+                         "window and the device, or the markers. Writes nothing. "
+                         "Default: .echolot/out/report.json next to the config.")
+    rp.add_argument("report", nargs="?", help="a report.json (default: the last one)")
+    rp.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
+    rp.add_argument("--detector", "-d", action="append", metavar="ID",
+                    help="this detector's rows, longest first; repeatable")
+    rp.add_argument("--top", type=int, metavar="N",
+                    help="how many rows (default: 5 for a detector, 15 for markers)")
+    rp.add_argument("--window", action="store_true",
+                    help="the window, the anchors, the main thread and the device")
+    rp.add_argument("--markers", action="store_true",
+                    help="the project's own names, measured")
+    rp.add_argument("--wide", action="store_true",
+                    help="do not cut the evidence column")
+    rp.add_argument("--json", action="store_true",
+                    help="the same selection as json, rows cut to --top")
+    rp.set_defaults(func=cmd_report)
 
     rf = add("reflect", "tool", "[--last|--all]", "the same kind of report over an agent session")
     pick = rf.add_mutually_exclusive_group()

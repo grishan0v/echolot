@@ -133,6 +133,25 @@ do not rebuild it by running `names` once per trace.
 map pointing at something this scenario does not run, or a name that
 changed under it. The markdown says the same under "Not in the window".
 
+## Views — `echolot report`
+
+The json is the contract; it is not the thing to read whole. On a real hunt
+the agent cut it up sixteen times with jq and python one-liners, and each
+one put a window's worth of json into the context to get at a line. The
+views are those one-liners, done once:
+
+```bash
+echolot report                                 # what fired: one line per detector
+echolot report --detector monitor_contention   # its rows, longest first, 5 of them
+echolot report -d main_thread_block --top 12   # more; --wide keeps the evidence whole
+echolot report --window                        # anchors, the main thread, the device
+echolot report --markers                       # your own names, measured
+echolot report -d repeated_work --json         # the same selection as json — `places` included
+echolot report path/to/report.json --window    # an older report, a round's own copy
+```
+
+Without a path it reads `.echolot/out/report.json` next to the config.
+
 ## Check these before drawing conclusions
 
 **`window.start_anchor.matches == 0`** — the anchor never matched and the
@@ -251,7 +270,7 @@ nest. Adding `self_ms` is fine — self times do not overlap.
 
 | id | what it catches | what to hook onto |
 |---|---|---|
-| `main_thread_block` | where the main thread spent its time | `location` — the slice name |
+| `main_thread_block` | where the main thread spent its time | `location` — the slice name; `detail` is the thread's comm, always the main thread here, cut to 15 characters by the kernel |
 | `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects |
 | `monitor_contention` | monitor contention | `places` names both sides of the lock in the checkout; `detail` carries the owner's tid |
 | `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |

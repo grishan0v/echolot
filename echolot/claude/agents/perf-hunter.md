@@ -160,6 +160,10 @@ echolot analyze … --set main_thread_block.min_slice_ms=4
                                                    one threshold, this run only
 echolot compare                                    the previous round against the latest;
                                                    --hunt <n> for first against last
+echolot report                                     what fired, one line per detector
+echolot report -d monitor_contention --top 5       one detector's rows, evidence cut short;
+                                                   --window, --markers, --json for the rest —
+                                                   instead of jq over report.json
 echolot names <trace>                              slice names of project.process, one trace;
                                                    your AGENTTMP_ ones across every run are
                                                    report.markers, not this
