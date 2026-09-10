@@ -9,6 +9,7 @@ number appears the same way in both.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -108,6 +109,7 @@ class Facts:
     config: dict[str, Any] = field(default_factory=dict)
     runs: list[dict[str, Any]] = field(default_factory=list)
     building: dict[str, Any] = field(default_factory=dict)
+    conclusion: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -641,28 +643,72 @@ def shell_edits(session: Session, prefix: str) -> list[dict[str, Any]]:
     return out
 
 
+_LABEL = re.compile(r"^\s*(?:[=\-#*]{2,}|\[.*\]\s*$)")
+_HIT = re.compile(r"^[^\s:]+\.\w+(?::\d+)?:")
+_CLEAN = re.compile(r"exit=1\b|\(1 = clean\)|\bclean\b|no matches|nothing found", re.IGNORECASE)
+
+
 def _grep_verdict(output: str, prefix: str) -> bool | None:
     """What the cleanup grep found: True = nothing, False = still there.
 
     `grep -rn PREFIX … | wc -l` → "0"; an `echo "label: $(… | wc -l)"` →
     ends with ": 0"; a bare grep with no matches exits 1 and prints nothing;
-    a match prints the line, prefix and all. Anything else: None, unknown.
+    a match prints the line — `path:line:text`, prefix and all.
+
+    The agent's own labels are not hits. On a real hunt the last grep was
+    wrapped as `echo "=== AGENTTMP_ in sources ==="; grep …; echo "exit=$?
+    (1 = clean)"`, the tree was clean, and the verdict read the prefix off
+    the label and said the marker was still there. A hit is a line shaped
+    like grep's output, and a label line is dropped before anything is read.
     """
     lines = [ln for ln in output.splitlines() if ln.strip()]
     if lines and lines[0].startswith("Exit code"):
         lines = lines[1:]
+    lines = [ln for ln in lines if not _LABEL.match(ln)]
     if not lines:
         return True
     first = lines[0].strip()
     m = re.search(r"(?:^|[\s:])(\d+)\s*$", first)
-    if m:
+    if m and not _HIT.match(first):
         return int(m.group(1)) == 0
-    if prefix in first:
+    if any(_HIT.match(ln.strip()) and prefix in ln for ln in lines):
         return False
+    if any(_CLEAN.search(ln) for ln in lines):
+        return True
+    if not any(prefix in ln for ln in lines):
+        return True
     return None
 
 
-def instrumentation(session: Session, cfg: Config | None) -> dict[str, Any]:
+def tree_check(project: Path | None, prefix: str, allowed: list[str]) -> dict[str, Any]:
+    """Whether the source tree carries the prefix now — read, not inferred.
+
+    The transcript says what the agent checked; this says what is there.
+    A `git checkout` that restored a file leaves no edit the transcript can
+    balance, and a grep wrapped in labels can be misread. The tree cannot.
+    Only the allowed roots are walked when there are any — the agent's
+    markers may go nowhere else — and the whole tree otherwise.
+    """
+    if project is None or not Path(project).is_dir():
+        return {"checked": False, "files": []}
+    from ..domains import source_files
+    found: list[str] = []
+    for path in source_files(Path(project)):
+        rel = path.relative_to(project).as_posix()
+        if allowed and not _under_any(rel, allowed):
+            continue
+        try:
+            if prefix in path.read_text(encoding="utf-8", errors="replace"):
+                found.append(rel)
+        except OSError:
+            continue
+        if len(found) >= 20:
+            break
+    return {"checked": True, "files": found}
+
+
+def instrumentation(session: Session, cfg: Config | None,
+                    project: Path | None = None) -> dict[str, Any]:
     prefix = (cfg.get("instrumentation.temp_prefix") if cfg else None) or "AGENTTMP_"
     allowed = list((cfg.get("instrumentation.allowed") if cfg else None) or [])
     per_file: dict[str, dict[str, int]] = {}
@@ -715,17 +761,27 @@ def instrumentation(session: Session, cfg: Config | None) -> dict[str, Any]:
         default=0.0)
     def is_grep(c: Call) -> bool:
         cmd = c.command or ""
-        return "grep" in cmd and prefix in cmd and not _PY_WRITES.search(cmd)
+        if "grep" not in cmd or prefix not in cmd or _PY_WRITES.search(cmd):
+            return False
+        # `echolot names … | grep AGENTTMP_` reads the trace, not the tree:
+        # it was counted as the cleanup grep on a real hunt, and its rows
+        # of marker names read as markers left in the sources.
+        return not ("echolot" in cmd and cmd.index("echolot") < cmd.index("grep"))
     # Calls are stored main-first, then subagents: sort by time, the verdict
     # is the latest grep's.
     final_grep = sorted((c for c in session.bash()
                          if is_grep(c) and ts_to_epoch(c.ts) >= last_edit),
                         key=lambda c: ts_to_epoch(c.ts))
     verdict = _grep_verdict(final_grep[-1].output_head or "", prefix) if final_grep else None
+    # Read off the tree only when the session touched instrumentation: a
+    # walk over a checkout is not free, and a session with no marker in it
+    # has nothing to be checked for.
+    tree = tree_check(project, prefix, allowed) if touched else {"checked": False, "files": []}
     return {
         "prefix": prefix,
         "allowed": allowed,
         "files": touched,
+        "tree": tree,
         # Balance is judged on tool edits only; a file edited through the
         # shell has no direction to balance, the grep verdict speaks for it.
         "unbalanced": {f: v for f, v in touched.items()
@@ -752,8 +808,21 @@ def _is_source(rel: str) -> bool:
 
 
 def _under_any(rel: str, roots: list[str]) -> bool:
-    return any(rel == r.rstrip("/") or rel.startswith(r.rstrip("/") + "/")
-               for r in roots)
+    """Whether a path sits under one of the allowed roots, globs included.
+
+    `instrumentation.allowed` is written the way the skill shows it —
+    `feature/*/src/main` — and was compared as a plain prefix, so on a real
+    project every edit under `domain/base/src/main` was filed as outside
+    `domain/*/src/main`. Each segment of the root is a glob over the matching
+    segment of the path; the path may go deeper.
+    """
+    parts = rel.split("/")
+    for root in roots:
+        segs = [s for s in root.strip("/").split("/") if s]
+        if segs and len(segs) <= len(parts) and all(
+                fnmatch.fnmatchcase(p, s) for p, s in zip(parts, segs, strict=False)):
+            return True
+    return False
 
 
 # --------------------------------------------------------------------- gaps
@@ -773,9 +842,32 @@ def gaps(session: Session, min_s: float = 120.0) -> list[dict[str, Any]]:
         for (t0, what), (t1, _) in zip(events, events[1:], strict=False):
             if t1 - t0 >= min_s:
                 out.append({"agent": agent, "seconds": round(t1 - t0),
-                            "after": what})
+                            "after": what, "why": _gap_reason(what)})
     out.sort(key=lambda g: -g["seconds"])
     return out[:8]
+
+
+def _gap_reason(after: str) -> str:
+    """What a silence most likely was, from the call it followed.
+
+    A list of seconds without a cause reads as the agent idling. On a real
+    session the longest was a subagent running for twenty-five minutes, the
+    next two were the human answering four questions and a gradle build in
+    the background — none of them the agent's, and none of them said so.
+    """
+    head = after.split(":", 1)[0]
+    body = after.lower()
+    if head == "Agent":
+        return "a subagent was running"
+    if head == "AskUserQuestion":
+        return "waiting for the human to answer"
+    if head == "TaskOutput" or "background" in body:
+        return "waiting on a background task"
+    if any(k in body for k in ("collect", "gradlew", "gradle ", "adb ", "perfetto")):
+        return "collect, gradle or the device"
+    if head == "Skill":
+        return "reading a skill"
+    return "unknown"
 
 
 # -------------------------------------------------------------------- entry
@@ -893,10 +985,24 @@ def gather(session: Session, cfg: Config | None,
         hunts=hunts(session, cfg),
         cost=cost(session),
         top_outputs=top_outputs(session),
-        instrumentation=instrumentation(session, cfg),
+        instrumentation=instrumentation(session, cfg, project),
         gaps=gaps(session),
         entry=entry(session, calls),
         config=config_snapshot(cfg),
         runs=inside,
         building=building_the_tool(project, calls),
+        conclusion=conclusion(session),
     )
+
+
+def conclusion(session: Session) -> dict[str, Any] | None:
+    """What the main context said last — its own conclusion.
+
+    A subagent's final text was kept and a hunt was judged by it; the main
+    context's was not, and for a session that reads an ANR or a report
+    without a hunt that text is the whole result. A `text` that is None
+    means the transcript carried no assistant text at all.
+    """
+    if not session.final_text:
+        return None
+    return {"agent": MAIN, "text": session.final_text}

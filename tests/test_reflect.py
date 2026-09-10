@@ -124,6 +124,11 @@ def build(root: Path, project: Path) -> Path:
                        output_tokens=250))
     # `2>&1` is not an argument; the reader must strip it
     bash(m, 5, cwd, "tu_doctor", "echolot doctor 2>&1", "All 12 checks passed", dt=2.0)
+    # the harness refused the call before echolot ran: not echolot's failure,
+    # and on a real session two of four "failures" were exactly this
+    bash(m, 8, cwd, "tu_denied", "echolot init --force 2>&1 | tail -40",
+         "Permission for this action was denied by the Claude Code auto mode classifier. "
+         "Reason: Blocked by classifier.", is_error=True)
     # a question with a recommended option, answered against the recommendation
     MSG[0] += 1
     m.append(assistant(10, cwd, [tool_use("tu_ask", "AskUserQuestion", {"questions": [{
@@ -138,6 +143,9 @@ def build(root: Path, project: Path) -> Path:
     # a Bash call that fails in the shell before echolot runs, then a retry
     bash(m, 90, cwd, "tu_cal1", 'cd "out/SM-A515F - 13" && echolot calibrate *.perfetto-trace -c echolot.yml',
          "Exit code 1\n(eval):cd:1: no such file or directory: out/SM-A515F - 13", is_error=True)
+    # what changed between the failure and the retry: the machine-local
+    # config — the retry row must say so, "the same argv" says nothing
+    bash(m, 92, cwd, "tu_local", "cat > local.yml <<'EOF'\nrunner:\n  device: SERIAL\nEOF", "")
     bash(m, 95, cwd, "tu_cal2", 'echolot calibrate "out/SM-A515F - 13"/*.perfetto-trace -c echolot.yml',
          "thresholds written", dt=20.0)
     # calibrate's output applied to echolot.yml through a python heredoc: a
@@ -184,6 +192,14 @@ def build(root: Path, project: Path) -> Path:
          "cat > echolot.yml.example <<'YML'\n"
          "detectors:\n  main_thread_block:\n    min_slice_ms: 40\n"
          "YML\necho written", "written")
+    # The agent names a defect in the tool in its own words. No rule reads
+    # that sentence; the report quotes it.
+    MSG[0] += 1
+    m.append(assistant(147, cwd, [{"type": "text", "text":
+             "Пробный трейс разобран.\n\n"
+             "Три бага самого echolot нашлись по дороге:\n"
+             "1. `init --force` затёр `.claude/settings.json` целиком\n"
+             "2. `domains` сканирует `.claude/worktrees/`"}], output_tokens=100))
     m.append(user_text(150, cwd, "<command-message>echolot-hunt</command-message>\n"
                                   "<command-name>/echolot-hunt</command-name>"))
     MSG[0] += 1
@@ -227,6 +243,17 @@ def build(root: Path, project: Path) -> Path:
          "mkdir -p .echolot/traces/before && cp build/out/*.perfetto-trace .echolot/traces/before/", "")
     bash(m, 1620, cwd, "tu_rec_ok", "./gradlew :benchmark:connectedBenchmarkAndroidTest",
          "BUILD SUCCESSFUL", dt=600.0)
+    # the harness moved the call to the background: no failure, no result
+    # either — the notice is what the transcript keeps as the output
+    bash(m, 2230, cwd, "tu_bg", "echolot doctor -q",
+         "MCP tool \"plugin:context-mode:context-mode/ctx_execute\" is still running after "
+         "120s. It was moved to the background as task k1 and keeps running.", dt=1.0)
+    # and the main context's own last word, which is the result of a session
+    # that has no hunt in it
+    MSG[0] += 1
+    m.append(assistant(2240, cwd, [{"type": "text", "text":
+             "Done. The cause was synchronous IO on the main thread; fixed in Foo.kt."}],
+             output_tokens=100))
     # Claude Code writes gitBranch "HEAD" outside a git repository; that is
     # not a branch name and must not be reported as one
     m[0]["gitBranch"] = "HEAD"
@@ -275,7 +302,18 @@ def build(root: Path, project: Path) -> Path:
          'fun run() { trace("AGENTTMP_bench") {', "fun run() {")
     bash(s, 707, cwd, "su_e_sh2",
          f"cd {cwd}/app/src/main/kotlin && sed -i '' 's/ trace(\"AGENTTMP_init\") {{//' Baz.kt", "")
-    bash(s, 710, cwd, "su_grep", "grep -rn AGENTTMP_ app/src benchmark/src | wc -l", "0")
+    # a grep over echolot's own output is a look at the trace, not at the
+    # tree — it was counted as the cleanup grep on a real hunt, and its rows
+    # of marker names read as markers left behind
+    bash(s, 708, cwd, "su_names_grep",
+         "echolot names out/x.perfetto-trace -c echolot.yml --top 400 | grep AGENTTMP_",
+         "| AGENTTMP_load | 1 | 12.0 | main | — |")
+    # the cleanup grep, wrapped in the agent's own labels: the label carries
+    # the prefix and is not a hit, the exit line says clean
+    bash(s, 710, cwd, "su_grep",
+         "echo \"=== AGENTTMP_ in sources ===\"; grep -rn AGENTTMP_ app/src benchmark/src; "
+         "echo \"exit=$? (1 = clean)\"",
+         "=== AGENTTMP_ in sources ===\nexit=1 (1 = clean)")
     MSG[0] += 1
     # a long conclusion, Cleanup and Confidence past the fourth kilobyte, the
     # suggestion under a Russian heading: every field must still be found
@@ -296,6 +334,11 @@ def reflected(tmp_path_factory):
     root = tmp_path_factory.mktemp("reflect")
     project = root / "app-project"
     project.mkdir()
+    # A source under the allowed root with no marker in it: what the tree
+    # check reads, and what "clean" is measured against.
+    (project / "app/src/main/kotlin").mkdir(parents=True)
+    (project / "app/src/main/kotlin/Foo.kt").write_text(
+        "class Foo {\n    fun load() {}\n}\n", encoding="utf-8")
     (project / "echolot.yml").write_text(
         "project:\n  process: app\n  source_root: app/src/main/kotlin\n"
         "scenario:\n  name: checkout\n"
@@ -329,11 +372,13 @@ def test_the_reader_found_every_planted_event(reflected):
     expect(src["agent_version"] == "2.1.0", "agent version read")
     expect(src["git_branch"] == "main", f"HEAD is not a branch: {src['git_branch']}")
     calls = report["echolot_calls"]
-    expect(len(calls) == 13,
-           f"13 echolot calls; prose about the tool is not one, got {len(calls)}")
+    expect(len(calls) == 16,
+           f"16 echolot calls; prose about the tool is not one, got {len(calls)}")
     subs = sorted(c["sub"] for c in calls)
-    expect(subs.count("analyze") == 8 and subs.count("doctor") == 2 and subs.count("names") == 1,
-           f"subcommands: {subs}")
+    expect(subs.count("analyze") == 8 and subs.count("doctor") == 3 and subs.count("names") == 2
+           and subs.count("init") == 1, f"subcommands: {subs}")
+    expect(report["conclusion"]["text"].startswith("Done."),
+           f"the main context's last word is the conclusion: {report.get('conclusion')}")
     # `echolot calibrate` inside a heredoc body is text, not a call
     expect(subs.count("calibrate") == 2, f"heredoc mention not counted as a call: {subs}")
     # the agent's own python traceback after a clean analyze is not echolot's
@@ -377,9 +422,9 @@ def test_the_reader_found_every_planted_event(reflected):
     # streaming usage: max per message (250, not 3 and not 253), one count per
     # message id, main and subagent kept apart
     um = report["cost"]["usage_main"]
-    expect(um["output"] == 250 + 100 * 17, f"main output tokens: {um['output']}")
+    expect(um["output"] == 250 + 100 * 22, f"main output tokens: {um['output']}")
     us = report["cost"]["usage_subagents"]
-    expect(us["output"] == 400 + 100 * 18, f"subagent output tokens: {us['output']}")
+    expect(us["output"] == 400 + 100 * 19, f"subagent output tokens: {us['output']}")
 
 
 def test_every_planted_signal_fired(reflected):
@@ -409,12 +454,15 @@ def test_every_planted_signal_fired(reflected):
     expect(sig.get("rounds_over_max", {}).get("severity") == "ok", "rounds within max")
     expect(sig.get("conclusion_shape", {}).get("severity") == "ok", "conclusion shape ok")
     x = sig.get("cleanup_balance")
-    expect(x and x["severity"] == "ok" and "through the shell" in x["why"]
-           and "found nothing" in x["why"], f"cleanup ok, shell edits counted: {x}")
+    expect(x and x["severity"] == "ok" and "carries no temporary marker" in x["title"]
+           and "through the shell" in x["why"], f"cleanup ok, read off the tree: {x}")
     inst = report["instrumentation"]
     expect(inst["files"].get("app/src/main/kotlin/Baz.kt", {}).get("shell") == 2
            and inst["shell_edits"] == 2 and inst["cleanup_grep_clean"] is True,
-           f"shell edits seen per file, grep verdict clean: {inst}")
+           f"shell edits seen per file, the labelled grep read as clean: {inst}")
+    expect(inst["cleanup_grep_after_last_edit"] == 1,
+           f"`echolot names | grep` is not a cleanup grep: {inst}")
+    expect(inst["tree"] == {"checked": True, "files": []}, f"the tree was read: {inst['tree']}")
     x = sig.get("edits_outside_allowed")
     expect(x and x["severity"] == "warn" and len(x["rows"]) == 2 and
            all("Bench.kt" in r["file"] for r in x["rows"]), f"edits outside allowed: {x}")
@@ -465,12 +513,21 @@ def test_every_planted_signal_fired(reflected):
            f"glob miss classified as shell failure: {x}")
     x = sig.get("retries")
     expect(x and x["rows"][0]["sub"] == "calibrate", f"calibrate retry: {x}")
+    expect(x and x["rows"][0]["between"] == "local.yml written",
+           f"what changed between the attempts: {x['rows'][0] if x else x}")
+    x = sig.get("agent_reported_bugs")
+    expect(x and len(x["rows"]) == 1 and "затёр" in x["rows"][0]["said"]
+           and x["rows"][0]["agent"] == "main", f"the agent's own words are quoted: {x}")
     x = sig.get("agent_prompt_gaps")
     expect(x and x["rows"][0]["missing"] == "since_change", f"prompt gap: {x}")
     x = sig.get("entry_fumbling")
     expect(x is not None, "entry fumbling (an interruption in the entry window)")
     x = sig.get("long_gaps")
     expect(x and any(r["seconds"] >= 300 for r in x["rows"]), f"the gradle wait is a gap: {x}")
+    whys = {r["after"].split(":", 1)[0]: r["why"] for r in x["rows"]} if x else {}
+    expect(whys.get("Agent") == "a subagent was running", f"the gap after a launch is the subagent: {whys}")
+    expect(any(r["why"] == "collect, gradle or the device" for r in x["rows"]),
+           f"the gradle wait is named as such: {x['rows'] if x else x}")
     # what fed the subagent's window: one source read, most of the chars,
     # before the first instrumentation edit
     w = h["window"]
@@ -502,8 +559,48 @@ def test_the_signals_with_nothing_planted_stayed_quiet(reflected):
     report, _ = reflected
     sig = {x["id"]: x for x in report["signals"]}
 
-    for quiet in ("context_hogs", "env_friction"):
+    for quiet in ("context_hogs",):
         expect(quiet not in sig, f"{quiet} must not fire: {sig.get(quiet)}")
+    # the harness's own notices are friction, not echolot's failures
+    x = sig.get("env_friction")
+    kinds = {r["kind"] for r in x["rows"]} if x else set()
+    expect({"denied by the agent's harness", "moved to the background by the harness"} <= kinds,
+           f"the harness's notices are filed as friction: {x}")
+    x = sig.get("echolot_failures")
+    expect(x and all("classifier" not in r["head"] and "background" not in r["head"] for r in x["rows"]),
+           f"and not as echolot failures: {x}")
+
+
+def test_allowed_roots_are_globs_and_the_tree_is_read(tmp_path):
+    """`domain/*/src/main` covers `domain/base/src/main/…`, and the tree says what is there."""
+    from echolot.reflect import facts
+    expect(facts._under_any("domain/base/src/main/java/X.kt", ["domain/*/src/main"]),
+           "a glob segment matches a module")
+    expect(facts._under_any("app/src/main/kotlin/X.kt", ["app/src/main"]), "a plain root still works")
+    expect(not facts._under_any("benchmark/src/main/java/B.kt", ["domain/*/src/main", "app/src/main"]),
+           "outside stays outside")
+    src = tmp_path / "feature/x/src/main/kotlin"
+    src.mkdir(parents=True)
+    (src / "A.kt").write_text('fun a() { trace("AGENTTMP_a") {} }\n', encoding="utf-8")
+    (src / "B.kt").write_text("fun b() {}\n", encoding="utf-8")
+    got = facts.tree_check(tmp_path, "AGENTTMP_", ["feature/*/src/main"])
+    expect(got == {"checked": True, "files": ["feature/x/src/main/kotlin/A.kt"]},
+           f"the file that carries the prefix is named: {got}")
+    expect(facts.tree_check(tmp_path, "AGENTTMP_", ["app/src/main"]) == {"checked": True, "files": []},
+           "outside the allowed roots nothing is read")
+    expect(facts.tree_check(None, "AGENTTMP_", []) == {"checked": False, "files": []},
+           "no project, no check — and it says so")
+
+
+def test_the_grep_verdict_reads_hits_not_labels():
+    from echolot.reflect.facts import _grep_verdict as v
+    expect(v("=== AGENTTMP_ in sources ===\nexit=1 (1 = clean)", "AGENTTMP_") is True, "a label is not a hit")
+    expect(v("app/src/main/kotlin/Foo.kt:12:    trace(\"AGENTTMP_load\") {", "AGENTTMP_") is False,
+           "a grep line is")
+    expect(v("0", "AGENTTMP_") is True and v("3", "AGENTTMP_") is False, "a count is a count")
+    expect(v("", "AGENTTMP_") is True, "nothing printed is clean")
+    expect(v("AGENTTMP_ leftovers:\n(none)", "AGENTTMP_") is None or v("AGENTTMP_ leftovers:\n(none)", "AGENTTMP_") is True,
+           "a prose line with the prefix is not read as a hit")
 
 
 def test_the_recorder_logged_the_reflect_run(reflected):
