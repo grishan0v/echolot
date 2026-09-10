@@ -1903,6 +1903,86 @@ def _(report):
             f"the working directory stopped being recorded: {entry['cwd']}")
 
 
+# --- the repository, scanned -------------------------------------------------
+
+def _android_repo(root: Path) -> None:
+    """An app with two flavours and a benchmark build type, and a macrobenchmark."""
+    (root / "build.gradle").write_text("", encoding="utf-8")
+    app = root / "app"
+    (app / "src/main/java/com/example/app").mkdir(parents=True)
+    (app / "build.gradle").write_text(
+        "publishing { defaultConfig { other = true } }\n"
+        "android {\n"
+        "  defaultConfig { applicationId = \"com.example.app\" }\n"
+        "  productFlavors { beta { applicationIdSuffix = \".beta\" }\n prod { } }\n"
+        "  buildTypes { debug { debuggable = true }\n"
+        "    benchmark { initWith release; debuggable = false; profileable = true } }\n"
+        "}\n", encoding="utf-8")
+    (app / "src/main/AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+        '<application><activity android:name=".MainActivity"><intent-filter>'
+        '<action android:name="android.intent.action.MAIN" />'
+        '<category android:name="android.intent.category.LAUNCHER" />'
+        '</intent-filter></activity></application></manifest>\n', encoding="utf-8")
+    (app / "src/main/java/com/example/app/App.kt").write_text("class App\n", encoding="utf-8")
+    bench = root / "benchmark"
+    (bench / "src/main/java").mkdir(parents=True)
+    (bench / "build.gradle").write_text(
+        "plugins { id 'com.android.test' }\n"
+        "android { productFlavors { beta { } }\n buildTypes { benchmark { } } }\n", encoding="utf-8")
+    (bench / "src/main/java/StartupBenchmark.kt").write_text(
+        "package com.example.benchmark\n"
+        "import androidx.benchmark.macro.junit4.MacrobenchmarkRule\n"
+        "class StartupBenchmark {\n"
+        "  @Test\n  fun startup() = rule.measureRepeated(packageName = \"com.example.app.beta\",\n"
+        "    metrics = listOf(StartupTimingMetric(), TraceSectionMetric(\"home_shown\"))) {}\n"
+        "}\n", encoding="utf-8")
+
+
+@check("scan: the app, its variants and the one to measure on, off the build script as text")
+def _(report):
+    """The facts setup starts from, which an agent used to read by hand.
+
+    On a real project that reading was the largest thing to enter the
+    agent's window during setup, part of it a `.class` file caught by a
+    glob, and the human still had to say which variant to install. A
+    publishing plugin's own `defaultConfig` came first in the file, which
+    is why the applicationId is read under `android`.
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        facts = scan.describe(root, devices=False)
+    assert facts.app and facts.app["application_id"] == "com.example.app", facts.app
+    assert facts.app["module"] == ":app", facts.app
+    names = {v["name"]: v for v in facts.variants}
+    assert names["betaBenchmark"]["application_id"] == "com.example.app.beta", names
+    assert names["betaDebug"]["measure"].startswith("no"), names["betaDebug"]
+    assert scan.preferred(facts.variants)["name"] == "betaBenchmark", facts.variants
+    # No <profileable> in the manifest is the first thing setup must say.
+    assert any("profileable" in n for n in facts.notes), facts.notes
+
+
+@check("scan: the benchmark, what it measures, and the task that runs it")
+def _(report):
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        facts = scan.describe(root, devices=False)
+        text = "\n".join(scan.skeleton(facts))
+    b = facts.benchmarks[0]
+    assert b["module"] == ":benchmark" and b["package_name"] == "com.example.app.beta", b
+    assert b["classes"][0]["tests"] == ["startup"] and b["metrics"] == ["home_shown"], b
+    assert scan.gradle_tasks(b, facts.variants) == [":benchmark:connectedBetaBenchmarkAndroidTest"]
+    # The skeleton carries them, each value with where it came from — and
+    # the test module is not a place for the app's markers.
+    assert 'gradle_task: ":benchmark:connectedBetaBenchmarkAndroidTest"' in text, text
+    assert 'end: {name: "home_shown"' in text and "_evidence" in text, text
+    assert facts.allowed == ["app/src/main"], facts.allowed
+
+
 # --- the markers table -----------------------------------------------------
 
 @check("markers: every planted name is measured, whatever the detectors say")

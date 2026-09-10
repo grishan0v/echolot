@@ -260,6 +260,7 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 |---|---|
 | `guide` | how to work with this tool, printed by the package — what an agent without the `.claude/` layer reads instead of it |
 | `report` | views of the last report without opening the json: what fired, one detector's rows with the evidence kept short, the window, the markers — `--json` for any of them |
+| `scan` | what the repository says about itself, read as text: the app module and its applicationId, the variants and which one to measure on, the macrobenchmark with its tests and the sections it measures, the gradle task that runs it, the devices attached — and an `echolot.yml` to start from |
 | `anr` | an ANR report from the field — the lock chain, the few threads that were not idle, and where their frames are in this checkout. Crashlytics exports and the device's own `dumpsys dropbox` record |
 | `probe` | processes, threads by CPU, scenario anchor candidates — the threads' sections and the process's async ones |
 | `names` | slice name inventory and detector mask coverage |
@@ -441,7 +442,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 140 checks inside
+The detectors were validated against a synthetic trace — 142 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
