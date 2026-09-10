@@ -45,7 +45,10 @@ echolot analyze <trace...> -c echolot.yml  # the report
 ```
 
 `analyze` writes `.echolot/out/report.json` for you and `report.md` for humans.
-**Read the json** — it has a stable schema.
+**Read the json** — it has a stable schema — through `echolot report`: what
+fired, `--detector <id> --top 5` for one detector's rows with the evidence
+kept short, `--window`, `--markers`, `--json` for any of them. Cutting the
+file up with jq puts a window's worth of json into your context for a line.
 
 ```bash
 echolot compare                            # what moved since the previous round

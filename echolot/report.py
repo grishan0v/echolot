@@ -653,6 +653,195 @@ def to_markdown(report: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+# --- views: what `echolot report` prints ---------------------------------------
+#
+# report.json is the agent's, and on a real hunt the agent cut it up sixteen
+# times with jq and python one-liners: the keys, the window, which detectors
+# fired with which thresholds, the top rows of one detector with the
+# evidence shortened. Each of those is a view the report can offer directly,
+# and each one-liner was a window's worth of json read to get at a line.
+
+# What the evidence column means where it is not obvious. `main_thread_block`
+# groups by thread as well as by name, and the thread is always the main
+# one — so the column shows its comm, which the kernel cuts to fifteen
+# characters: `m.example.app` for `com.example.app`. Kept rather than
+# renamed because it is part of the row's identity, and a rename would make
+# every earlier report's rows vanish in `compare`.
+EVIDENCE_LEGEND = {
+    "main_thread_block": "the thread's comm — always the main thread here; "
+                         "the kernel cuts the name to 15 characters",
+}
+
+
+def clip(text: Any, width: int) -> str:
+    text = "" if text is None else str(text)
+    return text if len(text) <= width else text[:width - 1] + "…"
+
+
+def _header_lines(report: dict[str, Any]) -> list[str]:
+    w = report.get("window") or {}
+    out = []
+    traces = report.get("traces")
+    what = f"{len(traces)} runs, medians" if traces else f"`{report.get('trace')}`"
+    line = f"**{what}** · process `{w.get('process')}`"
+    if w.get("duration_ms") is not None:
+        line += f" · window **{w['duration_ms']} ms**"
+        if w.get("duration_ms_min") is not None:
+            line += f" ({w['duration_ms_min']}–{w['duration_ms_max']})"
+    if report.get("generated_at"):
+        line += f" · {report['generated_at']}"
+    out.append(line)
+    anchors = []
+    for key, label in (("start_anchor", "start"), ("end_anchor", "end")):
+        a = w.get(key)
+        if a:
+            hit = a.get("matches")
+            anchors.append(f"{label} `{a.get('glob')}` "
+                           + ("⚠️ 0 matches" if hit == 0 else f"{hit} match(es)"))
+    if anchors:
+        out.append("Anchors: " + " · ".join(anchors))
+    alts = w.get("process_alternatives")
+    if alts:
+        out.append(f"⚠️ {w.get('process_alternatives_total') or len(alts)} other "
+                   f"process(es) matched the mask; the largest was taken")
+    out.extend(_budget_lines(w.get("main_thread")))
+    out.extend(_environment_lines(report.get("environment") or {}))
+    return out
+
+
+def overview(report: dict[str, Any]) -> str:
+    """One screen: the window, and every detector with what it found."""
+    out = ["# Report", ""]
+    out.extend(_header_lines(report))
+    m = report.get("markers") or {}
+    rows, absent = m.get("rows") or [], m.get("absent") or []
+    if rows or absent:
+        out.append(f"Markers: {len(rows)} measured"
+                   + (f", {len(absent)} listed in `domains` and not in the window" if absent else "")
+                   + " — `echolot report --markers`")
+    out.append("")
+    table_rows = []
+    for d in report.get("detectors") or []:
+        found = d.get("rows") or []
+        top = found[0] if found else None
+        table_rows.append({
+            "detector": d["id"],
+            "rows": len(found) if found else "—",
+            "thresholds": d.get("params_source") or "default",
+            "top row": clip(top.get("location"), 48) if top else ("failed" if d.get("error") else "silent"),
+            "metric": (f"{metric_of(top).replace('_ms', '')} {top.get(metric_of(top))} ms"
+                       if top and top.get(metric_of(top)) is not None else ""),
+        })
+    out.append(table.render(table_rows))
+    absent_ids = (report.get("summary") or {}).get("absent_ids") or []
+    if absent_ids:
+        out.append("")
+        out.append("Turned off in this config: " + ", ".join(f"`{a}`" for a in absent_ids))
+    out.append("")
+    out.append("One detector's rows: `echolot report --detector <id> --top 5`; "
+               "the window and the device: `--window`; the markers: `--markers`; "
+               "any of them as json: `--json`.")
+    return "\n".join(out)
+
+
+def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
+                  wide: bool = False) -> str:
+    """One detector's rows, the longest first, with the evidence kept short."""
+    d = next((x for x in report.get("detectors") or [] if x["id"] == det_id), None)
+    if d is None:
+        known = ", ".join(x["id"] for x in report.get("detectors") or [])
+        return f"no detector `{det_id}` in this report — it has: {known}"
+    out = [f"## {d.get('title') or det_id} (`{det_id}`)"]
+    if d.get("why"):
+        out.append(f"_{d['why']}_")
+    out.append(f"params: {d.get('params')}{_source_note(d)}")
+    if d.get("error"):
+        out.append(f"⚠️ the detector failed: {d['error']}")
+    out.append("")
+    rows = d.get("rows") or []
+    if not rows:
+        out.append("_silent — no row cleared the thresholds_")
+        return "\n".join(out)
+    shown = []
+    for r in rows[:top]:
+        r = dict(r)
+        if not wide:
+            r["location"] = clip(r.get("location"), 60)
+            if r.get("detail") is not None:
+                r["detail"] = clip(r["detail"], 100)
+        shown.append(r)
+    out.append(_table(shown))
+    if len(rows) > top:
+        out.append("")
+        out.append(f"_Showing {top} of {len(rows)}; `--top {len(rows)}` for all._")
+    legend = EVIDENCE_LEGEND.get(det_id)
+    if legend:
+        out.append("")
+        out.append(f"Evidence: {legend}.")
+    if any(r.get("places") for r in rows[:top]):
+        out.append("")
+        out.append("`--json` carries `places`: file and line for every symbol the rows name.")
+    return "\n".join(out)
+
+
+def markers_view(report: dict[str, Any], top: int = 15) -> str:
+    m = report.get("markers") or {}
+    rows = m.get("rows") or []
+    if not rows and not m.get("absent"):
+        return "_no markers: nothing carries the prefix and `domains` lists nothing_"
+    out = _markers_lines({**m, "rows": rows[:top]})
+    if len(rows) > top:
+        out.append(f"_Showing {top} of {len(rows)}; `--top {len(rows)}` for all._")
+    return "\n".join(out)
+
+
+def window_view(report: dict[str, Any]) -> str:
+    out = ["## Window", ""]
+    out.extend(_header_lines(report))
+    w = report.get("window") or {}
+    inside = w.get("opened_inside")
+    if inside and inside.get("material"):
+        out.append(f"⚠️ opened with the main thread already blocked: `{inside['state']}` "
+                   f"for {inside['total_ms']} ms, {inside['before_ms']} ms of it before the anchor")
+    return "\n".join(out)
+
+
+def select(report: dict[str, Any], detectors: list[str], top: int | None,
+           window: bool, markers: bool) -> dict[str, Any]:
+    """The json for a view: only the parts asked for, rows cut to `top`."""
+    if not detectors and not window and not markers:
+        return {
+            "window": report.get("window"),
+            "environment": report.get("environment"),
+            "summary": report.get("summary"),
+            "config": report.get("config"),
+            "markers": {"rows": len((report.get("markers") or {}).get("rows") or []),
+                        "absent": (report.get("markers") or {}).get("absent") or []},
+            "detectors": [{"id": d["id"], "rows": len(d.get("rows") or []),
+                           "params_source": d.get("params_source"),
+                           "error": d.get("error")}
+                          for d in report.get("detectors") or []],
+        }
+    out: dict[str, Any] = {}
+    if window:
+        out["window"] = report.get("window")
+        out["environment"] = report.get("environment")
+    if markers:
+        m = dict(report.get("markers") or {})
+        if top is not None:
+            m["rows"] = (m.get("rows") or [])[:top]
+        out["markers"] = m
+    if detectors:
+        out["detectors"] = []
+        for d in report.get("detectors") or []:
+            if d["id"] in detectors:
+                entry = dict(d)
+                if top is not None:
+                    entry["rows"] = (d.get("rows") or [])[:top]
+                out["detectors"].append(entry)
+    return out
+
+
 def _markers_lines(markers: dict[str, Any]) -> list[str]:
     """The project's own names, measured — above the findings, whatever fired.
 
