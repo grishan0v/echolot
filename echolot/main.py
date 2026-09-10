@@ -1693,6 +1693,9 @@ def cmd_anr(args) -> int:
     found = anr_mod.chains(report)
     recorder.note(anr=source.name, threads=len(report.threads),
                   chains=len(found),
+                  # Zero chains from a file with no lock notes is the file's
+                  # limit, not the freeze's; the log says which it was.
+                  lock_notes=report.lock_notes,
                   blocks_main=any(c.blocks_main for c in found),
                   placed=len(code[0]) if code else 0)
 

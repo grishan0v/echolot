@@ -213,12 +213,24 @@ SOURCES = (CRASHLYTICS, DUMPSYS, PLAY)
 # carries. Used only to decide which frames are worth printing — a stack of
 # twenty `java.util.concurrent` frames says nothing about the app that owns it.
 # Getting this wrong hides a frame; it never invents one.
-PLATFORM = (
+#
+# Two tiers, because they read differently. CORE is the platform and the
+# runtime: a frame there is a dead end, nobody configures `android.os.Looper`.
+# LIBRARIES are what the app pulls in and drives — WorkManager, coroutines,
+# OkHttp — and a frame there is a pointer to the app's own setup of that
+# library. A working thread with nothing of the app on its stack and
+# `androidx.work.impl.Schedulers` four frames down was reported as "every
+# frame belongs to the platform or a library", which is true and closes the
+# door on the one lead the dump had.
+CORE = (
     "java.", "javax.", "jdk.", "sun.", "libcore.", "dalvik.",
-    "android.", "androidx.", "com.android.",
-    "kotlin.", "kotlinx.",
+    "android.", "com.android.", "kotlin.",
+)
+LIBRARIES = (
+    "androidx.", "kotlinx.",
     "com.google.", "okhttp3.", "okio.", "retrofit2.", "io.reactivex.",
 )
+PLATFORM = CORE + LIBRARIES
 
 
 @dataclass
@@ -264,6 +276,20 @@ class Thread:
         return [f for f in self.frames
                 if f.startswith(prefixes) or not f.startswith(PLATFORM)]
 
+    def nearest(self, prefixes: tuple[str, ...]) -> str:
+        """The frame closest to the app: its own, else a library's, else the top.
+
+        The top of a working thread is almost always `BinderProxy.transactNative`
+        or `Unsafe.park` — true and useless alone. What the thread was doing
+        sits a few frames down, in the app when the app is there and in a
+        library it drives when it is not: `SystemJobScheduler.cancel` says
+        WorkManager was rescheduling, and the top frame says a binder call.
+        """
+        own = self.own(prefixes)
+        if own:
+            return own[0]
+        return next((f for f in self.frames if not f.startswith(CORE)), self.top)
+
 
 @dataclass
 class Report:
@@ -303,6 +329,18 @@ class Report:
         """Why the system fired it. The dropbox record has this; an export
         from Crashlytics does not, checked across ten of them."""
         return self.head.get("Subject", "") or self.head.get("Reason", "")
+
+    @property
+    def lock_notes(self) -> bool:
+        """Whether any thread in this file says what it waits on or holds.
+
+        An export that carries no lock note at all — Play Console strips
+        them, and so do some Crashlytics exports — cannot yield a monitor
+        chain, and an empty chain list then means "this file cannot say",
+        not "nothing was blocked". The two were reported the same way, and a
+        reader told the user "no lock chain" as a fact about the freeze.
+        """
+        return any(t.lock is not None or t.held for t in self.threads)
 
     @property
     def prefixes(self) -> tuple[str, ...]:
@@ -949,8 +987,31 @@ def _stack(thread: Thread, prefixes: tuple[str, ...], limit: int = 8) -> list[st
         keep = own[:max(room - 3, 1)] + ["…"] + own[-2:]
     else:
         keep = own
-    return lines + keep if own else (
-        lines + thread.native[1:3] if len(lines) == 1 else lines)
+    if own:
+        return lines + keep
+    # Nothing of the app on this stack. The nearest library frame is then
+    # the one that says what the thread was doing, and it goes under the
+    # top; the native frames, where there are any, sit after it.
+    near = thread.nearest(prefixes)
+    if near != thread.top and near not in lines:
+        lines.append(near)
+    return lines + thread.native[1:3] if len(lines) == 1 else lines
+
+
+def _nearest_libraries(report: Report) -> list[tuple[str, str]]:
+    """(thread, frame) for every thread of interest whose nearest frame is a library's.
+
+    Only when the app itself is on no stack: with own frames in the file the
+    library frames are plumbing, and this list would point away from them.
+    """
+    if any(t.own(report.prefixes) for t in of_interest(report)):
+        return []
+    out = []
+    for t in of_interest(report):
+        near = t.nearest(report.prefixes)
+        if near != t.top and near.startswith(LIBRARIES):
+            out.append((t.name, near))
+    return out
 
 
 def _short(symbol: str) -> str:
@@ -1056,6 +1117,17 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 "freeze is inside something nobody here wrote, and there is no "
                 "line of yours to open — which is a finding, and not the same "
                 "as an empty report.", ""]
+        near = _nearest_libraries(report)
+        if near:
+            # A library is not a wall. The app configures WorkManager, chose
+            # OkHttp's interceptors, scheduled the job: the frame names which
+            # of those to look at, and that is a lead where "platform" is not.
+            out += ["The platform is a dead end; a library the app drives is "
+                    "not. The frames nearest to the app:", ""]
+            out += [f"- `{frame}` on **{name}**" for name, frame in near]
+            out += ["", "That names what the app set up — its WorkManager jobs, "
+                        "its network client, its coroutine scopes — and that "
+                        "setup is where to read next.", ""]
 
     others = [t for t in busy if t is not main and not t.lock]
     if others:
@@ -1067,9 +1139,13 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
         ranked = sorted(others, key=lambda t: (not t.own(report.prefixes),
                                                t.state.endswith("waiting")))
         for thread in ranked[:12]:
-            own = thread.own(report.prefixes)
-            where = own[0] if own else thread.top
-            out.append(f"- **{thread.name}** ({thread.state}) — `{where}`")
+            where = thread.nearest(report.prefixes)
+            line = f"- **{thread.name}** ({thread.state}) — `{where}`"
+            if where != thread.top:
+                # The top said what the thread was standing on; this says
+                # what it was doing. Both, because they read differently.
+                line += f" — on top: `{thread.top}`"
+            out.append(line)
         if len(ranked) > 12:
             out.append(f"- … and {len(ranked) - 12} more")
         out.append("")
@@ -1114,6 +1190,12 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
         gaps.append("- Why the system fired the ANR. A Crashlytics export "
                     "carries no reason, component or intent — those come from "
                     "`dumpsys dropbox` and Play Console.")
+    if report.threads and not report.lock_notes:
+        gaps.append("- Who was holding what. No thread in this file carries a "
+                    "lock note (`waiting to lock … held by`), so a monitor "
+                    "chain cannot be read off it: an empty chain list here "
+                    "means the file cannot say, not that nothing was blocked. "
+                    "The device's own record (`dumpsys dropbox`) keeps the notes.")
     gaps.append("- How long anything took. A dump is one moment; durations "
                 "come from a trace.")
     if report.unread:
@@ -1183,11 +1265,23 @@ def summary(report: Report,
             "denied": None if not main_thread.lock else main_thread.lock.cls,
             "stack": _stack(main_thread, report.prefixes),
         },
+        # `where` is the frame nearest to the app — its own, else a library's
+        # — and `top` what the thread stood on; `stack` is the same cut the
+        # markdown prints. The first version kept the top alone, which for a
+        # working thread is the least informative frame it has.
         "working": [
             {"name": t.name, "state": t.state,
-             "where": (t.own(report.prefixes) or [t.top])[0]}
+             "where": t.nearest(report.prefixes),
+             "top": t.top,
+             "stack": _stack(t, report.prefixes)}
             for t in busy if t is not main_thread and not t.lock
         ],
+        # Whether this file can name a lock chain at all — see `lock_notes`.
+        "lock_notes": report.lock_notes,
+        # Where the app's setup is reached when none of its own frames are:
+        # a library it drives, per working thread.
+        "nearest": [{"thread": name, "frame": frame}
+                    for name, frame in _nearest_libraries(report)],
         "code": None if code is None else {
             "placed": [
                 {"symbol": f.symbol, "file": f.file, "line": f.line,

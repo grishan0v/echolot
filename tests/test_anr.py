@@ -121,6 +121,35 @@ Worker-1 (runnable):tid=9 systid=1009
        at com.example.app.work.Sync.run(Sync.kt:19)
 """
 
+# An export with no lock note anywhere, an idle main thread, and one thread
+# working inside a library the app drives: the shape a real export had, and
+# the reader told the user "no lock chain" and "every frame is the platform's"
+# — both true of the file, neither true of the freeze.
+LIBRARY_ONLY = """\
+# Application: com.example.app
+
+main (native):tid=1 systid=1001
+       at android.os.MessageQueue.nativePollOnce(Native method)
+       at android.os.Looper.loop(Looper.java:392)
+
+WM.task-3 (native):tid=40 systid=1040
+#00 pc 0x108f4c libc.so (__ioctl + 12) (BuildId: aa)
+#02 pc 0x60e38 libbinder.so (android::IPCThreadState::transact + 1580) (BuildId: bb)
+       at android.os.BinderProxy.transactNative(Native method)
+       at android.os.BinderProxy.transact(BinderProxy.java:670)
+       at android.app.job.IJobScheduler$Stub$Proxy.cancel(IJobScheduler.java:538)
+       at android.app.JobSchedulerImpl.cancel(JobSchedulerImpl.java:116)
+       at androidx.work.impl.background.systemjob.SystemJobScheduler.cancelJobById(SystemJobScheduler.java)
+       at androidx.work.impl.background.systemjob.SystemJobScheduler.cancel(SystemJobScheduler.java:245)
+       at androidx.work.impl.Schedulers.lambda$registerRescheduling$0(Schedulers.java:74)
+       at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1100)
+       at java.lang.Thread.run(Thread.java:1572)
+
+Okio Watchdog (waiting):tid=41 systid=1041
+       at java.lang.Object.wait(Native method)
+       at okio.AsyncTimeout$Watchdog.run(AsyncTimeout.kt:313)
+"""
+
 # Two threads each holding what the other wants.
 DEADLOCK = """\
 # Application: com.example.app
@@ -300,6 +329,58 @@ def test_an_idle_main_thread_is_named_as_idle():
     check("it says the main thread was idle", "It was **idle**" in text, text)
     check("and the working thread is still listed",
           "com.example.app.work.Sync.run(Sync.kt:19)" in text, text)
+
+
+def test_a_working_thread_is_named_by_the_frame_nearest_the_app_not_its_top():
+    """`BinderProxy.transactNative` says a binder call; `SystemJobScheduler.cancel` says what."""
+    rep = anr.parse(LIBRARY_ONLY)
+    wm = next(t for t in rep.threads if t.name == "WM.task-3")
+    near = wm.nearest(rep.prefixes)
+    check("the first frame outside the platform core",
+          near.startswith("androidx.work.impl.background.systemjob.SystemJobScheduler.cancelJobById"), near)
+    text = anr.render(rep)
+    check("the working thread is listed by that frame, with the top beside it",
+          "**WM.task-3** (native) — `androidx.work.impl.background.systemjob.SystemJobScheduler.cancelJobById"
+          in text and "on top: `android.os.BinderProxy.transactNative" in text, text)
+    stack = anr._stack(wm, rep.prefixes)
+    check("the stack keeps the top and the nearest frame",
+          stack[0].startswith("android.os.BinderProxy.transactNative")
+          and any(f.startswith("androidx.work") for f in stack), stack)
+    got = anr.summary(rep)
+    working = {w["name"]: w for w in got["working"]}
+    check("json: where is the nearest frame, top is the top, stack is the cut",
+          working["WM.task-3"]["where"].startswith("androidx.work")
+          and working["WM.task-3"]["top"].startswith("android.os.BinderProxy")
+          and len(working["WM.task-3"]["stack"]) >= 2, working["WM.task-3"])
+
+
+def test_a_library_the_app_drives_is_a_lead_not_a_wall():
+    rep = anr.parse(LIBRARY_ONLY)
+    text = anr.render(rep)
+    check("the platform section is still there", "belongs to the platform or a library" in text, text)
+    check("and it names the nearest library frame as where to read next",
+          "The frames nearest to the app:" in text and "`androidx.work.impl.background.systemjob" in text
+          and "WorkManager" in text, text)
+    got = anr.summary(rep)
+    check("json: own_frames false, nearest filled",
+          got["own_frames"] is False and got["nearest"]
+          and got["nearest"][0]["thread"] == "WM.task-3", got["nearest"])
+    with_own = anr.summary(report())
+    check("with the app on a stack, nearest is empty — the library frames are plumbing",
+          with_own["own_frames"] is True and with_own["nearest"] == [], with_own["nearest"])
+
+
+def test_a_file_without_lock_notes_says_it_cannot_name_a_chain():
+    rep = anr.parse(LIBRARY_ONLY)
+    check("no notes", rep.lock_notes is False, rep.lock_notes)
+    check("and the sample with `held by` has them", report().lock_notes is True, "")
+    text = anr.render(rep)
+    check("the gap is named", "Who was holding what" in text and "lock note" in text, text)
+    got = anr.summary(rep)
+    check("json: chains empty and lock_notes false, so the two are told apart",
+          got["chains"] == [] and got["lock_notes"] is False, got)
+    check("the sample with notes does not carry the gap",
+          "Who was holding what" not in anr.render(report()), "")
 
 
 def test_the_report_names_the_questions_it_cannot_answer():
