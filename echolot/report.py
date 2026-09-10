@@ -17,11 +17,12 @@ from typing import Any
 from . import table
 
 COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
-           "covered_ms", "detail"]
+           "covered_ms", "code", "detail"]
 # Keys a row may carry that are not columns. `_table` renders anything it does
 # not know as an extra column, which is right for a detector that invents one
-# and wrong for bookkeeping the report writes itself.
-HIDDEN = {"spread"}
+# and wrong for bookkeeping the report writes itself. `places` is the json
+# side of the `code` column — see place.py.
+HIDDEN = {"spread", "places"}
 HEADERS = {
     "location": "Where",
     "runs": "Runs",
@@ -30,6 +31,7 @@ HEADERS = {
     "total_ms": "Total, ms",
     "max_ms": "Max, ms",
     "covered_ms": "Instrumented, ms",
+    "code": "In the code",
     "detail": "Evidence",
 }
 

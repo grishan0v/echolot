@@ -221,6 +221,9 @@ that did not ask for it. Check before calling a scenario smooth.
 ## From a finding to the code
 
 1. A firing detector gives you a `location` — a slice or thread name.
+   A row with `code` has already been placed: `places[].file` and `.line`
+   name the method that waited for a lock and the one holding it, or the
+   class a View slice is. Open that; skip the grep.
 2. The `domains` section of `echolot.yml` maps that name to a module and file.
 3. Not in `domains`? Run `echolot domains --root .` — it maps literals inside
    `trace("...")` and names kept in a `const val` and passed through the

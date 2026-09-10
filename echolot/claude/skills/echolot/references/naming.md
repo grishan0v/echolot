@@ -56,7 +56,9 @@ monitor contention with owner main (13533) at void java.lang.Object.wait(…)
 
 The second shape is the more valuable one: it carries the owner, the method
 being waited on, and the call site. Under minification the names are
-obfuscated, but the `file:line` parts survive.
+obfuscated, but the `file:line` parts survive. `analyze` reads both frames
+and places them in the checkout — the row's `places` and its `code` column —
+so a contention row is an address, not a string to grep for.
 
 Everything else shaped `Lock contention on <something> lock` is a
 **runtime-internal lock** with no application code behind it:
