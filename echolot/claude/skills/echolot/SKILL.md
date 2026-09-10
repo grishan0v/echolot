@@ -35,7 +35,7 @@ Show that output to the human as it is, then act on the `next` line
 
 | `next` | what you do |
 |---|---|
-| `init` / `init-force` | run `echolot init` (with `--force` when it says so), show the result; then run `echolot` again and continue from its new `next` |
+| `init` / `init-force` | run `echolot init` (with `--all` when it says so), show the result; then run `echolot` again and continue from its new `next` |
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | invoke the `echolot-setup` skill (the Skill tool) — it builds `echolot.yml` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |

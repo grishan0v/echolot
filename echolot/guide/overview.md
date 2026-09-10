@@ -29,7 +29,7 @@ echolot status --next   # the same as one word, for switching on
 
 | `next` | what to do |
 |---|---|
-| `init` / `init-force` | run `echolot init` (add `--force` when it says so), then run `echolot` again |
+| `init` / `init-force` | run `echolot init` (add `--all` when it says so), then run `echolot` again |
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | build `echolot.yml` — run `echolot guide setup` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |

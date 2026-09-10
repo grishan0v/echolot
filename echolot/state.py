@@ -201,8 +201,8 @@ def next_step(st: dict) -> str:
             return "echolot init — installs the .claude/ layer; then /echolot in Claude Code"
         return "echolot init — brings the .claude/ layer up to date (the agent reads it)"
     if kind == "init-force":
-        return ("echolot init --force — the .claude/ layer differs from the package's and "
-                "nothing says whether you edited it; --force overwrites, keep your edits with git")
+        return ("echolot init --all — the .claude/ layer differs from the package's and "
+                "nothing says whether you edited it; --all overwrites them, keep your edits with git")
     if kind == "doctor":
         return "echolot doctor — the last self-check failed; no report is trustworthy until it passes"
     if kind == "setup":
