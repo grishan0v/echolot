@@ -6,7 +6,13 @@ real set:
 
 ```bash
 echolot names <trace> --process '<package>*'
+echolot names <trace> --grep 'contention'     # one family of names, whole
+echolot names <trace> --json                  # the inventory as json
 ```
+
+A pipe gets every name whole; cells are cut only on a terminal, and
+`--wide` keeps them there too. Do not grep the table: `--grep` matches the
+family name before anything is cut.
 
 The command collapses names that differ only by numbers, sorts them into
 sections, and shows which detector masks land on them. The **"Missed by the

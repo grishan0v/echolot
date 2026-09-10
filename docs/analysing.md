@@ -39,7 +39,15 @@ guess them — you can look:
 ```bash
 echolot names trace.perfetto-trace --process 'com.example.*'
 echolot names trace.perfetto-trace          # next to echolot.yml: its process
+echolot names trace.perfetto-trace --grep 'contention|AGENTTMP_'   # only those families
+echolot names trace.perfetto-trace --json   # sections, families, threads, masks
 ```
+
+Cells are cut to fit a terminal, and only a terminal: a pipe or an agent
+gets every name whole, and `--wide` does the same on a screen. On a real
+hunt the subagent grepped the table for a name the cut had taken and set
+`COLUMNS=300` by hand, which never was the reason; `--grep` is the filter it
+wanted, over the family name before anything is cut.
 
 Without `--process` and without a config the process with the most slices is
 taken — on a real device that is `surfaceflinger`, not the app, and the
