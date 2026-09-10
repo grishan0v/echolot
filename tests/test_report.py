@@ -137,6 +137,51 @@ def test_a_spike_inside_a_row_that_is_always_there_is_smoothed_and_kept():
           got["spread"]["max_ms"])
 
 
+def test_markers_merge_like_detector_rows_and_absent_means_every_repeat():
+    """The project's own names across repeats: medians, runs, and what was never there."""
+    def markers(rows, absent):
+        return {"prefix": "AGENTTMP_", "globs": ["AGENTTMP_*", "load", "gone"],
+                "rows": rows, "absent": absent}
+    runs = [
+        report_mod.build("a", {"process": "p", "duration_ms": 1.0}, [],
+                         markers=markers([
+                             {"location": "AGENTTMP_x", "count": 1, "self_ms": 8.0,
+                              "total_ms": 60.0, "max_ms": 60.0, "detail": "Seed"},
+                             {"location": "load", "count": 1, "self_ms": 1.0,
+                              "total_ms": 100.0, "max_ms": 100.0, "detail": "(async)"}],
+                             absent=["gone"])),
+        report_mod.build("b", {"process": "p", "duration_ms": 1.0}, [],
+                         markers=markers([
+                             {"location": "AGENTTMP_x", "count": 1, "self_ms": 10.0,
+                              "total_ms": 900.0, "max_ms": 900.0, "detail": "Seed"}],
+                             absent=["load", "gone"])),
+        report_mod.build("c", {"process": "p", "duration_ms": 1.0}, [],
+                         markers=markers([
+                             {"location": "AGENTTMP_x", "count": 1, "self_ms": 9.0,
+                              "total_ms": 70.0, "max_ms": 70.0, "detail": "Seed"}],
+                             absent=["load", "gone"])),
+    ]
+    got = report_mod.aggregate(runs)["markers"]
+    rows = {r["location"]: r for r in got["rows"]}
+    check("the prefix survives", got["prefix"] == "AGENTTMP_", got)
+    check("a marker in every run says so", rows["AGENTTMP_x"]["runs"] == "3/3", rows)
+    check("the median, not the spike", rows["AGENTTMP_x"]["total_ms"] == 70.0, rows)
+    check("and the spike is in the spread",
+          rows["AGENTTMP_x"]["spread"]["total_ms"]["max"] == 900.0, rows)
+    check("the thread comes along", rows["AGENTTMP_x"]["detail"] == "Seed", rows)
+    check("a name seen once is a row with a short runs column, not absent",
+          rows["load"]["runs"] == "1/3" and "load" not in got["absent"], got)
+    check("absent means absent from every repeat", got["absent"] == ["gone"], got)
+    text = report_mod.to_markdown(report_mod.aggregate(runs))
+    check("the table is in the markdown", "## Markers" in text and "| AGENTTMP_x |" in text, text)
+    check("and so is what was never there", "Not in the window: `gone`" in text, text)
+
+
+def test_a_report_without_markers_renders_no_markers_section():
+    text = report_mod.to_markdown(one([]))
+    check("nothing to say, nothing said", "## Markers" not in text, text)
+
+
 def test_a_single_report_is_returned_untouched():
     """One trace in, no `runs` column, no spread — there is nothing to merge."""
     only = one([row("draw", count=4, self_ms=120.0)])

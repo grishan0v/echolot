@@ -40,6 +40,13 @@ cannot be mistaken for the project's.
                "fired_ids": ["main_thread_block", "…"] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
               "local": null, "defaults": false, "set": null },
+  "markers": { "prefix": "AGENTTMP_",
+               "globs": ["AGENTTMP_*", "collection_mapping", "Screen.firstFrame"],
+               "rows": [ { "location": "AGENTTMP_fill_decks", "runs": "5/5",
+                           "count": 1, "self_ms": 8.0, "total_ms": 60.0,
+                           "max_ms": 60.0, "spread": { … },
+                           "detail": "SeedWorker" } ],
+               "absent": ["Screen.firstFrame"] },
   "detectors": [
     { "id": "…", "title": "…", "why": "…",
       "params": { … }, "params_source": "config",
@@ -106,6 +113,25 @@ finding.
 window — the process started inside it, or the recording has a hole. The
 shares are then of what was seen rather than of the scenario, and the report
 says so.
+
+## `markers` — your own names, measured every time
+
+A detector shows a marker only where a threshold says so. `markers` shows
+every name that is the project's — whatever carries
+`instrumentation.temp_prefix`, and whatever `domains` lists — with the same
+columns as a detector's rows and the same merge across repeats: `runs`,
+medians, `spread`. `self_ms` subtracts the children, so a marker that wraps
+another reads as the difference: `AGENTTMP_store_update` minus
+`AGENTTMP_store_update_locked` is how long the lock was waited for.
+`detail` is the thread, or `(async)` for a `beginAsyncSection` span, which
+is what most of a project's own markers are.
+
+This is the table for the markers you planted. Read it from the report;
+do not rebuild it by running `names` once per trace.
+
+`absent` lists the `domains` names the window never held in any repeat: a
+map pointing at something this scenario does not run, or a name that
+changed under it. The markdown says the same under "Not in the window".
 
 ## Check these before drawing conclusions
 

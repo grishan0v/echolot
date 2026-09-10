@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fnmatch
 import json
 import sys
 import time
@@ -370,6 +371,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                        {d.id: ov for d, ov, _ in plan if ov})
         window = _window_info(tp, cfg, procs)
         environment = _environment_info(tp)
+        markers = _markers_info(tp, cfg)
 
         # Stdlib modules the detectors declared, loaded once for the session.
         # A module that is not in this trace_processor is not fatal here: the
@@ -418,7 +420,86 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
 
     return report_mod.build(str(trace), window, results,
                             toolchain=toolchain_info(tp_binary, tp_source),
-                            absent=absent, environment=environment)
+                            absent=absent, environment=environment,
+                            markers=markers)
+
+
+def _markers_info(tp, cfg: Config) -> dict:
+    """Every marker of the project's own, measured — whatever else fired.
+
+    Two kinds of name are the project's: what `domains` in the config lists,
+    and what carries the temporary prefix. The detectors read them like any
+    other slice and show them only where a threshold says so, which is not
+    the question an agent asks about a marker it planted: it wants the
+    number, every time. On a real hunt the subagent ran `names` fifteen
+    times in a shell loop and wrote a python script to get this table.
+
+    Thread sections and async ones both, because the project's own names
+    are usually async — see `_aslice` in context.sql. Self time comes from
+    the same child sum the detectors use, so a marker wrapping another
+    reads as the difference: the hunt above needed `store_update` minus
+    `store_update_locked` to say how long the lock was waited for.
+
+    Grouped by name in the end, with the threads listed: a marker that ran
+    on two threads is one marker, and the reader wants one row and the
+    fact.
+    """
+    from .mark import DEFAULT_PREFIX
+    prefix = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    globs = [prefix + "*"]
+    for entry in cfg.get("domains") or []:
+        name = entry.get("slice") if isinstance(entry, dict) else None
+        if name and name not in globs:
+            globs.append(str(name))
+    wanted = " OR ".join(f"name GLOB '{sql_value(g)}'" for g in globs)
+    rows = tp.query(f"""
+        WITH child_sum AS (
+            SELECT parent_id, SUM(MAX(dur, 0)) AS ns
+            FROM slice WHERE parent_id IS NOT NULL GROUP BY parent_id
+        ),
+        seen AS (
+            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur
+            FROM _slice_win s WHERE {wanted}
+            UNION ALL
+            SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur
+            FROM _aslice_win a WHERE {wanted}
+        )
+        SELECT seen.name AS location, seen.thread AS thread,
+               COUNT(*) AS count,
+               SUM(MAX(seen.dur, 0)) AS total_ns,
+               SUM(MAX(seen.dur, 0) - COALESCE(c.ns, 0)) AS self_ns,
+               MAX(MAX(seen.dur, 0)) AS max_ns
+        FROM seen LEFT JOIN child_sum c ON c.parent_id = seen.slice_id
+        GROUP BY seen.name, seen.thread
+    """)
+    by_name: dict[str, dict] = {}
+    for r in rows:
+        row = by_name.setdefault(r["location"], {
+            "location": r["location"], "count": 0, "self_ns": 0,
+            "total_ns": 0, "max_ns": 0, "threads": set()})
+        row["count"] += r["count"]
+        row["self_ns"] += r["self_ns"] or 0
+        row["total_ns"] += r["total_ns"] or 0
+        row["max_ns"] = max(row["max_ns"], r["max_ns"] or 0)
+        row["threads"].add(r["thread"])
+    out = []
+    for row in by_name.values():
+        threads = sorted(row["threads"])
+        out.append({
+            "location": row["location"],
+            "count": row["count"],
+            "self_ms": round(row["self_ns"] / 1e6, 2),
+            "total_ms": round(row["total_ns"] / 1e6, 2),
+            "max_ms": round(row["max_ns"] / 1e6, 2),
+            "detail": ", ".join(threads[:3]) + (f" +{len(threads) - 3}" if len(threads) > 3 else ""),
+        })
+    out.sort(key=lambda r: (-r["total_ms"], r["location"]))
+    # A name the config lists that the window never held is worth a line:
+    # the map points at something this scenario does not run, or the name
+    # changed under it.
+    absent = [g for g in globs[1:]
+              if not any(fnmatch.fnmatchcase(r["location"], g) for r in out)]
+    return {"prefix": prefix, "globs": globs, "rows": out, "absent": absent}
 
 
 def cmd_analyze(args) -> int:

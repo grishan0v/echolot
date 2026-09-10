@@ -112,6 +112,9 @@ waiting for one.
 1. report = echolot analyze <traces> -c echolot.yml
    read .echolot/out/report.json — the schema is in
    .claude/skills/echolot/references/report.md, do not discover it by hand
+   report.markers.rows is every AGENTTMP_ name and every `domains` name,
+   medians per run with self time: the table for your own markers. Do not
+   rebuild it from `names` in a loop.
 
 2. check the config before concluding anything:
    window.start_anchor.matches == 0     → anchor missed, window is not the scenario
@@ -157,8 +160,9 @@ echolot analyze … --set main_thread_block.min_slice_ms=4
                                                    one threshold, this run only
 echolot compare                                    the previous round against the latest;
                                                    --hunt <n> for first against last
-echolot names <trace>                              slice names of project.process — with
-                                                   --top 200 --min-ms 0 to see AGENTTMP_ ones
+echolot names <trace>                              slice names of project.process, one trace;
+                                                   your AGENTTMP_ ones across every run are
+                                                   report.markers, not this
 echolot domains --root .                           slice name → file
 echolot mark                                       the first markers for a project with none:
                                                    where and why; --apply puts them in,

@@ -1831,6 +1831,63 @@ def _(report):
             f"the working directory stopped being recorded: {entry['cwd']}")
 
 
+# --- the markers table -----------------------------------------------------
+
+@check("markers: every planted name is measured, whatever the detectors say")
+def _(report):
+    """The number an agent wants about a marker it planted, every time.
+
+    A detector shows a marker only where a threshold says so. On a real hunt
+    the subagent ran `names` once per trace in a shell loop and wrote a
+    python script to get a table of its own markers with medians per run.
+    The report carries that table now: the temporary prefix and whatever
+    `domains` lists, thread sections and async ones, self time from the same
+    child sum the detectors use.
+    """
+    m = report["markers"]
+    assert m["prefix"] == "AGENTTMP_", m
+    rows = {r["location"]: r for r in m["rows"]}
+    assert "AGENTTMP_seed_first" in rows, sorted(rows)
+    first = rows["AGENTTMP_seed_first"]
+    # 60 ms wrapping 2 + 2 + 24 + 24 ms of children: 8 ms of its own.
+    assert first["count"] == 1 and first["total_ms"] == 60.0, first
+    assert first["self_ms"] == 8.0, f"self time is the difference: {first}"
+    assert first["detail"] == "SeedWorker", first
+    # The one-level-too-deep marker is a row too, three times in one wrapper.
+    assert rows["AGENTTMP_insert_card"]["count"] >= 3, rows["AGENTTMP_insert_card"]
+    # Nothing but the prefix, since this config lists no domains.
+    assert all(n.startswith("AGENTTMP_") for n in rows), sorted(rows)
+    assert m["absent"] == [], m["absent"]
+
+
+@check("markers: a domains entry is measured, async or not, and an unseen one is named")
+def _(report):
+    from .config import Config
+    from .main import analyze_trace
+    from .report import to_markdown
+    cfg = {**FIXTURE_CONFIG, "domains": [
+        {"slice": "Screen.loaded", "module": ":app"},
+        {"slice": "collection_mapping", "module": ":feature:collection"},
+        {"slice": "never_there", "module": ":app"},
+    ]}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "markers.perfetto-trace"
+        path.write_bytes(fixture.build())
+        rep = analyze_trace(path, Config(cfg))
+    rows = {r["location"]: r for r in rep["markers"]["rows"]}
+    # The async section: 700 ms on no thread, and the table says so.
+    assert rows["Screen.loaded"]["total_ms"] == 700.0, rows["Screen.loaded"]
+    assert rows["Screen.loaded"]["detail"] == "(async)", rows["Screen.loaded"]
+    # A thread's section, on the thread it ran on.
+    assert rows["collection_mapping"]["total_ms"] == 120.0, rows["collection_mapping"]
+    assert rows["collection_mapping"]["detail"] == "m.example.app", rows["collection_mapping"]
+    # And the one the window never held is a fact, not a silence.
+    assert rep["markers"]["absent"] == ["never_there"], rep["markers"]["absent"]
+    text = to_markdown(rep)
+    assert "## Markers" in text and "| Screen.loaded |" in text, text[:2000]
+    assert "Not in the window: `never_there`" in text, text[:2000]
+
+
 # --- the domains map -------------------------------------------------------
 
 def _sample_repo(root: Path) -> None:

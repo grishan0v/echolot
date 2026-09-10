@@ -47,6 +47,25 @@ WHERE s.ts < {{ts_end}}
   AND s.ts + CASE WHEN s.dur < 0 THEN {{ts_end}} - s.ts
                   ELSE MAX(s.dur, 0) END > {{ts_start}};
 
+-- The process's async sections that overlap the window, read the same way.
+-- Not part of _slice_win, and for the same reason it is not part of _slice:
+-- a section on no thread has no place in a per-thread sum. What reads this is
+-- the markers table — the project's own names are usually async — and
+-- nothing that attributes time to a thread.
+DROP VIEW IF EXISTS _aslice_win;
+CREATE VIEW _aslice_win AS
+SELECT
+    a.slice_id,
+    a.ts,
+    CASE WHEN a.dur < 0 THEN {{ts_end}} - a.ts ELSE a.dur END        AS dur,
+    a.name,
+    a.depth,
+    CASE WHEN a.dur < 0 THEN 1 ELSE 0 END                            AS unfinished
+FROM _aslice a
+WHERE a.ts < {{ts_end}}
+  AND a.ts + CASE WHEN a.dur < 0 THEN {{ts_end}} - a.ts
+                  ELSE MAX(a.dur, 0) END > {{ts_start}};
+
 -- Thread states, CLIPPED to the window.
 -- Here dur is already the clipped value: the question is always "how long did
 -- the thread spend in this state inside the scenario", never "how long was the
