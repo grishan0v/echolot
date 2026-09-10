@@ -159,6 +159,52 @@ def test_names_reports_what_no_mask_covers(trace):
     check("the missed section exists", "Missed by the masks" in text, text[-800:])
 
 
+def test_names_never_cuts_a_name_for_a_pipe_and_grep_is_the_filter(trace):
+    """The subagent grepped a table whose cells had been cut, and blamed COLUMNS.
+
+    `run` captures stdout, which is what a pipe or an agent is: no terminal,
+    so nothing is cut. The contention names are the long ones — over sixty
+    characters once the digits fold — and they must arrive whole.
+    """
+    text = run("names", str(trace), "--process", APP, "--min-ms", "0", "--top", "200")
+    lock = next((r for r in text.splitlines() if "monitor contention with owner" in r), "")
+    check("the long name is in the table", lock, text[:600])
+    check("and it is whole — no ellipsis in a pipe", "…" not in lock, lock)
+    check("with every thread, not two and a count", "+1" not in lock and "+2" not in lock, lock)
+
+    only = run("names", str(trace), "--process", APP, "--min-ms", "0", "--top", "200",
+               "--grep", "contention")
+    check("the filter says what it kept", "Only families matching `contention`" in only, only[:400])
+    rows = [r for r in only.splitlines() if r.startswith("| ") and "---" not in r
+            and not r.startswith("| family") and not r.startswith("| section")]
+    check("every row matches", rows and all("contention" in r.lower() for r in rows), rows[:5])
+    check("GC did not come along", "concurrent copying" not in only, only)
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(["names", str(trace), "--process", APP, "--grep", "("])
+    check("a broken regex is exit 2 and says so", code == 2 and "regular expression" in err.getvalue(), err.getvalue())
+
+
+def test_names_as_json_carries_sections_families_and_masks(trace):
+    import json
+    text = run("names", str(trace), "--process", APP, "--min-ms", "0", "--top", "200", "--json")
+    got = json.loads(text)
+    check("the process", got["process"] == APP and got["pid"] == APP_PID, {k: got[k] for k in ("process", "pid")})
+    check("async sections counted", got["async_sections"] == len(fixture.ASYNC_SLICES), got["async_sections"])
+    titles = [s["title"] for s in got["sections"]]
+    check("sections in order, the rest last",
+          "Garbage collection" in titles and titles[-1] == "Everything else", titles)
+    fams = {f["family"]: f for s in got["sections"] for f in s["families"]}
+    # The application-level shape, not the runtime's own `GC lock`, which no
+    # mask is meant to see.
+    lock = next((f for name, f in fams.items() if name.startswith("Lock contention on a monitor lock")), None)
+    check("a family with its mask", lock and "monitor_contention" in lock["detectors"], lock)
+    check("threads as a list", lock and isinstance(lock["threads"], list) and lock["threads"], lock)
+    check("the async section under its thread name", fams[ASYNC_SECTION]["threads"] == [ASYNC_THREAD], fams.get(ASYNC_SECTION))
+    check("missed is a list of the same shape", isinstance(got["missed"], list), got["missed"])
+
+
 def test_names_lists_async_sections_and_says_what_reads_them(trace):
     """An anchor is chosen from this inventory, and the app's markers were missing from it."""
     text = run("names", str(trace), "--process", APP, "--min-ms", "0", "--top", "200")

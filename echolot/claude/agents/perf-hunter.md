@@ -167,6 +167,9 @@ echolot report -d monitor_contention --top 5       one detector's rows, evidence
 echolot names <trace>                              slice names of project.process, one trace;
                                                    your AGENTTMP_ ones across every run are
                                                    report.markers, not this
+echolot names <trace> --grep 'contention' --json   one family of names, whole, as json —
+                                                   never grep the table: a pipe gets every
+                                                   name uncut, and COLUMNS is not the reason
 echolot domains --root .                           slice name → file
 echolot mark                                       the first markers for a project with none:
                                                    where and why; --apply puts them in,

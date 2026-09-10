@@ -32,6 +32,7 @@ import argparse
 import contextlib
 import fnmatch
 import json
+import re
 import sys
 import time
 from collections import defaultdict
@@ -1242,7 +1243,8 @@ def cmd_names(args) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 2
         upid = procs[0]["upid"]
-        print(f"Process: `{procs[0]['name']}` (pid {procs[0]['pid']})\n")
+        if not args.json:
+            print(f"Process: `{procs[0]['name']}` (pid {procs[0]['pid']})\n")
 
         rows = tp.query(f"""
             SELECT s.name AS name, t.name AS thread, COUNT(*) AS n,
@@ -1272,76 +1274,111 @@ def cmd_names(args) -> int:
         if not rows:
             print("_this process has no slices in the trace_")
             return 0
-        if async_rows:
-            print(f"{sum(r['n'] for r in async_rows)} async section(s) on "
-                  f"{len(async_rows)} name(s), shown as thread `{ASYNC_THREAD}`: "
-                  f"an anchor may name them and this inventory lists them; "
-                  f"the detectors read thread slices and never see them.\n")
 
         covered, skipped = _name_coverage(tp, upid, _detector_masks(overrides))
-
         families = group_families(rows, covered, skipped, keep=prefix)
 
-        print(
-            "The 'mask' column covers only detectors that search by slice "
-            "NAME. `main_thread_block`, `runnable_starvation` and "
-            "`uninstrumented_cpu` are structural, names mean nothing to them, "
-            "and a dash here does not mean nobody will find the slice."
-        )
+    # A filter over the family name, because that is what the reader was
+    # doing with grep — over a table whose cells had been cut to fit a
+    # terminal, so the grep missed what the cut had taken. On a real hunt the
+    # subagent set COLUMNS=300 by hand, which never was the reason.
+    pattern = None
+    if args.grep:
+        try:
+            pattern = re.compile(args.grep, re.IGNORECASE)
+        except re.error as e:
+            print(f"error: --grep {args.grep!r} is not a regular expression: {e}",
+                  file=sys.stderr)
+            return 2
+    # Cells are cut to fit a terminal, and only a terminal: a pipe or an
+    # agent gets the whole name, and so does `--wide` on a screen.
+    wide = args.wide or args.json or not sys.stdout.isatty()
 
-        floor_ns = args.min_ms * 1e6
-        assigned: set[str] = set()
-        missed: list[tuple[str, str, dict]] = []
-        for title, keywords in BUCKETS:
-            picked = []
-            for fam, data in families.items():
-                if fam in assigned:
-                    continue
-                # The section is decided by the slice NAME and nothing else.
-                # Thread names used to go through the same sieve — and then
-                # `merge`, `wait` and `releaseBuffer` drifted into "Binder /
-                # IPC" merely because they ran on `binder:*` threads, while
-                # `Thread::Init` landed under garbage collection because one of
-                # its threads happened to be HeapTaskDaemon. A thread says
-                # WHERE code ran, not what it did.
-                if any(k in fam.lower() for k in keywords):
-                    assigned.add(fam)
-                    if data["ns"] >= floor_ns:
-                        picked.append((fam, data))
-            if not picked:
+    floor_ns = args.min_ms * 1e6
+    assigned: set[str] = set()
+    sections: list[tuple[str, list[tuple[str, dict]]]] = []
+    missed: list[tuple[str, str, dict]] = []
+    for title, keywords in BUCKETS:
+        picked = []
+        for fam, data in families.items():
+            if fam in assigned:
                 continue
-            picked.sort(key=lambda x: -x[1]["ns"])
-            print(f"\n## {title}\n")
-            _families_table(picked[:args.top])
-            _note_dropped(len(picked), args.top)
-            # Something excluded on purpose (skip_glob) is not a miss.
-            missed += [
-                (title, f, d) for f, d in picked
-                if not d["dets"] and not d["skips"]
-            ]
+            # The section is decided by the slice NAME and nothing else.
+            # Thread names used to go through the same sieve — and then
+            # `merge`, `wait` and `releaseBuffer` drifted into "Binder /
+            # IPC" merely because they ran on `binder:*` threads, while
+            # `Thread::Init` landed under garbage collection because one of
+            # its threads happened to be HeapTaskDaemon. A thread says
+            # WHERE code ran, not what it did.
+            if any(k in fam.lower() for k in keywords):
+                assigned.add(fam)
+                if data["ns"] >= floor_ns and (pattern is None or pattern.search(fam)):
+                    picked.append((fam, data))
+        if not picked:
+            continue
+        picked.sort(key=lambda x: -x[1]["ns"])
+        sections.append((title, picked))
+        # Something excluded on purpose (skip_glob) is not a miss.
+        missed += [(title, f, d) for f, d in picked if not d["dets"] and not d["skips"]]
 
-        rest = [(f, d) for f, d in families.items()
-                if f not in assigned and d["ns"] >= floor_ns]
-        if rest:
-            rest.sort(key=lambda x: -x[1]["ns"])
-            print("\n## Everything else\n")
-            _families_table(rest[:args.top])
-            _note_dropped(len(rest), args.top)
+    rest = [(f, d) for f, d in families.items()
+            if f not in assigned and d["ns"] >= floor_ns
+            and (pattern is None or pattern.search(f))]
+    if rest:
+        rest.sort(key=lambda x: -x[1]["ns"])
+        sections.append(("Everything else", rest))
+    missed.sort(key=lambda x: -x[2]["ns"])
 
-        print("\n## Missed by the masks\n")
-        if not missed:
-            print("_Everything resembling GC, locks or binder is covered._")
-        else:
-            print("These families sit in sections the detectors are "
-                  "responsible for, yet no mask sees them. If there is a real "
-                  "problem among them, widen the mask in `echolot.yml`.\n")
-            missed.sort(key=lambda x: -x[2]["ns"])
-            table.show([
-                {"section": title, "family": _clip(fam), "N": d["n"],
-                 "total, ms": f"{d['ns']/1e6:.1f}"}
-                for title, fam, d in missed[:args.top]
-            ])
-            _note_dropped(len(missed), args.top)
+    if args.json:
+        def family_json(fam: str, d: dict) -> dict:
+            return {"family": fam, "n": d["n"], "total_ms": round(d["ns"] / 1e6, 1),
+                    "threads": sorted(d["threads"]), "detectors": sorted(d["dets"]),
+                    "excluded": sorted(d["skips"])}
+        print(json.dumps({
+            "process": procs[0]["name"], "pid": procs[0]["pid"],
+            "async_sections": sum(r["n"] for r in async_rows),
+            "grep": args.grep,
+            "sections": [{"title": title, "shown": len(items[:args.top]), "total": len(items),
+                          "families": [family_json(f, d) for f, d in items[:args.top]]}
+                         for title, items in sections],
+            "missed": [{"section": title, **family_json(f, d)}
+                       for title, f, d in missed[:args.top]],
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    if async_rows:
+        print(f"{sum(r['n'] for r in async_rows)} async section(s) on "
+              f"{len(async_rows)} name(s), shown as thread `{ASYNC_THREAD}`: "
+              f"an anchor may name them and this inventory lists them; "
+              f"the detectors read thread slices and never see them.\n")
+    print(
+        "The 'mask' column covers only detectors that search by slice "
+        "NAME. `main_thread_block`, `runnable_starvation` and "
+        "`uninstrumented_cpu` are structural, names mean nothing to them, "
+        "and a dash here does not mean nobody will find the slice."
+    )
+    if pattern is not None:
+        shown = sum(len(items) for _, items in sections)
+        print(f"\n_Only families matching `{args.grep}`: {shown} of {len(families)}._")
+    for title, items in sections:
+        print(f"\n## {title}\n")
+        _families_table(items[:args.top], wide=wide)
+        _note_dropped(len(items), args.top)
+
+    print("\n## Missed by the masks\n")
+    if not missed:
+        print("_Everything resembling GC, locks or binder is covered._"
+              if pattern is None else "_Nothing matching is missed by a mask._")
+    else:
+        print("These families sit in sections the detectors are "
+              "responsible for, yet no mask sees them. If there is a real "
+              "problem among them, widen the mask in `echolot.yml`.\n")
+        table.show([
+            {"section": title, "family": fam if wide else _clip(fam), "N": d["n"],
+             "total, ms": f"{d['ns']/1e6:.1f}"}
+            for title, fam, d in missed[:args.top]
+        ])
+        _note_dropped(len(missed), args.top)
     return 0
 
 
@@ -1375,18 +1412,20 @@ def _note_dropped(total: int, shown: int) -> None:
               f"Full list: `--top {total}`._")
 
 
-def _families_table(items) -> None:
+def _families_table(items, wide: bool = False) -> None:
+    """`wide` keeps every cell whole — for a pipe, an agent, or on request."""
     rows = []
     for fam, data in items:
         threads = sorted(data["threads"])
-        shown = ", ".join(threads[:2]) + (f" +{len(threads)-2}" if len(threads) > 2 else "")
+        shown = ", ".join(threads if wide else threads[:2]) \
+            + (f" +{len(threads)-2}" if len(threads) > 2 and not wide else "")
         marks = sorted(data["dets"])
         marks += [f"{d} (excluded)" for d in sorted(data["skips"])]
         rows.append({
-            "family": _clip(fam),
+            "family": fam if wide else _clip(fam),
             "N": data["n"],
             "total, ms": f"{data['ns']/1e6:.1f}",
-            "threads": _clip(shown, 34),
+            "threads": shown if wide else _clip(shown, 34),
             "mask": ", ".join(marks) or "—",
         })
     table.show(rows)
@@ -2476,6 +2515,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="how many families to show per section")
     nm.add_argument("--min-ms", type=float, default=1.0,
                     help="relevance floor: shorter families are not shown")
+    nm.add_argument("--grep", metavar="REGEX",
+                    help="only families whose name matches, case-insensitive — "
+                         "instead of a grep over a table whose cells were cut")
+    nm.add_argument("--wide", action="store_true",
+                    help="do not cut cells to fit a terminal (a pipe never cuts them)")
+    nm.add_argument("--json", action="store_true",
+                    help="the same inventory as json: sections, families, threads, masks")
     nm.set_defaults(func=cmd_names)
 
     an_r = add("anr", "agent", "<report>", "a thread dump from the field: the lock chain, and who was working",
