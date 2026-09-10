@@ -7,6 +7,7 @@ Two formats from one set of data:
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 from pathlib import Path
@@ -97,6 +98,7 @@ def build(
     toolchain: dict[str, Any] | None = None,
     absent: list[str] | None = None,
     environment: dict[str, Any] | None = None,
+    markers: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """`absent` — shipped detectors this config left out. See `to_markdown`.
 
@@ -104,6 +106,10 @@ def build(
     Optional because a report can be built from a trace recorded before those
     sources existed; the key is then absent, which `compare` reads as "cannot
     be checked" and never as "it held steady".
+
+    `markers` — the project's own names, measured whatever the detectors say.
+    Optional for the same reason: a report read back from before the section
+    existed has none, and a reader must not take that for "no markers".
     """
     fired = [r for r in results if r["rows"]]
     return {
@@ -113,6 +119,7 @@ def build(
         "toolchain": toolchain or {},
         "window": window,
         "environment": environment or {},
+        "markers": markers or {"prefix": None, "globs": [], "rows": [], "absent": []},
         "summary": {
             "detectors_run": len(results),
             "detectors_fired": len(fired),
@@ -238,6 +245,72 @@ def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
+               total: int) -> list[dict[str, Any]]:
+    """The rows of one detector across its repeats, folded to one row per identity.
+
+    `per_run` is one list of rows per repeat, in report order. The repeat's
+    index is what the `runs` column counts, and counting rows instead of
+    repeats is how a detector with two rows per run once printed "6/3".
+    """
+    groups: dict[tuple, list[tuple[int, dict]]] = {}
+    for i, rows in enumerate(per_run):
+        for row in rows:
+            groups.setdefault(tuple(row.get(c) for c in identity),
+                              []).append((i, row))
+
+    out = []
+    for key, seen in groups.items():
+        found = [r for _, r in seen]
+        row: dict[str, Any] = dict(zip(identity, key, strict=True))
+        row["runs"] = f"{len({i for i, _ in seen})}/{total}"
+        spread = {}
+        for col in NUMERIC:
+            values = [f[col] for f in found
+                      if f.get(col) is not None]
+            if not values:
+                continue
+            row[col] = round(median(values), 2)
+            if col in SPREAD:
+                # In report order, and only the repeats where this row was
+                # found at all — which is what the `runs` column counts.
+                spread[col] = {
+                    "min": round(min(values), 2),
+                    "max": round(max(values), 2),
+                    "values": [round(v, 2) for v in values],
+                }
+        if spread:
+            row["spread"] = spread
+        # Evidence comes from the worst repeat: that is where it says most.
+        # Unless it is part of what names the row, in which case it is the
+        # same in every repeat by construction and already set above.
+        worst = max(found, key=_rank)
+        if "detail" not in identity and worst.get("detail") is not None:
+            row["detail"] = worst["detail"]
+        out.append(row)
+    return sorted(out, key=_rank, reverse=True)
+
+
+def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
+    """The markers table across repeats: the same fold as a detector's rows.
+
+    A name the config lists is reported absent only when no repeat held it;
+    one that came and went is a row with a `runs` column short of the total,
+    which says the same thing more precisely.
+    """
+    sections = [r.get("markers") or {} for r in reports]
+    head = next((s for s in sections if s), {})
+    seen = {row["location"] for s in sections for row in s.get("rows") or []}
+    return {
+        "prefix": head.get("prefix"),
+        "globs": head.get("globs") or [],
+        "rows": merge_rows([s.get("rows") or [] for s in sections], ("location",), total),
+        "absent": [g for g in head.get("globs") or []
+                   if g in set(head.get("absent") or []) and not any(
+                       fnmatch.fnmatchcase(n, g) for n in seen)],
+    }
+
+
 def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
     """Merges N repeats into a single report using the median.
 
@@ -283,51 +356,13 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         # then read that against the next report and announced a threshold
         # change nobody had made.
         head = dict(next((r for r in runs if not r["error"]), runs[0]))
-        identity = identity_of(head)
-        # (which repeat, the row) — the repeat's index is what the `runs`
-        # column counts, and counting rows instead of repeats is how a
-        # detector with two rows per run once printed "6/3".
-        groups: dict[tuple, list[tuple[int, dict]]] = {}
-        for i, run in enumerate(runs):
-            for row in run["rows"]:
-                groups.setdefault(tuple(row.get(c) for c in identity),
-                                  []).append((i, row))
-
-        rows = []
-        for key, seen in groups.items():
-            found = [r for _, r in seen]
-            row: dict[str, Any] = dict(zip(identity, key, strict=True))
-            row["runs"] = f"{len({i for i, _ in seen})}/{total}"
-            spread = {}
-            for col in NUMERIC:
-                values = [f[col] for f in found
-                          if f.get(col) is not None]
-                if not values:
-                    continue
-                row[col] = round(median(values), 2)
-                if col in SPREAD:
-                    # In report order, and only the repeats where this row was
-                    # found at all — which is what the `runs` column counts.
-                    spread[col] = {
-                        "min": round(min(values), 2),
-                        "max": round(max(values), 2),
-                        "values": [round(v, 2) for v in values],
-                    }
-            if spread:
-                row["spread"] = spread
-            # Evidence comes from the worst repeat: that is where it says most.
-            # Unless it is part of what names the row, in which case it is the
-            # same in every repeat by construction and already set above.
-            worst = max(found, key=_rank)
-            if "detail" not in identity and worst.get("detail") is not None:
-                row["detail"] = worst["detail"]
-            rows.append(row)
-
-        head["rows"] = sorted(rows, key=_rank, reverse=True)
+        head["rows"] = merge_rows([run["rows"] for run in runs],
+                                  identity_of(head), total)
         head["error"] = next((r["error"] for r in runs if r["error"]), None)
         detectors.append(head)
 
     merged["detectors"] = detectors
+    merged["markers"] = _merge_markers(reports, total)
     fired = [d for d in detectors if d["rows"]]
     merged["summary"] = {
         "detectors_run": len(detectors),
@@ -579,6 +614,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(line)
     out.append("")
 
+    out.extend(_markers_lines(report.get("markers") or {}))
+
     if s["detectors_fired"] == 0:
         out.append("_No detector fired._")
         out.append("")
@@ -614,6 +651,36 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
         out.append(f"<sub>{note}</sub>")
     return "\n".join(out)
+
+
+def _markers_lines(markers: dict[str, Any]) -> list[str]:
+    """The project's own names, measured — above the findings, whatever fired.
+
+    A detector shows a marker only where a threshold says so, and an agent
+    that planted one wants the number every time. Absent names are listed
+    rather than dropped: a `domains` entry the window never held is a map
+    pointing at something this scenario does not run.
+    """
+    rows = markers.get("rows") or []
+    absent = markers.get("absent") or []
+    if not rows and not absent:
+        return []
+    out = ["## Markers"]
+    prefix = markers.get("prefix")
+    out.append(f"_the names `domains` lists and the `{prefix}` ones; medians per run, "
+               f"self time with children subtracted_" if prefix else
+               "_the names `domains` lists; medians per run_")
+    out.append("")
+    if rows:
+        out.append(table.render(rows, order=COLUMNS,
+                                headers={**HEADERS, "location": "Marker", "detail": "Threads"},
+                                skip=HIDDEN))
+        out.append("")
+    if absent:
+        out.append("Not in the window: " + ", ".join(f"`{g}`" for g in absent)
+                   + " — listed in `domains`, never seen in this scenario.")
+        out.append("")
+    return out
 
 
 def _config_line(report: dict[str, Any]) -> str | None:
