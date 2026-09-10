@@ -2248,6 +2248,33 @@ def _pkg_version(name: str) -> str:
         return "unknown"
 
 
+def cmd_scan(args) -> int:
+    """What the repository says about itself — the facts setup starts from.
+
+    The app module and its applicationId, the variants and which one to
+    measure on, the macrobenchmark and what it measures, the gradle task
+    that runs it, the devices attached, and a config to start from with
+    every value saying where it came from. An agent used to read the build
+    scripts for this, and one glob caught a `.class` file on the way. Reads
+    and prints; writes nothing.
+    """
+    from . import scan as scan_mod
+
+    root = Path(args.root).resolve()
+    if not root.is_dir():
+        print(f"no such directory: {root}", file=sys.stderr)
+        return 2
+    facts = scan_mod.describe(root, devices=not args.no_devices)
+    recorder.note(app=bool(facts.app), variants=len(facts.variants),
+                  benchmarks=len(facts.benchmarks),
+                  devices=None if facts.devices is None else len(facts.devices))
+    if args.json:
+        print(json.dumps(scan_mod.to_json(facts), ensure_ascii=False, indent=2))
+    else:
+        print(scan_mod.render(facts))
+    return 0
+
+
 def cmd_report(args) -> int:
     """Views of a report that is already on disk.
 
@@ -2314,8 +2341,8 @@ def _dump(tp, sql: str) -> None:
 # The agent's half is ordered by the working flow. `anr` sits at its head
 # because a report from the field arrives before there is a trace to probe.
 ORDER = ("status", "init", "hunt", "doctor", "collect", "analyze", "compare",
-         "guide", "report", "anr", "probe", "names", "domains", "mark", "calibrate",
-         "explain", "reflect")
+         "guide", "report", "scan", "anr", "probe", "names", "domains", "mark",
+         "calibrate", "explain", "reflect")
 
 GROUP_TITLES = {
     "yours": ("Yours", None),
@@ -2590,6 +2617,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     ex = add("explain", "agent", "", "the detectors and their parameters")
     ex.set_defaults(func=cmd_explain)
+
+    sc = add("scan", "agent", "[--root <repo>]",
+             "what the repository says about itself: app, variants, benchmark, devices, a config to start from",
+             description="The facts setup starts from, read off the tree rather than "
+                         "by an agent reading build scripts: the app module and its "
+                         "applicationId, flavours × build types and which variant to "
+                         "measure on, the module with a MacrobenchmarkRule with its tests "
+                         "and the sections it measures, the gradle tasks that run it, "
+                         "the devices attached — and an echolot.yml to start from, every "
+                         "value saying where it came from. Writes nothing.")
+    sc.add_argument("--root", default=".", help="repository root (default: the current directory)")
+    sc.add_argument("--no-devices", action="store_true", help="do not ask adb")
+    sc.add_argument("--json", action="store_true", help="the facts as json")
+    sc.set_defaults(func=cmd_scan)
 
     rp = add("report", "agent", "[--detector <id>] [--top N]",
              "views of the last report: one detector's rows, the window, the markers",

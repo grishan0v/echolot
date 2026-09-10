@@ -15,6 +15,18 @@ one makes every later report quietly meaningless.
 
 ## The order
 
+**0. What the repository says.**
+
+```bash
+echolot scan
+```
+
+The app module and its applicationId, the variants and which to measure on
+(a `benchmark` build type over `release` over anything debuggable), the
+macrobenchmark with its tests and the sections it measures, the gradle task
+that runs it, the devices — and an `echolot.yml` to start from, every value
+saying where it came from. Read that instead of the build scripts.
+
 **1. A probe trace.** You cannot write anchors for a trace you have not seen.
 
 ```bash

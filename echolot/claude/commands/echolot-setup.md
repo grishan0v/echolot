@@ -15,14 +15,31 @@ should be holding real options from a real trace, not guesses.
 
 ### 1. Scan the repository
 
-- `applicationId` and `namespace` — from `build.gradle.kts`
-- the process name — from the manifest, `android:process` if present
-- `<profileable android:shell="true" />` in the manifest: **without it there
-  will be no application slices in the trace** — say so immediately
-- a module with `MacrobenchmarkRule` — if there is one, that is the future
-  `runner`
-- existing instrumentation: run `echolot domains --root .`
-- paths for `instrumentation.allowed` — sources, not `build`, not `generated`
+```bash
+echolot scan
+```
+
+One command, not a reading of the build scripts. It prints, each with where
+it came from:
+
+- the app module, its `applicationId` and `namespace`, `android:process` if
+  the manifest sets one, and whether `<profileable android:shell="true" />`
+  is there — **without it there will be no application slices in the
+  trace**; the note says so, repeat it to the human immediately
+- the variants — flavour × build type, what each installs as, and which one
+  to measure on: a `benchmark` build type (release-like, profileable) over
+  `release` over anything debuggable, which skews everything
+- the module with `MacrobenchmarkRule`, its test classes and methods, the
+  package it drives, the `TraceSectionMetric` names it measures (anchor
+  candidates, and `domains` entries), its runner arguments, and the gradle
+  tasks by variant
+- the devices attached
+- a config to start from, every value with `_source: derived` and its
+  `_evidence` — the skeleton the questions below refine
+
+Do not read `build.gradle` yourself for any of this; `scan --json` has the
+facts if a value needs checking. Then existing instrumentation:
+`echolot domains --root .`.
 
 No instrumentation at all is normal and is an important fact. `echolot domains`
 prints the coverage and the modules with the most code and none of it; show
