@@ -170,6 +170,13 @@ echolot names <trace>                              slice names of project.proces
 echolot names <trace> --grep 'contention' --json   one family of names, whole, as json —
                                                    never grep the table: a pipe gets every
                                                    name uncut, and COLUMNS is not the reason
+                                                   names prints sections (GC, locks, binder,
+                                                   frames, everything else) of
+                                                   | family | N | total, ms | threads | mask |
+                                                   and "Missed by the masks" at the end
+echolot probe <trace> --process '<pkg>*'           processes (slices, async), threads by CPU,
+                                                   the longest slices as anchor candidates
+                                                   with (async) where there is no thread
 echolot domains --root .                           slice name → file
 echolot mark                                       the first markers for a project with none:
                                                    where and why; --apply puts them in,

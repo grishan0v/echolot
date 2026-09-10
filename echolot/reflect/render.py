@@ -66,6 +66,7 @@ def build(session: Session, facts: Facts, signals: list[Signal]) -> dict[str, An
         "echolot_calls": [asdict(c) for c in facts.echolot_calls],
         "questions": [asdict(a) for a in session.asks],
         "hunts": facts.hunts,
+        "conclusion": facts.conclusion,
         "instrumentation": facts.instrumentation,
         "cost": {**facts.cost, "top_outputs": facts.top_outputs, "gaps": facts.gaps},
         "runs_recorded": facts.runs,
@@ -273,6 +274,17 @@ def to_markdown(report: dict[str, Any]) -> str:
             out.append(f"Recommended option taken {chosen_rec} of {with_rec} time(s).")
         out.append("")
 
+    # ---- what the main context concluded
+    concl = report.get("conclusion") or {}
+    if concl.get("text"):
+        out.append("## What the main context concluded")
+        out.append("")
+        out.append("_its last message — for a session without a hunt, the whole result_")
+        out.append("")
+        for line in concl["text"][:1800].splitlines():
+            out.append(f"> {line}")
+        out.append("")
+
     # ---- hunts
     for h in report.get("hunts") or []:
         out.append(f"## Subagent `{h.get('type') or '?'}` — {h.get('description') or h['id']}")
@@ -330,6 +342,13 @@ def to_markdown(report: dict[str, Any]) -> str:
         if inst.get("shell_edits"):
             out.append(f"{inst['shell_edits']} edit(s) went through the shell (python, sed) — "
                        f"no add/remove direction to balance; the grep verdict stands for them.")
+        tree = inst.get("tree") or {}
+        if tree.get("checked"):
+            left = tree.get("files") or []
+            out.append("The tree when this report was made: "
+                       + (f"{len(left)} file(s) still carry the prefix — "
+                          + ", ".join(f"`{p}`" for p in left[:6]) if left
+                          else "no file carries the prefix."))
         out.append("")
 
     # ---- cost

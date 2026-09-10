@@ -144,6 +144,7 @@ class Session:
     subagents: list[SubAgent] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)          # main context only
     thinking_blocks: int = 0
+    final_text: str = ""          # the main context's last assistant text
     skills_loaded: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)      # files read
     notes: list[str] = field(default_factory=list)        # reader caveats

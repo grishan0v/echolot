@@ -59,7 +59,23 @@ _BYPASS = [
     ("adb", re.compile(r"\badb\s+(?:-s\s+\S+\s+)?shell\s+(?:perfetto|am\s+start|cmd\s+activity)")),
     ("perfetto", re.compile(r"(?:^|\s)perfetto\s+(?:-c|--txt|-o)")),
 ]
+# What the agent's harness says when it, not the command, stopped the call:
+# a permission screen refused it, the person declined it at the prompt, or
+# the call outlived the harness's patience and went on in the background.
+# None of those is a failure of what was called — an `echolot init` that
+# never ran did not fail — and on a real session two of the four "echolot
+# failures" were the first kind and one the third.
+_HOST = re.compile(
+    r"Permission for this action was denied|Blocked by classifier|"
+    r"The user doesn't want to proceed|tool use was rejected|"
+    r"still running after \d+s|moved to the background", re.I)
+
 _ENV_KINDS = [
+    ("denied by the agent's harness",
+     re.compile(r"Permission for this action was denied|Blocked by classifier|"
+                r"The user doesn't want to proceed|tool use was rejected", re.I)),
+    ("moved to the background by the harness",
+     re.compile(r"still running after \d+s|moved to the background", re.I)),
     ("hook redirected the call", re.compile(r"hook|redirected", re.I)),
     ("missing python module", re.compile(r"ModuleNotFoundError|No module named", re.I)),
     ("path not found", re.compile(r"No such file or directory|no such file", re.I)),
@@ -275,6 +291,27 @@ def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     grep_after = inst.get("cleanup_grep_after_last_edit", 0)
     clean = inst.get("cleanup_grep_clean")
     shell = inst.get("shell_edits", 0)
+    # The tree outranks the transcript. What the agent typed, edited or
+    # restored with git is evidence of intent; whether the prefix is in the
+    # sources now is the fact, and it was read at report time.
+    tree = inst.get("tree") or {}
+    if tree.get("checked"):
+        left = tree.get("files") or []
+        if left:
+            return Signal("cleanup_balance", "warn",
+                          "the source tree still carries the prefix",
+                          "Read off the checkout when this report was made, not "
+                          "off the transcript: these files hold the temporary "
+                          "prefix now.",
+                          [{"file": p} for p in left],
+                          f"Run: grep -rn {inst['prefix']} <source_root>; "
+                          f"`echolot mark --remove` takes out what `mark --apply` wrote.")
+        return Signal("cleanup_balance", "ok",
+                      "the source tree carries no temporary marker",
+                      f"Read off the checkout when this report was made: "
+                      f"{len(files)} file(s) were touched"
+                      + (f", {shell} edit(s) through the shell" if shell else "")
+                      + ", and none holds the prefix now.")
     if rows:
         return Signal("cleanup_balance", "warn",
                       "temporary instrumentation may have been left behind",
@@ -514,6 +551,42 @@ def help_lookups(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                   "SKILL.md or the reference.")
 
 
+_COMPLAINT = re.compile(
+    r"\b(?:bug|bugs|баг|баги|багов|traceback|false positive|ложн\w*|"
+    r"wrong|broken|refus\w*|отказ\w*|стёр|затёр|сломал\w*|не (?:видит|замечает|"
+    r"работает|читает)|does not (?:see|read|work)|doesn't (?:see|read|work))\b", re.I)
+
+
+def agent_reported_bugs(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
+    """The agent said, in its own words, that something in echolot was wrong.
+
+    On a real session the main context wrote "three bugs of echolot's own
+    turned up on the way" and listed them, and no signal here read that
+    paragraph: every check is a rule over calls and edits, and the sentence
+    that names the defect directly was the one thing the report did not
+    carry. It is the cheapest feedback the tool can get, and it is quoted.
+    """
+    rows = []
+    for t in s.turns:
+        if t.role != "assistant":
+            continue
+        for para in re.split(r"\n\s*\n", t.text):
+            low = para.lower()
+            if "echolot" in low and _COMPLAINT.search(para):
+                rows.append({"ts": _t(t.ts), "agent": t.agent,
+                             "said": " ".join(para.split())[:240]})
+                break
+    if not rows:
+        return None
+    return Signal("agent_reported_bugs", "info",
+                  f"the agent reported {len(rows)} problem(s) with echolot in its own words",
+                  "Quoted rather than classified: a sentence that names the defect "
+                  "is worth more than any rule here.",
+                  rows,
+                  "Read each one against the signals above; the ones no signal "
+                  "caught are the ones worth a check of their own.")
+
+
 def bypass_tools(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     counts: dict[str, list[dict[str, Any]]] = {}
     for c in s.bash():
@@ -700,6 +773,8 @@ def echolot_failures(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     for c in f.echolot_calls:
         if c.is_help:
             continue
+        if _HOST.search(c.output_head or ""):
+            continue   # the harness spoke, not echolot — see env_friction
         failed = c.traceback or c.is_error or c.shell_error or (c.exit not in (0, None))
         if not failed:
             continue
@@ -751,9 +826,16 @@ def retries(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         if a.recorded and a.recorded.get("exit") == 0:
             a_failed = False
         if a_failed and ts_to_epoch(b.ts) - ts_to_epoch(a.ts) <= 180:
+            # The same argv twice says nothing; what moved between the two
+            # attempts was a config file, and that is the column to read.
+            t0, t1 = ts_to_epoch(a.ts), ts_to_epoch(b.ts)
+            written = sorted({w["file"] for w in config_writes(s)
+                              if t0 <= ts_to_epoch(w["ts"]) <= t1})
             rows.append({"ts": _t(a.ts), "agent": a.agent, "sub": a.sub,
                          "first": a.argv[:80], "then": b.argv[:80],
-                         "seconds": round(ts_to_epoch(b.ts) - ts_to_epoch(a.ts))})
+                         "between": ", ".join(f"{w} written" for w in written) or
+                         ("the same argv again" if a.argv == b.argv else "the argv changed"),
+                         "seconds": round(t1 - t0)})
     if not rows:
         return None
     return Signal("retries", "info",
@@ -766,11 +848,12 @@ def retries(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 def env_friction(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     kinds: dict[str, list[dict[str, Any]]] = {}
     for c in s.calls:
-        if not c.is_error:
-            continue
-        if c.command is not None and RE_ECHOLOT.search(c.shell):
-            continue   # echolot's own failures are a separate signal
         head = c.output_head or ""
+        host = bool(_HOST.search(head))
+        if not c.is_error and not host:
+            continue
+        if c.command is not None and RE_ECHOLOT.search(c.shell) and not host:
+            continue   # echolot's own failures are a separate signal
         for kind, rx in _ENV_KINDS:
             if rx.search(head):
                 kinds.setdefault(kind, []).append(
@@ -852,9 +935,11 @@ def long_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         return None
     return Signal("long_gaps", "info",
                   f"{len(rows)} silence(s) of two minutes or more",
-                  "Almost always the agent waiting on gradle or a device. Listed so "
-                  "the wall time reads honestly.",
-                  [{"agent": g["agent"], "seconds": g["seconds"], "after": g["after"]}
+                  "A subagent running, the human answering, a build in the "
+                  "background, a device — the cause is read off the call before "
+                  "the silence. Listed so the wall time reads honestly.",
+                  [{"agent": g["agent"], "seconds": g["seconds"],
+                    "why": g.get("why", "unknown"), "after": g["after"]}
                    for g in rows])
 
 
@@ -892,6 +977,7 @@ SIGNALS: list[Detector] = [
     report_sliced_by_hand,
     help_lookups,
     bypass_tools,
+    agent_reported_bugs,
     # failures
     echolot_failures,
     retries,

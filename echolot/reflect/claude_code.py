@@ -354,6 +354,10 @@ def _parse_rows(rows: Iterable[dict[str, Any]], session: Session, agent: str,
         target.add(u)
     if sub is not None and last_assistant_text:
         sub.final_text = clip(last_assistant_text, FINAL_TEXT_LIMIT)
+    elif sub is None and agent == MAIN and last_assistant_text:
+        # The main context's own last word, kept the way a subagent's is:
+        # for a session without a hunt it is the whole result.
+        session.final_text = clip(last_assistant_text, FINAL_TEXT_LIMIT)
 
 
 def _call_from_use(block: dict[str, Any], ts: str, agent: str) -> Call:
