@@ -37,6 +37,8 @@ APP_PID = 4100
 OTHER = "com.other.app"
 BLIND_THREAD = "DefaultDispatcher-worker-1"      # 300 ms Running, no slices
 START_ANCHOR = "AppStart"                        # 1006 ms, the longest slice
+ASYNC_SECTION = "Menu.shown"                     # 700 ms, on no thread at all
+ASYNC_THREAD = "(async)"                         # what the thread column says for it
 
 
 @pytest.fixture(scope="module")
@@ -97,6 +99,28 @@ def test_probe_offers_the_longest_slices_as_anchor_candidates(trace):
           section[:300])
 
 
+def test_probe_lists_async_sections_as_anchor_candidates(trace):
+    """The app's own markers are usually async, and they were listed nowhere.
+
+    A `beginAsyncSection` span sits on a track owned by the process, and a
+    candidate list built from thread tracks alone told an agent the app had
+    no instrumentation — on a project with twenty-three named markers.
+    """
+    text = run("probe", str(trace), "--process", APP)
+    processes = text.split("## Threads", 1)[0]
+    check("the process table counts them apart from the threads' slices",
+          "async" in processes.splitlines()[2], processes[:300])
+    app_row = next(r for r in processes.splitlines() if APP in r)
+    check("and the count is the fixture's", f"| {len(fixture.ASYNC_SLICES)} |" in app_row, app_row)
+    section = text.split("anchor candidates", 1)[-1]
+    row = next((r for r in section.splitlines() if ASYNC_SECTION in r), "")
+    check("the async section is a candidate", row, section[:400])
+    check("under a thread name that says it has none", ASYNC_THREAD in row, row)
+    check("ordered by length with the rest",
+          section.index(START_ANCHOR) < section.index(ASYNC_SECTION)
+          < section.index("blocking_io_wait"), section[:400])
+
+
 def test_probe_refuses_a_mask_that_matches_nothing(trace):
     """It used to print an empty table and exit 0.
 
@@ -133,6 +157,17 @@ def test_names_reports_what_no_mask_covers(trace):
     """The section that says where a detector would be blind."""
     text = run("names", str(trace), "--process", APP, "--min-ms", "0", "--top", "200")
     check("the missed section exists", "Missed by the masks" in text, text[-800:])
+
+
+def test_names_lists_async_sections_and_says_what_reads_them(trace):
+    """An anchor is chosen from this inventory, and the app's markers were missing from it."""
+    text = run("names", str(trace), "--process", APP, "--min-ms", "0", "--top", "200")
+    row = next((r for r in text.splitlines() if ASYNC_SECTION in r), "")
+    check("the async section is in the inventory", row, text[:600])
+    check("under a thread name that says it has none", ASYNC_THREAD in row, row)
+    check("with no mask claiming it", row.rstrip().endswith("— |"), row)
+    check("and a sentence on who reads them",
+          "never see them" in text, text[:600])
 
 
 # --- explain ----------------------------------------------------------------

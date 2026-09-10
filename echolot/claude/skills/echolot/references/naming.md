@@ -123,6 +123,28 @@ createClassloaderNamespace
 `Choreographer#doFrame` carries a number inside its name, so a scenario anchor
 needs a wildcard: `Choreographer#doFrame*`.
 
+## The app's own async sections
+
+```
+menu_loading_v5          (async)    ← Trace.beginAsyncSection, on no thread
+cold_startup_menu_shown  (async)
+```
+
+`Trace.beginAsyncSection` and `endAsyncSection` are what an app writes for
+work that starts on one thread and ends on another, and what most hand-rolled
+tracing wrappers write for everything. The section lands on a track owned by
+the process rather than by a thread, and `names` and `probe` list it with
+`(async)` where a thread name would be. On one real project all twenty-three
+named markers were this kind.
+
+What reads them: the scenario anchors — `scenario.end` is usually one — and
+this inventory. What does not: every detector. They read thread slices, and a
+section that belongs to no thread has no self time on anyone's thread and no
+place in anyone's coverage. A dash in the mask column next to an `(async)`
+row is exact. Do not go changing the app's tracing to synchronous sections
+so a detector can see them; plant an `AGENTTMP_` marker on the thread that
+does the work instead.
+
 ## Waiting on the disk
 
 There are no names here to match on, which is the point: a thread waiting for

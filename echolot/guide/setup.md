@@ -29,6 +29,9 @@ echolot probe <trace> --process '<package>*'
 
 That gives processes, threads by CPU, and candidate anchors. Pick the process
 deliberately: `com.example.app*` also catches `:pushservice` and `:webview`.
+A candidate whose thread reads `(async)` is a `Trace.beginAsyncSection` span
+on no thread — usually the app's own marker, and almost always the right end
+anchor. It is an anchor and nothing else: no detector reads it.
 
 **3. Check how this app names things.**
 

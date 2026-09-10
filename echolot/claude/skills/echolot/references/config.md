@@ -56,6 +56,13 @@ analysed, narrow the mask.
 A GLOB over the slice name. Start is the first occurrence. End is where the
 **first** anchor starting after that ends.
 
+A thread's section or an async one — `Trace.beginAsyncSection`, which is what
+an app's own markers usually are, and what a macrobenchmark's end marker
+almost always is: a span that opens on one thread and closes wherever the
+screen was first drawn. Such a section belongs to no thread; `probe` and
+`names` list it under the thread name `(async)`, the anchors match it, and
+the detectors never see it.
+
 Both are optional: without them the window is the whole trace. For a trace from
 a macrobenchmark that is fine — it has already cut out the measured block.
 

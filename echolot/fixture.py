@@ -386,6 +386,33 @@ OTHER_SLICES = {
     OTHER_PID: [("other_app_huge_OUTSIDE", 200, 500, [])],
 }
 
+# --- async sections ----------------------------------------------------------
+# Shape: (name, start_ms, dur_ms, cookie). What `Trace.beginAsyncSection`
+# writes: an S/F pair on the process rather than a B/E pair on a thread, so
+# the section lands on a track of its own and belongs to no thread. Every
+# hand-written marker on a real project turned out to be this kind, and none
+# of them was visible: the end anchor matched nothing and the window became
+# the whole trace.
+#
+# `Menu.shown` is what a project's own end marker looks like — a span across
+# the load, closing at 1000, well inside the sync anchor's window. A config
+# that ends the scenario on it must get a window of [100, 1000]: 900 ms, and
+# `end_anchor.matches` of 1. `Async.mark` is the zero-length shape, a point
+# in time written as begin-and-end in one go.
+#
+# Neither may reach a detector. An async section has no thread to be counted
+# under and no depth in anyone's tree; a detector that shows one has started
+# reading the process's tracks as if they were a thread's, and its self-time
+# and coverage sums are wrong by that section's length.
+#
+# The cookie tells apart concurrent sections of the same name and must be
+# unique per name; here every name has one section, and the numbers only
+# have to differ.
+ASYNC_SLICES = [
+    ("Menu.shown", 300, 700, 1),
+    ("Async.mark", 350, 0, 2),
+]
+
 # --- the scheduler ---------------------------------------------------------
 # (cpu, tid, start_ms, end_ms, state_after_being_switched_out)
 #   0 → R (ready but preempted), 1 → S (sleeping), 2 → D (uninterruptible)
@@ -733,6 +760,17 @@ def build(frames: bool = True, environment: bool = True) -> bytes:
             by_cpu.setdefault(cpu, []).append(
                 (ts, order, "print", tid, buf)
             )
+
+    # atrace async sections: S and F carry the name and a cookie, and the
+    # process rather than the thread. Emitted from the main thread's CPU
+    # because an ftrace event needs a CPU to sit on; the parser ties the
+    # section to the pid in the buffer, not to the thread that wrote it.
+    for name, start, dur, cookie in ASYNC_SLICES:
+        cpu = tid_to_cpu[TID_MAIN]
+        by_cpu.setdefault(cpu, []).append(
+            (ms(start), next(seq), "print", TID_MAIN, f"S|{APP_PID}|{name}|{cookie}\n"))
+        by_cpu[cpu].append(
+            (ms(start + dur), next(seq), "print", TID_MAIN, f"F|{APP_PID}|{name}|{cookie}\n"))
 
     # atrace counters: the ANR record, from system_server rather than from us.
     for at, name in ANR_COUNTERS:
