@@ -35,11 +35,26 @@ LOG_FILE = LOG_DIR / "runs.jsonl"
 
 _facts: dict[str, Any] = {}
 _root: Path | None = None
+_reason: str | None = None
 
 
 def note(**facts: Any) -> None:
     """Attach facts to the current run. Called from inside a command."""
     _facts.update(facts)
+
+
+def failed(reason: str) -> None:
+    """Why the command is about to exit non-zero, in the words it printed.
+
+    A clean failure — a device that is not there, a gradle task that did
+    not run — used to leave `exit: 2` in the log and nothing else: `error`
+    was written only for a traceback. On a real project a `collect` that
+    fell over after two minutes of gradle left a line nobody could read a
+    cause off, and the transcript's copy of the output was a notice from the
+    agent's own harness. The sentence the command printed is the record.
+    """
+    global _reason
+    _reason = reason.strip()[:800] or None
 
 
 def at(root: Path | str | None) -> None:
@@ -80,14 +95,19 @@ class isolated:
     """
 
     def __enter__(self):
+        global _reason
         self._saved = dict(_facts)
         self._saved_root = _root
+        self._saved_reason = _reason
         _facts.clear()
+        _reason = None
         return self
 
     def __exit__(self, *exc):
+        global _reason
         _facts.clear()
         _facts.update(self._saved)
+        _reason = self._saved_reason
         at(self._saved_root)
         return False
 
@@ -124,6 +144,7 @@ _version = version   # the name the rest of this module uses
 
 def record(args: Any, argv: list[str] | None, started: float,
            exit_code: int | None, error: BaseException | None = None) -> None:
+    global _reason
     if os.environ.get("ECHOLOT_NO_RECORD"):
         return
     try:
@@ -147,6 +168,8 @@ def record(args: Any, argv: list[str] | None, started: float,
                 type(error), error, error.__traceback__))
             # The tail is what matters; the head is argparse and main().
             entry["error"] = tb[-2000:]
+        elif exit_code not in (0, None) and _reason:
+            entry["error"] = _reason
         # `cwd` above and the file below are two different questions, and
         # they used to have one answer. Where the command ran is a fact worth
         # keeping; where the log lives is the project.
@@ -158,6 +181,7 @@ def record(args: Any, argv: list[str] | None, started: float,
         pass
     finally:
         _facts.clear()
+        _reason = None
 
 
 def read(path: Path | None = None) -> list[dict[str, Any]]:

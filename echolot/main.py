@@ -523,6 +523,7 @@ def cmd_analyze(args) -> int:
         rep = report_mod.aggregate(reports)
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
+        recorder.failed(str(e))
         return 2
 
     # After the merge rather than per trace: the evidence a merged row
@@ -669,6 +670,7 @@ def cmd_compare(args) -> int:
                          if args.cfg else None))
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
+        recorder.failed(str(e))
         return 2
 
     s = cmp["summary"]
@@ -1542,6 +1544,9 @@ def cmd_status(args) -> int:
             bits.append("local.yml applied")
         lines.append(("config", "echolot.yml · " + " · ".join(bits)))
     lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"))))
+    collecting = state.collect_line(st)
+    if collecting:
+        lines.append(("collect", collecting))
     tr = st["traces"]
     if tr["count"]:
         lines.append(("traces", f"{tr['count']} in .echolot/traces, newest {when.ago(tr['newest'])}"))
@@ -1777,12 +1782,18 @@ def cmd_collect(args) -> int:
         cfg = Config.load(args.config, args.local)
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
+        recorder.failed(f"config error: {e}")
         return 2
 
     section = cfg.runner
     package = cfg.get("project.package") or cfg.process
     iterations = args.iterations or int(section.get("iterations", 5))
     out_dir = _out_dir(args.out, cfg)
+    project = _project_root(cfg)
+    # Where the run stands, for whoever asks while it runs — `status` reads
+    # it. Written before the first iteration and after the last, with why
+    # when it ended badly.
+    progress = runner.Progress(project / runner.PROGRESS_FILE)
 
     policy = str(section.get("reset_policy", "force-stop"))
     if policy not in ("force-stop", "none"):
@@ -1805,11 +1816,19 @@ def cmd_collect(args) -> int:
             # The set pushed aside is the previous round of this same
             # investigation — its baseline, and what the next report is
             # compared against.
-            on_set_aside=lambda d: hunt_mod.record_traces(_project_root(cfg), d),
+            on_set_aside=lambda d: hunt_mod.record_traces(project, d),
+            progress=progress.update,
         )
     except runner.RunnerError as e:
         print(f"collection error: {e}", file=sys.stderr)
+        # The sentence, in the log and in the progress file both: the log
+        # is what `reflect` reads after the session, the file is what
+        # `status` reads during it.
+        recorder.failed(f"collection error: {e}")
+        progress.update(finished=time.time(), exit=2,
+                        error=str(e).strip().splitlines()[0][:200] if str(e).strip() else "")
         return 2
+    progress.update(finished=time.time(), exit=0, traces=len(results))
 
     times = [r["total_time_ms"] for r in results
              if isinstance(r.get("total_time_ms"), int)]
@@ -1824,7 +1843,7 @@ def cmd_collect(args) -> int:
 
     for r in results:
         print(r["path"])
-    hunt_mod.touch(_project_root(cfg), collect=True)
+    hunt_mod.touch(project, collect=True)
     return 0
 
 
@@ -2244,6 +2263,7 @@ def cmd_report(args) -> int:
         rep = _load_report(path)
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
+        recorder.failed(str(e))
         return 2
     detectors = list(args.detector or [])
     known = {d["id"] for d in rep.get("detectors") or []}

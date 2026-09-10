@@ -14,6 +14,7 @@ building a project on disk for every case.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from . import hunt as hunt_mod
@@ -52,6 +53,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
               for p in traces_dir.glob(pat)] if traces_dir.is_dir() else []
     st["traces"] = {"dir": traces_dir, "count": len(traces),
                     "newest": max((p.stat().st_mtime for p in traces), default=None)}
+    st["collect"] = collect_state(project)
 
     st["report"] = None
     rep = project / ".echolot" / "out" / "report.json"
@@ -84,6 +86,72 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
 
 # The next step as one word — what `/echolot` in Claude Code switches on —
 # and as the line a person reads. Both from the same decision.
+def collect_state(project: Path) -> dict | None:
+    """Where the last `collect` stands, from the file it writes as it runs.
+
+    Four answers: running, interrupted, failed, or nothing worth saying. A
+    run whose process is gone and whose file says it never finished was
+    interrupted — the terminal closed, the agent's harness killed it — and
+    that reads differently from a failure that said why.
+    """
+    from .runner import PROGRESS_FILE
+    path = project / PROGRESS_FILE
+    if not path.exists():
+        return None
+    try:
+        p = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(p, dict) or "started" not in p:
+        return None
+    if p.get("finished") is None:
+        alive = False
+        pid = p.get("pid")
+        if isinstance(pid, int):
+            try:
+                os.kill(pid, 0)
+                alive = True
+            except OSError:
+                alive = False
+        p["status"] = "running" if alive else "interrupted"
+    else:
+        p["status"] = "failed" if p.get("exit") else "done"
+    return p
+
+
+def collect_line(st: dict) -> str | None:
+    """The `collect` line of `status`, or None when the traces line says it all.
+
+    A run in flight is the one thing an agent waiting on a background task
+    wants to know, and until this line the answer was the trace count from
+    the run before. A failure is shown while it is the latest word — once
+    a newer set of traces exists it is history, and the traces line speaks.
+    """
+    p = st.get("collect")
+    if not p:
+        return None
+    from . import when
+    status = p.get("status")
+    scenario = p.get("scenario") or "the scenario"
+    if status == "running":
+        if p.get("iterations"):
+            where = f"{p.get('done', 0)}/{p['iterations']} iterations"
+        else:
+            where = "the macrobenchmark drives the iterations"
+        return f"running: {scenario}, {where}, started {when.ago(p.get('started'))}"
+    if status == "interrupted":
+        done = f" at {p.get('done', 0)}/{p['iterations']}" if p.get("iterations") else ""
+        return (f"interrupted{done}, started {when.ago(p.get('started'))} — "
+                f"the process is gone and the run never finished")
+    if status == "failed":
+        newest = (st.get("traces") or {}).get("newest")
+        if newest and p.get("finished") and newest > p["finished"]:
+            return None
+        why = p.get("error") or "no reason recorded"
+        return f"failed {when.ago(p.get('finished'))}: {why}"
+    return None
+
+
 NEXT_KINDS = ("init", "init-force", "doctor", "setup", "fix-config",
               "resume-or-new", "hunt")
 

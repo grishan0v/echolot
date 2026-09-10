@@ -711,9 +711,14 @@ def echolot_failures(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         where = "shell" if c.shell_error else "echolot"
         if c.recorded is None and f.runs and not c.traceback:
             where = "shell (no run recorded)"
+        # The run log's own sentence outranks the transcript's copy of the
+        # output: a `collect` that failed under an agent's harness left the
+        # harness's "moved to the background" notice as its output, and the
+        # reason sat in nobody's record until the recorder kept it.
+        head = ((c.recorded or {}).get("error") or c.output_head or "")
         rows.append({"ts": _t(c.ts), "agent": c.agent, "sub": c.sub, "exit": c.exit,
                      "where": where, "traceback": c.traceback,
-                     "head": (c.output_head or "").replace("\n", " ")[:160]})
+                     "head": head.replace("\n", " ")[:160]})
     if not rows:
         return None
     tracebacks = sum(1 for r in rows if r["traceback"])

@@ -12,6 +12,7 @@ over repeats; without them both are guessing.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -144,6 +145,119 @@ RECORDING_KNOBS = ("environment", "atrace_categories", "buffer_kb",
 
 class RunnerError(Exception):
     pass
+
+
+# --- what a failed scenario command said, and what to do about it -------------
+#
+# Gradle writes the useful half of a failure to stdout — the instrumentation's
+# own exception, the benchmark's refusal — and the boilerplate half to stderr
+# ("FAILURE: Build failed with an exception"). `run_command` used to print
+# stderr when there was any, which on every macrobenchmark failure was the
+# half that says nothing. The lines that matter are picked out of both.
+_INTERESTING = re.compile(
+    r"FAILED|What went wrong|Exception|Error|ERRORS|checksum|suppress|"
+    r"not found|No online|offline|denied|INSTALL_FAILED", re.IGNORECASE)
+_BOILERPLATE = re.compile(
+    r"^\s*(\*|>)?\s*(Try:|Run with --|Get more help|BUILD FAILED|"
+    r"Deprecated Gradle|You can use|See https://docs\.gradle)")
+
+# Failures a macrobenchmark run produces by the shape of the device or the
+# build rather than by anything in the scenario, each with the one thing that
+# fixes it. Every entry came off a real run, and each cost an agent a
+# round of reading gradle output to arrive at the same sentence.
+KNOWN_FAILURES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"perfetto ?sdk|libtracing_perfetto|binary (verification|version|missing)",
+                re.IGNORECASE),
+     "the Perfetto SDK half of the benchmark's tracing could not be set up in the "
+     "app — usually a stale libtracing_perfetto.so in its code_cache. Reinstall "
+     "the app or `adb shell pm clear <package>` where the device allows it; or "
+     "turn that half off and keep the atrace half, which still carries the "
+     "app's own sections: add "
+     "-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark."
+     "perfettoSdkTracing.enable=false to runner.gradle_args"),
+    (re.compile(r"ERRORS \(not suppressed\)|suppressErrors", re.IGNORECASE),
+     "the benchmark refuses this device or its state (EMULATOR, LOW-BATTERY, "
+     "UNLOCKED, DEBUGGABLE …). Fix the state it names, or add "
+     "-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark."
+     "suppressErrors=EMULATOR,LOW-BATTERY,UNLOCKED to runner.gradle_args"),
+    (re.compile(r"No online devices|no devices/emulators found|device offline|"
+                r"DeviceException|No connected devices", re.IGNORECASE),
+     "gradle found no device: `adb devices` should list one as `device`; with "
+     "several attached, runner.device (or ANDROID_SERIAL) picks the one"),
+    (re.compile(r"INSTALL_FAILED|Installation failed|signatures do not match",
+                re.IGNORECASE),
+     "the APK did not install: uninstall the app on the device first — a build "
+     "signed differently cannot go over the one that is there"),
+]
+
+
+def failure_lines(out: str, err: str, limit: int = 20) -> list[str]:
+    """The lines of a failed command worth reading, out of both streams.
+
+    Both, in order, deduplicated: the instrumentation error on stdout and
+    the "What went wrong" block on stderr are two halves of one story. When
+    nothing matches, the tail of whatever was printed — a failure that says
+    nothing recognisable is still a failure.
+    """
+    picked: list[str] = []
+    seen: set[str] = set()
+    for stream in (out or "", err or ""):
+        for line in stream.splitlines():
+            text = line.strip()
+            if not text or text in seen or _BOILERPLATE.match(line):
+                continue
+            if _INTERESTING.search(text):
+                seen.add(text)
+                picked.append(text[:300])
+    if not picked:
+        tail = (err or out or "").strip().splitlines()
+        picked = [ln.strip()[:300] for ln in tail[-limit:] if ln.strip()]
+    return picked[-limit:]
+
+
+def hints(text: str) -> list[str]:
+    """What to do, for every known failure the text names."""
+    return [hint for pattern, hint in KNOWN_FAILURES if pattern.search(text or "")]
+
+
+def failure_message(command: str, code: int, out: str, err: str) -> str:
+    lines = failure_lines(out, err)
+    msg = f"the scenario command returned {code}:\n  {command[:300]}\n"
+    msg += "\n".join(f"  {ln}" for ln in lines)
+    for hint in hints("\n".join(lines) + "\n" + (out or "")[-4000:] + (err or "")[-4000:]):
+        msg += f"\n→ {hint}"
+    return msg
+
+
+# --- where a collect stands, for whoever asks while it runs -------------------
+#
+# A macrobenchmark round is minutes of silence: fifteen iterations of a
+# cold start, a gradle build in front of them. The agent that started it
+# waits on a background task and asks `echolot` what is going on, and the
+# answer used to be the trace count from the last run. This file is the
+# answer: written when the run starts, once per iteration, and when it ends,
+# with why, when it ended badly. `status` reads it.
+PROGRESS_FILE = Path(".echolot") / "log" / "collect.json"
+
+
+class Progress:
+    """The collect in flight, as a file `status` can read."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.state: dict = {}
+
+    def update(self, **fields) -> None:
+        self.state.update(fields)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self.state, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, self.path)
+        except OSError:
+            # Progress is a courtesy; a collect that cannot write it still
+            # collects.
+            pass
 
 
 def _run(args: list[str], stdin: str | None = None, timeout: int = 120) -> str:
@@ -303,9 +417,7 @@ def run_command(command: str, timeout: float, knob: str = "runner.timeout_s",
             f"Raise {knob} if it honestly takes that long."
         ) from None
     if proc.returncode != 0:
-        raise RunnerError(
-            f"the scenario command returned {proc.returncode}:\n"
-            f"{(err or out).strip()[:800]}")
+        raise RunnerError(failure_message(command, proc.returncode, out, err))
     return time.monotonic() - started
 
 
@@ -400,7 +512,8 @@ def collect(package: str, out_dir: Path, iterations: int,
             device: str | None = None,
             name: str = "run",
             log: Callable[[str], None] = print,
-            on_set_aside: Callable[[Path], None] | None = None) -> list[dict]:
+            on_set_aside: Callable[[Path], None] | None = None,
+            progress: Callable[..., None] | None = None) -> list[dict]:
     """N repeats of a scenario. The mode decides who drives it.
 
     launch  — we do: force-stop and launch the activity. Cold start.
@@ -412,6 +525,10 @@ def collect(package: str, out_dir: Path, iterations: int,
     set went to, when there was one — the caller files it under the
     investigation it belongs to. Without it the return value was dropped here
     and a multi-round hunt kept no record of the rounds it reasoned from.
+
+    `progress` is told where the run stands — `done` out of `iterations`
+    once per iteration where we drive them, and only that it started where
+    the macrobenchmark does. See `Progress`.
     """
     import time
 
@@ -419,9 +536,12 @@ def collect(package: str, out_dir: Path, iterations: int,
     mode = str(section.get("mode", "launch"))
     duration_ms = int(section.get("duration_ms", 12000))
     reset = str(section.get("reset_policy", "force-stop"))
+    tell = progress or (lambda **kw: None)
     aside = set_aside(out_dir, name, log)
     if aside is not None and on_set_aside is not None:
         on_set_aside(aside)
+    tell(scenario=name, mode=mode, started=time.time(), pid=os.getpid(),
+         iterations=None if mode == "gradle" else iterations, done=0)
 
     if mode == "gradle":
         task = section.get("gradle_task")
@@ -513,6 +633,7 @@ def collect(package: str, out_dir: Path, iterations: int,
             extra += f" ({info['launch_state']})"
         log(f"  [{i + 1}/{iterations}] {out.name}  "
             f"{info['size'] / 1e6:.1f} MB{extra}")
+        tell(done=i + 1)
     return results
 
 

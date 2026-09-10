@@ -33,7 +33,10 @@ and reports whether the last one left temporary markers in the sources. Every
 round and every report from here on is filed under it.
 
 **Traces.** None? `echolot collect -c echolot.yml -n 5`. Repeats are not
-belt-and-braces: a single run cannot tell a regression from a spike.
+belt-and-braces: a single run cannot tell a regression from a spike. With a
+runner config that is new or just changed, `-n 1` first: a wrong variant
+fails after the whole build. While it runs, `echolot` has a `collect` line
+saying how far it got, and a failure's sentence is on it.
 
 **No instrumentation at all?** `echolot domains --root .` says. If there is
 none, the report will name system slices and threads, and your first move is

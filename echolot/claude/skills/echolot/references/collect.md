@@ -118,6 +118,31 @@ The task name is often ambiguous (the baselineprofile plugin adds flavours) —
 Traces are written per iteration, so even a run that failed halfway usually
 leaves usable material.
 
+## While it runs, and when it fails
+
+A macrobenchmark round is minutes of silence — a gradle build, then the
+iterations. `echolot` (status) has a `collect` line while one is in flight:
+`running: coldStart, 7/15 iterations, started 3m ago`, or `the macrobenchmark
+drives the iterations` where gradle does. A run whose process is gone and
+that never finished reads `interrupted`; one that failed reads `failed 2m
+ago: …` with the sentence it printed, until a newer set of traces exists.
+
+**Run one iteration first** whenever the runner config is new or changed:
+`echolot collect -c echolot.yml -n 1`. A wrong variant or a device that
+refuses fails after the whole build either way, and once is enough to find
+that out.
+
+A failure prints the lines that matter from both of gradle's streams — the
+instrumentation's own exception lives on stdout, "What went wrong" on stderr
+— and the same sentence goes into `.echolot/log/runs.jsonl` as `error`.
+Three failures come with what fixes them, each learned on a real device:
+
+| the line says | what it is | the fix |
+|---|---|---|
+| `Perfetto SDK` / `binary verification` | the SDK half of the tracing could not be set up in the app — a stale `libtracing_perfetto.so` in its code_cache | reinstall or `pm clear`; or `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=false` in `runner.gradle_args` — the atrace half still carries the app's sections |
+| `ERRORS (not suppressed): EMULATOR, …` | the benchmark refuses the device or its state | fix the state, or `…androidx.benchmark.suppressErrors=EMULATOR,LOW-BATTERY,UNLOCKED` |
+| `No online devices found` | gradle found no device | `adb devices`; `runner.device` when several are attached |
+
 ## For calibration
 
 `echolot calibrate` expects **repeats of one scenario** on a known-healthy
