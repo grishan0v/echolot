@@ -165,9 +165,16 @@ that name a lock chain.
 | what it says | your next move |
 |---|---|
 | a lock chain with the main thread behind it | you have the mechanism. Open the holder's frames; no trace needed |
-| the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working |
+| the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working — each is listed by the frame nearest the app, with its top beside it |
+| "every frame belongs to the platform or a library", then "the frames nearest to the app" | the platform is a dead end, a library the app drives is not: `SystemJobScheduler.cancel` points at the app's WorkManager setup. Read that setup |
+| "Who was holding what" under what it does not say | this file carries no lock notes; an empty chain list is the file's limit, not the freeze's. Get the device's own record |
 | frames placed in the checkout | open those lines |
 | frames landing nowhere | check out the build the report names — line numbers go stale first |
+
+`--json` is the same findings in the shape you walk: `chains`, `main.stack`,
+`working[].where` / `.top` / `.stack`, `nearest`, `lock_notes`, `code.placed`.
+Read it rather than the file: the frames that decide sit three to six deep,
+and `awk` over the dump is what this replaces.
 
 The idle main thread is the case that wastes a day if you miss it: the dump is
 a snapshot taken five seconds in, and whatever caused the freeze had often let

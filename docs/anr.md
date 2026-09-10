@@ -70,6 +70,20 @@ standing in the method it could not enter, so its own top frame names the class
 whose monitor it wants. The raw name stays in the output beside the resolved
 one.
 
+When the file carries no lock note at all — Play Console strips them, and so
+do some Crashlytics exports — no chain can be read off it, and the report says
+so under what it does not say rather than printing nothing: an empty chain
+list is the file's limit, not a fact about the freeze. `--json` carries it as
+`lock_notes`.
+
+**The threads that were working** are listed by the frame nearest the app —
+its own where there is one, a library's where there is not — with the top
+frame beside it. The top is almost always `BinderProxy.transactNative` or
+`Unsafe.park`, true and useless alone; `SystemJobScheduler.cancel` four frames
+down is what the thread was doing. And when the app is on no stack at all, the
+library frames nearest to it are listed as leads: the platform is a dead end,
+a library the app drives points at the app's own setup of it.
+
 **Then the main thread**, and the case worth knowing about before you read one:
 `nativePollOnce` means it was **idle** when the dump was taken. Whatever caused
 the freeze had already let go, or never ran on that thread at all. Reading the
