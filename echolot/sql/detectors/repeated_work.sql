@@ -73,7 +73,7 @@
 --
 -- Numbers picked by looking at one app are worth no more for being left
 -- alone, so they were measured against four more. One trace, five processes
--- — `system_server`, `com.instagram.android`, `ru.dodopizza.app.beta`,
+-- — `system_server`, `com.instagram.android`, `com.example.app`,
 -- surfaceflinger and the app itself — whole trace, shipped thresholds, 25
 -- groups clearing the floor with two callers or more.
 --

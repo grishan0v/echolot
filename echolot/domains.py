@@ -122,12 +122,11 @@ _DYNAMIC = re.compile(
 )
 
 # A name held in a constant. On a real project every marker was written this
-# way: `object TraceNames { const val MENU_LOADING_V5 = "menu_loading_v5" }`,
-# and the calls read `SharedTraces.start(MENU_LOADING_V5)` through a wrapper
-# of the project's own. Not one of the twenty-three was a literal at its
-# call, and the map came back empty over half a million lines — "no
-# instrumentation", to an agent that then asked the human how to make the
-# markers visible.
+# way: `object Marks { const val LOAD = "collection_load" }`,
+# and the calls read `AppTraces.start(LOAD)` through a wrapper
+# of the project's own. Not one of them was a literal at its call, and the
+# map came back empty over the whole tree — "no instrumentation", to an
+# agent that then asked the human how to make the markers visible.
 #
 # `const val` and Java's `static final String` only. A plain `val` is a
 # literal just as often, but a local one shares its name with every other
@@ -141,20 +140,20 @@ _JAVA_CONST = re.compile(
     r'\b(?:static\s+final|final\s+static)\s+String\s+([A-Za-z_]\w*)\s*=\s*"((?:[^"\\]|\\.)*)"'
 )
 # A call whose callee says "trace", with an identifier for a name:
-# `SharedTraces.start(APP_SCOPE_INIT)`,
-# `Traces.createTrace(TraceNames.MENU_LOADING_V5)`, `Trace.beginSection(TAG)`.
-# The callee is the filter, not the argument: `TimeProfiler.start(TraceNames.X)`
+# `AppTraces.start(APP_INIT)`,
+# `Traces.createTrace(Marks.LOAD)`, `Trace.beginSection(TAG)`.
+# The callee is the filter, not the argument: `TimeProfiler.start(Marks.X)`
 # passes the same constant to something that writes no slice.
 #
-# Measured on the project this was built for, and every exclusion below is a
-# row that came back the first time. "section" alone let in a menu's
-# sections — `clickOnSection(DODOCOINS)`, `findValueByKey(APPEARANCE)` from a
+# Measured on a real project, and every exclusion below is a row that came
+# back the first time. "section" alone let in a menu's
+# sections — `clickOnSection(TAB)`, `findValueByKey(KEY)` from a
 # `sectionItem` — so it counts only as `beginSection` and its kin. A callee
 # that puts, sets or gets is handing the trace an attribute or a counter, not
-# a name: `trace.putAttribute(TraceAttribute.COUNTRY, …)` mapped a slice
-# called `country`. And `TraceSectionMetric(TraceNames.X)` is a benchmark
+# a name: `trace.putAttribute(Attr.REGION, …)` mapped a slice
+# called `region`. And `TraceSectionMetric(Marks.X)` is a benchmark
 # reading the marker, not the app writing it; the word "metric" is the tell.
-# The optional `<…>` is a type argument: `traces.trace<State>(ACTUALIZE_STATE)`
+# The optional `<…>` is a type argument: `traces.trace<State>(REFRESH_STATE)`
 # is how a wrapper that returns what the block returns gets called.
 _NAMED_CALL = re.compile(
     r'\b([A-Za-z_][\w.]*)\s*(?:<[^()]*>)?\s*\(\s*([A-Za-z_][\w.]*)\s*[,)]')
@@ -244,8 +243,8 @@ def constants(texts: dict[Path, str]) -> dict[str, str | None]:
     """Simple name → the string it holds, across the whole project.
 
     Keyed on the simple name because that is what a call site shows:
-    `SharedTraces.start(APP_SCOPE_INIT)` after an import, or
-    `TraceNames.APP_SCOPE_INIT` qualified, and either way the owner is not
+    `AppTraces.start(APP_INIT)` after an import, or
+    `Marks.APP_INIT` qualified, and either way the owner is not
     worth resolving for a map whose reader will grep the name anyway. Two
     constants of one name holding different strings resolve to neither —
     None, kept in the map so a later same-name declaration cannot quietly

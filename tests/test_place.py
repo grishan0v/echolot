@@ -21,8 +21,8 @@ from tests.support import check  # noqa: E402
 # runtime had no line for either side.
 REAL = ("monitor contention with owner DefaultDispatcher-worker-3 (28463) at void "
         "jdk.internal.misc.Unsafe.park(boolean, long)(Unsafe.java:-2) waiters=0 "
-        "blocking from void ru.dodopizza.app.domain.pizzerias.PizzeriaService"
-        ".updatePizzeriasForCountry(java.lang.String)(PizzeriaService.kt:-1)")
+        "blocking from void com.example.app.data.StoreRepository"
+        ".update(java.lang.String)(StoreRepository.kt:-1)")
 # The fixture's, with a line on the owner and nothing at all on the waiter.
 FIXTURE = ("monitor contention with owner Thread-3 (4455) at void "
            "com.example.Store.put(java.lang.String)(Store.java:41) waiters=0 "
@@ -32,27 +32,27 @@ FIXTURE = ("monitor contention with owner Thread-3 (4455) at void "
 def checkout(root: Path) -> Path:
     """Two modules, a name that lives in both, and a release-build target."""
     (root / "build.gradle.kts").write_text("", encoding="utf-8")
-    for module, pkg in (("domain", "ru/dodopizza/app/domain/pizzerias"),
-                        ("data", "ru/dodopizza/app/data")):
+    for module, pkg in (("domain", "com/example/app/data"),
+                        ("data", "com/example/app/cache")):
         src = root / module / "src/main/java" / pkg
         src.mkdir(parents=True)
         (root / module / "build.gradle.kts").write_text("", encoding="utf-8")
-    (root / "domain/src/main/java/ru/dodopizza/app/domain/pizzerias/PizzeriaService.kt").write_text(
-        "package ru.dodopizza.app.domain.pizzerias\n"
+    (root / "domain/src/main/java/com/example/app/data/StoreRepository.kt").write_text(
+        "package com.example.app.data\n"
         "\n"
-        "class PizzeriaService {\n"
+        "class StoreRepository {\n"
         "  private val cache by lazy { Cache() }\n"
         "  @Synchronized\n"
-        "  fun updatePizzeriasForCountry(countryCode: String) {\n"
-        "    if (updatePizzeriasForCountry(countryCode)) return\n"
+        "  fun update(key: String) {\n"
+        "    if (update(key)) return\n"
         "  }\n"
         "  fun <T> findSelected(): T = TODO()\n"
         "}\n", encoding="utf-8")
     # The same file name in another module — the package tells them apart.
-    (root / "data/src/main/java/ru/dodopizza/app/data/PizzeriaService.kt").write_text(
-        "package ru.dodopizza.app.data\nclass PizzeriaService\n", encoding="utf-8")
+    (root / "data/src/main/java/com/example/app/cache/StoreRepository.kt").write_text(
+        "package com.example.app.cache\nclass StoreRepository\n", encoding="utf-8")
     java = root / "data/src/main/java/com/example"
-    java.mkdir(parents=True)
+    java.mkdir(parents=True, exist_ok=True)
     (java / "Store.java").write_text(
         "package com.example;\n"
         "public class Store {\n"
@@ -78,8 +78,8 @@ def test_both_frames_come_off_a_contention_slice():
           owner == ("jdk.internal.misc.Unsafe.park", "Unsafe.java", None), owner)
     blocked = place.parse_frame(got["blocked"])
     check("the waiter's frame, with the file the runtime named",
-          blocked == ("ru.dodopizza.app.domain.pizzerias.PizzeriaService.updatePizzeriasForCountry",
-                      "PizzeriaService.kt", None), blocked)
+          blocked == ("com.example.app.data.StoreRepository.update",
+                      "StoreRepository.kt", None), blocked)
     check("a line of -1 is no line", blocked[2] is None, blocked)
 
 
@@ -103,11 +103,11 @@ def test_the_other_shape_and_an_empty_file_part_parse_to_nothing_or_no_file():
 def test_the_package_picks_between_two_files_of_one_name(tmp_path):
     root = checkout(tmp_path)
     idx = place.index(root)
-    check("two candidates for the name", len(idx["PizzeriaService.kt"]) == 2, idx)
-    got = place.locate("ru.dodopizza.app.domain.pizzerias.PizzeriaService.updatePizzeriasForCountry",
-                       "PizzeriaService.kt", None, idx, root, "blocked")
+    check("two candidates for the name", len(idx["StoreRepository.kt"]) == 2, idx)
+    got = place.locate("com.example.app.data.StoreRepository.update",
+                       "StoreRepository.kt", None, idx, root, "blocked")
     check("the domain module's, by package",
-          got.file == "domain/src/main/java/ru/dodopizza/app/domain/pizzerias/PizzeriaService.kt", got)
+          got.file == "domain/src/main/java/com/example/app/data/StoreRepository.kt", got)
     check("and it is exact", got.exact, got)
     check("with no line from the runtime, the declaration's line",
           got.line == 6, got)
@@ -120,11 +120,11 @@ def test_a_release_build_frame_lands_on_the_declaration_not_a_call(tmp_path):
     check("the file comes from the class when the runtime named none",
           got.file == "data/src/main/java/com/example/Store.java", got)
     check("the declaration on line 7, not the call on line 4", got.line == 7, got)
-    generic = place.locate("ru.dodopizza.app.domain.pizzerias.PizzeriaService.findSelected",
-                           "PizzeriaService.kt", None, idx, root, "owner")
+    generic = place.locate("com.example.app.data.StoreRepository.findSelected",
+                           "StoreRepository.kt", None, idx, root, "owner")
     check("a generic Kotlin function is still found", generic.line == 9, generic)
-    lazy = place.locate("ru.dodopizza.app.domain.pizzerias.PizzeriaService.cache_delegate$lambda$0",
-                        "PizzeriaService.kt", None, idx, root, "owner")
+    lazy = place.locate("com.example.app.data.StoreRepository.cache_delegate$lambda$0",
+                        "StoreRepository.kt", None, idx, root, "owner")
     check("a lazy delegate's synthetic name lands on the val", lazy.line == 4, lazy)
 
 
@@ -159,9 +159,9 @@ def test_annotate_places_both_sides_and_a_class_location(tmp_path):
     check("the owner is kept without a file",
           roles["owner"]["file"] is None and roles["owner"]["symbol"].endswith("Unsafe.park"), roles)
     check("the waiter is placed at its declaration",
-          roles["blocked"]["file"].endswith("pizzerias/PizzeriaService.kt") and roles["blocked"]["line"] == 6, roles)
+          roles["blocked"]["file"].endswith("data/StoreRepository.kt") and roles["blocked"]["line"] == 6, roles)
     check("the markdown cell names the side and the file",
-          lock["code"] == "blocked at PizzeriaService.kt:6", lock["code"])
+          lock["code"] == "blocked at StoreRepository.kt:6", lock["code"])
     check("the tid-only row is left alone", "places" not in rep["detectors"][0]["rows"][1], rep)
     block = rep["detectors"][1]["rows"]
     check("a class location is placed", block[0]["code"] == "Store.java", block[0])

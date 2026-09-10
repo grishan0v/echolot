@@ -173,7 +173,7 @@ loop:
 without scanning the repository blindly, and blind scanning is the main context
 eater. `echolot domains` pre-fills it from the sources — literals inside
 tracing calls, and names kept in a `const val` and passed to the project's
-own wrapper (`SharedTraces.start(MENU_LOADING)`), which is how most apps that
+own wrapper (`AppTraces.start(LOAD)`), which is how most apps that
 name their markers write them. A hint ending in `via X` says the literal is
 not on that line: `X` is.
 

@@ -42,8 +42,8 @@ JOIN _proc p         ON t.upid = p.upid;
 -- androidx.tracing writes for work that starts on one thread and ends on
 -- another, and what a hand-rolled wrapper over it writes for everything —
 -- lands on a track owned by the process, not by a thread, and the join
--- above never sees it. On a real project every one of the twenty-three
--- named markers was that kind: the end anchor matched nothing, the window
+-- above never sees it. On a real project every named marker was that
+-- kind: the end anchor matched nothing, the window
 -- quietly became the whole trace, and ten detectors fired on a scenario
 -- that had not been cut out.
 --

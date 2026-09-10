@@ -26,7 +26,7 @@ process's own `Trace.beginAsyncSection` spans, on a track of their own and on
 no thread — usually the app's hand-written markers, and almost always the
 macrobenchmark's end marker. An anchor may name one. A detector never sees
 one, and an agent reading the `slices` column alone would have reported an
-app with twenty-three named markers as uninstrumented.
+app with two dozen named markers as uninstrumented.
 
 ## `names` — how ART names things here
 
@@ -102,28 +102,28 @@ The module comes from the nearest ancestor holding a build script. `hint` is
 for humans; the engine never reads it, so fix the wording when it is imprecise.
 
 A name held in a constant reaches the map too. Most projects that name their
-markers keep them in one place — `object TraceNames { const val MENU_LOADING_V5
-= "menu_loading_v5" }` — and call a wrapper of their own with the constant:
-`SharedTraces.start(MENU_LOADING_V5)`, `traces.trace<Menu>(TraceNames.MENU_LOADING_V5)`.
+markers keep them in one place — `object Marks { const val LOAD
+= "collection_load" }` — and call a wrapper of their own with the constant:
+`AppTraces.start(LOAD)`, `traces.trace<Items>(Marks.LOAD)`.
 The literal is at the declaration; the place worth naming is the call, and
 that is what the map points at, with the identifier the call used so you know
 what to grep for at that line:
 
 ```yaml
-  - slice: "menu_loading_v5"
+  - slice: "collection_load"
     module: ":domain:base"
-    hint: "MenuService.kt:492 — method startMenuLoadingTracing, via TraceNames.MENU_LOADING_V5"
+    hint: "CollectionLoader.kt:52 — fun load, via Marks.LOAD"
 ```
 
-On the project this was built for, every one of the twenty-three markers was
-written that way, and the map came back empty over half a million lines.
+On a real project every marker was written that way, and the map came back
+empty over the whole tree.
 
 Precision rules worth knowing:
 
 - a bare `trace("…")` counts only in files that import `androidx.tracing`,
   otherwise every logging function with that name lands in the map;
 - a constant resolves only through a call whose name says `trace` (or
-  `beginSection` and its kin): `TimeProfiler.start(TraceNames.X)` writes no
+  `beginSection` and its kin): `TimeProfiler.start(Marks.X)` writes no
   slice. A callee that puts, sets or gets, or says metric, attribute or
   counter, is handing the trace something other than a name;
 - `const val` and Java's `static final String` only. A plain `val` shares
@@ -167,8 +167,8 @@ the entry points, from the manifest and the SDK, with a source on every row
 ## From a row to a line, without `domains`
 
 Some rows name the code themselves. ART's contention slice carries both
-sides of the lock as frames — `at void pkg.PizzeriaService.update(…)(PizzeriaService.kt:30)
-waiters=0 blocking from … PizzeriaService.find()(PizzeriaService.kt:66)` — and
+sides of the lock as frames — `at void pkg.StoreRepository.update(…)(StoreRepository.kt:30)
+waiters=0 blocking from … StoreRepository.find()(StoreRepository.kt:66)` — and
 `main_thread_block` names a class when the slice is a View being inflated.
 `analyze` looks those up in the checkout the config sits in and writes the
 answer into the row: a `code` column in the markdown, and `places` in the

@@ -37,7 +37,7 @@ APP_PID = 4100
 OTHER = "com.other.app"
 BLIND_THREAD = "DefaultDispatcher-worker-1"      # 300 ms Running, no slices
 START_ANCHOR = "AppStart"                        # 1006 ms, the longest slice
-ASYNC_SECTION = "Menu.shown"                     # 700 ms, on no thread at all
+ASYNC_SECTION = "Screen.loaded"                     # 700 ms, on no thread at all
 ASYNC_THREAD = "(async)"                         # what the thread column says for it
 
 
@@ -104,7 +104,7 @@ def test_probe_lists_async_sections_as_anchor_candidates(trace):
 
     A `beginAsyncSection` span sits on a track owned by the process, and a
     candidate list built from thread tracks alone told an agent the app had
-    no instrumentation — on a project with twenty-three named markers.
+    no instrumentation — on a project with two dozen named markers.
     """
     text = run("probe", str(trace), "--process", APP)
     processes = text.split("## Threads", 1)[0]
