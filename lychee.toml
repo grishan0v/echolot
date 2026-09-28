@@ -10,9 +10,26 @@ timeout = 20
 max_retries = 3
 retry_wait_time = 2
 
+# Anchors as well as pages. A link like `../README.md#some-heading` resolves as
+# long as the file exists, and the heading can be renamed under it:
+# docs/compare.md pointed at a README heading that was gone for weeks, and
+# every run passed. This checks each `#anchor` against the headings of the
+# Markdown file it points into, which is the whole of what this repository
+# links to that way.
+#
+# A string rather than `true`: lychee v0.24.2, the version lychee-action v2.9.0
+# installs, reads the key as none, anchor-only, text-only or full, and a
+# boolean does not parse — the whole run would stop at the config. And no
+# absolute GitHub link to a Markdown file may carry an anchor: lychee cannot
+# see the headings of a file GitHub renders in the browser, and says so in its
+# own source, which is one more reason the README links to documents rather
+# than into them.
+include_fragments = "anchor-only"
+
 # `checks.yml` already fails the build on a relative link in README.md — see
 # its "Check that the README has no relative links" step — so link rot in an
-# absolute URL is the failure mode left for this checker to catch.
+# absolute URL, and an anchor no heading answers any more, are the failures
+# left for this checker to catch.
 exclude = [
   # shields.io renders the README's badges (build status is served straight
   # off github.com and is excluded separately below). Each SVG is generated
@@ -26,4 +43,15 @@ exclude = [
   # asset. There is no "broken" for this checker to find here, only today's
   # colour.
   '^https://github\.com/grishan0v/echolot/actions/workflows/[^/]+/badge\.svg',
+
+  # PyPI's account pages — the project's publishing settings and the API
+  # token form, both linked from docs/publishing.md. They need a logged-in
+  # session, so an anonymous checker can never verify them: the most it can
+  # get is a redirect to the login form. And they have answered automated
+  # clients with 503 now and then since PyPI's incident of 2026-09-23,
+  # "Issues with search, logins and logged-in pages" — every run on the pull
+  # requests of 2026-09-28 failed on exactly these two links, while
+  # https://pypi.org/project/echolot/ answered 200. The public pages stay
+  # checked; only the ones behind a login are left out.
+  '^https://pypi\.org/manage/',
 ]

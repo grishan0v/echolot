@@ -5,10 +5,10 @@
 A release is a git tag. `.github/workflows/publish.yml` builds the sdist and
 wheel on the tag, uploads them with PyPI Trusted Publishing — no API token is
 stored anywhere in the repository or in GitHub secrets — and then creates the
-GitHub Release for that tag: the same two files attached, notes generated from
-the commits since the previous tag, a link to the version on PyPI on top. The
-GitHub Release is created only after PyPI has accepted the upload, so the two
-never disagree about which versions exist.
+GitHub Release for that tag: the same two files attached, notes listing the
+pull requests merged since the previous tag, a link to the version on PyPI on
+top. The GitHub Release is created only after PyPI has accepted the upload, so
+the two never disagree about which versions exist.
 
 ## One-time setup on PyPI
 
@@ -39,9 +39,13 @@ values:
 ## Before a release: what CI already checked
 
 `.github/workflows/checks.yml` runs on every pull request into `main`, and on
-`main` after a merge: `pytest` across every Python version the classifiers
-claim, and a `package` job that looks at the README three ways and then builds
-the artefacts.
+`main` after a merge: `pytest` on every Python version in its matrix — the
+five the classifiers claim, written out again by hand — with the coverage
+gate on each; `ruff check echolot tests` in a `lint` job; and a `package` job
+that looks at the README three ways, builds the artefacts and installs them.
+The `protect-main` ruleset requires two of those to pass before a merge:
+`checks`, which passes only when every Python version and the linter did, and
+`package`.
 
 The `package` job is the one that matters at release time, and it exists
 because a PyPI version number can never be reused. Not even after deletion. A
@@ -56,6 +60,7 @@ What it checks, and why each is separate:
 | `readme_renderer` over README.md | image addresses the sanitiser strips, arriving as empty boxes |
 | no relative links in README.md | hrefs that resolve against `pypi.org` and 404 |
 | `python -m build` and `twine check` | broken packaging metadata |
+| the sdist and the wheel, each installed into a clean environment and run from outside the checkout: the shipped files counted, then `echolot --help` and `doctor -q` | a package without its detectors, its guide or its `.claude/` layer — package-data an editable install never reads, so nothing else would notice it missing |
 
 **`twine check` is not the render.** For a Markdown README it never opens the
 file: its `_RENDERERS` table maps `text/markdown` to `None` with the comment
@@ -70,10 +75,16 @@ while every build stayed green.
 
 ## Cutting a release
 
+The bump goes through a pull request like any other change, because the
+`protect-main` ruleset requires one for every change to `main`. The tag comes
+after, on the commit the merge put there.
+
 ```bash
-# 1. bump __version__ in echolot/__init__.py, commit
-#    (pyproject.toml reads the version from that attribute)
-# 2. tag it — the tag must be "v" + that version, the workflow checks
+# 1. on a branch, bump __version__ in echolot/__init__.py, and open a pull
+#    request into main (pyproject.toml reads the version from that attribute)
+# 2. once it is merged, tag the merged commit — the tag must be "v" + that
+#    version, the workflow checks
+git switch main && git pull
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
@@ -81,18 +92,18 @@ git push origin vX.Y.Z
 Watch the run under **Actions**. When it is green the package is at
 <https://pypi.org/project/echolot/>, `pipx install echolot` works, and the
 release is listed at <https://github.com/grishan0v/echolot/releases>. The
-generated notes are a list of commits — edit them in the GitHub UI if a
-version deserves a paragraph.
+generated notes list the pull requests merged since the previous tag, by
+title — edit them in the GitHub UI if a version deserves a paragraph.
 
 A tag, and therefore a release, is a snapshot: it contains what was committed
-before the tag was made and nothing after. To ship a fix, bump the version and
-tag again — an uploaded version number can never be reused on PyPI, even after
-deletion.
+before the tag was made and nothing after. To ship a fix, bump the version in
+another pull request and tag again — an uploaded version number can never be
+reused on PyPI, even after deletion.
 
 ## Checking the artefacts locally
 
 The packaging half of the `package` job, useful before tagging. CI has already
-run all four of its checks on the pull request, so this is a second look rather
+run all five of its checks on the pull request, so this is a second look rather
 than the gate.
 
 ```bash

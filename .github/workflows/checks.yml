@@ -122,8 +122,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      # From the dev extra, so `pip install -e '.[dev]'` on a laptop gets the
-      # same version CI runs and the rules are the ones in pyproject.toml.
+      # From the dev extra, so `pip install -e '.[dev]'` on a laptop gets ruff
+      # under the same floor (`ruff>=0.14`) and the rules are the ones in
+      # pyproject.toml. A floor rather than a pin: CI takes the newest ruff
+      # above it, so a laptop that installed a while ago can run an older one.
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -172,11 +174,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The badge in the README states a range; the classifiers state the list
-      # the matrix above is built from. One claim kept in two places, and the
-      # short badge is only worth having if something keeps them equal: a
-      # version added to the matrix and forgotten in the README leaves the
-      # front page quietly wrong while every other check stays green.
+      # The badge in the README states a range; the classifiers state a list.
+      # One claim kept in two places, and the short badge is only worth having
+      # if something keeps them equal: a version added to the classifiers and
+      # forgotten in the README leaves the front page quietly wrong while every
+      # other check stays green. The matrix in `selfchecks` is a third copy,
+      # written out by hand, and nothing here compares it with either.
       - name: Check that the README badge matches the classifiers
         run: |
           python - <<'PY'
@@ -291,12 +294,13 @@ jobs:
           python -m twine check dist/*
 
       # `pip install -e '.[dev]'` in `selfchecks` above proves the source tree
-      # works and never touches this. Only `sql/*.sql`, `guide/*.md` and
-      # `claude/**/*.md` in `[tool.setuptools.package-data]` decide whether the
-      # wheel and the sdist built just above actually carry the detectors
-      # `doctor` runs, the pages `guide` prints and the layer `init` installs
-      # — an editable install answers all three from the checkout regardless
-      # of what that list says, so it cannot catch a name dropped from it.
+      # works and never touches this. Only `[tool.setuptools.package-data]` —
+      # `sql/*.sql` and `sql/detectors/*.sql`, `guide/*.md`, and the
+      # `claude/` patterns — decides whether the wheel and the sdist built just
+      # above actually carry the detectors `doctor` runs, the pages `guide`
+      # prints and the layer `init` installs. An editable install answers all
+      # three from the checkout regardless of what that list says, so it
+      # cannot catch a name dropped from it.
       #
       # Cached under the same key `selfchecks` uses: `doctor` below downloads
       # the same pinned trace_processor_shell, and a second unrelated 40 MB
@@ -311,10 +315,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # tp.py, layer.py and cmd_guide all find their files by a path next
-          # to `echolot/__file__` — none of them raises ImportError if
-          # package-data was left out of the build; the directory is just
-          # empty on whoever installs it. Emptiness is what this asserts.
+          # main.py (`SQL_DIR`) and layer.py (`GUIDE_DIR`, `CLAUDE_DIR`, which
+          # `guide` and `init` read) find their files by a path next to their
+          # own `__file__` — none of them raises ImportError if package-data
+          # was left out of the build; the directory is just empty on whoever
+          # installs it. Emptiness is what this asserts.
           cat > "$RUNNER_TEMP/smoke.py" <<'PY'
           import sys
           from pathlib import Path
