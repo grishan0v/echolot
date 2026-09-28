@@ -8,6 +8,10 @@ edges the tool went on printing what had stopped being true:
   one entry in `failed`, as #118 records it — as "1 check(s) FAILED".
 - `probe` opened a trace on the flag or the pin, while `analyze` from the
   same directory ran on the binary local.yml names.
+- `hunt "<q>"` on a config that does not load opened an investigation with
+  no scenario, and left the previous traces where the new ones would land,
+  without a word. Since #121 one malformed entry under `detectors:` is a
+  config that does not load.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from echolot import hunt as hunt_mod
 from echolot import main as main_mod
 from echolot import recorder
 from echolot.main import NOT_RUN, main
@@ -55,6 +60,14 @@ def project(monkeypatch, tmp_path) -> Path:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(recorder, "_root", None)
     return tmp_path
+
+
+def _traces(root: Path, n: int = 3) -> Path:
+    d = root / ".echolot" / "traces"
+    d.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        (d / f"coldStart_iter{i:03d}.perfetto-trace").write_bytes(b"x")
+    return d
 
 
 # --- status: a self-check that never ran has no tally -----------------------
@@ -151,3 +164,52 @@ def test_a_config_that_does_not_load_does_not_stop_probe(project, opened):
     check("and said why the binary is the pinned one",
           "does not load" in err and "the pinned one" in err
           and "frame_jank" in err, err)
+
+# --- hunt: a config that does not load opens nothing ------------------------
+
+def test_hunt_refuses_a_config_that_does_not_load(project):
+    (project / "echolot.yml").write_text(BROKEN, encoding="utf-8")
+    traces = _traces(project)
+
+    code, out, err = run("hunt", "cold start 3s → 7s")
+    check("refused, exit 2", code == 2, f"exit {code}\n{out}{err}")
+    check("with what failed", "echolot.yml does not load" in err
+          and "detectors.frame_jank" in err, err)
+    check("and what did not happen", "no traces were moved aside" in err, err)
+    check("nothing was opened", hunt_mod.load(project) is None, hunt_mod.load(project))
+    check("the traces are where they were",
+          len(list(traces.glob("*.perfetto-trace"))) == 3,
+          sorted(p.name for p in traces.iterdir()))
+
+
+def test_the_investigation_already_open_is_left_as_it_was(project):
+    """Opening closes the previous one as abandoned; a refusal must not."""
+    (project / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    code, out, err = run("hunt", "the list stutters")
+    assert code == 0, out + err
+    before = hunt_mod.path(project).read_text(encoding="utf-8")
+
+    (project / "echolot.yml").write_text(BROKEN, encoding="utf-8")
+    code, _, err = run("hunt", "cold start 3s → 7s")
+    check("refused", code == 2, err)
+    check("the open investigation is untouched",
+          hunt_mod.path(project).read_text(encoding="utf-8") == before)
+
+    # Fixed, the same question opens, and the traces move aside as always.
+    (project / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    traces = _traces(project)
+    code, out, err = run("hunt", "cold start 3s → 7s")
+    check("opens once the config loads", code == 0 and "opened #2" in out, out + err)
+    check("and sets the old traces aside", "set aside: 3 trace(s)" in err, err)
+    check("none left loose", not list(traces.glob("*.perfetto-trace")))
+
+
+def test_the_run_log_keeps_the_refusal(project, monkeypatch):
+    monkeypatch.delenv("ECHOLOT_NO_RECORD", raising=False)
+    (project / "echolot.yml").write_text(BROKEN, encoding="utf-8")
+    run("hunt", "cold start 3s → 7s")
+    hunts = [r for r in recorder.read(project / recorder.LOG_FILE)
+             if r.get("cmd") == "hunt"]
+    check("one hunt line", len(hunts) == 1, hunts)
+    check("exit 2, with the sentence", hunts[0].get("exit") == 2
+          and "does not load" in (hunts[0].get("error") or ""), hunts[0])

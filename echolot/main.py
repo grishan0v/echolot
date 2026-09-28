@@ -1490,16 +1490,22 @@ def _clip(text: str, width: int = 58) -> str:
 
 
 def _hunt_config(project: Path, config: str) -> tuple[str | None, str | None]:
-    """Scenario name and config hash, best effort — a broken config is not fatal.
+    """Scenario name and config hash — what an investigation is opened against.
 
     An investigation records what it was opened against so that `drift` can
     later say "the scenario changed" instead of the human having to remember.
+
+    No config at all is `(None, None)`: nothing names a scenario yet. A config
+    that is there and does not load raises, for `cmd_hunt` to refuse on. It
+    used to come back as `(None, None)` too, in silence — and since
+    `Config.load` checks `detectors:`, one malformed entry under it is enough
+    to get there.
     """
-    try:
-        cfg = Config.load(project / config)
-        return cfg.scenario_name, cfg.sha
-    except (ConfigError, OSError):
+    path = project / config
+    if not path.exists():
         return None, None
+    cfg = Config.load(path)
+    return cfg.scenario_name, cfg.sha
 
 
 def cmd_hunt(args) -> int:
@@ -1535,7 +1541,25 @@ def cmd_hunt(args) -> int:
         return 0
 
     if question:
-        scenario, sha = _hunt_config(project, config)
+        # A config that does not load is refused rather than opened around.
+        # The scenario it names is what picks the previous set out of
+        # .echolot/traces. Without it the investigation opened with no
+        # scenario for `drift` to compare, the old traces stayed where this
+        # question's would land, and the one open before it was closed as
+        # abandoned — all for a question whose first step, `collect` or
+        # `analyze`, stops on the same config. The Claude path opens here too
+        # (echolot-hunt.md), and an agent goes on after a command that
+        # succeeded: exit 2 stops it where the fix is, the way `fix-config`
+        # stops `/echolot` at the door. Refused before anything is touched,
+        # so asking again once the config loads loses nothing.
+        try:
+            scenario, sha = _hunt_config(project, config)
+        except (ConfigError, OSError) as e:
+            print(f"error: {config} does not load: {e}", file=sys.stderr)
+            print("Nothing was opened and no traces were moved aside. Fix the "
+                  "config, then ask again.", file=sys.stderr)
+            recorder.failed(f"{config} does not load: {e}")
+            return 2
         # The whole point of the feature: a new investigation must not start
         # on the previous one's traces. Nothing is deleted — the set moves
         # aside exactly the way `collect` moves it between rounds.
