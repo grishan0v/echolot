@@ -60,8 +60,9 @@ that needs a trace or a command of its own. Good both as a CI gate and as the
 agent's first action before entering a loop.
 
 Two cases end without a tally. Both exit 1 and go into the run log as a
-failed self-check, so `echolot` shows the last `doctor` as failed rather than
-passed, and routes the next step back to it:
+self-check that did not run — no checks, and one entry under `failed` — so
+`echolot` says the self-check did not run rather than that it passed, and
+routes the next step back to `doctor`:
 
 - The self-check could not start — a `--tp-binary` pointing at nothing, say.
   `doctor` prints why.
