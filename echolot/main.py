@@ -47,6 +47,7 @@ from . import report as report_mod
 from .config import NO_ANCHOR, Config, ConfigError
 from .reflect.cli import cmd_reflect
 from .tp import (
+    ToolchainError,
     TraceSession,
     load_detectors,
     render_sql,
@@ -2328,6 +2329,22 @@ def _record_not_run(reason: str, info: dict | None = None) -> None:
     recorder.failed(reason)
 
 
+def _no_trace_processor(e: ToolchainError, info: dict) -> int:
+    """Both doctors, when the trace_processor they check never arrived.
+
+    Not a check that failed, and not "could not run" with a curl command
+    line after it: the binary every check runs on could not be downloaded,
+    and the error says why and what to do about it. The same sentence and
+    the same exit 2 as any other command that opens a trace — `init` ends in
+    this too. Recorded like any self-check that did not run, so `echolot`
+    sends the next step back here.
+    """
+    sys.stdout.flush()
+    print(f"error: {e}", file=sys.stderr)
+    _record_not_run(str(e), info)
+    return 2
+
+
 def _doctor_config(args) -> Config | None:
     """The config `analyze` would read from here — for the binary it names.
 
@@ -2413,7 +2430,12 @@ def cmd_doctor(args) -> int:
     width = max(len(k) for k, _ in facts)
     for key, value in facts:
         print(f"  {key.ljust(width)}  {value}")
-    binary = resolve_binary_path(tp_binary)
+    try:
+        # On a first run this is the download, said on stderr as it starts.
+        # The self-check below opens the same path and does not ask again.
+        binary = resolve_binary_path(tp_binary)
+    except ToolchainError as e:
+        return _no_trace_processor(e, info)
     if binary:
         print(f"\n  binary: {binary}")
         if tp_binary:
@@ -2488,6 +2510,8 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
     try:
         from . import selftest
         results = selftest.run(info.get("binary"))
+    except ToolchainError as e:
+        return _no_trace_processor(e, info)
     except Exception as e:
         print(f"self-check: could not run — {e}")
         _record_not_run(f"self-check: could not run — {e}", info)
@@ -2638,6 +2662,36 @@ def _describe(entries: list[tuple[str, str, str, str]]) -> str:
     return "\n".join(out).rstrip()
 
 
+class _Versions(argparse.Action):
+    """`echolot --version`: the line `doctor -q` opens with, and nothing else.
+
+    What an issue asks for first. The trace_processor is the pin, read off
+    the manifest the way `toolchain_info` reads it and never downloaded, so
+    the answer comes offline and on a first run as well. A `--tp-binary` or a
+    `local.yml` does not change it: which binary a project runs is `doctor`'s
+    question.
+
+    Printed from inside the parser, which exits before `main` points the run
+    log anywhere. Asking for the version is not a run: it would otherwise
+    leave a line in .echolot/log/runs.jsonl, and create .echolot/, in
+    whatever directory it happened to be typed.
+    """
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS,
+                 default=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings=option_strings, dest=dest,
+                         default=default, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        import platform as py_platform
+        info = toolchain_info()
+        print(f"echolot {recorder.version()} · trace_processor "
+              f"{info.get('trace_processor') or 'unknown'} · perfetto "
+              f"{info.get('perfetto_package') or 'unknown'} · python "
+              f"{py_platform.python_version()}")
+        parser.exit()
+
+
 def build_parser() -> argparse.ArgumentParser:
     # rich-argparse title-cases the section headings — "Usage:", "Options:",
     # "Positional Arguments:". Every other Python program on the same machine
@@ -2652,6 +2706,9 @@ def build_parser() -> argparse.ArgumentParser:
         # the header congeals into a single paragraph.
         formatter_class=RawDescriptionRichHelpFormatter)
     p.add_argument("--tp-binary", help="path to your own trace_processor_shell")
+    p.add_argument("-V", "--version", action=_Versions,
+                   help="print the versions — echolot, the trace_processor it "
+                        "pins, perfetto, python — and exit")
 
     # The same flag is also allowed AFTER the subcommand: `doctor --tp-binary X`
     # is how nine people out of ten will write it. SUPPRESS is mandatory, or the
@@ -2986,7 +3043,62 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# What this tool prints that a legacy code page has no room for: the arrows
+# of `status` and `init`, the ≠ of a file init kept, the ⚠ of a report, the
+# ✓ of init's picker. The last two are in no Windows code page at all.
+OWN_SYMBOLS = "→↑≠⚠✓"
+
+
+def _streams_that_carry_the_output() -> None:
+    """Standard streams that cannot carry what this tool prints, made to.
+
+    On Windows, Python 3.10–3.14 encode redirected output in the ANSI code
+    page — cp1252 and its neighbours — and UTF-8 becomes the default only in
+    3.15 (PEP 686). Behind a pipe, `init` wrote .gitignore and hosts.json,
+    reached its first `↑` and died with a UnicodeEncodeError, the layer not
+    installed; `echolot` and `doctor -q` died on the `→` of a stale layer.
+    Agents and CI always read this tool through a pipe.
+
+    UTF-8, rather than the same code page with `errors="replace"`, which
+    would also have stopped the crash, because of who reads a pipe. An agent
+    does, and the agents `init` points at this tool read a command's output
+    as UTF-8; so does a CI log, and so does whatever parses `--json`, which
+    RFC 8259 puts in UTF-8 between systems. To every one of them a replaced
+    character is data lost without a word: a slice name, a path or a glob
+    comes back with a `?` in it, the agent pastes it into the next command,
+    and the tool is asked about a name that is in no trace. UTF-8 carries
+    every character as itself, and it is what 3.15 does anyway, so a reader
+    that works with 3.15 works with this.
+
+    `backslashreplace` on the way out is for what even UTF-8 cannot carry —
+    a lone surrogate out of an undecodable file name — so that nothing
+    printed can raise. stdin is read once, by init's picker, from a terminal
+    only; it is decoded as UTF-8 the same way, with `replace`, since the
+    picker understands nothing but ASCII and a stray byte is then one more
+    word it ignores instead of a traceback.
+
+    A stream that can carry the symbols is left as it is: UTF-8 everywhere
+    else, and the Windows console, which Python has written in UTF-16 since
+    3.6. So is one that is not a real stream — a StringIO a test or the
+    self-check put there, a stdin that is closed. Nothing here may stop the
+    command it runs in front of, so nothing here raises.
+    """
+    for stream, errors in ((sys.stdout, "backslashreplace"),
+                           (sys.stderr, "backslashreplace"),
+                           (sys.stdin, "replace")):
+        try:
+            OWN_SYMBOLS.encode(stream.encoding)
+            continue
+        except Exception:
+            pass
+        with contextlib.suppress(Exception):
+            stream.reconfigure(encoding="utf-8", errors=errors)
+
+
 def main(argv=None) -> int:
+    # First: argparse prints too — a usage line, `--help` — and the first
+    # character a stream cannot carry is a traceback wherever it comes.
+    _streams_that_carry_the_output()
     args = build_parser().parse_args(argv)
     # Every invocation leaves one line in .echolot/log/runs.jsonl — the tool's
     # own record of what was asked and how it went, independent of whichever

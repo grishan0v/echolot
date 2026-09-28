@@ -51,6 +51,8 @@ make rather than reporting silence as a clean bill.
 | | |
 |---|---|
 | **Python** | 3.10 or newer |
+| **`curl`** | on `PATH` — the one download in the next row goes through it |
+| **`trace_processor`** *(fetched once)* | the first command that needs it — usually `echolot init`, at its environment check — downloads the build the `perfetto` package pins for your OS and CPU: 10–14 MB, into `~/.local/share/perfetto/prebuilts/`, checked against its SHA-256. It says so on stderr as it starts. Behind a proxy, export `HTTPS_PROXY`. Offline, copy the `trace_processor_shell-…` file from that directory on a machine with the same OS and CPU, under the same name. See [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) |
 | **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
 | **Device** | a phone or emulator with USB debugging on |
 | **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) for the full workflow; Cursor, Codex and others via `echolot guide` |
@@ -64,7 +66,13 @@ Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
 
 ```bash
 pipx install echolot
+echolot --version
 ```
+
+`--version` names what you got: echolot, the `trace_processor` it pins,
+`perfetto` and Python. The binary itself arrives later, once — see
+[Requirements](#requirements). Installed with `pip` into an environment whose
+scripts are not on `PATH`, `python -m echolot` is the same command.
 
 ### 2. Set up your project
 

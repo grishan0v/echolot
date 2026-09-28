@@ -52,7 +52,8 @@ layer: current (10 files)
 self-check: 143 of 143 passed
 ```
 
-Exit code 0/1. No device needed. It takes about fifteen seconds on a laptop,
+Exit code 0/1, and 2 on a first run that could not download trace_processor
+(below). No device needed. It takes about fifteen seconds on a laptop,
 most of them spent starting trace_processor, which the self-check does about
 ten times: once for the report every check reads, then again for each check
 that needs a trace or a command of its own. Good both as a CI gate and as the
@@ -62,13 +63,17 @@ Two cases end without a tally. Both exit 1 and go into the run log as a
 failed self-check, so `echolot` shows the last `doctor` as failed rather than
 passed, and routes the next step back to it:
 
-- The self-check could not start — a first run with no network to download
-  the binary, a `--tp-binary` pointing at nothing. `doctor` prints why.
+- The self-check could not start — a `--tp-binary` pointing at nothing, say.
+  `doctor` prints why.
 - Python was started with `-O`, or `PYTHONOPTIMIZE` is set in the environment.
   Every check is an `assert` and that flag tells Python to skip them, so the
   tally would stop depending on whether the pipeline computes correctly.
   `doctor` refuses in one line before anything runs, and so does the check
   at the end of `init`.
+
+A first run that cannot download trace_processor ends without a tally too,
+and goes into the run log the same way, but it exits 2, with the error every
+command gives for it — see [the download](#the-download) below.
 
 This is deliberately **not** a check of "are the dependencies installed". `pip`
 already fails loudly, and `TraceSession` carries a clear message about a
@@ -177,6 +182,54 @@ SHA-256 per architecture; the binary is downloaded once and cached under
 with its own numbering, and there is no contract that a patch release keeps the
 same binary — so `~=` would not pin the thing the pin exists for. Only `==`
 does.
+
+### The download
+
+trace_processor is not in the wheel. The first command that needs it — the
+check at the end of `echolot init`, `doctor`, or anything that opens a trace —
+fetches the build the manifest names for this OS and CPU, once, and says so on
+stderr before it starts:
+
+```
+[i] trace_processor v56.1 is not on this machine yet — downloading it once, 13.4 MB, the build the perfetto package pins:
+      from https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v56.1/mac-amd64/trace_processor_shell
+      into /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46
+```
+
+stdout stays the command's result, so the first `names --json` is JSON like
+any other. The fetching is perfetto's own: `curl` downloads the file, and
+perfetto checks it against the SHA-256 in the manifest before giving it the
+pinned name. That name ends in the first sixteen hex digits of the hash, and it
+is how the file is trusted from then on without being hashed again. The size
+is 10 to 14 MB, depending on the platform. `echolot --version` names the
+pinned version without downloading anything.
+
+A download that fails is tried once per command, and the command ends with exit
+2 and one error that names the cause and the ways round it:
+
+```
+error: trace_processor v56.1 could not be downloaded: curl exited with status 6 — the server's name did not resolve.
+  Every trace is read with it, so nothing that opens one can run until it is here. Any one of these puts it in place:
+  - a network that reaches commondatastorage.googleapis.com. Behind a proxy, export HTTPS_PROXY — curl honours it — and run this again;
+  - curl, installed and on PATH: the download runs through it;
+  - offline, a copy of ~/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46 from a machine with the same OS and CPU (mac-amd64) that already has it, put at /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46. Keep the name: it carries the hash of the contents, and a file under any other name is not looked at.
+```
+
+- **Behind a proxy.** curl takes `HTTPS_PROXY` from the environment. Export it
+  before the first run, in the shell or the CI job that makes it.
+- **Without curl.** macOS and Windows 10 and later ship it; on a slim Linux
+  image it is one package away.
+- **Without a network.** Copy the file from a machine with the same OS and CPU
+  that has already run echolot: `~/.local/share/perfetto/prebuilts/` there,
+  the same directory here, the same name. The name carries the hash of the
+  contents, so a file from another platform or another pin lands under a name
+  nothing looks for, and cannot be picked up by mistake.
+- **In CI.** Cache `~/.local/share/perfetto/prebuilts`, keyed on the perfetto
+  version: a new pin is a new file, and every run after the first skips the
+  download.
+
+A binary of your own skips all of this — see [your own
+binary](#your-own-binary) below.
 
 ### A pin without a fixture would be freezing blind
 
