@@ -644,10 +644,16 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(f"**Silent:** {', '.join(quiet)}")
 
     tc = report.get("toolchain") or {}
-    if tc.get("trace_processor"):
-        note = f"trace_processor {tc['trace_processor']}"
-        if tc.get("source") == "--tp-binary":
-            note += " (custom binary, pin bypassed)"
+    # Any source but the pin is somebody's own binary, and the footer says
+    # whose. Only `--tp-binary` used to be marked, so a binary named by
+    # `toolchain.tp_binary` in a gitignored local.yml left the report looking
+    # pinned. Said even when its version could not be read: which binary ran
+    # matters more than what it calls itself.
+    custom = tc.get("source") not in (None, "pinned")
+    if tc.get("trace_processor") or custom:
+        note = f"trace_processor {tc.get('trace_processor') or 'unknown'}"
+        if custom:
+            note += f" (custom binary from {tc['source']}, pin bypassed)"
         out.append("")
         out.append(f"<sub>{note}</sub>")
     return "\n".join(out)

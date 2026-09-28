@@ -172,7 +172,8 @@ ASYNC_THREAD = "(async)"
 
 
 def _tp_binary(args, cfg: Config | None = None) -> str | None:
-    """Precedence: the flag, then local.yml, then the pin in requirements."""
+    """Precedence: the flag, then `toolchain.tp_binary` from the config
+    (usually its local.yml), then the pin — `perfetto==` in pyproject.toml."""
     return _tp_binary_source(args, cfg)[0]
 
 
@@ -182,6 +183,14 @@ def _tp_binary_source(args, cfg: Config | None = None) -> tuple[str | None, str 
     Two callers want different halves of this and the second one used to be
     guessed at: every custom binary was reported as `--tp-binary` whether or
     not a flag was involved. See `toolchain_info`.
+
+    `(None, None)` is the pin. It is not a path anyone wrote down: the
+    `perfetto` version pyproject.toml fixes carries a manifest, and the
+    manifest names the trace_processor it downloads. requirements.txt holds
+    nothing but `-e .`, though doctor used to name it as the pin.
+
+    `doctor` asks the same question as `analyze`, in the same order, so that
+    the binary it vouches for is the one the reports come from.
     """
     from_flag = getattr(args, "tp_binary", None)
     if from_flag:
@@ -2177,6 +2186,101 @@ def cmd_calibrate(args) -> int:
     return 0
 
 
+# What `failed` holds for a self-check that never ran. Every reader of the
+# fact counts it or tests it for truth — `echolot` says how many checks
+# failed, `state.next_kind` sends the next step back to doctor, reflect
+# notes it — and a self-check that could not start proves as little as one
+# that failed, so it goes in the same shape. One entry, since it is the whole
+# self-check that did not run rather than any check in it: `checks: 0`
+# beside it says so, and `error` carries the sentence doctor printed.
+NOT_RUN = "the self-check did not run"
+
+# Every self-check is an `assert`, and `python -O` — or PYTHONOPTIMIZE in the
+# environment, which is easy to have without knowing — compiles them out. A
+# check made only of asserts then passes without looking at anything, and one
+# with working code inside an assert fails for want of what that code would
+# have done. A healthy machine read "2 of 143 FAIL". The fixture report with
+# every detector's rows emptied failed 33 checks, and 23 under the flag: ten
+# passed a report with nothing in it. Neither number is about the pipeline,
+# so under that flag doctor gives no verdict at all.
+ASSERTS_SKIPPED = ("self-check: refused — every check is an assert, and this "
+                   "Python was told to skip asserts (-O or PYTHONOPTIMIZE), so "
+                   "nothing would be checked.")
+
+
+def _refused_without_asserts() -> bool:
+    """True, having said why, when this Python skips `assert` statements.
+
+    First thing in both doctors, before a line of the environment: the
+    refusal is the whole answer, and one sentence cannot be pushed off the
+    screen by a `| head`. `init` ends in `_doctor_quiet` and gets it from
+    there. Recorded like any self-check that did not run — see `NOT_RUN`.
+    """
+    if not sys.flags.optimize:
+        return False
+    print(ASSERTS_SKIPPED)
+    _record_not_run(ASSERTS_SKIPPED)
+    return True
+
+
+def _record_not_run(reason: str, info: dict | None = None) -> None:
+    """A self-check that never ran goes into the run log as one that failed.
+
+    It used to go in as nothing. doctor printed "could not run", exited 1 and
+    noted no checks at all, and `echolot` then read that line as "doctor 0s
+    ago, passed" — with `next` pointing past the one command that had just
+    said no report could be trusted.
+    """
+    recorder.note(checks=0, failed=[NOT_RUN])
+    if info is not None:
+        recorder.note(trace_processor=info.get("trace_processor"))
+    recorder.failed(reason)
+
+
+def _doctor_config(args) -> Config | None:
+    """The config `analyze` would read from here — for the binary it names.
+
+    doctor used to read none. With `toolchain.tp_binary` in a local.yml,
+    `analyze` ran on that binary while doctor self-checked the pinned one:
+    a pass about a trace_processor the project's reports never touched.
+
+    Only a config that is there is read, the rule `names` follows too:
+    outside a project there is nothing to follow. One that is there and does
+    not load is said, and the check goes on without it — on the flag, or on
+    the pin. `analyze` stops on the same error, so this is where it is first
+    heard, not where it has to be handled.
+    """
+    path = getattr(args, "config", None) or "echolot.yml"
+    if not Path(path).exists():
+        return None
+    try:
+        return Config.load(path, getattr(args, "local", None))
+    except ConfigError as e:
+        instead = ("the one --tp-binary names" if getattr(args, "tp_binary", None)
+                   else "the pinned one")
+        print(f"[!] the config does not load, so a trace_processor it names "
+              f"cannot be followed — doctor checks {instead}: {e}", file=sys.stderr)
+        return None
+
+
+def _binary_origin(source: str | None, cfg: Config | None) -> str | None:
+    """Who asked for a custom binary, down to the file when it was a file.
+
+    `toolchain.tp_binary` names a key, and two files can hold it: local.yml
+    is merged over echolot.yml. The reader wants the one to open.
+    """
+    if source != "toolchain.tp_binary" or cfg is None:
+        return source
+    holder = cfg.path
+    if cfg.local_path:
+        import yaml
+        with contextlib.suppress(OSError, yaml.YAMLError):
+            local = yaml.safe_load(Path(cfg.local_path).read_text(encoding="utf-8"))
+            if isinstance(local, dict) and Config(local).tp_binary:
+                holder = cfg.local_path
+    return f"toolchain.tp_binary in {holder}"
+
+
 def cmd_doctor(args) -> int:
     """Facts about the environment plus proof that it computes correctly.
 
@@ -2186,14 +2290,22 @@ def cmd_doctor(args) -> int:
     version becomes visible, and that version defines the vocabulary the
     detectors match on. Second: the self-check on a synthetic trace shows not
     the presence of tools but the correctness of answers.
+
+    The trace_processor it checks is the one `analyze` would run from here:
+    the flag, then `toolchain.tp_binary` from the config, then the pin.
     """
     import platform as py_platform
 
-    info = toolchain_info(args.tp_binary)
-    binary = resolve_binary_path(args.tp_binary)
+    if _refused_without_asserts():
+        return 1
+
+    cfg = _doctor_config(args)
+    tp_binary, source = _tp_binary_source(args, cfg)
+    info = toolchain_info(tp_binary, source)
+    origin = _binary_origin(source, cfg)
 
     if getattr(args, "quiet", False):
-        return _doctor_quiet(args, info)
+        return _doctor_quiet(args, info, origin=origin)
 
     print("## Environment\n")
     facts = [
@@ -2204,15 +2316,20 @@ def cmd_doctor(args) -> int:
         ("rich-argparse", _pkg_version("rich-argparse")),
     ]
     tp_version = info.get("trace_processor") or "unknown"
-    if info.get("source") == "--tp-binary":
-        tp_version += "  ← custom binary, the requirements.txt pin is bypassed"
+    if tp_binary:
+        tp_version += "  ← custom binary, the pin in pyproject.toml is bypassed"
     facts.append(("trace_processor", tp_version))
     width = max(len(k) for k, _ in facts)
     for key, value in facts:
         print(f"  {key.ljust(width)}  {value}")
+    binary = resolve_binary_path(tp_binary)
     if binary:
         print(f"\n  binary: {binary}")
-        if not args.tp_binary:
+        if tp_binary:
+            # Who asked for it, beside the path: a flag typed for this run,
+            # or a line in a file that is normally gitignored.
+            print(f"  (from {origin})")
+        else:
             print("  (the name is a SHA-256 prefix: contents verified on download)")
 
     # Before the self-check, not after: agents run `doctor | head -30`, and
@@ -2226,11 +2343,12 @@ def cmd_doctor(args) -> int:
     print("\n## Self-check on a synthetic trace\n")
     try:
         from . import selftest
-        results = selftest.run(args.tp_binary)
+        results = selftest.run(tp_binary)
     except Exception as e:
         print(f"  could not run: {e}")
         print("\nThe environment is broken. Until this is fixed, no report "
               "from it can be trusted.")
+        _record_not_run(f"self-check could not run: {e}", info)
         return 1
 
     failed = [(name, why) for name, why in results if why]
@@ -2248,18 +2366,28 @@ def cmd_doctor(args) -> int:
     return 0
 
 
-def _doctor_quiet(args, info: dict, project: Path | None = None) -> int:
+def _doctor_quiet(args, info: dict, project: Path | None = None,
+                  origin: str | None = None) -> int:
     """`doctor -q`: three lines, and every failure. Same exit code.
 
-    For a subagent, a CI step, a `| head`: the full report is six kilobytes
+    For a subagent, a CI step, a `| head`: the full report is ten kilobytes
     of "ok" that a second reader in the same session pays for again. Here
     the verdicts stay and the evidence goes. `init` calls it too, for the
     project it just installed into.
+
+    The binary checked is the one `info` names and no other, so the first
+    line and the verdict under it cannot be about two different
+    trace_processors. `origin` is who asked for a custom one, when the caller
+    knows it more exactly than `info["source"]` does — the file, not only
+    the key.
     """
     import platform as py_platform
 
+    if _refused_without_asserts():
+        return 1
     tp = info.get("trace_processor") or "unknown"
-    src = " (custom binary)" if info.get("source") == "--tp-binary" else ""
+    src = (f" (custom binary from {origin or info.get('source')})"
+           if info.get("binary") else "")
     print(f"echolot {recorder.version()} · trace_processor {tp}{src} · "
           f"perfetto {info.get('perfetto_package') or 'unknown'} · "
           f"python {py_platform.python_version()}")
@@ -2268,9 +2396,10 @@ def _doctor_quiet(args, info: dict, project: Path | None = None) -> int:
     print(line)
     try:
         from . import selftest
-        results = selftest.run(getattr(args, "tp_binary", None))
+        results = selftest.run(info.get("binary"))
     except Exception as e:
         print(f"self-check: could not run — {e}")
+        _record_not_run(f"self-check: could not run — {e}", info)
         return 1
     failed = [(name, why) for name, why in results if why]
     recorder.note(checks=len(results), failed=[name for name, _ in failed],
@@ -2498,6 +2627,10 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("-q", "--quiet", action="store_true",
                     help="three lines and the failures, same exit code — for "
                          "subagents and CI")
+    # Hidden, like status's: read only for `toolchain.tp_binary`, so that the
+    # binary doctor vouches for is the one `analyze` runs from here.
+    dr.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
+    dr.add_argument("--local", help=argparse.SUPPRESS)
     dr.set_defaults(func=cmd_doctor)
 
     pr = add("probe", "agent", "<trace>", "what is inside the trace at all")
