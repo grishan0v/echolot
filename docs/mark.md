@@ -197,8 +197,9 @@ surrounding code came out as `provideproductr`, `onauthenticatio` and
 variable while what the pool is *for* is in the call it is passed to.
 
 **At most 15 characters.** Linux truncates a thread's `comm` and the trace
-carries what is left — `pool-12-thread-` and `kin.gloommaster` are both cut in
-real traces. `cart-queue`, not `CartQueueProcessorExecutor`.
+carries what is left — `pool-12-thread-1` arrives as `pool-12-thread-`, and
+the main thread of `com.example.myapp` as `m.example.myapp`. `cart-queue`,
+not `CartQueueProcessorExecutor`.
 
 A thread that is given a name is not a finding, and neither is a pool whose
 factory names its threads. What counts as given:

@@ -123,8 +123,9 @@ _NAMED_ALREADY = re.compile(
     r"\bThread\.currentThread\(\)\s*\.\s*name\s*=|"
     r"\bnewThread\s*\(")
 # Linux truncates a thread's `comm` to 15 characters, and the trace carries
-# what is left: `pool-12-thread-` and `kin.gloommaster` are both cut. A name
-# longer than this is a name you will not read back.
+# what is left: `pool-12-thread-` and `m.example.myapp`, the main thread of
+# `com.example.myapp`, are both cut. A name longer than this is a name you
+# will not read back.
 COMM_MAX = 15
 
 _CLASS_DECL = re.compile(r"\b(?:class|object)\s+([A-Za-z_][A-Za-z0-9_]*)")

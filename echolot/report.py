@@ -676,7 +676,8 @@ def to_markdown(report: dict[str, Any]) -> str:
 # What the evidence column means where it is not obvious. `main_thread_block`
 # groups by thread as well as by name, and the thread is always the main
 # one — so the column shows its comm, which the kernel cuts to fifteen
-# characters: `m.example.app` for `com.example.app`. Kept rather than
+# characters: `m.example.myapp` for `com.example.myapp`, while
+# `com.example.app` is fifteen exactly and arrives whole. Kept rather than
 # renamed because it is part of the row's identity, and a rename would make
 # every earlier report's rows vanish in `compare`.
 EVIDENCE_LEGEND = {

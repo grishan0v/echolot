@@ -786,10 +786,10 @@ def _resolve_process(tp, glob: str, trace: str | None = None) -> list[dict]:
         where = f" {Path(trace).name}" if trace else ""
         # The name a trace carries is not always the one the package has.
         # Linux truncates comm to 15 characters and keeps the TAIL, so
-        # `com.rumpilstilstkin.gloommaster` can arrive as `kin.gloommaster`
-        # — which a trailing-wildcard glob does not match either. Seen on one
-        # trace out of fifteen from a single macrobenchmark round, where the
-        # other fourteen carried the full name.
+        # `com.example.myapp` can arrive as `m.example.myapp` — which a
+        # trailing-wildcard glob does not match either. Seen on one trace out
+        # of fifteen from a single macrobenchmark round, where the other
+        # fourteen carried the full name.
         tail = glob.rstrip("*")[-15:]
         raise ConfigError(
             f"no process in trace{where} matches project.process = '{glob}'. "
