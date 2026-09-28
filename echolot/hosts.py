@@ -118,7 +118,7 @@ def detect(project: Path) -> list[Host]:
 
 
 def parse(spec: str) -> list[Host] | None:
-    """`--for claude,cursor`, `--for all`, `--for detected`. None when unknown."""
+    """`--for claude,cursor`, `--for all`. None when a word names no client."""
     if spec == "all":
         return list(HOSTS)
     keys = [k.strip() for k in spec.split(",") if k.strip()]
@@ -200,8 +200,9 @@ def write_stub(project: Path, host: Host) -> tuple[str, Path]:
 # --- the choice, remembered --------------------------------------------------
 #
 # Without this, deselecting Claude Code is a trap: `.claude/` would be absent,
-# `_layer_line` would call that "absent", and `next` would ask for `echolot
+# `layer.one_line` would call that "absent", and `next` would ask for `echolot
 # init` forever — on a project that had just said it does not want the layer.
+# And the choice has to be read back as well as written: see `starting_set`.
 
 CHOICE_FILE = Path(".echolot") / "hosts.json"
 
@@ -234,6 +235,21 @@ def wants_claude(project: Path) -> bool:
     """Whether this project expects the .claude/ layer. Never asked means yes."""
     chosen = load_choice(project)
     return "claude" in chosen if chosen is not None else True
+
+
+def starting_set(project: Path) -> list[Host]:
+    """What `init` points at when `--for` does not say: the saved choice.
+
+    Detection only the first time. It used to run every time, and detection
+    puts Claude Code in unconditionally — so `init --for cursor` recorded the
+    opt-out, and the next plain `init` detected Claude Code again, installed
+    `.claude/` and wrote the opt-out over. Saving the choice made it a state;
+    reading it back is what makes it one.
+    """
+    saved = load_choice(project)
+    if saved is None:
+        return detect(project)
+    return [BY_KEY[k] for k in saved]
 
 
 # --- the screen --------------------------------------------------------------
@@ -290,13 +306,20 @@ def _parse(line: str) -> tuple[list[Host], list[str]]:
     return picked, bad
 
 
-def pick(detected: list[Host], stream=sys.stdout) -> list[Host]:
+def pick(detected: list[Host], stream=sys.stdout,
+         found: set[str] | None = None) -> list[Host]:
     """Confirm a guess rather than ask a blank question.
 
     Detection has already looked at the project, so the common answer is
     Enter. The answer is a typed line and not an arrow-key menu: "1 3", "all"
     and "none" are one keystroke apart, and what was chosen stays readable in
     a transcript an agent reads back later.
+
+    `detected` is what is ticked, and Enter keeps it: the choice the project
+    saved last time when there is one, detection otherwise. `found` is what
+    the tree shows evidence of now, marked whether ticked or not — a saved
+    choice that leaves out a client the tree has since started using is worth
+    seeing — and it is the ticked set when not given.
 
     `readline` is loaded for its effect on `input()` rather than for anything
     called here. Without it the left arrow arrives inside the answer as the
@@ -323,12 +346,14 @@ def pick(detected: list[Host], stream=sys.stdout) -> list[Host]:
 
     bold, dim, off = _colour(stream)
     pre = {h.key for h in detected}
+    seen = pre if found is None else found
     print(f"\n{bold}Point which agents at echolot?{off}\n", file=stream)
     width = max(len(h.title) for h in HOSTS)
     for i, h in enumerate(HOSTS, 1):
         mark = "✓" if h.key in pre else "·"
-        found = "   (found)" if h.key in pre and h.key != "claude" else ""
-        print(f"  {i} {mark} {h.title.ljust(width)}  {dim}{h.path}{off}{found}",
+        # Not for Claude Code: detection names it whether or not it is there.
+        here = "   (found)" if h.key in seen and h.key != "claude" else ""
+        print(f"  {i} {mark} {h.title.ljust(width)}  {dim}{h.path}{off}{here}",
               file=stream)
         if h.note:
             print(f"        {' ' * width}{dim}{h.note}{off}", file=stream)

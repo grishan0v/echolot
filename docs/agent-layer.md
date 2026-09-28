@@ -24,24 +24,44 @@ Installs into the project the knowledge of how to use the tool:
 
 `/echolot` is the one door. It runs `echolot` (the status command), shows
 it, and acts on the `next` line — `echolot status --next` gives it as one
-word: `init`, `init-force`, `doctor`, `setup`, `fix-config`, `hunt`. Setup
-and hunt are the two commands beside it, invoked through the Skill tool, so
-only the branch that applies enters the window; they remain callable
-directly for whoever knows where they are going. An argument wins over the
-state: `/echolot init` runs `echolot init` (not setup — a session once
-confused the two), `/echolot hunt <words>` starts a hunt with the words as
-the regression, free text about slowness means the same.
+word: `init`, `doctor`, `setup`, `fix-config`, `resume-or-new`,
+`init-force`, `fix-settings`, `hunt`. Setup and hunt are the two commands
+beside it, invoked through the Skill tool, so only the branch that applies
+enters the window; they remain callable directly for whoever knows where they
+are going. An argument wins over the state: `/echolot init` runs
+`echolot init` (not setup — a session once confused the two),
+`/echolot hunt <words>` starts a hunt with the words as the regression and
+without the `resume-or-new` question, and free text about slowness means the
+same.
+
+They are listed in the order `next_kind` tries them, and the order is part of
+the design. What
+`init` does on its own — a layer that is missing or stale — comes first: the
+agent is about to read that layer, and `init` touches nothing the project
+edited, so there is nothing to ask. Two things about the layer only a person
+can settle come last, right before a hunt: files edited here that
+`init --all` would overwrite (`init-force`), and a `settings.json` that does
+not parse (`fix-settings`). The skill asks, and either answer leads on to the
+hunt. Asked first, "keep my edits" had nowhere to lead but to `init-force`
+again, and an unreadable `settings.json` — read as stale — sent the agent
+round `init`, which cannot fix it, for good.
 
 The template ships **inside the package** rather than living in the application
 repository: knowledge of how to use the tool belongs to the tool. What lands in
 the project is a copy — edit it for your modules and commit it. A repeated
 `init` brings up to date what you did not touch and leaves what you edited
-alone; `--all` overwrites those too — it is still `init`, and the flag says "every file".
+alone; `--all` overwrites those too — it is still `init`, and the flag says
+"every file". The skill never runs it without asking: it shows the files
+`--all` would overwrite and lets the human choose.
 
-`init` also adds `/.echolot/` and `/local.yml` to the project's `.gitignore`,
-appended as a two-line block and only when they are not already covered — the
-traces are tens of megabytes each and `local.yml` holds a device serial, and
-both have been documented as gitignored since before anything wrote them there.
+`init` also adds `/.echolot/` and `/local.yml` to the project's `.gitignore`
+— a comment line and whichever of the two patterns is not already covered,
+appended — but only at a git root. Anywhere else it writes nothing and says
+so, with the two lines to put in a `.gitignore` in the project's directory:
+the patterns are anchored there, and git reads a `.gitignore` at every level.
+The traces are tens of megabytes each and `local.yml` holds a device serial,
+and both have been documented as gitignored since before anything wrote them
+there.
 
 One file in that list is not echolot's copy. `settings.json` is Claude Code's
 own configuration — the project keeps its hooks and its enabled plugins there
@@ -59,11 +79,26 @@ So `init` writes a small manifest of what it installed, and `doctor` (and
 `echolot` with no arguments) compares the layer with the template: `current`,
 `stale` (untouched since install, template moved on), `customised` (edited
 here, template did not move), `conflict` (both), `missing`, and — for the
-merged file above — `unreadable`. Stale is a line
-in the output and `echolot init`, not a failed check — a project may have
-edited its copy on purpose, and the manifest is what lets the tool tell the
-two apart. A layer installed before the manifest existed can only be
-`differs`, and needs `--all`.
+merged file above — `unreadable`. None of them fails a check: a project may
+have edited its copy on purpose, and the manifest is what lets the tool tell
+the two apart. A layer installed before the manifest existed can only be
+`differs`.
+
+What each state asks for, and of whom, is decided in one place and said the
+same way on the one line `doctor -q` and `status` print and in the full
+`doctor` section:
+
+| state | what it asks for |
+|---|---|
+| `stale`, `missing` | `echolot init` — it touches nothing edited here |
+| `conflict`, `differs` | `echolot init --all`, which overwrites every edited file, the customised ones included — so the skill shows the files and asks first |
+| `customised` | nothing: the edit is the whole difference |
+| `unreadable` | a person fixes the JSON; no flag of `init` touches a merged file |
+
+They used to decide separately, and disagreed: one stale file beside one
+customised read `echolot init` on the one line and `echolot init --all` in the
+full section, and the second would have overwritten the customised file to
+update the stale one.
 
 ## Why a CLI and not an MCP server
 
@@ -90,6 +125,7 @@ What ships now is one command and a set of pointers:
 echolot guide          # how to work with this tool
 echolot guide setup    # building echolot.yml
 echolot guide hunt     # the loop
+echolot guide anr      # an ANR report from the field, read and then measured
 ```
 
 `echolot init` writes a few lines into whatever the project shows evidence of —
@@ -101,9 +137,11 @@ worth recording because the obvious assumption is wrong: its context file is
 `GEMINI.md`, and `AGENTS.md` reaches it only when somebody has set
 `context.fileName` in `.gemini/settings.json`. The documentation shows that as
 an example of overriding the default, not as a second default. One shared file
-does not yet cover everyone. On a terminal it shows the detected set and lets you
-change it; `--for claude,cursor` (or `--for all`) skips the question, and
-`--no-input` takes the detection as-is.
+does not yet cover everyone. On a terminal `init` shows a set and lets you
+change it — the choice saved last time, or on a first run the detected set,
+with whatever the tree shows evidence of marked `(found)` either way.
+`--for claude,cursor` (or `--for all`) skips the question and replaces the
+choice, and `--no-input` keeps it as it is.
 
 The question is asked only when the CLI parser turned it on **and** there is a
 terminal at both ends, and never under `CI`. `init` is run by agents, and by
@@ -117,6 +155,14 @@ init" — on a project that chose Cursor only, that same absence would have
 `next` demand `echolot init` forever. With the choice recorded the layer reads
 as `opted-out`, and the next step is whatever the config says.
 
+A state has to be read back as well as written. `init` without `--for` starts
+from the saved choice, and detects only when there is none. It used to detect
+on every run, and detection names Claude Code whether or not it is there — so
+`init --for cursor` followed by a plain `init` installed `.claude/` and wrote
+the opt-out over. And where a project declined Claude Code, the lines that
+name the next step — `status`, `echolot hunt "<q>"` — name the door it chose,
+`echolot guide`, rather than a `/echolot` its human does not have.
+
 **The knowledge is not copied per client, on purpose.** Four files would drift
 apart within two releases, and a copy committed to somebody's repository goes
 stale the moment the package moves — which is exactly why `init` has to be
@@ -125,8 +171,12 @@ Text printed by the installed package cannot be stale. The pointers are stubs,
 and a self-check fails if one starts growing into a copy.
 
 A file the project wrote itself is never rewritten. When `AGENTS.md` is
-already there and has no echolot section, `init` prints the lines to add and
-leaves the file alone.
+already there and has no echolot section, `init` leaves the file alone and
+prints the whole section to paste into it, both marker lines included; pasted
+as printed, the next `init` finds its markers and keeps what is between them
+current. It used to print four lines and an ellipsis, and a section pasted
+from that had no end marker — every later `init` found an echolot section it
+could not bound, and left it alone as edited.
 
 ### What still does not port
 
@@ -151,47 +201,65 @@ of the same CLI a human types.
 
 ```
 /echolot                             what the file lets an agent run
- └─ skills/echolot/SKILL.md          status --next · init · doctor · analyze
-    │                                compare · probe · anr · mark · calibrate · hunt
+ └─ skills/echolot/SKILL.md          echolot · status --next · init · doctor · hunt
+    │                                analyze · report · compare · probe · anr · mark
+    │                                domains · calibrate
     │
-    ├─ references/report.md          analyze · compare · collect · probe
-    ├─ references/config.md          domains · calibrate
+    ├─ references/report.md          report · analyze · compare · probe · collect
+    ├─ references/config.md          domains · calibrate    → references/naming.md
     ├─ references/naming.md          names
     ├─ references/collect.md         collect · calibrate
     │
-    ├─ commands/echolot-setup.md     probe · names · domains · collect
-    │                                analyze · mark · calibrate      → echolot.yml
+    ├─ commands/echolot-setup.md     scan · domains · mark · collect · probe · names
+    │                                analyze · calibrate                → echolot.yml
     │
-    ├─ commands/echolot-hunt.md      doctor · init · domains · collect · hunt · mark
+    ├─ commands/echolot-hunt.md      doctor · init · hunt · collect · mark · domains
+    │  │                             hunt "<q>" opens it, hunt --done closes it
     │  │
-    │  └─ agents/perf-hunter.md      doctor · analyze · compare · names · domains
-    │     its own window             mark · anr · explain · collect   + Read Edit Grep
+    │  └─ agents/perf-hunter.md      doctor · analyze · report · compare · names
+    │     its own window             probe · domains · mark · anr · explain · collect
+    │                                hunt --show                 + Read Edit Grep
     │
     └─ commands/echolot-reflect.md   reflect          → .echolot/reflect/<id>.json
 
 echolot guide                        the same map, for a client without `.claude/`
- └─ guide/overview.md                every verb
-    ├─ guide/setup.md                status · collect · analyze · probe · names · domains
-    ├─ guide/hunt.md                 status · hunt · doctor · collect · analyze
+ └─ guide/overview.md                echolot · status --next · init · doctor · collect
+    │                                analyze · report · compare · domains · hunt
+    │                                calibrate · explain · reflect · guide
+    ├─ guide/setup.md                scan · collect · probe · names · domains
+    │                                analyze · echolot
+    ├─ guide/hunt.md                 doctor · hunt · collect · analyze · report
     │                                compare · names · domains · mark
     └─ guide/anr.md                  anr · mark
 ```
 
+`report` (views of a report already on disk) sits beside `analyze` wherever a
+report is read row by row — the skill, its report reference, the hunter and
+the two guides that hunt; `scan` (the facts setup starts from) is in the two
+setup paths and nowhere else. Every invocation in these files, inline or
+fenced, is run past the CLI's own parser by a test: the verb has to exist and
+every flag has to be one that verb takes.
+
 Four things the shape says.
 
 **The first call is always the same.** Every path out of the door begins with
-`echolot status --next`, and the skill switches on the word it comes back with
-rather than on the look of the project.
+bare `echolot` — the status command — and the skill switches on the word on
+its `next` line (`echolot status --next` prints the word alone) rather than on
+the look of the project.
 
-**The references are leaves.** They name verbs and lead to no further file, so
-nothing in the layer sits more than three hops from `/echolot`. Two of them are
-opened from below as well: `perf-hunter` reads `references/report.md` instead of
+**The references are one level down.** They name verbs, and one of them points
+further: `references/config.md` sends its reader to `references/naming.md` for
+why thread masks are masks — `comm` is cut to fifteen characters. Nothing in
+the layer sits more than three hops from `/echolot`. Two references are opened
+from below as well: `perf-hunter` reads `references/report.md` instead of
 working the schema out by hand, and setup reads `references/collect.md` to
 capture the probe trace while there is still no config.
 
-**One file reaches `Edit`.** `perf-hunter` is the only place allowed to write
-into the sources, which is what makes `AGENTTMP_` a prefix one agent owns rather
-than a convention several of them have to keep.
+**One file puts markers in.** `perf-hunter` is the only place that adds
+anything to the sources, which is what makes `AGENTTMP_` a prefix one agent
+owns rather than a convention several of them have to keep. The main context
+only takes out: `echolot mark --remove`, before a new hunt, for the markers an
+earlier investigation's `mark --apply` left behind.
 
 **One file points back at the others.** `echolot-reflect` proposes changes to
 `SKILL.md`, `perf-hunter.md` and the CLI itself — the only arrow here that
@@ -209,13 +277,22 @@ whole thing exists to remove sets in.
 The subagent works in its own window and returns only the conclusion:
 
 ```
-Place:       <file:line or module>
-Evidence:    <detector, numbers from the report>
-Mechanism:   <why this costs that much time>
-Suggestion:  <what to do>
-Confidence:  high | medium | low — and why
-Cleanup:     temporary instrumentation removed | none was added
+Place:         <file:line or module>
+Evidence:      <detector, numbers from the report — measured, nothing else>
+Mechanism:     <why this costs that much time; steps it did not measure
+               marked (inferred), steps it could not check marked (gap)>
+Suggestion:    <what to do>
+Confidence:    high | medium | low — and why
+Ruled out:     <what it checked and did not carry to a cause>
+Also measured: <every marker it planted, one line and one number each>
+Cleanup:       temporary instrumentation removed | none was added
 ```
+
+Eight fields, and `reflect` checks for all eight. The last two were added
+after hunts that lost something: an agent measured the redundant work it was
+looking for at 252.7 ms and returned a conclusion about something else, with
+no field to put the number in; and a suspect nobody measured to the end costs
+the next hunt a round spent rediscovering it.
 
 ## The loop protocol
 
@@ -300,6 +377,30 @@ already returned the directory it created, and dropping that return value left
 the record remembering a question with nothing behind it. Investigations are
 numbered so there is something short to name one by — `echolot hunt --show 2`.
 
+Some of that loose set may have been recorded for the very question being
+opened — the human captured the traces, then asked. They are moved, not lost,
+and they are still that question's evidence: the command hands the agent the
+directory `echolot hunt` names, rather than recording them again.
+
+### Who opens it, and who closes it
+
+On the Claude Code path both ends belong to the `echolot-hunt` command. It
+opens the investigation with the human's question and the change (`--since`)
+before anything is recorded for it — unless the human is carrying on the one
+already open — and closes it with `echolot hunt --done` and one line of the
+conclusion when `perf-hunter` returns, whatever the answer was.
+
+For a while the path opened one only when the door asked `resume-or-new` and
+the human chose something new, and closed none. `collect` and `analyze` file
+only into an investigation that is open, so on every other route `analyze`
+kept no copy of its report and `perf-hunter`'s bare `echolot compare` said
+there was nothing to compare; and a hunt that had finished stayed open, so the
+next visit was asked `resume-or-new` about work that was over.
+
+`perf-hunter` itself never opens or closes one. It is handed an open
+investigation in its prompt and works inside it, which is the same boundary
+as the question above: which investigation is settled before the loop starts.
+
 ### Filed under the investigation, without moving
 
 `.echolot/traces/` and `.echolot/out/report.json` stay exactly where they are:
@@ -309,15 +410,22 @@ would rewrite all three for tidiness. What changed is that each artefact is
 
 ```
 .echolot/
-├── hunt.json                    the open investigation
+├── hunt.json                    the open investigation; a closed one stays
+│                                here, readable, until the next one opens
 ├── traces/                      the working set — unchanged
 │   └── coldStart-<stamp>/       a round, pushed aside by collect
 ├── out/report.json|md           the latest report — unchanged
 └── hunts/
     └── 1/
-        ├── hunt.json            the record, once it is closed
+        ├── hunt.json            the record, archived when the next one opens
         └── reports/001.json…    a copy per analyze, oldest first
 ```
+
+`echolot hunt --done` marks the record concluded where it is;
+`echolot hunt "<q>"` is what moves it here. Bare `echolot hunt` reads the one
+in place and says whether it is open — a concluded one used to be headed
+"Open investigation", which told an agent deciding whether to open one that
+one was.
 
 Reports are copied, trace directories are recorded by path. That asymmetry is
 deliberate: a report is tens of kilobytes and there is no other way to see what

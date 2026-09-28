@@ -152,19 +152,25 @@ def collect_line(st: dict) -> str | None:
     return None
 
 
+# The vocabulary, not the routing order — `next_kind` below is that. The
+# order here is the one `status --help` lists, and it is also what keeps that
+# help the same under Rich and under argparse at 80 columns: argparse breaks a
+# line at a hyphen and Rich does not, so a hyphenated word that lands at a
+# line's end renders two ways (tests/test_cli_help.py). Adding a word, check
+# that test before settling where it goes.
 NEXT_KINDS = ("init", "init-force", "doctor", "setup", "fix-config",
-              "resume-or-new", "hunt")
+              "resume-or-new", "fix-settings", "hunt")
 
 
 def next_kind(st: dict) -> str:
     # `opted-out` falls through on purpose: nothing to install and nothing
     # wrong, so the next step is whatever the config says.
-    if st["layer_verdict"] == "absent":
+    #
+    # First what `init` does on its own. The agent is about to read this
+    # layer, and `init` touches nothing the project edited, so there is
+    # nothing to ask.
+    if st["layer_verdict"] in ("absent", "stale"):
         return "init"
-    if st["layer_verdict"] == "stale":
-        return "init"
-    if st["layer_verdict"] == "differs":
-        return "init-force"
     d = st.get("last_doctor")
     if d and d.get("facts", {}).get("failed"):
         return "doctor"
@@ -179,6 +185,17 @@ def next_kind(st: dict) -> str:
     # the agent puts the question with the recap `status` prints below.
     if hunt_mod.needs_choice(st.get("hunt"), st):
         return "resume-or-new"
+    # Two things about the layer only a person can settle, asked last and
+    # before a hunt rather than first, because neither answer may stop the
+    # work: files edited here that `--all` would overwrite (keep them, and the
+    # hunt goes on), and a settings.json that does not parse (fix it or not,
+    # the hunt goes on). Asked first, "keep my edits" had nowhere to lead —
+    # `next` said `init-force` again — and an unreadable settings.json read
+    # as stale sent the agent round `init`, which cannot fix it, for good.
+    if st["layer_verdict"] == "differs":
+        return "init-force"
+    if st["layer_verdict"] == "unreadable":
+        return "fix-settings"
     return "hunt"
 
 
@@ -200,9 +217,6 @@ def next_step(st: dict) -> str:
         if st["layer_verdict"] == "absent":
             return "echolot init — installs the .claude/ layer; then /echolot in Claude Code"
         return "echolot init — brings the .claude/ layer up to date (the agent reads it)"
-    if kind == "init-force":
-        return ("echolot init --all — the .claude/ layer differs from the package's and "
-                "nothing says whether you edited it; --all overwrites them, keep your edits with git")
     if kind == "doctor":
         return "echolot doctor — the last self-check failed; no report is trustworthy until it passes"
     if kind == "setup":
@@ -212,8 +226,20 @@ def next_step(st: dict) -> str:
         return f"fix echolot.yml — it does not load: {st['config']['error']}"
     if kind == "resume-or-new":
         q = (st.get("hunt") or {}).get("question") or "the earlier question"
-        return (f'/echolot in Claude Code — it will ask whether to carry on with '
-                f'"{q}" or start a new investigation')
+        return (f'{_door(st)}` — the agent asks whether to carry on with "{q}" '
+                f'or start a new investigation')
+    if kind == "init-force":
+        return ("echolot init --all — overwrites .claude/ files that may carry "
+                "edits made here (`echolot init` lists them): ask first, keep "
+                "the edits with git. Then: " + _hunt_step(st))
+    if kind == "fix-settings":
+        return ("fix .claude/settings.json by hand — echolot cannot add its "
+                "permission to a file that does not parse (the layer line "
+                "says what to merge in). Then: " + _hunt_step(st))
+    return _hunt_step(st)
+
+
+def _hunt_step(st: dict) -> str:
     if not st["traces"]["count"]:
         return (f"{_door(st)} hunt` — or by hand: "
                 f"echolot collect -c echolot.yml -n 5")

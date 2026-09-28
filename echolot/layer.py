@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import textwrap
 from pathlib import Path
 
 from . import hosts, recorder
@@ -129,11 +130,15 @@ def install_pointers(project: Path, chosen: list) -> None:
             print(f"  {'↑' if what == 'updated' else '+'} {rel} ({host.title})")
 
     if manual:
+        # The whole section, both markers included and nothing indented, so
+        # that what is pasted is exactly what `init` would have written. It
+        # used to print four lines and an ellipsis: pasted as shown, the
+        # section had no end marker, and every later `init` found an echolot
+        # section it could not bound and left it alone as edited.
         print(f"\nAdd this to {', '.join(str(m) for m in manual)} so the agent "
-              f"finds the tool:\n")
-        for line in hosts.BODY.strip().split("\n")[:4]:
-            print(f"    {line}")
-        print("    …  (`echolot guide` prints the rest)")
+              f"finds the tool — as it is,\nboth marker lines included; `init` "
+              f"keeps what is between them current from then on:\n")
+        print(hosts.BODY.rstrip("\n"))
 
 
 def _read_manifest(root: Path) -> dict:
@@ -218,8 +223,46 @@ def audit(project: Path) -> dict | None:
     }
 
 
-def one_line(project: Path) -> tuple[str, str]:
-    """(verdict, one line) about the project's .claude/ layer — for -q."""
+# Who can bring a file in each state up to date. `init` does stale and
+# missing ones on its own and touches nothing the project edited; only `--all`
+# updates a file that was edited here, or that nothing can tell from one, and
+# it does so by overwriting; and no flag writes over a merged file that does
+# not parse. `customised` is in none of them — an edit to a file the package
+# has not moved on from asks nothing of anyone.
+BY_INIT = ("stale", "missing")
+BY_ALL = ("conflict", "differs")
+BY_HAND = ("unreadable",)
+# Files that may carry the project's own edits, which `init` keeps.
+EDITED = ("conflict", "differs", "customised")
+# The order the rows are listed in, wherever they are listed.
+SHOWN = ("stale", "missing", "conflict", "differs", "customised", "unreadable")
+
+
+def assess(project: Path) -> dict:
+    """The layer's verdict and the one thing to do about it.
+
+    `one_line` (doctor -q, status, init) and `print_status` (the full doctor)
+    both render this and decide nothing themselves. Each used to decide for
+    itself, and they disagreed: one stale file beside one the project had
+    customised read `echolot init` on the one line and `echolot init --all`
+    in the full section — and the second would have overwritten the
+    customised file to update the stale one.
+
+        absent      nothing installed         `echolot init`
+        opted-out   declined on purpose       nothing
+        current     nothing to do             nothing
+        stale       stale or missing files    `echolot init`
+        differs     edited here, or nothing   `echolot init --all`, which
+                    can tell                  overwrites — a person decides
+        unreadable  settings.json does not    a person fixes the file
+                    parse
+
+    In that order when a layer has several: what `init` does on its own comes
+    first, so the question a person has to answer is asked about what is left
+    after it — and an unreadable settings.json, which `init` can never fix,
+    stops being read as a reason to run `init` again. It was: `stale`,
+    `next: init`, and `init` left the file as it was every time.
+    """
     status = audit(project)
     if status is None:
         # Absent because this project said it does not use Claude Code is a
@@ -229,62 +272,109 @@ def one_line(project: Path) -> tuple[str, str]:
         if not hosts.wants_claude(project):
             chosen = hosts.load_choice(project) or []
             named = ", ".join(hosts.BY_KEY[k].title for k in chosen) or "nothing"
-            return "opted-out", f"layer: not installed — this project points {named} at echolot"
-        return "absent", "layer: none installed here (`echolot init`)"
-    by_state: dict[str, int] = {}
+            return {"verdict": "opted-out", "status": None, "files": {},
+                    "command": None,
+                    "says": f"not installed — this project points {named} at echolot"}
+        return {"verdict": "absent", "status": None, "files": {},
+                "command": "echolot init", "says": "none installed here"}
+    files: dict[str, list[str]] = {}
     for r in status["rows"]:
-        by_state[r["state"]] = by_state.get(r["state"], 0) + 1
-    needs = {k: v for k, v in by_state.items()
-             if k in ("stale", "conflict", "differs", "missing", "unreadable")}
-    if not needs:
-        return "current", f"layer: current ({len(status['rows'])} files)"
-    what = ", ".join(f"{v} {k}" for k, v in needs.items())
-    # stale and missing files `init` updates on its own; files that differ
-    # with no manifest to say why, or that were edited here, need --all.
-    # `--all` has nothing to offer an unreadable one: that file is merged,
-    # never overwritten, so it is a job for a human either way.
-    if set(needs) <= {"stale", "missing", "unreadable"}:
-        return "stale", f"layer: STALE — {what} → `echolot init`"
-    return "differs", f"layer: STALE — {what} → `echolot init --all`"
+        files.setdefault(r["state"], []).append(r["file"])
+    if any(s in files for s in BY_INIT):
+        verdict, command = "stale", "echolot init"
+    elif any(s in files for s in BY_ALL):
+        verdict, command = "differs", "echolot init --all"
+    elif any(s in files for s in BY_HAND):
+        verdict, command = "unreadable", None
+    else:
+        verdict, command = "current", None
+    return {"verdict": verdict, "status": status, "files": files,
+            "command": command, "says": None}
+
+
+def _counts(files: dict[str, list[str]]) -> str:
+    return ", ".join(f"{len(files[s])} {s}" for s in SHOWN if s in files)
+
+
+def one_line(project: Path) -> tuple[str, str]:
+    """(verdict, one line) about the project's .claude/ layer — for -q."""
+    a = assess(project)
+    verdict, files = a["verdict"], a["files"]
+    if verdict == "absent":
+        return verdict, f"layer: {a['says']} (`{a['command']}`)"
+    if verdict == "opted-out":
+        return verdict, f"layer: {a['says']}"
+    if verdict == "current":
+        return verdict, f"layer: current ({len(a['status']['rows'])} files)"
+    what = _counts(files)
+    if verdict == "stale":
+        kept = ("; the files edited here are kept"
+                if any(s in files for s in EDITED) else "")
+        return verdict, f"layer: STALE — {what} → `{a['command']}`{kept}"
+    if verdict == "differs":
+        return verdict, (f"layer: STALE — {what} → `{a['command']}` overwrites "
+                         f"them, edits made here included — ask first")
+    # What to add goes on the line itself: this is the line `status` and
+    # `doctor -q` show, and the only other place it is printed is the full
+    # doctor run, ten kilobytes for one line of JSON.
+    adds = "; ".join(contribution(CLAUDE_DIR / rel) for rel in files[BY_HAND[0]])
+    return verdict, ("layer: UNREADABLE — .claude/settings.json is not JSON "
+                     "echolot can add to, and no flag of init touches it → "
+                     f"fix it by hand, and merge in {adds}")
 
 
 def print_status(project: Path) -> str | None:
-    """The doctor section; returns the one-word verdict for the run log."""
-    status = audit(project)
+    """The doctor section; returns the one-word verdict for the run log.
+
+    The same verdict and the same command as `one_line`, with the files named.
+    """
+    a = assess(project)
+    verdict, files, status = a["verdict"], a["files"], a["status"]
     print("\n## The .claude/ layer in this project\n")
-    if status is None:
-        print("  none installed here. `echolot init` puts the skill, the agent "
-              "and the commands into ./.claude/")
-        return "absent"
-    by_state: dict[str, list[str]] = {}
-    for r in status["rows"]:
-        by_state.setdefault(r["state"], []).append(r["file"])
-    total = len(status["rows"])
-    counts = ", ".join(f"{len(v)} {k}" for k, v in by_state.items())
-    print(f"  {total} template files: {counts}")
-    for state in ("stale", "conflict", "customised", "differs", "missing",
-                  "unreadable"):
-        for rel in by_state.get(state, []):
+    if verdict == "absent":
+        print(f"  {a['says']}. `{a['command']}` puts the skill, the agent "
+              f"and the commands into ./.claude/")
+        return verdict
+    if verdict == "opted-out":
+        print(f"  {a['says']}, as .echolot/hosts.json records — nothing to do.")
+        return verdict
+    counts = _counts(files)
+    print(f"  {len(status['rows'])} template files: "
+          + (f"{counts}, " if counts else "")
+          + f"{len(files.get('current', []))} current")
+    for state in SHOWN:
+        for rel in files.get(state, []):
             print(f"    {state:<10} {rel}")
     if status["installed_by"]:
         print(f"  installed by echolot {status['installed_by']}, "
               f"this is {recorder.version()}")
-    needs_update = set(by_state) & {"stale", "conflict", "differs", "missing",
-                                    "unreadable"}
-    if not needs_update:
+    if verdict == "current":
         print("  the layer is current.")
-        return "current"
-    if not status["manifest"]:
-        print("  installed before echolot kept a manifest, so a file that differs "
-              "cannot be told\n  customised from stale. `echolot init --all` "
-              "overwrites; keep the project's edits with git.")
-    elif needs_update == {"unreadable"}:
-        print("  → the file above is not JSON echolot can add to, and it is "
-              "merged rather than\n    overwritten — `--all` will not touch "
-              "it either. Fix the JSON and run `echolot init`.")
+    elif verdict == "stale":
+        print(f"  → `{a['command']}` brings the stale and missing files up to "
+              f"date and touches\n    nothing edited here.")
+        if any(s in files for s in EDITED):
+            print("    The edited files above are kept, and `init` lists them "
+                  "again when it runs.")
+    elif verdict == "differs":
+        if not status["manifest"]:
+            print("  installed before echolot kept a manifest, so a file that "
+                  "differs cannot be told\n  customised from stale.")
+        # Every file marked as edited, not only the ones that asked for it:
+        # `--all` does not choose, and a customised file goes with the rest.
+        marked = " or ".join(s for s in EDITED if s in files)
+        print(textwrap.fill(
+            f"`{a['command']}` would overwrite every file marked {marked} above, "
+            f"and any edit made here goes with it — ask whoever made them "
+            f"first, and carry the edits over from git afterwards. "
+            f"settings.json is merged, never overwritten: the project's hooks "
+            f"and plugins stay.",
+            width=80, initial_indent="  → ", subsequent_indent="    ",
+            break_on_hyphens=False, break_long_words=False))
     else:
-        print("  → `echolot init --all` updates it. Customised files are "
-              "listed above and are\n    overwritten too — carry the edits "
-              "over afterwards. settings.json is merged,\n    never "
-              "overwritten: the project's hooks and plugins stay.")
-    return "stale"
+        for rel in files.get("unreadable", []):
+            print(f"  → fix it by hand: .claude/{rel} is not JSON echolot can "
+                  f"add to, and it is\n    merged rather than overwritten, so "
+                  f"no flag of init touches it. What echolot\n    adds to it: "
+                  f"{contribution(CLAUDE_DIR / rel)}")
+    return verdict

@@ -12,6 +12,7 @@ one makes every later report quietly meaningless.
 | `scenario.start` / `end` | the window. Anchors are globs over slice names |
 | `runner` | who drives the scenario: `launch`, `command` or `gradle` |
 | `domains` | slice name → module and file, for turning a finding into a place |
+| `instrumentation.allowed` | where the hunt may write its temporary markers, and nowhere else |
 
 ## The order
 
@@ -32,6 +33,10 @@ saying where it came from. Read that instead of the build scripts.
 ```bash
 echolot collect -c echolot.yml -n 1     # if a rough config exists
 ```
+
+`-n 1` holds in `launch` and `command` mode. In `gradle` mode the
+macrobenchmark sets its own iteration count and `-n` never reaches it, so the
+probe is the whole set it records.
 
 **2. Look inside it.**
 
@@ -69,12 +74,17 @@ expanded to the whole trace.
 
 ## Ask the human, do not invent
 
-Four things cannot be read off a trace. Ask, and put the answers in the config:
+Five things cannot be read off a trace. Ask, and put the answers in the config:
 
 1. **which scenario** matters — cold start, a screen, a list
 2. **which process**, when the probe shows several plausible ones
 3. **where the scenario ends** — first frame, data on screen, interaction ready
 4. **what counts as acceptable** — goes into `scenario.budget_ms` as a record
+5. **where temporary instrumentation may be written** — goes into
+   `instrumentation.allowed`. `echolot scan` proposes every module's
+   `src/main`; the human confirms or narrows it. The hunt writes its
+   `AGENTTMP_` markers there and nowhere else, and `echolot reflect` holds
+   the edits it can see against this list
 
 Mark anything you inferred rather than were told. The shipped example config
 uses `_source:` and `_evidence:` keys next to a value for exactly this.

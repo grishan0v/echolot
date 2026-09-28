@@ -1543,8 +1543,13 @@ def cmd_hunt(args) -> int:
         # The half a shell cannot do. Said every time rather than only when
         # something looks wrong: this is the command a person reaches for
         # first, and it is where the two surfaces have to line up out loud.
-        print("\nThe hunt itself needs an agent: run `/echolot` in Claude Code.",
-              file=sys.stderr)
+        # Through the door this project chose: a project that declined Claude
+        # Code was being sent to a command it does not have.
+        from . import hosts as hosts_mod
+        door = ("`/echolot` in Claude Code, or any agent after `echolot guide hunt`"
+                if hosts_mod.wants_claude(project)
+                else "any agent, after `echolot guide hunt`")
+        print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
         print("By hand: echolot collect -c echolot.yml -n 5, then echolot analyze "
               ".echolot/traces/*.perfetto-trace", file=sys.stderr)
         return 0
@@ -1971,8 +1976,13 @@ def cmd_init(args) -> int:
     and the environment is checked (`doctor -q`). It ends with the next step,
     the same line `echolot` with no arguments prints.
 
-    It also puts `.echolot/` and `local.yml` into the project's .gitignore —
-    see `ignore.py` for why that is init's job and not the reader's.
+    It also puts `.echolot/` and `local.yml` into the project's .gitignore at
+    a git root, and says which two lines to add anywhere else — see
+    `ignore.py` for why that is init's job and not the reader's.
+
+    Which agents it points at: `--for` when given, else the choice this
+    project saved in `.echolot/hosts.json`, else what the tree shows evidence
+    of — and on a terminal, a picker that starts from that.
 
     One file is not a copy of ours: `.claude/settings.json` is the project's,
     and echolot only adds its permission to it. See `layer.MERGED`.
@@ -1992,12 +2002,15 @@ def cmd_init(args) -> int:
               file=sys.stderr)
         return 2
     if chosen is None:
-        chosen = hosts_mod.detect(target)
+        # What the project chose last time, when it chose: declining Claude
+        # Code is a state, and detecting afresh on every run put it back.
+        chosen = hosts_mod.starting_set(target)
         # Two gates, both required. The parser is the only thing that turns
         # `interactive` on, so the self-check's bare Namespace can never
         # prompt; and even then there has to be a terminal on both ends.
         if getattr(args, "interactive", False) and hosts_mod.interactive(sys.stdout):
-            chosen = hosts_mod.pick(chosen)
+            chosen = hosts_mod.pick(
+                chosen, found={h.key for h in hosts_mod.detect(target)})
     hosts_mod.save_choice(target, chosen)
 
     # Before the layer, and whatever client was chosen: the traces and the
@@ -2011,7 +2024,9 @@ def cmd_init(args) -> int:
     if not any(h.key == "claude" for h in chosen):
         print("\nClaude Code not selected — .claude/ stays out of this project.")
         layer.install_pointers(target, chosen)
-        print("\nAny agent: `echolot guide`. `echolot init --for all` adds the rest.")
+        print("\nAny agent: `echolot guide`. The choice is kept — a plain "
+              "`echolot init` points at\nthe same agents again; `--for` "
+              "changes it, and `echolot init --for all` adds the rest.")
         recorder.note(hosts=[h.key for h in chosen], layer="skipped")
         return 0
 
@@ -2089,9 +2104,25 @@ def cmd_init(args) -> int:
         # a file left untouched keeps whatever the old manifest said about it.
         layer.write_manifest(root, installed)
 
-    if kept:
-        print(f"\n{len(kept)} file(s) differ from the template and were kept. "
-              f"`echolot init --all` overwrites them; carry your edits over after.")
+    # Only the kept files that may be behind the package are worth `--all`:
+    # edited here and changed there since (conflict), or with nothing to say
+    # which (differs). A customised one is behind nothing — the edit is the
+    # whole difference — and pointing `--all` at it offered to throw the edit
+    # away for no gain.
+    behind = [rel for rel in kept if states.get(rel, "differs") in layer.BY_ALL]
+    if behind:
+        # `--all` does not choose, so the customised ones are named as well:
+        # they go with the rest, which is part of what the person is asked.
+        import textwrap
+        also = len(kept) - len(behind)
+        print("\n" + textwrap.fill(
+            f"{len(behind)} file(s) above differ from the package's, and the "
+            f"difference may be an edit made here; they were kept. `echolot "
+            f"init --all` overwrites them"
+            + (f", and the {also} customised one(s) with them" if also else "")
+            + " — ask whoever edited them first, and carry the edits over from "
+              "git after.", width=80, break_on_hyphens=False,
+            break_long_words=False))
 
     layer.install_pointers(target, chosen)
     recorder.note(hosts=[h.key for h in chosen])
@@ -2099,8 +2130,10 @@ def cmd_init(args) -> int:
         print("\nLayer installed.")
     elif written or updated or folded:
         print("\nLayer updated.")
-    elif kept:
-        print(f"\nLayer current, apart from the {len(kept)} kept above.")
+    elif kept or unmergeable:
+        apart = [f"the {len(kept)} kept above"] if kept else []
+        apart += [f".claude/{rel}, which needs a hand" for rel, _ in unmergeable]
+        print(f"\nLayer current, apart from {' and '.join(apart)}.")
     else:
         print("\nLayer is current.")
     recorder.note(written=len(written), updated=len(updated), kept=len(kept),
@@ -2796,16 +2829,21 @@ def build_parser() -> argparse.ArgumentParser:
                      help="update every file of the layer, the ones you edited too "
                           "(they are echolot's copies, under your git)")
     ini.add_argument("--force", dest="force", action="store_true", help=argparse.SUPPRESS)
+    # The clients are read off the list `init` knows, so a new one cannot be
+    # left out of the help the way gemini was.
     ini.add_argument("--for", dest="for_hosts", metavar="CLIENTS",
-                     help="which agents to point at the tool: claude, agents, "
-                          "cursor, copilot — comma-separated, or `all`. "
-                          "Default: whichever this project shows evidence of")
+                     help="which agents to point at the tool: "
+                          + ", ".join(h.key for h in layer.hosts.HOSTS)
+                          + " — comma-separated, or `all`. Default: the choice "
+                            "this project saved last time, else whichever it "
+                            "shows evidence of")
     # Only the parser turns prompting on: cmd_init is also called directly,
     # by the self-check, with a Namespace that has none of these.
     ini.set_defaults(interactive=True)
     ini.add_argument("--no-input", dest="interactive", action="store_false",
-                     help="never ask, take the detected set "
-                          "(already implied without a terminal)")
+                     help="never ask: keep the saved choice, or take the "
+                          "detected set the first time (already implied "
+                          "without a terminal)")
     ini.add_argument("--no-doctor", action="store_true",
                      help="skip the environment check at the end")
     ini.set_defaults(func=cmd_init)
@@ -2870,8 +2908,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     gd = add("guide", "agent", "[<topic>]",
              "how to work with this tool — for any agent, not only Claude Code")
+    # Read off the guide directory, which is what `guide` itself reads: the
+    # list written out by hand went on without `anr` once it shipped.
     gd.add_argument("topic", nargs="?",
-                    help="overview (default), setup, hunt")
+                    help="overview (default), " + ", ".join(sorted(
+                        p.stem for p in layer.GUIDE_DIR.glob("*.md")
+                        if p.stem != "overview")))
     gd.set_defaults(func=cmd_guide)
 
     ex = add("explain", "agent", "", "the detectors and their parameters")
