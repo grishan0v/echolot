@@ -723,8 +723,15 @@ _KOTLIN_FUN = re.compile(
 )
 _JAVA_DECL = re.compile(
     r"^[ \t]*(?:@\w+(?:\([^)]*\))?[ \t]*)*"
+    # None of these is required. A method with no modifier is package-private,
+    # which is how Java spells "only this package calls it", and requiring one
+    # left `void flush() {` in no function at all.
     r"(?:(?:public|private|protected|static|final|abstract|synchronized|"
-    r"native|default|strictfp)[ \t]+)+"
+    r"native|default|strictfp)[ \t]+)*"
+    # With no modifier in front, a statement has the same shape as a
+    # declaration — `return fetch(`, `new Runnable() {`, `else if (` — and a
+    # declaration never opens with one of these words.
+    r"(?!(?:return|new|else|throw|yield|assert|case)\b)"
     r"(?:<[^>]*>[ \t]*)?[\w.<>\[\]?]+[ \t]+(?P<name>\w+)[ \t]*\("
 )
 
@@ -789,19 +796,67 @@ def enclosing_block(text: str, suffix: str, line: int):
     return best
 
 
+# The two ways into a lambda that Kotlin compiled into a class of its own. A
+# method a person named is hardly ever one of them on a class numbered last:
+# an anonymous object's `onClick` is declared in the source, and is the answer
+# as it stands.
+_LAMBDA_ENTRY = ("invoke", "invokeSuspend")
+
+
+def _as_written(member: str) -> str:
+    """A method's name with what the compiler added to it taken off.
+
+    javac lifts a lambda into `lambda$<function>$N`. Kotlin compiling with
+    invokedynamic writes `<function>$lambda$N` (`$lambda-N` before 1.8), gives
+    a function with default arguments a `<function>$default` beside it and an
+    open suspend one a `$suspendImpl`, and puts a `-hash` on a name that takes
+    an inline class. Neither a `$` nor a `-` belongs in a name a person gives
+    — Java keeps the first for generated code, Kotlin allows neither — so
+    what comes before the first of them is that name.
+    """
+    if member.startswith("lambda$"):
+        written = member.split("$")[1]
+    else:
+        written = re.split(r"[$-]", member, maxsplit=1)[0]
+    return written or member
+
+
 def frame_function(symbol: str) -> str:
     """The source function a frame belongs to, seen through the compiler.
 
-    A plain frame names it directly. A lambda's does not: Kotlin compiles one
-    into a class of its own, so `Handler$updateLocality$2.invokeSuspend` is a
-    lambda written inside `updateLocality`, and the first `$` segment that is
-    not a number is the function a person would point at. An anonymous class
-    implementing an interface numbers all of its segments, and there the
-    member's own name is the answer.
+    A plain frame names it directly, and so does a frame of a class nested in
+    another: `Repo$Companion.warm` is `warm`, whatever the companion, the
+    `ViewHolder` or the `object` around it is called. Reading the first `$`
+    segment as the function named the class instead, and `plan_from_anr` then
+    refused every such frame as a line the compiler had moved — on a checkout
+    that was the build that froze.
+
+    A lambda's frame does not name it. Kotlin compiles one into a class of its
+    own, entered through `invoke` or `invokeSuspend` and numbered last, so
+    `Handler$updateLocality$2.invokeSuspend` was written inside
+    `updateLocality`: the innermost segment that is a name rather than a
+    number. Compiled with invokedynamic there is no class, and the method
+    carries the function in its own name — see `_as_written`. A class the
+    toolchain made rather than anyone here, everything from `$$` on, is read
+    the same way as a lambda's.
+
+    An anonymous class is numbered last too, and is entered through a method
+    the source declares — `MainActivity$1.onClick`, or `Screen$load$1.onClick`
+    for one made inside `load` — so the member is the answer there. A lambda
+    compiled into a class for an interface of its own reads exactly like
+    that: a `collect { }` block is `Screen$load$1$1.emit`. Its line then falls
+    in `load` while this says `emit`, and the frame is refused rather than
+    bracketed — the right way to be wrong, since a pair around `load` would
+    time the call that set the block up and not the block.
     """
     owner, _, member = symbol.rpartition(".")
-    named = next((s for s in owner.split("$")[1:] if not s.isdigit()), "")
-    return named or member
+    written, made, _ = owner.partition("$$")
+    nested = written.split("$")[1:]
+    if made or (member in _LAMBDA_ENTRY and nested and nested[-1].isdigit()):
+        named = [s for s in nested if s.isidentifier() and s not in _LAMBDA_ENTRY]
+        if named:
+            return named[-1]
+    return _as_written(member)
 
 
 def marker_for(symbol: str, prefix: str) -> str:
