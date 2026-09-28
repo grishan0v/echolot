@@ -11,8 +11,9 @@ echolot anr report.txt --root .
 echolot anr report.txt --json      # the same findings, for you
 ```
 
-Reads and prints. It opens no investigation and writes nothing, so a folder of
-exports goes through it in one loop:
+Reads and prints. It opens no investigation, and writes nothing but its own
+line in `.echolot/log/runs.jsonl`, so a folder of exports goes through it in
+one loop:
 
 ```bash
 for f in ~/anr/*.txt; do echolot anr "$f" | head -6; done
@@ -27,6 +28,10 @@ Play Console strips who holds a monitor, so a chain from there names what
 everyone is queued on and says the holder is not in the file — look for it
 among the threads that were working. An export of the same freeze from
 Crashlytics or off a device is worth more.
+
+Read it from the checkout. The packages its sources declare are what makes a
+frame the app's own; without them a library the tool has never heard of reads
+as the app's.
 
 ## What to do with what it says
 
@@ -59,9 +64,12 @@ line. Show the reasons, do not work around them.
 
 ## Measure it, if you can record it
 
-Two detectors work on the trace side, and both need a long enough recording —
-the default `duration_ms: 12000` does not hold a five-second freeze plus the
-five the system waits before declaring anything.
+Two detectors work on the trace side, and both need a long enough recording:
+the seconds until the freeze starts, plus the five an unanswered input event is
+given before the system declares an ANR, plus a few for it to write the record.
+A freeze eight seconds in needs about sixteen, past the default
+`duration_ms: 12000`. That knob sets the recording in `launch` and `command`
+modes; in `gradle` mode the macrobenchmark decides.
 
 - **`anr_risk`** — a stretch where the main thread never got back to the message
   queue. Its bar is the platform's five seconds. Silent by construction on a
