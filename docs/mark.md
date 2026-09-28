@@ -29,14 +29,15 @@ that promises stable results.
 ## What it binds to, and what it refuses to
 
 Everything `mark` looks at is fixed by the platform or a library, never by
-the project:
+the project. Each row it prints carries one of these tags:
 
-| source | what it is | example |
+| tag | what it is | example |
 |---|---|---|
-| `manifest` | the launcher Activity is the `<intent-filter>` with `MAIN` and `LAUNCHER`; the Application class is `android:name` on `<application>` | structure, no names |
-| `lifecycle` | `onCreate` — the SDK's method name, whatever the class is called | `override fun onCreate(`, `protected void onCreate(` |
+| `manifest+lifecycle` | the manifest names the class — the launcher Activity is the one whose `<intent-filter>` has `MAIN` and `LAUNCHER`, the Application class is `android:name` on `<application>` — and `onCreate`, the SDK's method name, is the place in it, whatever the class is called | `override fun onCreate(`, `protected void onCreate(` |
 | `api` | exact strings from someone else's library | `setContent {`, `setContentView(`, `Room.databaseBuilder(`, `startKoin {`, `@HiltAndroidApp` |
 | `call-from-setContent` | the composables invoked inside `setContent { }`, kept only when `@Composable fun Name(` is in this project's sources | `AppTheme { AppNavHost() }` → both, if defined here |
+| `anr` | a frame of a stack from a freeze, with `--from-anr`: the function around the line the compiler wrote into it | see `--from-anr` below |
+| `jdk` | a thread or a pool the JDK's default factory will name, with `--pools` | `Executors.newSingleThreadExecutor()`, `Thread(task)` |
 
 There is no rule about `*ViewModel`, `*Repository`, `*Screen`, `*Fragment`
 or any other convention. A project where the ViewModel is called `Presenter`
@@ -47,16 +48,24 @@ for source.
 
 ## What it says when it cannot see
 
-- no `AndroidManifest.xml` with a launcher under `src/main` — "no app entry
-  point in this tree", nothing proposed
+- no `AndroidManifest.xml` with a launcher under `src/main` — "no launcher
+  Activity in any AndroidManifest.xml under src/main — this tree has no app
+  entry point to mark", nothing proposed, and `--root` is how to point it at
+  the app
 - two modules with a launcher (an app and a wear app) — an ambiguity that
   stops the command until `--module` or `project.package` settles it
+- two launcher activities in one manifest — the same stop, since `--module`
+  chooses between modules and not between the entry points of one; the
+  proposals are for the first, to mark by hand. An `<activity-alias>` is its
+  `targetActivity`, not a second activity, and an `<activity … />` that
+  closes itself has no intent-filter to be the launcher with
 - the launcher Activity does not override `onCreate` — said, with the base
-  class it inherits from, because the override may live there
+  class it inherits from (`: Base()` in Kotlin, `extends Base` in Java),
+  because the override may live there
 - the Application class is not in the manifest — said; `bindApplication` is
   the framework's alone
-- a method with a `return` in its body — proposed but not applicable: a
-  begin/end pair would lose its end on that path; mark it by hand
+- a block that cannot take a begin/end pair of whole lines — proposed but not
+  applicable, with the reason; the cases are under `--apply` below
 - a composable, a Room builder, a Koin block — proposed with the reason it
   is not applied mechanically (a call site, a builder chain), and where to
   wrap by hand
@@ -68,8 +77,9 @@ the count beyond it is printed.
 
 ## `--apply` and `--remove`
 
-`--apply` inserts, at each applicable site, a begin line right after the
-block's `{` and an end line right before its `}`, indented like the body:
+`--apply` inserts, at each applicable site, a begin line under the line that
+holds the block's `{` and an end line over the line that holds its `}`,
+indented like the body:
 
 ```kotlin
 override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,15 +95,41 @@ override fun onCreate(savedInstanceState: Bundle?) {
 ```
 
 `android.os.Trace` is the framework's, so no dependency is added; every
-inserted line ends with `// echolot:mark`; Java gets a semicolon. `--remove`
-deletes exactly the tagged lines under `--root` and restores every file byte
-for byte — the self-check applies, removes and compares. Applying twice adds
-nothing. Braces are matched on a view of the file with strings and comments
-blanked out, so a `}` inside a literal does not count.
+inserted line ends with `// echolot:mark`; Java gets a semicolon. Each one is
+a whole line put in between two of the file's own, ending the way the line
+above it ends, and nothing else in the file changes — a CRLF file stays CRLF.
+`--remove` deletes exactly those lines under `--root`, the ones carrying the
+tag in the shape `--apply` writes, and gives every file back byte for byte:
+the self-check applies, removes and compares, and `tests/test_mark_edits.py`
+does the same over generated Kotlin and Java sources, CRLF files among them.
+A line that carries the tag in any other shape has more on it than a marker,
+so it stays where it is and `--remove` lists it with its file and line, to be
+cleaned by hand. Applying twice adds nothing. Braces are matched on a view of
+the file with strings and comments blanked out, so a `}` inside a literal
+does not count.
 
-`instrumentation.allowed` from `echolot.yml` is honoured: a site outside it
-is still shown (the joint is where it is) but not applied, with the note to
-mark the nearest allowed caller instead.
+That promise decides what is refused. A block is proposed but not applied,
+with the reason on its row, when a pair of whole lines cannot go in without
+changing a line of the project's:
+
+- **a `return` in the body** — the end line would be skipped on that path;
+- **the whole body on one line**, `setContent { AppRoot() }` — there is no
+  line between the braces to put anything on;
+- **code after the `{`, or before the `}`, on the brace's own line** —
+  `setContent { AppTheme {`, `} }` — the new line could only go in by
+  splitting that line, and `--remove` deletes lines; it cannot join one back
+  together. A comment after the `{` is not code: the begin line goes in under
+  it, and the comment stays where it was.
+
+Put the code on a line of its own and run `mark` again, or mark by hand.
+
+`instrumentation.allowed` from `echolot.yml` is honoured, globs included: each
+entry is matched path segment by path segment, so `feature/*/src/main` — the
+form `scan` writes — covers every module directly under `feature/`. A site
+outside it is still shown (the joint is where it is) but not applied, with the
+note to mark the nearest allowed caller instead. A frame from `--from-anr` is
+shown the same way rather than left out, and a place to name from `--pools`
+says it is outside.
 
 ## `--from-anr`: targets from a stack instead of the manifest
 
@@ -113,8 +149,10 @@ around them:
 - **the line falls inside another function than the frame names** — the
   compiler moved it, and bracketing where the line landed would name one
   function and measure another;
-- **a `return` in the body**, and **a body on one line** — the same two
-  refusals as above;
+- **a `return` in the body**, **a body on one line**, and **code sharing a
+  line with the `{` or the `}`** — the refusals of `--apply` above;
+- **a frame outside `instrumentation.allowed`** — shown and not applied,
+  like any site outside; the frame under it may be the allowed caller;
 - **most frames landing nowhere** — one sentence naming the build the report
   came from. The working tree is not that build, and no line number in the
   report means anything until it is.
@@ -162,9 +200,23 @@ variable while what the pool is *for* is in the call it is passed to.
 carries what is left — `pool-12-thread-` and `kin.gloommaster` are both cut in
 real traces. `cart-queue`, not `CartQueueProcessorExecutor`.
 
-A factory that already names its threads is not a finding, and neither is
-`HandlerThread`, which takes a name as its first argument. Counting those
-found fifteen sites on a codebase where four were real.
+A thread that is given a name is not a finding, and neither is a pool whose
+factory names its threads. What counts as given:
+
+- a string among `Thread(`'s own arguments — `Thread(r, "io")`,
+  `new Thread(r, "io-" + n)`, `Thread("sync")`, `object : Thread("sync")`;
+- a second argument of any kind — `Thread(r, name)` in a factory that was
+  handed the name — since every constructor of the JDK's that takes two or
+  more arguments takes a name, except `(ThreadGroup, Runnable)`;
+- a factory built with `ThreadFactoryBuilder().setNameFormat(…)`, or one with
+  a `newThread(` of its own;
+- a factory that makes its threads with `Thread(` — Kotlin's
+  `Executors.newFixedThreadPool(2) { r -> Thread(r, "io") }` passes it
+  outside the parentheses. That `Thread(` decides: named, there is no row;
+  not, it is the row, since it is where the name goes;
+- `HandlerThread`, which takes a name as its first argument.
+
+Counting those found fifteen sites on a codebase where four were real.
 
 ## The loop it fits into
 
@@ -200,3 +252,8 @@ graph with no direct call, generated code, a Flutter or React Native shell —
 `mark` will find the entry, say what it cannot follow, and stop. That is the
 intended failure: three markers and an honest note beat seven guesses. From
 there the trace leads, one hop at a time.
+
+`--pools` reads the call and nothing after it. A name set once the thread
+exists — `Thread(r).apply { name = "io" }`, `t.setName("io")` — is not seen,
+and that thread is listed anyway; a `Thread(group, runnable)` has two
+arguments and is taken for named when it is not.

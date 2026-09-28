@@ -9,13 +9,13 @@ number appears the same way in both.
 
 from __future__ import annotations
 
-import fnmatch
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..config import Config
+from ..mark import under_allowed
 from .model import Call, MAIN, Session, strip_heredocs, ts_to_epoch
 
 # Shared with signals.py — the vocabulary of what an agent does around the tool.
@@ -815,14 +815,13 @@ def _under_any(rel: str, roots: list[str]) -> bool:
     project every edit under `domain/base/src/main` was filed as outside
     `domain/*/src/main`. Each segment of the root is a glob over the matching
     segment of the path; the path may go deeper.
+
+    The rule itself is `mark.under_allowed`, so the command that writes the
+    markers and this report that audits where they went read the list the
+    same way. Only the empty list differs: `mark` takes it as no limit,
+    while here it holds nothing, and every caller asks only when there is one.
     """
-    parts = rel.split("/")
-    for root in roots:
-        segs = [s for s in root.strip("/").split("/") if s]
-        if segs and len(segs) <= len(parts) and all(
-                fnmatch.fnmatchcase(p, s) for p, s in zip(parts, segs, strict=False)):
-            return True
-    return False
+    return bool(roots) and under_allowed(rel, roots)
 
 
 # --------------------------------------------------------------------- gaps

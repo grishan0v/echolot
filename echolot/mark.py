@@ -31,20 +31,28 @@ the ground is; what cannot be found is said as not found, never guessed;
 the output is sorted and byte-for-byte the same for the same tree.
 
 Applying is mechanical and reversible: each inserted line is a whole line of
-its own ending in the tag `// echolot:mark`, and `--remove` deletes exactly
-those lines. Both halves of that sentence are load-bearing, so a block that
-cannot take a line of its own is refused rather than approximated:
+its own ending in the tag `// echolot:mark`, put between two lines of the
+project's and never into one, and `--remove` deletes exactly those lines.
+Both halves of that sentence are load-bearing, so a block that cannot take a
+line of its own is refused rather than approximated:
 
     a `return` in the body   the end would be skipped;
     a body written on one    the begin and end lines would cross, and the
     line                     body would end up inside the begin line's
-                             comment — where `--remove` would then delete it.
+                             comment — where `--remove` would then delete it;
+    code after the `{`, or   the new line could only get in by splitting a
+    before the `}`, on the   line of the project's, and `--remove` deletes
+    brace's line             lines, it does not join them back.
 
-Both are reported as "mark by hand" and shown with the reason.
+All three are reported as "mark by hand" and shown with the reason. A comment
+after the `{` is not code: the begin line goes in under it and the comment
+stays where it was. Nothing else in the file is touched, its line endings
+included, so `--remove` gives back the bytes `--apply` was given.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -58,8 +66,10 @@ TAG = "// echolot:mark"
 # Exactly what `apply` writes, and nothing else. `remove` deletes whole lines,
 # so a rule as loose as "the tag is somewhere in it" takes the line's real code
 # along — which is how a one-line block used to be destroyed rather than merely
-# mangled. A hand-written tag on a line of code is now left alone and reported
-# as such rather than quietly deleted.
+# mangled. A hand-written tag on a line of code is left alone, and `remove`
+# returns it with its line number so the command can say where it is: kept
+# without a word, it let "no `echolot:mark` lines found" stand over a tree
+# that still had them.
 _APPLIED_LINE = re.compile(
     r"^\s*android\.os\.Trace\.(?:begin|end)Section\s*\([^)]*\)\s*;?\s*"
     + re.escape(TAG) + r"\s*$")
@@ -67,8 +77,14 @@ CAP = 7   # proposals shown; the rest is a count. Five to seven is a skeleton, n
 
 # --- the vocabulary -----------------------------------------------------------
 
-_LAUNCHER_ACTIVITY = re.compile(
-    r"<activity(?:-alias)?\b(?P<attrs>[^>]*)>(?P<body>.*?)</activity(?:-alias)?>", re.S)
+# The opening tag of an <activity> or <activity-alias>, the body read
+# separately — see `launcher_activities`. A quoted value is taken whole, so a
+# `>` inside one does not end the tag, and `closed` is the slash of a tag that
+# closes itself.
+_ACTIVITY_OPEN = re.compile(
+    r"<(?P<tag>activity(?:-alias)?)\b(?P<attrs>(?:[^>\"'/]|\"[^\"]*\"|'[^']*')*)"
+    r"(?P<closed>/)?>")
+_XML_COMMENT = re.compile(r"<!--.*?-->", re.S)
 _ANDROID_NAME = re.compile(r"android:name\s*=\s*\"([^\"]+)\"")
 _TARGET_ACTIVITY = re.compile(r"android:targetActivity\s*=\s*\"([^\"]+)\"")
 _ACTION_MAIN = re.compile(r"android\.intent\.action\.MAIN")
@@ -130,12 +146,12 @@ def is_applied_line(line: str) -> bool:
 
 @dataclass
 class Proposal:
-    kind: str                 # app_oncreate | activity_oncreate | set_content | set_content_view | compose_root | room_open | di_koin
+    kind: str                 # app_oncreate | activity_oncreate | set_content | set_content_view | compose_root | room_open | di_koin | anr_frame | pool_name | thread_name
     file: str                 # relative to root
     line: int                 # 1-based
     what: str                 # for a human
     marker: str               # AGENTTMP_…
-    source: str               # manifest+lifecycle | lifecycle | api | call-from-setContent
+    source: str               # manifest+lifecycle | api | call-from-setContent | anr | jdk
     module: str
     applicable: bool          # --apply can do it mechanically
     reason: str = ""          # why not, or a caveat
@@ -165,11 +181,31 @@ class Plan:
 
 # --- text helpers ---------------------------------------------------------------
 
-def strip_noise(text: str) -> str:
+def read_source(path: Path, strict: bool = False) -> str:
+    """A source file's text as it is on disk, its line endings included.
+
+    `read_text` turns `\\r\\n` into `\\n` on the way in and `write_text` writes
+    `\\n` on the way out, so a CRLF file went through `--apply` and `--remove`
+    and came back with every line ending changed — from a command whose whole
+    promise is that the file comes back as it was. Decoded here with nothing
+    translated, the offsets `plan` computes are offsets into the very text
+    `apply` edits and writes back.
+
+    `strict` is for the two that write: see `apply` for why a file that is
+    not valid UTF-8 must not be read leniently there.
+    """
+    return path.read_bytes().decode("utf-8", errors="strict" if strict else "replace")
+
+
+def strip_noise(text: str, strings: bool = True) -> str:
     """Strings and comments replaced by spaces, length and newlines kept.
 
     Brace matching and `return` detection run on this view, so a `}` inside
     a string literal or a `// return early` comment does not count.
+
+    `strings=False` blanks the comments and leaves the strings: `--pools`
+    has to see a string where the code has one — `Thread(r, "io")` is a
+    thread with a name — and still not take a quote inside a comment for one.
     """
     out = list(text)
     i, n = 0, len(text)
@@ -191,9 +227,10 @@ def strip_noise(text: str) -> str:
         elif text.startswith('"""', i):
             j = text.find('"""', i + 3)
             j = n if j < 0 else j + 3
-            for k in range(i, j):
-                if out[k] != "\n":
-                    out[k] = " "
+            if strings:
+                for k in range(i, j):
+                    if out[k] != "\n":
+                        out[k] = " "
             i = j
         elif c == '"' or c == "'":
             j = i + 1
@@ -202,9 +239,10 @@ def strip_noise(text: str) -> str:
                     j += 1
                 j += 1
             j = min(n, j + 1)
-            for k in range(i, j):
-                if out[k] != "\n":
-                    out[k] = " "
+            if strings:
+                for k in range(i, j):
+                    if out[k] != "\n":
+                        out[k] = " "
             i = j
         else:
             i += 1
@@ -232,12 +270,13 @@ def line_of(text: str, offset: int) -> int:
 def one_line_body(text: str, open_at: int | None, close_at: int | None) -> bool:
     """Is this block's `{ … }` all on one source line?
 
-    `apply` puts the begin line just after the `{` and the end line at the
-    start of the `}`'s line. When those are the same line the second insert
-    lands *before* the first: the end marker comes out above the block, and
-    the body is swallowed by the begin line's trailing `// echolot:mark`.
-    `remove` then deletes that line whole and the body goes with it, which is
-    the one thing this module promises never to do.
+    `apply` puts the begin line under the `{`'s line and the end line over
+    the `}`'s, and on one line there is no room between the two. An earlier
+    `apply` put them in anyway, and the second insert landed *before* the
+    first: the end marker came out above the block, and the body was
+    swallowed by the begin line's trailing `// echolot:mark`. `remove` then
+    deleted that line whole and the body went with it, which is the one thing
+    this module promises never to do.
 
     `setContent { AppRoot() }` is the shape a great deal of Compose is written
     in, so this is not a corner. Refused and said out loud, the way a `return`
@@ -248,8 +287,48 @@ def one_line_body(text: str, open_at: int | None, close_at: int | None) -> bool:
     return "\n" not in text[open_at:close_at]
 
 
+# What may share a line with a block's brace and still leave that line to
+# itself: blanks, and comments that close on the same line — after the `{`
+# a `/* … */` or a `// …`, before the `}` only the first. Anything else is
+# the project's code.
+_OPEN_TAIL = re.compile(r"[ \t]*(?:/\*(?:(?!\*/).)*\*/[ \t]*)*(?://.*)?\r?")
+_CLOSE_HEAD = re.compile(r"[ \t]*(?:/\*(?:(?!\*/).)*\*/[ \t]*)*")
+
+
+def brace_lines(text: str, open_at: int, close_at: int) -> tuple[int, int] | str:
+    """Where whole lines go in around a block's body, or why they cannot.
+
+    `(begin_at, end_at)`: the start of the line after the `{`'s, and the
+    start of the `}`'s own line. A line put in at either sits between two of
+    the project's lines, and deleting it gives back exactly what was there.
+
+    That holds only while the `{` ends its line and the `}` begins its own,
+    blanks and comments aside. `apply` used to put the begin line right after
+    the `{` whatever followed it: `setContent { AppTheme {` became a begin
+    line with `AppTheme {` trailing behind its `// echolot:mark`, commented
+    out, and the file stopped compiling — while `--remove`, which deletes only
+    lines of the exact applied shape, could not take that line back out. A
+    comment after the `{` went the same way and left a begin with no end once
+    `--remove` had run. Code before the `}` would have put the end line above
+    it, inside whatever block that code closes. `--remove` deletes lines and
+    joins none back together, so a block like that is refused, and the reason
+    names the line to move.
+    """
+    eol = text.find("\n", open_at)
+    if eol < 0 or eol >= close_at:
+        return "the whole body is on one line — split the block, or mark by hand"
+    if not _OPEN_TAIL.fullmatch(text, open_at + 1, eol):
+        return ("code follows the `{` on its line — move it to a line of its "
+                "own, or mark by hand")
+    bol = text.rfind("\n", 0, close_at) + 1
+    if not _CLOSE_HEAD.fullmatch(text, bol, close_at):
+        return ("code comes before the `}` on its line — move it to a line of "
+                "its own, or mark by hand")
+    return eol + 1, bol
+
+
 def _why_not(open_at: int | None, has_return: bool, flat: bool,
-             close_at: int | None = 0) -> str:
+             close_at: int | None = 0, text: str | None = None) -> str:
     """Why a block cannot take a begin/end pair mechanically. Empty when it can.
 
     Every refusal has to carry its reason. A row printed with `·` and nothing
@@ -258,6 +337,10 @@ def _why_not(open_at: int | None, has_return: bool, flat: bool,
     brace below produced: `find_lambda` finds the `{` and `match_brace`
     returns None, so the proposal was not applicable and the reason was the
     empty string.
+
+    With the file's `text`, a block whose braces share their lines with code
+    is refused here too — see `brace_lines` — so the plan says so before
+    `--apply` has to.
     """
     if open_at is None:
         return "no block body found"
@@ -267,6 +350,10 @@ def _why_not(open_at: int | None, has_return: bool, flat: bool,
         return "has a return in its body — mark by hand"
     if flat:
         return "the whole body is on one line — split the block, or mark by hand"
+    if text is not None:
+        room = brace_lines(text, open_at, close_at)
+        if isinstance(room, str):
+            return room
     return ""
 
 
@@ -300,17 +387,37 @@ def manifests(root: Path) -> list[Path]:
 
 
 def launcher_activities(text: str) -> list[str]:
-    """Class names of activities whose intent-filter has MAIN and LAUNCHER."""
-    out = []
-    for m in _LAUNCHER_ACTIVITY.finditer(text):
-        body = m.group("body")
-        if _ACTION_MAIN.search(body) and _CATEGORY_LAUNCHER.search(body):
-            attrs = m.group("attrs")
-            target = _TARGET_ACTIVITY.search(attrs)
-            name = _ANDROID_NAME.search(attrs)
-            chosen = target or name
-            if chosen:
-                out.append(chosen.group(1))
+    """Class names of activities whose intent-filter has MAIN and LAUNCHER.
+
+    An element's body runs to its own closing tag and never past the next
+    activity's opening one, and a tag that closes itself has no body at all.
+    One pattern used to do both jobs, and for `<activity android:name=
+    ".SettingsActivity" />` it read on to the next `</activity>` — taking the
+    launcher's intent-filter along, so the settings screen was named the
+    entry point and `--apply` marked its onCreate. Commented-out elements are
+    dropped first: the build does not see them either.
+
+    An `<activity-alias>` names its class by `targetActivity`, and an app that
+    switches its icon has several aliases for one activity. Each class is
+    listed once, by its simple name — the one every search below uses — or
+    the same activity counted twice was "several launcher activities", an
+    ambiguity that stopped `--apply` and that no flag could settle.
+    """
+    text = _XML_COMMENT.sub("", text)
+    opens = list(_ACTIVITY_OPEN.finditer(text))
+    out: list[str] = []
+    for i, m in enumerate(opens):
+        if m.group("closed"):
+            continue
+        stop = opens[i + 1].start() if i + 1 < len(opens) else len(text)
+        close = re.compile(r"</" + m.group("tag") + r"\s*>").search(text, m.end(), stop)
+        body = text[m.end():close.start() if close else stop]
+        if not (_ACTION_MAIN.search(body) and _CATEGORY_LAUNCHER.search(body)):
+            continue
+        attrs = m.group("attrs")
+        chosen = _TARGET_ACTIVITY.search(attrs) or _ANDROID_NAME.search(attrs)
+        if chosen and simple_name(chosen.group(1)) not in {simple_name(n) for n in out}:
+            out.append(chosen.group(1))
     return out
 
 
@@ -356,11 +463,14 @@ def read_sources(files: list[Path]) -> dict[Path, str]:
     and each search used to open every file in the project again. On a
     checkout of any size that is the whole tree read six or seven times over
     for four answers, and the searches are what `mark` spends its time on.
+
+    Read by `read_source`, so the offsets taken from these texts are good
+    for `apply` as they are.
     """
     out: dict[Path, str] = {}
     for p in files:
         try:
-            out[p] = p.read_text(encoding="utf-8", errors="replace")
+            out[p] = read_source(p)
         except OSError:
             continue
     return out
@@ -378,6 +488,20 @@ def find_class_file(root: Path, module_dir: Path | None, name: str,
         if inside:
             return inside[0]
     return hits[0]
+
+
+def base_class(text: str, name: str) -> str | None:
+    """The class `name` inherits from, as its declaration writes it.
+
+    Kotlin's `class Main : Base()` and Java's `class Main extends Base` both;
+    only the first was read, so a Java launcher that does not override
+    onCreate got the note without the one name that says where to look. A
+    Kotlin primary constructor is stepped over whole, so the type of a
+    parameter in it is not taken for the base.
+    """
+    m = re.search(r"\bclass\s+" + re.escape(name)
+                  + r"\b(?:\([^)]*\)|[^{(])*?(?::|\bextends\b)\s*([A-Za-z_][\w.]*)", text)
+    return m.group(1) if m else None
 
 
 def find_on_create(text: str) -> tuple[int, int | None, int | None, bool] | None:
@@ -469,9 +593,44 @@ def find_composable_decl(name: str,
 
 
 def under_allowed(rel: str, allowed: list[str]) -> bool:
+    """Whether a path sits under one of `instrumentation.allowed`, globs included.
+
+    An empty list allows everything. Otherwise each root is compared segment
+    by segment, every segment a glob over the path's segment at the same
+    depth, and the path may go deeper: `feature/*/src/main` covers
+    `feature/login/src/main/kotlin/A.kt` and not `feature/login/src/test/…`.
+
+    That is the form `scan` writes into the config and the example shows,
+    and this used to compare it as a plain prefix — so every site in every
+    `feature/*` module was refused as outside. `reflect` reads the same list
+    through this function, so the command that writes the markers and the
+    report that audits where they went cannot disagree about it.
+    """
     if not allowed:
         return True
-    return any(rel == a.rstrip("/") or rel.startswith(a.rstrip("/") + "/") for a in allowed)
+    parts = rel.split("/")
+    for root in allowed:
+        segs = [s for s in str(root).strip("/").split("/") if s]
+        if segs and len(segs) <= len(parts) and all(
+                fnmatch.fnmatchcase(p, s) for p, s in zip(parts, segs, strict=False)):
+            return True
+    return False
+
+
+_OUTSIDE = "outside instrumentation.allowed — mark the nearest allowed caller instead"
+
+
+def _refuse_outside(p: Proposal, allowed: list[str], why: str = _OUTSIDE) -> None:
+    """Not applicable, and why, when the site is outside `allowed`.
+
+    Shown rather than dropped: the joint is where it is, and a reader who
+    does not see the row cannot know there was one. The reason is added to
+    any the site already had, never in place of it.
+    """
+    if under_allowed(p.file, allowed):
+        return
+    p.applicable = False
+    p.reason = "; ".join(r for r in (p.reason, why) if r)
 
 
 def _build_files(root: Path, mdir: Path) -> tuple[list[Path], list[Path]]:
@@ -572,15 +731,16 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
     out.module = gradle_module(mf, root)
     out.package = out.package or pkg
     if len(launchers) > 1:
+        # Two different classes, aliases already folded into their target.
+        # `--module` chooses between modules, not between two entry points of
+        # one, so it is not offered as the way out.
         out.ambiguity.append(
             f"{_rel(mf, root)} declares {len(launchers)} launcher activities: "
-            + ", ".join(launchers) + " — the first is taken; pass --module or edit the manifest")
+            + ", ".join(launchers) + " — the proposals below are for the first, and "
+            "--apply will not choose between two entry points: mark by hand")
 
     def add(p: Proposal) -> None:
-        if not under_allowed(p.file, allowed):
-            p.applicable = False
-            p.reason = (p.reason + "; " if p.reason else "") + \
-                "outside instrumentation.allowed — mark the nearest allowed caller instead"
+        _refuse_outside(p, allowed)
         out.proposals.append(p)
 
     # 2. Application.onCreate
@@ -591,20 +751,19 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
             out.notes.append(f"Application class {app_cls} is declared in the manifest but no "
                              f"source declares it under src/ (generated, or in a dependency)")
         else:
-            t = f.read_text(encoding="utf-8", errors="replace")
+            t = sources[f]
             oc = find_on_create(t)
             if oc is None:
                 out.notes.append(f"{_rel(f, root)}: {simple_name(app_cls)} does not override "
                                  f"onCreate — nothing of yours runs at bindApplication")
             else:
                 line, o, c, ret = oc
-                flat = one_line_body(t, o, c)
+                why = _why_not(o, ret, one_line_body(t, o, c), c, t)
                 add(Proposal("app_oncreate", _rel(f, root), line,
                              f"{simple_name(app_cls)}.onCreate — what runs inside bindApplication",
                              prefix + "app_oncreate", "manifest+lifecycle",
                              gradle_module(f, root),
-                             applicable=o is not None and not ret and not flat,
-                             reason=_why_not(o, ret, flat),
+                             applicable=not why, reason=why,
                              open_at=o, close_at=c))
     else:
         out.notes.append("no custom Application class in the manifest — bindApplication is "
@@ -617,33 +776,30 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
         out.notes.append(f"launcher Activity {act} is declared in the manifest but no source "
                          f"declares it under src/ (generated, or in a dependency)")
     else:
-        t = f.read_text(encoding="utf-8", errors="replace")
+        t = sources[f]
         oc = find_on_create(t)
         if oc is None:
-            m = re.search(r"\bclass\s+" + re.escape(simple_name(act)) + r"\b[^{]*?:\s*([A-Za-z_][\w.]*)", t)
-            base = m.group(1) if m else None
+            base = base_class(t, simple_name(act))
             out.notes.append(
                 f"{_rel(f, root)}: {simple_name(act)} does not override onCreate"
                 + (f" — it inherits from {base}; the override, if any, is there" if base else ""))
         else:
             line, o, c, ret = oc
-            flat = one_line_body(t, o, c)
+            why = _why_not(o, ret, one_line_body(t, o, c), c, t)
             add(Proposal("activity_oncreate", _rel(f, root), line,
                          f"{simple_name(act)}.onCreate — the launcher Activity, what runs inside activityStart",
                          prefix + "activity_oncreate", "manifest+lifecycle",
                          gradle_module(f, root),
-                         applicable=o is not None and not ret and not flat,
-                         reason=_why_not(o, ret, flat),
+                         applicable=not why, reason=why,
                          open_at=o, close_at=c))
         sc = find_lambda(t, _SET_CONTENT)
         if sc:
             line, o, c = sc
-            flat = one_line_body(t, o, c)
+            why = _why_not(o, False, one_line_body(t, o, c), c, t)
             add(Proposal("set_content", _rel(f, root), line,
                          "setContent { } — the root of the Compose tree; recomposition re-enters it",
                          prefix + "set_content", "api", gradle_module(f, root),
-                         applicable=o is not None and c is not None and not flat,
-                         reason=_why_not(o, False, flat, c),
+                         applicable=not why, reason=why,
                          open_at=o, close_at=c, lambda_body=True))
             # one hop: what setContent calls, when it is this project's code
             if o is not None and c is not None:
@@ -837,8 +993,6 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
             out.notes.append(f"{symbol} — the frame carries no line, so there "
                              f"is nothing to find the block around")
             continue
-        if allowed and not under_allowed(rel, allowed):
-            continue
         marker = marker_for(symbol, prefix)
         if marker in seen:
             continue
@@ -846,7 +1000,7 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
 
         path = root / rel
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = read_source(path)
         except OSError:
             continue
         block = enclosing_block(text, path.suffix, line)
@@ -872,13 +1026,20 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
             f"the line falls inside `{name}` while the frame names "
             f"`{wanted}` — the compiler moved it; mark by hand")
         flat = one_line_body(text, open_at, close_at)
+        why = disagree or _why_not(open_at, has_return, flat, close_at, text)
         out.proposals.append(Proposal(
             "anr_frame", rel, decl_line,
             f"{name} — on the stack when it froze, at line {line}",
             marker, "anr", gradle_module(path, root),
-            applicable=not has_return and not flat and not disagree,
-            reason=disagree or _why_not(open_at, has_return, flat),
+            applicable=not why, reason=why,
             open_at=open_at, close_at=close_at))
+
+    # A frame outside `instrumentation.allowed` was dropped here without a
+    # row, while `plan` shows such a site and refuses it. It is still on the
+    # stack, and the frame under it may be the allowed caller to mark
+    # instead — which a reader cannot see from a list it is missing from.
+    for p in out.proposals:
+        _refuse_outside(p, list(allowed or []))
 
     # A frame that lands on an import, on a blank line between two functions,
     # or past the end of the file is not a hard case — it is a line number
@@ -918,20 +1079,73 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
 #
 # Only then are markers worth placing, and by then you know where.
 
-def _call_end(clean: str, open_paren: int, limit: int = 600) -> int:
+def _call_end(clean: str, open_paren: int, limit: int = 600, pair: str = "()") -> int:
     """Index just past the `)` closing the call whose `(` is at `open_paren`.
 
     Bounded: an unbalanced file must not drag the scan to the end of it.
+    `pair="{}"` does the same for a lambda's braces.
     """
+    opening, closing = pair
     depth = 0
     for i in range(open_paren, min(len(clean), open_paren + limit)):
-        if clean[i] == "(":
+        if clean[i] == opening:
             depth += 1
-        elif clean[i] == ")":
+        elif clean[i] == closing:
             depth -= 1
             if depth == 0:
                 return i + 1
     return min(len(clean), open_paren + limit)
+
+
+def _with_trailing_lambda(clean: str, end: int) -> int:
+    """Past a Kotlin trailing lambda that follows a call, else `end` as it is.
+
+    `Executors.newFixedThreadPool(2) { r -> Thread(r, "io") }` hands over its
+    ThreadFactory outside the parentheses, and the factory is what names the
+    threads: read up to the `)` alone, that pool looked nameless.
+    """
+    k = end
+    while k < len(clean) and clean[k] in " \t":
+        k += 1
+    if k < len(clean) and clean[k] == "{":
+        return _call_end(clean, k, pair="{}")
+    return end
+
+
+def _names_its_thread(clean: str, quoted: str, open_paren: int, end: int) -> bool:
+    """Whether a `Thread(…)` call is handed a name among its own arguments.
+
+    Read at the top level of the argument list, where a name goes, on two
+    views of the file: `clean` for the structure, and `quoted` — comments
+    blanked, strings kept — to see a string where there is one. Everything
+    used to be read on `clean` alone, which blanks `"io"` out of
+    `Thread(r, "io")` before anything looks for a name, so a thread named in
+    plain sight was reported as nameless.
+
+    A string at that level is the name: `Thread("sync")`, `Thread(r, "io-$n")`.
+    So is a second argument of any kind — `Thread(r, name)` inside a factory
+    that was handed its name — because every constructor of the JDK's that
+    takes two or more arguments takes a name, except `(ThreadGroup,
+    Runnable)`, which an app rarely has reason to call. A string nested
+    deeper, in the Runnable, is not a name, and a Kotlin trailing lambda is
+    the Runnable and not an argument counted here.
+    """
+    depth, args, current = 0, 0, False
+    for i in range(open_paren + 1, end - 1):
+        c = clean[i]
+        if depth == 0 and quoted[i] == '"':
+            return True
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            args += 1 if current else 0
+            current = False
+            continue
+        if not c.isspace():
+            current = True
+    return args + (1 if current else 0) >= 2
 
 
 def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
@@ -952,10 +1166,11 @@ def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
     for path in source_files(root):
         rel = _rel(path, root)
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = read_source(path)
         except OSError:
             continue
         clean = strip_noise(text)
+        quoted: str | None = None   # made the first time a `Thread(` needs it
         for rx, name_of in ((_EXECUTORS, lambda m: f"Executors.new{m.group(1)}"),
                             (_POOL_CTOR, lambda m: m.group(1)),
                             (_BARE_THREAD, lambda m: "Thread")):
@@ -965,9 +1180,23 @@ def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
             # ThreadFactoryBuilder()…)` — and a per-line check called that an
             # unnamed pool.
             end = _call_end(clean, m.end() - 1)
+            what = name_of(m)
+            if what == "Thread":
+                if quoted is None:
+                    quoted = strip_noise(text, strings=False)
+                if _names_its_thread(clean, quoted, m.end() - 1, end):
+                    continue
+            else:
+                # A factory that builds its threads with `Thread(` is judged
+                # by that call, which this loop reaches on its own: named, the
+                # pool's threads are named; not, the `Thread(` is the row, and
+                # the place to name them. A row for the pool as well would
+                # point at the same line with the wrong default name.
+                end = _with_trailing_lambda(clean, end)
+                if _BARE_THREAD.search(clean, m.end(), end):
+                    continue
             if _NAMED_ALREADY.search(clean[m.start():end]):
                 continue
-            what = name_of(m)
             line_no = clean.count("\n", 0, m.start()) + 1
             kind = "thread_name" if what == "Thread" else "pool_name"
             born = "Thread-N" if kind == "thread_name" else "pool-N-thread-M"
@@ -979,9 +1208,9 @@ def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
                 # what this refuses to do.
                 "(name it)", "jdk", gradle_module(path, root),
                 applicable=False, reason="")
-            if not under_allowed(rel, allowed):
-                p.reason = ("outside instrumentation.allowed; "
-                            + p.reason)
+            # Naming is not a marker, so "the nearest allowed caller" is no
+            # advice here; that the place is outside is the whole reason.
+            _refuse_outside(p, allowed, "outside instrumentation.allowed")
             out.proposals.append(p)
 
     out.proposals.sort(key=lambda p: (p.file, p.line))
@@ -1025,15 +1254,29 @@ def _inner_indent(text: str, open_at: int) -> str:
     return _indent_of(text, open_at) + "    "
 
 
+def _ending_before(text: str, at: int) -> str:
+    """The line ending just before `at`, a line start: what a new line there ends with.
+
+    Taken from the line above rather than decided for the whole file, so a
+    CRLF file gets CRLF lines and a file that mixes the two gets whatever its
+    neighbour has — either way, deleting the line leaves the rest as it was.
+    """
+    return "\r\n" if text[max(0, at - 2):at] == "\r\n" else "\n"
+
+
 def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]:
     """Insert begin/end pairs for the applicable proposals.
 
     Returns (edited files with their markers, files that could not be read).
 
-    A begin line right after the block's `{`, an end line right before its
-    `}`, both tagged so `remove` can find them without any bookkeeping.
-    Files are edited from the last offset backwards, so earlier offsets stay
-    valid. Java gets a `;`, Kotlin does not.
+    A begin line under the line holding the block's `{`, an end line over
+    the line holding its `}`, both tagged so `remove` can find them without
+    any bookkeeping. Whole lines only, and only between two of the file's
+    own: `brace_lines` refuses a block whose braces share their lines with
+    code, and the plan has said so already. The lines are joined in one pass
+    from the top, with each one ending the way the line above it ends, and
+    the file is written back as bytes — nothing else in it changes, its line
+    endings included. Java gets a `;`, Kotlin does not.
 
     A file that is not valid UTF-8 is skipped and named. `plan` reads with
     `errors="replace"` and computes its offsets on what that produced; this
@@ -1054,53 +1297,78 @@ def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]
     for rel in sorted(by_file):
         path = root / rel
         try:
-            text = path.read_text(encoding="utf-8")
+            text = read_source(path, strict=True)
         except (OSError, UnicodeDecodeError):
             unreadable.append(rel)
             continue
         semi = ";" if path.suffix == ".java" else ""
-        edits = []   # (offset, insert_text)
+        # (offset, 0 for a begin and 1 for an end, the line): sorted, a begin
+        # and an end at one offset — an empty body — come out in that order.
+        edits: list[tuple[int, int, str]] = []
         marked = []
+        blocks: set[tuple[int, int]] = set()
         for p in by_file[rel]:
-            if TAG in text[p.open_at:p.close_at + 1]:
+            if TAG in text[p.open_at:p.close_at + 1] or (p.open_at, p.close_at) in blocks:
                 continue   # already marked here
-            if one_line_body(text, p.open_at, p.close_at):
-                continue   # the two inserts would cross — see one_line_body
+            room = brace_lines(text, p.open_at, p.close_at)
+            if isinstance(room, str):
+                continue   # refused, and the plan printed why — see brace_lines
+            begin_at, end_at = room
+            blocks.add((p.open_at, p.close_at))
             marked.append(p.marker)
             ind = _inner_indent(text, p.open_at)
-            begin = f"\n{ind}android.os.Trace.beginSection(\"{p.marker}\"){semi} {TAG}"
-            end = f"{ind}android.os.Trace.endSection(){semi} {TAG}\n"
-            edits.append((p.open_at + 1, begin))
-            # before the closing brace, at the start of its line
-            line_start = text.rfind("\n", 0, p.close_at) + 1
-            edits.append((line_start, end))
+            edits.append((begin_at, 0, f"{ind}android.os.Trace.beginSection(\"{p.marker}\")"
+                                       f"{semi} {TAG}{_ending_before(text, begin_at)}"))
+            edits.append((end_at, 1, f"{ind}android.os.Trace.endSection(){semi} {TAG}"
+                                     f"{_ending_before(text, end_at)}"))
         if not edits:
             continue
-        for offset, ins in sorted(edits, key=lambda e: -e[0]):
-            text = text[:offset] + ins + text[offset:]
-        path.write_text(text, encoding="utf-8")
+        pieces, last = [], 0
+        for offset, _, line in sorted(edits):
+            pieces += [text[last:offset], line]
+            last = offset
+        pieces.append(text[last:])
+        path.write_bytes("".join(pieces).encode("utf-8"))
         done.append((rel, marked))
     return done, unreadable
 
 
-def remove(root: Path) -> list[tuple[str, int]]:
-    """Delete every line tagged by apply, under root. Returns (file, lines removed)."""
+def remove(root: Path) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]]]:
+    """Delete every line `apply` wrote, under root.
+
+    Returns (files edited, with the number of lines taken out of each; lines
+    that carry the tag and were left in place, as file, line number after
+    this pass, and the line itself).
+
+    A line goes only when it has exactly the shape `apply` writes — see
+    `_APPLIED_LINE` — and it goes whole, line ending and all, so the lines
+    around it and their endings are the ones the file had before `--apply`.
+
+    A line that carries the tag in any other shape stays. It is somebody's
+    code with the tag typed onto it, or a line an older `apply` mangled —
+    `beginSection(…) // echolot:mark AppTheme {` — and deleting it would
+    take that code along. It is handed back instead of passed over: kept in
+    silence, it let the command say "no `echolot:mark` lines found" about a
+    tree that still had them.
+    """
     root = root.resolve()
-    touched = []
+    touched: list[tuple[str, int]] = []
+    kept: list[tuple[str, int, str]] = []
     for p in source_files(root):
         try:
-            text = p.read_text(encoding="utf-8")
+            text = read_source(p, strict=True)
         except (OSError, UnicodeDecodeError):
             continue
         if TAG not in text:
             continue
         lines = text.split("\n")
-        kept = [ln for ln in lines if not is_applied_line(ln)]
-        removed = len(lines) - len(kept)
-        if removed:
-            p.write_text("\n".join(kept), encoding="utf-8")
-            touched.append((_rel(p, root), removed))
-    return touched
+        rest = [ln for ln in lines if not is_applied_line(ln)]
+        rel = _rel(p, root)
+        kept += [(rel, n, ln.strip()) for n, ln in enumerate(rest, 1) if TAG in ln]
+        if len(rest) < len(lines):
+            p.write_bytes("\n".join(rest).encode("utf-8"))
+            touched.append((rel, len(lines) - len(rest)))
+    return touched, kept
 
 
 # --- rendering -------------------------------------------------------------------
