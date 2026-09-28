@@ -237,8 +237,10 @@ weight is; the agent opens the one file the trace named. That order is what
 ## Two things that need no markers at all
 
 - **`androidx.compose.runtime:runtime-tracing`** in the app module puts
-  composable names into the trace with no code touched. `mark` says when it
-  is missing; for a Compose app it is the first thing to add.
+  composable names into the trace with no code touched. `mark` says when a
+  Compose app is missing it — one whose app module calls `setContent {` or
+  declares a `@Composable` — and for such an app it is the first thing to
+  add. An app without Compose is not told about it.
 - **Callstack sampling** (Perfetto's `linux.perf` on Android 12+) names Java
   frames on a hot thread from symbols, no instrumentation, no naming — with
   the caveats of profileable builds and R8 mapping. Not wired in yet; the

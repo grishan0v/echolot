@@ -15,6 +15,8 @@ edges the tool went on printing what had stopped being true:
 - report.md for a run where nothing fired stopped before the Silent line and
   the toolchain footer — the footer being where #118 names a trace_processor
   that bypassed the pin.
+- `mark` told every app, a Views-only one included, that the Compose
+  tracing library was the first thing to add.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ import pytest
 
 from echolot import hunt as hunt_mod
 from echolot import main as main_mod
-from echolot import recorder
+from echolot import mark, recorder
 from echolot import report as report_mod
 from echolot.main import NOT_RUN, main
 from tests.support import check
@@ -111,6 +113,7 @@ def test_a_self_check_that_ran_keeps_its_tally(project, facts, said):
     check(f"the line says {said!r}", said in line, line)
     check("and not that it did not run", "did not run" not in line, line)
 
+
 # --- probe: the binary analyze would use ------------------------------------
 
 @pytest.fixture
@@ -170,6 +173,7 @@ def test_a_config_that_does_not_load_does_not_stop_probe(project, opened):
           "does not load" in err and "the pinned one" in err
           and "frame_jank" in err, err)
 
+
 # --- hunt: a config that does not load opens nothing ------------------------
 
 def test_hunt_refuses_a_config_that_does_not_load(project):
@@ -219,6 +223,7 @@ def test_the_run_log_keeps_the_refusal(project, monkeypatch):
     check("exit 2, with the sentence", hunts[0].get("exit") == 2
           and "does not load" in (hunts[0].get("error") or ""), hunts[0])
 
+
 # --- report.md: nothing fired, and still the footer -------------------------
 
 def _quiet(toolchain: dict) -> dict:
@@ -261,3 +266,91 @@ def test_the_fixture_with_every_row_emptied_names_each_detector_silent(marker_re
     version = marker_report["toolchain"]["trace_processor"]
     check("and the pinned trace_processor last",
           lines[-1] == f"<sub>trace_processor {version}</sub>", lines[-1])
+
+
+# --- mark: the Compose note, for Compose apps --------------------------------
+
+FILTER = ('<intent-filter><action android:name="android.intent.action.MAIN" />'
+          '<category android:name="android.intent.category.LAUNCHER" /></intent-filter>')
+
+
+def _app(root: Path, activity: str, *extra: tuple[str, str]) -> Path:
+    """One app module: a manifest with a launcher, its Activity, and `extra`."""
+    files = {
+        "settings.gradle.kts": "",
+        "app/build.gradle.kts": 'android { namespace = "com.example.app" }\n',
+        "app/src/main/AndroidManifest.xml":
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+            '  <application>\n'
+            f'    <activity android:name=".MainActivity" android:exported="true">{FILTER}'
+            '</activity>\n'
+            '  </application>\n</manifest>\n',
+        "app/src/main/java/com/example/app/MainActivity.kt": activity,
+        **dict(extra),
+    }
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return root
+
+
+COMPOSE = """\
+package com.example.app
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            AppRoot()
+        }
+    }
+}
+"""
+VIEWS = """\
+package com.example.app
+
+class MainActivity : AppCompatActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.main)
+    }
+}
+"""
+SCREEN = """\
+package com.example.app
+
+@Composable
+fun Home() {
+    Text("home")
+}
+"""
+
+
+def _note(root: Path) -> str | None:
+    """The runtime-tracing line `mark` prints for this tree, if it prints one."""
+    code, out, err = run("mark", "--root", str(root))
+    assert code == 0, out + err
+    return next((ln for ln in out.splitlines()
+                 if ln.startswith("# note:") and "runtime-tracing" in ln), None)
+
+
+def test_a_compose_app_is_told_about_runtime_tracing(project):
+    note = _note(_app(project / "compose", COMPOSE))
+    check("the note is there", note is not None, note)
+    check("and says what is missing", "not among the app module's" in note, note)
+
+
+def test_a_views_only_app_is_not_told_about_compose(project):
+    root = _app(project / "views", VIEWS)
+    check("no note", _note(root) is None, _note(root))
+    check("the plan knows why",
+          not any("runtime-tracing" in n for n in mark.plan(root).notes),
+          mark.plan(root).notes)
+
+
+def test_compose_behind_a_views_launcher_is_still_compose(project):
+    """The launcher is Views; a screen in the same module is a composable."""
+    root = _app(project / "mixed", VIEWS,
+                ("app/src/main/java/com/example/app/Home.kt", SCREEN))
+    check("the note is there", _note(root) is not None, _note(root))

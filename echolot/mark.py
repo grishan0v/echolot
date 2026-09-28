@@ -99,6 +99,7 @@ _ON_CREATE = re.compile(
     r"(?:fun|void)\s+onCreate\s*\(", re.M)
 _SET_CONTENT = re.compile(r"\bsetContent\s*(?:\([^)]*\)\s*)?\{")
 _SET_CONTENT_VIEW = re.compile(r"\bsetContentView\s*\(")
+_COMPOSABLE = re.compile(r"@Composable\b")
 _ROOM_BUILDER = re.compile(r"\bRoom\s*\.\s*(?:databaseBuilder|inMemoryDatabaseBuilder)\s*\(")
 _KOIN_START = re.compile(r"\bstartKoin\s*\{")
 _HILT_APP = re.compile(r"@HiltAndroidApp\b")
@@ -690,6 +691,26 @@ def _tracing_note(root: Path, mdir: Path) -> str:
             "thing to add for a Compose app")
 
 
+def _uses_compose(sources: dict[Path, str], mdir: Path,
+                  proposals: list[Proposal]) -> bool:
+    """Whether the app module uses Compose, by the strings `plan` knows it by.
+
+    runtime-tracing names composables, and an app without any has nothing for
+    it to name. The note went to every app all the same, a Views-only one
+    included, and told it the Compose library was the first thing to add — a
+    line that is on every project's output is a line people learn to skip.
+
+    The launcher's `setContent {` settles it, and `plan` has already looked
+    for that one. Past it, any source under the app module that calls
+    `setContent {` or declares a `@Composable`: a Compose screen behind a
+    launcher written with Views, a `ComposeView` given its content.
+    """
+    if any(p.kind == "set_content" for p in proposals):
+        return True
+    return any(mdir in p.parents and (_SET_CONTENT.search(t) or _COMPOSABLE.search(t))
+               for p, t in sources.items())
+
+
 # --- the plan ------------------------------------------------------------------
 
 def plan(root: Path, package: str | None = None, allowed: list[str] | None = None,
@@ -846,10 +867,11 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
             out.notes.append(f"{rel}: @HiltAndroidApp — the graph is generated; its cost sits "
                              f"inside Application.onCreate (super.onCreate), nothing separate to mark")
 
-    # 5. what would give names for free
-    note = _tracing_note(root, mdir)
-    if note:
-        out.notes.append(note)
+    # 5. what would give names for free — to an app with composables to name
+    if _uses_compose(sources, mdir, out.proposals):
+        note = _tracing_note(root, mdir)
+        if note:
+            out.notes.append(note)
 
     # deterministic order: by kind rank, then path, then line; then the cap
     rank = {k: i for i, k in enumerate(("app_oncreate", "activity_oncreate", "set_content",
