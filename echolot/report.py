@@ -617,6 +617,11 @@ def to_markdown(report: dict[str, Any]) -> str:
 
     out.extend(_markers_lines(report.get("markers") or {}))
 
+    # Nothing fired still ends the way every report does, with the Silent
+    # line and the toolchain footer. It used to return here, before both —
+    # and the footer is where a trace_processor other than the pinned one is
+    # named, so a clean report from a binary that bypassed the pin did not
+    # say so.
     if s["detectors_fired"] == 0:
         out.append("_No detector fired._")
         out.append("")
@@ -625,7 +630,7 @@ def to_markdown(report: dict[str, Any]) -> str:
             "process name and the scenario anchors match the trace "
             "(`echolot probe`)."
         )
-        return "\n".join(out)
+        out.append("")
 
     for d in report["detectors"]:
         if not d["rows"]:

@@ -12,11 +12,15 @@ edges the tool went on printing what had stopped being true:
   no scenario, and left the previous traces where the new ones would land,
   without a word. Since #121 one malformed entry under `detectors:` is a
   config that does not load.
+- report.md for a run where nothing fired stopped before the Silent line and
+  the toolchain footer — the footer being where #118 names a trace_processor
+  that bypassed the pin.
 """
 
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import json
 from pathlib import Path
@@ -26,6 +30,7 @@ import pytest
 from echolot import hunt as hunt_mod
 from echolot import main as main_mod
 from echolot import recorder
+from echolot import report as report_mod
 from echolot.main import NOT_RUN, main
 from tests.support import check
 
@@ -213,3 +218,46 @@ def test_the_run_log_keeps_the_refusal(project, monkeypatch):
     check("one hunt line", len(hunts) == 1, hunts)
     check("exit 2, with the sentence", hunts[0].get("exit") == 2
           and "does not load" in (hunts[0].get("error") or ""), hunts[0])
+
+# --- report.md: nothing fired, and still the footer -------------------------
+
+def _quiet(toolchain: dict) -> dict:
+    """A report in which the one detector that ran found nothing."""
+    return {
+        "schema": 1, "generated_at": "2026-09-28T10:00:00+00:00",
+        "trace": "t.perfetto-trace", "toolchain": toolchain,
+        "window": {"process": "com.example.app", "duration_ms": 1000.0},
+        "environment": {},
+        "summary": {"detectors_run": 1, "detectors_fired": 0, "fired_ids": []},
+        "detectors": [{"id": "d", "title": "d", "why": "", "params": {},
+                       "params_source": "default", "error": None, "rows": []}],
+    }
+
+
+@pytest.mark.parametrize("toolchain,footer", [
+    ({"trace_processor": "v48.0", "source": "toolchain.tp_binary", "binary": CUSTOM},
+     "trace_processor v48.0 (custom binary from toolchain.tp_binary, pin bypassed)"),
+    ({"trace_processor": "v56.1", "source": "pinned", "binary": None},
+     "trace_processor v56.1"),
+], ids=["custom", "pinned"])
+def test_a_report_where_nothing_fired_keeps_silent_and_the_footer(toolchain, footer):
+    lines = report_mod.to_markdown(_quiet(toolchain)).splitlines()
+    check("it still says nothing fired", "_No detector fired._" in lines, lines)
+    check("the Silent line is there", "**Silent:** d" in lines, lines)
+    check("and the footer ends it", lines[-1] == f"<sub>{footer}</sub>", lines[-3:])
+
+
+def test_the_fixture_with_every_row_emptied_names_each_detector_silent(marker_report):
+    """The same, on the pipeline's own report: twelve names and a version."""
+    quiet = copy.deepcopy(marker_report)
+    for d in quiet["detectors"]:
+        d["rows"] = []
+    quiet["summary"].update(detectors_fired=0, fired_ids=[])
+
+    lines = report_mod.to_markdown(quiet).splitlines()
+    ids = [d["id"] for d in quiet["detectors"]]
+    check("every detector named silent", f"**Silent:** {', '.join(ids)}" in lines,
+          [ln for ln in lines if ln.startswith("**Silent")])
+    version = marker_report["toolchain"]["trace_processor"]
+    check("and the pinned trace_processor last",
+          lines[-1] == f"<sub>trace_processor {version}</sub>", lines[-1])
