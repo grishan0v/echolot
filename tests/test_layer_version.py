@@ -388,6 +388,27 @@ def test_the_upgrade_row_shows_the_line_and_stops(path: Path) -> None:
           "Do not run `echolot init`" in rows[0], rows[0])
 
 
+def test_the_hunt_command_stops_on_a_newer_layer_before_its_init_route() -> None:
+    """`/echolot hunt <words>` skips the door and reads `doctor -q` instead.
+
+    The door routes `upgrade` to a stop. The hunt command read two things
+    off the layer line — stale and naming `echolot init`: run it; naming
+    `--all`: ask — and a NEWER line matched neither, so the hunt went on with
+    the installed CLI against a layer written for a newer one. The stop has
+    to come before the stale route: a VERSION UNREADABLE line names
+    `echolot init` in its way out.
+    """
+    text = (CLAUDE_DIR / "commands" / "echolot-hunt.md").read_text(encoding="utf-8")
+    env = " ".join(text[text.index("**Environment.**"):text.index("**Config.**")].split())
+    stop, stale = env.find("`layer: NEWER`"), env.find("stale and names plain `echolot init`")
+    check("the environment step names both lines",
+          stop >= 0 and "`layer: VERSION UNREADABLE`" in env, env)
+    check("with the upgrade, and a stop", layer.UPGRADE in env and "and stop" in env, env)
+    check("and never init there", "do not run `echolot init` or `echolot init --all`"
+          in env, env)
+    check("before the stale route, which is still there", 0 <= stop < stale, (stop, stale))
+
+
 # --- the binary init's closing check is handed ------------------------------
 
 @pytest.mark.parametrize("flag,local,want,said", [

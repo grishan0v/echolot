@@ -8,12 +8,25 @@ Find the cause of a performance regression.
 
 **Environment.** `echolot doctor -q`. A non-zero exit means there is no point
 going further: no report from that environment can be trusted. Show what
-exactly failed. If the second line says the `.claude/` layer is stale and
-names plain `echolot init`, run that before anything else — the agent you are
-about to launch reads that layer. If it names `echolot init --all`, that
-overwrites files edited here: ask the human first, the way the skill's
-`init-force` section says. Note the time: the agent is told doctor passed and
-when, so it does not run it again.
+exactly failed.
+
+Then read its second line, the one about the `.claude/` layer, and look at
+how it starts before anything else. `layer: NEWER` or
+`layer: VERSION UNREADABLE` means the layer here was written by a newer
+echolot than the one installed, or names a version the installed one cannot
+read: the agent you are about to launch would read files written for a CLI
+that is not here. Show that line to the human as it is — it names the
+upgrade, `pipx upgrade echolot` (or `uv tool upgrade echolot`) — and stop.
+Do not call the agent, and do not run `echolot init` or `echolot init --all`,
+whatever else the line names: `init` refuses that layer, and the upgrade is
+the human's to make.
+
+Otherwise, if the line says the layer is stale and names plain
+`echolot init`, run that before anything else — the agent you are about to
+launch reads that layer. If it names `echolot init --all`, that overwrites
+files edited here: ask the human first, the way the skill's `init-force`
+section says. Note the time: the agent is told doctor passed and when, so it
+does not run it again.
 
 **Config.** No `echolot.yml` in the root? Go to `/echolot-setup` and come back.
 A loop on an invented config burns rounds for nothing.
