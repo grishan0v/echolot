@@ -4,10 +4,14 @@ It lives in the Android project root and is committed. Read it like
 `gradle.properties`: one tool per machine, the binding to a project inside that
 project's repository.
 
-Machine-local things (device serials, a path to your own
-`trace_processor_shell`) go into `local.yml` next to it, which sits in
-`.gitignore`. The merge is recursive and local wins; when it is applied, the
-CLI says so on stderr.
+Machine-local things go into `local.yml` next to it: `runner.device`, the
+serial of the phone on this desk, and `toolchain.tp_binary`, a path to your
+own `trace_processor_shell`. It belongs in `.gitignore`, and `echolot init`
+adds it there when the project is the root of a git checkout. The merge is
+recursive and local wins, key by key inside a section — but a list is a value
+like any other and is replaced whole: a `runner.gradle_args` in local.yml
+drops the committed arguments rather than adding to them. When local.yml is
+applied, the CLI says so on stderr.
 
 ## What the code reads today
 
@@ -99,11 +103,39 @@ macrobenchmark task and gathers the traces it wrote.
 unsupported: wiping data changes the scenario rather than repeating it.
 
 `environment: true` records what the device was doing to the app while the
-scenario ran — CPU frequency, thermal throttling, free memory, and the kernel
-function a thread went to sleep on. It reaches the report as `environment`,
-and `compare` reads it to tell a slower machine from a slower app. Turning it
-off is for a device whose buffer overflows; the report then says the device
-state was not recorded, which is a different answer from "it held steady".
+scenario ran — CPU frequency, thermal throttling, free memory, and why a
+thread went into uninterruptible sleep. That last one carries two things: the
+disk flag, which `io_wait` reads, and the kernel function, which comes back
+empty on a production kernel and is named only on a userdebug one. It reaches
+the report as `environment`, and `compare` reads it to tell a slower machine
+from a slower app. Turning it off is for a device whose buffer overflows; the
+report then says the device state was not recorded, which is a different
+answer from "it held steady" — and `io_wait` goes silent, having no disk flag
+to read.
+
+Every key the runner reads, and where it applies:
+
+| key | mode | default |
+|---|---|---|
+| `mode` | every | `launch` |
+| `iterations` | launch, command | 5; `collect -n` overrides it |
+| `duration_ms` | launch, command | 12000 — the recording, not the scenario |
+| `reset_policy` | launch, command | `force-stop` |
+| `environment` | launch, command | `true` |
+| `atrace_categories` | launch, command | `am wm gfx view dalvik binder_driver res database` |
+| `buffer_kb` | launch, command | 131072 |
+| `device` | launch, command | the one device attached; `collect --device` overrides it. Belongs in local.yml |
+| `activity` | launch | the launcher activity of `project.package`, asked of the device |
+| `command` | command | none — the mode needs it |
+| `gradle_task` | gradle | none — the mode needs it |
+| `gradle_args` | gradle | none |
+| `gradle` | gradle | `./gradlew` |
+| `project_root` | gradle | the config's directory; a relative path is taken from there, as `-o` is |
+| `timeout_s` | gradle | 3600 — the whole gradle run, build included |
+
+In gradle mode the macrobenchmark makes the recording, so the keys that shape
+one — `environment`, `atrace_categories`, `buffer_kb`, `duration_ms`,
+`reset_policy` — do not apply, and `collect` says so when it finds them set.
 
 ### `detectors`
 
@@ -120,15 +152,23 @@ detectors:
   frame_jank: false        # this device has no frame timeline
 ```
 
-`false` is the only way out. Until 0.5.4 the section doubled as an allowlist,
+`false` is the only way out. Before 0.6.0 the section doubled as an allowlist,
 so a config naming six detectors ran six — and on a real project four sat out
 for weeks because a calibrated section had been tidied.
 
-The values override the `@param` defaults in the `.sql` files. Besides numbers
-they include name masks: `*name_glob*` over the slice name, `*thread_glob*`
-over the thread, `*skip_glob*` for exclusions. They live in the config because
-ART names things differently across Android versions, and adapting to a device
-must not require editing a query.
+The values override the `@param` defaults in the `.sql` files, and each has to
+be the kind its default is — a number for a threshold, a string for a mask.
+A value of the wrong kind, or a parameter the detector does not have, stops
+`analyze` with exit 2 before any trace is read. Besides numbers they include
+name masks: a parameter with `name_glob` in its name masks the slice name
+(`name_glob_alt` too), one with `skip_glob` is an exclusion. They live in the
+config because ART names things differently across Android versions, and
+adapting to a device must not require editing a query.
+
+`repeated_work.marker_prefix` is a parameter of that detector's own, and not
+the same key as `instrumentation.temp_prefix`: it decides which names may come
+back as a near miss, and it does not follow the other. A project that changes
+its prefix changes both.
 
 Thresholds are not picked by hand: `echolot calibrate` derives them from
 healthy runs and prints a ready section with the reasoning attached.
@@ -156,7 +196,7 @@ was found in the code or in the trace, with a `file:line` or a table row.
 Nothing found — write `null` and say so out loud, do not invent something
 plausible.
 
-## What the agent reads, and the code never does
+## What the agent reads, and the code reads in two places
 
 ```yaml
 domains:                        # the slice-to-code map
@@ -177,8 +217,14 @@ own wrapper (`AppTraces.start(LOAD)`), which is how most apps that
 name their markers write them. A hint ending in `via X` says the literal is
 not on that line: `X` is.
 
+`analyze` reads `domains[].slice`: every name listed there, taken as a GLOB,
+is measured in the Markers table of each report whatever the detectors say,
+and one the window never held is listed as absent. `module` and `hint` are
+for the reader alone.
+
 `loop.max_rounds` is the one number a human sets to bound a hunt. Stopping is
 not left to the agent's judgement: it has no goal of its own to economise.
+`reflect` reads it too, to say whether a hunt went past it.
 
 ## Read by nobody yet
 

@@ -101,9 +101,12 @@ one: it is not the cost of synchronous IPC, however similar the name looks.
 
 ## Thread names
 
-Linux truncates `comm` to **15 characters**. So the trace holds not
-`com.example.app` but `m.example.app`, not `DefaultDispatcher-worker-1` but
-`DefaultDispatch`. Write thread masks with the truncation in mind.
+Linux keeps **15 characters** of a thread's name (`comm`), and which 15
+depends on the thread. A pool thread loses its end: the trace holds not
+`DefaultDispatcher-worker-1` but `DefaultDispatch`. The main thread is named
+after the process and loses its front: `com.example.myapp` arrives as
+`m.example.myapp`, while `com.example.app` is exactly fifteen characters and
+arrives whole. Write thread masks with the truncation in mind.
 
 The consequence worth holding on to: a pool whose workers differ only past
 the fifteenth character arrives as **one** name, so every
@@ -145,13 +148,15 @@ the process rather than by a thread, and `names` and `probe` list it with
 `(async)` where a thread name would be. On one real project every named
 marker was this kind.
 
-What reads them: the scenario anchors — `scenario.end` is usually one — and
-this inventory. What does not: every detector. They read thread slices, and a
-section that belongs to no thread has no self time on anyone's thread and no
-place in anyone's coverage. A dash in the mask column next to an `(async)`
-row is exact. Do not go changing the app's tracing to synchronous sections
-so a detector can see them; plant an `AGENTTMP_` marker on the thread that
-does the work instead.
+What reads them: the scenario anchors — `scenario.end` is usually one — this
+inventory, and the Markers table in every report, for a name `domains` lists
+or one that carries the temporary prefix. What does not: every detector. They
+read thread slices, and a section that belongs to no thread has no self time
+on anyone's thread and no place in anyone's coverage. A dash in the mask
+column next to an `(async)` row is exact. Do not go changing the app's
+tracing to synchronous sections so a detector can see them. To have one
+measured, list its name under `domains`; to have a detector see the work,
+plant an `AGENTTMP_` marker on the thread that does it.
 
 ## Waiting on the disk
 
