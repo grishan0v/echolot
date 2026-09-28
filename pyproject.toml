@@ -63,10 +63,13 @@ dependencies = [
     #
     # Worth saying out loud what one line here installs: rich-argparse pulls in
     # rich, and rich pulls in pygments, markdown-it-py and mdurl. Four
-    # distributions for help text, against the two this package had. The trade
-    # was taken because none of them is imported until help is actually
-    # rendered — `import echolot.main` costs 4 ms more, and `echolot status`
-    # never touches rich at all — and because all four are MIT or BSD-2.
+    # distributions for help text, against the two this package had, all four
+    # MIT or BSD-2. What they cost at run time is not nothing: `import
+    # echolot.main` imports no rich yet, but every command builds the parser
+    # before it runs, and building it formats the usage through rich-argparse.
+    # After `echolot status`, 43 `rich.*` modules are loaded — some 30 ms of
+    # the first parse on a laptop. pygments and markdown-it are not imported,
+    # by `status` or by `--help`.
     #
     # The cap is on the major version, not the minor: the formatter class names
     # and `group_name_formatter` are the API this uses, and 1.x keeps them.
@@ -105,21 +108,32 @@ select = ["E4", "E7", "E9", "F", "W", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Every warning the package emits, at the top of the report. A DeprecationWarning
-# from the standard library is how a future Python announces a breakage, and the
-# only cheap moment to hear it is now.
+# A DeprecationWarning attributed to echolot's own code fails the test that
+# raised it: that is the standard library, or a dependency, saying a call this
+# package makes is on its way out — how a future Python announces a breakage,
+# and the only cheap moment to hear it is now. Only those: any other warning,
+# and a deprecation inside a dependency's own code, is reported the way pytest
+# always reports it, in the summary at the end.
 filterwarnings = ["error::DeprecationWarning:echolot.*"]
 
 [tool.coverage.run]
 source = ["echolot"]
+# Several tests run the CLI as a child process — `python -m echolot.main`, the
+# way a person and an agent run it — and without this nothing those runs
+# reached was counted, unless some in-process test happened to reach it too.
+# coverage >= 7.10, which pytest-cov 7 already requires, measures the
+# children and folds them into the total.
+patch = ["subprocess"]
 
 [tool.coverage.report]
 show_missing = true
-# Measured 2026-09-08 with `pytest --cov=echolot`: 85.56%, 1046 of 7244
-# statements missed. The gate sits a point and a half below that — enough that
-# an unrelated line here or there doesn't fail CI, not so much that coverage
-# can drift downward release after release without anyone noticing.
-fail_under = 84
+# Measured 2026-09-28 with `pytest --cov=echolot`, child processes counted
+# (`patch` above): 91.82%, 756 of 9239 statements missed. Without them the
+# same tree reads 90.19%. The gate sits a point and a bit below the first
+# number — enough that an unrelated line here or there doesn't fail CI on one
+# of the five Python versions, not so much that coverage can drift downward
+# release after release without anyone noticing.
+fail_under = 90.5
 
 [tool.setuptools.dynamic]
 version = { attr = "echolot.__version__" }
