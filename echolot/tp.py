@@ -534,6 +534,7 @@ def _fetch(pin: PinnedBuild) -> str:
     sys.stdout.flush()
     print(_notice(pin), file=sys.stderr, flush=True)
     _, download = _perfetto_prebuilts()
+    before = _partials(pin)
     try:
         # perfetto announces the download itself, with a `print` — to
         # stdout, which is the result channel: the first `names --json` came
@@ -543,8 +544,35 @@ def _fetch(pin: PinnedBuild) -> str:
             return download(file_name=pin.file_name, url=pin.url,
                             sha256=pin.sha256)
     except Exception as e:
+        # The file this attempt created goes with it. perfetto leaves it
+        # under its temporary name when curl fails or the hash does not
+        # match, and names the next attempt's file afresh, so every failure
+        # left one more in the cache: part of the binary, or a whole file
+        # that is not the pin. Only this build's temporary name, and only a
+        # file that was not there before the attempt: the binary and other
+        # builds' files never have that name, and an earlier run's leftover
+        # was there before. Nothing is said about it either way; the error
+        # below is what happened.
+        for leftover in _partials(pin) - before:
+            with contextlib.suppress(OSError):
+                leftover.unlink()
         _FAILED[pin.path] = _cannot_fetch(pin, _cause(e))
         raise ToolchainError(_FAILED[pin.path]) from e
+
+
+def _partials(pin: PinnedBuild) -> set[Path]:
+    """This build's downloads in progress, or abandoned, in perfetto's cache.
+
+    perfetto downloads into `<binary>.<number>.tmp` beside where the binary
+    goes — the number random, so two downloads at once do not share a file —
+    and gives it the pinned name only once its SHA-256 matched. Nothing else
+    has that shape: not the binary, not another build's file.
+    """
+    shape = re.compile(re.escape(pin.path.name) + r"\.[0-9]+\.tmp")
+    try:
+        return {p for p in pin.path.parent.iterdir() if shape.fullmatch(p.name)}
+    except OSError:
+        return set()
 
 
 def _notice(pin: PinnedBuild) -> str:
@@ -569,9 +597,9 @@ def _cause(e: Exception) -> str:
     if isinstance(e, FileNotFoundError) and shutil.which("curl") is None:
         return "curl is not installed, or not on PATH"
     if str(e).startswith("Checksum mismatch"):
-        # perfetto's own words for it, and it leaves the file under a
-        # temporary name: the pinned name is only ever given to a file whose
-        # hash matched.
+        # perfetto's own words for it. The file it hashed was under a
+        # temporary name, and `_fetch` removes it: the pinned name is only
+        # ever given to a file whose hash matched.
         return ("what arrived is not the file the pin names — its SHA-256 "
                 "differs — so it was not put in place. A proxy or a captive "
                 "portal answering in the server's stead does this")

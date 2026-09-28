@@ -8,6 +8,11 @@
 - With no investigation open, `echolot` promised "the next hunt opens one"
   while echolot.yml did not load — which is when `hunt "<q>"` refuses, since
   #126.
+- A download of the pinned trace_processor that failed left its file in the
+  cache. perfetto fetches into `<binary>.<number>.tmp` and gives the file the
+  pinned name only once the hash matches, with a new number for every
+  attempt, so each failure left one more: part of the binary, or a whole
+  file that is not the pin.
 
 Wherever a download is attempted here, HOME is an empty directory and PATH
 holds a fake `curl` and nothing else, so the real one cannot run.
@@ -19,6 +24,7 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +81,19 @@ def fake_curl(bin_dir: Path, body: str) -> str:
     curl.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
     curl.chmod(0o755)
     return str(bin_dir)
+
+
+def writes(text: str, then: int, wrote: Path) -> str:
+    """A curl body: `text` into the file after `-o`, that file's name into
+    `wrote`, then exit `then`. Shell builtins only — PATH has nothing else."""
+    return ('while [ $# -gt 0 ]; do\n'
+            '  if [ "$1" = "-o" ]; then\n'
+            f'    printf %s {shlex.quote(text)} > "$2"\n'
+            f'    echo "$2" >> {shlex.quote(str(wrote))}\n'
+            '  fi\n'
+            '  shift\n'
+            'done\n'
+            f'exit {then}\n')
 
 
 # --- `next`: a self-check that never ran did not fail -----------------------
@@ -195,3 +214,94 @@ def test_the_hunt_line_promises_only_what_hunt_does(project, config, promised):
     opened = code == 0 and hunt_mod.load(project) is not None
     check("and hunt does what the line said", opened == promised,
           f"exit {code}, opened: {opened}\n{line}\n{err}")
+
+
+# --- a failed download takes its own file with it ---------------------------
+
+@pytest.fixture
+def cache(tmp_path, monkeypatch) -> tuple[tp.PinnedBuild, dict[str, bytes]]:
+    """perfetto's cache under an empty HOME, holding what no attempt may touch:
+    an earlier run's leftover of this build, another build's binary and its
+    download, and a file that is not perfetto's."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(tp, "_FAILED", {})
+    pin = tp.pinned_build()
+    root, ext = os.path.splitext(pin.file_name)
+    other = f"{root}-{'0' * 16}{ext}"
+    kept = {
+        f"{pin.path.name}.77.tmp": b"an earlier run's leftover",
+        other: b"another build's binary",
+        f"{other}.4242.tmp": b"another build's download",
+        "notes.txt": b"not perfetto's",
+    }
+    pin.path.parent.mkdir(parents=True)
+    for name, data in kept.items():
+        (pin.path.parent / name).write_bytes(data)
+    return pin, kept
+
+
+def _listing(pin: tp.PinnedBuild) -> dict[str, bytes]:
+    return {p.name: p.read_bytes() for p in pin.path.parent.iterdir()}
+
+
+def _attempt(monkeypatch, tmp_path, body: str) -> str:
+    """One download through `resolve_binary_path`, with `body` as curl."""
+    monkeypatch.setenv("PATH", fake_curl(tmp_path / "bin", body))
+    with pytest.raises(tp.ToolchainError) as e:
+        tp.resolve_binary_path()
+    return str(e.value)
+
+
+@needs_a_pin
+@pytest.mark.parametrize("text,then,cause", [
+    ("the first half of a binary", 56, "curl exited with status 56"),
+    ("<html>log in first</html>", 0, "its SHA-256 differs"),
+], ids=["curl-broke-off", "hash-mismatch"])
+def test_a_failed_download_takes_its_own_file_with_it(
+        tmp_path, monkeypatch, capsys, cache, text, then, cause):
+    pin, kept = cache
+    wrote = tmp_path / "wrote"
+    error = _attempt(monkeypatch, tmp_path, writes(text, then, wrote))
+    check("the download failed as planted", cause in error, error)
+
+    created = wrote.read_text(encoding="utf-8").split()
+    check("curl did write a file, under perfetto's temporary name",
+          len(created) == 1 and created[0].startswith(f"{pin.path}.")
+          and created[0].endswith(".tmp"), created)
+    check("which is gone", not Path(created[0]).exists(), created[0])
+    check("everything else in the cache is as it was", _listing(pin) == kept,
+          sorted(_listing(pin)))
+    check("and nothing is under the pinned name", not pin.path.exists())
+    said = capsys.readouterr()
+    check("nothing is said about it: the notice, and the error raised",
+          said.err == tp._notice(pin) + "\n" and said.out == "", said)
+
+
+@needs_a_pin
+def test_an_attempt_that_wrote_nothing_removes_nothing_and_says_nothing(
+        tmp_path, monkeypatch, capsys, cache):
+    """Offline, curl gives up before it creates the file."""
+    pin, kept = cache
+    error = _attempt(monkeypatch, tmp_path, "exit 6\n")
+    offline = tp._cause(subprocess.CalledProcessError(6, ["curl"]))
+    check("the error is the one it always was", error == tp._cannot_fetch(pin, offline),
+          error)
+    check("the cache is as it was", _listing(pin) == kept, sorted(_listing(pin)))
+    said = capsys.readouterr()
+    check("and nothing is said but the notice",
+          said.err == tp._notice(pin) + "\n" and said.out == "", said)
+
+
+@needs_a_pin
+def test_only_this_builds_temporary_name_counts(cache):
+    """The binary itself, and every name merely like the shape, are not it."""
+    pin, _ = cache
+    where = pin.path.parent
+    pin.path.write_bytes(b"the binary")
+    ours = where / f"{pin.path.name}.31337.tmp"
+    for name in (ours.name, f"{pin.path.name}.tmp", f"{pin.path.name}.12a.tmp",
+                 f"{pin.path.name}.12.tmp.part", f"x{pin.path.name}.12.tmp"):
+        (where / name).write_bytes(b"")
+    check("this build's `.<digits>.tmp` names and nothing else",
+          tp._partials(pin) == {ours, where / f"{pin.path.name}.77.tmp"},
+          sorted(p.name for p in tp._partials(pin)))

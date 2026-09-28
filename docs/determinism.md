@@ -198,15 +198,17 @@ stderr before it starts:
 ```
 
 stdout stays the command's result, so the first `names --json` is JSON like
-any other. The fetching is perfetto's own: `curl` downloads the file, and
-perfetto checks it against the SHA-256 in the manifest before giving it the
-pinned name. That name ends in the first sixteen hex digits of the hash, and it
-is how the file is trusted from then on without being hashed again. The size
-is 10 to 14 MB, depending on the platform. `echolot --version` names the
-pinned version without downloading anything.
+any other. The fetching is perfetto's own: `curl` downloads the file under a
+temporary name beside the pinned one, and perfetto checks it against the
+SHA-256 in the manifest before giving it the pinned name. That name ends in
+the first sixteen hex digits of the hash, and it is how the file is trusted
+from then on without being hashed again. The size is 10 to 14 MB, depending
+on the platform. `echolot --version` names the pinned version without
+downloading anything.
 
-A download that fails is tried once per command, and the command ends with exit
-2 and one error that names the cause and the ways round it:
+A download that fails is tried once per command, whatever it left under the
+temporary name is removed, and the command ends with exit 2 and one error that
+names the cause and the ways round it:
 
 ```
 error: trace_processor v56.1 could not be downloaded: curl exited with status 6 — the server's name did not resolve.
