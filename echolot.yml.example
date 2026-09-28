@@ -148,11 +148,17 @@ detectors:
     min_occurrences: 5        # fewer than this is no history to be an outlier from
 
 # Where the agent may write temporary markers, and what to prefix them with.
-# `mark` reads both: it refuses a candidate outside `allowed` and names the
-# nearest allowed caller instead, and `--remove` takes out exactly what carries
-# the prefix. `compare` reads the prefix too, to say which rows appeared
-# because markers were added between the rounds rather than because the app did
-# something new.
+# `mark` reads both. A candidate outside `allowed` is still listed, but not
+# applied, and the row says to mark the nearest allowed caller instead — which
+# caller that is, it leaves to the reader. Each entry is compared path segment
+# by path segment and may use globs: `feature/*/src/main` covers the main
+# sources of every module directly under feature/. `--remove` does not go by
+# the prefix: it deletes the lines `--apply` wrote, known by the
+# `// echolot:mark` tag and their exact shape, and lists any other line that
+# carries the tag for a person to clean up. `compare` reads the prefix too, to
+# say which rows appeared because markers were added between the rounds rather
+# than because the app did something new. `cleanup` is for the agent alone; no
+# code reads it.
 instrumentation:
   allowed: ["app/src/main", "feature/*/src/main"]
   temp_prefix: AGENTTMP_

@@ -1749,12 +1749,24 @@ def cmd_mark(args) -> int:
             print(f"config ignored: {e}", file=sys.stderr)
 
     if args.remove:
-        touched = mark_mod.remove(root)
+        touched, kept = mark_mod.remove(root)
         for rel, n in touched:
             print(f"  - {rel}: {n} line(s)")
-        print(f"removed markers from {len(touched)} file(s)" if touched
-              else "no `echolot:mark` lines found under this root")
-        recorder.note(removed_files=len(touched))
+        # A tagged line in any other shape than --apply's is left where it
+        # is, and named: it carries more than a marker, which deleting it
+        # would take along, and "nothing found" over a tree that still has
+        # it reads as clean.
+        for rel, line, text in kept:
+            print(f"  ! {rel}:{line}: {text[:120]}")
+        if touched:
+            print(f"removed markers from {len(touched)} file(s)")
+        elif not kept:
+            print("no `echolot:mark` lines found under this root")
+        if kept:
+            print(f"left {len(kept)} line(s) with `{mark_mod.TAG}` on them that are not "
+                  f"in the shape --apply writes — each carries something besides the "
+                  f"marker, so take the marker out by hand")
+        recorder.note(removed_files=len(touched), kept_tagged=len(kept))
         return 0
 
     if getattr(args, "pools", False):

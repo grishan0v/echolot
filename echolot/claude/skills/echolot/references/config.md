@@ -136,11 +136,16 @@ healthy runs and prints a ready section with the reasoning attached.
 ### `instrumentation`
 
 Where the agent may write temporary markers, and what to prefix them with.
-`mark` reads both: a candidate outside `allowed` is refused with the nearest
-allowed caller named instead, and `--remove` takes out exactly what carries the
-prefix. `compare` reads the prefix too, to tell rows that appeared because
-markers were added between the rounds from rows that appeared because the app
-did something new.
+`mark` reads both. A candidate outside `allowed` is still listed but not
+applied, and its row says to mark the nearest allowed caller instead — which
+caller that is, `mark` does not say. Each entry is compared path segment by
+path segment, globs included: `feature/*/src/main` covers the main sources of
+every module directly under `feature/`, the form `scan` writes. `--remove` does
+not go by the prefix: it deletes the lines `--apply` wrote, recognised by the
+`// echolot:mark` tag and their exact shape, and lists any other line carrying
+the tag, with its file and line, for you to clean by hand. `compare` reads the
+prefix too, to tell rows that appeared because markers were added between the
+rounds from rows that appeared because the app did something new.
 
 `cleanup: always` is for the agent, and says the markers come out whether the
 hunt concluded or ran out of rounds.

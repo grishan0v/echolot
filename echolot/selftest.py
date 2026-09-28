@@ -2555,8 +2555,9 @@ def _(report):
         again, _ = mk.apply(root, mk.plan(root, package="com.example.app",
                                           allowed=["app/src/main"]))
         assert again == [], again
-        touched = mk.remove(root)
+        touched, kept = mk.remove(root)
         assert {rel for rel, _ in touched} == files and all(n == 2 or n == 4 for _, n in touched), touched
+        assert kept == [], f"every tagged line here is one apply wrote: {kept}"
         after = {p: p.read_bytes() for p in mk.source_files(root)}
         assert after == before, "remove must restore every file byte for byte"
 
