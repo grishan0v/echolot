@@ -1669,7 +1669,7 @@ def cmd_status(args) -> int:
         if cfg.get("local"):
             bits.append("local.yml applied")
         lines.append(("config", "echolot.yml · " + " · ".join(bits)))
-    lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"))))
+    lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"), st)))
     collecting = state.collect_line(st)
     if collecting:
         lines.append(("collect", collecting))

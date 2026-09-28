@@ -5,6 +5,9 @@
   last self-check failed", for a self-check that never ran as well. #118
   logs one as `checks: 0` beside one entry in `failed`, and since #126
   `echolot`'s doctor line says it did not run.
+- With no investigation open, `echolot` promised "the next hunt opens one"
+  while echolot.yml did not load — which is when `hunt "<q>"` refuses, since
+  #126.
 
 Wherever a download is attempted here, HOME is an empty directory and PATH
 holds a fake `curl` and nothing else, so the real one cannot run.
@@ -22,11 +25,23 @@ from pathlib import Path
 
 import pytest
 
+from echolot import hunt as hunt_mod
 from echolot import recorder, selftest, state, tp
 from echolot.main import ASSERTS_SKIPPED, NOT_RUN, main
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parent.parent
+CONFIG = """\
+project:
+  package: com.example.app
+  process: com.example.app
+scenario:
+  name: coldStart
+"""
+# `true` is not a setting under a detector, so the whole config is refused
+# on load — the shape #121 made fatal.
+BROKEN = CONFIG + "detectors:\n  frame_jank: true\n"
+
 PIN = tp.pinned_build()
 needs_a_pin = pytest.mark.skipif(PIN is None, reason="the pin has no build for this machine")
 
@@ -154,3 +169,29 @@ def test_init_keeps_failed_for_a_self_check_that_ran_and_failed(project, monkeyp
     check("exit 1", code == 1, f"exit {code}\n{said[-2000:]}")
     check("the next line says it failed", "the self-check failed" in line, line)
     check("and not that it did not run", "did not run" not in line, line)
+
+
+# --- the hunt line: no promise the config will not keep ---------------------
+
+@pytest.mark.parametrize("config,promised", [
+    (None, True),
+    (CONFIG, True),
+    (BROKEN, False),
+], ids=["no-config", "a-config-that-loads", "a-config-that-does-not-load"])
+def test_the_hunt_line_promises_only_what_hunt_does(project, config, promised):
+    """The line is read against what `hunt "<q>"` then does, not against itself."""
+    if config is not None:
+        (project / "echolot.yml").write_text(config, encoding="utf-8")
+    code, out, _ = run()
+    assert code == 0, out
+    line = next(ln for ln in out.splitlines() if ln.startswith("hunt"))
+    check("no investigation is open", "none open" in line, line)
+    says_it_opens = "the next hunt opens one" in line
+    check("the promise is there or not", says_it_opens == promised, line)
+    if not promised:
+        check("and the line says what it waits on", "once echolot.yml loads" in line, line)
+
+    code, _, err = run("hunt", "cold start 3s → 7s")
+    opened = code == 0 and hunt_mod.load(project) is not None
+    check("and hunt does what the line said", opened == promised,
+          f"exit {code}, opened: {opened}\n{line}\n{err}")
