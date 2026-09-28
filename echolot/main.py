@@ -1682,9 +1682,10 @@ def cmd_anr(args) -> int:
     source = anr_mod.detect(text)
     if source is None:
         print(f"nothing in {path} announces a thread the way a source this "
-              f"reader knows does. It reads the Crashlytics export and the ART "
-              f"dump that `dumpsys dropbox --print data_app_anr` and the files "
-              f"under /data/anr/ carry.", file=sys.stderr)
+              f"reader knows does. It reads a Crashlytics export, a Play "
+              f"Console ANR cluster, and the ART dump that `dumpsys dropbox "
+              f"--print data_app_anr` and the files under /data/anr/ carry.",
+              file=sys.stderr)
         return 2
     report = anr_mod.parse(text, source)
     if not report.threads:
@@ -2673,16 +2674,21 @@ def build_parser() -> argparse.ArgumentParser:
     nm.set_defaults(func=cmd_names)
 
     an_r = add("anr", "agent", "<report>", "a thread dump from the field: the lock chain, and who was working",
-               description="Reads an ANR report — an export from Crashlytics or "
-                    "the device's own record from `adb shell dumpsys dropbox "
-                    "--print data_app_anr` — and prints what it found: the "
-                    "monitor everything was queued behind, what the main thread "
-                    "was doing, and the few threads that were not idle. Reads "
-                    "and prints; opens no investigation and writes nothing.")
+               description="Reads an ANR report — an export from Crashlytics, "
+                    "an ANR cluster from Play Console, or the device's own "
+                    "record from `adb shell dumpsys dropbox --print "
+                    "data_app_anr` — and prints what it found: the monitor "
+                    "everything was queued behind, what the main thread was "
+                    "doing, and the few threads that were not idle. Reads and "
+                    "prints; opens no investigation, and writes only its own "
+                    "line in .echolot/log/runs.jsonl under the working "
+                    "directory.")
     an_r.add_argument("report", help="the report file")
     an_r.add_argument("--root", default=".",
-                      help="repository root, to place the frames in files "
-                           "(default: the current directory)")
+                      help="repository root, to place the frames in files and "
+                           "tell the app's own code from its libraries by the "
+                           "packages its sources declare (default: the current "
+                           "directory)")
     an_r.add_argument("--json", action="store_true",
                       help="the same findings in the shape an agent walks")
     an_r.set_defaults(func=cmd_anr)
