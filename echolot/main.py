@@ -1638,9 +1638,19 @@ def cmd_status(args) -> int:
         lines.append(("report", "none yet"))
     d = st["last_doctor"]
     if d:
-        failed = (d.get("facts") or {}).get("failed") or []
-        lines.append(("doctor", f"{when.ago(when.iso_epoch(d.get('ts')))}, "
-                      + (f"{len(failed)} check(s) FAILED" if failed else "passed")))
+        facts = d.get("facts") or {}
+        failed = facts.get("failed") or []
+        ago = when.ago(when.iso_epoch(d.get("ts")))
+        if facts.get("checks") == 0:
+            # No check ran, so there is no count to give. A self-check that
+            # could not start is logged with `checks: 0` and one entry in
+            # `failed` (see `NOT_RUN`), and that entry was printed as "1
+            # check(s) FAILED" — a tally of a run that never happened.
+            lines.append(("doctor", f"{ago}, the self-check did not run — "
+                                    f"run `echolot doctor` to see why"))
+        else:
+            lines.append(("doctor", f"{ago}, "
+                          + (f"{len(failed)} check(s) FAILED" if failed else "passed")))
     else:
         lines.append(("doctor", "never run here"))
     width = max(len(k) for k, _ in lines)
