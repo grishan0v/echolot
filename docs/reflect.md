@@ -14,12 +14,27 @@ decision "what to change" is made over those.
 cd ~/StudioProjects/my-app        # the project the agent worked in
 echolot reflect --list            # candidate sessions
 echolot reflect --last            # the newest one that used echolot
-echolot reflect --all             # every one, plus summary.md
+echolot reflect --session 3f2a    # one session, by the first characters of its id
+echolot reflect --since 2h        # every session in the last 2h / 30m / 3d
+echolot reflect --all             # every one, plus a summary
 ```
 
 Output: `.echolot/reflect/<session>.md` for a human, `.json` for the agent —
 `/echolot-reflect` reads the json and turns signals into a list of proposed
-changes.
+changes. When a run covers more than one session (`--all`, or `--since` that
+finds several) it also writes `summary.md` and `summary.json` beside them: a
+row per session and how often each signal fired, which is where a signal
+that fires in most sessions shows up as a design item rather than a note.
+
+Where things are looked for, when they are not where the defaults say:
+
+| flag | default | what it names |
+|---|---|---|
+| `--project ROOT` | `.` | the application project the agent worked in — its run log, its config, its source tree |
+| `--transcripts DIR` | `~/.claude/projects/<slug>` | where the agent's transcripts are |
+| `-c`, `--local` | `echolot.yml` in the project, `local.yml` beside it | the config the protocol checks read |
+| `-o DIR` | `.echolot/reflect` | where the reports go; relative to the project |
+| `--from-log` | off | ignore any transcript and read the run log alone — see below |
 
 ## Two sources
 
@@ -54,13 +69,16 @@ decision it lets you make:
 
 | section | what it holds | the decision it serves |
 |---|---|---|
-| Signals | protocol breaks (`warn`), workarounds and friction (`info`), checks that passed (`ok`) | what to change, in what order |
+| Signals | protocol breaks (`warn`), workarounds and friction (`info`) — each with its rows and a hint | what to change, in what order |
+| Protocol checks passed | the checks that came back `ok`, one line each | which rules held, so a short Signals section is read as clean and not as unchecked |
+| Not checked | the checks that could not run (`skip`): the source does not carry what they read, the session was building the tool, or the check itself broke | which silences are no verdict |
 | Entry | prompts, slash commands, skills loaded, time to real work | is the way into the tool obvious |
 | Timeline | milestones: first call of each subcommand, questions, config written, agent launched, first temporary slice | where the time went |
 | echolot calls | every invocation: subcommand, args, exit, duration, output size, config used, help lookups | which commands the agent fumbles |
 | Questions to the human | each `AskUserQuestion`: options, recommended, chosen, time to answer | are the questions needed, are the defaults right |
-| Subagent | rounds against `loop.max_rounds`, re-records, tools, tokens, whether the prompt named the traces / the regression / the change, whether the conclusion has all six fields | is the loop behaving |
-| Temporary instrumentation | per file, prefix added vs removed; was there a grep after the last edit | did cleanup happen |
+| What the main context concluded | its last message, quoted — `conclusion` in the json | what the session came to; for one that read an ANR report or a report and ran no hunt, the whole result |
+| Subagent | rounds against `loop.max_rounds`, re-records, tools, tokens, what fed its window, whether the prompt named the traces / the regression / the change, whether the conclusion has all eight fields, and what it returned | is the loop behaving |
+| Temporary instrumentation | per file, prefix added vs removed; was there a grep after the last edit; what the source tree holds now | did cleanup happen |
 | Cost | wall time, tokens for main and subagents separately, tools by type, largest tool outputs, longest silences | what eats the window |
 | Recorder | the `runs.jsonl` lines inside the session's window | exit codes the transcript lost |
 
@@ -72,30 +90,59 @@ Not in the report: thinking text (counted, not quoted), full tool outputs
 
 The same idea as `echolot/sql/detectors/`: one signal is one small function
 in `echolot/reflect/signals.py` over the normalised session; it returns a row
-set or nothing. Add a function, append it to `SIGNALS`, done. A `hint` on a
-signal is one line about what it usually means for the tool — a pointer for
-whoever reads the report, never a verdict.
+set or nothing. Add a function and append it to `SIGNALS` — and then decide
+two things that list does not say. Whether it can run on echolot's own calls
+alone: `FROM_CALLS_ALONE`, the checks a session without a transcript gets.
+And whether it still means something in a session that was building the
+tool: `MEANS_SOMETHING_WHILE_BUILDING`. Both are allowlists, so a new signal
+is held back from both until somebody adds it — listed under **Not checked**
+rather than reporting clean over evidence it never had. A `hint` on a signal
+is one line about what it usually means for the tool — a pointer for whoever
+reads the report, never a verdict.
 
 The ones that ship, by what they watch:
 
+- **entry** — `entry_fumbling`: several slash commands, or the human
+  interrupting, before real work started; `agent_prompt_gaps`: the prompt
+  handed to the subagent left out the traces, the regression or the change
 - **protocol** — doctor before analyze; the trace never opened directly; the
   loop stayed in the subagent; rounds within the limit; every inserted tracing
-  call carries the prefix; edits inside `instrumentation.allowed`; additions
-  and removals of the prefix balance, with a grep afterwards; the conclusion
-  has its six fields; analysis ran on the project's config and not one the
-  agent wrote; thresholds edited only after `calibrate`; the traces analysed
-  before a re-record were copied out first (a `mv` inside the build tree does
-  not count — gradle cleans it)
+  call carries the prefix; edits inside `instrumentation.allowed`; the
+  temporary markers are gone (see below); the conclusion has its eight
+  fields; analysis ran on the project's config and not one the agent wrote;
+  thresholds edited only after `calibrate`; the traces analysed before a
+  re-record were copied out first (a `mv` inside the build tree does not
+  count — gradle cleans it)
 - **workarounds** — `report.json` cut up by hand; `--help` / `explain` mid-work;
-  gradle / adb / perfetto driven directly instead of `collect`
+  gradle / adb / perfetto driven directly instead of `collect`;
+  `agent_reported_bugs`: the agent saying in its own words, in any language,
+  that something in echolot was wrong — quoted rather than classified, since
+  a sentence that names the defect is worth more than any rule
 - **failures** — echolot calls that failed, tracebacks apart from clean exits,
-  shell failures apart from the tool's own; retries; tool errors outside
-  echolot, by kind
-- **cost** — silences of two minutes or more; tool outputs over 8k characters;
-  the subagent's window fed by reading sources by hand rather than by the
-  report (per activity: echolot, report reading, source reading,
-  instrumentation edits, builds — calls and characters, with the reads made
-  before the first marker was placed counted separately)
+  shell failures apart from the tool's own; retries, with what moved between
+  the two attempts; tool errors outside echolot, by kind
+- **cost** — silences of two minutes or more, each with what it was read off
+  the call before it (a subagent running, the human answering, a build); tool
+  outputs over 8k characters; the subagent's window fed by reading sources by
+  hand rather than by the report (per activity: echolot, report reading,
+  source reading, instrumentation edits, builds — calls and characters, with
+  the reads made before the first marker was placed counted separately)
+
+**Cleanup is read off the tree.** Whether a temporary marker is left is
+answered by reading the checkout when the report is made — under
+`instrumentation.allowed`, or all of it when the config names no roots — and
+that outranks the transcript: what the agent typed,
+edited or restored with git is intent, what the sources hold now is the fact.
+A `git checkout` that restored a file leaves no edit to balance, and a grep
+wrapped in `echo` labels once had the prefix read off its own label. The
+transcript's reading — additions against removals, a grep after the last edit
+— is what is left when the tree cannot be read.
+
+**The harness is not echolot.** A call the agent's harness refused at its
+permission screen, that the person declined, or that ran long enough to be
+moved to the background did not fail — the command never ran, or is still
+running. Those are left out of `echolot_failures` and counted as friction
+under kinds of their own in `env_friction`.
 
 ## What it cannot see, honestly
 
@@ -138,8 +185,8 @@ is which echolot commands ran, when, for how long, with what exit code, and
 the facts each attached.
 
 So the checks that read echolot's own calls run unchanged — `doctor_first`,
-`echolot_failures`, `retries`, `help_lookups`, `long_gaps`. The rest have
-nothing to read.
+`echolot_failures`, `retries`, `help_lookups`, `long_gaps`, the
+`FROM_CALLS_ALONE` set. The rest have nothing to read.
 
 **And that is the part worth getting right.** A check that finds no evidence
 returns "clean": `trace_opened_directly` with nothing to look at reports "the
@@ -172,9 +219,10 @@ report.
 The protocol checks are then held back the same way a missing source holds
 them back: listed under **Not checked**, with the reason, because silence
 there is no verdict rather than a clean one. What still runs is everything
-about friction — a failing call, a retry, a tool error, a long silence, an
-output that ate the window. A tool that misbehaves under its own author is
-exactly as broken as one that misbehaves under a user.
+about friction — a failing call, a retry, a help lookup, a tool error, a long
+silence, an output that ate the window: the `MEANS_SOMETHING_WHILE_BUILDING`
+set. A tool that misbehaves under its own author is exactly as broken as one
+that misbehaves under a user.
 
 This was found by pointing `reflect` at the session that wrote it: three
 findings came back, all true, none about anything anyone did wrong.
