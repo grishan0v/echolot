@@ -66,16 +66,46 @@ def cmd_probe(args) -> int:
 
     This is what the agent feeds on during setup, so it can offer the user
     real options instead of inventing them.
+
+    The trace_processor is the one `analyze` would run from here: the flag,
+    then `toolchain.tp_binary` from the echolot.yml in this directory, the
+    local.yml beside it included, then the pin. probe used to take the flag
+    or the pin and nothing else, so with a binary named in local.yml the
+    first look at a trace and every report after it came from two different
+    trace_processors — and the version is what defines the vocabulary the
+    detectors match on (see `cmd_doctor`).
     """
     try:
-        return _probe(args)
+        return _probe(args, _tp_binary(args, _probe_config(args)))
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
 
-def _probe(args) -> int:
-    with TraceSession(args.trace, args.tp_binary) as tp:
+def _probe_config(args) -> Config | None:
+    """The config `analyze` would read from here — for the binary it names.
+
+    Only a config that is there is read: outside a project, or before setup
+    has written one, there is nothing to follow. One that is there and does
+    not load is said, and probe goes on without it, on the flag or on the
+    pin. `analyze` stops on the same error; a look at a trace has no reason
+    to.
+    """
+    path = getattr(args, "config", None) or "echolot.yml"
+    if not Path(path).exists():
+        return None
+    try:
+        return Config.load(path)
+    except ConfigError as e:
+        instead = ("the one --tp-binary names" if getattr(args, "tp_binary", None)
+                   else "the pinned one")
+        print(f"[!] {path} does not load, so a trace_processor it names cannot "
+              f"be followed — probe uses {instead}: {e}", file=sys.stderr)
+        return None
+
+
+def _probe(args, tp_binary: str | None) -> int:
+    with TraceSession(args.trace, tp_binary) as tp:
         print("## Processes\n")
         # Two counts, because they are two kinds of section. `slices` are
         # the threads' — what the detectors read. `async` are the process's
@@ -757,10 +787,10 @@ def _resolve_process(tp, glob: str, trace: str | None = None) -> list[dict]:
         where = f" {Path(trace).name}" if trace else ""
         # The name a trace carries is not always the one the package has.
         # Linux truncates comm to 15 characters and keeps the TAIL, so
-        # `com.rumpilstilstkin.gloommaster` can arrive as `kin.gloommaster`
-        # — which a trailing-wildcard glob does not match either. Seen on one
-        # trace out of fifteen from a single macrobenchmark round, where the
-        # other fourteen carried the full name.
+        # `com.example.myapp` can arrive as `m.example.myapp` — which a
+        # trailing-wildcard glob does not match either. Seen on one trace out
+        # of fifteen from a single macrobenchmark round, where the other
+        # fourteen carried the full name.
         tail = glob.rstrip("*")[-15:]
         raise ConfigError(
             f"no process in trace{where} matches project.process = '{glob}'. "
@@ -818,11 +848,11 @@ def _setup_context(tp, cfg: Config, upid: int,
 def _claim_names(tp, overrides: dict) -> None:
     """`_claimed_name` — every slice name a detector's mask already speaks for.
 
-    Ten of the eleven detectors know what they are looking for and say so in a
-    `*name_glob*` param: `*GC`, `Lock contention on a monitor lock*`, `binder
-    transaction`. `repeated_work` is the one that does not — it asks a
-    question about shape and so has to look at every name there is, which
-    means it also looks at names that belong to somebody else.
+    Three of the twelve detectors know the names of what they are looking for
+    and say so in a `*name_glob*` param: `*GC`, `Lock contention on a monitor
+    lock*`, `binder transaction`. `repeated_work` knows no name in advance —
+    it asks a question about shape and so has to look at every name there
+    is, which means it also looks at names that belong to somebody else.
 
     Twice that produced a row that was already in the report under its own
     heading, and both times the shape was the same: a slice the platform
@@ -1461,16 +1491,22 @@ def _clip(text: str, width: int = 58) -> str:
 
 
 def _hunt_config(project: Path, config: str) -> tuple[str | None, str | None]:
-    """Scenario name and config hash, best effort — a broken config is not fatal.
+    """Scenario name and config hash — what an investigation is opened against.
 
     An investigation records what it was opened against so that `drift` can
     later say "the scenario changed" instead of the human having to remember.
+
+    No config at all is `(None, None)`: nothing names a scenario yet. A config
+    that is there and does not load raises, for `cmd_hunt` to refuse on. It
+    used to come back as `(None, None)` too, in silence — and since
+    `Config.load` checks `detectors:`, one malformed entry under it is enough
+    to get there.
     """
-    try:
-        cfg = Config.load(project / config)
-        return cfg.scenario_name, cfg.sha
-    except (ConfigError, OSError):
+    path = project / config
+    if not path.exists():
         return None, None
+    cfg = Config.load(path)
+    return cfg.scenario_name, cfg.sha
 
 
 def cmd_hunt(args) -> int:
@@ -1506,7 +1542,25 @@ def cmd_hunt(args) -> int:
         return 0
 
     if question:
-        scenario, sha = _hunt_config(project, config)
+        # A config that does not load is refused rather than opened around.
+        # The scenario it names is what picks the previous set out of
+        # .echolot/traces. Without it the investigation opened with no
+        # scenario for `drift` to compare, the old traces stayed where this
+        # question's would land, and the one open before it was closed as
+        # abandoned — all for a question whose first step, `collect` or
+        # `analyze`, stops on the same config. The Claude path opens here too
+        # (echolot-hunt.md), and an agent goes on after a command that
+        # succeeded: exit 2 stops it where the fix is, the way `fix-config`
+        # stops `/echolot` at the door. Refused before anything is touched,
+        # so asking again once the config loads loses nothing.
+        try:
+            scenario, sha = _hunt_config(project, config)
+        except (ConfigError, OSError) as e:
+            print(f"error: {config} does not load: {e}", file=sys.stderr)
+            print("Nothing was opened and no traces were moved aside. Fix the "
+                  "config, then ask again.", file=sys.stderr)
+            recorder.failed(f"{config} does not load: {e}")
+            return 2
         # The whole point of the feature: a new investigation must not start
         # on the previous one's traces. Nothing is deleted — the set moves
         # aside exactly the way `collect` moves it between rounds.
@@ -1639,9 +1693,19 @@ def cmd_status(args) -> int:
         lines.append(("report", "none yet"))
     d = st["last_doctor"]
     if d:
-        failed = (d.get("facts") or {}).get("failed") or []
-        lines.append(("doctor", f"{when.ago(when.iso_epoch(d.get('ts')))}, "
-                      + (f"{len(failed)} check(s) FAILED" if failed else "passed")))
+        facts = d.get("facts") or {}
+        failed = facts.get("failed") or []
+        ago = when.ago(when.iso_epoch(d.get("ts")))
+        if facts.get("checks") == 0:
+            # No check ran, so there is no count to give. A self-check that
+            # could not start is logged with `checks: 0` and one entry in
+            # `failed` (see `NOT_RUN`), and that entry was printed as "1
+            # check(s) FAILED" — a tally of a run that never happened.
+            lines.append(("doctor", f"{ago}, the self-check did not run — "
+                                    f"run `echolot doctor` to see why"))
+        else:
+            lines.append(("doctor", f"{ago}, "
+                          + (f"{len(failed)} check(s) FAILED" if failed else "passed")))
     else:
         lines.append(("doctor", "never run here"))
     width = max(len(k) for k, _ in lines)
@@ -1686,11 +1750,13 @@ def cmd_anr(args) -> int:
     """A thread dump from the field, read the way the report reads a trace.
 
     Reconnaissance rather than an investigation, and that is the whole reason
-    it is its own verb. It reads a file and prints; nothing lands on disk and
-    no hunt is opened. That is what makes it composable — a folder of exports
-    from the console goes through it in one loop, and out of ten reports the
-    two worth chasing are the ones that name a lock chain. Opening ten
-    investigations to learn that would be the wrong shape.
+    it is its own verb. It reads a file and prints; no hunt is opened, and
+    the one thing written is its line in .echolot/log/runs.jsonl — the line
+    `main` appends for every command unless ECHOLOT_NO_RECORD is set. That is
+    what makes it composable — a folder of exports from the console goes
+    through it in one loop, and out of ten reports the two worth chasing are
+    the ones that name a lock chain. Opening ten investigations to learn that
+    would be the wrong shape.
     """
     from . import anr as anr_mod
 
@@ -2890,7 +2956,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "of the manifest — what was on the stack when it froze")
     mk.add_argument("--apply", action="store_true", help="insert the applicable markers")
     mk.add_argument("--remove", action="store_true",
-                    help="delete every line tagged `// echolot:mark` under --root")
+                    help="delete the lines --apply wrote under --root; a line "
+                         "that carries the `// echolot:mark` tag in any other "
+                         "shape is listed with its file and line, and left "
+                         "for you to clean by hand")
     mk.add_argument("--json", action="store_true", help="the plan as JSON")
     mk.set_defaults(func=cmd_mark)
 

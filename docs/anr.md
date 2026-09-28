@@ -206,7 +206,14 @@ Most proposals will not be applicable, and the reasons are the useful part:
 - **a `return` in the body** — a begin/end pair leaks the section on the early
   path;
 - **the body is on one line** — `remove` could not take it out without taking
-  the code with it.
+  the code with it;
+- **code after the `{`, or before the `}`, on the brace's own line** — the
+  new line could only go in by splitting a line of the project's, and
+  `remove` deletes lines; it cannot join one back together. Move the code to
+  a line of its own, or mark by hand;
+- **a frame outside `instrumentation.allowed`** — shown as a row and refused,
+  not left out: it is still on the stack, and the frame under it may be the
+  allowed caller to mark instead.
 
 ## Measuring the freeze
 

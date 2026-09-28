@@ -617,6 +617,11 @@ def to_markdown(report: dict[str, Any]) -> str:
 
     out.extend(_markers_lines(report.get("markers") or {}))
 
+    # Nothing fired still ends the way every report does, with the Silent
+    # line and the toolchain footer. It used to return here, before both —
+    # and the footer is where a trace_processor other than the pinned one is
+    # named, so a clean report from a binary that bypassed the pin did not
+    # say so.
     if s["detectors_fired"] == 0:
         out.append("_No detector fired._")
         out.append("")
@@ -625,7 +630,7 @@ def to_markdown(report: dict[str, Any]) -> str:
             "process name and the scenario anchors match the trace "
             "(`echolot probe`)."
         )
-        return "\n".join(out)
+        out.append("")
 
     for d in report["detectors"]:
         if not d["rows"]:
@@ -671,7 +676,8 @@ def to_markdown(report: dict[str, Any]) -> str:
 # What the evidence column means where it is not obvious. `main_thread_block`
 # groups by thread as well as by name, and the thread is always the main
 # one — so the column shows its comm, which the kernel cuts to fifteen
-# characters: `m.example.app` for `com.example.app`. Kept rather than
+# characters: `m.example.myapp` for `com.example.myapp`, while
+# `com.example.app` is fifteen exactly and arrives whole. Kept rather than
 # renamed because it is part of the row's identity, and a rename would make
 # every earlier report's rows vanish in `compare`.
 EVIDENCE_LEGEND = {

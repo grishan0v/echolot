@@ -440,7 +440,7 @@ def _match(before_rows: list[dict], after_rows: list[dict],
     """Pairs rows of one detector, exactly first and by name family second.
 
     A row is named by every column in `identity`, never by `location` alone.
-    Five of the ten shipped detectors group by a second column —
+    Seven of the twelve shipped detectors group by a second column —
     `runnable_starvation` by the thread's state, `binder_txn` by whether the
     thread is the main one, `anr` by which record it is — so one location
     carrying several rows is ordinary rather than a corner.

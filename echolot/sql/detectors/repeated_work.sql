@@ -73,7 +73,7 @@
 --
 -- Numbers picked by looking at one app are worth no more for being left
 -- alone, so they were measured against four more. One trace, five processes
--- — `system_server`, `com.instagram.android`, `com.example.app`,
+-- — `system_server`, `com.example.other`, `com.example.app`,
 -- surfaceflinger and the app itself — whole trace, shipped thresholds, 25
 -- groups clearing the floor with two callers or more.
 --
@@ -94,11 +94,11 @@
 --
 -- ## This detector works what the others left
 --
--- Ten of the eleven detectors know what they are looking for and say so in a
--- `*name_glob*` param. This one does not: it asks a question about shape, so
--- it has to look at every name there is — which means it also looks at names
--- that belong to somebody else. Twice that produced a row already in the
--- report under its own heading.
+-- Three of the twelve detectors know the names of what they are looking for
+-- and say so in a `*name_glob*` param. This one knows no name in advance: it
+-- asks a question about shape, so it has to look at every name there is —
+-- which means it also looks at names that belong to somebody else. Twice that
+-- produced a row already in the report under its own heading.
 --
 --     Lock contention on a monitor lock (owner tid: 17403)   3 × 56.5 ms
 --       under  monitor contention with owner … waiters=0 …

@@ -187,9 +187,6 @@ the tag, with its file and line, for you to clean by hand. `compare` reads the
 prefix too, to tell rows that appeared because markers were added between the
 rounds from rows that appeared because the app did something new.
 
-`cleanup: always` is for the agent, and says the markers come out whether the
-hunt concluded or ran out of rounds.
-
 ### Provenance
 
 `_source` and `_evidence` give three things: a human sees what to double-check,
@@ -212,6 +209,9 @@ domains:                        # the slice-to-code map
 loop:
   max_rounds: 3
   on_exhausted: report
+
+instrumentation:
+  cleanup: always               # the agent's; no code reads it
 ```
 
 `domains` is the central abstraction: it turns a marker into a hypothesis
@@ -230,6 +230,13 @@ for the reader alone.
 `loop.max_rounds` is the one number a human sets to bound a hunt. Stopping is
 not left to the agent's judgement: it has no goal of its own to economise.
 `reflect` reads it too, to say whether a hunt went past it.
+
+`instrumentation.cleanup` sits in a section the code reads and is the one key
+of it the code does not. It is the agent's: `perf-hunter` takes out every
+`AGENTTMP_` marker before it returns, on success and on running out of rounds
+alike, and SKILL.md has the ones a previous investigation left behind taken
+out before the next one starts. `always` is what the two of them do whatever
+the key says, so another value changes no run.
 
 ## Read by nobody yet
 

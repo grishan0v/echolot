@@ -197,8 +197,9 @@ surrounding code came out as `provideproductr`, `onauthenticatio` and
 variable while what the pool is *for* is in the call it is passed to.
 
 **At most 15 characters.** Linux truncates a thread's `comm` and the trace
-carries what is left — `pool-12-thread-` and `kin.gloommaster` are both cut in
-real traces. `cart-queue`, not `CartQueueProcessorExecutor`.
+carries what is left — `pool-12-thread-1` arrives as `pool-12-thread-`, and
+the main thread of `com.example.myapp` as `m.example.myapp`. `cart-queue`,
+not `CartQueueProcessorExecutor`.
 
 A thread that is given a name is not a finding, and neither is a pool whose
 factory names its threads. What counts as given:
@@ -237,8 +238,10 @@ weight is; the agent opens the one file the trace named. That order is what
 ## Two things that need no markers at all
 
 - **`androidx.compose.runtime:runtime-tracing`** in the app module puts
-  composable names into the trace with no code touched. `mark` says when it
-  is missing; for a Compose app it is the first thing to add.
+  composable names into the trace with no code touched. `mark` says when a
+  Compose app is missing it — one whose app module calls `setContent {` or
+  declares a `@Composable` — and for such an app it is the first thing to
+  add. An app without Compose is not told about it.
 - **Callstack sampling** (Perfetto's `linux.perf` on Android 12+) names Java
   frames on a hot thread from symbols, no instrumentation, no naming — with
   the caveats of profileable builds and R8 mapping. Not wired in yet; the
