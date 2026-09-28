@@ -51,7 +51,7 @@ produce. The keys only a merged report has are named under the block.
               "local": null, "defaults": false, "set": null },
   "markers": { "prefix": "AGENTTMP_",
                "globs": ["AGENTTMP_*", "collection_mapping", "Screen.firstFrame"],
-               "rows": [ { "location": "AGENTTMP_fill_decks", "runs": "5/5",
+               "rows": [ { "location": "AGENTTMP_seed_first", "runs": "5/5",
                            "count": 1, "self_ms": 8.0, "total_ms": 60.0,
                            "max_ms": 60.0, "spread": { … },
                            "detail": "SeedWorker" } ],

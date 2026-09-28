@@ -225,16 +225,16 @@ than "remember what you added".
 markers around the same work must end up with the same name.
 
 ```kotlin
-AGENTTMP_fill_decks        // the work — comparable wherever it is called from
-AGENTTMP_fill_decks_v6     // where you put it — comparable with nothing
+AGENTTMP_fill_presets      // the work — comparable wherever it is called from
+AGENTTMP_fill_presets_v6   // where you put it — comparable with nothing
 ```
 
 This is not style. `repeated_work` finds the same named work entered from two
 different callers, and that is the whole shape of "this was already done".
 Named by call site, the two entries get two names and there is nothing to
 compare: a migration ladder redoing a rung came out as `AGENTTMP_fill_main`
-and `AGENTTMP_fill_decks_v6`, the duplicate sat in the report as two unrelated
-rows, and the detector built for it stayed silent.
+and `AGENTTMP_fill_presets_v6`, the duplicate sat in the report as two
+unrelated rows, and the detector built for it stayed silent.
 
 When you genuinely need to say where a call came from, put it in a second
 marker around the caller. Keep the work's own name the same in both places.
@@ -283,7 +283,7 @@ not it turned out to be the answer — one line each, no prose, no argument for
 or against. You planted five to seven markers; five to seven lines.
 
 It is here because of what happened without it. An agent bracketed a
-migration ladder, measured `AGENTTMP_fill_decks_v6` at 252.7 ms — the exact
+migration ladder, measured `AGENTTMP_fill_presets_v6` at 252.7 ms — the exact
 redundant work the hunt was looking for — and returned a conclusion about
 something else. The number was on its screen and never reached the human. A
 finding you hold and do not pass on is a finding nobody has.

@@ -538,12 +538,12 @@ def _(report):
 def _(report):
     """The planted duplicate, and what the row has to say to be worth a row.
 
-    `insert_decks` runs once under `stage_first` and once under
+    `fill_presets` runs once under `stage_first` and once under
     `stage_again`, 90 ms and 95 ms. Every other detector reads that as two
     ordinary slices, and on the axis they all measure — how much — they are
     right. What makes it a finding is that the work had already been done.
     """
-    row = one_row(report, "repeated_work", "insert_decks")
+    row = one_row(report, "repeated_work", "fill_presets")
     assert row["count"] == 2, row
     assert row["total_ms"] == 185.0, row
     # Which two places is the reader's next question, so the row answers it
@@ -558,7 +558,7 @@ def _(report):
 def _(report):
     """The silence that means "you are one edit away", said out loud.
 
-    `AGENTTMP_insert_card` is a loop body entered from two callers: two
+    `AGENTTMP_insert_preset` is a loop body entered from two callers: two
     callers, 52 ms, and occurrences from 2 ms to 24 ms. Every gate but the
     spread, which is exactly what a duplicate looks like when the marker is
     around the insert rather than around the unit that runs twice. Three
@@ -570,7 +570,7 @@ def _(report):
     is the same shape without one and stays out, because re-wrapping a slice
     nobody planted is not advice anyone can take.
     """
-    row = one_row(report, "repeated_work", "AGENTTMP_insert_card")
+    row = one_row(report, "repeated_work", "AGENTTMP_insert_preset")
     assert row["count"] == 6, row
     assert row["total_ms"] == 52.0, row
     assert row["detail"].startswith("near miss"), row
@@ -2019,7 +2019,7 @@ def _(report):
     assert first["self_ms"] == 8.0, f"self time is the difference: {first}"
     assert first["detail"] == "SeedWorker", first
     # The one-level-too-deep marker is a row too, three times in one wrapper.
-    assert rows["AGENTTMP_insert_card"]["count"] >= 3, rows["AGENTTMP_insert_card"]
+    assert rows["AGENTTMP_insert_preset"]["count"] >= 3, rows["AGENTTMP_insert_preset"]
     # Nothing but the prefix, since this config lists no domains.
     assert all(n.startswith("AGENTTMP_") for n in rows), sorted(rows)
     assert m["absent"] == [], m["absent"]
@@ -2247,7 +2247,7 @@ def _(report):
 
 # --- mark ------------------------------------------------------------------
 
-def _mark_repo(root: Path, *, app="GloomApp", act="MainActivity", theme="AppTheme",
+def _mark_repo(root: Path, *, app="ExampleApp", act="MainActivity", theme="AppTheme",
                nav="AppNavHost", pkg="com.example.app", app_return=False,
                launcher=True, second_app=False, one_line=False,
                unclosed=False) -> None:
@@ -2553,7 +2553,7 @@ def _(report):
         pl = mk.plan(root, package="com.example.app", allowed=["app/src/main"])
         done, _ = mk.apply(root, pl)
         files = {rel for rel, _ in done}
-        assert files == {"app/src/main/kotlin/x/GloomApp.kt", "app/src/main/kotlin/x/MainActivity.kt"}, files
+        assert files == {"app/src/main/kotlin/x/ExampleApp.kt", "app/src/main/kotlin/x/MainActivity.kt"}, files
         act = (root / "app/src/main/kotlin/x/MainActivity.kt").read_text(encoding="utf-8")
         tagged = [ln for ln in act.splitlines() if mk.TAG in ln]
         assert len(tagged) == 4, tagged      # onCreate pair + setContent pair
@@ -2600,7 +2600,7 @@ def _(report):
         done, _ = mk.apply(root, pl)
         # The Application, whose onCreate spans lines, is still marked: the
         # refusal is about the block, not about the file or the run.
-        assert [rel for rel, _ in done] == ["app/src/main/kotlin/x/GloomApp.kt"], done
+        assert [rel for rel, _ in done] == ["app/src/main/kotlin/x/ExampleApp.kt"], done
         act = root / "app/src/main/kotlin/x/MainActivity.kt"
         assert act.read_bytes() == before[act], \
             "a one-line block must come out of --apply untouched"
@@ -3790,11 +3790,11 @@ def _(report):
     **Name after the work.** `repeated_work` finds the same named work entered
     from two callers, which is the whole shape of "this was already done".
     Named after the call site instead, a migration ladder redoing a rung came
-    back as `AGENTTMP_fill_main` and `AGENTTMP_fill_decks_v6` — two names, and
-    a detector built for exactly that finding with nothing to compare.
+    back as `AGENTTMP_fill_main` and `AGENTTMP_fill_presets_v6` — two names,
+    and a detector built for exactly that finding with nothing to compare.
 
     **Hand back every number.** The same agent measured
-    `AGENTTMP_fill_decks_v6` at 252.7 ms — the redundant work itself — and
+    `AGENTTMP_fill_presets_v6` at 252.7 ms — the redundant work itself — and
     returned a conclusion about something else. The return shape had six
     fields, all of them about the one finding, and no room for a measurement
     that turned out not to be it. `Also measured` is that room, and `reflect`

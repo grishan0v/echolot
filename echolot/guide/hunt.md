@@ -151,7 +151,7 @@ than remembering what you added.
 
 **Name a marker after the work it wraps, never after where you put it.** Two
 markers around the same work must end up with the same name —
-`AGENTTMP_fill_decks`, not `AGENTTMP_fill_decks_v6`. `repeated_work` finds
+`AGENTTMP_fill_presets`, not `AGENTTMP_fill_presets_v6`. `repeated_work` finds
 the same named work entered from two callers; named by call site, the two get
 two names and there is nothing to compare. When you need to say where a call
 came from, put a second marker around the caller.
