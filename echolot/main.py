@@ -1986,6 +1986,10 @@ def cmd_init(args) -> int:
 
     One file is not a copy of ours: `.claude/settings.json` is the project's,
     and echolot only adds its permission to it. See `layer.MERGED`.
+
+    One layer it does not touch at all: one a newer echolot wrote. It says
+    so, names the upgrade, and exits 1 having written none of the above —
+    see `layer.ahead` for what it used to do instead.
     """
     target = Path(args.into)
     if not target.is_dir():
@@ -2001,6 +2005,23 @@ def cmd_init(args) -> int:
               f"{', '.join(h.key for h in hosts_mod.HOSTS)}, or `all`",
               file=sys.stderr)
         return 2
+
+    # Before the first write, and whatever the flags say: `--all` is about
+    # files edited here, not about undoing a teammate's upgrade. None of
+    # what `init` writes is written — not the layer, not the .gitignore
+    # lines, not the pointers for other agents, not the saved choice of
+    # agents — because the release that wrote the layer may write every one
+    # of them differently, and this one cannot know how. The line that says
+    # why is the same one `status` and `doctor` print.
+    if layer.ahead(target):
+        verdict, line = layer.one_line(target)
+        said = ("init: refused — .claude/, .gitignore and the pointers for "
+                "other agents are left as they are.\n" + line)
+        print(said, file=sys.stderr)
+        recorder.note(layer=verdict)
+        recorder.failed(said)
+        return 1
+
     if chosen is None:
         # What the project chose last time, when it chose: declining Claude
         # Code is a state, and detecting afresh on every run put it back.
@@ -2144,10 +2165,23 @@ def cmd_init(args) -> int:
     # are the same three `doctor -q` prints; a failure is said and the exit
     # code carries it, but the layer is installed regardless — a broken
     # trace_processor is not a reason to leave the project without the skill.
+    #
+    # The trace_processor checked is the one `analyze` would run in the
+    # project just installed into, chosen the way `doctor` chooses it: the
+    # flag, then `toolchain.tp_binary` from the echolot.yml there and the
+    # local.yml beside it, then the pin. This check used to take the flag or
+    # the pin and nothing else, so a project whose local.yml named its own
+    # binary was vouched for on one its reports never touched. The files are
+    # the project's, not the working directory's: `--into` can name a
+    # project somewhere else.
     if not getattr(args, "no_doctor", False):
         print()
-        code = _doctor_quiet(args, toolchain_info(getattr(args, "tp_binary", None)),
-                             project=target)
+        cfg = _doctor_config(argparse.Namespace(
+            config=str(target / "echolot.yml"), local=None,
+            tp_binary=getattr(args, "tp_binary", None)))
+        tp_binary, source = _tp_binary_source(args, cfg)
+        code = _doctor_quiet(args, toolchain_info(tp_binary, source),
+                             project=target, origin=_binary_origin(source, cfg))
     else:
         code = 0
     if code:

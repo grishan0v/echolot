@@ -24,7 +24,7 @@ Installs into the project the knowledge of how to use the tool:
 
 `/echolot` is the one door. It runs `echolot` (the status command), shows
 it, and acts on the `next` line — `echolot status --next` gives it as one
-word: `init`, `doctor`, `setup`, `fix-config`, `resume-or-new`,
+word: `upgrade`, `init`, `doctor`, `setup`, `fix-config`, `resume-or-new`,
 `init-force`, `fix-settings`, `hunt`. Setup and hunt are the two commands
 beside it, invoked through the Skill tool, so only the branch that applies
 enters the window; they remain callable directly for whoever knows where they
@@ -35,8 +35,12 @@ without the `resume-or-new` question, and free text about slowness means the
 same.
 
 They are listed in the order `next_kind` tries them, and the order is part of
-the design. What
-`init` does on its own — a layer that is missing or stale — comes first: the
+the design. A layer a newer echolot wrote comes before everything
+(`upgrade`): the agent is about to read files written for a newer CLI than
+the one installed, every later step would be taken with the older one, and
+`init` refuses to touch it — so the skill shows the line and stops, and a
+person upgrades. Next comes what `init` does on its own — a layer that is
+missing or stale: the
 agent is about to read that layer, and `init` touches nothing the project
 edited, so there is nothing to ask. Two things about the layer only a person
 can settle come last, right before a hunt: files edited here that
@@ -90,6 +94,7 @@ same way on the one line `doctor -q` and `status` print and in the full
 
 | state | what it asks for |
 |---|---|
+| `newer` — the whole layer, see below | an upgrade: `pipx upgrade echolot` (or `uv tool upgrade echolot`); `init` refuses |
 | `stale`, `missing` | `echolot init` — it touches nothing edited here |
 | `conflict`, `differs` | `echolot init --all`, which overwrites every edited file, the customised ones included — so the skill shows the files and asks first |
 | `customised` | nothing: the edit is the whole difference |
@@ -99,6 +104,59 @@ They used to decide separately, and disagreed: one stale file beside one
 customised read `echolot init` on the one line and `echolot init --all` in the
 full section, and the second would have overwritten the customised file to
 update the stale one.
+
+### A layer from a newer echolot
+
+The manifest also names the echolot that wrote it, and for a long time
+nothing read that name back. In a team that commits the layer, that was a way
+to lose an upgrade. One person upgraded echolot and ran `init`; a teammate
+still on the older release ran `/echolot`. Every file the newer release had
+changed still matched its hash in the manifest and no longer matched the
+older template — which is what `stale` means — so `next` said `init`, the
+skill ran it, the older files went back in, the manifest took the older
+version, and `init` printed "Layer updated." The newer echolot then did the
+same in the other direction, and the layer went back and forth with whoever
+ran `init` last.
+
+Now the name is read first, before any file is compared, and compared by the
+numeric parts of the release: 0.10.0 is newer than 0.9.0, and 0.8 is 0.8.0.
+Development releases, pre-releases and post-releases sort around their
+release the way PEP 440 orders them, and a local label (`+mine`) orders
+nothing. When a newer release wrote the layer, its state is `newer`,
+whatever the files say:
+
+- `echolot`, `doctor` and `doctor -q` name the release that wrote it and the
+  one that is running, and the upgrade — `pipx upgrade echolot`, or
+  `uv tool upgrade echolot`;
+- `echolot status --next` says `upgrade`, and the skill shows that line to
+  the human and stops;
+- `init` refuses with exit 1 and writes none of what it installs: not
+  `.claude/`, not the `.gitignore` lines, not the pointers for other agents,
+  not the saved choice of agents. The release that wrote the layer may write
+  every one of them differently, and this one cannot know how.
+
+A version that does not read as one — a hand edit, a spelling a later
+release may adopt — cannot be put in order, and gets the same answer. A
+layer left alone costs a person one command; a layer rolled back undoes a
+teammate's upgrade without a word. If an upgrade does not change it, the
+manifest is what is wrong: delete it, and `init` adds what is missing and
+keeps every file that differs until a person chooses `--all`. A manifest
+with no name in it at all makes no claim, and its files are judged as
+before.
+
+There is no flag to go back. The layer is committed and the manifest with
+it, so returning to an older layer is reverting the commit that brought the
+newer one, which takes the manifest back too — and afterwards every echolot
+agrees on what is installed. A flag would do the same thing less well, and it
+would be one more command for an agent to try on a route whose whole point
+is that it stops.
+
+The same line is also the only news of a newer release echolot can give: the
+tool makes no network calls, and a teammate's commit is what brings it. Two
+limits. Releases up to 0.7.0 do not read the name, so they still put their
+files back; the rule holds once the whole team is on a later one. And
+between releases a checkout carries the number of the last one, so two
+builds with the same number are the same version as far as this goes.
 
 ## Why a CLI and not an MCP server
 

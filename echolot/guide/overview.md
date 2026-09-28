@@ -29,6 +29,7 @@ echolot status --next   # the same as one word, for switching on
 
 | `next` | what to do |
 |---|---|
+| `upgrade` | the `.claude/` layer here was written by a newer echolot than the one installed, or its manifest names a version the installed one cannot read, and the installed one writes nothing into it. Show the `layer` line to the human as it is — it names both versions and the command to upgrade — and stop. Do not run `echolot init`: it refuses |
 | `init` | run `echolot init`, then run `echolot` again |
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | build `echolot.yml` — run `echolot guide setup` |

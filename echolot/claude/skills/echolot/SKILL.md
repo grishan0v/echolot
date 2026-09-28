@@ -35,6 +35,7 @@ Show that output to the human as it is, then act on the `next` line
 
 | `next` | what you do |
 |---|---|
+| `upgrade` | the `.claude/` layer here was written by a newer echolot than the one installed, or its manifest names a version the installed one cannot read, and the installed one writes nothing into it. Show the `layer` line to the human as it is — it names both versions and the command to upgrade — and stop. Do not run `echolot init`: it refuses |
 | `init` | run `echolot init`, show the result; then run `echolot` again and continue from its new `next` |
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | invoke the `echolot-setup` skill (the Skill tool) — it builds `echolot.yml` |
