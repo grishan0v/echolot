@@ -56,7 +56,10 @@ TID_DISK = 4209
 TID_DISK_BG = 4210
 
 THREADS = {
-    TID_MAIN: "m.example.app",  # Linux truncates comm to 15 characters
+    # The main thread's name cut from the front, the way a package name
+    # longer than fifteen characters arrives: `com.example.myapp` comes as
+    # `m.example.myapp`. `com.example.app` itself would arrive whole.
+    TID_MAIN: "m.example.app",
     TID_WORKER: "DefaultDispatcher-worker-1",
     TID_HEAP: "HeapTaskDaemon",
     TID_OKHTTP: "OkHttp Dispatcher",

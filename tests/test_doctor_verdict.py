@@ -221,7 +221,12 @@ def test_a_config_that_does_not_load_is_said_and_the_pin_is_checked(
 # --- the report ---------------------------------------------------------------
 
 def _fired(toolchain: dict) -> dict:
-    """A report with one detector that fired: a quiet one ends before the footer."""
+    """A report with one detector that fired, its section above the footer.
+
+    A report where nothing fired ends in the same footer — tests/test_loose_ends.py
+    holds that. Here a detector's own `<sub>` line sits above it, and the check
+    on the last line is what tells the two apart.
+    """
     return {
         "schema": 1, "generated_at": "2026-09-28T10:00:00+00:00",
         "trace": "t.perfetto-trace", "toolchain": toolchain,

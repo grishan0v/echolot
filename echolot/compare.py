@@ -24,9 +24,10 @@ Two things it refuses to do quietly:
     or more — with a single trace on either side the column reads `—`.
 
 Rows are paired on everything the detector declared in `@identity`, which the
-report carries. Half the shipped detectors name a second column there, and one
-location legitimately holding several rows is what that field exists to say;
-see `_match` for what pairing on the name alone produced instead.
+report carries. Seven of the twelve shipped detectors name a second column
+there, and one location legitimately holding several rows is what that field
+exists to say; see `_match` for what pairing on the name alone produced
+instead.
 """
 
 from __future__ import annotations

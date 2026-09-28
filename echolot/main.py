@@ -2656,7 +2656,9 @@ def cmd_scan(args) -> int:
     that runs it, the devices attached, and a config to start from with
     every value saying where it came from. An agent used to read the build
     scripts for this, and one glob caught a `.class` file on the way. Reads
-    and prints; writes nothing.
+    and prints; the one thing written is its line in .echolot/log/runs.jsonl
+    — the line `main` appends for every command unless ECHOLOT_NO_RECORD is
+    set.
     """
     from . import scan as scan_mod
 
@@ -2682,7 +2684,9 @@ def cmd_report(args) -> int:
     python one-liners — the keys, the window, which detectors fired with
     which thresholds, the top rows of one detector with the evidence cut
     short. Each is a view, and each one-liner put a window's worth of json
-    into the context to get at a line. Reads and prints; writes nothing.
+    into the context to get at a line. Reads and prints; the one thing
+    written is its line in .echolot/log/runs.jsonl — the line `main` appends
+    for every command unless ECHOLOT_NO_RECORD is set.
     """
     project = project_of(args)
     path = Path(args.report) if args.report else project / ".echolot" / "out" / "report.json"
@@ -3100,7 +3104,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "measure on, the module with a MacrobenchmarkRule with its tests "
                          "and the sections it measures, the gradle tasks that run it, "
                          "the devices attached — and an echolot.yml to start from, every "
-                         "value saying where it came from. Writes nothing.")
+                         "value saying where it came from. Writes only its own line in "
+                         ".echolot/log/runs.jsonl under the working directory.")
     sc.add_argument("--root", default=".", help="repository root (default: the current directory)")
     sc.add_argument("--no-devices", action="store_true", help="do not ask adb")
     sc.add_argument("--json", action="store_true", help="the facts as json")
@@ -3111,8 +3116,9 @@ def build_parser() -> argparse.ArgumentParser:
              description="Reads a Marker Report that is already on disk and prints "
                          "one view of it: an overview of what fired, one "
                          "detector's rows with the evidence kept short, the "
-                         "window and the device, or the markers. Writes nothing. "
-                         "Default: .echolot/out/report.json next to the config.")
+                         "window and the device, or the markers. Writes only its "
+                         "own line in .echolot/log/runs.jsonl. Default: "
+                         ".echolot/out/report.json next to the config.")
     rp.add_argument("report", nargs="?", help="a report.json (default: the last one)")
     rp.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
     rp.add_argument("--detector", "-d", action="append", metavar="ID",

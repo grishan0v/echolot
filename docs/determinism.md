@@ -259,11 +259,12 @@ A trace_processor of your own goes in one of two ways:
   every run on this machine. `init` puts `local.yml` in `.gitignore`, so the
   path stays yours. The key works in `echolot.yml` too, where everyone gets it.
 
-`analyze`, `calibrate`, `names` and `doctor` choose in the same order: the
-flag, then the config, then the pin. `doctor` reads the config in the
-directory it runs from for that key alone, so the binary it self-checks is the
-one `analyze` would use there. A config that does not load does not stop it:
-it says so on stderr and checks the flag's binary, or the pin.
+`analyze`, `calibrate`, `names`, `probe` and `doctor` choose in the same
+order: the flag, then the config, then the pin. `probe` and `doctor` read the
+config in the directory they run from for that key alone, so `probe` opens a
+trace with, and `doctor` self-checks, the binary `analyze` would use there. A
+config that does not load stops neither: each says so on stderr and goes on
+with the flag's binary, or the pin.
 
 `doctor` and the report say which binary ran and who asked for it. With the
 path in `local.yml`, `doctor` shows the version the binary reports about
