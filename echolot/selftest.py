@@ -1879,13 +1879,16 @@ def _(report):
             os.chdir(elsewhere)
             # Its own scope: this runs inside the doctor run that hosts it,
             # and neither the facts nor the project may leak into that line.
+            # Called outside the assert: under `python -O` an assert is not
+            # evaluated at all, and the run this check is about never happens.
             with recorder.isolated():
-                assert main(["status", "-c", str(config)]) == 0
+                code = main(["status", "-c", str(config)])
         finally:
             os.chdir(here)
             if quiet is not None:
                 os.environ["ECHOLOT_NO_RECORD"] = quiet
 
+        assert code == 0, f"`status` exited {code}"
         stray = list(elsewhere.rglob("runs.jsonl"))
         assert not stray, f"the run log was left in the working directory: {stray}"
 
@@ -3124,14 +3127,22 @@ def _(report):
     thirty-five megabytes of binary, and the person found out from git.
 
     Appended, never rewritten, and only what is missing: a .gitignore is the
-    project's file, the same as settings.json.
+    project's file, the same as settings.json. Written only at a git root —
+    and anywhere else said, with the lines, rather than skipped in silence.
+
+    Every `ensure` is called outside its assert: under `python -O` an assert
+    is not evaluated, and the write it wraps would not happen.
     """
     from . import ignore as ig
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
-        # not a checkout: nothing to ignore into
-        assert ig.ensure(project) is None, "wrote a .gitignore outside a repository"
-        assert not (project / ".gitignore").exists()
+        # not a checkout: nothing written, and the two lines said instead
+        said = ig.ensure(project)
+        assert not (project / ".gitignore").exists(), \
+            "wrote a .gitignore outside a repository"
+        assert said and "not written" in said \
+            and all(p in said for p in ig.PATTERNS), (
+                f"a .gitignore left unwritten went unsaid: {said!r}")
 
         (project / ".git").mkdir()
         (project / ".gitignore").write_text("build/\n*.iml\n", encoding="utf-8")
@@ -3142,7 +3153,8 @@ def _(report):
         assert "/.echolot/" in text and "/local.yml" in text, text
 
         # twice is once: the second run has nothing to add
-        assert ig.ensure(project) is None, "added the same lines again"
+        said = ig.ensure(project)
+        assert said is None, f"added the same lines again: {said!r}"
         assert (project / ".gitignore").read_text(encoding="utf-8") == text
 
     # the spellings a person may already have used, and the one that says no
@@ -3155,7 +3167,9 @@ def _(report):
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
         (project / ".git").write_text("gitdir: /repo/.git/worktrees/x\n", encoding="utf-8")
-        assert ig.ensure(project), "a worktree has a history to keep traces out of"
+        ig.ensure(project)
+        assert (project / ".gitignore").exists(), \
+            "a worktree has a history to keep traces out of"
 
 
 @check(".claude/ layer: settings.json is merged into, never written over")
@@ -3245,6 +3259,16 @@ def _(report):
         assert "not valid JSON" in said, said
         assert '"Bash(echolot:*)"' in said, said
 
+        # — and `next` goes to the person who can fix it, not back to the
+        # `init` that just could not. It was `stale`, `next: init`, for good.
+        from .state import next_kind, project_state
+        (project / "echolot.yml").write_text(
+            "project:\n  process: app\nscenario:\n  name: checkout\n",
+            encoding="utf-8")
+        routed = next_kind(project_state(project))
+        assert routed == "fix-settings", \
+            f"an unreadable settings.json routes to {routed!r}"
+
 
 @check("status: the next step follows the project's state, first visit to return")
 def _(report):
@@ -3298,8 +3322,9 @@ def _(report):
         assert next_kind(project_state(project)) == "hunt", \
             "the loop must never be interrupted by the choice"
         # every kind the skill switches on is one the decision can produce
-        assert set(NEXT_KINDS) >= {"init", "init-force", "doctor", "setup",
-                                   "fix-config", "resume-or-new", "hunt"}
+        assert set(NEXT_KINDS) >= {"init", "init-force", "fix-settings",
+                                   "doctor", "setup", "fix-config",
+                                   "resume-or-new", "hunt"}
 
 
 @check("init: `--all` is the flag, and `--force` still means the same")
@@ -3324,7 +3349,10 @@ def _(report):
     sub = next(a for a in parser._actions if isinstance(a, _argparse._SubParsersAction))
     help_text = sub.choices["init"].format_help()
     assert "--all" in help_text and "--force" not in help_text, help_text
-    line = next_step({"layer_verdict": "differs", "layer_line": "", "config": None,
+    # A config that loads, so the route reaches the layer's own question: it
+    # is asked right before a hunt, after everything that does not need it.
+    line = next_step({"layer_verdict": "differs", "layer_line": "",
+                      "config": {"scenario": "coldStart"},
                       "traces": {"count": 0}, "report": None, "hunt": None,
                       "collect": None})
     assert "--all" in line and "--force" not in line, line
@@ -3405,14 +3433,18 @@ def _(report):
     agents = hosts_mod.BY_KEY["agents"]
     theirs = "\n## Our build rules\n\nRun ./gradlew spotlessApply first.\n"
 
+    # Every write_stub call below is made outside its assert: under `python
+    # -O` an assert is not evaluated, and the write it wraps would not happen.
     with tempfile.TemporaryDirectory() as d:
         project = Path(d)
-        assert hosts_mod.write_stub(project, agents)[0] == "written"
+        what, _ = hosts_mod.write_stub(project, agents)
+        assert what == "written", what
         own = project / "AGENTS.md"
 
         # Nothing to do the second time round.
-        assert hosts_mod.write_stub(project, agents)[0] == "current", \
-            "a freshly written stub reads as out of date"
+        what, _ = hosts_mod.write_stub(project, agents)
+        assert what == "current", \
+            f"a freshly written stub reads as out of date ({what!r})"
 
         own.write_text(own.read_text(encoding="utf-8") + theirs, encoding="utf-8")
         what, _ = hosts_mod.write_stub(project, agents)
@@ -3426,7 +3458,8 @@ def _(report):
         # And a stale section really is brought up to date, in place.
         stale = after.replace("echolot guide", "echolot gide")
         own.write_text(stale, encoding="utf-8")
-        assert hosts_mod.write_stub(project, agents)[0] == "updated"
+        what, _ = hosts_mod.write_stub(project, agents)
+        assert what == "updated", what
         fixed = own.read_text(encoding="utf-8")
         assert "echolot gide" not in fixed, "a stale pointer was left stale"
         assert theirs in fixed, "updating the pointer took the project's text"
@@ -3449,7 +3482,8 @@ def _(report):
         project = Path(d)
         own = project / "AGENTS.md"
         own.write_text(hosts_mod._without_an_end(agents.render()), encoding="utf-8")
-        assert hosts_mod.write_stub(project, agents)[0] == "updated"
+        what, _ = hosts_mod.write_stub(project, agents)
+        assert what == "updated", what
         assert hosts_mod.END_MARKER in own.read_text(encoding="utf-8"), \
             "an older install was not migrated to the marked form"
 
@@ -3513,8 +3547,15 @@ def _(report):
     `.claude/` absent normally means "run init". On a project that chose
     Cursor only, that same absence would have `next` demand `echolot init`
     every time — on a project that had just declined it.
+
+    And the choice has to be read back, not only written. `init` without
+    `--for` detected afresh every run, detection always names Claude Code,
+    and so the next plain `init` installed `.claude/` and wrote the opt-out
+    over.
     """
     import argparse
+    import contextlib
+    import io
 
     from . import hosts as hosts_mod
     from .main import cmd_init
@@ -3524,7 +3565,7 @@ def _(report):
         project = Path(d)
         (project / "echolot.yml").write_text(
             "project:\n  process: com.example.app\n", encoding="utf-8")
-        with recorder.isolated():
+        with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()):
             cmd_init(argparse.Namespace(into=str(project), force=False,
                                         no_doctor=True, for_hosts="cursor"))
         assert not (project / ".claude").exists(), \
@@ -3536,6 +3577,15 @@ def _(report):
         st = project_state(project, "echolot.yml")
         assert st["layer_verdict"] == "opted-out", st["layer_verdict"]
         assert next_kind(st) != "init", "a project that declined is still asked to init"
+
+        # A plain `init` later — the one command a person has to know.
+        with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()):
+            cmd_init(argparse.Namespace(into=str(project), force=False,
+                                        no_doctor=True))
+        assert not (project / ".claude").exists(), \
+            "a plain `init` installed the layer this project had declined"
+        assert hosts_mod.load_choice(project) == ["cursor"], \
+            f"a plain `init` wrote the choice over: {hosts_mod.load_choice(project)}"
 
 
 @check("CLI: every verb is grouped by audience and shown in --help")

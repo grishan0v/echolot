@@ -449,7 +449,20 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
     """
     if not hunt:
         return ["No investigation is open."]
-    out = [f'Open investigation: "{hunt.get("question") or "(no question recorded)"}"']
+    q = hunt.get("question") or "(no question recorded)"
+    state = hunt.get("status") or "open"
+    if state == "open":
+        out = [f'Open investigation: "{q}"']
+    else:
+        # A closed record stays at .echolot/hunt.json until the next one
+        # opens, and bare `echolot hunt` reads it from there. Headed "Open
+        # investigation", it told an agent deciding whether to open one that
+        # one was open — and inside a closed one nothing is filed, so the
+        # loop's `compare` had nothing to compare.
+        out = [f'No investigation is open. The last one, #{hunt.get("n") or "?"}, '
+               f'{state}: "{q}"']
+        if hunt.get("conclusion"):
+            out.append(f"  → {hunt['conclusion']}")
     if hunt.get("since"):
         out.append(f"  after: {hunt['since']}")
     facts = []
