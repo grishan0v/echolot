@@ -55,9 +55,11 @@ that to the user. Before saying it, read the probe: an app whose markers are
 particular. `domains` maps them when their names are `const val`s passed to
 the app's own wrapper; a hint ending in `via X` is that case. Then run `echolot mark`: it lists the entry points the
 first markers would go to — from the manifest and the SDK, with a source on
-each row — and says whether `androidx.compose.runtime:runtime-tracing` is
-missing. Show the list; do not apply anything during setup. The hunt applies
-it when the first report has nothing of the application's to name.
+each row — and, when the app module uses Compose and its build script does
+not name `androidx.compose.runtime:runtime-tracing`, adds a note saying so.
+An app without Compose gets no such note. Show the list; do not apply
+anything during setup. The hunt applies it when the first report has nothing
+of the application's to name.
 
 ### 2. A probe trace
 

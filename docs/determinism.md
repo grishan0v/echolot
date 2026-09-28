@@ -60,8 +60,9 @@ that needs a trace or a command of its own. Good both as a CI gate and as the
 agent's first action before entering a loop.
 
 Two cases end without a tally. Both exit 1 and go into the run log as a
-failed self-check, so `echolot` shows the last `doctor` as failed rather than
-passed, and routes the next step back to it:
+self-check that did not run — no checks, and one entry under `failed` — so
+`echolot` says the self-check did not run rather than that it passed, and
+routes the next step back to `doctor`:
 
 - The self-check could not start — a `--tp-binary` pointing at nothing, say.
   `doctor` prints why.
@@ -197,15 +198,17 @@ stderr before it starts:
 ```
 
 stdout stays the command's result, so the first `names --json` is JSON like
-any other. The fetching is perfetto's own: `curl` downloads the file, and
-perfetto checks it against the SHA-256 in the manifest before giving it the
-pinned name. That name ends in the first sixteen hex digits of the hash, and it
-is how the file is trusted from then on without being hashed again. The size
-is 10 to 14 MB, depending on the platform. `echolot --version` names the
-pinned version without downloading anything.
+any other. The fetching is perfetto's own: `curl` downloads the file under a
+temporary name beside the pinned one, and perfetto checks it against the
+SHA-256 in the manifest before giving it the pinned name. That name ends in
+the first sixteen hex digits of the hash, and it is how the file is trusted
+from then on without being hashed again. The size is 10 to 14 MB, depending
+on the platform. `echolot --version` names the pinned version without
+downloading anything.
 
-A download that fails is tried once per command, and the command ends with exit
-2 and one error that names the cause and the ways round it:
+A download that fails is tried once per command, whatever it left under the
+temporary name is removed, and the command ends with exit 2 and one error that
+names the cause and the ways round it:
 
 ```
 error: trace_processor v56.1 could not be downloaded: curl exited with status 6 — the server's name did not resolve.
@@ -256,11 +259,12 @@ A trace_processor of your own goes in one of two ways:
   every run on this machine. `init` puts `local.yml` in `.gitignore`, so the
   path stays yours. The key works in `echolot.yml` too, where everyone gets it.
 
-`analyze`, `calibrate`, `names` and `doctor` choose in the same order: the
-flag, then the config, then the pin. `doctor` reads the config in the
-directory it runs from for that key alone, so the binary it self-checks is the
-one `analyze` would use there. A config that does not load does not stop it:
-it says so on stderr and checks the flag's binary, or the pin.
+`analyze`, `calibrate`, `names`, `probe` and `doctor` choose in the same
+order: the flag, then the config, then the pin. `probe` and `doctor` read the
+config in the directory they run from for that key alone, so `probe` opens a
+trace with, and `doctor` self-checks, the binary `analyze` would use there. A
+config that does not load stops neither: each says so on stderr and goes on
+with the flag's binary, or the pin.
 
 `doctor` and the report say which binary ran and who asked for it. With the
 path in `local.yml`, `doctor` shows the version the binary reports about

@@ -56,7 +56,10 @@ TID_DISK = 4209
 TID_DISK_BG = 4210
 
 THREADS = {
-    TID_MAIN: "m.example.app",  # Linux truncates comm to 15 characters
+    # The main thread's name cut from the front, the way a package name
+    # longer than fifteen characters arrives: `com.example.myapp` comes as
+    # `m.example.myapp`. `com.example.app` itself would arrive whole.
+    TID_MAIN: "m.example.app",
     TID_WORKER: "DefaultDispatcher-worker-1",
     TID_HEAP: "HeapTaskDaemon",
     TID_OKHTTP: "OkHttp Dispatcher",
@@ -153,7 +156,7 @@ SLICES = {
     # rewrite half the other findings to prove it.
     # --- work reached from two places, and three shapes that only look like it -
     #
-    # The planted finding is `insert_decks`: the same named work entered once
+    # The planted finding is `fill_presets`: the same named work entered once
     # from `stage_first` and once from `stage_again`, costing about the same
     # both times. That is what a migration ladder redoing a rung looks like in
     # a trace — and every other detector reads it as two ordinary slices,
@@ -169,7 +172,7 @@ SLICES = {
     #                  work; identical work costs an identical amount, and
     #                  that sameness is the whole signal
     #
-    # And one that must not stay silent: `AGENTTMP_insert_card` is
+    # And one that must not stay silent: `AGENTTMP_insert_preset` is
     # `shared_helper`'s shape carrying the temporary prefix, which makes it
     # the hunt's own marker sitting one level too deep. That is a near miss
     # rather than a finding, and the report says so.
@@ -181,7 +184,7 @@ SLICES = {
         ("batch_loop", 200, 120, [
             ("insert_row", 200 + i * 11, 8, []) for i in range(10)
         ]),
-        # The near miss: a marker one level too deep. `AGENTTMP_insert_card`
+        # The near miss: a marker one level too deep. `AGENTTMP_insert_preset`
         # is a loop body reached from two callers, so it clears every gate
         # except the spread — a loop's occurrences vary by what they are
         # given. On a live hunt this was the duplicate seen from one level
@@ -197,19 +200,19 @@ SLICES = {
         # ran twice. A finding is allowed three callers because equal cost
         # carries the claim; a near miss has no equal cost to lean on.
         ("AGENTTMP_seed_first", 330, 60, [
-            ("AGENTTMP_insert_card", 331, 2, []),
-            ("AGENTTMP_insert_card", 334, 2, []),
-            ("AGENTTMP_insert_card", 337, 24, []),
+            ("AGENTTMP_insert_preset", 331, 2, []),
+            ("AGENTTMP_insert_preset", 334, 2, []),
+            ("AGENTTMP_insert_preset", 337, 24, []),
             ("AGENTTMP_parse_json", 362, 24, []),
         ]),
-        ("stage_first", 400, 200, [("insert_decks", 410, 90, [])]),
+        ("stage_first", 400, 200, [("fill_presets", 410, 90, [])]),
         ("AGENTTMP_seed_again", 610, 60, [
-            ("AGENTTMP_insert_card", 611, 2, []),
-            ("AGENTTMP_insert_card", 614, 2, []),
-            ("AGENTTMP_insert_card", 617, 20, []),
+            ("AGENTTMP_insert_preset", 611, 2, []),
+            ("AGENTTMP_insert_preset", 614, 2, []),
+            ("AGENTTMP_insert_preset", 617, 20, []),
             ("AGENTTMP_parse_json", 640, 3, []),
         ]),
-        ("stage_again", 700, 200, [("insert_decks", 710, 95, [])]),
+        ("stage_again", 700, 200, [("fill_presets", 710, 95, [])]),
         ("stage_light", 920, 30, [("shared_helper", 922, 5, [])]),
         ("stage_heavy", 960, 90, [("shared_helper", 962, 80, [])]),
         ("AGENTTMP_seed_third", 1052, 45, [

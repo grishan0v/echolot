@@ -37,8 +37,8 @@
 -- The duplicate looks like this instead: one name, entered once from each of
 -- two callers.
 --
---     GT_deckTr_loop_x29_en   under GT_main_monster              103.7 ms
---     GT_deckTr_loop_x29_en   under GT_update6_fillDecks_again    85.9 ms
+--     APP_presets_loop_x29    under APP_main_load                103.7 ms
+--     APP_presets_loop_x29    under APP_update6_fill_again        85.9 ms
 --
 -- So the grouping is by name and thread, and the finding is that the callers
 -- differ. `detail` names them, because which two places is the whole question
@@ -148,7 +148,7 @@
 -- All three bracketed the call site of the repeat instead of the work it
 -- reached, and got one occurrence where the shape needs two. The third went
 -- one level deeper still and wrapped the insert inside the loop, and
--- `AGENTTMP_insert_monster` came back under exactly two callers — 67
+-- `AGENTTMP_insert_preset` came back under exactly two callers — 67
 -- occurrences, 325.9 ms of them, every gate cleared but one. The occurrences
 -- ran from 1.8 to 104.1 ms, a spread of 57.9, and nothing was said. One
 -- marker moved inside the shared function instead would have priced the two

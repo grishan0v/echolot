@@ -420,9 +420,17 @@ def leftovers(root: Path, prefix: str | None = None) -> dict[str, Any]:
 
 # --- rendering --------------------------------------------------------------
 
-def summary_line(hunt: dict[str, Any] | None) -> str:
-    """The one line `status` prints among layer / config / traces / report."""
+def summary_line(hunt: dict[str, Any] | None, st: dict[str, Any]) -> str:
+    """The one line `status` prints among layer / config / traces / report.
+
+    With none open it says what opens one. `hunt "<q>"` refuses while
+    echolot.yml is there and does not load, so then the promise waits on
+    the config, and the config's own line above this one says why it does
+    not load. With no config at all a hunt opens one.
+    """
     if not hunt:
+        if (st.get("config") or {}).get("error"):
+            return "none open — a hunt opens one once echolot.yml loads"
         return "none open — the next hunt opens one"
     q = hunt.get("question") or "(no question recorded)"
     bits = [f'"{q}"']

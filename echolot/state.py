@@ -228,7 +228,14 @@ def next_step(st: dict) -> str:
             return "echolot init — installs the .claude/ layer; then /echolot in Claude Code"
         return "echolot init — brings the .claude/ layer up to date (the agent reads it)"
     if kind == "doctor":
-        return "echolot doctor — the last self-check failed; no report is trustworthy until it passes"
+        # The fact `echolot`'s doctor line reads, read the same way. A
+        # self-check that never started is logged with `checks: 0` beside its
+        # one `failed` entry (main.NOT_RUN): nothing in it was checked, so
+        # nothing failed — it did not run.
+        facts = (st.get("last_doctor") or {}).get("facts") or {}
+        what = "did not run" if facts.get("checks") == 0 else "failed"
+        return (f"echolot doctor — the last self-check {what}; no report is "
+                f"trustworthy until it passes")
     if kind == "setup":
         return (f"{_door(st)} setup` — echolot.yml from the repository "
                 f"and a probe trace")

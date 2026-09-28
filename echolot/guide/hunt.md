@@ -45,6 +45,11 @@ Nothing is deleted. If the human recorded traces for **this** question before
 asking, they moved too and are still its evidence: analyse that directory,
 and do not record them again.
 
+If `echolot hunt` exits 2 with `error: echolot.yml does not load: …`, it
+opened nothing and moved no traces aside. Show that error to the human as it
+is, ask them to fix `echolot.yml`, and stop — record nothing, and do not
+start the loop.
+
 **Traces.** None? `echolot collect -c echolot.yml -n 5`, once the
 investigation is open. Repeats are not belt-and-braces: a single run cannot
 tell a regression from a spike. With a runner config that is new or just
@@ -146,7 +151,7 @@ than remembering what you added.
 
 **Name a marker after the work it wraps, never after where you put it.** Two
 markers around the same work must end up with the same name —
-`AGENTTMP_fill_decks`, not `AGENTTMP_fill_decks_v6`. `repeated_work` finds
+`AGENTTMP_fill_presets`, not `AGENTTMP_fill_presets_v6`. `repeated_work` finds
 the same named work entered from two callers; named by call site, the two get
 two names and there is nothing to compare. When you need to say where a call
 came from, put a second marker around the caller.

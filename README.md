@@ -138,7 +138,7 @@ The same work, by hand or in CI:
 echolot collect -c echolot.yml -n 5                              # 5 repeats of the scenario
 echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml  # build the report
 echolot compare before.json .echolot/out/report.json             # what changed since
-echolot doctor -q                                                # exit 0/1: is this environment sane?
+echolot doctor -q                                                # is this environment sane? exit 0 yes, 1 no or not checked, 2 trace_processor not downloaded
 ```
 
 Results land in `.echolot/out/` — `report.md` for you, `report.json` for the
@@ -286,7 +286,7 @@ the agent has. One word, one meaning, both surfaces.
 | `echolot` | where this project stands, and the next step |
 | `echolot init` | install or update the `.claude/` layer; .gitignore, and checks the environment |
 | `echolot hunt "<what regressed>"` | open an investigation — see [below](#the-investigation) |
-| `echolot doctor` | environment + self-check on a synthetic trace; exit 0/1, `-q` for three lines |
+| `echolot doctor` | environment + self-check on a synthetic trace; exit 0 when every check passes, 1 when one fails or the self-check cannot run, 2 when trace_processor cannot be downloaded; `-q` for three lines |
 
 ### The pipeline — for CI, and for traces by hand
 

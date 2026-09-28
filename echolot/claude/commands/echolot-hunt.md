@@ -75,6 +75,11 @@ it had an investigation — the human captured them, then asked — move with
 them and are still its evidence: fact 2 is now that directory. Hand it to the
 agent, and do not record them again.
 
+If `echolot hunt` exits 2 with `error: echolot.yml does not load: …`, it
+opened nothing and moved no traces aside. Show that error to the human as it
+is, ask them to fix `echolot.yml`, and stop — record nothing, and do not call
+`perf-hunter`.
+
 **Traces.** None that show it? Capture them now that the investigation is
 open, so they are filed under it: `echolot collect -c echolot.yml -n 5`. With
 a runner config that is new or was just changed, make the first run a cheap

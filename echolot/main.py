@@ -1669,7 +1669,7 @@ def cmd_status(args) -> int:
         if cfg.get("local"):
             bits.append("local.yml applied")
         lines.append(("config", "echolot.yml · " + " · ".join(bits)))
-    lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"))))
+    lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"), st)))
     collecting = state.collect_line(st)
     if collecting:
         lines.append(("collect", collecting))
@@ -2247,13 +2247,19 @@ def cmd_init(args) -> int:
             config=str(target / "echolot.yml"), local=None,
             tp_binary=getattr(args, "tp_binary", None)))
         tp_binary, source = _tp_binary_source(args, cfg)
-        code = _doctor_quiet(args, toolchain_info(tp_binary, source),
-                             project=target, origin=_binary_origin(source, cfg))
+        code, ran = _doctor_quiet(args, toolchain_info(tp_binary, source),
+                                  project=target, origin=_binary_origin(source, cfg))
     else:
-        code = 0
+        code, ran = 0, False
     if code:
-        print("\nnext  echolot doctor — the self-check failed (see above); until it "
-              "passes, no report from this environment can be trusted")
+        # In the words `echolot` uses for a doctor that did the same. A
+        # self-check that never started — trace_processor not downloaded,
+        # asserts switched off, a binary that is not there — checked
+        # nothing: it did not run, and "failed" sent the reader looking above
+        # for a check that never happened.
+        what = "failed" if ran else "did not run"
+        print(f"\nnext  echolot doctor — the self-check {what} (see above); until "
+              f"it passes, no report from this environment can be trusted")
     else:
         print(f"\nnext  {state.next_step(state.project_state(target))}")
     return code
@@ -2513,7 +2519,8 @@ def cmd_doctor(args) -> int:
     origin = _binary_origin(source, cfg)
 
     if getattr(args, "quiet", False):
-        return _doctor_quiet(args, info, origin=origin)
+        code, _ = _doctor_quiet(args, info, origin=origin)
+        return code
 
     print("## Environment\n")
     facts = [
@@ -2580,7 +2587,7 @@ def cmd_doctor(args) -> int:
 
 
 def _doctor_quiet(args, info: dict, project: Path | None = None,
-                  origin: str | None = None) -> int:
+                  origin: str | None = None) -> tuple[int, bool]:
     """`doctor -q`: three lines, and every failure. Same exit code.
 
     For a subagent, a CI step, a `| head`: the full report is ten kilobytes
@@ -2593,11 +2600,15 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
     trace_processors. `origin` is who asked for a custom one, when the caller
     knows it more exactly than `info["source"]` does — the file, not only
     the key.
+
+    Returned beside the exit code: whether the self-check ran at all. Exit 1
+    is a check that failed and also a self-check that never started, and
+    `init`, which ends in this, says which of the two it was.
     """
     import platform as py_platform
 
     if _refused_without_asserts():
-        return 1
+        return 1, False
     tp = info.get("trace_processor") or "unknown"
     src = (f" (custom binary from {origin or info.get('source')})"
            if info.get("binary") else "")
@@ -2611,11 +2622,11 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
         from . import selftest
         results = selftest.run(info.get("binary"))
     except ToolchainError as e:
-        return _no_trace_processor(e, info)
+        return _no_trace_processor(e, info), False
     except Exception as e:
         print(f"self-check: could not run — {e}")
         _record_not_run(f"self-check: could not run — {e}", info)
-        return 1
+        return 1, False
     failed = [(name, why) for name, why in results if why]
     recorder.note(checks=len(results), failed=[name for name, _ in failed],
                   trace_processor=info.get("trace_processor"))
@@ -2624,9 +2635,9 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
               f"this environment cannot be trusted")
         for name, why in failed:
             print(f"  FAILS {name}\n          {why}")
-        return 1
+        return 1, True
     print(f"self-check: {len(results)} of {len(results)} passed")
-    return 0
+    return 0, True
 
 
 def _pkg_version(name: str) -> str:
@@ -2645,7 +2656,9 @@ def cmd_scan(args) -> int:
     that runs it, the devices attached, and a config to start from with
     every value saying where it came from. An agent used to read the build
     scripts for this, and one glob caught a `.class` file on the way. Reads
-    and prints; writes nothing.
+    and prints; the one thing written is its line in .echolot/log/runs.jsonl
+    — the line `main` appends for every command unless ECHOLOT_NO_RECORD is
+    set.
     """
     from . import scan as scan_mod
 
@@ -2671,7 +2684,9 @@ def cmd_report(args) -> int:
     python one-liners — the keys, the window, which detectors fired with
     which thresholds, the top rows of one detector with the evidence cut
     short. Each is a view, and each one-liner put a window's worth of json
-    into the context to get at a line. Reads and prints; writes nothing.
+    into the context to get at a line. Reads and prints; the one thing
+    written is its line in .echolot/log/runs.jsonl — the line `main` appends
+    for every command unless ECHOLOT_NO_RECORD is set.
     """
     project = project_of(args)
     path = Path(args.report) if args.report else project / ".echolot" / "out" / "report.json"
@@ -2871,7 +2886,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Ordered by the working flow rather than by when things were written:
     # first make sure the environment computes correctly, then reconnaissance,
     # then analysis.
-    dr = add("doctor", "yours", "", "environment + self-check on a synthetic trace, exit 0/1")
+    dr = add("doctor", "yours", "",
+             "environment + self-check on a synthetic trace; exit 0 passed, "
+             "1 failed or could not run, 2 trace_processor not downloaded")
     dr.add_argument("-q", "--quiet", action="store_true",
                     help="three lines and the failures, same exit code — for "
                          "subagents and CI")
@@ -3087,7 +3104,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "measure on, the module with a MacrobenchmarkRule with its tests "
                          "and the sections it measures, the gradle tasks that run it, "
                          "the devices attached — and an echolot.yml to start from, every "
-                         "value saying where it came from. Writes nothing.")
+                         "value saying where it came from. Writes only its own line in "
+                         ".echolot/log/runs.jsonl under the working directory.")
     sc.add_argument("--root", default=".", help="repository root (default: the current directory)")
     sc.add_argument("--no-devices", action="store_true", help="do not ask adb")
     sc.add_argument("--json", action="store_true", help="the facts as json")
@@ -3098,8 +3116,9 @@ def build_parser() -> argparse.ArgumentParser:
              description="Reads a Marker Report that is already on disk and prints "
                          "one view of it: an overview of what fired, one "
                          "detector's rows with the evidence kept short, the "
-                         "window and the device, or the markers. Writes nothing. "
-                         "Default: .echolot/out/report.json next to the config.")
+                         "window and the device, or the markers. Writes only its "
+                         "own line in .echolot/log/runs.jsonl. Default: "
+                         ".echolot/out/report.json next to the config.")
     rp.add_argument("report", nargs="?", help="a report.json (default: the last one)")
     rp.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
     rp.add_argument("--detector", "-d", action="append", metavar="ID",
