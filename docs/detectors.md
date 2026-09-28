@@ -10,6 +10,7 @@ A detector is one self-contained `.sql` file. Metadata in the header,
 -- @title: What we are looking for
 -- @why: why it matters
 -- @param: threshold_ms = 50
+-- @identity: location, detail
 
 SELECT name AS location, COUNT(*) AS count,
        ROUND(SUM(dur)/1e6, 2) AS total_ms,
@@ -20,13 +21,25 @@ WHERE dur >= {{threshold_ms}} * 1000000
 GROUP BY name, thread_name;
 ```
 
-Drop the file into `echolot/sql/detectors/` and it is picked up. There is no
+Drop the file into `echolot/sql/detectors/` and it runs. There is no
 registration in code, and `@param` values are the defaults the project config
-overrides.
+overrides. Running is not the same as shipping, though — what else a new
+detector needs is in [the checklist below](#adding-a-detector).
 
 The column contract is shared: `location`, `count`, `self_ms`, `total_ms`,
 `max_ms`, `covered_ms`, `detail`. Not every detector fills every column, but
 the report renders uniformly and the agent reads a stable schema.
+
+`@identity` names the columns that tell one row of the result from another —
+what the query groups by, as it reaches the report. It defaults to `location`
+and has to include it. The example groups by the thread as well as the name,
+so it says `location, detail`. Left at the default, two threads running the
+same name come out as two rows of one trace, and merging repeats — which folds
+rows on their identity — puts a single median across both. `compare` pairs
+rows on the identity too, and would match either thread against either. A
+column named there is part of the row's name rather than evidence, which is
+also why `compare` shows `detail` in its Evidence column only for detectors
+that list it.
 
 ## The context views
 
@@ -36,12 +49,22 @@ project-specific belongs inside a detector.
 | view | what is inside |
 |---|---|
 | `_proc` | the target process (exactly one) |
-| `_slice` | every slice of the process, with its thread and an `is_main_thread` flag |
+| `_slice` | every **thread** slice of the process, with its thread and an `is_main_thread` flag |
+| `_aslice` | the process's **async** sections — `Trace.beginAsyncSection`, on a track of the process and on no thread |
+| `_anchor` | `_slice` and `_aslice` together, name and time only — what the scenario anchors match |
 | `_window` | `ts_start` / `ts_end` of the scenario window |
-| `_slice_win` | slices **overlapping** the window |
+| `_slice_win` | thread slices **overlapping** the window |
+| `_aslice_win` | async sections **overlapping** the window |
 | `_tstate_win` | thread states **clipped** to the window |
 | `_cpu_in_slice` | time **on CPU inside** top-level slices |
 | `_claimed_name` | slice names a `*name_glob*` already speaks for |
+
+The async ones are kept apart on purpose. A section on no thread has no place
+in a sum per thread — counted with the rest it would land under no thread, at
+a depth of its own, and every self-time and coverage figure would be off by
+its length. So no shipped detector reads `_aslice_win`. The markers table in
+every report does: the project's own names are usually async, and it measures
+them by name rather than by thread.
 
 `_claimed_name` is the set's own vocabulary, collected from every shipped
 detector's masks with the project's overrides applied. It is there for
@@ -188,8 +211,12 @@ computed by a view. While the window *was* a view, every reference to
 `_slice_win` recomputed it, and on a 475k-slice trace a run did not finish
 within ten minutes.
 
-Hence the two phases: `context.sql` finds the window, the CLI reads it, and
-`window.sql` builds everything else on top of plain numbers.
+Hence the phases: `context.sql` finds the window, the CLI reads it, and
+`window.sql` builds everything else on top of plain numbers. `environment.sql`
+is a third, run on the same numbers right after it: the clock, the
+temperature, throttling and memory the report states every duration under.
+Nothing in it is a detector — no threshold, no finding — and its views are
+there for a detector that wants them all the same.
 
 ## Self time versus total time
 
@@ -286,9 +313,11 @@ is guessable.
 
 The same goes for what a value looks like after trace_processor has finished
 with it. A thermal zone arrives as a track named `cpu-therm Temperature` and
-not `cpu-therm`. Temperatures arrive in degrees where the kernel wrote
-millidegrees, and meminfo in bytes where `/proc` wrote kilobytes. Build a
-five-line trace carrying the events you care about, query it, and look.
+not `cpu-therm`. A temperature arrives in millidegrees, as the kernel wrote it
+— `environment.sql` divides by a thousand — while meminfo arrives in bytes
+where `/proc` wrote kilobytes. One unit is converted on the way in and the
+other is not, and nothing but a query says which. Build a five-line trace
+carrying the events you care about, query it, and look.
 
 ### Everything must survive being run twice
 
@@ -301,6 +330,48 @@ explicit `DROP TABLE IF EXISTS` shown above.
 
 The symptom is a detector that works alone and fails in a full run, which
 sends you reading the query instead of the session.
+
+## Adding a detector
+
+A file in `echolot/sql/detectors/` runs on the next `analyze`. Shipping it
+takes more. The first two things below fail the build until they are done.
+The other three decide what the tool does with the detector once it runs —
+what survives a merge, which overrides it accepts, which masks `names` can see
+— and a mistake there fails nothing until somebody reads the report or writes
+a config.
+
+- **A problem planted for it in the fixture.** `doctor`'s self-check counts
+  the detector files, and "every shipped detector ran, and every one fired"
+  fails until `echolot/fixture.py` plants something the new one finds — or
+  until `SILENT_ON_FIXTURE` in `echolot/selftest.py` names it, with the reason
+  the fixture is the wrong shape to hold one, the way it names `anr_risk`.
+  Then the checks that pin what it must find and what it must not, beside the
+  others in `selftest.py`.
+- **The counts in the README.** `tests/test_docs.py` reads the number in
+  "runs twelve SQL detectors", in the flowchart's `12 SQL detectors` and in
+  the sample report's `Detectors fired: **N of 12**`, and fails while any of
+  them disagrees with the files. `tests/test_doc_samples.py` holds the sample
+  report itself to what the renderer prints, down to the **Silent** line,
+  which names every detector that did not fire. The detector tables in the
+  README and in `references/report.md` are lists kept by hand.
+- **Only part of a row survives a merge.** Repeats are folded row by row, and
+  a merged row keeps its `@identity` columns, `runs`, the numeric contract
+  columns — `count`, `self_ms`, `total_ms`, `max_ms` and `covered_ms`, as
+  medians — and `detail`, taken from the worst repeat unless the identity
+  already holds it. A column the detector invents is rendered in a report of
+  one trace and is gone from a report of five, so what a reader needs goes
+  into `detail`.
+- **A threshold keeps the kind of its default.** An override from
+  `echolot.yml` or from `--set` must be what the `@param` default is — a
+  number for a number, a string for a string, and a bool is neither — and a
+  key the detector does not declare is refused. Both stop `analyze` with exit
+  2 before a trace is opened, so the default decides: `16` makes a number of
+  the parameter, `*GC` a string.
+- **A mask says so in its name.** A parameter with `name_glob` in its name is
+  read as a mask over slice names — by `names`, and by `_claimed_name`, which
+  keeps `repeated_work` off what another detector speaks for — and `names`
+  reads one with `skip_glob` as an exclusion. A mask named anything else still
+  works in the query and is invisible to both.
 
 ## Robustness
 

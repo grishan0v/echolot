@@ -55,4 +55,4 @@ Reference material the agent reads, under
 | `report.md` | the Marker Report schema — the shape of `report.json` |
 | `config.md` | the `echolot.yml` schema, field by field |
 | `naming.md` | how ART names things, and what the detector masks match |
-| `collect.md` | capturing a trace by hand, without `collect` |
+| `collect.md` | capturing a trace by hand, without `collect` — and what happens while a `collect` runs and when it fails |

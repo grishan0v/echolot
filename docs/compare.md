@@ -19,15 +19,18 @@ echolot compare old.json new.json     # exactly those two
 It writes `comparison.md` and `comparison.json` next to the report, by the same
 rule `analyze` uses: a relative `-o` is taken from the config's directory, so
 running it from a build folder full of traces still lands the output in the
-project. Without a config it prints to stdout and writes nothing.
+project. The config is `echolot.yml` in the working directory; `-c` names
+another, although `--help` does not list the flag. Run from a folder without
+one — or with a `-c` that does not load — it prints the comparison and writes
+nothing, and says so on stderr.
 
 ## What the table says
 
 | Where | Evidence | Detector | Before | After | Δ | N | Ranges |
 |---|---|---|---|---|---|---|---|
-| SyncAdapter.onPerformSync | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
-| TeamRepository.loadAll | main | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | apart |
-| inflate | main | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | overlap |
+| SyncAdapterThre | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
+| TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | apart |
+| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | overlap |
 
 **One table, not one section per detector.** The Marker Report is grouped by detector
 because each answers a different question. A comparison has one question, so
@@ -45,6 +48,15 @@ places, and the millisecond column alone cannot tell them apart.
 **`±` is the furthest a repeat strayed from the median**, not a standard
 deviation. Exact bounds and the per-run values are in `comparison.json`.
 
+**`Evidence` appears where it tells two rows apart.** It is filled only for a
+detector that names its rows by `detail` as well as by location.
+`main_thread_block` groups by thread, and its evidence is the main thread's
+name as the kernel keeps it — `com.example.app` here. Everywhere else the cell
+is `—`: evidence that differs between the rounds would be a coin toss to show.
+Thread names are cut the same way wherever they appear: `uninstrumented_cpu`
+names threads, and `SyncAdapterThread-1` reaches the trace as
+`SyncAdapterThre`, fifteen characters.
+
 ## The Ranges column
 
 This is the column that decides whether a row is worth acting on.
@@ -53,7 +65,7 @@ This is the column that decides whether a row is worth acting on.
 |---|---|
 | `apart` | every repeat after fell outside everything seen before — the move survives a re-record |
 | `overlap` | the ranges intersect: some run before was already as slow as some run after |
-| `—` | one side had a single trace, so there is nothing to test against |
+| `—` | nothing to test against: the row is on one side only — it appeared or went — or one side had a single trace |
 
 `overlap` does not mean the row is uninteresting. It means the repeats disagree
 among themselves by more than the medians moved, and the honest next step is
@@ -91,6 +103,11 @@ So rows are paired in two passes: exact name first, then by name family, which
 collapses digits and hex the way `echolot names` does when it builds its
 inventory.
 
+A name carrying the config's `instrumentation.temp_prefix` keeps its digits:
+`AGENTTMP_fill_v4` and `AGENTTMP_fill_v6` are two markers somebody wrote to
+tell two things apart, not one marker renamed. `compare` takes the prefix from
+the config only, so without one planted markers fold like any other name.
+
 The second pass only fires when the family is unambiguous — exactly one
 unmatched row on each side. With two workers before and three after there is no
 honest way to say which became which, and they stay listed as appeared and
@@ -114,8 +131,9 @@ top, the way the Marker Report already states an anchor that never matched.
 | `runs` | different numbers of repeats; the narrower range is the smaller sample |
 | `single` | one trace on a side: no spread, so the Ranges column is empty throughout |
 | `detectors` | the two runs did not use the same set of detectors |
-| `environment` | the clock the two rounds ran at differs by 10% or more, or one side has no clock recorded at all |
-| `environment-thermal` | the kernel throttled the device during one round and not the other |
+| `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. Only with that key in the config — without it they are ordinary appeared rows |
+| `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock at all. Two rounds that recorded no platform state get no warning — see below |
+| `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
 
 The one to read first is `environment`, because it is the only one that can
 make the whole table say the opposite of what it looks like. A duration is the
@@ -155,19 +173,24 @@ whether a number is steady: 120 ms from (118, 119, 121) and 120 ms from
 (12, 120, 890) read identically, and only the second one means the next run will
 say something else.
 
-So `analyze` now keeps the per-run values for two columns — the detector's
-ranking metric and `max_ms` — under `spread`:
+So `analyze` now keeps the per-run values of three columns — `self_ms`,
+`total_ms` and `max_ms`, whichever of them a row carries — under `spread`:
 
 ```json
-{ "location": "draw", "runs": "5/5", "self_ms": 125.4,
-  "spread": { "self_ms": { "min": 118.2, "max": 340.1,
-                           "values": [118.2, 121.0, 125.4, 133.7, 340.1] } } }
+{ "location": "draw", "runs": "5/5", "self_ms": 125.4, "total_ms": 130.1,
+  "max_ms": 61.2,
+  "spread": { "self_ms":  { "min": 118.2, "max": 340.1,
+                            "values": [118.2, 121.0, 125.4, 133.7, 340.1] },
+              "total_ms": { "…": "the same shape" },
+              "max_ms":   { "…": "the same shape" } } }
 ```
 
-Two columns rather than all five, because the report staying small is the point
-of it. The ranking metric because every conclusion is drawn from it, and
-`max_ms` because that is where a single slow occurrence shows up at all — and a
-median over maxima across repeats is exactly what hides one.
+Three of the five rather than all of them, because the report staying small is
+the point of it. `self_ms` and `total_ms` because one of the two is the
+detector's ranking metric — self time where it measures one, total otherwise —
+and every conclusion is drawn from it. `max_ms` because that is where a single
+slow occurrence shows up at all, and a median over maxima across repeats is
+exactly what hides one. `count` and `covered_ms` stay medians alone.
 
 `values` holds one entry per repeat **the row was found in**, which is what the
 `runs` column counts: a row with `3/5` has three values, not five. `report.md`
@@ -210,12 +233,13 @@ agent can take the rows worth looking at without parsing any numbers:
 rows[?change == 'appeared' || (change == 'grew' && overlap == false)]
 ```
 
-`overlap: false` means the ranges are apart. `null` means one side had a single
-trace and there was nothing to test.
+`overlap: false` means the ranges are apart. `null` means there was nothing to
+test: the row is on one side only — every `appeared` and `vanished` row — or
+one side had a single trace.
 
 ## In CI
 
-The [README explains](../README.md#there-is-no-ci-gate-on-purpose) why `analyze`
+The [README explains](../README.md#there-is-no-performance-gate-on-purpose) why `analyze`
 does not fail a build against a budget. A comparison is the other shape, and it
 is the one worth having: run `analyze` over the traces the benchmark already
 wrote, compare against yesterday's `report.json`, and keep `comparison.json` as
