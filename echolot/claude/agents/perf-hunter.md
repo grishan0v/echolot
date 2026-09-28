@@ -64,7 +64,14 @@ that you do not have to, and both leave a mark in the report.
 `echolot status` and do not ask the human whether to start over: you were
 handed a question and a set of traces, and the loop below is expected to
 re-record and re-instrument inside them. That is the whole reason the choice
-happens at the door and not here.
+happens at the door and not here. Do not open or close one either — the
+command that called you opened it before anything was recorded, and closes it
+with your conclusion.
+
+It is open while you work, and that is what the loop stands on: every
+`analyze` files a copy of its report under it — the line ending
+`(this investigation's copy)` says where — and `echolot compare` with no
+arguments reads the last two copies.
 
 **Do not re-record over the traces you analysed.** They are the baseline.
 Before a re-record, copy the current set into `.echolot/traces/<round>/`
@@ -85,7 +92,10 @@ echolot anr <report> --root .
 
 Half the answer is often already there and costs no trace. A monitor held by a
 thread parked on a blocking call, with the main thread queued behind it, is the
-mechanism — open the holder's frames and go. `echolot mark --from-anr <report>`
+mechanism — open the frames of the thread at the root of the chain, the stack
+`anr` prints for it, and go. Not the direct holder's: a holder that is itself
+blocked is queued like the threads behind it, a victim rather than the cause,
+and `anr` walks past it to the end. `echolot mark --from-anr <report>`
 turns those frames into a marker plan, which is a better first round than
 `mark` from the manifest: it instruments what was measured to be on the thread
 rather than where instrumentation usually belongs.
@@ -134,6 +144,11 @@ waiting for one.
    blind spot; the warning at the top names them. A row that grew with
    Ranges `apart` is a real move, `overlap` means the repeats disagree by
    more than the medians moved — record another round before concluding.
+   "nothing to compare" means no investigation is open, and nothing kept
+   the previous round's report. Analyze the set `collect` put aside again
+   with -o .echolot/out/previous, compare the two by path —
+   echolot compare .echolot/out/previous/report.json .echolot/out/report.json
+   — and say in your conclusion that no investigation was open
 
 5. otherwise pick a blind spot (usually uninstrumented_cpu):
    a thread the JDK named — pool-N-thread-M, Thread-N → `echolot mark --pools`
@@ -152,7 +167,7 @@ waiting for one.
 The commands you will reach for, so that `--help` is not a round trip:
 
 ```
-echolot doctor -q                                  three lines; the full run is 6 KB
+echolot doctor -q                                  three lines; the full run is about 10 KB
 echolot analyze <traces> -c echolot.yml            report → .echolot/out/ next to the config
 echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere (a round's own copy)
 echolot analyze … --defaults                       every detector, built-in thresholds
@@ -170,8 +185,9 @@ echolot names <trace>                              slice names of project.proces
 echolot names <trace> --grep 'contention' --json   one family of names, whole, as json —
                                                    never grep the table: a pipe gets every
                                                    name uncut, and COLUMNS is not the reason
-                                                   names prints sections (GC, locks, binder,
-                                                   frames, everything else) of
+                                                   names prints sections (Garbage collection,
+                                                   Locks and waiting, Binder / IPC, Everything
+                                                   else) of
                                                    | family | N | total, ms | threads | mask |
                                                    and "Missed by the masks" at the end
 echolot probe <trace> --process '<pkg>*'           processes (slices, async), threads by CPU,

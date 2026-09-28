@@ -29,11 +29,13 @@ echolot status --next   # the same as one word, for switching on
 
 | `next` | what to do |
 |---|---|
-| `init` / `init-force` | run `echolot init` (add `--all` when it says so), then run `echolot` again |
+| `init` | run `echolot init`, then run `echolot` again |
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | build `echolot.yml` — run `echolot guide setup` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |
-| `resume-or-new` | an investigation was left open. Show `echolot hunt` and ask the human: carry on, or start a new one — `echolot hunt --resume` or `echolot hunt "<their question>"` |
+| `resume-or-new` | an investigation was left open. Show `echolot hunt` and ask the human: carry on (`echolot hunt --resume`, then `echolot guide hunt` inside it), or start a new one (`echolot guide hunt`, which opens it) |
+| `init-force` | files in `.claude/` may carry edits made here, and `echolot init --all` would overwrite them. Run `echolot init`, show the files it marks `≠`, and ask the human: overwrite them (`echolot init --all`), or keep them. Either way, go on as for `hunt` |
+| `fix-settings` | `.claude/settings.json` does not parse, and no flag of `init` can fix it. Show the `layer` line — it says what to merge in — and tell the human to fix the file by hand, then go on as for `hunt` |
 | `hunt` | find the regression — run `echolot guide hunt` |
 
 ## The order of work
@@ -52,6 +54,7 @@ file up with jq puts a window's worth of json into your context for a line.
 
 ```bash
 echolot compare                            # what moved since the previous round
+echolot compare --hunt <n>                 # an investigation's first report against its last
 echolot compare <before.json> <after.json> # or name the two reports
 ```
 
@@ -84,11 +87,11 @@ calibrated ones. Calibrated on the very runs that hold the regression means the
 bar sits above it: look with `echolot analyze … --defaults` before calling a
 run clean.
 
-**`frame_jank` is about single frames, not totals.** The other six aggregate by
-name and gate on sums, which is right for "cold start got slower" and blind to
-a heavy tail: one 86 ms frame among thousands disappears into every sum there
-is. This one reads SurfaceFlinger's per-frame record instead, so it needs no
-instrumentation and answers a question the rest cannot.
+**`frame_jank` is about single frames, not totals.** Most of the others
+aggregate by name and gate on sums, which is right for "cold start got slower"
+and blind to a heavy tail: one 86 ms frame among thousands disappears into
+every sum there is. This one reads SurfaceFlinger's per-frame record instead,
+so it needs no instrumentation and answers a question the sums cannot.
 
 Its `total_ms` and `max_ms` are time **past the deadline**; the frame's own
 length is in `detail`, which is where a benchmark's percentiles can be matched.
@@ -103,9 +106,16 @@ that did not ask for it. Check before calling a scenario smooth.
 ## From a finding to the code
 
 1. A firing detector gives a `location` — a slice or thread name.
+   A row with `code` has already been placed: `places[].file` and `.line`
+   name the method that waited for a lock and the one holding it, or the
+   class a View slice is. Open that; skip the grep.
 2. The `domains` section of `echolot.yml` maps that name to a module and file.
-3. Not there? Grep the repository for the slice name: it is a string literal
-   inside `trace("...")`, survives minification, and is found exactly.
+3. Not in `domains`? Run `echolot domains --root .` — it maps literals inside
+   `trace("...")` and names kept in a `const val` and passed through the
+   project's own wrapper; a hint ending in `via X` names what to grep for at
+   that line. Still nothing? Grep the repository for the slice name: a literal
+   survives minification and is found exactly, and a constant's declaration
+   is one grep away from its calls.
 4. Nothing found? The slice is most likely a system one (`bindApplication`,
    `Choreographer#doFrame`, `binder transaction`).
 

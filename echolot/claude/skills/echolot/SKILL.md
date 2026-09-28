@@ -35,12 +35,14 @@ Show that output to the human as it is, then act on the `next` line
 
 | `next` | what you do |
 |---|---|
-| `init` / `init-force` | run `echolot init` (with `--all` when it says so), show the result; then run `echolot` again and continue from its new `next` |
+| `init` | run `echolot init`, show the result; then run `echolot` again and continue from its new `next` |
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | invoke the `echolot-setup` skill (the Skill tool) — it builds `echolot.yml` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |
 | `resume-or-new` | **ask before attaching to anything** — see below |
-| `hunt` | invoke the `echolot-hunt` skill (the Skill tool) — **never run the loop here**; it asks what regressed and hands the work to `perf-hunter`, waiting for its answer |
+| `init-force` | files in `.claude/` may carry edits made here, and `echolot init --all` would overwrite them — **ask first**, see below |
+| `fix-settings` | `.claude/settings.json` does not parse, so echolot's permission is not in it and no flag of `init` can put it there. Show the `layer` line — it says what to merge in — and tell the human to fix the file by hand, then do what the `hunt` row says |
+| `hunt` | invoke the `echolot-hunt` skill (the Skill tool) — **never run the loop here**; it asks what regressed and after which change, opens the investigation, hands the work to `perf-hunter` and waits for its answer, then closes the investigation with it |
 
 ## `resume-or-new`: whose question are we answering
 
@@ -55,19 +57,21 @@ and anything that drifted since. **Show that recap as it is**, then ask with
 
 | the human picks | what you do |
 |---|---|
-| carry on | `echolot hunt --resume`, then the `echolot-hunt` skill with the recorded question |
-| something new | `echolot hunt "<their question>" --since "<the change, or unknown>"`, then the `echolot-hunt` skill |
+| carry on | `echolot hunt --resume`, then the `echolot-hunt` skill, saying the human chose to carry on: it works inside that investigation, with the question and the change it recorded |
+| something new | the `echolot-hunt` skill with their question: it asks for the change and opens the new investigation before anything is recorded for it |
 | just show the report | print `.echolot/out/report.md` and stop |
 
 Lean towards "something new" when the recap shows a `!` line — the scenario
 changed, the config changed, or it has been untouched for over a week.
 
-`echolot hunt "<question>"` moves the previous set of traces aside before anything is
-recorded, so the new investigation cannot inherit them, and it says on stderr
-if the previous one left `AGENTTMP_` markers in the sources. **Deal with those
-before hunting**: `echolot mark --remove` takes out what `mark --apply` wrote,
-and anything added by hand has to go by hand. Instrumentation nobody meant to
-leave behind is the starting condition of the next investigation otherwise.
+A new investigation is opened by `echolot hunt "<question>"`, which the
+`echolot-hunt` skill runs. It moves the previous set of traces aside before
+anything is recorded, so the new investigation cannot inherit them, and it
+says on stderr if the previous one left `AGENTTMP_` markers in the sources.
+**Deal with those before hunting**: `echolot mark --remove` takes out what
+`mark --apply` wrote, and anything added by hand has to go by hand.
+Instrumentation nobody meant to leave behind is the starting condition of the
+next investigation otherwise.
 
 When the human's own words already name a different question — `/echolot why
 does the list stutter` while the open investigation is about cold start — still
@@ -79,25 +83,47 @@ re-records and re-instruments on purpose, works inside an investigation it was
 handed, and never calls `status` at all. And within half an hour of the last
 `collect` or `analyze` — that is the same sitting, and `next` says `hunt`.
 
-With an argument, the argument wins over the state:
+## `init-force`: edits made here
+
+The package has moved on from files this project edited (`conflict`), or from
+files nothing can tell apart from an edit (`differs` — a layer installed before
+echolot kept a manifest). `echolot init` leaves them alone;
+`echolot init --all` overwrites them, and the edit goes with the old copy.
+
+Run `echolot init`: it touches nothing edited here and lists each file `--all`
+would overwrite on a `≠` line — the `customised` ones too, since `--all` does
+not choose. Show those lines, then ask with `AskUserQuestion`:
+
+| the human picks | what you do |
+|---|---|
+| overwrite them | `echolot init --all`, then `echolot` again and continue from its new `next`. Say that the edits are in git, to carry over by hand |
+| keep them | leave them, and do what the `hunt` row says. `next` asks again while they differ from the package |
+
+Never run `echolot init --all` without that answer.
+
+## With an argument
+
+The argument wins over the state:
 
 - `/echolot init` — run `echolot init`. Not setup: `init` installs or
   updates **this** layer; the config is setup's job.
 - `/echolot setup` — the `echolot-setup` skill.
-- `/echolot hunt <words>` — the `echolot-hunt` skill, with the words as what
-  regressed. `/echolot <free text>` about slowness ("why is startup slow",
-  "the list stutters since the redesign") means the same.
+- `/echolot hunt <words>` — a hunt for that question, and the
+  `resume-or-new` question is not asked: the words are what regressed. It
+  is the `echolot-hunt` skill with those words. The skill asks for the
+  change, opens the investigation with `echolot hunt "<words>" --since …` —
+  the same word in a shell, which does that half and nothing else — hands
+  the loop to `perf-hunter`, and closes the investigation with its answer.
+  `/echolot <free text>` about slowness ("why is startup slow", "the list
+  stutters since the redesign") means the same.
 - `/echolot doctor`, `/echolot status`, `/echolot analyze …` — run that
   command, show the output.
-- `/echolot hunt <words>` — that question, without asking first. It is the
-  same word as `echolot hunt <words>` in a shell, and does the same thing
-  plus the loop: the CLI half opens the investigation, the agent half runs it.
+- `/echolot reflect` — the `echolot-reflect` skill: how the last session
+  went, what to change in the tool.
 
 Every argument after `/echolot` is a CLI verb of the same name, except
 `setup` — that one needs an agent and has no shell half. Where a verb has
 both, `/echolot X` runs `echolot X` and then whatever loop it needs.
-- `/echolot reflect` — the `echolot-reflect` skill: how the last session
-  went, what to change in the tool.
 
 `/echolot-setup`, `/echolot-hunt` and `/echolot-reflect` still exist for
 whoever knows where they are going; `/echolot` is the door for everyone else.
@@ -158,13 +184,14 @@ no device and no trace.
 echolot anr report.txt --root .
 ```
 
-Reads and prints — it opens no investigation and writes nothing, so a folder of
+Reads and prints — it opens no investigation and leaves nothing on disk but
+the line every command adds to `.echolot/log/runs.jsonl`, so a folder of
 exports goes through it in one loop and the ones worth chasing are the ones
 that name a lock chain.
 
 | what it says | your next move |
 |---|---|
-| a lock chain with the main thread behind it | you have the mechanism. Open the holder's frames; no trace needed |
+| a lock chain with the main thread behind it | you have the mechanism. Open the frames of the thread at the root of the chain — the stack `anr` prints for it. The direct holder is often queued itself, a victim like the threads behind it. No trace needed |
 | the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working — each is listed by the frame nearest the app, with its top beside it |
 | "every frame belongs to the platform or a library", then "the frames nearest to the app" | the platform is a dead end, a library the app drives is not: `SystemJobScheduler.cancel` points at the app's WorkManager setup. Read that setup |
 | "Who was holding what" under what it does not say | this file carries no lock notes; an empty chain list is the file's limit, not the freeze's. Get the device's own record |
@@ -213,11 +240,11 @@ expanded to the whole trace and none of the numbers are about your scenario.
 Fix the config rather than hunting a problem. Same for `process_alternatives` —
 you may be analysing the wrong process.
 
-**`frame_jank` is about single frames, not totals.** The other six aggregate by
-name and gate on sums, which is right for "cold start got slower" and blind to
-a heavy tail: one 86 ms frame among thousands disappears into every sum there
-is. This one reads SurfaceFlinger's per-frame record instead, so it needs no
-instrumentation and answers a question the rest cannot.
+**`frame_jank` is about single frames, not totals.** Most of the others
+aggregate by name and gate on sums, which is right for "cold start got slower"
+and blind to a heavy tail: one 86 ms frame among thousands disappears into
+every sum there is. This one reads SurfaceFlinger's per-frame record instead,
+so it needs no instrumentation and answers a question the sums cannot.
 
 Its `total_ms` and `max_ms` are time **past the deadline**; the frame's own
 length is in `detail`, which is where a benchmark's percentiles can be matched.

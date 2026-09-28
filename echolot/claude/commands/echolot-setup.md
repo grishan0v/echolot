@@ -34,8 +34,14 @@ it came from:
   candidates, and `domains` entries), its runner arguments, and the gradle
   tasks by variant
 - the devices attached
-- a config to start from, every value with `_source: derived` and its
-  `_evidence` — the skeleton the questions below refine
+- a config to start from — the skeleton the questions below refine. What
+  it read off the tree says `_source: derived` with its `_evidence` (the
+  package and process, an end anchor taken from a `TraceSectionMetric`);
+  what it could not read is an engine default and says `_source: default`
+  (the start anchor, and an end it did not find, written `"?"`). The
+  `runner` section carries `_evidence` alone, and `instrumentation` neither
+  — its `allowed` list is every module's `src/main` the scan found, test
+  modules left out, for the human to confirm in question 4
 
 Do not read `build.gradle` yourself for any of this; `scan --json` has the
 facts if a value needs checking. Then existing instrumentation:
@@ -57,7 +63,9 @@ it when the first report has nothing of the application's to name.
 
 Capture a cold start with `echolot collect -c echolot.yml -n 1`, or by the
 recipe in `references/collect.md` if there is no config yet. Check that a
-device is connected (`adb devices`).
+device is connected (`adb devices`). `-n 1` holds in `launch` and `command`
+mode; in `gradle` mode the macrobenchmark sets its own iteration count and
+`-n` never reaches it, so the probe is the whole set it records.
 
 ### 3. Reconnaissance
 

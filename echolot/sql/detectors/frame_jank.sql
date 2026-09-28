@@ -8,11 +8,12 @@
 -- @param: min_overrun_ms = 4
 -- @calibrate: min_frames = top10(count) * 1.5
 --
--- The other six aggregate by slice name and gate on accumulated sums. That is
--- the right shape for "cold start got slower" and the wrong one for a heavy
+-- Most of the others aggregate by slice name and gate on accumulated sums. That
+-- is the right shape for "cold start got slower" and the wrong one for a heavy
 -- tail: one frame of 86 ms among thousands over 48 seconds disappears into
 -- every sum there is. A benchmark reporting P50 14.7 ms and P99 86 ms was met
--- with silence from all six, and not because any of them was broken.
+-- with silence from all six detectors of the time, and not because any of them
+-- was broken.
 --
 -- SurfaceFlinger already knows. Since Android 12 the frame timeline records,
 -- per frame, the deadline it was given and what it actually took, with a
