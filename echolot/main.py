@@ -847,11 +847,11 @@ def _setup_context(tp, cfg: Config, upid: int,
 def _claim_names(tp, overrides: dict) -> None:
     """`_claimed_name` — every slice name a detector's mask already speaks for.
 
-    Ten of the eleven detectors know what they are looking for and say so in a
-    `*name_glob*` param: `*GC`, `Lock contention on a monitor lock*`, `binder
-    transaction`. `repeated_work` is the one that does not — it asks a
-    question about shape and so has to look at every name there is, which
-    means it also looks at names that belong to somebody else.
+    Three of the twelve detectors know the names of what they are looking for
+    and say so in a `*name_glob*` param: `*GC`, `Lock contention on a monitor
+    lock*`, `binder transaction`. `repeated_work` knows no name in advance —
+    it asks a question about shape and so has to look at every name there
+    is, which means it also looks at names that belong to somebody else.
 
     Twice that produced a row that was already in the report under its own
     heading, and both times the shape was the same: a slice the platform
@@ -1749,11 +1749,13 @@ def cmd_anr(args) -> int:
     """A thread dump from the field, read the way the report reads a trace.
 
     Reconnaissance rather than an investigation, and that is the whole reason
-    it is its own verb. It reads a file and prints; nothing lands on disk and
-    no hunt is opened. That is what makes it composable — a folder of exports
-    from the console goes through it in one loop, and out of ten reports the
-    two worth chasing are the ones that name a lock chain. Opening ten
-    investigations to learn that would be the wrong shape.
+    it is its own verb. It reads a file and prints; no hunt is opened, and
+    the one thing written is its line in .echolot/log/runs.jsonl — the line
+    `main` appends for every command unless ECHOLOT_NO_RECORD is set. That is
+    what makes it composable — a folder of exports from the console goes
+    through it in one loop, and out of ten reports the two worth chasing are
+    the ones that name a lock chain. Opening ten investigations to learn that
+    would be the wrong shape.
     """
     from . import anr as anr_mod
 
@@ -2863,7 +2865,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "of the manifest — what was on the stack when it froze")
     mk.add_argument("--apply", action="store_true", help="insert the applicable markers")
     mk.add_argument("--remove", action="store_true",
-                    help="delete every line tagged `// echolot:mark` under --root")
+                    help="delete the lines --apply wrote under --root; a line "
+                         "that carries the `// echolot:mark` tag in any other "
+                         "shape is listed with its file and line, and left "
+                         "for you to clean by hand")
     mk.add_argument("--json", action="store_true", help="the plan as JSON")
     mk.set_defaults(func=cmd_mark)
 

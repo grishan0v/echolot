@@ -5,8 +5,9 @@ name: publish
 #     git tag vX.Y.Z && git push origin vX.Y.Z
 #
 # Three jobs, in order: build the sdist and wheel; upload them to PyPI; create
-# the GitHub Release for the tag with the same two files attached and the
-# notes generated from the commits since the previous tag.
+# the GitHub Release for the tag with the same two files attached, and notes
+# that list the pull requests merged since the previous tag under a link to
+# the version on PyPI.
 #
 # PyPI authentication is Trusted Publishing (OIDC): no token lives in the
 # repository. PyPI must know this workflow — see docs/publishing.md.
@@ -15,11 +16,12 @@ on:
   push:
     tags: ["v*"]
 
-# The floor, so a job holds only what it declares. `publish` adds id-token and
-# `release` adds contents:write below; `build` needs neither and now says so.
-# It runs `python -m build`, which executes setup code out of the checked-out
-# tree, and it was the one workflow of the three without this line — in the
-# workflow that also carries PyPI's trust relationship.
+# The floor, so a job holds only what it declares. `publish` and `release`
+# declare their own below — id-token, and contents:write — and a job's block
+# replaces this one rather than adding to it; `build` needs neither and now
+# says so. It runs `python -m build`, which executes setup code out of the
+# checked-out tree, and it was the one workflow of the three without this
+# line — in the workflow that also carries PyPI's trust relationship.
 permissions:
   contents: read
 
