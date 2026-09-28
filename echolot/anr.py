@@ -210,9 +210,16 @@ PLAY = Source(
 SOURCES = (CRASHLYTICS, DUMPSYS, PLAY)
 
 # Packages that belong to the platform, the runtime and the libraries every app
-# carries. Used only to decide which frames are worth printing — a stack of
-# twenty `java.util.concurrent` frames says nothing about the app that owns it.
-# Getting this wrong hides a frame; it never invents one.
+# carries — a stack of twenty `java.util.concurrent` frames says nothing about
+# the app that owns it.
+#
+# Which frames are the app's own is this list's answer only when there is no
+# checkout to ask, and a list has a hole in it: a library it has not heard of
+# reads as the app's. `dagger`, `koin` and `sentry` did, and their frames came
+# out as the project's code the checkout was missing — the sign of a report
+# from another build, given on the build that froze. With a checkout the
+# packages its sources declare decide instead (see `Ownership`), and this list
+# is only a veto there.
 #
 # Two tiers, because they read differently. CORE is the platform and the
 # runtime: a frame there is a dead end, nobody configures `android.os.Looper`.
@@ -231,6 +238,77 @@ LIBRARIES = (
     "com.google.", "okhttp3.", "okio.", "retrofit2.", "io.reactivex.",
 )
 PLATFORM = CORE + LIBRARIES
+
+
+def _package_of(frame: str) -> str:
+    """The package a frame's class is declared in: `pkg` of `pkg.Class$1.run(…)`."""
+    owner = frame.split("(", 1)[0].strip().rsplit(".", 1)[0].split("$", 1)[0]
+    return owner.rsplit(".", 1)[0] if "." in owner else ""
+
+
+@dataclass(frozen=True)
+class Ownership:
+    """Which frames are this project's own code, and what that was decided by.
+
+    From outside a checkout it is a guess: the report's own package, and
+    anything not under a root in the lists above. That guess is where a
+    library nobody listed came through.
+
+    A checkout settles it instead. Its sources say which packages they are
+    in, and a frame in none of them, nor below one, nor in the report's own
+    package, is somebody else's code whether or not the list has heard of the
+    library. The list is still consulted there, as a veto: a test stub that
+    declares `package android.util` does not make `android.util.Log` the
+    project's.
+
+    A frame R8 renamed into a package of its own — `a.b.c(SourceFile:12)` —
+    is in nothing a checkout declares, and reads as somebody else's once one
+    is read. Such a report wants retracing before anything is placed.
+    """
+    package: str = ""
+    # The packages the checkout's sources declare. None when no checkout was
+    # read, and when the one that was declares nothing.
+    declared: frozenset[str] | None = None
+
+    @property
+    def prefixes(self) -> tuple[str, ...]:
+        """The report's own package, and — without a checkout — its root.
+
+        Needed first for an app whose package sits under a platform root,
+        which the lists alone would strike out. Code under a second root of
+        the same company — `ru.example.app` shipping modules as
+        `com.example.*`, which is what the sample reports do — needs nothing
+        here: without a checkout it is not platform and survives on that, and
+        a checkout declares it.
+
+        The root goes once a checkout is read. It was a guess at where the
+        rest of the project lives, and kept, it claims what is not here: a
+        company SDK under the same root, counted as this checkout's missing
+        code and so as a sign of the wrong build.
+        """
+        if not self.package:
+            return ()
+        parts = self.package.split(".")
+        if self.declared is not None or len(parts) < 2:
+            return (self.package,)
+        return (self.package, ".".join(parts[:2]))
+
+    def claims(self, frame: str) -> bool:
+        """Whether this frame is the project's own code."""
+        # Up to the dot: `com.example.app` is not the root of
+        # `com.example.application`.
+        if frame.startswith(tuple(p + "." for p in self.prefixes)):
+            return True
+        if frame.startswith(PLATFORM):
+            return False
+        if self.declared is None:
+            return True
+        package = _package_of(frame)
+        while package:
+            if package in self.declared:
+                return True
+            package = package.rpartition(".")[0]
+        return False
 
 
 @dataclass
@@ -267,16 +345,11 @@ class Thread:
             return self.frames[0]
         return self.native[0] if self.native else "(no frames)"
 
-    def own(self, prefixes: tuple[str, ...]) -> list[str]:
-        """Frames that are neither platform nor a common library.
+    def own(self, ours: Ownership) -> list[str]:
+        """The frames that are the project's own code — see `Ownership`."""
+        return [f for f in self.frames if ours.claims(f)]
 
-        An app whose own package sits under one of the platform roots would be
-        struck out by the prefix rule alone, so its package wins over it.
-        """
-        return [f for f in self.frames
-                if f.startswith(prefixes) or not f.startswith(PLATFORM)]
-
-    def nearest(self, prefixes: tuple[str, ...]) -> str:
+    def nearest(self, ours: Ownership) -> str:
         """The frame closest to the app: its own, else a library's, else the top.
 
         The top of a working thread is almost always `BinderProxy.transactNative`
@@ -285,7 +358,7 @@ class Thread:
         library it drives when it is not: `SystemJobScheduler.cancel` says
         WorkManager was rescheduling, and the top frame says a binder call.
         """
-        own = self.own(prefixes)
+        own = self.own(ours)
         if own:
             return own[0]
         return next((f for f in self.frames if not f.startswith(CORE)), self.top)
@@ -312,12 +385,16 @@ class Report:
     # What `chains()` worked out, kept once. Not part of the report's content
     # and not compared with anything: see `chains`.
     _chains: "list[Chain] | None" = field(default=None, repr=False, compare=False)
+    # The packages the checkout declares, once `locate` has read one — what
+    # `Ownership` decides by. Not the report's content either.
+    declared: frozenset[str] | None = field(default=None, repr=False, compare=False)
 
     @property
     def package(self) -> str:
         """Crashlytics names the application; the dropbox record names the
         process that hung, which is the same string for a single-process app
-        and the right one to scope to when it is not."""
+        and the right one to scope to when it is not. A trace with no header
+        at all names it only in `Cmd line:`, and `_scoped` copies that up."""
         for key in ("Application", "Process", "Package"):
             value = self.head.get(key, "")
             if value:
@@ -343,19 +420,9 @@ class Report:
         return any(t.lock is not None or t.held for t in self.threads)
 
     @property
-    def prefixes(self) -> tuple[str, ...]:
-        """What counts as this project's own code, beyond the not-platform rule.
-
-        Only needed for an app whose package sits under a platform root. Code
-        under a second root of the same company — `ru.example.app` shipping
-        modules as `com.example.*`, which is what the sample reports do — needs
-        nothing here: it is not platform, so it survives on that alone.
-        """
-        pkg = self.package
-        if not pkg:
-            return ()
-        parts = pkg.split(".")
-        return (pkg,) if len(parts) < 2 else (pkg, ".".join(parts[:2]))
+    def ownership(self) -> Ownership:
+        """What counts as this project's own code in this report."""
+        return Ownership(self.package, self.declared)
 
     def by_tid(self) -> dict[str, Thread]:
         """Threads by tid — the id `held by thread N` refers to.
@@ -541,15 +608,21 @@ def _scoped(report: Report) -> Report:
     An ANR trace holds a block per process — the app that froze first, then
     whatever else the system thought worth dumping. Reading them as one process
     would put another app's stalled thread in this app's findings.
+
+    The block's `Cmd line:` also goes into the header when the header does not
+    name the process. A trace pulled from `/data/anr/` has no header at all,
+    and with one process in it the report was titled "unknown application"
+    while the name was in the file.
     """
     seen = {t.process for t in report.threads if t.process}
-    if len(seen) <= 1:
+    if not seen:
         return report
     target = report.package if report.package in seen else next(
         (t.process for t in report.threads if t.process), "")
-    kept = [t for t in report.threads if t.process == target]
-    report.elsewhere = len(report.threads) - len(kept)
-    report.threads = kept
+    if len(seen) > 1:
+        kept = [t for t in report.threads if t.process == target]
+        report.elsewhere = len(report.threads) - len(kept)
+        report.threads = kept
     if not report.head.get("Process"):
         report.head["Process"] = target
     return report
@@ -759,9 +832,11 @@ def _queues_without_a_note(report: Report) -> list[Chain]:
     thread is blocked and never says by whom — the strongest finding this
     reader has, gone. Most of it comes back without the note: a blocked thread
     is standing in the method it could not enter, so several of them standing
-    in the same one are queued on the same monitor. On a live export seven
-    threads including main sat in one `getCurrentState`, and the Crashlytics
-    report of the same freeze confirms that class is the monitor.
+    in the same class are queued on the same monitor. The class rather than
+    the method, because two synchronized methods of one object take the same
+    lock — `read` and `write` behind one monitor is one queue. On a live
+    export seven threads including main sat in one `getCurrentState`, and the
+    Crashlytics report of the same freeze confirms that class is the monitor.
 
     What cannot be recovered is who holds it. That is said rather than guessed:
     the holder is somewhere among the threads that were working, and picking
@@ -869,6 +944,34 @@ def source_index(root: Path) -> dict[str, list[Path]]:
     return found
 
 
+# `package com.example.app` — Kotlin with no semicolon, Java with one. Only
+# comments and file annotations may come before it, so the head of a file is
+# enough to find it. The head is decoded as `utf-8-sig`: a byte-order mark an
+# editor left on the first line would otherwise keep it from the `^`.
+_PACKAGE = re.compile(r"^[ \t]*package[ \t]+(?P<name>[\w.]+)", re.MULTILINE)
+
+
+def declared_packages(index: dict[str, list[Path]]) -> frozenset[str]:
+    """Every package a source file in the index says it is in.
+
+    Read off the `package` line rather than the directory. Kotlin lets a file
+    live in a directory that does not spell its package out, and the line is
+    what the compiler went by — so it is what the frame says too.
+    """
+    found: set[str] = set()
+    for paths in index.values():
+        for path in paths:
+            try:
+                with path.open("rb") as source:
+                    head = source.read(8192).decode("utf-8-sig", errors="replace")
+            except OSError:
+                continue
+            named = _PACKAGE.search(head)
+            if named:
+                found.add(named.group("name"))
+    return frozenset(found)
+
+
 def place(frame: str, index: dict[str, list[Path]], root: Path) -> Located | None:
     """Where in the repository this frame is, or None when it says nowhere.
 
@@ -889,16 +992,20 @@ def place(frame: str, index: dict[str, list[Path]], root: Path) -> Located | Non
 
     symbol = parsed.group("symbol").strip()
     # `pkg.Class$1.onClick` — the anonymous class is still that package.
-    owner = symbol.rsplit(".", 1)[0].split("$", 1)[0]
-    package = owner.rsplit(".", 1)[0] if "." in owner else ""
-    wanted = "/".join(package.split(".")) if package else ""
+    package = _package_of(symbol)
+    wanted = "/" + package.replace(".", "/") if package else ""
 
     # One file of that name in the whole checkout is not a guess, whatever the
     # package says: Kotlin lets a class live in a directory that does not spell
     # out its package, and warning about that would cry wolf on every one.
+    #
+    # Where the package does settle it, the directory has to end in it, from
+    # one `/` to the file. As a plain substring `com/example/a` is inside
+    # `com/example/app`, and `com.example.a.Mapper` was placed, as certain, in
+    # the other package's `Mapper.kt` with its own sitting in the next module.
     chosen, exact = candidates[0], len(candidates) == 1
     for path in candidates:
-        if wanted and wanted in path.as_posix():
+        if wanted and ("/" + path.relative_to(root).parent.as_posix()).endswith(wanted):
             chosen, exact = path, True
             break
     line = where.group("line")
@@ -932,13 +1039,21 @@ def locate(report: Report, root: Path) -> tuple[list[Located], list[str]]:
     is not in this checkout, or the report is from a version that no longer
     matches it — and both are worth saying rather than rounding down to a
     shorter list.
+
+    Which frames the project owns is the checkout's to say, so this is where
+    it is asked. What its sources declare is kept on the report, and every
+    section `render` prints afterwards draws the line in the same place: a
+    stack that showed `DoubleCheck.get` as the app's own, next to a placement
+    that had set it aside, would be two readings of one file.
     """
     index = source_index(root)
+    report.declared = declared_packages(index) or None
+    ours = report.ownership
     placed: list[Located] = []
     missing: list[str] = []
     seen: set[str] = set()
     for thread in of_interest(report):
-        for frame in thread.own(report.prefixes):
+        for frame in thread.own(ours):
             if frame in seen:
                 continue
             seen.add(frame)
@@ -960,7 +1075,7 @@ def locate(report: Report, root: Path) -> tuple[list[Located], list[str]]:
 
 # --- the report -------------------------------------------------------------
 
-def _stack(thread: Thread, prefixes: tuple[str, ...], limit: int = 8) -> list[str]:
+def _stack(thread: Thread, ours: Ownership, limit: int = 8) -> list[str]:
     """The frames worth printing: the top, the boundary, then the app's own.
 
     Three kinds of frame carry anything. The top says what the thread was
@@ -971,7 +1086,7 @@ def _stack(thread: Thread, prefixes: tuple[str, ...], limit: int = 8) -> list[st
     `Http2Stream.takeHeaders`, and printing only the two ends loses it. Every
     frame in between is the library's own plumbing.
     """
-    own = [f for f in thread.own(prefixes) if f != thread.top]
+    own = [f for f in thread.own(ours) if f != thread.top]
     lines = [thread.top]
     if own:
         edge = thread.frames.index(own[0])
@@ -992,7 +1107,7 @@ def _stack(thread: Thread, prefixes: tuple[str, ...], limit: int = 8) -> list[st
     # Nothing of the app on this stack. The nearest library frame is then
     # the one that says what the thread was doing, and it goes under the
     # top; the native frames, where there are any, sit after it.
-    near = thread.nearest(prefixes)
+    near = thread.nearest(ours)
     if near != thread.top and near not in lines:
         lines.append(near)
     return lines + thread.native[1:3] if len(lines) == 1 else lines
@@ -1003,13 +1118,20 @@ def _nearest_libraries(report: Report) -> list[tuple[str, str]]:
 
     Only when the app itself is on no stack: with own frames in the file the
     library frames are plumbing, and this list would point away from them.
+
+    Below the top, the nearest frame is outside the platform core by
+    construction, and with nothing of the app's anywhere it is a library's,
+    named in `LIBRARIES` or not. Once a checkout decides what is the
+    project's, most libraries are ones the list has not heard of, and asking
+    it here as well would drop them as leads.
     """
-    if any(t.own(report.prefixes) for t in of_interest(report)):
+    ours = report.ownership
+    if any(t.own(ours) for t in of_interest(report)):
         return []
     out = []
     for t in of_interest(report):
-        near = t.nearest(report.prefixes)
-        if near != t.top and near.startswith(LIBRARIES):
+        near = t.nearest(ours)
+        if near != t.top:
             out.append((t.name, near))
     return out
 
@@ -1023,6 +1145,7 @@ def _short(symbol: str) -> str:
 def render(report: Report, code: tuple[list[Located], list[str]] | None = None) -> str:
     """The dump as a findings list — sections that have something to say."""
     out: list[str] = ["# ANR Report", ""]
+    ours = report.ownership
 
     head = report.head
     title = " ".join(x for x in (report.package, head.get("Version", "")) if x)
@@ -1047,7 +1170,7 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
 
     found = chains(report)
     if found:
-        note = ("_several threads standing in the same method are queued on "
+        note = ("_several threads standing in the same class are queued on "
                 "the same monitor — the holder is what this source withheld_"
                 if all(c.inferred for c in found) else
                 "_a monitor held by a thread that is itself waiting is the "
@@ -1055,7 +1178,10 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
         out += ["## What was holding the lock", "", note, ""]
         for chain in found:
             name = chain.named or chain.monitor
-            also = f" (`{chain.monitor}` in the dump)" if chain.named else ""
+            # The raw name only when it says something the resolved one does
+            # not: a monitor that was never obfuscated resolves to itself.
+            also = (f" (`{chain.monitor}` in the dump)"
+                    if chain.named and chain.named != chain.monitor else "")
             who = ", ".join(f"`{t.name}`" for t in chain.waiters[:4])
             if len(chain.waiters) > 4:
                 who += f" and {len(chain.waiters) - 4} more"
@@ -1086,7 +1212,7 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                           "standing on anything of its own:",
                         "", f"**{root.name}** (tid {root.tid}, {root.state}) "
                             f"was on:"]
-            out += ["", "```"] + _stack(root, report.prefixes) + ["```", ""]
+            out += ["", "```"] + _stack(root, ours) + ["```", ""]
 
     main = report.main
     if main is not None:
@@ -1103,15 +1229,15 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                     f"{main.lock.owner}. The section above has the holder.", ""]
         else:
             out += [f"State `{main.state}`, standing on:", ""]
-        out += ["```"] + _stack(main, report.prefixes) + ["```", ""]
+        out += ["```"] + _stack(main, ours) + ["```", ""]
 
-    if report.threads and not any(t.own(report.prefixes)
-                                 for t in of_interest(report)):
+    if report.threads and not any(t.own(ours) for t in of_interest(report)):
         # Said as narrowly as it is checked. "Not this project's code" would
         # need to know which packages are the project's, and an app published
         # as `ru.example.app` routinely ships modules under `com.example.*`.
-        # What can be stated without guessing is that nothing here is outside
-        # the platform and the libraries every app carries.
+        # Without a checkout what can be stated is that nothing here is
+        # outside the platform and the libraries every app carries; with one,
+        # that nothing here is in a package the checkout declares.
         out += ["## Every frame here belongs to the platform or a library", "",
                 "Not one frame outside them in any thread worth reading. The "
                 "freeze is inside something nobody here wrote, and there is no "
@@ -1136,10 +1262,10 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
         # never cover every library, and a thread with no frame of this project
         # anywhere in it is the one a reader can do least with — so it sinks
         # rather than being struck out on a guess.
-        ranked = sorted(others, key=lambda t: (not t.own(report.prefixes),
+        ranked = sorted(others, key=lambda t: (not t.own(ours),
                                                t.state.endswith("waiting")))
         for thread in ranked[:12]:
-            where = thread.nearest(report.prefixes)
+            where = thread.nearest(ours)
             line = f"- **{thread.name}** ({thread.state}) — `{where}`"
             if where != thread.top:
                 # The top said what the thread was standing on; this says
@@ -1179,6 +1305,21 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
     return "\n".join(out).rstrip() + "\n"
 
 
+# Why a file has no reason in it, said of the file that was read. Only the
+# device's own record carries a `Subject`, and the sentence used to say "a
+# Crashlytics export" whatever the input was — while sending the reader to
+# Play Console for the reason, which its export does not carry either.
+_NO_REASON = {
+    CRASHLYTICS.name: "A Crashlytics export carries no reason, component or "
+                      "intent; the device's own record does",
+    PLAY.name: "A Play Console export carries no reason, component or intent; "
+               "the device's own record does",
+    DUMPSYS.name: "This is ART's dump without the drop box's header — a trace "
+                  "pulled from `/data/anr/` has no `Subject:` — and the drop "
+                  "box entry for the same freeze has one",
+}
+
+
 def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
     """What could not be read or was never there.
 
@@ -1187,10 +1328,15 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
     """
     gaps = []
     if not report.reason:
-        gaps.append("- Why the system fired the ANR. A Crashlytics export "
-                    "carries no reason, component or intent — those come from "
-                    "`dumpsys dropbox` and Play Console.")
-    if report.threads and not report.lock_notes:
+        why = _NO_REASON.get(report.source, "This file carries no reason, "
+                             "component or intent; the device's own record does")
+        gaps.append(f"- Why the system fired the ANR. {why}: "
+                    f"`adb shell dumpsys dropbox --print data_app_anr`.")
+    # ART writes the note on every thread waiting for a monitor and every frame
+    # holding one, so the device's own record without a single note says that
+    # none was — which is not a gap, and pointing the reader at that same
+    # record for the notes it already lacks was wrong.
+    if report.threads and not report.lock_notes and report.source != DUMPSYS.name:
         gaps.append("- Who was holding what. No thread in this file carries a "
                     "lock note (`waiting to lock … held by`), so a monitor "
                     "chain cannot be read off it: an empty chain list here "
@@ -1228,6 +1374,7 @@ def summary(report: Report,
     """
     busy = working(report)
     main_thread = report.main
+    ours = report.ownership
     return {
         "schema": 1,
         "source": report.source,
@@ -1254,7 +1401,7 @@ def summary(report: Report,
                     "name": chain.root.name,
                     "tid": chain.root.tid,
                     "state": chain.root.state,
-                    "stack": _stack(chain.root, report.prefixes),
+                    "stack": _stack(chain.root, ours),
                 },
             }
             for chain in chains(report)
@@ -1263,7 +1410,7 @@ def summary(report: Report,
             "state": main_thread.state,
             "idle": idle_reason(main_thread),
             "denied": None if not main_thread.lock else main_thread.lock.cls,
-            "stack": _stack(main_thread, report.prefixes),
+            "stack": _stack(main_thread, ours),
         },
         # `where` is the frame nearest to the app — its own, else a library's
         # — and `top` what the thread stood on; `stack` is the same cut the
@@ -1271,9 +1418,9 @@ def summary(report: Report,
         # working thread is the least informative frame it has.
         "working": [
             {"name": t.name, "state": t.state,
-             "where": t.nearest(report.prefixes),
+             "where": t.nearest(ours),
              "top": t.top,
-             "stack": _stack(t, report.prefixes)}
+             "stack": _stack(t, ours)}
             for t in busy if t is not main_thread and not t.lock
         ],
         # Whether this file can name a lock chain at all — see `lock_notes`.
@@ -1291,7 +1438,7 @@ def summary(report: Report,
             "unplaced": code[1],
         },
         "load": [{"share": s, "process": n} for s, n in report.load],
-        "own_frames": any(t.own(report.prefixes) for t in of_interest(report)),
+        "own_frames": any(t.own(ours) for t in of_interest(report)),
         "unread": {
             "outside": len(report.unread),
             "inside": sum(len(t.unread) for t in report.threads),

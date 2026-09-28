@@ -335,14 +335,14 @@ def test_a_working_thread_is_named_by_the_frame_nearest_the_app_not_its_top():
     """`BinderProxy.transactNative` says a binder call; `SystemJobScheduler.cancel` says what."""
     rep = anr.parse(LIBRARY_ONLY)
     wm = next(t for t in rep.threads if t.name == "WM.task-3")
-    near = wm.nearest(rep.prefixes)
+    near = wm.nearest(rep.ownership)
     check("the first frame outside the platform core",
           near.startswith("androidx.work.impl.background.systemjob.SystemJobScheduler.cancelJobById"), near)
     text = anr.render(rep)
     check("the working thread is listed by that frame, with the top beside it",
           "**WM.task-3** (native) — `androidx.work.impl.background.systemjob.SystemJobScheduler.cancelJobById"
           in text and "on top: `android.os.BinderProxy.transactNative" in text, text)
-    stack = anr._stack(wm, rep.prefixes)
+    stack = anr._stack(wm, rep.ownership)
     check("the stack keeps the top and the nearest frame",
           stack[0].startswith("android.os.BinderProxy.transactNative")
           and any(f.startswith("androidx.work") for f in stack), stack)
