@@ -15,42 +15,60 @@ echolot doctor
 ```
 ## Environment
 
-  python           3.14.4
+  python           3.14.7
   platform         Darwin / x86_64
   perfetto         0.57.2
   PyYAML           6.0.3
   rich-argparse    1.8.0
   trace_processor  v56.1
 
-  binary: ~/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46
+  binary: /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46
   (the name is a SHA-256 prefix: contents verified on download)
 
 ## The .claude/ layer in this project
 
   10 template files: 10 current
+  installed by echolot 0.7.0, this is 0.7.0
   the layer is current.
 
 ## Self-check on a synthetic trace
 
   ok    scenario window built from the anchors: 1005 ms
+  ok    the right process is picked, the foreign one is dropped
   ...
-  All 143 checks passed — the pipeline computes correctly.
+
+All 143 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
 self-check tally — plus every failure, with the same exit code. It is for a
 subagent that has to confirm the environment before it starts, a CI step, or
-anyone piping into `head`; the full output is six kilobytes of "ok" that a
-second reader in the same session would pay for again.
+anyone piping into `head`; the full output is about ten kilobytes of "ok" that
+a second reader in the same session would pay for again.
 
 ```
-echolot 0.6.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
-layer: STALE — 8 differs, 1 missing → `echolot init --all`
+echolot 0.7.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
+layer: current (10 files)
 self-check: 143 of 143 passed
 ```
 
-Exit code 0/1. No device needed, one second — good both as a CI gate and as
-the agent's first action before entering a loop.
+Exit code 0/1. No device needed. It takes about fifteen seconds on a laptop,
+most of them spent starting trace_processor, which the self-check does about
+ten times: once for the report every check reads, then again for each check
+that needs a trace or a command of its own. Good both as a CI gate and as the
+agent's first action before entering a loop.
+
+Two cases end without a tally. Both exit 1 and go into the run log as a
+failed self-check, so `echolot` shows the last `doctor` as failed rather than
+passed, and routes the next step back to it:
+
+- The self-check could not start — a first run with no network to download
+  the binary, a `--tp-binary` pointing at nothing. `doctor` prints why.
+- Python was started with `-O`, or `PYTHONOPTIMIZE` is set in the environment.
+  Every check is an `assert` and that flag tells Python to skip them, so the
+  tally would stop depending on whether the pipeline computes correctly.
+  `doctor` refuses in one line before anything runs, and so does the check
+  at the end of `init`.
 
 This is deliberately **not** a check of "are the dependencies installed". `pip`
 already fails loudly, and `TraceSession` carries a clear message about a
@@ -175,8 +193,49 @@ The TP version is also written into `report.json`. When numbers diverge between
 two reports, the first question is whether anything underneath changed, and the
 field answers it immediately instead of after an hour of digging.
 
-Your own binary goes in via `--tp-binary`, accepted both before and after the
-subcommand. The report then marks that the pin was bypassed.
+### Your own binary
+
+A trace_processor of your own goes in one of two ways:
+
+- `--tp-binary <path>`, accepted both before and after the subcommand — for
+  one run;
+- `toolchain.tp_binary: <path>` in `local.yml`, beside `echolot.yml` — for
+  every run on this machine. `init` puts `local.yml` in `.gitignore`, so the
+  path stays yours. The key works in `echolot.yml` too, where everyone gets it.
+
+`analyze`, `calibrate`, `names` and `doctor` choose in the same order: the
+flag, then the config, then the pin. `doctor` reads the config in the
+directory it runs from for that key alone, so the binary it self-checks is the
+one `analyze` would use there. A config that does not load does not stop it:
+it says so on stderr and checks the flag's binary, or the pin.
+
+`doctor` and the report say which binary ran and who asked for it. With the
+path in `local.yml`, `doctor` shows the version the binary reports about
+itself, marks the row, and names the source under the path:
+
+```
+  trace_processor  …  ← custom binary, the pin in pyproject.toml is bypassed
+
+  binary: /opt/perfetto/trace_processor_shell
+  (from toolchain.tp_binary in local.yml)
+```
+
+`doctor -q` puts the same on its first line:
+
+```
+echolot 0.7.0 · trace_processor … (custom binary from toolchain.tp_binary in local.yml) · …
+```
+
+and the footer under the findings in `report.md` reads:
+
+```
+trace_processor … (custom binary from toolchain.tp_binary, pin bypassed)
+```
+
+With the flag, each of them names `--tp-binary` instead; with neither, there
+is no mark at all. `report.json` keeps the same under `toolchain`: `source` is
+`pinned`, `--tp-binary` or `toolchain.tp_binary`, and `binary` is the path
+that ran.
 
 ### What the pin does not solve
 
@@ -185,8 +244,9 @@ subcommand. The report then marks that the pin was bypassed.
 - **Team members do not get identical binaries.** mac-arm64 and linux-amd64 are
   different files of the same version. Results should agree, but that is
   Perfetto's promise, not ours.
-- **`--tp-binary` bypasses it entirely.** Which is why the report records what
-  actually ran, rather than what was supposed to.
+- **A binary of your own bypasses it entirely**, whichever way it came in.
+  Which is why the report records what actually ran, and who asked for it,
+  rather than what was supposed to.
 
 ## Where determinism ends
 
