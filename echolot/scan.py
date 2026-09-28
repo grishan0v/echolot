@@ -376,22 +376,25 @@ def gradle_tasks(bench: dict, variants: list[dict]) -> list[str]:
 # --- the rest -----------------------------------------------------------------
 
 def devices_attached() -> list[dict[str, Any]] | None:
-    """`adb devices -l`, or None when adb is not there to ask."""
-    from .runner import RunnerError, _run
+    """`adb devices -l`, or None when adb is not there to ask.
+
+    Any other failure of adb's — a server that does not answer within the
+    timeout, an error of its own — is raised as the RunnerError that says
+    so, for `describe` to pass on. It used to be None as well, and the note
+    read "adb is not on PATH" over an adb that was there and had timed out.
+    The lines are read by the runner's parser, the one `collect` picks a
+    device with, so a Linux `no permissions (…)` is that state rather than
+    a device in state `no`.
+    """
+    from .runner import AdbNotFound, _run, parse_devices
     try:
         out = _run(["adb", "devices", "-l"], timeout=30)
-    except RunnerError:
+    except AdbNotFound:
         return None
-    found = []
-    for line in out.splitlines()[1:]:
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        props = dict(p.split(":", 1) for p in parts[2:] if ":" in p)
-        found.append({"serial": parts[0], "state": parts[1],
-                      "model": props.get("model"), "device": props.get("device"),
-                      "emulator": parts[0].startswith("emulator-")})
-    return found
+    return [{"serial": d["serial"], "state": d["state"],
+             "model": d["props"].get("model"), "device": d["props"].get("device"),
+             "emulator": d["serial"].startswith("emulator-")}
+            for d in parse_devices(out)]
 
 
 def allowed_paths(root: Path) -> list[str]:
@@ -430,9 +433,15 @@ def describe(root: Path, *, devices: bool = True) -> Facts:
     facts.variants = variants_of(facts.app, facts.flavors, facts.build_types)
     facts.benchmarks = benchmarks_of(root)
     facts.allowed = allowed_paths(root)
-    facts.devices = devices_attached() if devices else None
-    if devices and facts.devices is None:
-        facts.notes.append("adb is not on PATH, so no device was asked")
+    if devices:
+        from .runner import RunnerError
+        try:
+            facts.devices = devices_attached()
+        except RunnerError as e:
+            facts.notes.append(f"adb is on PATH but did not list the devices: {e.gist}")
+        else:
+            if facts.devices is None:
+                facts.notes.append("adb is not on PATH, so no device was asked")
     return facts
 
 

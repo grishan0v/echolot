@@ -393,26 +393,30 @@ def test_collect_reports_the_round_it_set_aside(tmp_path: Path) -> None:
 
     It used to call `set_aside` and drop the return value — the same shape of
     defect as `cmd_hunt` dropping it, and the reason rounds went unrecorded.
-    Checked against the real function: the callback has to fire before any
-    device work, or a hunt on a machine with no phone attached would lose the
-    round anyway.
+    Checked against the real function, in gradle mode with a wrapper that
+    writes one trace: the round moves when a new trace is there to take its
+    place, and not before — no adb, no device, no waiting.
     """
     from echolot import runner
 
     p = setup(tmp_path, traces=3)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
+    app = tmp_path / "app"
+    app.mkdir()
+    wrapper = app / "gradlew"
+    wrapper.write_text("#!/bin/sh\nmkdir -p out\n"
+                       "printf trace > out/Startup_iter000.perfetto-trace\n",
+                       encoding="utf-8")
+    wrapper.chmod(0o755)
     seen: list[Path] = []
-    try:
-        # gradle with no task fails immediately after the set-aside, which is
-        # exactly the window under test — no adb, no device, no waiting.
-        runner.collect(package="com.example.app",
-                       out_dir=p / ".echolot" / "traces",
-                       iterations=1, section={"mode": "gradle"},
-                       name="coldStart", log=lambda m: None,
-                       on_set_aside=lambda d: (seen.append(d),
-                                               hunt_mod.record_traces(p, d)))
-    except runner.RunnerError:
-        pass
+    runner.collect(package="com.example.app",
+                   out_dir=p / ".echolot" / "traces",
+                   iterations=1,
+                   section={"mode": "gradle", "gradle_task": ":benchmark:connected",
+                            "project_root": str(app)},
+                   name="coldStart", log=lambda m: None,
+                   on_set_aside=lambda d: (seen.append(d),
+                                           hunt_mod.record_traces(p, d)))
     check("collect reported the set-aside directory", len(seen) == 1, str(seen))
     if seen:
         check("with the traces really in it",

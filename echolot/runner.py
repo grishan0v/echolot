@@ -144,7 +144,31 @@ RECORDING_KNOBS = ("environment", "atrace_categories", "buffer_kb",
 
 
 class RunnerError(Exception):
-    pass
+    """A device or scenario problem, said as a sentence rather than a traceback.
+
+    `gist` is the one line of it worth keeping where there is room for no
+    more: the `collect` line of `echolot`, and the head of the run log's
+    `error`. It is the first line unless whoever raised it knows better, and
+    for a scenario command that failed it does. That message opens with "the
+    scenario command returned 1:" every time, the progress file used to keep
+    exactly that line, and so after any gradle failure at all the `collect`
+    line of `echolot` named no cause. See `failure_gist`.
+    """
+
+    def __init__(self, message: str = "", gist: str | None = None):
+        super().__init__(message)
+        first = next((ln.strip() for ln in message.splitlines() if ln.strip()), "")
+        self.gist = gist or first
+
+
+class AdbNotFound(RunnerError):
+    """adb itself is missing: a fact about this machine, not about a device.
+
+    A class of its own because `scan` answers it differently from every other
+    failure. No adb is worth one quiet note; an adb that is there and timed
+    out, or refused, is a problem worth its own words — and both used to read
+    "adb is not on PATH".
+    """
 
 
 # --- what a failed scenario command said, and what to do about it -------------
@@ -182,8 +206,9 @@ KNOWN_FAILURES: list[tuple[re.Pattern, str]] = [
      "suppressErrors=EMULATOR,LOW-BATTERY,UNLOCKED to runner.gradle_args"),
     (re.compile(r"No online devices|no devices/emulators found|device offline|"
                 r"DeviceException|No connected devices", re.IGNORECASE),
-     "gradle found no device: `adb devices` should list one as `device`; with "
-     "several attached, runner.device (or ANDROID_SERIAL) picks the one"),
+     "gradle found no device it could use: `adb devices` should list one as "
+     "`device`, and a serial named with --device or runner.device — which "
+     "reaches gradle as ANDROID_SERIAL — has to be one of those listed"),
     (re.compile(r"INSTALL_FAILED|Installation failed|signatures do not match",
                 re.IGNORECASE),
      "the APK did not install: uninstall the app on the device first — a build "
@@ -220,13 +245,43 @@ def hints(text: str) -> list[str]:
     return [hint for pattern, hint in KNOWN_FAILURES if pattern.search(text or "")]
 
 
+def _fixes(lines: list[str], out: str, err: str) -> list[str]:
+    return hints("\n".join(lines) + "\n" + (out or "")[-4000:] + (err or "")[-4000:])
+
+
 def failure_message(command: str, code: int, out: str, err: str) -> str:
     lines = failure_lines(out, err)
     msg = f"the scenario command returned {code}:\n  {command[:300]}\n"
     msg += "\n".join(f"  {ln}" for ln in lines)
-    for hint in hints("\n".join(lines) + "\n" + (out or "")[-4000:] + (err or "")[-4000:]):
+    for hint in _fixes(lines, out, err):
         msg += f"\n→ {hint}"
     return msg
+
+
+# An exception with its message, or an error line of adb's own:
+# `java.lang.IllegalStateException: Issue while enabling …`, `adb: error: …`.
+# Gradle's frame around it — "Execution failed for task", "What went wrong"
+# — says where the failure happened, which the command line already said.
+_THROWN = re.compile(r"(Exception|Error)\b\s*:\s*\S", re.IGNORECASE)
+
+
+def failure_gist(code: int, out: str, err: str) -> str:
+    """The one line of a failed command that says why, and what fixes it.
+
+    Of the lines `failure_lines` picked: one a known failure matches, else an
+    exception with its message, else the first that looked interesting, else
+    the last thing the command printed. Then every hint, whole — the hint is
+    the half an agent acts on, and the run log cuts what it keeps at 800
+    characters, so it goes near the front rather than after twenty lines of
+    gradle.
+    """
+    lines = failure_lines(out, err)
+    said = ([ln for ln in lines if hints(ln)]
+            or [ln for ln in lines if _THROWN.search(ln)]
+            or [ln for ln in lines if _INTERESTING.search(ln)]
+            or lines[-1:]
+            or [f"the scenario command returned {code} and printed nothing"])[0]
+    return " → ".join([said[:200], *_fixes(lines, out, err)])
 
 
 # --- where a collect stands, for whoever asks while it runs -------------------
@@ -265,7 +320,7 @@ def _run(args: list[str], stdin: str | None = None, timeout: int = 120) -> str:
         done = subprocess.run(args, input=stdin, capture_output=True,
                               text=True, timeout=timeout)
     except FileNotFoundError:
-        raise RunnerError(
+        raise AdbNotFound(
             "adb not found. It ships in the Android SDK platform-tools; "
             "make sure that directory is on PATH."
         ) from None
@@ -273,35 +328,85 @@ def _run(args: list[str], stdin: str | None = None, timeout: int = 120) -> str:
         raise RunnerError(
             f"no answer within {timeout}s from: {' '.join(args)}") from None
     if done.returncode != 0:
-        raise RunnerError(
-            f"{' '.join(args)}\n{(done.stderr or done.stdout).strip()}")
+        said = (done.stderr or done.stdout).strip()
+        # The last line is the one that says why: adb's `error: …`, or
+        # perfetto's own complaint under the lines it logs on the way.
+        last = said.splitlines()[-1].strip() if said else f"exit {done.returncode}"
+        raise RunnerError(f"{' '.join(args)}\n{said}",
+                          gist=f"{' '.join(args)[:120]}: {last[:200]}")
     return done.stdout
 
 
-def devices() -> list[tuple[str, str]]:
-    out = _run(["adb", "devices"], timeout=30)
+# One state in adb's listing is more than a word. On Linux a device whose USB
+# node this user may not open reads `no permissions (missing udev rules? user
+# is in the plugdev group); see [http://developer.android.com/tools/device.html]`,
+# and a split on whitespace made that a device in state `no` — which the
+# message then repeated back as "state is no, expected device".
+_NO_PERMISSIONS = re.compile(
+    r"^no permissions(?P<detail>\s*(\([^)]*\))?\s*(;?\s*see \[[^\]]*\])?)")
+
+
+def parse_devices(out: str) -> list[dict]:
+    """`adb devices`, with or without -l, as serial, state, detail and props.
+
+    A line is the serial, a tab and the state; with -l the serial is padded
+    with spaces and `key:value` pairs follow the state. What adb prints
+    before its header — `* daemon started successfully` — is not a device,
+    and a carriage return is not part of a state: Windows ends every line
+    with one.
+    """
+    lines = out.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("List of devices"):
+            lines = lines[i + 1:]
+            break
     found = []
-    for line in out.splitlines()[1:]:
-        parts = line.split()
-        if len(parts) >= 2:
-            found.append((parts[0], parts[1]))
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("*"):
+            continue
+        serial, _, rest = text.partition("\t" if "\t" in text else " ")
+        rest = rest.strip()
+        detail = ""
+        m = _NO_PERMISSIONS.match(rest)
+        if m:
+            state, detail, rest = "no permissions", m.group("detail").strip(), rest[m.end():]
+        else:
+            state, _, rest = rest.partition(" ")
+        if not state:
+            continue
+        props = dict(p.split(":", 1) for p in rest.split() if ":" in p)
+        found.append({"serial": serial, "state": state, "detail": detail,
+                      "props": props})
     return found
 
 
+def devices() -> list[tuple[str, str]]:
+    """(serial, state) for every device adb lists — see parse_devices."""
+    return [(d["serial"], d["state"])
+            for d in parse_devices(_run(["adb", "devices"], timeout=30))]
+
+
 def pick_device(serial: str | None = None) -> str:
-    """Picks a device, and explains what to do when there is nothing to pick."""
-    found = devices()
+    """Picks a device, and explains what to do when there is nothing to pick.
+
+    `serial` is `--device`, or `runner.device` when the flag is absent — the
+    caller passes whichever was given. Without either, the one attached
+    device in state `device` is the answer, and anything else is a sentence:
+    none, several, or one that adb lists but cannot use.
+    """
+    found = parse_devices(_run(["adb", "devices"], timeout=30))
     if serial:
-        for dev, state in found:
-            if dev == serial:
-                if state != "device":
-                    raise RunnerError(_state_hint(dev, state))
-                return dev
+        for d in found:
+            if d["serial"] == serial:
+                if d["state"] != "device":
+                    raise RunnerError(_state_hint(d["serial"], d["state"], d["detail"]))
+                return serial
         raise RunnerError(
             f"device {serial} is not among the connected ones: "
-            f"{', '.join(d for d, _ in found) or 'none'}")
+            f"{', '.join(d['serial'] for d in found) or 'none'}")
 
-    ready = [d for d, state in found if state == "device"]
+    ready = [d["serial"] for d in found if d["state"] == "device"]
     if len(ready) == 1:
         return ready[0]
     if not ready:
@@ -310,13 +415,14 @@ def pick_device(serial: str | None = None) -> str:
                 "adb sees no devices at all. Plug in a phone or start an "
                 "emulator.")
         # The most common case with a real phone — and the fix is not ours.
-        raise RunnerError("; ".join(_state_hint(d, s) for d, s in found))
+        raise RunnerError("; ".join(_state_hint(d["serial"], d["state"], d["detail"])
+                                    for d in found))
     raise RunnerError(
         f"several devices connected: {', '.join(ready)}. "
-        f"Pick one with --device <serial>.")
+        f"Pick one with --device <serial>, or runner.device in local.yml.")
 
 
-def _state_hint(serial: str, state: str) -> str:
+def _state_hint(serial: str, state: str, detail: str = "") -> str:
     if state == "unauthorized":
         return (f"{serial}: debugging not authorised. The device screen should "
                 f"be showing an 'Allow USB debugging?' prompt — accept it and "
@@ -324,6 +430,11 @@ def _state_hint(serial: str, state: str) -> str:
     if state == "offline":
         return (f"{serial}: device is offline. Usually cured by replugging the "
                 f"cable or running `adb kill-server`")
+    if state == "no permissions":
+        return (f"{serial}: adb may not open this device"
+                f"{f' — {detail}' if detail else ''}. On Linux that is the udev "
+                f"rules: add one for the phone's USB vendor, replug the cable "
+                f"and run `adb kill-server`")
     return f"{serial}: state is {state}, expected device"
 
 
@@ -368,7 +479,8 @@ def trace_config(package: str, duration_ms: int, categories: list[str],
 
 
 def run_command(command: str, timeout: float, knob: str = "runner.timeout_s",
-                cwd: Path | None = None) -> float:
+                cwd: Path | None = None,
+                env: dict[str, str] | None = None) -> float:
     """Lets something else drive the scenario while we record the trace.
 
     The command comes from the project's own config — the same level of trust
@@ -380,6 +492,12 @@ def run_command(command: str, timeout: float, knob: str = "runner.timeout_s",
     it is relative to. Without it the wrapper resolved against wherever
     `echolot` happened to be started, which is the directory holding
     `echolot.yml` and need not be the one holding the app.
+
+    `env` is laid over the environment the command inherits. `collect` puts
+    the device there as ANDROID_SERIAL, which adb and gradle's connected
+    tasks both read: the scenario's own `adb shell …` then reaches the device
+    being recorded, rather than failing with "more than one device" the
+    moment a second one is plugged in — `--device` or not.
 
     Two things about the timeout, both learned the hard way.
 
@@ -404,6 +522,7 @@ def run_command(command: str, timeout: float, knob: str = "runner.timeout_s",
     proc = subprocess.Popen(
         command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, cwd=str(cwd) if cwd is not None else None,
+        env={**os.environ, **env} if env else None,
         # POSIX only, and the reason the kill below can reach the whole tree.
         start_new_session=(os.name == "posix"))
     try:
@@ -414,10 +533,13 @@ def run_command(command: str, timeout: float, knob: str = "runner.timeout_s",
         raise RunnerError(
             f"the scenario command was still running after {timeout:g}s and "
             f"was stopped:\n  {command[:300]}\n"
-            f"Raise {knob} if it honestly takes that long."
+            f"Raise {knob} if it honestly takes that long.",
+            gist=f"the scenario command was still running after {timeout:g}s "
+                 f"and was stopped → raise {knob} if it honestly takes that long"
         ) from None
     if proc.returncode != 0:
-        raise RunnerError(failure_message(command, proc.returncode, out, err))
+        raise RunnerError(failure_message(command, proc.returncode, out, err),
+                          gist=failure_gist(proc.returncode, out, err))
     return time.monotonic() - started
 
 
@@ -430,12 +552,16 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 
 def harvest(search_root: Path, since: float, out_dir: Path,
-            name: str) -> list[dict]:
+            name: str, before_copy: Callable[[], None] | None = None) -> list[dict]:
     """Collects the traces a macrobenchmark wrote by itself.
 
     It drops them per iteration into an artifact directory whose path depends
     on the build variant and the device model — awkward to find by hand. We
     take everything that appeared after the run started.
+
+    `before_copy` runs once there is something to copy and before the first
+    copy lands: `collect` makes room there, by setting the previous set
+    aside. A run that found nothing leaves that set where it was.
     """
     # The modification time is read once and carried, rather than read again
     # in the sort key. Gradle is still tidying up while this walks its output
@@ -453,6 +579,8 @@ def harvest(search_root: Path, since: float, out_dir: Path,
             if when >= since:
                 found.append((when, path))
     found.sort()
+    if found and before_copy is not None:
+        before_copy()
 
     out_dir.mkdir(parents=True, exist_ok=True)
     results = []
@@ -462,6 +590,11 @@ def harvest(search_root: Path, since: float, out_dir: Path,
         results.append({"path": dst, "size": dst.stat().st_size,
                         "source": src})
     return results
+
+
+# What `collect` names a trace it wrote, read back by set_aside to tell
+# whose a file is.
+_ITERATION = re.compile(r"^(?P<scenario>.+)_iter\d+\.perfetto-trace$")
 
 
 def set_aside(out_dir: Path, name: str,
@@ -485,12 +618,25 @@ def set_aside(out_dir: Path, name: str,
 
     Traces of another scenario are still left alone. A project that records
     `coldStart` and `scroll` into one directory keeps both, and re-recording
-    one must not sweep away the other.
+    one must not sweep away the other — including a scenario whose name only
+    begins with this one's. The `<name>_*` glob took `startup_warm_*` along
+    with `startup_*`, so re-recording `startup` moved the warm set as well.
+    A file now belongs to the longest scenario name it begins with, among
+    this one and every scenario that has `_iterNNN` traces here:
+    `startup_warm_iter000` is `startup_warm`'s, and so is a probe saved as
+    `startup_warm_probe_…`, while `startup_probe_…` is still `startup`'s.
     """
     import time
 
-    existing = sorted(out_dir.glob(f"{name}_*.perfetto-trace")) \
-        if out_dir.exists() else []
+    traces = sorted(out_dir.glob("*.perfetto-trace")) if out_dir.exists() else []
+    scenarios = {name} | {m.group("scenario") for p in traces
+                          if (m := _ITERATION.match(p.name))}
+
+    def owner(p: Path) -> str | None:
+        return max((s for s in scenarios if p.name.startswith(f"{s}_")),
+                   key=len, default=None)
+
+    existing = [p for p in traces if owner(p) == name]
     if not existing:
         return None
     newest = max(p.stat().st_mtime for p in existing)
@@ -507,6 +653,58 @@ def set_aside(out_dir: Path, name: str,
     return aside
 
 
+RESET_POLICIES = ("force-stop", "none")
+
+
+def reset_policy(section: dict, log: Callable[[str], None] = print) -> str:
+    """What happens to the app between iterations — the value collect uses.
+
+    `force-stop` (cold, the default) or `none` (warm). Anything else used to
+    be announced as force-stop and run as none: `cmd_collect` printed "Using
+    force-stop." while the loop here stopped the app on the exact string
+    only, so a typo — `force_stop`, or an empty value — measured warm starts
+    under a cold start's name. Decided once, here, and what is announced is
+    what runs.
+
+    `pm clear` is not on the list on purpose: it changes the scenario rather
+    than repeating it. A cold start with an empty database and a user's cold
+    start are different things.
+    """
+    value = section.get("reset_policy", "force-stop")
+    if value in RESET_POLICIES:
+        return value
+    shown = "(empty)" if value in (None, "") else value
+    log(f"[!] runner.reset_policy: {shown} is not supported. Available: "
+        f"force-stop (cold) and none (warm). Using force-stop.")
+    return "force-stop"
+
+
+def _positive(section: dict, key: str, default: int) -> int:
+    """A size or a duration from the runner section, as a whole number.
+
+    `int(...)` used to be the whole check, and `duration_ms: 12s` came out of
+    `collect` as a ValueError traceback. The unit is in the key's name, so
+    the value is digits alone.
+    """
+    value = section.get(key, default)
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not 1 <= value < float("inf")):
+        raise RunnerError(
+            f"runner.{key}: {value!r} is not a positive number. The unit is "
+            f"in the name; the value is digits alone.")
+    return int(value)
+
+
+def _listed(section: dict, key: str) -> list[str]:
+    """A list from the runner section, where one string is a list of one.
+
+    `gradle_args: "-P…"` written without brackets used to go into the
+    command a character at a time, each separated by a space.
+    """
+    value = section.get(key) or []
+    return [str(v) for v in value] if isinstance(value, (list, tuple)) else [str(value)]
+
+
 def collect(package: str, out_dir: Path, iterations: int,
             section: dict | None = None,
             device: str | None = None,
@@ -520,11 +718,22 @@ def collect(package: str, out_dir: Path, iterations: int,
     command — someone else's command; we record the trace around it.
     gradle  — the macrobenchmark writes traces itself, we only collect them.
 
-    Whatever the mode, a set already in out_dir is set aside first, never
-    overwritten: see set_aside. `on_set_aside` is handed the directory that
-    set went to, when there was one — the caller files it under the
-    investigation it belongs to. Without it the return value was dropped here
-    and a multi-round hunt kept no record of the rounds it reasoned from.
+    Whatever can be checked is checked before anything is touched: the mode
+    and what it needs, the numbers, the trace config, the device. A set
+    already in out_dir is set aside, never overwritten (see set_aside), and
+    only once the first new trace is about to take its place. It used to move
+    first thing, so a collect that failed at once — no device, a typo in the
+    mode — still emptied .echolot/traces of the set the next report was to
+    be compared against, and a gradle build that failed after ten minutes
+    did the same. `on_set_aside` is handed the directory that set went to,
+    when there was one — the caller files it under the investigation it
+    belongs to. Without it the return value was dropped here and a
+    multi-round hunt kept no record of the rounds it reasoned from.
+
+    `device` is `--device`, else `runner.device`. Launch and command modes
+    pick with it (see pick_device), and a command-mode scenario gets the
+    device it picked as ANDROID_SERIAL. Gradle picks for itself; a device
+    named here reaches it as ANDROID_SERIAL too.
 
     `progress` is told where the run stands — `done` out of `iterations`
     once per iteration where we drive them, and only that it started where
@@ -534,24 +743,41 @@ def collect(package: str, out_dir: Path, iterations: int,
 
     section = section or {}
     mode = str(section.get("mode", "launch"))
-    duration_ms = int(section.get("duration_ms", 12000))
-    reset = str(section.get("reset_policy", "force-stop"))
     tell = progress or (lambda **kw: None)
-    aside = set_aside(out_dir, name, log)
-    if aside is not None and on_set_aside is not None:
-        on_set_aside(aside)
     tell(scenario=name, mode=mode, started=time.time(), pid=os.getpid(),
          iterations=None if mode == "gradle" else iterations, done=0)
+
+    moved = False
+
+    def make_room() -> None:
+        nonlocal moved
+        if not moved:
+            moved = True
+            aside = set_aside(out_dir, name, log)
+            if aside is not None and on_set_aside is not None:
+                on_set_aside(aside)
 
     if mode == "gradle":
         task = section.get("gradle_task")
         if not task:
             raise RunnerError("runner.mode: gradle needs runner.gradle_task")
         root = Path(section.get("project_root", "."))
+        timeout = _positive(section, "timeout_s", 3600)
         command = " ".join([str(section.get("gradle", "./gradlew")), str(task),
-                            *(section.get("gradle_args") or [])])
+                            *_listed(section, "gradle_args")])
         log(f"gradle: {command}")
         log(f"  in {root.resolve()}")
+        env = None
+        if device:
+            # The connected test tasks run on every device adb lists unless
+            # ANDROID_SERIAL names one. `--device` and runner.device used to
+            # stop at the other two modes, and the hint for gradle's own "no
+            # device" failure recommended runner.device to a mode that never
+            # read it.
+            env = {"ANDROID_SERIAL": str(device)}
+            log(f"  on {device} (ANDROID_SERIAL)")
+        elif os.environ.get("ANDROID_SERIAL"):
+            log(f"  on {os.environ['ANDROID_SERIAL']} (ANDROID_SERIAL, from the environment)")
         ignored = [k for k in RECORDING_KNOBS if k in section]
         if ignored:
             # Nothing here builds a trace config: the macrobenchmark wrote
@@ -566,9 +792,11 @@ def collect(package: str, out_dir: Path, iterations: int,
                 f"What the traces carry is up to the benchmark's own perfetto "
                 f"config; the report says which platform state it found.")
         since = time.time()
-        spent = run_command(command, timeout=int(section.get("timeout_s", 3600)),
-                            knob="runner.timeout_s", cwd=root)
-        results = harvest(root, since, out_dir, name)
+        spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
+                            cwd=root, env=env)
+        # A build that failed raised above, and one that wrote nothing
+        # copies nothing: either way the previous set stays where it was.
+        results = harvest(root, since, out_dir, name, before_copy=make_room)
         if not results:
             raise RunnerError(
                 f"gradle finished but no new traces appeared under "
@@ -580,24 +808,30 @@ def collect(package: str, out_dir: Path, iterations: int,
             log(f"    {r['path'].name}  {r['size'] / 1e6:.1f} MB")
         return results
 
-    dev = pick_device(device)
+    if mode not in ("launch", "command"):
+        raise RunnerError(
+            f"unknown runner.mode: {mode}. Available: launch, command, gradle.")
+    command = section.get("command")
+    if mode == "command" and not command:
+        raise RunnerError("runner.mode: command needs runner.command")
+    if isinstance(iterations, bool) or not isinstance(iterations, int) or iterations < 1:
+        raise RunnerError(
+            f"-n / runner.iterations: {iterations!r} is not a number of "
+            f"repeats. One or more, in digits.")
+    duration_ms = _positive(section, "duration_ms", 12000)
+    reset = reset_policy(section, log)
     config = trace_config(package, duration_ms,
-                          section.get("atrace_categories") or DEFAULT_CATEGORIES,
-                          int(section.get("buffer_kb", 131072)),
+                          _listed(section, "atrace_categories") or DEFAULT_CATEGORIES,
+                          _positive(section, "buffer_kb", 131072),
                           environment=bool(section.get("environment", True)))
 
+    dev = pick_device(device)
     activity = None
-    command = section.get("command")
     if mode == "launch":
         activity = section.get("activity") or resolve_activity(dev, package)
         log(f"device {dev}, activity {activity}")
-    elif mode == "command":
-        if not command:
-            raise RunnerError("runner.mode: command needs runner.command")
-        log(f"device {dev}, scenario: {command}")
     else:
-        raise RunnerError(
-            f"unknown runner.mode: {mode}. Available: launch, command, gradle.")
+        log(f"device {dev}, scenario: {command}")
 
     results = []
     for i in range(iterations):
@@ -614,7 +848,8 @@ def collect(package: str, out_dir: Path, iterations: int,
             info = _launch(dev, activity)
         else:
             spent = run_command(command, timeout=duration_ms // 1000 + 300,
-                                knob="runner.duration_ms")
+                                knob="runner.duration_ms",
+                                env={"ANDROID_SERIAL": dev})
             if spent * 1000 > duration_ms:
                 log(f"  [!] the scenario ran {spent:.0f}s against a "
                     f"{duration_ms / 1000:.0f}s recording window — the trace "
@@ -623,6 +858,9 @@ def collect(package: str, out_dir: Path, iterations: int,
         _run(["adb", "-s", dev, "shell",
               "while pidof perfetto > /dev/null; do sleep 0.5; done"],
              timeout=duration_ms // 1000 + 300)
+        # A trace is recorded and about to take the first name: the moment
+        # the previous set has to make room, and not a moment earlier.
+        make_room()
         info.update(_pull(dev, out))
         results.append(info)
 

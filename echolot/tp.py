@@ -410,7 +410,11 @@ class TraceSession:
 
     def __init__(self, trace_path: str | Path, binary: str | None = None):
         try:
-            from perfetto.trace_processor import TraceProcessor, TraceProcessorConfig
+            from perfetto.trace_processor import (
+                TraceProcessor,
+                TraceProcessorConfig,
+                TraceProcessorException,
+            )
         except ImportError as e:
             raise RuntimeError(
                 "the perfetto package is not installed — run: pip install perfetto"
@@ -433,8 +437,25 @@ class TraceSession:
                    else ""))
 
         cfg = TraceProcessorConfig(bin_path=binary) if binary else None
-        self._tp = TraceProcessor(trace=str(trace_path), config=cfg) if cfg \
-            else TraceProcessor(trace=str(trace_path))
+        try:
+            self._tp = TraceProcessor(trace=str(trace_path), config=cfg) if cfg \
+                else TraceProcessor(trace=str(trace_path))
+        except TraceProcessorException as e:
+            # A file that is there and is not a trace: a capture cut short, a
+            # log saved under the wrong name. It came out of the CLI as a
+            # PerfettoException traceback, and one such file among the
+            # repeats took a whole multi-trace `analyze` with it without
+            # saying which. Only the parse is the file's fault — a
+            # trace_processor that would not start is not, and stays what it
+            # is.
+            said = str(e)
+            if "parsing trace" not in said:
+                raise
+            why = said.split("Error message:", 1)[-1].strip().rstrip(".")
+            raise ConfigError(
+                f"{path}: trace_processor cannot read this file — {why}. A "
+                f"capture that was cut short, or a file that is not a trace; "
+                f"leave it out and run again.") from e
 
     def exec_script(self, sql: str) -> None:
         """Runs a multi-statement script (DDL), discarding the output."""

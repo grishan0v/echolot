@@ -115,8 +115,11 @@ refuses to start:
 The task name is often ambiguous (the baselineprofile plugin adds flavours) —
 `./gradlew :benchmark:tasks | grep -i connected` lists the options.
 
-Traces are written per iteration, so even a run that failed halfway usually
-leaves usable material.
+Traces are written per iteration, but `collect` harvests only after the task
+succeeds: a run that failed halfway gathers nothing, and `.echolot/traces`
+keeps the previous set. What the half-run wrote stays in the module's output
+directory shown above, and `echolot analyze` reads it there if it is worth a
+look.
 
 ## While it runs, and when it fails
 
@@ -125,23 +128,33 @@ iterations. `echolot` (status) has a `collect` line while one is in flight:
 `running: coldStart, 7/15 iterations, started 3m ago`, or `the macrobenchmark
 drives the iterations` where gradle does. A run whose process is gone and
 that never finished reads `interrupted`; one that failed reads `failed 2m
-ago: …` with the sentence it printed, until a newer set of traces exists.
+ago: …` with the line of the output that names the cause — the exception the
+benchmark threw, say — and the fix when the failure is a known one, until a
+newer set of traces exists.
 
-**Run one iteration first** whenever the runner config is new or changed:
-`echolot collect -c echolot.yml -n 1`. A wrong variant or a device that
-refuses fails after the whole build either way, and once is enough to find
-that out.
+**Run one iteration first** whenever the runner config is new or changed. In
+launch and command modes that is `echolot collect -c echolot.yml -n 1`: one
+trace, enough to see that the device, the activity or the command, and the
+anchors work. In gradle mode `-n` does not reach the benchmark — it runs as
+many iterations as its own `measureRepeated` asks for, and `collect` says so —
+so narrow the task instead: one test through
+`-Pandroid.testInstrumentationRunnerArguments.class=<Class>#<method>` in
+`runner.gradle_args`. A wrong variant or a device that refuses fails after the
+whole build either way, and once is enough to find that out.
 
 A failure prints the lines that matter from both of gradle's streams — the
-instrumentation's own exception lives on stdout, "What went wrong" on stderr
-— and the same sentence goes into `.echolot/log/runs.jsonl` as `error`.
-Three failures come with what fixes them, each learned on a real device:
+instrumentation's own exception lives on stdout, "What went wrong" on stderr.
+`.echolot/log/runs.jsonl` keeps it as the run's `error`: the line that names
+the cause and the fix first, then as much of the full message as fits in 800
+characters. Four failures come with what fixes them, each learned on a real
+device:
 
 | the line says | what it is | the fix |
 |---|---|---|
 | `Perfetto SDK` / `binary verification` | the SDK half of the tracing could not be set up in the app — a stale `libtracing_perfetto.so` in its code_cache | reinstall or `pm clear`; or `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=false` in `runner.gradle_args` — the atrace half still carries the app's sections |
 | `ERRORS (not suppressed): EMULATOR, …` | the benchmark refuses the device or its state | fix the state, or `…androidx.benchmark.suppressErrors=EMULATOR,LOW-BATTERY,UNLOCKED` |
-| `No online devices found` | gradle found no device | `adb devices`; `runner.device` when several are attached |
+| `No online devices found` | gradle found no device it could use | `adb devices`; with several attached, `--device` or `runner.device` picks one — `collect` hands it to gradle as `ANDROID_SERIAL`, so it has to be one `adb devices` lists |
+| `INSTALL_FAILED` / `signatures do not match` | the APK did not install | uninstall the app from the device first — a build signed differently cannot go over the one that is there |
 
 ## For calibration
 
