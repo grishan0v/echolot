@@ -116,7 +116,11 @@ one line saying what to do next.
 
 > [!IMPORTANT]
 > After upgrading the package, run `echolot init` again. It brings the
-> `.claude/` layer up to date and leaves files you edited alone.
+> `.claude/` layer up to date and leaves files you edited alone. A teammate
+> still on an older echolot is then told to upgrade: their `echolot` says
+> so, and their `init` refuses rather than put the older files back.
+> Releases up to 0.7.0 do not have that rule, so it holds once the whole
+> team is on a later one.
 
 ### Without an agent
 

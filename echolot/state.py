@@ -158,7 +158,7 @@ def collect_line(st: dict) -> str | None:
 # line at a hyphen and Rich does not, so a hyphenated word that lands at a
 # line's end renders two ways (tests/test_cli_help.py). Adding a word, check
 # that test before settling where it goes.
-NEXT_KINDS = ("init", "init-force", "doctor", "setup", "fix-config",
+NEXT_KINDS = ("upgrade", "init", "init-force", "doctor", "setup", "fix-config",
               "resume-or-new", "fix-settings", "hunt")
 
 
@@ -166,7 +166,13 @@ def next_kind(st: dict) -> str:
     # `opted-out` falls through on purpose: nothing to install and nothing
     # wrong, so the next step is whatever the config says.
     #
-    # First what `init` does on its own. The agent is about to read this
+    # Before everything, a layer a newer echolot wrote. The agent is about
+    # to read files that describe what that release can do, every step
+    # after this one would be taken with the older one, and `init` refuses
+    # to touch it — so there is nothing to run, and a person upgrades.
+    if st["layer_verdict"] == "newer":
+        return "upgrade"
+    # Then what `init` does on its own. The agent is about to read this
     # layer, and `init` touches nothing the project edited, so there is
     # nothing to ask.
     if st["layer_verdict"] in ("absent", "stale"):
@@ -213,6 +219,10 @@ def _door(st: dict) -> str:
 def next_step(st: dict) -> str:
     """One line: what to do next, from the state. Shared by status and init."""
     kind = next_kind(st)
+    if kind == "upgrade":
+        return (f"upgrade echolot: {layer.UPGRADE}, then `echolot` again — "
+                f"until then this one leaves the .claude/ layer alone (the "
+                f"layer line says why)")
     if kind == "init":
         if st["layer_verdict"] == "absent":
             return "echolot init — installs the .claude/ layer; then /echolot in Claude Code"

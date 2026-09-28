@@ -3,7 +3,9 @@
 A project gets a skill, an agent, three commands and their reference material
 copied into it. Copies drift — the package moves on, or someone edits a file in
 the project — so `init` records a hash per file and every later run compares
-against it. That is the whole job: files, hashes, and a verdict.
+against it. That is the whole job: files, hashes, and a verdict. The record
+also names the echolot that wrote it, and an older echolot reads that first
+and leaves a newer layer alone.
 
 It knows nothing about traces. It lived in main.py next to the detectors for as
 long as main.py was the only file there was to live in.
@@ -13,6 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 import textwrap
 from pathlib import Path
 
@@ -29,6 +33,64 @@ LAYER_MANIFEST = "echolot-layer.json"
 # template over it — which is what `init --force` did — hands the project
 # back that one line and takes the rest of its configuration with it.
 MERGED = ("settings.json",)
+# How a person gets a newer echolot: the two tools that install it as a
+# command of its own. One string, because the layer line, the full doctor
+# section and `next` all say it.
+UPGRADE = "`pipx upgrade echolot` (or `uv tool upgrade echolot`)"
+
+# A version the way PEP 440 spells one, as far as this package could ever
+# carry it: the release (`0.8.0`), then a pre-release (`0.8.0rc1`, or
+# `0.8.0beta1` and the other long spellings), a post-release
+# (`0.8.0.post1`), a development release (`0.8.0.dev2`) and a local label
+# (`0.8.0+mine`), each optional and in that order, with the separators PEP
+# 440 allows between them. Anything else — `0.8.0-1`, a `-SNAPSHOT` — does
+# not read as a version. `packaging` reads the whole standard and is not a
+# dependency of echolot; for these forms, the order `version_key` gives is
+# the one `packaging` gives.
+_VERSION = re.compile(r"""
+    v?(?P<release>\d+(?:\.\d+)*)
+    (?:[-_.]?(?P<pre>alpha|a|beta|b|preview|pre|rc|c)[-_.]?(?P<pre_n>\d+)?)?
+    (?P<post>[-_.]?post[-_.]?(?P<post_n>\d+)?)?
+    (?P<dev>[-_.]?dev[-_.]?(?P<dev_n>\d+)?)?
+    (?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?
+""", re.VERBOSE | re.IGNORECASE)
+# Each spelling of a pre-release, as its place before the release.
+_PRE = {"a": 0, "alpha": 0, "b": 1, "beta": 1,
+        "rc": 2, "c": 2, "pre": 2, "preview": 2}
+
+
+def version_key(version: object) -> tuple | None:
+    """What puts two versions in order — None for one that does not read as one.
+
+    The release is compared number by number, which is the part a string
+    comparison gets wrong: 0.10.0 comes after 0.9.0. Trailing zeros do not
+    count, so 0.8 and 0.8.0 are one version. Around one release, in order:
+    its development releases, its pre-releases (a, b, rc), the release, its
+    post-releases. A local label is a build of the version it is attached
+    to and orders nothing.
+
+    Releases of this package are plain X.Y.Z tags, so the suffixes are here
+    for a build that carries one, which must neither be locked out of a
+    layer the release before it wrote nor put its own files over the
+    release that came after it.
+    """
+    if not isinstance(version, str):
+        return None
+    m = _VERSION.fullmatch(version.strip())
+    if m is None:
+        return None
+    release = [int(n) for n in m["release"].split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    if m["pre"]:
+        pre = (_PRE[m["pre"].lower()], int(m["pre_n"] or 0))
+    elif m["dev"] and not m["post"]:
+        pre = (-1, 0)      # 0.8.0.dev1 comes before 0.8.0a1
+    else:
+        pre = (3, 0)       # the release itself, after every pre-release
+    post = int(m["post_n"] or 0) if m["post"] else -1
+    dev = int(m["dev_n"] or 0) if m["dev"] else math.inf
+    return (tuple(release), pre, post, dev)
 
 
 def sha(path: Path) -> str:
@@ -238,6 +300,49 @@ EDITED = ("conflict", "differs", "customised")
 SHOWN = ("stale", "missing", "conflict", "differs", "customised", "unreadable")
 
 
+def ahead(project: Path) -> dict | None:
+    """Why this echolot must leave the project's layer alone — None when it need not.
+
+    The manifest has named the echolot that wrote the layer from the first
+    day, and nothing read the name back. So a layer that a teammate's newer
+    echolot installed and committed met an older one like this: a file
+    untouched since then differs from the older package's template, the
+    audit called it stale, and `init` — which `/echolot` runs by itself when
+    `next` says `init` — put the older file back, wrote the older version
+    into the manifest and printed "Layer updated." The newer echolot then
+    found its own files stale and put them back in turn, and the layer went
+    back and forth with whoever ran `init` last.
+
+    So the name is read first, before any file is compared. A newer release
+    wrote the layer: this one writes nothing and says to upgrade. That is
+    also the only news of a newer release echolot can give, since it makes
+    no network calls: a teammate's commit is what brings it.
+
+    A name that does not read as a version — a hand edit, a spelling this
+    release does not know — cannot be put in order with this one, and is
+    treated the same way. Leaving the layer alone costs a person one command;
+    putting older files over newer ones undoes a teammate's upgrade without
+    a word. A manifest with no name in it makes no claim, and the files are
+    judged one by one as before; every echolot that wrote a manifest wrote a
+    name, so that is a manifest somebody edited.
+    """
+    by = _read_manifest(project / ".claude").get("echolot")
+    if by is None:
+        return None
+    this = recorder.version()
+    theirs, mine = version_key(by), version_key(this)
+    readable = theirs is not None and mine is not None
+    if readable and theirs <= mine:
+        return None
+    if readable:
+        says = f"written by echolot {by}, a newer release than this {this}"
+    else:
+        says = (f".claude/{LAYER_MANIFEST} names echolot {by!r} as its writer, "
+                f"and this echolot ({this}) cannot compare that with its own "
+                f"version")
+    return {"by": by, "this": this, "readable": readable, "says": says}
+
+
 def assess(project: Path) -> dict:
     """The layer's verdict and the one thing to do about it.
 
@@ -248,6 +353,9 @@ def assess(project: Path) -> dict:
     in the full section — and the second would have overwritten the
     customised file to update the stale one.
 
+        newer       written by a newer        an upgrade; `init` refuses
+                    echolot, or one whose
+                    version does not read
         absent      nothing installed         `echolot init`
         opted-out   declined on purpose       nothing
         current     nothing to do             nothing
@@ -257,12 +365,20 @@ def assess(project: Path) -> dict:
         unreadable  settings.json does not    a person fixes the file
                     parse
 
-    In that order when a layer has several: what `init` does on its own comes
-    first, so the question a person has to answer is asked about what is left
-    after it — and an unreadable settings.json, which `init` can never fix,
-    stops being read as a reason to run `init` again. It was: `stale`,
-    `next: init`, and `init` left the file as it was every time.
+    `newer` is decided before a single file is compared, and whatever the
+    files say: against an older template every file the newer release
+    changed reads as stale, which is the misreading it exists to stop (see
+    `ahead`). The rest in that order when a layer has several: what `init`
+    does on its own comes first, so the question a person has to answer is
+    asked about what is left after it — and an unreadable settings.json,
+    which `init` can never fix, stops being read as a reason to run `init`
+    again. It was: `stale`, `next: init`, and `init` left the file as it was
+    every time.
     """
+    newer = ahead(project)
+    if newer:
+        return {"verdict": "newer", "status": None, "files": {},
+                "command": None, "says": newer["says"], "ahead": newer}
     status = audit(project)
     if status is None:
         # Absent because this project said it does not use Claude Code is a
@@ -296,10 +412,27 @@ def _counts(files: dict[str, list[str]]) -> str:
     return ", ".join(f"{len(files[s])} {s}" for s in SHOWN if s in files)
 
 
+# The way out when the manifest names a version this echolot cannot read,
+# and upgrading does not change that: the manifest itself is what is wrong.
+# Without one, `init` has nothing to vouch for any file, so it adds what is
+# missing and keeps every file that differs from the template until a
+# person chooses `--all` — `next` says `init-force`, and the skill asks.
+_NO_MANIFEST = (f"if this is already the newest echolot, the manifest is what "
+                f"is wrong: delete .claude/{LAYER_MANIFEST}, and `echolot init` "
+                f"then keeps every file that differs until `--all` is chosen")
+
+
 def one_line(project: Path) -> tuple[str, str]:
     """(verdict, one line) about the project's .claude/ layer — for -q."""
     a = assess(project)
     verdict, files = a["verdict"], a["files"]
+    if verdict == "newer":
+        if a["ahead"]["readable"]:
+            return verdict, (f"layer: NEWER — {a['says']}, which leaves it alone "
+                             f"rather than roll it back → upgrade: {UPGRADE}")
+        return verdict, (f"layer: VERSION UNREADABLE — {a['says']}; it could be "
+                         f"newer, so the layer is left alone → upgrade: "
+                         f"{UPGRADE}; {_NO_MANIFEST}")
     if verdict == "absent":
         return verdict, f"layer: {a['says']} (`{a['command']}`)"
     if verdict == "opted-out":
@@ -331,6 +464,25 @@ def print_status(project: Path) -> str | None:
     a = assess(project)
     verdict, files, status = a["verdict"], a["files"], a["status"]
     print("\n## The .claude/ layer in this project\n")
+    if verdict == "newer":
+        # No files listed: against this older template, every file the
+        # newer release changed would be listed as stale.
+        if a["ahead"]["readable"]:
+            said = (f"{a['says']}. An older echolot would put its own files "
+                    f"back over the newer ones, so this one compares nothing "
+                    f"here and writes nothing, and `init` refuses.")
+            todo = f"upgrade: {UPGRADE}, then run `echolot` again."
+        else:
+            said = (f"{a['says']}. It could be newer, so this one compares "
+                    f"nothing here and writes nothing, and `init` refuses.")
+            todo = f"upgrade: {UPGRADE}; {_NO_MANIFEST}."
+        print(textwrap.fill(said, width=80, initial_indent="  ",
+                            subsequent_indent="  ", break_on_hyphens=False,
+                            break_long_words=False))
+        print(textwrap.fill(todo, width=80, initial_indent="  → ",
+                            subsequent_indent="    ", break_on_hyphens=False,
+                            break_long_words=False))
+        return verdict
     if verdict == "absent":
         print(f"  {a['says']}. `{a['command']}` puts the skill, the agent "
               f"and the commands into ./.claude/")

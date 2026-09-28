@@ -3071,13 +3071,15 @@ def _(report):
     _json.loads((CLAUDE_DIR / "settings.json").read_text(encoding="utf-8"))
 
 
-@check(".claude/ layer: doctor tells stale from customised from current")
+@check(".claude/ layer: doctor tells stale from customised from current, "
+       "and init leaves a newer one alone")
 def _(report):
     import argparse
     import contextlib
     import io
+    import json as _json
     from .main import cmd_init
-    from .layer import LAYER_MANIFEST, audit, write_manifest
+    from .layer import LAYER_MANIFEST, assess, audit, write_manifest
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
         assert audit(project) is None, "no layer yet must be None"
@@ -3120,6 +3122,29 @@ def _(report):
             cmd_init(argparse.Namespace(into=str(project), force=True, no_doctor=True))
         assert "! .claude/skills/echolot/SKILL.md" in out.getvalue(), out.getvalue()
         assert {r["state"] for r in audit(project)["rows"]} == {"current"}
+
+        # a newer echolot wrote it: a file it changed reads as stale against
+        # this template, and an older `init` used to put this template's
+        # copy back. The manifest's version is read first now, and neither
+        # a file nor the manifest moves — `--all` included.
+        agent.write_text(agent.read_text(encoding="utf-8") + "\n# newer\n", encoding="utf-8")
+        write_manifest(project / ".claude", {"agents/perf-hunter.md": sha(agent)})
+        manifest = project / ".claude" / LAYER_MANIFEST
+        manifest.write_text(_json.dumps(dict(
+            _json.loads(manifest.read_text(encoding="utf-8")), echolot="999.0")),
+            encoding="utf-8")
+        by = {r["file"]: r["state"] for r in audit(project)["rows"]}
+        assert by["agents/perf-hunter.md"] == "stale", by
+        assert assess(project)["verdict"] == "newer", assess(project)
+        layer_before = {p: p.read_bytes() for p in (project / ".claude").rglob("*")
+                        if p.is_file()}
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            refused = cmd_init(argparse.Namespace(into=str(project), force=True,
+                                                  no_doctor=True))
+        assert refused == 1, f"init over a newer layer exited {refused}"
+        assert {p: p.read_bytes() for p in (project / ".claude").rglob("*")
+                if p.is_file()} == layer_before, "init wrote into a newer layer"
 
         # a layer installed before the manifest existed: differs, not stale
         (project / ".claude" / LAYER_MANIFEST).unlink()
@@ -3301,6 +3326,18 @@ def _(report):
         # layer, no config: build the config — /echolot does that
         st = project_state(project)
         assert next_kind(st) == "setup" and "/echolot" in next_step(st), next_step(st)
+        # the same layer as a newer echolot left it: nothing this one runs
+        # helps, so upgrading comes before everything else
+        import json as _json
+        from .layer import LAYER_MANIFEST
+        manifest = project / ".claude" / LAYER_MANIFEST
+        kept = manifest.read_text(encoding="utf-8")
+        manifest.write_text(_json.dumps(dict(_json.loads(kept), echolot="999.0")),
+                            encoding="utf-8")
+        st = project_state(project)
+        assert next_kind(st) == "upgrade" and "pipx upgrade echolot" in next_step(st), \
+            next_step(st)
+        manifest.write_text(kept, encoding="utf-8")
         (project / "echolot.yml").write_text(
             "project:\n  process: app\nscenario:\n  name: checkout\n", encoding="utf-8")
         # config, no traces: hunt (it collects), or collect by hand
@@ -3336,9 +3373,9 @@ def _(report):
         assert next_kind(project_state(project)) == "hunt", \
             "the loop must never be interrupted by the choice"
         # every kind the skill switches on is one the decision can produce
-        assert set(NEXT_KINDS) >= {"init", "init-force", "fix-settings",
-                                   "doctor", "setup", "fix-config",
-                                   "resume-or-new", "hunt"}
+        assert set(NEXT_KINDS) >= {"upgrade", "init", "init-force",
+                                   "fix-settings", "doctor", "setup",
+                                   "fix-config", "resume-or-new", "hunt"}
 
 
 @check("init: `--all` is the flag, and `--force` still means the same")
