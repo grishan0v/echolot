@@ -13,31 +13,40 @@ cannot be mistaken for the project's.
 
 ## The `report.json` schema
 
+A report of five repeats merged, which is what `collect` and then `analyze`
+produce. The keys only a merged report has are named under the block.
+
 ```json
 {
   "schema": 1,
   "generated_at": "2026-08-15T12:00:00+00:00",
-  "trace": "path",
-  "toolchain": { "perfetto_package": "0.57.2",
-                 "trace_processor": "v56.1", "source": "pinned" },
+  "trace": "path of the first repeat",
+  "traces": ["…/coldStart_iter000.perfetto-trace", "…"],
+  "runs": 5,
+  "toolchain": { "perfetto_package": "0.57.2", "trace_processor": "v56.1",
+                 "source": "pinned", "binary": null },
   "window": { "ts_start": …, "ts_end": …, "duration_ms": 772.3,
+              "duration_ms_min": 751.8, "duration_ms_max": 790.4,
               "process": "com.example.app", "pid": 4100,
               "start_anchor": { "glob": "bindApplication", "matches": 1 },
-              "end_anchor":   { "glob": "…", "matches": 1 } },
-  "environment": { "cpu": { "mean_mhz": 1481.2, "min_mhz": 300.0,
+              "end_anchor":   { "glob": "…", "matches": 1 },
+              "opened_inside": null,
+              "main_thread": { "on_cpu": 380.1, "waiting_for_cpu": 30.6,
+                               "in_kernel": 77.2, "sleeping": 282.1,
+                               "other": 0.0, "accounted_ms": 770.0,
+                               "window_ms": 772.3, "accounted_pct": 99.7,
+                               "runs": "5/5" } },
+  "environment": { "cpu": { "mean_mhz": 1481.2, "mean_mhz_min": 1452.0,
+                            "mean_mhz_max": 1503.9, "min_mhz": 300.0,
                             "max_mhz": 2400.0, "on_cpu_ms": 1945.0,
-                            "measured_ms": 1902.4 },
+                            "measured_ms": 1902.4, "runs": "5/5" },
                    "thermal": { "max_celsius": 61.5, "hottest_zone": "cpu-therm",
-                                "throttled": false, "throttle_device": null },
+                                "throttled": false, "throttle_device": null,
+                                "throttled_runs": "0/5" },
                    "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
                    "missing": [] },
-  "window": { "…": "…",
-              "main_thread": { "on_cpu": 268.4, "waiting_for_cpu": 21.5,
-                               "in_kernel": 55.0, "sleeping": 195.1,
-                               "other": 0.0, "accounted_ms": 540.0,
-                               "window_ms": 541.5, "accounted_pct": 99.7 } },
-  "summary": { "detectors_run": 6, "detectors_fired": 4,
-               "fired_ids": ["main_thread_block", "…"] },
+  "summary": { "detectors_run": 12, "detectors_fired": 4,
+               "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
               "local": null, "defaults": false, "set": null },
   "markers": { "prefix": "AGENTTMP_",
@@ -51,15 +60,32 @@ cannot be mistaken for the project's.
     { "id": "…", "title": "…", "why": "…",
       "params": { … }, "params_source": "config",
       "defaults": { "min_slice_ms": 16 },
-      "rows": [ { "location": "draw", "runs": "5/5", "count": 4,
+      "identity": ["location", "detail"],
+      "rows": [ { "location": "draw", "detail": "com.example.app",
+                  "runs": "5/5", "count": 4,
                   "self_ms": 125.4, "total_ms": 130.1, "max_ms": 61.2,
                   "spread": { "self_ms": { "min": …, "max": …, "values": [ … ] },
-                              "max_ms":  { … } },
-                  "detail": "main" } ],
+                              "total_ms": { … }, "max_ms": { … } } } ],
       "error": null }
   ]
 }
 ```
+
+**`traces` and `runs`** — the repeats behind a merged report, by path, and
+how many. Every number in it is then a median across them, and a few keys say
+how far the repeats spread: `window.duration_ms_min` and `_max`,
+`window.main_thread.runs` (how many repeats had a main thread to account for),
+`environment.cpu.mean_mhz_min` and `_max` with `environment.cpu.runs` (how many
+had a clock to read), and `environment.thermal.throttled_runs` — how many were
+throttled, kept as a count because one throttled repeat is a fact about the
+set rather than a vote. A report of a single trace has none of these keys.
+
+**`detectors[].identity`** — the columns that name a row of this detector:
+`location`, and for several of them `detail` too. Merging repeats and
+`compare` both pair rows on all of them, so two rows with one `location` and
+different `detail` are two findings, not a duplicate. Where `detail` is part
+of the identity it is the same in every repeat; elsewhere it is evidence,
+taken from the repeat where the row cost most.
 
 **`config`** — which file made this report, and its content hash. Two
 reports with different `sha` were not made against the same thresholds;
@@ -177,11 +203,11 @@ and the largest by slice count was taken. If you are analysing `:pushservice`
 instead of the main process, narrow `project.process`. The list holds the
 next few by slice count; `process_alternatives_total` is how many there were.
 
-**`summary.absent_ids` non-empty** — this project's config names detectors,
-so only those ran, and the ones listed here were shipped after it was written.
-They are not silent; they never ran. `echolot analyze … --defaults` runs every
-shipped detector without touching the config, which is the quickest way to see
-what they would have said.
+**`summary.absent_ids` non-empty** — the config turned these detectors off,
+with `<detector>: false` under `detectors:`, so they did not run. They are not
+silent; nobody asked them. `echolot analyze … --defaults` runs every shipped
+detector without touching the config, which is the quickest way to see what
+they would have said.
 
 **`detectors[].error != null`** — that detector failed while the rest ran. SQL
 is version-fragile; report the error, but do not treat the absence of findings
@@ -196,7 +222,10 @@ number that moved.
 
 **`toolchain.trace_processor`** — the parser version. If the numbers diverge
 between two reports, check this first: a version change alters trace semantics
-while the SQL stays identical.
+while the SQL stays identical. `source` says where the binary came from —
+`pinned`, `--tp-binary` on the command line, or `toolchain.tp_binary` from the
+config, usually local.yml — and `binary` is its path when it was not the
+pinned one, `null` when it was.
 
 ## Row columns
 
@@ -205,6 +234,7 @@ The contract is shared, but not every detector fills every column.
 | column | meaning |
 |---|---|
 | `location` | the slice or thread name — what you hook onto |
+| `runs` | in a merged report, how many repeats the row was found in, of how many — `3/5` |
 | `count` | how many times it occurred inside the window |
 | `self_ms` | self time, with children subtracted |
 | `total_ms` | total time, children included |
@@ -213,7 +243,7 @@ The contract is shared, but not every detector fills every column.
 | `code` | where that is in the checkout, when the row names a method or a class — see below |
 | `detail` | the evidence: thread, state, lock name with the owner's tid |
 | `places` | the json behind `code`: every symbol the row names, with `file`, `line` and `role` |
-| `spread` | the per-run values behind the medians, for two columns — see below |
+| `spread` | the per-run values behind the medians, for three columns — see below |
 
 **`code` and `places` save the grep.** A contention slice names both sides of
 the lock — the thread holding it and where it is, the method that waited and
@@ -251,10 +281,12 @@ second means the next run will say something else.
                          "values": [118.2, 121.0, 125.4, 133.7, 340.1] } }
 ```
 
-Present for the detector's ranking metric (`self_ms` where it has one,
-`total_ms` otherwise) and for `max_ms`. `values` holds one entry per repeat the
-row was **found in**, which is what `runs` counts: a `3/5` row has three. Absent
-when `analyze` ran on a single trace — there is nothing to spread.
+Present for `self_ms`, `total_ms` and `max_ms`, whichever of them the row
+carries. The one to read is the ranking metric's — `self_ms` where the
+detector measures it, `total_ms` otherwise — which is also the one `compare`
+tests. `values` holds one entry per repeat the row was **found in**, which is
+what `runs` counts: a `3/5` row has three. Absent when `analyze` ran on a
+single trace — there is nothing to spread.
 
 Use it before acting on a number. A row whose `max` is several times its median
 holds one slow occurrence rather than a steady cost, and that is a different
@@ -404,7 +436,7 @@ itself is the symptom; the cause is the number of intermediate objects.
 
 **`binder_txn`** fires both on one long transaction and on the sum of short
 ones. On a live startup there were 76 transactions of about 1 ms — 66 ms
-together, an eighth of the cold start, and not one of them stood out alone.
+together, 8.5% of the cold start, and not one of them stood out alone.
 
 ## An empty report
 
@@ -420,7 +452,9 @@ The second case is more common than the first.
 ## The comparison — `echolot compare`
 
 Two Marker Reports in, one table out, sorted by how far each row moved. Written
-to `comparison.json` and `comparison.md` beside the report.
+to `comparison.json` and `comparison.md` beside the report when `echolot.yml`
+is found; run from a folder without one, it prints the table and writes
+nothing.
 
 ```bash
 echolot compare                      # inside an investigation: previous round vs latest
@@ -457,7 +491,8 @@ dropped silently.
 means the two sets are apart — every run after was outside everything seen
 before. `true` means they intersect, so the runs disagree among themselves by
 more than the medians moved: record another round before concluding. `null`
-means one side was a single trace.
+means there was nothing to test: the row is on one side only — every
+`appeared` and `vanished` row — or one side was a single trace.
 
 **`count` before and after** separates "called more often" from "became slower
 inside". `inflate` at 12 → 31 occurrences and `loadAll` growing 73× at one
@@ -467,13 +502,17 @@ occurrence are different bugs in different places.
 name family second — `arch_disk_io_0` and `arch_disk_io_3` are one pool.
 The family pass only fires when exactly one row on each side is unmatched;
 otherwise the rows stay listed as appeared and gone rather than guessed at.
+A name carrying the config's `instrumentation.temp_prefix` keeps its digits in
+that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 
 **`warnings`** — read before the table:
 
 | `id` | what it means |
 |---|---|
 | `thresholds` | detector parameters differ. **appeared** and **gone** mean the bar moved, not that the app changed. Re-run both with `--defaults` |
-| `instrumentation` | rows that appeared are `AGENTTMP_` markers added between the rounds — a breakdown of a blind spot, not new work |
+| `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
+| `environment-thermal` | the kernel throttled the device during one round and not the other: that side is slower for a reason outside the code. Only when both sides recorded thermal state |
+| `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
 | `process` | two different apps. `comparable: false` |
 | `defaults` / `config` | one side used `--defaults`, or the config's hash changed |
 | `anchor-before` / `anchor-after` | that side's window is the whole trace |

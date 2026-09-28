@@ -460,6 +460,38 @@ def test_a_clock_nobody_recorded_is_unknown_not_steady() -> None:
           "after" in text and "unknown" in text, text)
 
 
+# The block `analyze` writes for a trace recorded without the platform-state
+# sources. Never an empty dict: every key is there, and every measurement in
+# it is null.
+UNMEASURED = {"cpu": None, "thermal": None, "memory": None,
+              "missing": ["cpu", "memory", "thermal"]}
+
+
+def test_two_rounds_that_measured_nothing_say_nothing_about_it() -> None:
+    """The pair the quiet case was written for, in the shape it really has.
+
+    The case above builds its old reports with no `environment` at all, which
+    is what a report written before the block existed looks like. A trace
+    recorded without the sources looks different: `analyze` writes the block
+    anyway, with every measurement null. A test for an empty dict let that
+    pair through, and every comparison of two such rounds opened with a
+    warning about a clock neither side had tried to read.
+    """
+    quiet = compare(
+        report([det("d", [row("A", 100.0)])], environment=dict(UNMEASURED)),
+        report([det("d", [row("A", 100.0)])], environment=dict(UNMEASURED)))
+    w = warned(quiet)
+    check("no clock warning between two rounds that measured nothing",
+          "environment" not in w, str(w))
+    check("and no thermal one either", "environment-thermal" not in w, str(w))
+
+    half = compare(
+        report([det("d", [row("A", 100.0)])], environment=env(1800.0)),
+        report([det("d", [row("A", 100.0)])], environment=dict(UNMEASURED)))
+    check("one measured round against one that measured nothing is still said",
+          "environment" in warned(half), str(warned(half)))
+
+
 def test_throttling_on_one_side_only() -> None:
     before = report([det("d", [row("A", 100.0)])],
                     environment=env(1800.0, throttled=False))
@@ -634,6 +666,39 @@ def test_end_to_end(tmp_path: Path) -> None:
           f"exit {done.returncode}")
     check("with a sentence that says why",
           "not a Marker Report" in done.stderr, done.stderr[-200:])
+
+
+def test_a_trace_without_the_sources_compares_as_unmeasured(
+        marker_report, tmp_path: Path) -> None:
+    """The same quiet pair, written by the pipeline instead of by hand.
+
+    What broke was the contract between the two commands: `analyze` wrote a
+    shape that `compare` did not read as "nothing recorded". Merged as well
+    as single, because merging repeats writes the block a second time.
+    """
+    import copy
+
+    from echolot import fixture, selftest
+    from echolot import report as report_mod
+    from echolot.config import Config
+    from echolot.main import analyze_trace
+
+    trace = tmp_path / "bare.perfetto-trace"
+    trace.write_bytes(fixture.build(environment=False))
+    bare = analyze_trace(trace, Config(selftest.FIXTURE_CONFIG))
+    merged = report_mod.aggregate([copy.deepcopy(bare), copy.deepcopy(bare)])
+
+    for label, one in (("single", bare), ("merged", merged)):
+        w = warned(compare(one, one))
+        check(f"{label}: two unmeasured rounds carry no platform-state warning",
+              not w & {"environment", "environment-thermal"}, str(w))
+
+    # The session's report is the fixture with its platform state recorded.
+    cmp = compare(copy.deepcopy(marker_report), bare)
+    text = next((w["text"] for w in cmp["warnings"] if w["id"] == "environment"), "")
+    check("against a measured round the missing clock is named, on its side",
+          "the after side carries no CPU frequency" in text,
+          text or str(warned(cmp)))
 
 
 # --- which two reports, when nobody named them ------------------------------

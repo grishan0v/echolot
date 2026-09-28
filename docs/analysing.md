@@ -78,9 +78,12 @@ detectors:
     name_glob: "*GC"
 ```
 
-The convention: `*name_glob*` masks the slice name, `*thread_glob*` the thread
-name, `*skip_glob*` is an exclusion. `names` reads them itself, so a new
-detector with masks appears in the report without any registration.
+The convention is in the parameter's name: one with `name_glob` in it masks
+the slice name (`name_glob_alt` is a second mask of the same kind), one with
+`skip_glob` is an exclusion. `names` also reads `thread_glob` as a mask over
+the thread name, although no shipped detector declares one. It takes them from
+the detector files and the config itself, so a new detector with masks
+appears in its output without any registration.
 
 They live in the config rather than in SQL because adapting to a device must
 not require editing a query. What ART actually calls things on Android 14 is
@@ -144,11 +147,20 @@ Precision rules worth knowing:
 - `build` and `generated` are not scanned — generated code is no place for
   hypotheses.
 
-Calls with a non-literal name that no constant explains
-(`Trace.beginSection(tag)`, `Traces.createTrace("OkHttp CALL $path")`) cannot
-reach the map at all. They are counted separately and mentioned in the header:
-they are visible in the trace, and staying quiet about them would pass a gap
-off as its absence.
+What reaches the map, then: a literal in `Trace.beginSection`,
+`Trace.beginAsyncSection` or their `TraceCompat` twins, a bare `trace("…")`
+under the import above, and a constant handed to a call whose name says
+`trace`. A name built at runtime cannot reach it, and only some of those calls
+are counted: `trace(…)`, `Trace.beginSection(…)` and
+`TraceCompat.beginSection(…)` with an identifier where the literal would be
+and no constant to resolve it. Those are mentioned in the header — they are
+visible in the trace, and staying quiet about them would pass a gap off as
+its absence. Anything else is neither mapped nor counted, so that count is a
+floor: `Trace.beginAsyncSection(tag, …)`, and a wrapper of the project's own
+by any other name, called with a literal or a variable —
+`Traces.createTrace("OkHttp CALL $path")` is one. A template inside a literal,
+`Trace.beginSection("load_$id")`, is mapped as written, `$id` and all, and
+will not match the name the trace carries.
 
 ### When there is no instrumentation
 
@@ -171,6 +183,57 @@ works": the modules with the most code and none of it, by name.
 which of those modules actually burns CPU. And where the first markers go —
 the entry points, from the manifest and the SDK, with a source on every row
 — is `echolot mark`, in [mark.md](mark.md).
+
+## Your own names, measured every time
+
+A detector shows a marker only when it clears a threshold, and a marker you
+planted is one you want the number for whatever it cleared. So a report
+carries a **Markers** table above the detectors' sections whenever there is
+anything to put in it, and two things decide what that is:
+
+- every name `domains[].slice` lists, each read as a GLOB;
+- every name that starts with `instrumentation.temp_prefix` — `AGENTTMP_`
+  when the config sets none.
+
+Thread sections and async ones both, since a project's own markers are
+usually async. One row per name, with the threads it ran on and `(async)` for
+a section on no thread. Self time subtracts the children, so a marker wrapping
+another reads as the difference between the two. A `domains` name that no
+repeat's window held is listed under the table as not in the window: the map
+points at something this scenario does not run, or the name changed under it.
+
+That makes `domains` more than a map for the reader. It is also what `analyze`
+measures of the project's own vocabulary, run after run, without a threshold
+in the way.
+
+Names that carry the temporary prefix keep their digits. `names` folds
+numbers into families — `worker-2` and `worker-5` are one pool — and leaves a
+prefixed name whole: `AGENTTMP_fill_v4` and `AGENTTMP_fill_v6` are two markers
+somebody wrote to tell two things apart. `names` takes the prefix from the
+config or falls back to `AGENTTMP_`; `compare` takes it from the config only.
+The Markers table folds nothing at all.
+
+## Reading a report without opening the json
+
+`report.json` is the contract, and it is not the thing to read whole.
+`echolot report` prints one view of a report already on disk and writes
+nothing:
+
+```bash
+echolot report                                 # what fired: one line per detector
+echolot report --detector monitor_contention   # its rows, longest first, five of them
+echolot report -d main_thread_block --top 12   # more rows; -d repeats for several detectors
+echolot report --window                        # the anchors, the main thread, the device
+echolot report --markers                       # the Markers table, fifteen rows of it
+echolot report -d repeated_work --json         # the same selection as json, places included
+echolot report path/to/report.json --window    # another report, a round's own copy
+```
+
+Without a path it reads `.echolot/out/report.json` next to the config, or
+under the working directory when there is none. A detector's view cuts the
+location at 60 characters and the evidence at 100; `--wide` keeps both
+whole. `--json` keeps everything and cuts only the rows, and only when
+`--top` says how many.
 
 ## From a row to a line, without `domains`
 

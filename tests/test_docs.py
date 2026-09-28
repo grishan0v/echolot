@@ -171,6 +171,70 @@ def test_the_sample_comparison_has_the_columns_compare_prints(document):
         assert got == want, f"{document} shows {got}, compare prints {want}"
 
 
+# --- anchors, which a heading can stop answering ----------------------------
+
+# The documents a link inside the repository may point into.
+LINKING = ["README.md", *sorted(f"docs/{p.name}" for p in (ROOT / "docs").glob("*.md"))]
+
+
+def _unfenced(path: Path) -> str:
+    return re.sub(r"^```.*?^```", "", path.read_text(encoding="utf-8"),
+                  flags=re.S | re.M)
+
+
+def _slug(heading: str) -> str:
+    """A heading's anchor, made the way GitHub and the link checker make it.
+
+    Lower case; letters, digits, `-` and `_` kept; whitespace to `-`;
+    everything else dropped. The text of inline code counts, and so does the
+    label of a link — the markup around them does not.
+    """
+    text = re.sub(r"`([^`]*)`", r"\1", heading)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text).replace("*", "")
+    return "".join("-" if ch.isspace() else ch
+                   for ch in text.strip().lower()
+                   if ch.isalnum() or ch in "-_" or ch.isspace())
+
+
+def _anchors(path: Path) -> set[str]:
+    """Every anchor the headings of one document make, repeats numbered."""
+    seen: dict[str, int] = {}
+    out: set[str] = set()
+    for heading in re.findall(r"^#{1,6}\s+(.+?)\s*$", _unfenced(path), re.M):
+        slug = _slug(heading)
+        out.add(slug if slug not in seen else f"{slug}-{seen[slug]}")
+        seen[slug] = seen.get(slug, 0) + 1
+    return out
+
+
+@pytest.mark.parametrize("document", LINKING)
+def test_every_anchor_a_link_names_is_a_heading_there(document):
+    """A link into a heading outlives the heading, and nothing says so.
+
+    `docs/compare.md` sent readers to `../README.md#there-is-no-ci-gate-on-purpose`
+    for weeks after the heading it named had been renamed. GitHub opens such
+    a link at the top of the page without a word, the link checker ran with
+    fragments off, and the reader lands somewhere unrelated to the sentence
+    that sent them.
+
+    Links inside the repository only, the in-page ones and the ones into
+    another document here. An absolute URL is the link checker's business.
+    """
+    here = ROOT / document
+    broken = []
+    for target in re.findall(r'(?:\]\(|href=")([^)"\s]*#[^)"\s]+)', _unfenced(here)):
+        if re.match(r"[a-z]+:", target):
+            continue
+        name, fragment = target.split("#", 1)
+        page = (here.parent / name).resolve() if name else here
+        if page.suffix != ".md" or not page.is_file():
+            continue
+        if fragment not in _anchors(page):
+            broken.append(target)
+    assert not broken, (
+        f"{document} links to anchors no heading makes: {', '.join(broken)}")
+
+
 # --- the version, which is also a claim about the tool ----------------------
 
 def test_the_version_comes_from_the_code_and_only_from_there():

@@ -15,9 +15,11 @@ body:
     attributes:
       label: Environment
       description: |
-        The output of `echolot doctor -q`. One line, and it carries every
-        version that can change the answer:
-        `echolot 0.6.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7`
+        The output of `echolot doctor -q`, run in the project. Three lines,
+        and the first carries every version that can change the answer:
+        `echolot 0.7.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7`.
+        The second is the state of the `.claude/` layer, and the third how
+        many self-checks passed — with every failure listed under it.
 
         The trace_processor version is the one that matters most: the
         detectors match on strings that binary invents, so a different version

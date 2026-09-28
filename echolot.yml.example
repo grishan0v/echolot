@@ -1,9 +1,11 @@
 # echolot — the contract between the engine and the project.
 # Copy to echolot.yml and fill in. Commit it.
 #
-# Machine-local things — device serials, a path to your own
-# trace_processor_shell — go into local.yml next to this file. That one stays
-# in .gitignore; the merge is recursive and local wins.
+# Machine-local things go into local.yml next to this file: runner.device, the
+# serial of the phone on this desk, and toolchain.tp_binary, a path to your own
+# trace_processor_shell. That one belongs in .gitignore. The merge is recursive
+# and local wins key by key, but a list is replaced whole: a runner.gradle_args
+# in local.yml drops the one below rather than adding to it.
 #
 # The file has three readers, and the headers below say which is which:
 # the code, the agent running the loop, and — for one section so far — nobody
@@ -11,6 +13,8 @@
 # be mistaken for one that changes a run.
 
 # --- read by the code ------------------------------------------------------
+# One key in this part is the exception: nothing reads
+# instrumentation.cleanup — the hunt takes its markers out whatever it says.
 project:
   package: com.example.app
   # A GLOB over process.name. If the app lives in several processes
@@ -46,16 +50,21 @@ runner:
   # gradle  — a macrobenchmark writes traces itself, we only collect them.
   mode: launch
   iterations: 5
-  # Long enough for the scenario, and a cold start is seconds. A freeze is not:
-  # the platform waits five seconds before it calls anything an ANR, and then
-  # takes its own time writing the record down. Hunting one needs a window of
-  # its own — see docs/anr.md — and 12 seconds is not it.
+  # How long each recording runs, in launch and command modes; in gradle mode
+  # the macrobenchmark records, and decides for how long. Long enough for the
+  # scenario, and a cold start is seconds. A freeze needs more: the recording
+  # has to reach the freeze, then the five seconds the platform gives an
+  # unanswered input event before it declares an ANR, then a margin while it
+  # writes its record down. A freeze eight seconds in needs about sixteen
+  # seconds, past the twelve below — see docs/anr.md.
   duration_ms: 12000
   # force-stop (cold) or none (warm). pm clear is deliberately unsupported:
   # wiping data changes the scenario rather than repeating it.
   reset_policy: force-stop
   # Record what the device was doing to the app: CPU frequency, thermal
-  # throttling, free memory, and the kernel function a thread blocked on.
+  # throttling, free memory, and why a thread went into uninterruptible sleep
+  # — the disk flag `io_wait` reads, and the kernel function, which comes back
+  # empty on a production kernel and is named only on a userdebug one.
   #
   # On by default because `compare` depends on it. The same code on a lower
   # clock takes longer, and a comparison that cannot see the clock reports
@@ -64,9 +73,14 @@ runner:
   #
   # Turn it off if the buffer overflows on your device. What you lose is the
   # ability to tell a slower machine from a slower app: the report then says
-  # the device state was not recorded, and never that it held steady.
+  # the device state was not recorded, and never that it held steady. `io_wait`
+  # goes silent too, with no disk flag left to read.
   environment: true
+  # What the recording asks for, with the defaults. The categories are atrace's.
+  # atrace_categories: [am, wm, gfx, view, dalvik, binder_driver, res, database]
+  # buffer_kb: 131072
   # activity: com.example.app/.MainActivity   # resolved automatically if absent
+  # device: emulator-5554   # with several attached; belongs in local.yml
   #
   # mode: command
   # command: >
@@ -74,11 +88,16 @@ runner:
   #   adb shell input swipe 500 1500 500 600 400
   #
   # mode: gradle
+  # The macrobenchmark makes the recording in this mode, so environment,
+  # atrace_categories, buffer_kb, duration_ms and reset_policy do not apply.
   # gradle_task: ":benchmark:connectedBenchmarkBenchmarkAndroidTest"
-  # Where ./gradlew lives, and where the traces are looked for afterwards.
-  # Defaults to the current directory, which is only right when this file
-  # sits beside the wrapper.
+  # Where ./gradlew lives, and where the traces are looked for afterwards. A
+  # relative path is taken from this file's directory, the way -o is, and
+  # without the key it is that directory — right when this file sits beside
+  # the wrapper.
   # project_root: ../my-app
+  # gradle: ./gradlew       # the wrapper, run in project_root
+  # timeout_s: 3600         # the whole gradle run, build included
   # gradle_args: ["-Pandroid.testInstrumentationRunnerArguments.class=..."]
 
 # Detector thresholds. Values override the @param defaults in the .sql files.
@@ -89,7 +108,7 @@ runner:
 # nothing leaves the run because a section was tidied, and the report names
 # what was turned off at the top of every run.
 #
-# Until 0.5.4 this section doubled as an allowlist. On a real project a
+# Before 0.6.0 this section doubled as an allowlist. On a real project a
 # calibrated section was pasted in and tidied, and four of ten detectors then
 # sat out three runs in a row.
 #
@@ -97,7 +116,12 @@ runner:
 # derives them from known-healthy runs and prints a ready section with the
 # reasoning attached. The values below are the shipped defaults.
 #
-# Parameters suffixed *_glob are masks over names. They live in the config
+# A value has to be the kind its default is — a number for a threshold, a
+# string for a mask — and a parameter the detector does not have is refused;
+# either stops `analyze` with exit 2.
+#
+# Parameters with name_glob in their name (name_glob_alt too) are masks over
+# slice names, and skip_glob ones are exclusions. They live in the config
 # rather than in SQL because ART names GC and locks differently across Android
 # versions: adapting to a device must not require editing a query. What is
 # actually in the trace, and which masks land on it, is shown by
@@ -146,6 +170,11 @@ detectors:
     factor: 4                 # times the median before it counts as out of line
     min_abs_ms: 40            # and never mind the ratio below this
     min_occurrences: 5        # fewer than this is no history to be an outlier from
+  # Its near-miss rows are only ever about markers the hunt planted, and this
+  # is how it recognises them. A parameter of its own, not
+  # instrumentation.temp_prefix below: a project that changes one changes both.
+  repeated_work:
+    marker_prefix: AGENTTMP_
 
 # Where the agent may write temporary markers, and what to prefix them with.
 # `mark` reads both. A candidate outside `allowed` is still listed, but not
@@ -164,18 +193,21 @@ instrumentation:
   temp_prefix: AGENTTMP_
   cleanup: always               # on success and on running out of rounds alike
 
-# --- read by the agent, never by the code ----------------------------------
+# --- read by the agent, and by the code in two places ------------------------
 
 # The slice-to-code map. Turns a marker into a hypothesis without scanning the
 # repository blindly, and blind scanning is what eats an agent's context.
-# `echolot domains --root .` pre-fills it from the sources.
+# `echolot domains --root .` pre-fills it from the sources. `analyze` reads the
+# `slice` names too: each one, taken as a GLOB, is measured in the Markers table
+# of every report, and one the window never held is listed as absent.
 domains:
   - slice: "collection_mapping"
     module: ":feature:collection"
     hint: "CollectionMapper.kt — entity→domain"
 
 # The one number a human sets to bound a hunt. The agent has no goal of its own
-# to economise, so the limit is not left to its judgement.
+# to economise, so the limit is not left to its judgement. `reflect` reads it to
+# say whether a hunt went past it.
 loop:
   max_rounds: 3
   on_exhausted: report          # an interim conclusion from the data at hand

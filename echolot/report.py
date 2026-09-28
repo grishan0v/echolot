@@ -42,10 +42,11 @@ NUMERIC = ["count", "self_ms", "total_ms", "max_ms", "covered_ms"]
 # Columns whose per-run values survive the merge, in `spread`. The median alone
 # cannot say whether a number is steady: 120 ms from (118, 119, 121) and 120 ms
 # from (12, 120, 890) read identically, and only the second one means the next
-# run will say something else. Two columns rather than all five, because the
+# run will say something else. Three columns rather than all five, because the
 # whole point of the report is that it stays small:
-#   the ranking metric — every conclusion is drawn from it, so its stability is
-#   what decides whether a conclusion holds;
+#   self_ms and total_ms — one of the two is the ranking metric (`metric_of`),
+#   every conclusion is drawn from it, so its stability is what decides
+#   whether a conclusion holds;
 #   max_ms — where a single slow occurrence shows up at all, and a median over
 #   maxima across repeats is exactly what hides one.
 SPREAD = ["self_ms", "total_ms", "max_ms"]

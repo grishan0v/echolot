@@ -267,23 +267,24 @@ def _environment_moved(before: dict, after: dict) -> list[dict[str, str]]:
     speed did not.
 
     Silence has to mean "checked and steady", so a side with nothing recorded
-    says so instead. `analyze` only fills this in from a trace that carried
-    the platform-state sources; anything recorded without them, or before they
-    existed, arrives here empty.
+    says so instead. What "nothing recorded" looks like is `_measured`'s
+    business: `analyze` writes the block for every report, so a trace
+    recorded without the platform-state sources does not arrive empty.
     """
     eb, ea = before.get("environment") or {}, after.get("environment") or {}
-    if not eb and not ea:
-        # Neither side carries it. The reports say so on their own pages, and
-        # repeating it on every comparison of two older reports would be noise
-        # about a config rather than about these two rounds.
+    if not _measured(eb) and not _measured(ea):
+        # Neither side measured anything. The reports say so on their own
+        # pages, and repeating it on every comparison of two such rounds
+        # would be noise about a config rather than about these two rounds.
         return []
 
     out: list[dict[str, str]] = []
     cb, ca = eb.get("cpu") or {}, ea.get("cpu") or {}
     mb, ma = cb.get("mean_mhz"), ca.get("mean_mhz")
     if not mb or not ma:
-        # One side has a clock and the other does not. Thermal is still worth
-        # checking below — a missing clock is not a missing device.
+        # A side without a clock, while something was measured on one side
+        # or the other. Thermal is still worth checking below — a missing
+        # clock is not a missing device.
         blank = [side for side, mhz in (("before", mb), ("after", ma)) if not mhz]
         out.append({
             "id": "environment",
@@ -329,6 +330,21 @@ def _environment_moved(before: dict, after: dict) -> list[dict[str, str]]:
                     f"record that side again.",
         })
     return out
+
+
+def _measured(env: dict) -> bool:
+    """Whether a report's platform state holds any measurement at all.
+
+    `analyze` always writes the block. A trace recorded without the sources —
+    by an older echolot, or with `runner.environment: false` — comes back as
+    `cpu`, `thermal` and `memory` all null and all three named in `missing`,
+    which is a non-empty dict. The early return in `_environment_moved` used
+    to test for an empty one, so two such reports — the one pair it was
+    written to keep quiet — were told on every comparison that their clock
+    could not be checked. Only a report written before the block existed
+    carries none of it.
+    """
+    return any(env.get(key) for key in ("cpu", "thermal", "memory"))
 
 
 def _params_moved(before: dict, after: dict) -> list[str]:
