@@ -2,7 +2,7 @@
 
 [← back to the README](../README.md)
 
-Eleven documents. If you are here for the first time, read them in the order of
+Twelve documents. If you are here for the first time, read them in the order of
 the workflow: **collect → mark → analyse → compare → calibrate**. The rest
 explains why the tool is built the way it is.
 
@@ -42,6 +42,7 @@ Why the answers can be trusted, and what the tool refuses to do.
 | document | about |
 |---|---|
 | 📦 **[Publishing](publishing.md)** | cutting a release — the tag, Trusted Publishing, checking artefacts locally |
+| 🗺️ **[Planning](planning.md)** | where work is tracked — filing an issue, the four fields the roadmap board sorts by, when a spike comes first, and how a card reaches Done |
 
 ---
 
