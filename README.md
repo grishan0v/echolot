@@ -29,7 +29,7 @@ confident guesses instead of answers.
 echolot sits in between. It runs twelve SQL detectors over the trace and returns
 about twenty rows: where the time went, how much of it, and the evidence behind
 each claim. Same trace in, same report out — the `trace_processor` version is
-pinned and verified on every run.
+pinned, and the binary is checked against its SHA-256 when it is downloaded.
 
 > [!TIP]
 > The intended way to use it is through Claude Code: you describe the
@@ -75,8 +75,10 @@ cd ~/my-app && echolot init
 ```
 
 This installs the `.claude/` layer — a skill, the `perf-hunter` agent and three
-commands — adds `.echolot/` and `local.yml` to the project's `.gitignore`, and
-checks that this machine computes traces correctly.
+commands — and checks that this machine computes traces correctly. When the
+project directory is the root of a git checkout, `echolot init` also adds
+`.echolot/` and `local.yml` to its `.gitignore`; otherwise it says it did not
+and prints the two lines to add.
 
 ### 3. Open the agent and type one word
 
@@ -97,14 +99,20 @@ project stands and takes the next step by itself:
 /echolot init | setup | hunt | reflect | doctor
 ```
 
+Each word on the last line is also an `echolot` command, except `setup`:
+building `echolot.yml` needs an agent, and there is no `echolot setup` in the
+shell.
+
 ### Coming back later
 
 ```bash
 echolot
 ```
 
-Prints where the project stands — layer, config, traces, last report, last
-`doctor` — and one line saying what to do next.
+That is `echolot status`. It prints where the project stands — the layer, the
+config, the investigation, the traces, the last report and the last `doctor`,
+plus a `collect` line while a run is going or after one stopped short — and
+one line saying what to do next.
 
 > [!IMPORTANT]
 > After upgrading the package, run `echolot init` again. It brings the
@@ -126,7 +134,9 @@ agent.
 
 ## What you get
 
-A **Marker Report**: one section per detector that fired, nothing else.
+A **Marker Report**: a header saying what was measured and against which
+config, a table of your own markers when there are any, then one section per
+detector that fired. The silent ones are only named.
 
 <details>
 <summary><b>Example report</b> (click to expand)</summary>
@@ -137,50 +147,70 @@ A **Marker Report**: one section per detector that fired, nothing else.
 Runs: **5**, numbers are medians across them
 Traces: `coldStart_iter000`, `coldStart_iter001`, `coldStart_iter002`, `coldStart_iter003`, `coldStart_iter004`
 Process: `com.example.app` (pid 12903)
-Scenario window: **1184 ms** (from 1102 to 1291)
+Scenario window: **1184.37 ms** (from 1102.14 to 1291.52)
 Main thread: 49% on a CPU · 8% waiting for a CPU · 10% blocked in the kernel · 33% sleeping
 Device: clock **1481 MHz** (from 1204 to 1622 across repeats), peak 54 °C, 1536 MB free at the low point
 Detectors fired: **5 of 12**
+Config: `/home/you/my-app/echolot.yml` (sha 3f9a1c2b7d40) · thresholds: built-in defaults
 
-## Where the main thread spent its time
+## Markers
+_the names `domains` lists and the `AGENTTMP_` ones; medians per run, self time with children subtracted_
 
-_measured as SELF time, children subtracted_
-
-| Where | N | Self, ms | Total, ms | Max, ms |
-|---|---|---|---|---|
-| draw | 4 | 125.4 | 130.1 | 61.2 |
-| TextLayout:initLayout | 61 | 88.0 | 88.0 | 4.1 |
-| inflate | 12 | 47.3 | 210.7 | 12.9 |
-
-## Blind spots: threads burning CPU with no instrumentation
-
-_the only detector that finds a problem inside uninstrumented code_
-
-| Where | Total, ms | Instrumented, ms | Evidence |
-|---|---|---|---|
-| DefaultDispatch | 340.2 | 0.0 | 0 slices |
-
-## Monitor contention
-
-| Where | N | Total, ms | Max, ms | Evidence |
-|---|---|---|---|---|
-| Lock contention on a monitor lock | 9 | 61.5 | 22.4 | owner tid 12931 |
+| Marker | Runs | N | Self, ms | Total, ms | Max, ms | Threads |
+|---|---|---|---|---|---|---|
+| collection_load | 5/5 | 1 | 212.4 | 212.4 | 212.4 | (async) |
+| collection_mapping | 5/5 | 1 | 96.0 | 118.3 | 118.3 | arch_disk_io_1 |
 
 ## Frames that missed their deadline
+_the platform classifies every frame itself, and says whose fault it was. The only detector that answers "which frames stuttered" rather than "where did the total go" — and it needs no instrumentation in the app at all._
 
-_time past the deadline; frame duration is in the evidence_
+| Where | Runs | N | Total, ms | Max, ms | Evidence |
+|---|---|---|---|---|---|
+| App Deadline Missed | 5/5 | 14 | 412.0 | 70.1 | Self Jank · 14 of 300 frames · longest 86.2 ms |
 
-| Where | N | Total, ms | Max, ms | Evidence |
-|---|---|---|---|---|
-| App Deadline Missed | 14 | 412.0 | 70.1 | Self Jank · 14 of 300 frames · longest 86.2 ms |
+<sub>detector `frame_jank`, params: {'min_frames': 3, 'min_overrun_ms': 4}</sub>
+
+## Where the main thread spent its time
+_measured as SELF time, children subtracted — otherwise one event lands in the report several times at different depths and the agent counts it twice_
+
+| Where | Runs | N | Self, ms | Total, ms | Max, ms | Evidence |
+|---|---|---|---|---|---|---|
+| draw | 5/5 | 4 | 125.4 | 130.1 | 61.2 | com.example.app |
+| TextLayout:initLayout | 5/5 | 61 | 88.0 | 88.0 | 4.1 | com.example.app |
+| inflate | 5/5 | 12 | 47.3 | 162.4 | 21.7 | com.example.app |
+
+<sub>detector `main_thread_block`, params: {'min_slice_ms': 16}</sub>
 
 ## Single occurrences far longer than the same work usually takes
+_the pair to main_thread_block. That one asks where the main thread's time went in total; this one asks which single occurrence was out of line with its own history. A heavy tail hides from every sum._
 
-| Where | N | Total, ms | Max, ms | Evidence |
-|---|---|---|---|---|
-| inflate | 2 | 149.3 | 86.2 | median 12.9 ms of 312 · worst 6.7× |
+| Where | Runs | N | Total, ms | Max, ms | Evidence |
+|---|---|---|---|---|---|
+| inflate | 2/5 | 1 | 86.2 | 86.2 | median 12.9 ms of 12 · worst 6.7× |
 
-**Silent:** gc_pressure, binder_txn, runnable_starvation, repeated_work, anr_risk, anr
+<sub>detector `main_thread_outlier`, params: {'factor': 4, 'min_abs_ms': 40, 'min_occurrences': 5}</sub>
+
+## Monitor contention
+_ART writes a "Lock contention on ..." slice with the owner's tid — ready-made evidence_
+
+| Where | Runs | N | Total, ms | Max, ms | In the code | Evidence |
+|---|---|---|---|---|---|---|
+| com.example.app | 5/5 | 9 | 61.5 | 22.4 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:66 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:66) |
+
+<sub>detector `monitor_contention`, params: {'min_block_ms': 8, 'max_total_ms': 50, 'name_glob': 'Lock contention on a monitor lock*', 'name_glob_alt': 'monitor contention with owner*'}</sub>
+
+## Blind spots: threads burning CPU with no instrumentation
+_the ONLY detector that finds a problem inside uninstrumented code. The agent does not guess — it is handed the fact "thread T ran for 340 ms, zero slices". That is exactly where adding trace{} pays off._
+
+| Where | Runs | N | Total, ms | Instrumented, ms | Evidence |
+|---|---|---|---|---|---|
+| DefaultDispatch | 5/5 | 0 | 340.2 | 0.0 | 100.0% of CPU outside slices |
+
+<sub>detector `uninstrumented_cpu`, params: {'min_running_ms': 50, 'max_covered_pct': 50}</sub>
+
+**Silent:** anr, anr_risk, binder_txn, gc_pressure, io_wait, repeated_work, runnable_starvation
+
+<sub>trace_processor v56.1</sub>
 ```
 
 </details>
@@ -205,9 +235,9 @@ One table, sorted by how far each row moved. The top row is usually the answer.
 
 | Where | Evidence | Detector | Before | After | Δ | N | Ranges |
 |---|---|---|---|---|---|---|---|
-| SyncAdapter.onPerformSync | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
-| TeamRepository.loadAll | main | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | apart |
-| inflate | main | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | overlap |
+| SyncAdapterThre | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
+| TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | apart |
+| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | overlap |
 
 `N` separates "called more often" from "became slower inside" — two different
 bugs in two different places. **Ranges** is the column that decides whether a
@@ -219,20 +249,23 @@ more than the medians moved, and the honest next step is another round of
 Reports built against different thresholds are compared with the reason printed
 above the table — a row can cross a moved bar without anything in the app
 changing. The same goes for the machine: a duration is the work done divided by
-the speed the device was doing it at, so a clock that dropped 10% or more
-between the rounds, or a kernel that throttled during one of them, is named
-above the table too. Silence there means the device was checked and held
-steady; a round recorded without the platform-state sources says that instead.
+the speed the device was doing it at, so a clock that moved 10% or more
+between the rounds, in either direction, or a kernel that throttled during one
+of them, is named above the table too. Silence there means the device was
+checked and held steady; a round recorded without the platform-state sources
+says that instead.
 See [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md).
 
 ## Commands
 
-Three audiences share one CLI, and `echolot --help` says which is which — the
-grouping below is generated from the same registration, so the two cannot
-drift apart.
+Four groups share one CLI, and `echolot --help` says which is which. Its list
+is generated from the same registration that defines the commands, so it
+cannot drift from them; the tables below are written by hand and follow its
+grouping.
 
-Every argument after `/echolot` is a verb of the same name, doing the same
-thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
+Every verb after `/echolot` is an `echolot` command of the same name, doing
+the same thing plus whatever loop needs an agent — except `setup`, which only
+the agent has. One word, one meaning, both surfaces.
 
 ### Yours
 
@@ -261,18 +294,18 @@ thing plus whatever loop needs an agent. One word, one meaning, both surfaces.
 | `guide` | how to work with this tool, printed by the package — what an agent without the `.claude/` layer reads instead of it |
 | `report` | views of the last report without opening the json: what fired, one detector's rows with the evidence kept short, the window, the markers — `--json` for any of them |
 | `scan` | what the repository says about itself, read as text: the app module and its applicationId, the variants and which one to measure on, the macrobenchmark with its tests and the sections it measures, the gradle task that runs it, the devices attached — and an `echolot.yml` to start from |
-| `anr` | an ANR report from the field — the lock chain, the few threads that were not idle, and where their frames are in this checkout. Crashlytics exports and the device's own `dumpsys dropbox` record |
+| `anr` | an ANR report from the field — the lock chain, the few threads that were not idle, and where their frames are in this checkout. Crashlytics and Play Console exports, and the device's own `dumpsys dropbox` record |
 | `probe` | processes, threads by CPU, scenario anchor candidates — the threads' sections and the process's async ones |
 | `names` | slice name inventory and detector mask coverage |
 | `domains` | slice-to-code map and instrumentation coverage — literals, and names kept in a `const val` and passed through the project's own wrapper |
-| `mark` | the first temporary markers for a project with none, from the manifest and the SDK, or from an ANR report's own frames with `--from-anr` — `--apply` / `--remove` |
+| `mark` | the first temporary markers for a project with none, from the manifest and the SDK, or from an ANR report's own frames with `--from-anr` — `--apply` / `--remove`. `--pools` lists where a thread or pool is created with the JDK's default name instead |
 | `calibrate` | thresholds derived from known-healthy runs |
 | `explain` | list the detectors and their parameters |
 
 </details>
 
 <details>
-<summary><b>For improving the tool</b></summary>
+<summary><b>Improving the tool</b></summary>
 
 <br>
 
@@ -374,8 +407,11 @@ once not means the cause is the state it hit that once.
 
 > [!NOTE]
 > Each detector is one self-contained `.sql` file with its metadata in the
-> header. Drop a file into `echolot/sql/detectors/` and it is picked up —
-> there is no registration step in code. See
+> header. Drop a file into `echolot/sql/detectors/` and it runs — there is no
+> registration step in code. Shipping it takes more than running: `doctor`'s
+> self-check fails until the fixture plants a problem for it or says why it
+> cannot, and the tests fail until the detector counts in this README are
+> brought up to date. The checklist is in
 > [docs/detectors.md](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md).
 
 ## How it works
@@ -409,9 +445,11 @@ android-project/
 └── .echolot/         ← traces, reports, run log, reflect reports; in .gitignore
 ```
 
-`echolot init` writes those two .gitignore lines. A trace is tens of megabytes
-and a collect writes five, so without them the first `git add -A` after a run
-stages the lot.
+When the project directory is the root of a git checkout, `echolot init` adds
+`.echolot/` and `local.yml` to its .gitignore; otherwise it says it did not
+and prints the two lines to add. A trace is tens of megabytes and a collect
+writes five, so without them the first `git add -A` after a run stages the
+lot.
 
 Read it the way you read `gradle.properties` and `local.properties`: one tool
 per machine, and the binding to a project living inside that project's
@@ -447,13 +485,19 @@ The detectors were validated against a synthetic trace — 143 checks inside
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
 
-Two are newer than that hardware round and have not had one. `frame_jank` was
-built against the pinned `trace_processor` and a frame timeline written for the
-purpose — the column names, the jank vocabulary and where display frames live
-were all read back out of it rather than assumed — but no report from it has
-been compared with a real device's own frame statistics yet.
-`main_thread_outlier` was written for a miss recorded on an A51 and has so far
-answered only the fixture.
+Six are newer than that hardware round. `io_wait`, `anr` and `repeated_work`
+have each been run on real traces since — fifteen cold starts of a freshly
+installed app on an A51, an ANR raised on purpose on an Android 13 phone, the
+traces of the hunts that found a duplicate — and their headers say what those
+runs showed. `frame_jank` was built against the pinned `trace_processor` and a
+frame timeline written for the purpose — the column names, the jank vocabulary
+and where display frames live were all read back out of it rather than
+assumed — but no report from it has been compared with a real device's own
+frame statistics yet. `main_thread_outlier` was written for a miss recorded on
+an A51 and has so far answered only the fixture. `anr_risk` is silent on the
+fixture by construction: its bar is the platform's five seconds, and the
+fixture is a one-second cold start. Its checks run it there with the bar
+lowered, and one holds it to silence at the bar it ships with.
 
 A failed detector never fails the run: the error goes to stderr and into
 `report.json`.
@@ -464,6 +508,7 @@ A failed detector never fails the run: the error goes to stderr and into
 pip install -e '.[dev]'
 pytest                       # every check, including the ones doctor runs
 pytest -k uninstrumented     # one detector's claims, by name
+ruff check echolot tests     # the linter, which CI runs beside pytest
 ```
 
 `doctor` stays dependency-free: it walks the same list itself, because it runs
