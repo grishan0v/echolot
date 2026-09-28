@@ -65,16 +65,46 @@ def cmd_probe(args) -> int:
 
     This is what the agent feeds on during setup, so it can offer the user
     real options instead of inventing them.
+
+    The trace_processor is the one `analyze` would run from here: the flag,
+    then `toolchain.tp_binary` from the echolot.yml in this directory, the
+    local.yml beside it included, then the pin. probe used to take the flag
+    or the pin and nothing else, so with a binary named in local.yml the
+    first look at a trace and every report after it came from two different
+    trace_processors — and the version is what defines the vocabulary the
+    detectors match on (see `cmd_doctor`).
     """
     try:
-        return _probe(args)
+        return _probe(args, _tp_binary(args, _probe_config(args)))
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
 
-def _probe(args) -> int:
-    with TraceSession(args.trace, args.tp_binary) as tp:
+def _probe_config(args) -> Config | None:
+    """The config `analyze` would read from here — for the binary it names.
+
+    Only a config that is there is read: outside a project, or before setup
+    has written one, there is nothing to follow. One that is there and does
+    not load is said, and probe goes on without it, on the flag or on the
+    pin. `analyze` stops on the same error; a look at a trace has no reason
+    to.
+    """
+    path = getattr(args, "config", None) or "echolot.yml"
+    if not Path(path).exists():
+        return None
+    try:
+        return Config.load(path)
+    except ConfigError as e:
+        instead = ("the one --tp-binary names" if getattr(args, "tp_binary", None)
+                   else "the pinned one")
+        print(f"[!] {path} does not load, so a trace_processor it names cannot "
+              f"be followed — probe uses {instead}: {e}", file=sys.stderr)
+        return None
+
+
+def _probe(args, tp_binary: str | None) -> int:
+    with TraceSession(args.trace, tp_binary) as tp:
         print("## Processes\n")
         # Two counts, because they are two kinds of section. `slices` are
         # the threads' — what the detectors read. `async` are the process's

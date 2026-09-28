@@ -6,6 +6,8 @@ edges the tool went on printing what had stopped being true:
 
 - `echolot` read a doctor that never ran its self-check — `checks: 0` and
   one entry in `failed`, as #118 records it — as "1 check(s) FAILED".
+- `probe` opened a trace on the flag or the pin, while `analyze` from the
+  same directory ran on the binary local.yml names.
 """
 
 from __future__ import annotations
@@ -17,9 +19,22 @@ from pathlib import Path
 
 import pytest
 
+from echolot import main as main_mod
 from echolot import recorder
 from echolot.main import NOT_RUN, main
 from tests.support import check
+
+CUSTOM = "/opt/custom/trace_processor_shell"
+CONFIG = """\
+project:
+  package: com.example.app
+  process: com.example.app
+scenario:
+  name: coldStart
+"""
+# `true` is not a setting under a detector, so the whole config is refused
+# on load — the shape #121 made fatal.
+BROKEN = CONFIG + "detectors:\n  frame_jank: true\n"
 
 
 def run(*argv: str) -> tuple[int, str, str]:
@@ -77,3 +92,62 @@ def test_a_self_check_that_ran_keeps_its_tally(project, facts, said):
     line = _doctor_line(project, facts)
     check(f"the line says {said!r}", said in line, line)
     check("and not that it did not run", "did not run" not in line, line)
+
+# --- probe: the binary analyze would use ------------------------------------
+
+@pytest.fixture
+def opened(monkeypatch) -> list:
+    """The binary each trace was opened with, collected instead of run.
+
+    Which binary `probe` was handed is the question here, not what that
+    binary would have said about a trace.
+    """
+    seen: list = []
+
+    class Session:
+        def __init__(self, trace, binary=None):
+            seen.append(binary)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def query(self, sql):
+            return []
+
+    monkeypatch.setattr(main_mod, "TraceSession", Session)
+    return seen
+
+
+def test_probe_opens_the_trace_with_the_binary_local_yml_names(project, opened):
+    (project / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    (project / "local.yml").write_text(f"toolchain:\n  tp_binary: {CUSTOM}\n",
+                                       encoding="utf-8")
+    code, out, err = run("probe", "t.perfetto-trace")
+    check("probe ran", code == 0, out + err)
+    check("on the binary analyze would have used", opened == [CUSTOM], opened)
+
+
+def test_probe_keeps_the_order_analyze_uses(project, opened):
+    """The flag, then the config, then the pin."""
+    (project / "local.yml").write_text(f"toolchain:\n  tp_binary: {CUSTOM}\n",
+                                       encoding="utf-8")
+    run("probe", "t.perfetto-trace")
+    check("local.yml alone is not a config: the pin", opened == [None], opened)
+
+    (project / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    run("probe", "t.perfetto-trace", "--tp-binary", "/opt/flag/tp")
+    check("the flag outranks the config", opened[-1] == "/opt/flag/tp", opened)
+
+
+def test_a_config_that_does_not_load_does_not_stop_probe(project, opened):
+    (project / "echolot.yml").write_text(BROKEN, encoding="utf-8")
+    (project / "local.yml").write_text(f"toolchain:\n  tp_binary: {CUSTOM}\n",
+                                       encoding="utf-8")
+    code, out, err = run("probe", "t.perfetto-trace")
+    check("probe still ran", code == 0 and opened == [None], f"{opened}\n{err}")
+    check("and said why the binary is the pinned one",
+          "does not load" in err and "the pinned one" in err
+          and "frame_jank" in err, err)
