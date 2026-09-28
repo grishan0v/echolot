@@ -18,10 +18,18 @@ Detector.identity for what goes wrong when it is left unsaid.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import os
+import platform
 import re
+import shutil
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .config import ConfigError
 
@@ -351,19 +359,14 @@ def toolchain_info(bin_path: str | None = None,
         return info
 
     try:
-        from perfetto.prebuilts.manifests.trace_processor_shell import (
-            TRACE_PROCESSOR_SHELL_MANIFEST as manifest,
-        )
-        match = re.search(r"/v([\d.]+)/", manifest[0]["url"])
-        if match:
-            info["trace_processor"] = f"v{match.group(1)}"
+        manifest, _ = _perfetto_prebuilts()
+        info["trace_processor"] = _version_of(manifest[0]["url"])
     except Exception:
         pass
     return info
 
 
 def _binary_version(bin_path: str) -> str | None:
-    import subprocess
     try:
         out = subprocess.run([bin_path, "--version"], capture_output=True,
                              text=True, timeout=15)
@@ -372,15 +375,228 @@ def _binary_version(bin_path: str) -> str | None:
         return None
 
 
-def resolve_binary_path(bin_path: str | None = None) -> str | None:
-    """Where the pin points. Needed only by doctor, to show the fact."""
+def _version_of(url: str) -> str | None:
+    """`v56.1` out of the manifest's URL, which is the only place it is said."""
+    match = re.search(r"/v([\d.]+)/", url)
+    return f"v{match.group(1)}" if match else None
+
+
+def _perfetto_prebuilts():
+    """The perfetto package's manifest for trace_processor, and its downloader.
+
+    The two pieces of that package's internals echolot uses, behind this one
+    function so that a perfetto release which moves either breaks one place.
+    Everything else goes through `TraceProcessor`, the package's public API.
+    Imported here rather than at the top: `import echolot.main` must not pull
+    perfetto in for commands that never open a trace.
+    """
+    from perfetto.prebuilts.manifests.trace_processor_shell import (
+        TRACE_PROCESSOR_SHELL_MANIFEST,
+    )
+    from perfetto.prebuilts.perfetto_prebuilts import download_or_get_cached
+    return TRACE_PROCESSOR_SHELL_MANIFEST, download_or_get_cached
+
+
+class ToolchainError(ConfigError):
+    """The trace_processor a command needs is not here and could not be got.
+
+    A ConfigError on purpose. Every command that opens a trace already turns
+    one into `error: …` and exit 2, and a first run offline used to get a
+    traceback instead: a CalledProcessError from deep inside perfetto that
+    quoted a curl command line and said nothing a person could act on.
+    `doctor` catches this one by name, because there it is not a check that
+    failed but the ground every check stands on that never arrived.
+    """
+
+
+@dataclass(frozen=True)
+class PinnedBuild:
+    """The trace_processor the perfetto package pins, for this OS and CPU."""
+    version: str | None   # "v56.1"
+    arch: str             # the manifest's name for the OS and CPU: "linux-amd64"
+    file_name: str        # what perfetto calls the file: "trace_processor_shell"
+    url: str
+    size: int             # bytes, as the manifest gives them
+    sha256: str
+    path: Path            # where perfetto keeps it once it is here
+
+    @property
+    def size_text(self) -> str:
+        return f"{self.size / 1e6:.1f} MB"
+
+
+def pinned_build() -> PinnedBuild | None:
+    """The pinned trace_processor for this machine, and where it lives.
+
+    Never downloads. Worked out the way perfetto works it out, so that the
+    destination said before a download is the one the download writes and
+    "is it here yet" is answered without starting one: the first manifest
+    entry whose `platform` is `sys.platform` and whose `machine` list holds
+    `platform.machine()`, kept in ~/.local/share/perfetto/prebuilts under
+    its file name with the first sixteen hex digits of its SHA-256 appended
+    — the hash in the name is how perfetto trusts the file without hashing
+    it again. tests/test_first_run.py holds this path to the one perfetto
+    itself computes.
+
+    None when the pin has no build for this machine, or only a placeholder
+    with no URL yet.
+    """
+    manifest, _ = _perfetto_prebuilts()
+    plat, machine = sys.platform.lower(), platform.machine().lower()
+    for entry in manifest:
+        if entry.get("platform") != plat or machine not in entry.get("machine", []):
+            continue
+        if not entry.get("url"):
+            return None
+        root, ext = os.path.splitext(entry["file_name"])
+        home = Path(os.path.expanduser("~"))
+        return PinnedBuild(
+            version=_version_of(entry["url"]),
+            arch=entry.get("arch") or f"{plat}-{machine}",
+            file_name=entry["file_name"],
+            url=entry["url"],
+            size=int(entry.get("file_size") or 0),
+            sha256=entry["sha256"],
+            path=(home / ".local" / "share" / "perfetto" / "prebuilts"
+                  / f"{root}-{entry['sha256'][:16]}{ext}"),
+        )
+    return None
+
+
+def resolve_binary_path(bin_path: str | None = None) -> str:
+    """The trace_processor a session runs: the one named, else the pin.
+
+    The pin is downloaded here the first time, and nowhere else. It used to
+    happen inside perfetto, on the way to starting the binary, and it
+    showed: `Downloading <url>` printed to stdout in front of the first
+    `names --json`; a CalledProcessError traceback out of every command on a
+    first run offline; and `doctor` paying for the failure twice — once for
+    the path it shows, once more for the self-check. Now it is one step: a
+    notice on stderr that says what, how big and where; one attempt per
+    process, with whatever asks again after a failure handed the same
+    ToolchainError without curl being run again; and an error that names the
+    cause and the ways round it.
+
+    What is downloaded and how it is checked stay perfetto's: the URL and
+    SHA-256 from the manifest the package pins, fetched by its own
+    downloader. The pin is the point.
+
+    A named binary comes back as named. Whether it is there is the session's
+    question, and doctor shows the path either way.
+    """
     if bin_path:
         return str(bin_path)
     try:
-        from perfetto.trace_processor.platform import PlatformDelegate
-        return PlatformDelegate().get_shell_path(None)
-    except Exception:
-        return None
+        pin = pinned_build()
+    except ImportError as e:
+        raise ToolchainError("the perfetto package is not installed — run: "
+                             "pip install perfetto") from e
+    if pin is None:
+        raise ToolchainError(
+            f"the pinned trace_processor has no build for this machine "
+            f"({sys.platform} {platform.machine()}). Point --tp-binary, or "
+            f"toolchain.tp_binary in local.yml, at a trace_processor_shell "
+            f"built for it; the report then says the pin was bypassed.")
+    return _fetch(pin)
+
+
+# Why each destination could not be downloaded, for the rest of this process.
+# A command can ask for the binary more than once — doctor for the path it
+# shows and again for the self-check, analyze once per trace — and whatever
+# asks after a failure gets that failure, not a second wait on the same curl
+# that fails the same way.
+_FAILED: dict[Path, str] = {}
+
+# What curl's exit status means, for the ones a download usually ends in.
+# The number alone is what the CalledProcessError said, and it is all the run
+# log would keep: curl's own sentence goes to the terminal and nowhere else.
+_CURL_EXITS = {
+    5: "the proxy's name did not resolve",
+    6: "the server's name did not resolve",
+    7: "there was no connection to the server",
+    22: "the server answered with an HTTP error",
+    28: "it timed out",
+    35: "the TLS handshake failed",
+    56: "the connection broke off",
+    60: "the server's certificate was not trusted, which a proxy that "
+        "inspects TLS causes",
+}
+
+
+def _fetch(pin: PinnedBuild) -> str:
+    """The pinned binary's path, downloading it first when it is not here."""
+    if pin.path.is_file():
+        return str(pin.path)
+    if pin.path in _FAILED:
+        raise ToolchainError(_FAILED[pin.path])
+    # stdout first: whatever the command already printed there belongs above
+    # this, and behind a pipe it would otherwise wait for the exit.
+    sys.stdout.flush()
+    print(_notice(pin), file=sys.stderr, flush=True)
+    _, download = _perfetto_prebuilts()
+    try:
+        # perfetto announces the download itself, with a `print` — to
+        # stdout, which is the result channel: the first `names --json` came
+        # out with `Downloading <url>` in front of the JSON. The notice above
+        # says that and more, where notes go.
+        with contextlib.redirect_stdout(io.StringIO()):
+            return download(file_name=pin.file_name, url=pin.url,
+                            sha256=pin.sha256)
+    except Exception as e:
+        _FAILED[pin.path] = _cannot_fetch(pin, _cause(e))
+        raise ToolchainError(_FAILED[pin.path]) from e
+
+
+def _notice(pin: PinnedBuild) -> str:
+    """What is about to be downloaded, how big, from where and into where.
+
+    Said once, before curl starts and its progress bar with it, on stderr
+    with the other notes: stdout is what the command answers with.
+    """
+    return (f"[i] trace_processor {pin.version} is not on this machine yet — "
+            f"downloading it once, {pin.size_text}, the build the perfetto "
+            f"package pins:\n"
+            f"      from {pin.url}\n"
+            f"      into {pin.path}")
+
+
+def _cause(e: Exception) -> str:
+    """Why the download failed, in words: the half of the error that varies."""
+    if isinstance(e, subprocess.CalledProcessError):
+        gloss = _CURL_EXITS.get(e.returncode)
+        return (f"curl exited with status {e.returncode}"
+                + (f" — {gloss}" if gloss else ""))
+    if isinstance(e, FileNotFoundError) and shutil.which("curl") is None:
+        return "curl is not installed, or not on PATH"
+    if str(e).startswith("Checksum mismatch"):
+        # perfetto's own words for it, and it leaves the file under a
+        # temporary name: the pinned name is only ever given to a file whose
+        # hash matched.
+        return ("what arrived is not the file the pin names — its SHA-256 "
+                "differs — so it was not put in place. A proxy or a captive "
+                "portal answering in the server's stead does this")
+    return str(e) or type(e).__name__
+
+
+def _cannot_fetch(pin: PinnedBuild, cause: str) -> str:
+    """The error for a download that failed: the cause, then the ways round it.
+
+    All three, whatever the cause: the cause says which one is likely, and
+    the copy works where the other two cannot. Whole without the notice
+    printed before it, because the run log keeps this and not that.
+    """
+    return (
+        f"trace_processor {pin.version} could not be downloaded: {cause}.\n"
+        f"  Every trace is read with it, so nothing that opens one can run "
+        f"until it is here. Any one of these puts it in place:\n"
+        f"  - a network that reaches {urlsplit(pin.url).netloc}. Behind a "
+        f"proxy, export HTTPS_PROXY — curl honours it — and run this again;\n"
+        f"  - curl, installed and on PATH: the download runs through it;\n"
+        f"  - offline, a copy of ~/.local/share/perfetto/prebuilts/"
+        f"{pin.path.name} from a machine with the same OS and CPU "
+        f"({pin.arch}) that already has it, put at {pin.path}. Keep the "
+        f"name: it carries the hash of the contents, and a file under any "
+        f"other name is not looked at.")
 
 
 def _coerce(raw: str) -> Any:
@@ -436,10 +652,22 @@ class TraceSession:
                    "written — is the directory empty?)" if "*" in str(path)
                    else ""))
 
-        cfg = TraceProcessorConfig(bin_path=binary) if binary else None
+        # The binary is settled before perfetto is asked to start it, and
+        # handed over by path: left to perfetto, the pin would be downloaded
+        # deep inside the start, with none of what resolve_binary_path says.
+        binary = resolve_binary_path(binary)
+        if not Path(binary).is_file():
+            # A path named by `--tp-binary` or `toolchain.tp_binary` that is
+            # not there. perfetto refuses it with a bare Exception, which came
+            # out of `names` and `analyze` as a traceback.
+            raise ConfigError(
+                f"no trace_processor at {binary} — the path given for it "
+                f"(--tp-binary, or toolchain.tp_binary in the config) is not "
+                f"a file")
         try:
-            self._tp = TraceProcessor(trace=str(trace_path), config=cfg) if cfg \
-                else TraceProcessor(trace=str(trace_path))
+            self._tp = TraceProcessor(
+                trace=str(trace_path),
+                config=TraceProcessorConfig(bin_path=binary))
         except TraceProcessorException as e:
             # A file that is there and is not a trace: a capture cut short, a
             # log saved under the wrong name. It came out of the CLI as a
