@@ -281,6 +281,14 @@ def parse_set(values: list[str], detectors) -> dict[str, dict]:
     the same way they would from the config. Unknown detectors and parameters
     are refused with the list of valid ones: a silently ignored typo is worse
     than no flag at all.
+
+    A mask is a glob, and a glob is not always YAML: `*GC*` is an alias
+    nobody defined, the same shape as the shipped defaults `*GC` and
+    `*async*`, and it came out of `yaml.safe_load` as a traceback. So a
+    string parameter takes the value as it was typed whenever YAML does not
+    read it as a string — `[Gg]` stays a glob rather than becoming a list,
+    `on` a word rather than true. A number that does not parse is kept as
+    typed too, and `check` refuses it in a sentence.
     """
     import yaml
     known = {d.id: d for d in detectors}
@@ -297,7 +305,14 @@ def parse_set(values: list[str], detectors) -> dict[str, dict]:
             raise ConfigError(
                 f"--set: {det} has no parameter '{param}'. "
                 f"It has: {', '.join(sorted(known[det].params))}")
-        out.setdefault(det, {})[param] = yaml.safe_load(raw.strip())
+        text = raw.strip()
+        try:
+            value = yaml.safe_load(text)
+        except yaml.YAMLError:
+            value = text
+        if isinstance(known[det].params[param], str) and text and not isinstance(value, str):
+            value = text
+        out.setdefault(det, {})[param] = value
     return out
 
 
@@ -1823,39 +1838,53 @@ def cmd_collect(args) -> int:
     """
     from . import runner
 
+    # The runner section and the process are read here, inside the same
+    # handler as the load: `runner: gradle` and a config naming no package
+    # both used to pass the load and end in a traceback on the next line.
     try:
         cfg = Config.load(args.config, args.local)
+        section = cfg.runner
+        package = cfg.get("project.package") or cfg.process
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         recorder.failed(f"config error: {e}")
         return 2
 
-    section = cfg.runner
-    package = cfg.get("project.package") or cfg.process
-    iterations = args.iterations or int(section.get("iterations", 5))
+    mode = str(section.get("mode", "launch"))
+    iterations = (args.iterations if args.iterations is not None
+                  else section.get("iterations", 5))
     out_dir = _out_dir(args.out, cfg)
     project = _project_root(cfg)
+    # project_root follows the config, as -o and the investigation already
+    # do: a relative path is taken from the directory echolot.yml is in. It
+    # used to be taken from wherever `echolot` was started, so the same
+    # config ran gradle in two different places depending on the shell.
+    root = Path(str(section.get("project_root") or ".")).expanduser()
+    section = {**section, "project_root": str(root if root.is_absolute()
+                                              else project / root)}
+    device = args.device or section.get("device")
     # Where the run stands, for whoever asks while it runs — `status` reads
     # it. Written before the first iteration and after the last, with why
     # when it ended badly.
     progress = runner.Progress(project / runner.PROGRESS_FILE)
 
-    policy = str(section.get("reset_policy", "force-stop"))
-    if policy not in ("force-stop", "none"):
-        # pm clear changes the scenario rather than repeating it: a cold start
-        # with an empty database and a user's cold start are different things.
-        print(f"[!] reset_policy: {policy} is not supported. Available: "
-              f"force-stop (cold) and none (warm). Using force-stop.",
-              file=sys.stderr)
-
     _note_local(cfg)
+    if mode == "gradle" and (args.iterations is not None or "iterations" in section):
+        # The count lives in the benchmark's own measureRepeated, and every
+        # trace it writes is gathered. Said, because `-n 1` is the advice for
+        # a first run in the other two modes, and here it would buy a whole
+        # round while looking like one iteration.
+        print(f"[!] {'-n' if args.iterations is not None else 'runner.iterations'} "
+              f"does not reach the macrobenchmark: it runs as many iterations "
+              f"as its own measureRepeated asks for, and every trace it writes "
+              f"is collected.", file=sys.stderr)
     try:
         results = runner.collect(
             package=str(package),
             out_dir=out_dir,
             iterations=iterations,
             section=section,
-            device=args.device or section.get("device"),
+            device=str(device) if device else None,
             name=cfg.scenario_name,
             log=lambda m: print(m, file=sys.stderr),
             # The set pushed aside is the previous round of this same
@@ -1866,17 +1895,31 @@ def cmd_collect(args) -> int:
         )
     except runner.RunnerError as e:
         print(f"collection error: {e}", file=sys.stderr)
-        # The sentence, in the log and in the progress file both: the log
-        # is what `reflect` reads after the session, the file is what
-        # `status` reads during it.
-        recorder.failed(f"collection error: {e}")
-        progress.update(finished=time.time(), exit=2,
-                        error=str(e).strip().splitlines()[0][:200] if str(e).strip() else "")
+        # The log is what `reflect` reads after the session, the file is
+        # what `status` reads during it, and both lead with the gist: the
+        # line that names the cause, and the hint when there is one. The
+        # first line alone was "the scenario command returned 1:" after
+        # every gradle failure, and the log's 800 characters ran out in the
+        # middle of gradle's output, before the hint.
+        said = str(e).strip()
+        recorder.failed(f"collection error: {e.gist}"
+                        + ("" if said == e.gist else f"\n{said}"))
+        progress.update(finished=time.time(), exit=2, error=e.gist)
         return 2
     progress.update(finished=time.time(), exit=0, traces=len(results))
 
-    times = [r["total_time_ms"] for r in results
+    # `TotalTime: 0` is the system saying it timed no start — the activity
+    # was already in front, and nothing was launched. It used to go into the
+    # spread below as a divisor, and the ZeroDivisionError came after the
+    # traces were pulled and before their paths were printed.
+    timed = [r.get("total_time_ms") for r in results
              if isinstance(r.get("total_time_ms"), int)]
+    times = [t for t in timed if t > 0]
+    if len(times) < len(timed):
+        print(f"\nam start -W: {len(timed) - len(times)} of {len(timed)} "
+              f"launches report TotalTime: 0 — the system timed no start "
+              f"there, usually because the activity was already in front.",
+              file=sys.stderr)
     if len(times) > 1:
         spread = (max(times) - min(times)) / min(times) * 100
         print(f"\nam start -W: from {min(times)} to {max(times)} ms "
@@ -2088,12 +2131,14 @@ def cmd_calibrate(args) -> int:
 
     # Before the first trace is opened. `calibrate` is where people iterate on
     # the thresholds section, so it is where a value of the wrong kind is most
-    # likely to be typed — and it does not go through `plan_detectors`.
-    overrides = cfg.detector_overrides
+    # likely to be typed — and it does not go through `plan_detectors`. The
+    # section's own shape is refused here too: `detectors:` written as a
+    # list was read outside this handler and came out as a traceback.
     try:
+        overrides = cfg.detector_overrides
         for d in detectors:
             d.check(overrides.get(d.id), "from the config")
-    except ValueError as e:
+    except (ConfigError, ValueError) as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
 

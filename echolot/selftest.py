@@ -799,7 +799,10 @@ def _(report):
     from .runner import set_aside
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "traces"
-        assert set_aside(out, "run", log=lambda s: None) is None, "nothing to move yet"
+        # Called outside the assert: under `python -O` an assert is not
+        # evaluated, and neither would the call inside it be.
+        nothing = set_aside(out, "run", log=lambda s: None)
+        assert nothing is None, "nothing to move yet"
         out.mkdir()
         for i in range(3):
             (out / f"run_iter{i:03d}.perfetto-trace").write_bytes(b"x")
@@ -808,14 +811,21 @@ def _(report):
         # glob merged it into each report.
         (out / "run_probe_2026-09-05.perfetto-trace").write_bytes(b"p")
         (out / "other_iter000.perfetto-trace").write_bytes(b"y")
+        # A scenario whose name begins with this one's, and a probe of it:
+        # `run_*` took both along with this scenario's own set.
+        (out / "run_warm_iter000.perfetto-trace").write_bytes(b"w")
+        (out / "run_warm_probe_2026-09-06.perfetto-trace").write_bytes(b"q")
         said = []
         aside = set_aside(out, "run", log=said.append)
         assert aside and aside.parent == out and aside.name.startswith("run-"), aside
         assert sorted(p.name for p in aside.iterdir()) == [
             f"run_iter{i:03d}.perfetto-trace" for i in range(3)
         ] + ["run_probe_2026-09-05.perfetto-trace"], list(aside.iterdir())
-        assert not list(out.glob("run_*.perfetto-trace")), "the old names are free again"
+        assert not list(out.glob("run_iter*.perfetto-trace")), "the old names are free again"
         assert (out / "other_iter000.perfetto-trace").exists(), "another scenario is not touched"
+        assert sorted(p.name for p in out.glob("run_warm_*")) == [
+            "run_warm_iter000.perfetto-trace", "run_warm_probe_2026-09-06.perfetto-trace",
+        ], "a scenario whose name begins with this one's is another scenario"
         assert said and "set aside" in said[0], said
 
 
@@ -2801,7 +2811,10 @@ def _(report):
                              ["names", "nosuch.perfetto-trace"],
                              ["calibrate", "nosuch.perfetto-trace"],
                              ["reflect", "--since", "2weeks"]):
-                    assert main(argv) == 2, f"{argv} did not exit 2"
+                    # Outside the assert, which `python -O` would skip
+                    # together with the command it was checking.
+                    code = main(argv)
+                    assert code == 2, f"{argv} exited {code}, not 2"
         finally:
             os.chdir(here)
 

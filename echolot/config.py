@@ -85,7 +85,15 @@ class Config:
             # A file named explicitly but missing is almost certainly a typo.
             raise ConfigError(f"local config not found: {local_path}")
 
-        return cls(raw, p, used_local)
+        cfg = cls(raw, p, used_local)
+        # Checked on load rather than on first use, because the first use
+        # is not always inside a command that turns a ConfigError into a
+        # sentence: `reflect` reads the thresholds for its snapshot outside
+        # any such handler, and `detectors:` written as a list took it down
+        # with a traceback. Every loader already answers a config that does
+        # not load.
+        cfg._detectors()
+        return cfg
 
     @property
     def sha(self) -> str | None:
@@ -142,9 +150,31 @@ class Config:
         return str(node)
 
     def _detectors(self) -> dict[str, Any]:
+        """The `detectors:` section, refused in a sentence when it has no shape.
+
+        Under a detector go its thresholds, or `false`, or nothing at all.
+        `frame_jank: true` used to pass here and fail two calls later as
+        `dict(True)` — a traceback for what reads like switching a detector
+        on, which is what every detector already is.
+        """
         node = self.get("detectors") or {}
         if not isinstance(node, dict):
-            raise ConfigError("the detectors section must be a mapping")
+            raise ConfigError(
+                f"the detectors section must be a mapping of detector names, "
+                f"got a {type(node).__name__}. Each detector is a key: "
+                f"`frame_jank: false` turns one off, and thresholds go under "
+                f"its name — `main_thread_block:` with `min_slice_ms: 16` "
+                f"beneath it.")
+        for name, value in node.items():
+            if value is None or value is False or isinstance(value, dict):
+                continue
+            said = "true" if value is True else repr(value)
+            raise ConfigError(
+                f"detectors.{name}: {said} is not a setting. Every detector "
+                f"runs unless the config turns it off: leave `{name}` out to "
+                f"run it on its shipped thresholds, write thresholds under it "
+                f"to tune it (`echolot explain` lists them), or `{name}: "
+                f"false` to turn it off.")
         return node
 
     @property
@@ -186,7 +216,13 @@ class Config:
         """The runner section. Absence is fine: the defaults are enough."""
         node = self.get("runner") or {}
         if not isinstance(node, dict):
-            raise ConfigError("the runner section must be a mapping")
+            # `runner: gradle` is the likely shape of it: the mode written
+            # where the section goes.
+            raise ConfigError(
+                f"the runner section must be a mapping, got {node!r}. The mode "
+                f"is one key under it: `runner:`, then `mode: "
+                f"{node if node in ('launch', 'command', 'gradle') else 'launch'}`"
+                f" on the next line, indented.")
         return node
 
     @property
