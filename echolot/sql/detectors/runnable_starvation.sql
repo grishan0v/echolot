@@ -19,3 +19,14 @@ GROUP BY thread_name, state
 HAVING SUM(dur) >= {{min_runnable_ms}} * 1000000
 ORDER BY total_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- The main thread's time ready and denied a CPU, in the states its rows name.
+
+SELECT t.ts, t.dur
+FROM _tstate_win t
+CROSS JOIN _proc p
+JOIN _rows r ON r.location = t.thread_name AND r.detail = 'state ' || t.state
+WHERE t.tid = p.pid
+  AND t.state IN ('R', 'R+');

@@ -41,3 +41,44 @@ GROUP BY s.name, s.thread_name
 HAVING SUM(MAX(s.dur, 0) - COALESCE(c.ns, 0)) >= {{min_slice_ms}} * 1000000
 ORDER BY self_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- A row is self time, so that is what it stands for: the stretches of each
+-- slice it names during which none of the slice's children was open. The
+-- gaps before, between and after the children, found by ordering them. A
+-- child that never closed is taken as zero long, as the sum above takes it.
+--
+-- Except a slice that spans the whole window. That is the scenario's anchor,
+-- most often — `AppStart` around a cold start, the shape `echolot mark`
+-- proposes — and its self time is the part of the window no child accounts
+-- for: counted in, it would call the unexplained rest explained. The same
+-- reason `anr_risk` does not take depth zero as evidence.
+
+WITH named AS MATERIALIZED (
+    SELECT s.slice_id, s.ts, s.ts + s.dur AS te
+    FROM _slice_win s
+    JOIN _rows r ON r.location = s.name AND r.detail = s.thread_name
+    CROSS JOIN _window w
+    WHERE s.is_main_thread = 1 AND s.dur > 0
+      AND NOT (s.ts <= w.ts_start AND s.ts + s.dur >= w.ts_end)
+),
+kids AS MATERIALIZED (
+    SELECT c.parent_id AS slice_id,
+           c.ts AS cs,
+           c.ts + MAX(c.dur, 0) AS ce,
+           LAG(c.ts + MAX(c.dur, 0))
+               OVER (PARTITION BY c.parent_id ORDER BY c.ts) AS prev_end
+    FROM slice c
+    WHERE c.parent_id IN (SELECT slice_id FROM named)
+)
+SELECT COALESCE(k.prev_end, n.ts) AS ts,
+       k.cs - COALESCE(k.prev_end, n.ts) AS dur
+FROM kids k
+JOIN named n ON n.slice_id = k.slice_id
+UNION ALL
+SELECT COALESCE(MAX(k.ce), n.ts) AS ts,
+       n.te - COALESCE(MAX(k.ce), n.ts) AS dur
+FROM named n
+LEFT JOIN kids k ON k.slice_id = n.slice_id
+GROUP BY n.slice_id;

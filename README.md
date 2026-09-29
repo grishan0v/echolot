@@ -161,6 +161,7 @@ Traces: `coldStart_iter000`, `coldStart_iter001`, `coldStart_iter002`, `coldStar
 Process: `com.example.app` (pid 12903)
 Scenario window: **1184.37 ms** (from 1102.14 to 1291.52)
 Main thread: 49% on a CPU · 8% waiting for a CPU · 10% blocked in the kernel · 33% sleeping
+Covered by the findings below: **31%** of the main thread's window, each moment counted once
 Device: clock **1481 MHz** (from 1204 to 1622 across repeats), peak 54 °C, 1536 MB free at the low point
 Detectors fired: **5 of 12**
 Config: `/home/you/my-app/echolot.yml` (sha 3f9a1c2b7d40) · thresholds: built-in defaults
@@ -493,7 +494,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 143 checks inside
+The detectors were validated against a synthetic trace — 144 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.

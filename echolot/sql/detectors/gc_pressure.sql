@@ -50,3 +50,13 @@ HAVING COUNT(*) >= {{max_events}}
     OR SUM(dur) / 1e6 >= {{max_total_ms}}
 ORDER BY total_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- The collector's slices a row counted, where they ran on the main thread:
+-- `waitWhileAllocating` there is the app standing still for the collector.
+
+SELECT s.ts, s.dur
+FROM _slice_win s
+JOIN _rows r ON r.location = s.name AND r.detail = s.thread_name
+WHERE s.is_main_thread = 1;

@@ -89,3 +89,10 @@ FROM ours o
 GROUP BY o.subject, detail
 ORDER BY o.ts
 LIMIT 20;
+
+-- @intervals
+--
+-- None. The record is the system saying it stopped waiting; the waiting was
+-- the main thread's, and `anr_risk` and the others measure it on the thread.
+
+SELECT NULL AS ts, NULL AS dur LIMIT 0;

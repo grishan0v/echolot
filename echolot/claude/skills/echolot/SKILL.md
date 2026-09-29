@@ -236,7 +236,9 @@ go there.
 **`self_ms` versus `total_ms`.** Self time, with children subtracted, is where
 the time actually went. `traversal` with `total_ms: 354` and `self_ms: 79` does
 almost nothing itself; dig into its children. Never add `total_ms` across rows:
-they nest inside one another.
+they nest inside one another. Nor `self_ms` across detectors: a disk wait
+inside a slice is in both. How much of the window the findings cover is
+`window.main_thread.in_rows_pct`, each moment counted once.
 
 **Warnings inside `window`.** If `start_anchor.matches == 0`, the window
 expanded to the whole trace and none of the numbers are about your scenario.

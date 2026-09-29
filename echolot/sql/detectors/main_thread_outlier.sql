@@ -69,3 +69,32 @@ WHERE b.n >= {{min_occurrences}}
 GROUP BY r.name
 ORDER BY max_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- The occurrences a row counted, whole: the ones past `factor` times the
+-- median for their name, and past the floor. The median is taken over every
+-- occurrence of the name, as above, so the same ones come out.
+
+WITH ranked AS (
+    SELECT
+        name,
+        ts,
+        dur,
+        ROW_NUMBER() OVER (PARTITION BY name ORDER BY dur) AS rk,
+        COUNT(*)     OVER (PARTITION BY name)              AS n
+    FROM _slice_win
+    WHERE is_main_thread = 1
+      AND dur > 0
+      AND name IN (SELECT location FROM _rows)
+),
+baseline AS (
+    SELECT name, dur AS median_ns
+    FROM ranked
+    WHERE rk = (n + 1) / 2
+)
+SELECT r.ts, r.dur
+FROM ranked r
+JOIN baseline b ON b.name = r.name
+WHERE r.dur >= b.median_ns * {{factor}}
+  AND r.dur >= {{min_abs_ms}} * 1000000;

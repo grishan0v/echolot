@@ -167,3 +167,56 @@ FROM described
 GROUP BY what
 ORDER BY total_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- The stretches themselves. A row keeps only the name of the longest message
+-- in each, so the steps that find them are the ones above, repeated, and a
+-- row stands for every stretch that name was given. Stretches never overlap,
+-- so theirs add up to the rows' total, and the tests hold them to it.
+
+WITH busy AS (
+    SELECT ts_win AS ts, ts_win + dur_win AS te
+    FROM _slice_win
+    WHERE is_main_thread = 1 AND depth >= 1 AND dur_win > 0
+
+    UNION ALL
+
+    SELECT t.ts, t.ts + t.dur
+    FROM _tstate_win t
+    CROSS JOIN _proc p
+    WHERE t.tid = p.pid
+      AND t.state IN ('Running', 'R', 'R+', 'D', 'DK')
+      AND t.dur > 0
+),
+ordered AS (
+    SELECT ts, te,
+           MAX(te) OVER (ORDER BY ts, te
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS reached
+    FROM busy
+),
+flagged AS (
+    SELECT ts, te,
+           CASE WHEN reached IS NULL OR ts - reached > {{max_gap_ms}} * 1000000
+                THEN 1 ELSE 0 END AS opens
+    FROM ordered
+),
+runs AS (
+    SELECT ts, te,
+           SUM(opens) OVER (ORDER BY ts, te ROWS UNBOUNDED PRECEDING) AS run
+    FROM flagged
+),
+stalls AS (
+    SELECT MIN(ts) AS ts_from, MAX(te) AS ts_to
+    FROM runs
+    GROUP BY run
+    HAVING MAX(te) - MIN(ts) >= {{min_stall_ms}} * 1000000
+)
+SELECT s.ts_from AS ts, s.ts_to - s.ts_from AS dur
+FROM stalls s
+WHERE COALESCE((
+        SELECT sl.name FROM _slice_win sl
+        WHERE sl.is_main_thread = 1 AND sl.depth >= 1
+          AND sl.ts_win < s.ts_to AND sl.ts_win + sl.dur_win > s.ts_from
+        ORDER BY sl.dur_win DESC LIMIT 1
+    ), 'uninstrumented work on the main thread') IN (SELECT location FROM _rows);

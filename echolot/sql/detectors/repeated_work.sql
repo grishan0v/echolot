@@ -240,3 +240,20 @@ HAVING COUNT(DISTINCT COALESCE(p.name, '(top level)')) >= 2
             AND COUNT(DISTINCT COALESCE(p.name, '(top level)')) = 2))
 ORDER BY total_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- Every occurrence of the name on the thread a row names, whole, as the
+-- row's total counts them — when that thread is the main one. The thread is
+-- the end of the row's `detail`, or what comes before the near miss's `;`.
+
+WITH ours AS (
+    SELECT s.ts, s.dur, r.detail, '— on ' || s.thread_name AS tail
+    FROM _slice_win s
+    JOIN _rows r ON r.location = s.name
+    WHERE s.is_main_thread = 1
+)
+SELECT ts, dur
+FROM ours
+WHERE SUBSTR(detail, -LENGTH(tail)) = tail
+   OR INSTR(detail, tail || ';') > 0;

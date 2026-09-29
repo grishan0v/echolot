@@ -51,3 +51,18 @@ WHERE r.running_ns >= {{min_running_ms}} * 1000000
   AND COALESCE(c.sliced_ns, 0) < r.running_ns * {{max_covered_pct}} / 100.0
 ORDER BY r.running_ns DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- The blind spot itself: the main thread on a CPU with no top-level slice
+-- open, when the main thread is one of the rows. Most rows here are other
+-- threads, and their time is none of the window's.
+
+SELECT c.ts, c.dur
+FROM _cpu_by_slice c
+JOIN thread t ON t.utid = c.utid
+CROSS JOIN _proc p
+WHERE t.upid = p.upid
+  AND t.tid = p.pid
+  AND c.instrumented IS NULL
+  AND t.name IN (SELECT location FROM _rows);
