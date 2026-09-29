@@ -90,7 +90,9 @@ round = 1
    New rows with the AGENTTMP_ prefix are your own markers breaking down a
    blind spot; the warning at the top names them. A row that grew with
    Holds `yes` is a real move, `no` means the repeats disagree by more
-   than it moved — record another round before concluding.
+   than it moved — record another round before concluding, as many runs
+   a side as the cell says. Hundreds means another round will not settle
+   it: say the move is below what these runs resolve.
 
 5. otherwise pick a blind spot (usually uninstrumented_cpu):
    a thread the JDK named — pool-N-thread-M, Thread-N → echolot mark --pools

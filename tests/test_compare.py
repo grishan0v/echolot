@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.support import check  # noqa: E402
 
 from echolot import compare as compare_mod  # noqa: E402
+from echolot import stats  # noqa: E402
 
 
 
@@ -360,9 +361,9 @@ def test_the_orders_are_counted_not_guessed() -> None:
             for places in itertools.combinations(range(n + m), n):
                 tally[sum(m - s + i for i, s in enumerate(places))] += 1
             check(f"{n} before, {m} after: every order counted",
-                  compare_mod._orderings(n, m) == tuple(tally),
-                  f"{compare_mod._orderings(n, m)} vs {tuple(tally)}")
-    counts = compare_mod._orderings(40, 40)
+                  stats._orderings(n, m) == tuple(tally),
+                  f"{stats._orderings(n, m)} vs {tuple(tally)}")
+    counts = stats._orderings(40, 40)
     check("forty a side: the counts add up to the orders",
           sum(counts) == math.comb(80, 40))
     check("and are symmetric", counts == counts[::-1])
@@ -380,7 +381,7 @@ def test_the_cut_is_the_textbook_one() -> None:
              (2, 8): 0, (1, 39): 0,
              (3, 3): None, (3, 4): None, (2, 7): None, (1, 38): None}
     for (n, m), want in table.items():
-        got = compare_mod._cut(n, m)
+        got = stats.cut(n, m)
         check(f"{n} before, {m} after: {want}", got == want, str(got))
 
 
@@ -392,14 +393,14 @@ def test_many_runs_take_the_curve_and_err_wide() -> None:
     narrower one. Five hundred a side must come back at once.
     """
     for n, m in [(20, 20), (30, 30), (40, 40), (50, 150), (80, 80), (100, 100)]:
-        counted = compare_mod._cut(n, m)
-        curve = compare_mod._cut_by_curve(n, m)
+        counted = stats.cut(n, m)
+        curve = stats._cut_by_curve(n, m)
         check(f"{n} before, {m} after: the curve is the count or one short",
               counted - 1 <= curve <= counted, f"{curve} vs {counted}")
     check("a hundred a side is still counted",
-          100 * 100 * 100 <= compare_mod.COUNTED_UP_TO)
+          100 * 100 * 100 <= stats.COUNTED_UP_TO)
     check("five hundred a side takes the curve",
-          compare_mod._cut(500, 500) == compare_mod._cut_by_curve(500, 500))
+          stats.cut(500, 500) == stats._cut_by_curve(500, 500))
 
 
 def test_the_interval_on_a_hand_count() -> None:
@@ -412,8 +413,8 @@ def test_the_interval_on_a_hand_count() -> None:
     cmp = one_row([1.0, 2.0, 3.0, 4.0, 5.0], [13.0, 16.0, 17.0, 19.0, 22.0])
     r = cmp["rows"][0]
     check("the move and the range it lies in",
-          r["shift"] == {"ms": 14.0, "low_ms": 10.0, "high_ms": 19.0},
-          str(r["shift"]))
+          {k: r["shift"][k] for k in ("ms", "low_ms", "high_ms")}
+          == {"ms": 14.0, "low_ms": 10.0, "high_ms": 19.0}, str(r["shift"]))
     check("above zero, so it holds", r["holds"] is True, str(r["holds"]))
     check("the level is stated once, at the top", cmp["confidence"] == 0.95,
           str(cmp.get("confidence")))
@@ -488,6 +489,76 @@ def test_too_few_runs_for_a_verdict() -> None:
                          [200.0, 205.0, 210.0, 207.0, 203.0])
     check("three against five has one", three_five["rows"][0]["holds"] is True,
           str(three_five["rows"][0]))
+
+
+# --- what the runs can resolve ----------------------------------------------
+
+def test_resolves_is_where_the_verdict_turns() -> None:
+    """Exact, not an estimate.
+
+    A run after minus a run before is the move of the medians plus what the
+    two strayed from their own medians, so the interval is the strays' own,
+    moved along. A move of the medians just past `resolves` holds, and one
+    just short of it does not, whatever the runs.
+    """
+    before = [16.3, 38.0, 47.3, 55.1, 78.3]
+    shape = [33.9, 95.2, 121.9, 140.3, 209.9]
+    reach = stats.resolves(before, shape)
+    gap = median(shape) - median(before)
+    for past, want in ((0.05, True), (-0.05, False)):
+        after = [y + reach + past - gap for y in shape]
+        r = one_row(before, after)["rows"][0]
+        check(f"a move {past:+} ms from {reach} ms {'holds' if want else 'does not'}",
+              r["holds"] is want, str(r["shift"]))
+
+
+def test_one_set_resolves_the_same_both_ways() -> None:
+    """Against as many runs spread the same way, before there is a second set.
+
+    One slow run in five sets it: four pairs with it at each end, and five a
+    side only takes two off each.
+    """
+    runs = [118.2, 121.0, 125.4, 133.7, 340.1]
+    check("up and down agree for one set",
+          stats.resolves(runs) == stats.resolves(runs, upward=False),
+          f"{stats.resolves(runs)} vs {stats.resolves(runs, upward=False)}")
+    check("and the slow run is what it comes to", stats.resolves(runs) == 214.7,
+          str(stats.resolves(runs)))
+    check("fewer than four is no answer", stats.resolves(runs[:3]) is None)
+
+
+def test_runs_needed_goes_by_the_square_root() -> None:
+    check("half the move the runs resolve takes four times the runs",
+          stats.runs_needed(5, 5, 10.0, 5.0) == 20)
+    check("five against ten count as about seven a side",
+          stats.runs_needed(5, 10, 10.0, 5.0) == 27)
+    check("and it is always at least one run more",
+          stats.runs_needed(5, 5, 10.0, 9.99) == 6)
+    check("a move already resolved needs nothing",
+          stats.runs_needed(5, 5, 10.0, 12.0) is None)
+    check("a move of nothing is never settled",
+          stats.runs_needed(5, 5, 10.0, 0.0) is None)
+
+
+def test_a_move_that_does_not_hold_says_how_many_runs() -> None:
+    """What "record another round" left out: five more, or five hundred."""
+    cmp = one_row([16.3, 38.0, 47.3, 55.1, 78.3],
+                  [33.9, 95.2, 121.9, 140.3, 209.9])
+    r = cmp["rows"][0]
+    check("the move does not hold", r["holds"] is False, str(r))
+    check("these runs resolve 88 ms upward", r["shift"]["resolves_ms"] == 88.0,
+          str(r["shift"]))
+    check("so 74.6 needs about seven a side", r["shift"]["runs_needed"] == 7,
+          str(r["shift"]))
+    text = compare_mod.to_markdown(cmp)
+    check("and the cell says so",
+          "| no, -13.4 … +162.6 · ~7 runs a side |" in text, text)
+
+    held = one_row([10.4, 11.3, 12.1, 13.0, 14.0],
+                   [843.4, 861.0, 883.4, 897.2, 923.4])["rows"][0]
+    check("a move that holds needs no more runs",
+          held["shift"]["runs_needed"] is None
+          and held["shift"]["resolves_ms"] == 40.0, str(held["shift"]))
 
 
 def test_a_single_trace_has_no_verdict() -> None:

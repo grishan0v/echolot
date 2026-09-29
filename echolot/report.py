@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
-from . import table
+from . import stats, table
 
 COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
            "covered_ms", "code", "detail"]
@@ -287,11 +287,20 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
             if col in SPREAD:
                 # In report order, and only the repeats where this row was
                 # found at all — which is what the `runs` column counts.
+                kept = [round(v, 2) for v in values]
                 spread[col] = {
                     "min": round(min(values), 2),
                     "max": round(max(values), 2),
-                    "values": [round(v, 2) for v in values],
+                    "values": kept,
                 }
+                # The smallest move `compare` could call real in this row,
+                # against as many runs spread the same way. From the values
+                # as kept, so the report and a later comparison agree.
+                reach = stats.resolves(kept)
+                if reach is not None:
+                    spread[col]["resolves_ms"] = reach
+                    spread[col]["resolves_pct"] = (
+                        round(reach / row[col] * 100, 1) if row[col] else None)
         if spread:
             row["spread"] = spread
         # Evidence comes from the worst repeat: that is where it says most.
