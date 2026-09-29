@@ -315,13 +315,16 @@ bug in a different place.
 it spent", the second "how long did it take altogether". A slice with
 `total_ms: 354` and `self_ms: 79` barely works itself — it waits on its
 children, and that is where to dig. Never add `total_ms` across rows: they
-nest. Adding `self_ms` is fine — self times do not overlap.
+nest. `self_ms` adds up within one detector's rows — self times do not
+overlap — and not across detectors: a disk wait inside a slice is in both.
+How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 
 ## The detectors
 
 | id | what it catches | what to hook onto |
 |---|---|---|
 | `main_thread_block` | where the main thread spent its time | `location` — the slice name; `detail` is the thread's comm, always the main thread here, cut to 15 characters by the kernel |
+| `app_init` | what ran after the Application was created, before the first Activity | an Initializer or a library's section by name; `(no section)` is the ContentProviders and `Application.onCreate` nobody traced |
 | `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects |
 | `monitor_contention` | monitor contention | `places` names both sides of the lock in the checkout; `detail` carries the owner's tid |
 | `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |
@@ -347,6 +350,19 @@ here is never a restatement of one above it. And it depends on how markers are
 named: a marker takes the name of the work it wraps, never of the place it was
 put, or the two entries arrive under two names and there is nothing left to
 compare.
+
+**`app_init`** is the stretch of a cold start between the Application and the
+first Activity: every ContentProvider's `onCreate`, then `Application.onCreate`.
+The platform traces neither, so what has a name here is what libraries write
+themselves — each androidx.startup Initializer is a row of its own, and so is
+a library's section such as `Firebase` — and `(no section)` is the rest.
+
+An Initializer or a library's section is something to defer or make lazy, and
+its name is the address. `(no section)` has no address yet: it is the app's
+own providers and `Application.onCreate` plus any library that writes
+nothing. Put `AGENTTMP_` markers around the app's own there, or `echolot mark`,
+and record again; what stays unnamed after that is libraries, which the
+manifest's `<provider>` entries list.
 
 **`runnable_starvation`** talks about hardware, not code. A thread in state `R`
 is ready to work but the scheduler will not let it in. On an emulator it fires

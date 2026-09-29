@@ -401,8 +401,8 @@ until somebody reads the report or writes a config.
   Then the checks that pin what it must find and what it must not, beside the
   others in `selftest.py`.
 - **The counts in the README.** `tests/test_docs.py` reads the number in
-  "runs twelve SQL detectors", in the flowchart's `12 SQL detectors` and in
-  the sample report's `Detectors fired: **N of 12**`, and fails while any of
+  "runs thirteen SQL detectors", in the flowchart's `13 SQL detectors` and in
+  the sample report's `Detectors fired: **N of 13**`, and fails while any of
   them disagrees with the files. `tests/test_doc_samples.py` holds the sample
   report itself to what the renderer prints, down to the **Silent** line,
   which names every detector that did not fire. The detector tables in the

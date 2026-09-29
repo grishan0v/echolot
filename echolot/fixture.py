@@ -274,6 +274,30 @@ SLICES = {
         ("Bootstrap_OUTSIDE", 0, 50, []),
         # The start anchor. Wraps the whole scenario, as on a real startup.
         ("AppStart", 100, 1006, [
+            # app_init: the stretch a cold start spends between the
+            # Application and the first Activity, shaped the way a real one
+            # is. `makeApplication` is traced and ends at 108; what the
+            # platform does not trace — ContentProviders, then
+            # Application.onCreate — fills the 91 ms after it to 199. Inside:
+            # androidx.startup's `Startup` with two Initializers, a library's
+            # own section, classes ART initialized — one of them obfuscated,
+            # one inside `Startup` beside the Initializer it belongs to — and
+            # async binder transactions, whose name belongs to `binder_txn`
+            # and stays there, even inside `Startup`. The 48 ms nobody named
+            # is the row this detector exists for.
+            ("bindApplication", 101, 98, [
+                ("makeApplication", 102, 6, []),
+                ("Startup", 110, 16, [
+                    ("Landroidx/work/WorkManagerInitializer;", 110.2, 0.6, []),
+                    ("WorkManagerInitializer", 111, 9, []),
+                    ("binder transaction async", 120.2, 0.5, []),
+                    ("ProfileInstallerInitializer", 121, 4, []),
+                ]),
+                ("Firebase", 128, 22, []),
+                ("Lcom/example/app/Store;", 152, 1, []),
+                ("Lq3;", 154, 1, []),
+                ("binder transaction async", 156, 3, []),
+            ]),
             # main_thread_block: 120 ms on main → fires (threshold 16)
             ("collection_mapping", 200, 120, []),
             # negative control: 5 ms < 16, must not fire
