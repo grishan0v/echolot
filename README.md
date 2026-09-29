@@ -476,25 +476,17 @@ once not means the cause is the state it hit that once.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A["Android device"]
-    B["trace<br/>81 MB · 475k slices"]
-    C["13 SQL detectors<br/>pinned trace_processor"]
-    D["report.md<br/>~20 rows"]
-    E["report.json<br/>14 KB"]
-    H["comparison<br/>what moved, and by how much"]
-    F(["You"])
-    G(["The agent"])
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/loop-dark.svg">
+    <img alt="The hunt as a loop: echolot records, analyzes and compares the same way every time; the agent reads the rows, marks one blind spot a round, and names the place in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/loop-light.svg" width="880">
+  </picture>
+</p>
 
-    A -->|"echolot collect"| B
-    B -->|"echolot analyze"| C
-    C --> D --> F
-    C --> E --> G
-    E -->|"echolot compare, against an earlier one"| H
-    H --> F
-    H --> G
-```
+The recording, the detectors and the comparison are scripts that run the same
+way every time. In each round the agent makes one decision: where to look
+next. The loop ends when the report names a place in the code, or when the
+rounds run out.
 
 ## Project layout
 

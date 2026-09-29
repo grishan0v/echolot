@@ -401,11 +401,13 @@ until somebody reads the report or writes a config.
   Then the checks that pin what it must find and what it must not, beside the
   others in `selftest.py`.
 - **The counts in the README.** `tests/test_docs.py` reads the number in
-  "runs thirteen SQL detectors", in the flowchart's `13 SQL detectors` and in
-  the sample report's `Detectors fired: **N of 13**`, and fails while any of
-  them disagrees with the files. `tests/test_doc_samples.py` holds the sample
-  report itself to what the renderer prints, down to the **Silent** line,
-  which names every detector that did not fire. The detector tables in the
+  "runs thirteen SQL detectors" and in the sample report's
+  `Detectors fired: **N of 13**`, and fails while either disagrees with the
+  files. `tests/test_doc_samples.py` holds the sample report itself to what
+  the renderer prints, down to the **Silent** line, which names every
+  detector that did not fire. The README's pictures state the count too,
+  read out of that tally: `tests/test_readme_pictures.py` fails until
+  `python docs/assets/render.py` draws them again. The detector tables in the
   README and in `references/report.md` are lists kept by hand.
 - **Only part of a row survives a merge.** Repeats are folded row by row, and
   a merged row keeps its `@identity` columns, `runs`, the numeric contract
