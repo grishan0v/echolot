@@ -117,12 +117,13 @@ failed: the traces of a half-finished run stay in the module's output
 directory, and the previous set stays in `.echolot/traces`.
 
 The macrobenchmark chose what to record, so this mode builds no trace config
-of its own. `environment`, `atrace_categories`, `buffer_kb`, `duration_ms` and
-`reset_policy` are inert here, and `collect` says so when it finds them —
-they look like they apply, and copying them in from a launch-mode config is
-the obvious mistake. What the traces carry is the benchmark's decision, and
-the report says which platform state it actually found. On the run these notes
-come from that was the clock and memory but no thermal.
+of its own. `environment`, `atrace_categories`, `buffer_kb`, `duration_ms`,
+`reset_policy` and `sampling` are inert here, and `collect` says so when it
+finds them — they look like they apply, and copying them in from a
+launch-mode config is the obvious mistake. What the traces carry is the
+benchmark's decision, and the report says which platform state it actually
+found, and whether a callstack sampler ran. On the run these notes come from
+that was the clock and memory but no thermal.
 
 `project_root` is both where the task runs and where the traces are looked
 for. A relative one is taken from the directory `echolot.yml` is in, the way
@@ -285,6 +286,83 @@ else; `io_wait` is what tells disk waiting from other blocking everywhere.
 There is also a requirement on the app itself: slices arrive only if it is
 **profileable or debuggable**. The manifest needs
 `<profileable android:shell="true" />`.
+
+## Callstack sampling
+
+```yaml
+runner:
+  sampling: 100    # Hz. `true` means 100; `false`, or no key, leaves it off
+```
+
+`uninstrumented_cpu` finds a thread that burned CPU with no slice around it,
+and that is all it can say. What the thread was running takes another round:
+markers around the likely code, a new recording, another look. A callstack
+sampler records the answer alongside. Many times a second it notes which
+functions were on the stack of each thread that held a CPU, and the samples
+go into the same trace, on the same clock as everything else. The Perfetto UI
+shows them as a flame graph for any stretch of time you select.
+
+It is off unless asked for, because it costs the app time. On the SM-A515F
+(Android 13, a `user` build), six cold starts of about 1.36 s recorded the
+way `collect` records them took 186 ms longer at 100 Hz than six without a
+sampler, 95% sure between 68 and 263 ms. The two kinds of start alternated,
+so the device's heat fell on both alike. A sampled set therefore compares
+only with another sampled at the same rate. The report says on its header
+whether a sampler ran, and `compare` warns when two rounds were not recorded
+alike.
+
+Three choices in the recording are deliberate, and the first two were
+settled on that device:
+
+- **No process filter.** The sampler judges a process once, by its name at
+  its first sample, and drops one that does not match for the rest of the
+  recording. A process just forked from zygote still carries zygote's name,
+  so a filter by package name lost the cold start in four recordings of seven
+  and got nothing of it at all. Without the filter every process is sampled,
+  and only those that are profileable or debuggable come back with a stack,
+  which in practice means the app's.
+- **The app's frames, not the kernel's.** Kotlin and Java frames come back by
+  name, interpreted, JIT-compiled and compiled ahead of time alike. Frames of
+  the framework, compiled into the system image, come back without one, and
+  a minified build's frames carry their minified names.
+- **A buffer of its own**, the size of `buffer_kb`, so the samples can never
+  push out the sched and atrace events every detector reads.
+
+`true` means 100 Hz. A higher rate buys more samples and costs about the
+same — 250 Hz, filtered to the app, had cost the same start 156 ms — but the
+unwinding falls behind: at 100 Hz every one of the app's samples in the
+window came with a stack, wherever a recording got stacks at all; at 250 Hz
+77 to 85% did, and at 1 kHz one in seven came without, every one of them in
+the busiest seconds. Perfetto advises staying under 200 for Java and Kotlin
+stacks, and `collect` warns above that.
+
+Two requirements. The app has to be profileable or debuggable, which is the
+same `<profileable android:shell="true" />` the slices need. And the device
+needs Perfetto's sampler, `traced_perf`: the recordings above ran on
+Android 13, and Perfetto documents CPU profiling for Android 15 and up. When
+the recording asks for samples and no sampler starts, the report says so
+rather than showing none.
+
+What the report says, on the line under **Device**:
+
+| the report says | what happened |
+|---|---|
+| Sampled callstacks at 100 Hz: 1482 samples of this process in the window, 99% with a stack | a sampler ran and unwound the app |
+| … they came with a stack in 5 of 6 repeats and with none in the rest | the sampler lost the process as it started in one repeat, which has no stacks to read |
+| … none with a stack | the app is not profileable or debuggable, or the sampler lost the process as it started; another round tells which |
+| … none of the samples in the window is this process's | the recording was filtered by process name and missed the start |
+| The recording asked for callstack samples … and none arrived | the device's sampler did not run |
+
+The last three are warnings. A profileable app does lose every stack of a
+cold start now and then: on the SM-A515F it happened in one recording of six,
+and the other five had a stack on every sample. The sampler asks a process
+for access to its memory once, at its first sample; that time it did not get
+it, and every sample after that was written without a stack.
+
+What the report reads is the trace, never the config, so a trace recorded
+some other way says the same. In `gradle` mode the benchmark records with its
+own config and `runner.sampling` does not apply, but the report still says
+whether its traces hold samples.
 
 ## Merging repeats
 

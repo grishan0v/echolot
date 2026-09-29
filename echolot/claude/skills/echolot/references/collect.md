@@ -81,6 +81,29 @@ older devices it does not exist, perfetto records the rest without complaining,
 and the detector is silent. Silence there looks exactly like "no bad frames",
 so check the Android version before reporting a scenario as smooth.
 
+## Callstack samples
+
+`runner.sampling` adds a second buffer, after the first, and a sampler that
+writes into it:
+
+```
+buffers: { size_kb: 131072 fill_policy: DISCARD }
+data_sources: { config {
+    name: "linux.perf"
+    target_buffer: 1
+    perf_event_config {
+      timebase { frequency: 100 }
+      callstack_sampling { kernel_frames: false }
+    }
+} }
+```
+
+No `scope { target_cmdline }` when the scenario starts the process. The
+sampler judges a process once, by its name at its first sample, and a process
+just forked from zygote still has zygote's: with the filter a cold start was
+lost in four recordings of seven. A sampled round runs slower than a plain
+one, so compare it only with another sampled at the same rate.
+
 ## What the app itself may be missing
 
 Application slices only arrive if the app is **profileable or debuggable**. The

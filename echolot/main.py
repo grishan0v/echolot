@@ -1052,6 +1052,10 @@ def _environment_info(tp) -> dict:
     None of this is a finding. It is the denominator under every duration in
     the report: the same code on a lower clock takes longer, and `compare`
     reads these numbers to avoid calling that a regression.
+
+    `sampling` is the fourth block and works the other way round: `None` is a
+    definite answer, "nothing sampled this recording", so it never goes into
+    `missing`. See `_sampling_info`.
     """
     def one(sql: str) -> dict:
         try:
@@ -1117,9 +1121,74 @@ def _environment_info(tp) -> dict:
     else:
         env["memory"] = None
 
+    env["sampling"] = _sampling_info(tp, one)
     env["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if env[k] is None)
     return env
+
+
+def _sampling_info(tp, one) -> dict | None:
+    """Whether callstacks were sampled while this trace recorded, read from the trace.
+
+    From the trace rather than from `runner.sampling`, so that a trace
+    recorded some other way — by a macrobenchmark's own config, by hand —
+    says the same, and so that a config edited since says nothing false.
+
+    Two sources, because either can be there without the other:
+
+    - `perf_session`: the sampler ran. It is what slows the app, so it is what
+      `started` says, and `compare` goes by it.
+    - the recording's own config, which the tracing service writes into the
+      trace: what was asked for, and at what rate. Asked for and not started
+      is a device without a sampler to run, and a reader has to be told
+      rather than left to find no samples.
+
+    `samples` and `with_stack` count this process's samples inside the window,
+    and the difference between them is the diagnosis: none with a stack is an
+    app the sampler was not allowed to unwind, and no samples at all while it
+    ran is a process the sampler missed. The report's header says which.
+    """
+    asked, hz = _sampling_asked(tp)
+    started = bool(one("SELECT COUNT(*) AS n FROM perf_session").get("n"))
+    if not asked and not started:
+        return None
+    counts = one("SELECT COUNT(*) AS samples, COUNT(callsite_id) AS with_stack "
+                 "FROM _samples_win")
+    return {
+        "hz": hz,
+        "started": started,
+        "samples": counts.get("samples") or 0,
+        "with_stack": counts.get("with_stack") or 0,
+    }
+
+
+# The recording's config as trace_processor prints it back: protobuf text,
+# one field per line. Only the linux.perf block is of interest, and within it
+# only the rate — `frequency`, the one field of that name the block has.
+_PERF_BLOCK = re.compile(r'name:\s*"linux\.perf"(.*?)(?=^data_sources\s*\{|\Z)',
+                         re.MULTILINE | re.DOTALL)
+_PERF_RATE = re.compile(r"^\s*frequency:\s*(\d+)\s*$", re.MULTILINE)
+
+
+def _sampling_asked(tp) -> tuple[bool, int | None]:
+    """Whether the recording's config asked for callstack samples, and at what rate.
+
+    A trace without its config — an old perfetto, a trace put together by
+    another tool — asked for nothing as far as this can tell. A sampler set
+    to a period rather than a rate has no rate to report.
+    """
+    try:
+        rows = tp.query("SELECT str_value AS text FROM metadata "
+                        "WHERE name = 'trace_config_pbtxt'")
+    except Exception as e:  # a trace_processor without the key
+        print(f"[!] environment: {e}", file=sys.stderr)
+        return False, None
+    text = (rows[0]["text"] if rows else None) or ""
+    block = _PERF_BLOCK.search(text)
+    if block is None:
+        return False, None
+    rate = _PERF_RATE.search(block.group(1))
+    return True, int(rate.group(1)) if rate else None
 
 
 # The four things a thread can be doing, in trace_processor's vocabulary.

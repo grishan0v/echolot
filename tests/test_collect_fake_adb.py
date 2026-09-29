@@ -173,6 +173,32 @@ def test_reset_policy_runs_what_it_announces(tmp_path, adb, value, stops, warned
         check("and the warning says what runs", "Using force-stop" in notes[0], notes)
 
 
+# --- sampling: sent to the device, and said ------------------------------------
+
+@pytest.mark.parametrize("value, hz", [(ABSENT, None), (False, None),
+                                       (True, 100), (150, 150)],
+                         ids=["default", "false", "true", "rate"])
+def test_sampling_reaches_the_device_and_is_said(tmp_path, adb, value, hz):
+    """`runner.sampling` is the one knob that makes the app slower on purpose.
+
+    So it is said when the recording starts, as well as sent to the device —
+    the set it records compares only with another sampled one.
+    """
+    section = {} if value is ABSENT else {"sampling": value}
+    said: list[str] = []
+    runner.collect(PACKAGE, tmp_path / "traces", 1, section=section,
+                   name="startup", log=said.append)
+    recording = adb.stdin[adb.kinds().index("perfetto")] or ""
+    if hz is None:
+        check("no sampler unless asked for", "linux.perf" not in recording, recording)
+        check("and nothing said about one", not [s for s in said if "sampling" in s], said)
+        return
+    check("the sampler is in the device's config, at the rate asked",
+          "linux.perf" in recording and f"frequency: {hz} " in recording, recording)
+    check("the log says it samples, and at what rate",
+          any(f"sampling callstacks at {hz} Hz" in line for line in said), said)
+
+
 # --- the previous set moves when a new trace takes its place, not before ------
 
 @pytest.mark.parametrize("listing, section, fail", [
@@ -182,10 +208,11 @@ def test_reset_policy_runs_what_it_announces(tmp_path, adb, value, stops, warned
     (ONE_DEVICE, {"mode": "lanuch"}, None),
     (ONE_DEVICE, {"mode": "command"}, None),
     (ONE_DEVICE, {"duration_ms": "12s"}, None),
+    (ONE_DEVICE, {"sampling": "fast"}, None),
     (ONE_DEVICE, {}, "perfetto"),
     (ONE_DEVICE, {}, "wait"),
 ], ids=["no-device", "several", "unauthorized", "mode-typo", "no-command",
-        "duration-unit", "perfetto-refused", "wait-failed"])
+        "duration-unit", "sampling-word", "perfetto-refused", "wait-failed"])
 def test_a_collect_that_fails_before_its_first_trace_leaves_the_set_alone(
         tmp_path, adb, listing, section, fail):
     """The baseline is the first thing a re-record loses, and it was lost for nothing.

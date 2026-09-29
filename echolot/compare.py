@@ -205,6 +205,7 @@ def _check(before: dict, after: dict) -> tuple[list[dict[str, str]], bool]:
         })
 
     out.extend(_environment_moved(before, after))
+    out.extend(_sampling_moved(before, after))
 
     nb, na = _runs(before), _runs(after)
     if nb != na:
@@ -346,6 +347,45 @@ def _environment_moved(before: dict, after: dict) -> list[dict[str, str]]:
                     f"record that side again.",
         })
     return out
+
+
+def _sampling_moved(before: dict, after: dict) -> list[dict[str, str]]:
+    """Whether a sampler ran on one side and not the other, or at another rate.
+
+    The same kind of warning as a clock that moved: a cause outside the code
+    that makes one side slower. A sampler interrupts the app on every tick to
+    copy its stack; on the device it was measured on, a cold start of 1.36 s
+    sampled at 100 Hz ran 186 ms longer than the same start without it.
+
+    A report from before the field existed carries no `sampling` at all, and
+    that side is unknown rather than unsampled, so it gets no sentence. What
+    counts is whether the sampler ran: a round that asked for samples on a
+    device that has no sampler ran like a plain one.
+    """
+    eb, ea = before.get("environment") or {}, after.get("environment") or {}
+    if "sampling" not in eb or "sampling" not in ea:
+        return []
+    was, now = _sampled(eb["sampling"]), _sampled(ea["sampling"])
+    if was == now:
+        return []
+    return [{
+        "id": "sampling",
+        "text": f"Callstack sampling was {was} before and {now} after. The "
+                f"sampler takes time from the app, so a row can move for that "
+                f"reason alone, on code nobody touched. Record both rounds "
+                f"with the same `runner.sampling`.",
+    }]
+
+
+def _sampled(s: dict | None) -> str:
+    """One side's sampling in words, for the sentence above."""
+    if not s or not s.get("started"):
+        return "off"
+    rate = f" at {s['hz']} Hz" if s.get("hz") else ""
+    ran, _, total = (s.get("runs") or "").partition("/")
+    if total and ran != total:
+        return f"on in {ran} of {total} repeats{rate}"
+    return f"on{rate}"
 
 
 def _measured(env: dict) -> bool:

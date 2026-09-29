@@ -46,6 +46,7 @@ produce. The keys only a merged report has are named under the block.
                                 "throttled": false, "throttle_device": null,
                                 "throttled_runs": "0/5" },
                    "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
+                   "sampling": null,
                    "missing": [] },
   "summary": { "detectors_run": 12, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
@@ -78,9 +79,11 @@ how many. Every number in it is then a median across them, and a few keys say
 how far the repeats spread: `window.duration_ms_min` and `_max`,
 `window.main_thread.runs` (how many repeats had a main thread to account for),
 `environment.cpu.mean_mhz_min` and `_max` with `environment.cpu.runs` (how many
-had a clock to read), and `environment.thermal.throttled_runs` — how many were
+had a clock to read), `environment.thermal.throttled_runs` — how many were
 throttled, kept as a count because one throttled repeat is a fact about the
-set rather than a vote. A report of a single trace has none of these keys.
+set rather than a vote — and `environment.sampling.runs` with
+`runs_with_stack`, how many ran a callstack sampler and how many of those
+got stacks. A report of a single trace has none of these keys.
 
 **`detectors[].identity`** — the columns that name a row of this detector:
 `location`, and for several of them `detail` too. Merging repeats and
@@ -111,6 +114,31 @@ clean.
 `thermal.throttled` is the one to act on. A hot device is not a slowed device;
 a cooling device above zero is the kernel saying it took capacity away, and
 the numbers below then understate the app.
+
+`sampling` is whether a callstack sampler ran while the trace recorded —
+`runner.sampling`, or whatever config recorded the trace — read from the
+trace itself. `null` is a definite answer here: nothing sampled it, which is
+the default, and it is never listed in `missing`. Otherwise:
+
+```json
+"sampling": { "hz": 100, "started": true, "samples": 1482, "with_stack": 1466,
+              "runs": "5/5", "runs_with_stack": "5/5" }
+```
+
+`samples` counts this process's samples inside the window and `with_stack`
+the ones that came with a callstack; merged, both are medians, `runs` counts
+the repeats a sampler ran in and `runs_with_stack` those among them that got
+any stack. The sampler takes time from the app, so a sampled round compares
+only with another sampled at the same rate, and `compare` says so when they
+differ. The report puts a warning in place of the line for the three ways it
+comes back empty: `started: false` — asked for, and the device's sampler
+never ran; `samples: 0` — the sampler ran and none of it is this process's,
+the mark of a recording filtered by process name that missed a starting
+process; and no repeat with a stack. That last one has two causes: an app
+the sampler may not unwind, which on a `user` build of Android means the
+manifest lacks `<profileable android:shell="true" />`, or a start the
+sampler lost, which a profileable app's cold start does now and then. If
+some repeats have stacks and others none, it was the second.
 
 **`detectors[].params_source`** — where this detector's thresholds came from:
 `default` (the numbers shipped in the .sql), `config` (calibrated or
@@ -571,6 +599,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `thresholds` | detector parameters differ. **appeared** and **gone** mean the bar moved, not that the app changed. Re-run both with `--defaults` |
 | `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
 | `environment-thermal` | the kernel throttled the device during one round and not the other: that side is slower for a reason outside the code. Only when both sides recorded thermal state |
+| `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
 | `process` | two different apps. `comparable: false` |
 | `defaults` / `config` | one side used `--defaults`, or the config's hash changed |

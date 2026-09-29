@@ -728,6 +728,76 @@ def test_throttling_on_one_side_only() -> None:
     check("and the slowed side is named", "after" in text, text)
 
 
+def sampled(hz: int | None = 100, *, started: bool = True,
+            runs: str | None = None) -> dict:
+    """A platform-state block from a recording that ran a callstack sampler."""
+    sampling = {"hz": hz, "started": started,
+                "samples": 300 if started else 0,
+                "with_stack": 290 if started else 0}
+    if runs:
+        sampling["runs"] = runs
+    return {**env(1800.0), "sampling": sampling}
+
+
+def plain() -> dict:
+    """The same block from a recording nothing sampled."""
+    return {**env(1800.0), "sampling": None}
+
+
+def test_a_sampler_on_one_side_only_is_said() -> None:
+    """A cause outside the code that makes one side slower, like a clock that fell."""
+    cmp = compare(report([det("d", [row("A", 100.0)])], environment=plain()),
+                  report([det("d", [row("A", 130.0)])], environment=sampled()))
+    check("a round sampled against a plain one is warned about",
+          "sampling" in warned(cmp), str(warned(cmp)))
+    text = next(w["text"] for w in cmp["warnings"] if w["id"] == "sampling")
+    check("and the warning says which side ran it, and at what rate",
+          "off before and on at 100 Hz after" in text, text)
+
+
+def test_rounds_sampled_alike_say_nothing() -> None:
+    for label, side in (("both sampled", sampled), ("both plain", plain)):
+        cmp = compare(report([det("d", [row("A", 100.0)])], environment=side()),
+                      report([det("d", [row("A", 100.0)])], environment=side()))
+        check(f"{label}: no word about sampling",
+              "sampling" not in warned(cmp), str(warned(cmp)))
+
+
+def test_another_rate_is_another_cost() -> None:
+    cmp = compare(report([det("d", [row("A", 100.0)])], environment=sampled(100)),
+                  report([det("d", [row("A", 100.0)])], environment=sampled(250)))
+    text = next((w["text"] for w in cmp["warnings"] if w["id"] == "sampling"), "")
+    check("two rates are two different costs, and both are named",
+          "at 100 Hz before" in text and "at 250 Hz after" in text, text)
+
+
+def test_a_sampler_that_never_ran_slowed_nothing() -> None:
+    """Asked for on a device without a sampler: the round ran like a plain one."""
+    cmp = compare(report([det("d", [row("A", 100.0)])], environment=plain()),
+                  report([det("d", [row("A", 100.0)])],
+                         environment=sampled(started=False)))
+    check("no warning against a plain round",
+          "sampling" not in warned(cmp), str(warned(cmp)))
+
+
+def test_a_report_from_before_sampling_is_unknown_not_plain() -> None:
+    """No `sampling` key at all is a report older than the field: nothing to say."""
+    cmp = compare(report([det("d", [row("A", 100.0)])], environment=env(1800.0)),
+                  report([det("d", [row("A", 100.0)])], environment=sampled()))
+    check("an old report against a sampled one stays quiet about sampling",
+          "sampling" not in warned(cmp), str(warned(cmp)))
+
+
+def test_a_half_sampled_set_is_named_as_one() -> None:
+    cmp = compare(
+        report([det("d", [row("A", 100.0)])], runs=6, environment=sampled(runs="3/6")),
+        report([det("d", [row("A", 100.0)])], runs=6, environment=sampled(runs="6/6")))
+    text = next((w["text"] for w in cmp["warnings"] if w["id"] == "sampling"), "")
+    check("the set sampled in only some repeats is said to be",
+          "on in 3 of 6 repeats at 100 Hz before and on at 100 Hz after" in text,
+          text or str(warned(cmp)))
+
+
 def test_detector_sets_differ() -> None:
     before = report([det("one", [row("A", 100.0)])])
     after = report([det("one", [row("A", 100.0)]), det("two", [row("B", 50.0)])])
@@ -922,6 +992,31 @@ def test_a_trace_without_the_sources_compares_as_unmeasured(
     check("against a measured round the missing clock is named, on its side",
           "the after side carries no CPU frequency" in text,
           text or str(warned(cmp)))
+
+
+def test_a_sampled_round_is_told_from_a_plain_one_as_analyze_writes_them(
+        marker_report, sampled_report) -> None:
+    """The contract between the two commands, for sampling.
+
+    Single and merged: merging repeats writes the block again, with `runs`.
+    """
+    import copy
+
+    from echolot import report as report_mod
+
+    def merged(one: dict) -> dict:
+        return report_mod.aggregate([copy.deepcopy(one) for _ in range(3)])
+
+    for label, plain_side, sampled_side in (
+            ("single", marker_report, sampled_report),
+            ("merged", merged(marker_report), merged(sampled_report))):
+        cmp = compare(copy.deepcopy(plain_side), copy.deepcopy(sampled_side))
+        text = next((w["text"] for w in cmp["warnings"] if w["id"] == "sampling"), "")
+        check(f"{label}: the sampled side is named, with its rate",
+              "off before and on at 100 Hz after" in text, text or str(warned(cmp)))
+        same = compare(copy.deepcopy(sampled_side), copy.deepcopy(sampled_side))
+        check(f"{label}: two sampled rounds say nothing about it",
+              "sampling" not in warned(same), str(warned(same)))
 
 
 # --- which two reports, when nobody named them ------------------------------

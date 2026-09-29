@@ -253,9 +253,38 @@ def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
             "available_mb_min": min(avail) if avail else None,
             "major_faults": round(median(faults)) if faults else None,
         }
+    out["sampling"] = _merge_sampling([e.get("sampling") for e in envs])
     out["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if out[k] is None)
     return out
+
+
+def _merge_sampling(samplings: list[dict[str, Any] | None]) -> dict[str, Any] | None:
+    """Callstack sampling across repeats: medians of the runs it ran in, and how many.
+
+    `runs` is the fact that matters most. One `collect` samples every repeat
+    or none, but a set can be assembled from two, and a set that is half
+    sampled has the sampler's cost in its spread. The rate is kept only when
+    every repeat that asked for one asked for the same.
+
+    `runs_with_stack` counts, among those, the repeats that got any stack at
+    all. A profileable app loses every stack of a cold start now and then —
+    one recording of six on a device, with the other five complete — and a
+    median over the six reads "all with a stack" for a repeat that had none.
+    """
+    asked = [s for s in samplings if s]
+    if not asked:
+        return None
+    ran = [s for s in asked if s.get("started")]
+    rates = {s.get("hz") for s in asked}
+    return {
+        "hz": rates.pop() if len(rates) == 1 else None,
+        "started": bool(ran),
+        "samples": round(median([s["samples"] for s in ran])) if ran else 0,
+        "with_stack": round(median([s["with_stack"] for s in ran])) if ran else 0,
+        "runs": f"{len(ran)}/{len(samplings)}",
+        "runs_with_stack": f"{sum(1 for s in ran if s.get('with_stack'))}/{len(ran)}",
+    }
 
 
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
@@ -566,7 +595,79 @@ def _environment_lines(env: dict[str, Any]) -> list[str]:
             f"carries no platform-state sources, so `compare` cannot tell a "
             f"slower machine from a slower app."
         )
+    out.extend(_sampling_lines(env.get("sampling")))
     return out
+
+
+def _sampling_lines(s: dict[str, Any] | None) -> list[str]:
+    """What sampled the app while it was measured, and what came of it.
+
+    Nothing when nothing did: that is how every trace was recorded before
+    `runner.sampling`, and the report said nothing about it then either.
+
+    Otherwise one line, and a warning in place of it for the three ways it
+    comes back empty: no stacks, no samples of this process, no sampler. Each
+    points somewhere else — the app's manifest, how the recording was
+    filtered, the device. No stacks has a second cause that looks the same
+    from here: a profileable app whose start the sampler lost, which on a
+    device happened in one cold start of six. Only another round tells them
+    apart, so the warning names both.
+    """
+    if not s:
+        return []
+    rate = f" at {s['hz']} Hz" if s.get("hz") else ""
+    if not s.get("started"):
+        return [
+            f"> ⚠️ The recording asked for callstack samples{rate} and none "
+            f"arrived: the device's sampler, `traced_perf`, did not run. The "
+            f"app was not slowed by it, and there are no stacks to read."
+        ]
+    runs = s.get("runs") or ""
+    ran, _, total = runs.partition("/")
+    part = f" in {ran} of {total} repeats" if total and ran != total else ""
+    cost = ("The sampler takes time from the app, so compare these numbers "
+            "only with another round sampled at the same rate.")
+    if part:
+        cost = ("The repeats were not recorded alike, and the sampler takes "
+                "time from the app, so its cost is part of the spread below.")
+    samples, stacked = s.get("samples") or 0, s.get("with_stack") or 0
+    head = f"Sampled callstacks{rate}{part}"
+    if not samples:
+        return [
+            f"> ⚠️ {head}, and none of the samples in the window is this "
+            f"process's. A sampler filtered by process name misses a process "
+            f"it first meets under zygote's name, which is how a cold start "
+            f"begins; `runner.sampling` records without that filter. {cost}"
+        ]
+    # A single trace has no `runs_with_stack`: it is one repeat, with a stack
+    # or without.
+    got, _, tried = (s.get("runs_with_stack") or f"{int(bool(stacked))}/1").partition("/")
+    if got == "0":
+        return [
+            f"> ⚠️ {head}: {samples} samples of this process in the window, "
+            f"none with a stack. Either the app is not profileable or "
+            f"debuggable, which a `user` build of Android needs before the "
+            f"sampler unwinds it — `<profileable android:shell=\"true\" />` "
+            f"in the manifest — or the sampler lost the process as it "
+            f"started, which a cold start does now and then. If another round "
+            f"comes back with stacks, it was the second. {cost}"
+        ]
+    if got != tried:
+        return [
+            f"{head}: {samples} samples of this process in the window. They "
+            f"came with a stack in {got} of {tried} repeats and with none in "
+            f"the rest: the sampler lost the process as it started, which a "
+            f"cold start does now and then, and those repeats have no stacks "
+            f"to read. {cost}"
+        ]
+    # Rounded, a share can read 100% with samples missing their stack, or 0%
+    # with some carrying one. Neither end is said unless it is exact.
+    share = ("all" if stacked == samples
+             else f"{min(max(round(stacked / samples * 100), 1), 99)}%")
+    return [
+        f"{head}: {samples} samples of this process in the window, {share} "
+        f"with a stack. {cost}"
+    ]
 
 
 def to_markdown(report: dict[str, Any]) -> str:

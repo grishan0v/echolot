@@ -477,7 +477,7 @@ Start at the [documentation index](https://github.com/grishan0v/echolot/tree/mai
 
 | | document | about |
 |---|---|---|
-| 🎬 | [Collecting](https://github.com/grishan0v/echolot/blob/main/docs/collecting.md) | `collect`, the three modes, merging repeats |
+| 🎬 | [Collecting](https://github.com/grishan0v/echolot/blob/main/docs/collecting.md) | `collect`, the three modes, callstack sampling, merging repeats |
 | 🔎 | [Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md) | `probe`, `names`, `domains` — from a trace to a place in the code |
 | 🔀 | [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md) | `compare` — what changed between two reports, and when the repeats support saying so |
 | 🧊 | [ANRs](https://github.com/grishan0v/echolot/blob/main/docs/anr.md) | `anr` — reading a report from the field, and measuring a freeze |
@@ -496,7 +496,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 146 checks inside
+The detectors were validated against a synthetic trace — 147 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
