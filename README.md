@@ -26,7 +26,7 @@ A Perfetto trace of one cold start holds around half a million slices in eighty
 megabytes. Nobody reads that, and an AI agent pointed at the raw file produces
 confident guesses instead of answers.
 
-echolot sits in between. It runs twelve SQL detectors over the trace and returns
+echolot sits in between. It runs thirteen SQL detectors over the trace and returns
 about twenty rows: where the time went, how much of it, and the evidence behind
 each claim. Same trace in, same report out — the `trace_processor` version is
 pinned, and the binary is checked against its SHA-256 when it is downloaded.
@@ -163,7 +163,7 @@ Scenario window: **1184.37 ms** (from 1102.14 to 1291.52)
 Main thread: 49% on a CPU · 8% waiting for a CPU · 10% blocked in the kernel · 33% sleeping
 Covered by the findings below: **31%** of the main thread's window, each moment counted once
 Device: clock **1481 MHz** (from 1204 to 1622 across repeats), peak 54 °C, 1536 MB free at the low point
-Detectors fired: **5 of 12**
+Detectors fired: **5 of 13**
 Config: `/home/you/my-app/echolot.yml` (sha 3f9a1c2b7d40) · thresholds: built-in defaults
 
 ## Markers
@@ -221,7 +221,7 @@ _the ONLY detector that finds a problem inside uninstrumented code. The agent do
 
 <sub>detector `uninstrumented_cpu`, params: {'min_running_ms': 50, 'max_covered_pct': 50}</sub>
 
-**Silent:** anr, anr_risk, binder_txn, gc_pressure, io_wait, repeated_work, runnable_starvation
+**Silent:** anr, anr_risk, app_init, binder_txn, gc_pressure, io_wait, repeated_work, runnable_starvation
 
 <sub>trace_processor v56.1</sub>
 ```
@@ -370,6 +370,7 @@ which re-records and re-instruments on purpose.
 | detector | what it catches |
 |---|---|
 | `main_thread_block` | where the main thread spent its time, by self time |
+| `app_init` | what ran after the Application was created, before the first Activity: initializers by name, and the ContentProviders and `Application.onCreate` nobody traced |
 | `gc_pressure` | frequent or expensive GC, and waits on allocation |
 | `monitor_contention` | lock contention, with the owner's tid as evidence |
 | `binder_txn` | long synchronous IPC, and death by a thousand cuts |
@@ -434,7 +435,7 @@ once not means the cause is the state it hit that once.
 flowchart LR
     A["Android device"]
     B["trace<br/>81 MB · 475k slices"]
-    C["12 SQL detectors<br/>pinned trace_processor"]
+    C["13 SQL detectors<br/>pinned trace_processor"]
     D["report.md<br/>~20 rows"]
     E["report.json<br/>14 KB"]
     H["comparison<br/>what moved, and by how much"]
@@ -494,7 +495,7 @@ schema, how ART names things, and how to capture a trace by hand.
 
 **v0.** Everything planned for it is in place.
 
-The detectors were validated against a synthetic trace — 144 checks inside
+The detectors were validated against a synthetic trace — 146 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.

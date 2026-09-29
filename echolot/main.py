@@ -865,7 +865,7 @@ def _setup_context(tp, cfg: Config, upid: int,
 def _claim_names(tp, overrides: dict) -> None:
     """`_claimed_name` — every slice name a detector's mask already speaks for.
 
-    Three of the twelve detectors know the names of what they are looking for
+    Three of the thirteen detectors know the names of what they are looking for
     and say so in a `*name_glob*` param: `*GC`, `Lock contention on a monitor
     lock*`, `binder transaction`. `repeated_work` knows no name in advance —
     it asks a question about shape and so has to look at every name there

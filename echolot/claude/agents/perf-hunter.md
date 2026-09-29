@@ -156,6 +156,9 @@ waiting for one.
      not mark the work there: you do not know what it is yet, and that is the
      complaint
    no instrumentation at all → echolot mark, then echolot mark --apply
+   app_init's (no section) → the app's own ContentProviders and
+     Application.onCreate: AGENTTMP_ markers there; what stays unnamed is
+     libraries, listed as <provider> in the merged manifest
    a named place → a few AGENTTMP_ markers around it, by hand
    copy the current traces aside, re-record, round += 1
    (cleanup: echolot mark --remove takes out what --apply put in)

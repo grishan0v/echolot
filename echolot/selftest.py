@@ -406,7 +406,7 @@ def _(report):
                if r["location"] == "AppStart")
     assert row["total_ms"] == 1006.0, row
     assert row["self_ms"] < row["total_ms"], f"children not subtracted: {row}"
-    assert row["self_ms"] == 275.0, f"1006 minus 731 ms of children: {row}"
+    assert row["self_ms"] == 177.0, f"1006 minus 829 ms of children: {row}"
 
 
 @check("main_thread_block: self time never exceeds the window")
@@ -418,6 +418,36 @@ def _(report):
     assert total_self <= window, (
         f"self time sums to {total_self} ms against a {window} ms window"
     )
+
+
+@check("app_init: the stretch after makeApplication, named where it can be")
+def _(report):
+    # The fixture's `bindApplication`: `makeApplication` ends at 108, and the
+    # 91 ms to 199 are what the platform does not trace. Each Initializer is
+    # a row of its own, a library's section is one, the three classes ART
+    # initialized fold into one — the obfuscated `Lq3;` and the one inside
+    # `Startup` included — and what no section holds is the 48 ms the
+    # detector exists to say out loud.
+    got = {r["location"]: r for r in rows(report, "app_init")}
+    assert set(got) == {"(no section)", "Firebase", "WorkManagerInitializer",
+                        "ProfileInstallerInitializer",
+                        "class initialization (ART)"}, sorted(got)
+    assert got["(no section)"]["total_ms"] == 48.0, got["(no section)"]
+    assert got["WorkManagerInitializer"]["total_ms"] == 9.0, got
+    assert got["class initialization (ART)"]["count"] == 3, got
+    assert got["class initialization (ART)"]["total_ms"] == 2.6, got
+    assert "Application.onCreate" in got["(no section)"]["detail"], got
+
+
+@check("app_init: the wrapper, the part before, and another detector's name stay out")
+def _(report):
+    # `Startup` is androidx.startup's own wrapper, not work anybody can defer;
+    # `makeApplication` is before the stretch; `binder transaction async` is a
+    # name `binder_txn` speaks for, and one signal arrives under one heading.
+    # Their time still counts as named: the 48 ms is what is left without it.
+    loc = locations(report, "app_init")
+    for name in ("Startup", "makeApplication", "binder transaction async"):
+        assert name not in loc, f"{name} is not app_init's row: {loc}"
 
 
 @check("binder_txn: fired on the long transaction, async does not count")

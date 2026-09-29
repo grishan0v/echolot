@@ -96,6 +96,9 @@ round = 1
    a thread the JDK named — pool-N-thread-M, Thread-N → echolot mark --pools
      first: name the pool, re-record, and the row stops being anonymous
    no instrumentation → echolot mark, then echolot mark --apply
+   app_init's (no section) → the app's own ContentProviders and
+     Application.onCreate: AGENTTMP_ markers there; what stays unnamed is
+     libraries, listed as <provider> in the merged manifest
    a named place → a few AGENTTMP_ markers around it, by hand
    re-record, round += 1
    round > loop.max_rounds (config, default 3) → exit with an interim conclusion
