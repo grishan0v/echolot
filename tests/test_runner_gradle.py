@@ -110,9 +110,13 @@ def test_a_gradle_run_says_which_knobs_it_ignored(tmp_path, monkeypatch):
         package="com.example.app", out_dir=tmp_path / "out", iterations=1,
         name="startup", log=said.append,
         section={"mode": "gradle", "gradle_task": ":benchmark:connected",
-                 "project_root": str(project), "environment": True},
+                 "project_root": str(project), "environment": True,
+                 "sampling": 100},
     )
 
-    warned = [line for line in said if "does not apply" in line]
+    warned = [line for line in said if "not apply" in line]
     assert warned, said
     assert "runner.environment" in warned[0], warned[0]
+    # The benchmark's own perfetto config decides whether a sampler runs, and
+    # the report says whether one did.
+    assert "runner.sampling" in warned[0], warned[0]

@@ -597,6 +597,39 @@ SYS_STATS = [
     (1200, 100_000, 9_999),
 ]
 
+# --- callstack samples -----------------------------------------------------
+#
+# What `runner.sampling` records: Perfetto's linux.perf, the samples on a
+# sequence of their own with their frames interned, and the recording's own
+# config at the head of the trace, which is where the rate is read from.
+#
+# The report counts this process's samples inside the window and how many of
+# them came with a stack: 30 and 28. The rest is there to be left out:
+#
+#   * DefaultDispatcher-worker-1 is sampled at 100 Hz through both of its
+#     stretches on a CPU, [200, 350] and [400, 550]: 30 samples. The first two
+#     arrive without a stack, the way a new process's first samples do while
+#     the sampler is still opening its memory;
+#   * the main thread is sampled at 60 and 80 ms, before the window opens,
+#     and at 1150 and 1200, after it closes;
+#   * com.other.app is sampled inside the window, on the core nothing of ours
+#     runs on, and without a stack: every app that is not profileable comes
+#     back that way.
+#
+# (cpu, pid, tid, at_ms, with_stack)
+SAMPLING_HZ = 100
+SAMPLES = [
+    *[(1, APP_PID, TID_WORKER, at, at >= 225) for at in range(205, 350, 10)],
+    *[(1, APP_PID, TID_WORKER, at, True) for at in range(405, 550, 10)],
+    *[(0, APP_PID, TID_MAIN, at, True) for at in (60, 80, 1150, 1200)],
+    *[(9, OTHER_PID, OTHER_PID, at, False) for at in (300, 500, 700)],
+]
+
+# One stack, root first, as a callstack lists its frames. The mapping is the
+# app's compiled code, which is where a sampled Kotlin frame comes from.
+SAMPLE_MAPPING = "/data/app/com.example.app/oat/arm64/base.odex"
+SAMPLE_STACK = ["java.lang.Thread.run", "com.example.app.Store.load"]
+
 
 def _flatten(slices, out, seq):
     """Unrolls the slice tree into B/E events with correct nesting.
@@ -663,6 +696,58 @@ def _frames(builder) -> None:
               gpu_composition=False, prediction_type=FT.PREDICTION_VALID)
 
 
+def _samples(builder, arrived: bool = True) -> None:
+    """Callstack sampling: the config that asked for it, then what the sampler wrote.
+
+    `arrived=False` keeps the config and drops the rest — a recording that
+    asked for samples on a device whose sampler never ran.
+    """
+    packet = builder.add_packet()
+    perf = packet.trace_config.data_sources.add().config
+    perf.name = "linux.perf"
+    perf.target_buffer = 1
+    perf.perf_event_config.timebase.frequency = SAMPLING_HZ
+    perf.perf_event_config.callstack_sampling.kernel_frames = False
+    if not arrived:
+        return
+
+    # The sequence opens the way traced_perf opens it: state cleared, the
+    # defaults it samples with, and the frames every sample below refers to.
+    packet = builder.add_packet()
+    packet.trusted_packet_sequence_id = 3000
+    packet.sequence_flags = pb.TracePacket.SEQ_INCREMENTAL_STATE_CLEARED
+    packet.trace_packet_defaults.perf_sample_defaults.timebase.frequency = SAMPLING_HZ
+    interned = packet.interned_data
+    path = interned.mapping_paths.add()
+    path.iid, path.str = 1, SAMPLE_MAPPING.encode()
+    mapping = interned.mappings.add()
+    mapping.iid, mapping.start, mapping.end = 1, 0x1000, 0x100000
+    mapping.path_string_ids.append(1)
+    for iid, name in enumerate(SAMPLE_STACK, start=1):
+        function = interned.function_names.add()
+        function.iid, function.str = iid, name.encode()
+        frame = interned.frames.add()
+        frame.iid, frame.function_name_id, frame.mapping_id = iid, iid, 1
+        frame.rel_pc = 0x100 * iid
+    stack = interned.callstacks.add()
+    stack.iid = 1
+    stack.frame_ids.extend(range(1, len(SAMPLE_STACK) + 1))
+
+    for cpu, pid, tid, at, with_stack in SAMPLES:
+        packet = builder.add_packet()
+        packet.trusted_packet_sequence_id = 3000
+        packet.timestamp = ms(at)
+        sample = packet.perf_sample
+        sample.cpu, sample.pid, sample.tid = cpu, pid, tid
+        sample.cpu_mode = pb.Profiling.MODE_USER
+        if with_stack:
+            sample.callstack_iid = 1
+        else:
+            # What traced_perf writes for a sample it could not unwind: the
+            # sample, without its stack, and why.
+            sample.sample_skipped_reason = pb.PerfSample.PROFILER_SKIP_READ_STAGE
+
+
 
 # --- the ANR the system recorded -------------------------------------------
 #
@@ -715,7 +800,8 @@ ANR_COUNTERS = [
 ]
 
 
-def build(frames: bool = True, environment: bool = True) -> bytes:
+def build(frames: bool = True, environment: bool = True,
+          sampling: str | None = None) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -729,6 +815,11 @@ def build(frames: bool = True, environment: bool = True) -> bytes:
     report has to say "not recorded" for those and never "the device held
     steady", which is a different sentence and the one a comparison would act
     on.
+
+    `sampling` is what became of callstack sampling: `"arrived"`, `"asked"`
+    for a config that asked and a sampler that never ran, or `None` for a
+    recording that never asked. `None` by default, because that is the
+    default recording, and the sample report in the README is this one.
     """
     builder = TraceProtoBuilder()
 
@@ -754,6 +845,8 @@ def build(frames: bool = True, environment: bool = True) -> bytes:
 
     if frames:
         _frames(builder)
+    if sampling:
+        _samples(builder, arrived=sampling == "arrived")
 
     # Collect ftrace events per CPU.
     by_cpu: dict[int, list] = {}

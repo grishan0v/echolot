@@ -2,8 +2,8 @@
 --
 -- Runs after window.sql and, like it, receives ts_start/ts_end as plain
 -- numbers. Nothing here is a detector: there is no finding, no threshold and
--- no judgement, only four measurements that every other number in the report
--- is conditional on. A slice is 40 ms partly because of the code in it and
+-- no judgement, only the measurements every other number in the report is
+-- conditional on. A slice is 40 ms partly because of the code in it and
 -- partly because of the clock it ran on, and until the clock is written down
 -- the report cannot tell those apart — neither can `compare`, which is what
 -- these views exist for.
@@ -104,3 +104,24 @@ FROM counter c
 JOIN counter_track t ON c.track_id = t.id
 WHERE t.type = 'vmstat'
   AND c.ts >= {{ts_start}} AND c.ts <= {{ts_end}};
+
+-- --- callstack samples -------------------------------------------------------
+--
+-- Not a fact about the device: a fact about the recording, and one that moves
+-- every duration above. A sampler interrupts the app on every tick and copies
+-- its stack out, so a sampled round runs slower than a plain one on the same
+-- code, and `compare` has to know which is which.
+--
+-- Our own threads only, and inside the window, like everything else here.
+-- Without a process filter the sampler visits every process on the device,
+-- and all but the profileable ones come back without a stack; counting them
+-- would describe the phone rather than the app. A sample without a stack
+-- keeps its row with an empty callsite, which is what `with_stack` counts
+-- apart.
+DROP VIEW IF EXISTS _samples_win;
+CREATE VIEW _samples_win AS
+SELECT s.ts AS ts, s.utid AS utid, s.callsite_id AS callsite_id
+FROM perf_sample s
+JOIN thread t ON s.utid = t.utid
+JOIN _proc p  ON t.upid = p.upid
+WHERE s.ts >= {{ts_start}} AND s.ts <= {{ts_end}};

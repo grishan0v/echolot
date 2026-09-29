@@ -41,7 +41,7 @@ DEFAULT_CATEGORIES = [
 # for the sake of a sentence that reads better here.
 TRACE_CONFIG = """\
 buffers: {{ size_kb: {buffer_kb} fill_policy: DISCARD }}
-data_sources: {{
+{perf_buffer}data_sources: {{
   config {{
     name: "linux.ftrace"
     ftrace_config {{
@@ -66,7 +66,7 @@ data_sources: {{
   config {{
     name: "android.surfaceflinger.frametimeline"
   }}
-}}{sys_stats}
+}}{sys_stats}{perf}
 duration_ms: {duration_ms}
 """
 
@@ -133,6 +133,56 @@ data_sources: {
   }
 }"""
 
+# Callstack sampling, `runner.sampling`: what a thread was running when no
+# slice says, named in the round that finds it rather than one round of
+# `trace {}` blocks later. Off unless asked for, because it costs the app time.
+#
+# The first two choices were settled by recording on a device (SM-A515F,
+# Android 13, a `user` build, the platform's own traced_perf):
+#
+# - No process filter. traced_perf judges a new process once, by its
+#   /proc/pid/cmdline at its first sample, and one that does not match is
+#   dropped for the rest of the session. A process just forked from zygote
+#   still carries zygote's name, so `scope { target_cmdline }` lost the cold
+#   start in four recordings of seven and caught nothing of it at all. Without
+#   the filter it was caught three times of three. Every process is sampled
+#   then, and only a profileable or debuggable one gets a stack, so the trace
+#   holds the app's stacks and little else.
+# - User frames only. Kotlin and Java frames came through by name, whether
+#   interpreted, JIT-compiled or compiled ahead of time; the kernel's frames
+#   name nothing a project can change.
+#
+# The third is a buffer of its own: samples that fill it stop there, and never
+# push out the sched and atrace events every detector reads.
+#
+# Doubled braces, like the template: this one goes through str.format for
+# the rate before it is substituted.
+PERF_BUFFER = "buffers: {{ size_kb: {buffer_kb} fill_policy: DISCARD }}\n"
+PERF_SOURCE = """
+data_sources: {{
+  config {{
+    name: "linux.perf"
+    target_buffer: 1
+    perf_event_config {{
+      timebase {{ frequency: {hz} }}
+      callstack_sampling {{ kernel_frames: false }}
+    }}
+  }}
+}}"""
+
+# `sampling: true` means this rate. On the A51 a cold start of 1.36 s,
+# recorded the way `collect` records it, took 186 ms longer at this rate than
+# without a sampler (95% sure: 68 to 263). At 250 Hz, filtered to the app, it
+# had cost much the same, 156 ms: the sampler costs by being there more than
+# by its rate. What the rate decides is whether the unwinding keeps up. At
+# 100 Hz every one of the app's samples in the window came with a stack,
+# wherever the recording got stacks at all; at 250 Hz 77 to 85% did, and at
+# 1 kHz one in seven came without, every one of them in the busiest seconds.
+# Perfetto advises staying under 200 Hz for Java and Kotlin stacks, which are
+# expensive to unwind.
+SAMPLING_HZ = 100
+SAMPLING_ADVISED_MAX_HZ = 200
+
 DEVICE_TRACE = "/data/misc/perfetto-traces/echolot.pftrace"
 
 # Config keys that describe a recording we make ourselves. In gradle mode the
@@ -140,7 +190,7 @@ DEVICE_TRACE = "/data/misc/perfetto-traces/echolot.pftrace"
 # they are the keys most likely to be copied in from a launch-mode config and
 # believed.
 RECORDING_KNOBS = ("environment", "atrace_categories", "buffer_kb",
-                   "duration_ms", "reset_policy")
+                   "duration_ms", "reset_policy", "sampling")
 
 
 class RunnerError(Exception):
@@ -461,7 +511,13 @@ _NAME_SHAPE = re.compile(r"^[A-Za-z0-9_.:\-]+$")
 
 
 def trace_config(package: str, duration_ms: int, categories: list[str],
-                 buffer_kb: int, environment: bool = True) -> str:
+                 buffer_kb: int, environment: bool = True,
+                 sampling_hz: int | None = None) -> str:
+    """The device's trace config. `sampling_hz` adds callstack sampling at that rate.
+
+    The samples get a buffer the size of the main one: perfetto fills a
+    buffer as it writes, so a cap nobody reaches costs nothing.
+    """
     for what, value in [("project.package", package),
                         *(("runner.atrace_categories", c) for c in categories)]:
         if not _NAME_SHAPE.match(str(value)):
@@ -475,7 +531,35 @@ def trace_config(package: str, duration_ms: int, categories: list[str],
         package=package, duration_ms=duration_ms, categories=lines,
         buffer_kb=buffer_kb,
         environment=env if environment else "",
-        sys_stats=SYS_STATS_SOURCE if environment else "")
+        sys_stats=SYS_STATS_SOURCE if environment else "",
+        perf_buffer=PERF_BUFFER.format(buffer_kb=buffer_kb) if sampling_hz else "",
+        perf=PERF_SOURCE.format(hz=sampling_hz) if sampling_hz else "")
+
+
+def sampling(section: dict, log: Callable[[str], None] = print) -> int | None:
+    """`runner.sampling` as a rate in Hz, or None when it is off.
+
+    Off unless set: `false` or no key at all. `true` is SAMPLING_HZ; a number
+    is the rate itself. A rate above what Perfetto advises is recorded as
+    asked, with a warning, since only the device can say whether it keeps up.
+    """
+    value = section.get("sampling")
+    if value is None or value is False:
+        return None
+    if value is True:
+        return SAMPLING_HZ
+    if not isinstance(value, (int, float)) or not 1 <= value < float("inf"):
+        raise RunnerError(
+            f"runner.sampling: {value!r} is not a rate. It is a number of Hz "
+            f"in digits, {SAMPLING_HZ} being what `true` means, or `false` to "
+            f"leave sampling off.")
+    hz = int(value)
+    if hz > SAMPLING_ADVISED_MAX_HZ:
+        log(f"[!] runner.sampling: {hz} Hz is above the "
+            f"{SAMPLING_ADVISED_MAX_HZ} Perfetto advises for Java and Kotlin "
+            f"stacks. In the busiest stretches the device falls behind "
+            f"unwinding them, and those samples arrive without a stack.")
+    return hz
 
 
 def run_command(command: str, timeout: float, knob: str = "runner.timeout_s",
@@ -820,10 +904,12 @@ def collect(package: str, out_dir: Path, iterations: int,
             f"repeats. One or more, in digits.")
     duration_ms = _positive(section, "duration_ms", 12000)
     reset = reset_policy(section, log)
+    hz = sampling(section, log)
     config = trace_config(package, duration_ms,
                           _listed(section, "atrace_categories") or DEFAULT_CATEGORIES,
                           _positive(section, "buffer_kb", 131072),
-                          environment=bool(section.get("environment", True)))
+                          environment=bool(section.get("environment", True)),
+                          sampling_hz=hz)
 
     dev = pick_device(device)
     activity = None
@@ -832,6 +918,10 @@ def collect(package: str, out_dir: Path, iterations: int,
         log(f"device {dev}, activity {activity}")
     else:
         log(f"device {dev}, scenario: {command}")
+    if hz:
+        log(f"  sampling callstacks at {hz} Hz (runner.sampling): the app "
+            f"runs slower for it, so compare this set only with another "
+            f"sampled at the same rate")
 
     results = []
     for i in range(iterations):

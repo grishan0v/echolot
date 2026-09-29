@@ -382,6 +382,25 @@ def _(report):
         bare["summary"]["fired_ids"], report["summary"]["fired_ids"])
 
 
+@check("callstack samples: this process's, inside the window, with a stack or without")
+def _(report):
+    # The default recording has no sampler, and the report says nothing about
+    # one: `None`, which is an answer, never a missing device state.
+    env = report["environment"]
+    assert env["sampling"] is None, env["sampling"]
+    assert "sampling" not in env["missing"], env["missing"]
+    # The same trace with the sampler behind it. 30 samples of the worker
+    # inside the window, the first two without a stack; the main thread's
+    # four fall before and after it, and the other app's three are not ours.
+    # The rate is the recording's own, read back from the config in the trace.
+    sampled = build_report(sampling="arrived")
+    s = sampled["environment"]["sampling"]
+    assert s == {"hz": 100, "started": True, "samples": 30, "with_stack": 28}, s
+    # Samples are context, like the clock: they must not move a finding.
+    assert [d["rows"] for d in sampled["detectors"]] == \
+        [d["rows"] for d in report["detectors"]], "the samples changed a row"
+
+
 # --- detectors -------------------------------------------------------------
 
 @check("main_thread_block: found the 120 ms, skipped the 5 ms")
@@ -3982,13 +4001,17 @@ def _(report):
 
 # --- the run ---------------------------------------------------------------
 
-def build_report(tp_binary: str | None = None) -> dict:
-    """Builds the fixture into a temp file and runs the detectors over it."""
+def build_report(tp_binary: str | None = None, sampling: str | None = None) -> dict:
+    """Builds the fixture into a temp file and runs the detectors over it.
+
+    `sampling` is `fixture.build`'s: the same trace with a callstack sampler
+    behind it, for the checks that are about one.
+    """
     from .main import analyze_trace# late import: main imports us
 
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
-        trace.write_bytes(fixture.build())
+        trace.write_bytes(fixture.build(sampling=sampling))
         return analyze_trace(trace, Config(FIXTURE_CONFIG), tp_binary)
 
 

@@ -187,6 +187,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. Only with that key in the config — without it they are ordinary appeared rows |
 | `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock at all. Two rounds that recorded no platform state get no warning — see below |
 | `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
+| `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
 
 The one to read first is `environment`, because it is the only one that can
 make the whole table say the opposite of what it looks like. A duration is the
@@ -212,6 +213,17 @@ Silence here means checked and steady. A side recorded without the
 platform-state sources — an older echolot, or `runner.environment: false` —
 says so instead, and two such reports say nothing at all rather than repeating
 a config problem on every comparison.
+
+`sampling` is the same kind of warning about a cause the recording brought
+along. A callstack sampler interrupts the app on every tick and copies its
+stack out, so a round recorded with `runner.sampling` runs slower than a plain
+one on the same code: on the SM-A515F, a cold start of 1.36 s sampled at
+100 Hz took 186 ms longer than the same start without it, 95% sure between
+68 and 263 ms. Whether a sampler ran is read from each trace, so a round
+recorded some other way is judged the same. A round that asked for one on a
+device whose sampler never started ran like a plain one and counts as plain,
+and a report written before the field existed gets no warning, since nobody
+can say how it was recorded.
 
 Then `thresholds`. After `echolot calibrate` the numbers in
 `echolot.yml` are derived from particular runs, and comparing a calibrated

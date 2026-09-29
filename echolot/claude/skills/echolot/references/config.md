@@ -37,6 +37,7 @@ runner:
   duration_ms: 12000
   reset_policy: force-stop     # force-stop (cold) | none (warm)
   environment: true            # record CPU clock, thermal, memory
+  sampling: false              # callstack samples, in Hz; true is 100
 
 detectors:
   main_thread_block:
@@ -113,6 +114,14 @@ report then says the device state was not recorded, which is a different
 answer from "it held steady" — and `io_wait` goes silent, having no disk flag
 to read.
 
+`sampling` adds a callstack sampler to the recording: a number is the rate in
+Hz, `true` is 100. It is off by default because it slows the app — on a cold
+start of about 1.4 s, by some 190 ms at 100 Hz — so a sampled round compares
+only with another sampled at the same rate, and `compare` warns when two are
+not. The report's `environment.sampling` says whether a sampler ran and how
+many of this process's samples came with a stack, and warns about the three
+ways it comes back empty. Do not turn it on for one round of a comparison.
+
 Every key the runner reads, and where it applies:
 
 | key | mode | default |
@@ -122,6 +131,7 @@ Every key the runner reads, and where it applies:
 | `duration_ms` | launch, command | 12000 — the recording, not the scenario |
 | `reset_policy` | launch, command | `force-stop` |
 | `environment` | launch, command | `true` |
+| `sampling` | launch, command | off; `true` is 100 Hz |
 | `atrace_categories` | launch, command | `am wm gfx view dalvik binder_driver res database` |
 | `buffer_kb` | launch, command | 131072 |
 | `device` | launch, command | the one device attached; `collect --device` overrides it. Belongs in local.yml |
@@ -135,7 +145,8 @@ Every key the runner reads, and where it applies:
 
 In gradle mode the macrobenchmark makes the recording, so the keys that shape
 one — `environment`, `atrace_categories`, `buffer_kb`, `duration_ms`,
-`reset_policy` — do not apply, and `collect` says so when it finds them set.
+`reset_policy`, `sampling` — do not apply, and `collect` says so when it finds
+them set.
 
 ### `detectors`
 

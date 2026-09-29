@@ -73,3 +73,14 @@ def marker_report():
     """
     with recorder.isolated():
         return selftest.build_report()
+
+
+@pytest.fixture(scope="session")
+def sampled_report():
+    """The same trace with a callstack sampler behind it, analysed once.
+
+    The default fixture is recorded without one, as the default recording is;
+    the cases about sampling read this one.
+    """
+    with recorder.isolated():
+        return selftest.build_report(sampling="arrived")
