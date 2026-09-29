@@ -90,3 +90,12 @@ GROUP BY f.jank_type, f.jank_tag
 HAVING COUNT(*) >= {{min_frames}}
 ORDER BY total_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- None of the main thread's own. A frame's lateness is measured on the
+-- display's timeline, and what the main thread did inside a late frame is
+-- its slices, which `main_thread_block` stands for where they are large
+-- enough to be rows.
+
+SELECT NULL AS ts, NULL AS dur LIMIT 0;

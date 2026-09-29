@@ -35,6 +35,8 @@ produce. The keys only a merged report has are named under the block.
                                "in_kernel": 77.2, "sleeping": 282.1,
                                "other": 0.0, "accounted_ms": 770.0,
                                "window_ms": 772.3, "accounted_pct": 99.7,
+                               "in_rows_ms": 401.6, "in_rows_pct": 52.0,
+                               "in_rows_uncounted": [],
                                "runs": "5/5" } },
   "environment": { "cpu": { "mean_mhz": 1481.2, "mean_mhz_min": 1452.0,
                             "mean_mhz_max": 1503.9, "min_mhz": 300.0,
@@ -139,6 +141,23 @@ finding.
 window — the process started inside it, or the recording has a hole. The
 shares are then of what was seen rather than of the scenario, and the report
 says so.
+
+**`in_rows_pct`** — how much of the main thread's window the findings cover,
+each moment counted once however many rows describe it; `in_rows_ms` is the
+same in milliseconds. Read it instead of adding up `self_ms`. A disk wait
+inside a slice is in `io_wait` and in the slice's self time, a binder
+transaction on the main thread is in `binder_txn` and in `main_thread_block`,
+and the sum can pass 100% without a single row being wrong. The markers table
+is not in it. `in_rows_uncounted` names a detector whose rows could not be
+placed on the timeline, and the share is short by those rows.
+
+Read it with the budget. A low share with the main thread mostly `sleeping`
+means it waited — for work elsewhere, or for nothing at all — and the findings
+on the main thread do not say which. Work it waited for, if the report has it,
+is in the rows about other threads: `uninstrumented_cpu`, `io_wait`, a
+background `binder_txn`. A low share with the main thread mostly on a CPU
+means it ran code no row names: slices below the thresholds, or none at all —
+`echolot names` shows which, and `mark` names the rest.
 
 ## `markers` — your own names, measured every time
 

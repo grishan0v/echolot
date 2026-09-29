@@ -442,6 +442,10 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
             except Exception as e:
                 print(f"[!] module {module}: {e}", file=sys.stderr)
 
+        # The main thread's time behind every row, for `_in_rows`, and the
+        # detectors whose rows could not be placed on it.
+        spans: list[tuple[int, int]] = []
+        uncounted: list[str] = []
         for d, overrides, source in plan:
             try:
                 sql, params = d.render(overrides)
@@ -450,6 +454,16 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
             except Exception as e:  # SQL is version-fragile — never fail the run
                 rows, params, err = [], d.params, str(e)
                 print(f"[!] {d.id}: {e}", file=sys.stderr)
+            if rows:
+                try:
+                    behind = _spans_behind(tp, d, params, rows)
+                except Exception as e:  # the same leniency as the query above
+                    behind = None
+                    print(f"[!] {d.id} @intervals: {e}", file=sys.stderr)
+                if behind is None:
+                    uncounted.append(d.id)
+                else:
+                    spans.extend(behind)
             entry = {
                 "id": d.id,
                 "title": d.title,
@@ -476,6 +490,9 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     # as a decision rather than as an oversight.
     planned = {d.id for d, _, _ in plan}
     absent = [d.id for d in load_detectors(DETECTOR_DIR) if d.id not in planned]
+
+    if window.get("main_thread"):
+        window["main_thread"].update(_in_rows(window, spans, uncounted))
 
     return report_mod.build(str(trace), window, results,
                             toolchain=toolchain_info(tp_binary, tp_source),
@@ -1170,6 +1187,65 @@ def _main_thread_budget(tp, window: dict) -> dict | None:
     # scenario is explained" and "most of it was not looked at".
     out["accounted_pct"] = round(accounted / duration * 100, 1) if duration else None
     return out
+
+
+def _spans_behind(tp, d, params: dict,
+                  rows: list[dict]) -> list[tuple[int, int]] | None:
+    """The main thread's time behind one detector's rows, from its `@intervals`.
+
+    None when the detector has no such query: its rows are then named as not
+    counted rather than counted as nothing, which would be a claim about them.
+    The rows go in as `_rows` one statement at a time — `exec_script` splits
+    on `;`, and a slice name is free to contain one.
+    """
+    sql = d.render_intervals(params)
+    if sql is None:
+        return None
+    tp.query("DROP TABLE IF EXISTS _rows")
+    tp.query("CREATE TABLE _rows AS " + " UNION ALL ".join(
+        f"SELECT {_sql_text(r.get('location'))} AS location, "
+        f"{_sql_text(r.get('detail'))} AS detail" for r in rows))
+    return [(int(r["ts"]), int(r["dur"])) for r in tp.query(sql)
+            if r.get("ts") is not None and (r.get("dur") or 0) > 0]
+
+
+def _sql_text(value) -> str:
+    return "NULL" if value is None else f"'{sql_value(str(value))}'"
+
+
+def _in_rows(window: dict, spans: list[tuple[int, int]],
+             uncounted: list[str]) -> dict:
+    """How much of the window the findings stand for, each moment counted once.
+
+    The budget above says where the main thread's time went by state; this
+    is the other half of the account, and the one a reader was working out by
+    hand. Adding up `self_ms` down the report and dividing by the window is
+    the tempting way, and it errs in one direction only: a wait for the disk
+    usually falls inside some slice's self time as well as in `io_wait`, a
+    binder transaction on the main thread is also the self time of the slice
+    it sits in, and on the fixture the sum comes to nearly three windows with
+    nothing wrong in any row. So each detector names the stretches its rows
+    stand for, and here they are laid on one timeline, clipped to the window,
+    and every moment is counted once however many rows describe it.
+
+    The main thread only, like the budget: the window's length is made of
+    that thread's time, and a background thread working in parallel explains
+    none of it until the main thread waits for it — and then the waiting is
+    main-thread time again, counted where a row stands for it.
+    """
+    start, end = window["ts_start"], window["ts_end"]
+    covered, reached = 0, start
+    for ts, dur in sorted(spans):
+        lo, hi = max(ts, reached), min(ts + dur, end)
+        if hi > lo:
+            covered += hi - lo
+            reached = hi
+    return {
+        "in_rows_ms": round(covered / 1e6, 2),
+        "in_rows_pct": round(covered / (end - start) * 100, 1)
+        if end > start else None,
+        "in_rows_uncounted": sorted(uncounted),
+    }
 
 
 # Inventory sections. The keywords are deliberately broad: the job is to show

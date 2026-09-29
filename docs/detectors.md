@@ -260,6 +260,59 @@ appeared with locks: 200 blocks of a quarter of a millisecond each.
 
 Death by a thousand cuts is no less real than one long call.
 
+## What time the rows stand for
+
+A row says how much. The report also says how much of the window the findings
+cover — `Covered by the findings below` under the budget,
+`window.main_thread.in_rows_pct` in the JSON — and that needs to know *which*
+moments each row stands for, so that a moment two rows describe is counted
+once. A line reading `-- @intervals` after the query starts a second query
+that says so:
+
+```sql
+ORDER BY self_ms DESC
+LIMIT 20;
+
+-- @intervals
+SELECT s.ts, s.dur
+FROM _slice_win s
+JOIN _rows r ON r.location = s.name AND r.detail = s.thread_name
+WHERE s.is_main_thread = 1;
+```
+
+`analyze` runs it straight after the first, with the same thresholds and with
+the rows the first returned in a table named `_rows` — `location` and
+`detail`, the latter NULL where a row has none. It returns `ts` and `dur` in
+nanoseconds, one line per stretch of the **main thread's** time. Stretches may
+overlap and may run past the window: they are clipped and every moment is
+counted once. A row about another thread returns nothing, because the
+window's length is made of the main thread's time; a background thread
+working in parallel explains none of it until the main thread waits for it,
+and then the waiting is the main thread's, where a row of its own can stand
+for it.
+
+What decides the query:
+
+- **The marker comes straight after the first query**, so that the first still
+  ends in its `LIMIT` — `calibrate` strips it from there.
+- **Stand for what the row counts.** `main_thread_block` counts self time, so
+  its stretches are the slices with their children taken out; a detector that
+  counts whole slices returns whole slices. Which rows cleared a threshold is
+  already in `_rows` and is not decided again — only a selection inside a row
+  is, the way `main_thread_outlier` picks the occurrences past its factor.
+- **A slice that spans the whole window is the window.** Usually it is the
+  scenario's anchor, and its self time is the part of the window no child
+  accounts for. `main_thread_block` leaves it out, for the reason `anr_risk`
+  does not take depth zero as evidence.
+- **Rows that are not the main thread's time say so** with a query that
+  returns nothing, and a comment saying why: `frame_jank`'s lateness is on the
+  display's timeline, and `anr` is a record of the system giving up. A
+  detector with no second query at all is named in the report as not counted.
+
+Every shipped detector has one, and the tests hold each to its own rows: on
+the fixture, the stretches behind the rows about the main thread add up to
+those rows' own milliseconds.
+
 ## What trips people up
 
 Three things that cost an afternoon each. All three are about trace_processor
@@ -335,10 +388,10 @@ sends you reading the query instead of the session.
 
 A file in `echolot/sql/detectors/` runs on the next `analyze`. Shipping it
 takes more. The first two things below fail the build until they are done.
-The other three decide what the tool does with the detector once it runs —
-what survives a merge, which overrides it accepts, which masks `names` can see
-— and a mistake there fails nothing until somebody reads the report or writes
-a config.
+The other four decide what the tool does with the detector once it runs —
+what survives a merge, which overrides it accepts, which masks `names` can
+see, how much of the window its rows cover — and a mistake there fails nothing
+until somebody reads the report or writes a config.
 
 - **A problem planted for it in the fixture.** `doctor`'s self-check counts
   the detector files, and "every shipped detector ran, and every one fired"
@@ -372,6 +425,9 @@ a config.
   keeps `repeated_work` off what another detector speaks for — and `names`
   reads one with `skip_glob` as an exclusion. A mask named anything else still
   works in the query and is invisible to both.
+- **The time its rows stand for.** Without an `-- @intervals` query the
+  report still runs, and its coverage line names the detector as not counted
+  whenever it fires. See [What time the rows stand for](#what-time-the-rows-stand-for).
 
 ## Robustness
 

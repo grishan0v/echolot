@@ -58,3 +58,17 @@ GROUP BY t.thread_name, t.tid = p.pid
 HAVING SUM(t.dur) >= {{min_io_wait_ms}} * 1000000
 ORDER BY total_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- The main thread's waits for the disk, when its row is in the report. The
+-- same states the sum above counted, already clipped to the window.
+
+SELECT t.ts, t.dur
+FROM _tstate_win t
+CROSS JOIN _proc p
+WHERE t.tid = p.pid
+  AND t.state IN ('D', 'DK')
+  AND t.io_wait = 1
+  AND EXISTS (SELECT 1 FROM _rows r
+              WHERE r.location = t.thread_name AND r.detail LIKE 'main%');

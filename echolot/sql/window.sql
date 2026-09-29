@@ -133,3 +133,11 @@ WHERE depth = 0 AND dur_win > 0;
 DROP TABLE IF EXISTS _cpu_in_slice;
 CREATE VIRTUAL TABLE _cpu_in_slice
 USING SPAN_JOIN(_running_span PARTITIONED utid, _top_slice_span PARTITIONED utid);
+
+-- The same split with nothing dropped: every stretch of on-CPU time, and
+-- `instrumented` NULL where no top-level slice was open over it. That part is
+-- what `uninstrumented_cpu` calls a blind spot, and its @intervals reads the
+-- stretches from here. Computed only when something asks for it.
+DROP TABLE IF EXISTS _cpu_by_slice;
+CREATE VIRTUAL TABLE _cpu_by_slice
+USING SPAN_LEFT_JOIN(_running_span PARTITIONED utid, _top_slice_span PARTITIONED utid);

@@ -168,6 +168,11 @@ def _merge_budget(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     up, and it is deliberately not the numerator of the percentage: those are
     two different questions and only one of them can be answered by a
     division.
+
+    The share of the window the findings cover is a property of a run for
+    the same reason, and is merged the same way. Each run's share is of that
+    run's own findings, which is what a typical run looks like; a detector
+    left out of the count in any run is named.
     """
     budgets = [r["window"].get("main_thread") for r in reports
                if (r.get("window") or {}).get("main_thread")]
@@ -182,6 +187,13 @@ def _merge_budget(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     shares = [b["accounted_pct"] for b in budgets
               if b.get("accounted_pct") is not None]
     out["accounted_pct"] = round(median(shares), 1) if shares else None
+    covered = [b for b in budgets if b.get("in_rows_pct") is not None]
+    if covered:
+        out["in_rows_ms"] = round(median([b["in_rows_ms"] for b in covered]), 2)
+        out["in_rows_pct"] = round(
+            median([b["in_rows_pct"] for b in covered]), 1)
+        out["in_rows_uncounted"] = sorted(
+            {d for b in covered for d in b.get("in_rows_uncounted") or []})
     out["runs"] = f"{len(budgets)}/{len(reports)}"
     return out
 
@@ -444,6 +456,7 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
         return []
 
     out = ["Main thread: " + " · ".join(parts)]
+    out.extend(_in_rows_line(budget))
     accounted = budget.get("accounted_pct")
     # Anything much short of the whole window means the thread was not there
     # for all of it. Silence would read as "the rest was nothing".
@@ -455,6 +468,33 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
             f"so the shares above are of what was seen, not of the scenario."
         )
     return out
+
+
+def _in_rows_line(budget: dict[str, Any]) -> list[str]:
+    """How much of that window the findings below stand for, each moment once.
+
+    Under the budget, because it is the other half of the same account: the
+    line above says what the main thread was doing, this one how much of it
+    the rows below describe. It is also the number a reader used to work out
+    by adding up the milliseconds down the page, which counts a disk wait
+    inside a slice twice and can pass 100% without a single row being wrong.
+    The markers table is not in it: those are the project's own names,
+    measured whether or not anything is wrong with them.
+    """
+    pct = budget.get("in_rows_pct")
+    if pct is None:
+        return []
+    line = (f"Covered by the findings below: **{pct:.0f}%** of the main "
+            f"thread's window, each moment counted once")
+    uncounted = budget.get("in_rows_uncounted") or []
+    if uncounted:
+        # A detector without `@intervals`, or one whose second query failed
+        # (stderr says so). Either way the number is short by an unknown
+        # amount, and a reader has to know which rows it leaves out.
+        line += (" — not counting " + ", ".join(f"`{d}`" for d in uncounted)
+                 + ", whose rows could not be placed on the main thread's "
+                   "timeline")
+    return [line]
 
 
 def _environment_lines(env: dict[str, Any]) -> list[str]:

@@ -275,6 +275,24 @@ def _(report):
         f"a state nothing recognised reached the budget: {b}")
 
 
+@check("the findings' share of the window counts every detector, once")
+def _(report):
+    # Each detector's `@intervals` query runs on whatever trace_processor this
+    # machine has. One that stopped running there leaves the share short by
+    # its rows, and the report only names it — here it is a failure, where
+    # an upgrade that broke it is found out.
+    b = report["window"]["main_thread"]
+    assert b.get("in_rows_uncounted") == [], (
+        f"{b.get('in_rows_uncounted')} could not place their rows on the main "
+        f"thread's timeline; stderr of the analysis says why: {b}")
+    # The fixture's findings on the main thread, each moment once. `AppStart`
+    # spans the window and is not a finding about it, so the share stays
+    # clear of the whole.
+    assert 0 < b["in_rows_ms"] < b["window_ms"], b
+    assert b["in_rows_pct"] == round(
+        b["in_rows_ms"] / b["window_ms"] * 100, 1), b
+
+
 @check("slices outside the window stayed out of the report")
 def _(report):
     no_slice_named(report, "Bootstrap_OUTSIDE")   # 50 ms before the window

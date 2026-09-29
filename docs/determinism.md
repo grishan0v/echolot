@@ -37,7 +37,7 @@ echolot doctor
   ok    the right process is picked, the foreign one is dropped
   ...
 
-All 143 checks passed — the pipeline computes correctly.
+All 144 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
@@ -49,7 +49,7 @@ a second reader in the same session would pay for again.
 ```
 echolot 0.8.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
 layer: current (10 files)
-self-check: 143 of 143 passed
+self-check: 144 of 144 passed
 ```
 
 Exit code 0/1, and 2 on a first run that could not download trace_processor

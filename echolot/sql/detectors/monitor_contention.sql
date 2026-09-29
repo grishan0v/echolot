@@ -48,3 +48,13 @@ HAVING MAX(dur) >= {{min_block_ms}} * 1000000
     OR SUM(dur) >= {{max_total_ms}} * 1000000
 ORDER BY total_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- The main thread's own waits for a monitor, when it is one of the rows.
+
+SELECT s.ts, s.dur
+FROM _slice_win s
+WHERE s.is_main_thread = 1
+  AND (s.name GLOB '{{name_glob}}' OR s.name GLOB '{{name_glob_alt}}')
+  AND s.thread_name IN (SELECT location FROM _rows);

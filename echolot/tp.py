@@ -14,6 +14,10 @@ A detector is a self-contained .sql file with metadata in its header:
 what the query GROUP BYs, as it reaches the report. It defaults to `location`
 and only needs saying when a detector groups by something else as well; see
 Detector.identity for what goes wrong when it is left unsaid.
+
+A line reading `-- @intervals` after the query starts a second one, which
+says what stretches of the main thread's time the rows of the first stand
+for; see Detector.render_intervals.
 """
 
 from __future__ import annotations
@@ -41,6 +45,9 @@ _META_BLANK = re.compile(r"^\s*--\s*$")
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 # The trailing LIMIT is stripped only when measuring the distribution.
 _LIMIT_TAIL = re.compile(r"\bLIMIT\s+\d+\s*;?\s*$", re.IGNORECASE)
+# Where a detector's second query begins: a line of its own, straight after
+# the first query, so that the first still ends in its LIMIT.
+_INTERVALS = re.compile(r"^--\s*@intervals\s*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -188,6 +195,8 @@ class Detector:
     modules: tuple[str, ...] = ()
     sql: str = ""
     path: Path | None = None
+    # The query after `-- @intervals`, empty for a detector without one.
+    intervals_sql: str = ""
 
     @classmethod
     def from_file(cls, path: Path) -> "Detector":
@@ -196,6 +205,7 @@ class Detector:
             meta, params, calibrations = parse_meta(text)
         except ValueError as e:
             raise ValueError(f"{path.name}: {e}") from e
+        first, *second = _INTERVALS.split(text, maxsplit=1)
         return cls(
             id=meta.get("id", path.stem),
             title=meta.get("title", path.stem),
@@ -205,8 +215,9 @@ class Detector:
             identity=_identity(meta.get("identity")),
             modules=tuple(m.strip() for m in meta.get("module", "").split(",")
                           if m.strip()),
-            sql=text,
+            sql=first,
             path=path,
+            intervals_sql=second[0] if second else "",
         )
 
     def render_open(self, overrides: dict[str, Any] | None = None) -> str:
@@ -294,6 +305,37 @@ class Detector:
         sql = _PLACEHOLDER.sub(
             lambda m: sql_value(resolved[m.group(1)]), self.sql)
         return sql, resolved
+
+    def render_intervals(self, resolved: dict[str, Any]) -> str | None:
+        """The second query, with the values the first one ran with.
+
+        It answers one question about the rows the first query returned:
+        which stretches of the main thread's time they stand for. `analyze`
+        runs it straight after the first, with those rows in a table named
+        `_rows` — `location` and `detail`, the latter NULL where a row has
+        none — so the query only has to find its way back from a row to the
+        time behind it. Which rows cleared a threshold is already decided,
+        and repeating the HAVING here would be one more place for the two to
+        drift apart.
+
+        It returns `ts` and `dur`, in nanoseconds, one line per stretch.
+        Stretches may overlap each other and run past the window: the caller
+        clips them and counts each moment once, which is the whole point.
+        Only the main thread's time, because that is the thread the window's
+        length is made of; rows about other threads return nothing.
+
+        None when the detector has no second query. `resolved` is what
+        `render` returned, so both queries see the same thresholds.
+        """
+        if not self.intervals_sql.strip():
+            return None
+        missing = {m for m in _PLACEHOLDER.findall(self.intervals_sql)
+                   if m not in resolved}
+        if missing:
+            raise ValueError(
+                f"{self.id} @intervals: no values for {sorted(missing)}")
+        return _PLACEHOLDER.sub(
+            lambda m: sql_value(resolved[m.group(1)]), self.intervals_sql)
 
 
 def _identity(declared: str | None) -> tuple[str, ...]:

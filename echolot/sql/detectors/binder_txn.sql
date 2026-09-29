@@ -38,3 +38,16 @@ HAVING MAX(dur) >= {{min_txn_ms}} * 1000000
     OR SUM(dur) >= {{max_total_ms}} * 1000000
 ORDER BY total_ms DESC
 LIMIT 20;
+
+-- @intervals
+--
+-- The main thread's row stands for its transactions, end to end; the
+-- background rows are other threads' time and stand for none of the window.
+
+SELECT s.ts, s.dur
+FROM _slice_win s
+WHERE s.is_main_thread = 1
+  AND s.name GLOB '{{name_glob}}'
+  AND s.name NOT GLOB '{{skip_glob}}'
+  AND EXISTS (SELECT 1 FROM _rows r
+              WHERE r.location = s.thread_name AND r.detail = 'main thread');
