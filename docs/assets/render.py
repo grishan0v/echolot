@@ -25,6 +25,7 @@ from statistics import median
 
 HERE = Path(__file__).resolve().parent
 README = HERE.parent.parent / "README.md"
+AGENT = HERE.parent.parent / "echolot" / "claude" / "agents" / "perf-hunter.md"
 
 SANS = ("-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', "
         "Helvetica, Arial, sans-serif")
@@ -85,8 +86,17 @@ def readme_facts(text: str | None = None) -> dict:
     lock = _find(r"^\| [^|]+ \| \d+/\d+ \| \d+ \| ([\d.]+) \| [\d.]+ \| "
                  r"owner at (\w+)\.kt:(\d+)", sample, "the sample's monitor contention row",
                  re.M)
+    repeats = _find(r"echolot collect -c echolot\.yml -n (\d+)", text,
+                    "the collect example under Quick start")
+    agent = AGENT.read_text(encoding="utf-8")
+    rounds = re.search(r"`loop\.max_rounds` comes from the\s+config, default (\d+)", agent)
+    if not rounds:
+        raise SystemExit(f"{AGENT.name}: the sentence that gives loop.max_rounds its "
+                         f"default is gone or reworded, and the loop picture reads it")
     seconds = trace.group(4)
     return {
+        "repeats": int(repeats.group(1)),
+        "max_rounds": int(rounds.group(1)),
         "trace_mb": int(trace.group(1)),
         "slices": int(trace.group(2)) * 1000,
         "report_kb": int(trace.group(3)),
@@ -340,6 +350,90 @@ def versus(c, f):
                f"One bug, one model: {h['ratio']} times cheaper with echolot")
 
 
+def connector(points, color):
+    """A line through the points, with an arrowhead at the last one."""
+    (x1, y1), (x2, y2) = points[-2], points[-1]
+    length = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+    ux, uy = (x2 - x1) / length, (y2 - y1) / length
+    stops = [f"{x:g} {y:g}" for x, y in points[:-1]] + [f"{x2 - ux * 9:g} {y2 - uy * 9:g}"]
+    bx, by, px, py = x2 - ux * 10, y2 - uy * 10, -uy * 6, ux * 6
+    return (f'<path d="M{" L".join(stops)}" fill="none" stroke="{color}" stroke-width="1.75" '
+            f'stroke-linecap="round" stroke-linejoin="round"/>'
+            f'<path d="M{x2:g} {y2:g}L{bx + px:g} {by + py:g}L{bx - px:g} {by - py:g}Z" '
+            f'fill="{color}"/>')
+
+
+def loop(c, f):
+    """The hunt as echolot and the agent share it: scripts measure, the agent decides."""
+    out = [text(40, 50, "echolot does the legwork, your agent decides", size=30, weight=700,
+                fill=c["ink"])]
+    ly = 86
+    out.append(f'<rect x="40" y="{ly - 11}" width="22" height="14" rx="3" fill="{c["teal"]}"/>')
+    out.append(text(70, ly, "echolot runs it, the same way every time", size=14, fill=c["sub"]))
+    out.append(f'<rect x="370.75" y="{ly - 10.25}" width="20.5" height="12.5" rx="3" '
+               f'fill="none" stroke="{c["ink"]}" stroke-width="1.5"/>')
+    out.append(text(400, ly, "the agent decides", size=14, fill=c["sub"]))
+    out.append(f'<rect x="550.75" y="{ly - 10.25}" width="20.5" height="12.5" rx="3" '
+               f'fill="none" stroke="{c["sub"]}" stroke-width="1.5" stroke-dasharray="4 3"/>')
+    out.append(text(580, ly, "you", size=14, fill=c["sub"]))
+
+    w, h = 240, 104
+    left, middle, right = 40, 320, 600
+    top, mid, low = 120, 304, 488
+
+    def box(x, y, kind, title, lines, mono=False):
+        if kind == "echolot":
+            shape = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="10" '
+                     f'fill="{c["teal"]}"/>')
+            ink = sub = c["on_teal"]
+        else:
+            fill = c["card"] if kind == "answer" else "none"
+            edge = c["sub"] if kind == "you" else c["ink"]
+            dash = ' stroke-dasharray="5 4"' if kind == "you" else ""
+            shape = (f'<rect x="{x + 0.75}" y="{y + 0.75}" width="{w - 1.5}" height="{h - 1.5}" '
+                     f'rx="10" fill="{fill}" stroke="{edge}" '
+                     f'stroke-width="{2 if kind == "answer" else 1.5}"{dash}/>')
+            ink, sub = c["ink"], c["sub"]
+        parts = [shape, text(x + 18, y + 34, title, size=17, weight=700, fill=ink,
+                             family=MONO if mono else SANS)]
+        for i, line in enumerate(lines):
+            parts.append(text(x + 18, y + 60 + i * 22, line, size=14, fill=sub))
+        return "".join(parts)
+
+    arrows = c["sub"]
+    out.append(connector([(left + w, top + h / 2), (middle, top + h / 2)], arrows))
+    out.append(connector([(middle + w, top + h / 2), (right, top + h / 2)], arrows))
+    out.append(connector([(right + w / 2, top + h), (right + w / 2, mid)], arrows))
+    out.append(connector([(right, mid + h / 2), (middle + w, mid + h / 2)], arrows))
+    out.append(connector([(middle, mid + h / 2), (left + w, mid + h / 2)], arrows))
+    out.append(connector([(middle + w / 2, mid + h), (middle + w / 2, low)], arrows))
+    out.append(connector([(left + w / 2, mid), (left + w / 2, 264), (middle + w / 2, 264),
+                          (middle + w / 2, top + h)], arrows))
+    out.append(text(left + w / 2 + 16, 288, f"next round · up to {f['max_rounds']} by default",
+                    size=14, fill=c["sub"]))
+    out.append(text(300, mid + h / 2 - 10, "no", size=14, fill=c["sub"], anchor="middle"))
+    out.append(text(middle + w / 2 + 12, 452, "yes", size=14, fill=c["sub"]))
+
+    out.append(box(left, top, "you", "You", ["say what regressed", "and after which change"]))
+    out.append(box(middle, top, "echolot", "collect",
+                   [f"records the scenario {f['repeats']} times", "gradle mode: its own count"],
+                   mono=True))
+    out.append(box(right, top, "echolot", "analyze",
+                   [f"runs the {f['detectors']} detectors", "writes about 20 rows"], mono=True))
+    out.append(box(right, mid, "echolot", "compare",
+                   ["from round 2: what moved", "and whether the move holds"], mono=True))
+    out.append(box(middle, mid, "agent", "The agent", ["reads the rows:", "a place in the code?"]))
+    out.append(box(left, mid, "agent", "The agent",
+                   ["marks one blind spot", "with 5–7 temporary markers"]))
+    out.append(box(middle, low, "answer", "The answer",
+                   ["place, evidence, mechanism,", "confidence; markers removed"]))
+    out.append(text(left, 520, "echolot mark --apply", size=13, weight=600, fill=c["ink"],
+                    family=MONO))
+    out.append(text(left, 542, "places the markers when the", size=14, fill=c["sub"]))
+    out.append(text(left, 562, "project has none of its own", size=14, fill=c["sub"]))
+    return svg(880, 616, "".join(out), "echolot does the legwork, your agent decides")
+
+
 # The session is one picture for both themes: a terminal keeps its own colours.
 TERM = dict(bg="#10191D", fg="#E6E1D6", dim="#7A898F", edge="#33424A", sand="#E8C25B",
             green="#8DC9A0")
@@ -424,7 +518,7 @@ def session(f):
                style="".join(style))
 
 
-THEMED = {"hero": hero, "benefits": benefits, "versus": versus}
+THEMED = {"hero": hero, "benefits": benefits, "versus": versus, "loop": loop}
 
 
 def pictures(readme: str | None = None) -> dict[str, str]:
@@ -462,6 +556,7 @@ pre{{background:{code_bg};border-radius:6px;padding:12px 16px;margin:0 0 12px;fo
 <p align="center"><img src="{assets / 'session.svg'}" width="880"></p>
 <h2>Quick start</h2><pre>pipx install echolot</pre><pre>cd ~/my-app &amp;&amp; echolot init</pre><pre>/echolot</pre>
 <h2>What it saves</h2>{themed('versus')}
+<h2>How it works</h2>{themed('loop')}
 </div></div></body></html>"""
 
 

@@ -18,9 +18,12 @@ committed file differs from what the script draws now.
 A number in a picture is a claim like a number in a sentence, so it comes from
 the same place:
 
-- the size of a trace and its report, the sample's window, tally and lock wait
-  are read out of the README's own text; a README edit that moves one fails
-  the test until the pictures are drawn again;
+- the size of a trace and its report, the sample's window, tally and lock wait,
+  and the number of repeats in the `collect` example are read out of the
+  README's own text; a README edit that moves one fails the test until the
+  pictures are drawn again;
+- the number of rounds a hunt may take is read out of `perf-hunter.md`, the
+  instructions the agent follows;
 - the cost of a hunt is worked out from the recorded runs listed in the
   script, one number per run. The medians, the ratio and the count of models
   are computed from those runs and never typed.
