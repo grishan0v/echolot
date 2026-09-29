@@ -2,7 +2,7 @@
 <img width="429" height="128" alt="echolot-lockup-inverse-2x" src="https://github.com/user-attachments/assets/1cea634c-f0cd-4b32-a32f-c221e2be8227" />
 </p>
 <p align="center">
-  <b>CLI that helps your agent to find performance issues in Android apps.</b>
+  <b>Turns a huge Android trace into 20 rows of facts an AI agent can actually use.</b>
 </p>
 
 <p align="center">
@@ -14,53 +14,34 @@
   <a href="#status"><img alt="Status" src="https://img.shields.io/badge/status-v0-orange.svg"></a>
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/hero-dark.svg">
+    <img alt="From a huge trace to the line to fix: echolot turns the trace into twenty rows of facts, and your agent follows one of them to the line in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/hero-light.svg" width="880">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/benefits-dark.svg">
+    <img alt="Finds the line to fix. Same answer, every run. No tracing code needed. Works with your agent." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/benefits-light.svg" width="880">
+  </picture>
+</p>
+
+<p align="center">
+  <img alt="A condensed /echolot session: the question, three rounds of recording and reading, and the answer with its place in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/session.svg" width="880">
+</p>
+
 ---
 
-**Contents** · [What it is](#what-it-is) · [Requirements](#requirements) · [Quick start](#quick-start) · [What you get](#what-you-get) · [What changed](#what-changed) · [Commands](#commands) · [Detectors](#detectors) · [How it works](#how-it-works) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
+**Contents** · [Quick start](#quick-start) · [What it saves](#what-it-saves) · [What it is](#what-it-is) · [Requirements](#requirements) · [What you get](#what-you-get) · [What changed](#what-changed) · [Commands](#commands) · [Detectors](#detectors) · [How it works](#how-it-works) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
 
 ---
-
-## What it is
-
-A Perfetto trace of one cold start holds around half a million slices in eighty
-megabytes. Nobody reads that, and an AI agent pointed at the raw file produces
-confident guesses instead of answers.
-
-echolot sits in between. It runs thirteen SQL detectors over the trace and returns
-about twenty rows: where the time went, how much of it, and the evidence behind
-each claim. Same trace in, same report out — the `trace_processor` version is
-pinned, and the binary is checked against its SHA-256 when it is downloaded.
-
-> [!TIP]
-> The intended way to use it is through Claude Code: you describe the
-> regression in plain words, the agent collects traces, reads the report and
-> walks down to the code. The command line works on its own too — see
-> [without an agent](#without-an-agent).
-
-**Using Cursor, Codex or something else?** `echolot init` points them at the
-tool, and `echolot guide` tells any agent how to work with it. The loop runs
-in your main context rather than a subagent, so keep the passes short — the
-guide says where that matters.
-
-`echolot reflect` works from any of them: with no transcript to read it builds
-the report from the tool's own run log, and names every check it could not
-make rather than reporting silence as a clean bill.
-
-## Requirements
-
-| | |
-|---|---|
-| **Python** | 3.10 or newer |
-| **`curl`** | on `PATH` — the one download in the next row goes through it |
-| **`trace_processor`** *(fetched once)* | the first command that needs it — usually `echolot init`, at its environment check — downloads the build the `perfetto` package pins for your OS and CPU: 10–14 MB, into `~/.local/share/perfetto/prebuilts/`, checked against its SHA-256. It says so on stderr as it starts. Behind a proxy, export `HTTPS_PROXY`. Offline, copy the `trace_processor_shell-…` file from that directory on a machine with the same OS and CPU, under the same name. See [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) |
-| **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
-| **Device** | a phone or emulator with USB debugging on |
-| **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) for the full workflow; Cursor, Codex and others via `echolot guide` |
-| **Android 12+** *(for one detector)* | `frame_jank` reads SurfaceFlinger's frame timeline. Older devices do not have it, and the detector is then silent — which reads exactly like "no bad frames" |
-
-Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
 
 ## Quick start
+
+You need Python 3.10+, `adb`, and a phone or emulator with USB debugging on.
+The full list is under [Requirements](#requirements).
 
 ### 1. Install
 
@@ -111,6 +92,17 @@ Each word on the last line is also an `echolot` command, except `setup`:
 building `echolot.yml` needs an agent, and there is no `echolot setup` in the
 shell.
 
+### What to ask
+
+Describe the problem the way you would to a colleague:
+
+| the problem | what to type | what it needs |
+|---|---|---|
+| Cold start got slower | `/echolot why is cold start slow` | — |
+| Scrolling stutters | `/echolot the feed janks on scroll` | a scroll scenario in `echolot.yml`, which holds one scenario at a time; `frame_jank` needs Android 12+ |
+| "App isn't responding" | `/echolot the app froze, here is anr.txt` | the report: an export from Crashlytics or Play Console, or `dumpsys dropbox` |
+| The nightly benchmark got slower | `echolot analyze` over its traces, then `echolot compare last-night.json` | wired by hand for now: [the CI shape](#there-is-no-performance-gate-on-purpose) |
+
 ### Coming back later
 
 ```bash
@@ -143,6 +135,58 @@ echolot doctor -q                                                # is this envir
 
 Results land in `.echolot/out/` — `report.md` for you, `report.json` for the
 agent.
+
+## What it saves
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/versus-dark.svg">
+    <img alt="One bug, one model: a hunt costs less with echolot than without it, and follows one fixed loop instead of a new approach every run" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/versus-light.svg" width="880">
+  </picture>
+</p>
+
+Cost is the measure because it includes the work of the agent's subagent:
+token counts leave that out, and time went both ways across the four models.
+
+## What it is
+
+A Perfetto trace of one cold start holds around half a million slices in eighty
+megabytes. Nobody reads that, and an AI agent pointed at the raw file produces
+confident guesses instead of answers.
+
+echolot sits in between. It runs thirteen SQL detectors over the trace and returns
+about twenty rows: where the time went, how much of it, and the evidence behind
+each claim. Same trace in, same report out — the `trace_processor` version is
+pinned, and the binary is checked against its SHA-256 when it is downloaded.
+
+> [!TIP]
+> The intended way to use it is through Claude Code: you describe the
+> regression in plain words, the agent collects traces, reads the report and
+> walks down to the code. The command line works on its own too — see
+> [without an agent](#without-an-agent).
+
+**Using Cursor, Codex or something else?** `echolot init` points them at the
+tool, and `echolot guide` tells any agent how to work with it. The loop runs
+in your main context rather than a subagent, so keep the passes short — the
+guide says where that matters.
+
+`echolot reflect` works from any of them: with no transcript to read it builds
+the report from the tool's own run log, and names every check it could not
+make rather than reporting silence as a clean bill.
+
+## Requirements
+
+| | |
+|---|---|
+| **Python** | 3.10 or newer |
+| **`curl`** | on `PATH` — the one download in the next row goes through it |
+| **`trace_processor`** *(fetched once)* | the first command that needs it — usually `echolot init`, at its environment check — downloads the build the `perfetto` package pins for your OS and CPU: 10–14 MB, into `~/.local/share/perfetto/prebuilts/`, checked against its SHA-256. It says so on stderr as it starts. Behind a proxy, export `HTTPS_PROXY`. Offline, copy the `trace_processor_shell-…` file from that directory on a machine with the same OS and CPU, under the same name. See [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) |
+| **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
+| **Device** | a phone or emulator with USB debugging on |
+| **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) for the full workflow; Cursor, Codex and others via `echolot guide` |
+| **Android 12+** *(for one detector)* | `frame_jank` reads SurfaceFlinger's frame timeline. Older devices do not have it, and the detector is then silent — which reads exactly like "no bad frames" |
+
+Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
 
 ## What you get
 
