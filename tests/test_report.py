@@ -409,3 +409,24 @@ def test_a_merged_budget_still_reports_a_real_shortfall():
     ])["window"]["main_thread"]
     check("three quarters explained is reported as three quarters",
           got["accounted_pct"] == 75.0, got)
+
+
+def test_merged_rows_say_what_they_resolve() -> None:
+    """The smallest move a later comparison could call real, per row.
+
+    Five runs with one slow one resolve 215 ms of a 125 ms row: what the next
+    comparison can see is bounded here, before there is a second set. Three
+    runs cannot be 95% sure of anything, and say nothing.
+    """
+    values = [118.2, 121.0, 125.4, 133.7, 340.1]
+    merged = report_mod.merge_rows(
+        [[{"location": "draw", "self_ms": v}] for v in values], ("location",), 5)
+    band = merged[0]["spread"]["self_ms"]
+    check("the move it resolves, in ms", band.get("resolves_ms") == 214.7, band)
+    check("and against the median", band.get("resolves_pct") == 171.2, band)
+
+    three = report_mod.merge_rows(
+        [[{"location": "draw", "self_ms": v}] for v in values[:3]], ("location",), 3)
+    check("three runs say nothing about it",
+          "resolves_ms" not in three[0]["spread"]["self_ms"],
+          three[0]["spread"]["self_ms"])

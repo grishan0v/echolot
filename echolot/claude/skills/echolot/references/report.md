@@ -297,7 +297,8 @@ second means the next run will say something else.
 
 ```json
 "spread": { "self_ms": { "min": 118.2, "max": 340.1,
-                         "values": [118.2, 121.0, 125.4, 133.7, 340.1] } }
+                         "values": [118.2, 121.0, 125.4, 133.7, 340.1],
+                         "resolves_ms": 214.7, "resolves_pct": 171.2 } }
 ```
 
 Present for `self_ms`, `total_ms` and `max_ms`, whichever of them the row
@@ -306,6 +307,14 @@ detector measures it, `total_ms` otherwise — which is also the one `compare`
 tests. `values` holds one entry per repeat the row was **found in**, which is
 what `runs` counts: a `3/5` row has three. Absent when `analyze` ran on a
 single trace — there is nothing to spread.
+
+`resolves_ms` is the smallest move of this row a later `compare` could call
+real, against as many runs spread the same way; `resolves_pct` is the same
+against the median. A move smaller than that cannot hold, so it is the number
+to read before promising anyone a comparison: the row above resolves nothing
+under 215 ms, because one run in five went slow. It shrinks with the square
+root of the runs, four times the runs for half the move. Absent below four
+runs, where nothing can be 95% sure.
 
 Use it before acting on a number. A row whose `max` is several times its median
 holds one slow occurrence rather than a steady cost, and that is a different
@@ -513,7 +522,8 @@ echolot compare old.json new.json    # or name them
       "before": { "self_ms": 12.1, "min": 10.4, "max": 14.0, "count": 1 },
       "after":  { "self_ms": 883.4, "min": 843.4, "max": 923.4, "count": 1 },
       "delta_ms": 871.3, "ratio": 73.0,
-      "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3 },
+      "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3,
+                 "resolves_ms": 40.0, "runs_needed": null },
       "holds": true }
   ]
 }
@@ -534,6 +544,14 @@ concluding. `null` in both means there was nothing to test: the row is on one
 side only — every `appeared` and `vanished` row — or there were too few runs
 to be 95% sure (four a side is always enough); the `single` or `few` warning
 says so.
+
+`shift.resolves_ms` is the smallest move of the medians these two sets could
+call real, in the direction this one went: `holds` is `true` exactly when the
+move is larger. When it is not, `shift.runs_needed` says about how many runs a
+side would settle a move this size, by the square root of the runs and
+assuming the next runs stray as much as these did. A handful more is another
+round; hundreds means more rounds will not settle it — say the move is below
+what this scenario can resolve, or bring the spread down first.
 
 **`count` before and after** separates "called more often" from "became slower
 inside". `inflate` at 12 → 31 occurrences and `loadAll` growing 73× at one

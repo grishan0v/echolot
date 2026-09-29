@@ -30,7 +30,7 @@ nothing, and says so on stderr.
 |---|---|---|---|---|---|---|---|
 | SyncAdapterThre | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
 | TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | yes, +831.3 … +911.3 |
-| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | no, -13.4 … +162.6 |
+| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | no, -13.4 … +162.6 · ~7 runs a side |
 
 **One table, not one section per detector.** The Marker Report is grouped by detector
 because each answers a different question. A comparison has one question, so
@@ -65,13 +65,13 @@ the range the move lies in, 95% sure, and a verdict read off that range.
 | value | meaning |
 |---|---|
 | `yes, +831.3 … +911.3` | the whole range is on one side of zero: the move survives a re-record, and the end nearer zero is the least it moved |
-| `no, -13.4 … +162.6` | the range runs through zero: the runs disagree among themselves by more than the row moved |
+| `no, -13.4 … +162.6 · ~7 runs a side` | the range runs through zero: the runs disagree among themselves by more than the row moved, and about seven runs a side would settle a move this size |
 | `—` | nothing to test: the row is on one side only — it appeared or went — or there are too few runs to be 95% sure of anything |
 
 `no` does not mean the row is uninteresting. It means the honest next step is
 another round of `collect` rather than a conclusion, and the range says how
 open the question still is: `-13.4 … +162.6` is anything from no move at all
-to more than a doubling.
+to more than a doubling. The count after it says how big that round is.
 
 **How the range is made.** Every run after is paired with every run before,
 and each pair gives a difference. The median of those differences is the move.
@@ -105,6 +105,23 @@ has to make up for it: three need five against them, two need eight, one needs
 thirty-nine. Below that the column stays empty and the `few` warning at the
 top says why. The count is the row's own: a row found in `2/5` runs has two
 values, and against five it gets `—` while the rest of the table has a verdict.
+
+**What the runs can resolve.** A run after minus a run before is the move of
+the medians plus what the two runs strayed from their own medians. So the
+range is the strays' own range moved along by the move, exactly, and a row
+holds when its medians moved further than the strays reach on the far side.
+That reach is `shift.resolves_ms`: `inflate` above moved 74.6 ms, and these
+runs resolve nothing under 88.0. It shrinks with the square root of the runs,
+so a `no` carries about how many runs a side would bring it under this move —
+seven here, a round of `collect` away. A count in the hundreds is a different
+answer: more rounds will not settle the row, and either the spread comes down
+first — a settled device, a quieter scenario — or the move is below what this
+scenario can resolve. The count assumes the next runs stray as much as these
+did, which is why it is about.
+
+The report carries the same number for a single set, per row, under
+`spread` — see [below](#what-analyze-keeps-for-it) — so what a comparison
+could see is known before there is a second set.
 
 This works because `analyze` keeps the per-run values when it merges repeats —
 see [`spread`](#what-analyze-keeps-for-it) below. With one trace on each side
@@ -216,7 +233,8 @@ So `analyze` now keeps the per-run values of three columns — `self_ms`,
 { "location": "draw", "runs": "5/5", "self_ms": 125.4, "total_ms": 130.1,
   "max_ms": 61.2,
   "spread": { "self_ms":  { "min": 118.2, "max": 340.1,
-                            "values": [118.2, 121.0, 125.4, 133.7, 340.1] },
+                            "values": [118.2, 121.0, 125.4, 133.7, 340.1],
+                            "resolves_ms": 214.7, "resolves_pct": 171.2 },
               "total_ms": { "…": "the same shape" },
               "max_ms":   { "…": "the same shape" } } }
 ```
@@ -233,6 +251,14 @@ exactly what hides one. `count` and `covered_ms` stay medians alone.
 is unchanged — this lives in the JSON, where the readers that need it are.
 `compare` reads every value, not only the two ends: the Holds column pairs each
 one after with each one before.
+
+`resolves_ms` is the smallest move of this row a comparison could call real,
+against as many runs spread the same way, and `resolves_pct` the same against
+the median — see [What the runs can resolve](#the-holds-column). Here it is
+214.7 ms on a 125.4 ms row, and the reason is the one slow run: five a side
+leaves two of the pairs with it at each end, and the next comparison of this
+row will not see less than that unless there are more runs or the slow one
+goes away. Absent below four runs.
 
 ## The comparison JSON
 
@@ -261,7 +287,8 @@ one after with each one before.
       "after":  { "self_ms": 883.4, "min": 843.4, "max": 923.4,
                   "values": [ … ], "count": 1, "runs": "5/5" },
       "delta_ms": 871.3, "ratio": 73.0,
-      "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3 },
+      "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3,
+                 "resolves_ms": 40.0, "runs_needed": null },
       "holds": true }
   ]
 }
@@ -277,7 +304,10 @@ rows[?change == 'appeared' || (change == 'grew' && holds == true)]
 `holds: true` means the range in `shift` — `low_ms` to `high_ms` — is on one
 side of zero. `shift.ms` is the move it was read from: the median of every
 run-after-minus-run-before pair, close to `delta_ms`, the difference of the two
-medians, and not always equal to it. `null` in both means there was nothing to
+medians, and not always equal to it. `shift.resolves_ms` is the smallest move
+of the medians these runs could call real, in this move's direction, and
+`shift.runs_needed` — only where the move does not hold — about how many runs
+a side would. `null` in both `shift` and `holds` means there was nothing to
 test: the row is on one side only — every `appeared` and `vanished` row — or
 there were too few runs. `confidence` is the level the ranges are drawn at.
 
