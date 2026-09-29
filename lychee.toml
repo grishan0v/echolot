@@ -54,4 +54,12 @@ exclude = [
   # https://pypi.org/project/echolot/ answered 200. The public pages stay
   # checked; only the ones behind a login are left out.
   '^https://pypi\.org/manage/',
+
+  # The README's own pictures, under docs/assets/. The README names them by
+  # their full address on `main` because PyPI resolves nothing relative, and a
+  # picture added in a pull request is not on `main` until that pull request
+  # merges: checked here, the one that adds it would fail on its own picture.
+  # tests/test_readme_pictures.py checks the same addresses against the tree
+  # the pull request brings.
+  '^https://raw\.githubusercontent\.com/grishan0v/echolot/main/docs/assets/',
 ]

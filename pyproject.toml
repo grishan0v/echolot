@@ -11,7 +11,7 @@ name = "echolot"
 # manifest — and importlib.metadata answers from whatever dist-info exists,
 # which on an editable install is whatever was written the first time.
 dynamic = ["version"]
-description = "A deterministic layer between Perfetto traces and AI agents"
+description = "Turns a huge Android trace into 20 rows of facts an AI agent can actually use"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
