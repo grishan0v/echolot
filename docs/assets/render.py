@@ -76,8 +76,9 @@ def _find(pattern: str, text: str, what: str, flags: int = 0) -> re.Match:
 
 def readme_facts(text: str | None = None) -> dict:
     text = README.read_text(encoding="utf-8") if text is None else text
-    trace = _find(r"An (\d+) MB trace with (\d+)k slices comes out as a (\d+) KB "
-                  r"`report\.json` in\s+about (\w+) seconds", text,
+    # Markdown rewraps freely, so any whitespace may stand between the words.
+    trace = _find(r"An\s+(\d+)\s+MB\s+trace\s+with\s+(\d+)k\s+slices\s+comes\s+out\s+as\s+a\s+"
+                  r"(\d+)\s+KB\s+`report\.json`\s+in\s+about\s+(\w+)\s+seconds", text,
                   "the sentence about the size of a trace and its report")
     sample = _find(r"^```markdown\n(# Marker Report\n.*?)^```", text,
                    "the sample Marker Report", re.S | re.M).group(1)

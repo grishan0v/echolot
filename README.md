@@ -14,6 +14,12 @@
   <a href="#status"><img alt="Status" src="https://img.shields.io/badge/status-v0-orange.svg"></a>
 </p>
 
+---
+
+**Contents** · [Quick start](#quick-start) · [What it saves](#what-it-saves) · [What it is](#what-it-is) · [Requirements](#requirements) · [What you get](#what-you-get) · [What changed](#what-changed) · [Commands](#commands) · [Detectors](#detectors) · [How it works](#how-it-works) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
+
+---
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/hero-dark.svg">
@@ -32,12 +38,6 @@
   <img alt="A condensed /echolot session: the question, three rounds of recording and reading, and the answer with its place in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/session.svg" width="880">
 </p>
 
----
-
-**Contents** · [Quick start](#quick-start) · [What it saves](#what-it-saves) · [What it is](#what-it-is) · [Requirements](#requirements) · [What you get](#what-you-get) · [What changed](#what-changed) · [Commands](#commands) · [Detectors](#detectors) · [How it works](#how-it-works) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
-
----
-
 ## Quick start
 
 You need Python 3.10+, `adb`, and a phone or emulator with USB debugging on.
@@ -47,40 +47,22 @@ The full list is under [Requirements](#requirements).
 
 ```bash
 pipx install echolot
-echolot --version
 ```
 
-`--version` names what you got: echolot, the `trace_processor` it pins,
-`perfetto` and Python. The binary itself arrives later, once — see
-[Requirements](#requirements). Installed with `pip` into an environment whose
-scripts are not on `PATH`, `python -m echolot` is the same command.
+`echolot --version` names what you got. Installed with `pip` into an
+environment whose scripts are not on `PATH`, `python -m echolot` is the same
+command.
 
 ### 2. Set up your project
-
-Run this once inside your Android project:
 
 ```bash
 cd ~/my-app && echolot init
 ```
 
 This installs the `.claude/` layer — a skill, the `perf-hunter` agent and three
-commands — and checks that this machine computes traces correctly. When the
-project directory is the root of a git checkout, `echolot init` also adds
-`.echolot/` and `local.yml` to its `.gitignore`; otherwise it says it did not
-and prints the two lines to add.
+commands — and checks that this machine computes traces correctly.
 
 ### 3. Open the agent and type one word
-
-```
-/echolot
-```
-
-That is the only entry point you need to remember. It asks the tool where the
-project stands and takes the next step by itself:
-
-- **first run** — builds `echolot.yml` from your repository and a probe trace,
-  asking you four questions along the way;
-- **every run after** — hunts down the regression you describe.
 
 ```
 /echolot                          reads the state, does whatever is next
@@ -88,9 +70,9 @@ project stands and takes the next step by itself:
 /echolot init | setup | hunt | reflect | doctor
 ```
 
-Each word on the last line is also an `echolot` command, except `setup`:
-building `echolot.yml` needs an agent, and there is no `echolot setup` in the
-shell.
+The first run builds `echolot.yml` from your repository and a probe trace,
+asking you four questions along the way. Every run after that hunts down the
+regression you describe.
 
 ### What to ask
 
@@ -105,22 +87,9 @@ Describe the problem the way you would to a colleague:
 
 ### Coming back later
 
-```bash
-echolot
-```
-
-That is `echolot status`. It prints where the project stands — the layer, the
-config, the investigation, the traces, the last report and the last `doctor`,
-plus a `collect` line while a run is going or after one stopped short — and
-one line saying what to do next.
-
-> [!IMPORTANT]
-> After upgrading the package, run `echolot init` again. It brings the
-> `.claude/` layer up to date and leaves files you edited alone. A teammate
-> still on an older echolot is then told to upgrade: their `echolot` says
-> so, and their `init` refuses rather than put the older files back.
-> Releases up to 0.7.0 do not have that rule, so it holds once the whole
-> team is on a later one.
+`echolot` on its own prints where the project stands and the next step. After
+upgrading the package, run `echolot init` again: it brings the `.claude/` layer
+up to date and leaves the files you edited alone.
 
 ### Without an agent
 
@@ -150,29 +119,15 @@ token counts leave that out, and time went both ways across the four models.
 
 ## What it is
 
-A Perfetto trace of one cold start holds around half a million slices in eighty
-megabytes. Nobody reads that, and an AI agent pointed at the raw file produces
-confident guesses instead of answers.
+echolot runs thirteen SQL detectors over a Perfetto trace and returns about
+twenty rows: where the time went, how much of it, and the evidence behind each
+claim. Same trace in, same report out: the `trace_processor` version is pinned.
 
-echolot sits in between. It runs thirteen SQL detectors over the trace and returns
-about twenty rows: where the time went, how much of it, and the evidence behind
-each claim. Same trace in, same report out — the `trace_processor` version is
-pinned, and the binary is checked against its SHA-256 when it is downloaded.
-
-> [!TIP]
-> The intended way to use it is through Claude Code: you describe the
-> regression in plain words, the agent collects traces, reads the report and
-> walks down to the code. The command line works on its own too — see
-> [without an agent](#without-an-agent).
-
-**Using Cursor, Codex or something else?** `echolot init` points them at the
-tool, and `echolot guide` tells any agent how to work with it. The loop runs
-in your main context rather than a subagent, so keep the passes short — the
-guide says where that matters.
-
-`echolot reflect` works from any of them: with no transcript to read it builds
-the report from the tool's own run log, and names every check it could not
-make rather than reporting silence as a clean bill.
+| where you run it | how |
+|---|---|
+| Claude Code | the full loop: `echolot init`, then `/echolot`. The agent records, reads the report and walks down to the code |
+| Cursor, Codex, other agents | `echolot init` points them at the tool, and `echolot guide` tells them how to work with it. The loop runs in your main context, so keep the passes short |
+| a shell or CI | the pipeline commands under [Without an agent](#without-an-agent) |
 
 ## Requirements
 
@@ -180,7 +135,7 @@ make rather than reporting silence as a clean bill.
 |---|---|
 | **Python** | 3.10 or newer |
 | **`curl`** | on `PATH` — the one download in the next row goes through it |
-| **`trace_processor`** *(fetched once)* | the first command that needs it — usually `echolot init`, at its environment check — downloads the build the `perfetto` package pins for your OS and CPU: 10–14 MB, into `~/.local/share/perfetto/prebuilts/`, checked against its SHA-256. It says so on stderr as it starts. Behind a proxy, export `HTTPS_PROXY`. Offline, copy the `trace_processor_shell-…` file from that directory on a machine with the same OS and CPU, under the same name. See [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) |
+| **`trace_processor`** *(fetched once)* | downloaded by the first command that needs it, usually `echolot init`: 10–14 MB, checked against its SHA-256. Behind a proxy or offline, see [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) |
 | **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
 | **Device** | a phone or emulator with USB debugging on |
 | **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) for the full workflow; Cursor, Codex and others via `echolot guide` |
@@ -190,9 +145,8 @@ Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
 
 ## What you get
 
-A **Marker Report**: a header saying what was measured and against which
-config, a table of your own markers when there are any, then one section per
-detector that fired. The silent ones are only named.
+A **Marker Report**: what was measured, then one section per detector that
+fired. The silent ones are named too.
 
 <details>
 <summary><b>Example report</b> (click to expand)</summary>
@@ -272,10 +226,9 @@ _the ONLY detector that finds a problem inside uninstrumented code. The agent do
 
 </details>
 
-The report is written for two readers at once: `report.md` reads like a
-findings list, `report.json` carries the same numbers in a shape the agent can
-walk. An 81 MB trace with 475k slices comes out as a 14 KB `report.json` in
-about five seconds.
+`report.md` is for you, `report.json` for the agent.
+An 81 MB trace with 475k slices comes out as a 14 KB `report.json` in about
+five seconds.
 
 ## What changed
 
@@ -296,35 +249,22 @@ One table, sorted by how far each row moved. The top row is usually the answer.
 | TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | yes, +831.3 … +911.3 |
 | inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | no, -13.4 … +162.6 · ~7 runs a side |
 
-`N` separates "called more often" from "became slower inside" — two different
-bugs in two different places. **Holds** is the column that decides whether a
-row is worth acting on. It gives the range the move lies in, 95% sure, worked
-out from every run after paired with every run before: `yes` when the whole
-range is on one side of zero, `no` when it runs through zero. `no` means the
-runs disagree among themselves by more than the row moved, and the honest next
-step is another round of `collect` rather than a conclusion — the cell says
-about how many runs a side would settle it.
+| column | what it says |
+|---|---|
+| `Δ` | how far the median moved, and by what factor |
+| `N` | how many times it ran, before and after: called more often is a different bug from slower inside |
+| `Holds` | the range the move lies in, 95% sure. `yes` when the range stays on one side of zero; `no` asks for another round of `collect`, and says about how many runs a side would settle it |
 
-Reports built against different thresholds are compared with the reason printed
-above the table — a row can cross a moved bar without anything in the app
-changing. The same goes for the machine: a duration is the work done divided by
-the speed the device was doing it at, so a clock that moved 10% or more
-between the rounds, in either direction, or a kernel that throttled during one
-of them, is named above the table too. Silence there means the device was
-checked and held steady; a round recorded without the platform-state sources
-says that instead.
-See [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md).
+A report built against other thresholds, or on a device whose clock moved or
+throttled between the rounds, is named above the table. See
+[Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md).
 
 ## Commands
 
-Four groups share one CLI, and `echolot --help` says which is which. Its list
-is generated from the same registration that defines the commands, so it
-cannot drift from them; the tables below are written by hand and follow its
-grouping.
-
-Every verb after `/echolot` is an `echolot` command of the same name, doing
-the same thing plus whatever loop needs an agent — except `setup`, which only
-the agent has. One word, one meaning, both surfaces.
+`echolot --help` lists every command in four groups. Every verb after
+`/echolot` is an `echolot` command of the same name, except `setup`, which
+only the agent has. The pipeline — `collect`, `analyze`, `compare` — is under
+[Without an agent](#without-an-agent).
 
 ### Yours
 
@@ -334,14 +274,6 @@ the agent has. One word, one meaning, both surfaces.
 | `echolot init` | install or update the `.claude/` layer; .gitignore, and checks the environment |
 | `echolot hunt "<what regressed>"` | open an investigation — see [below](#the-investigation) |
 | `echolot doctor` | environment + self-check on a synthetic trace; exit 0 when every check passes, 1 when one fails or the self-check cannot run, 2 when trace_processor cannot be downloaded; `-q` for three lines |
-
-### The pipeline — for CI, and for traces by hand
-
-| command | what it does |
-|---|---|
-| `echolot collect` | capture N traces of one scenario — `launch`, `command` or `gradle` |
-| `echolot analyze` | run the detectors, build a Marker Report |
-| `echolot compare` | the difference between two reports — see [below](#what-changed) |
 
 <details>
 <summary><b>The agent's, behind <code>/echolot</code></b> — you do not call these</summary>
@@ -401,15 +333,10 @@ each one keeps, are in [The agent layer](https://github.com/grishan0v/echolot/bl
 | `repeated_work` | the same work reached from more than one caller, costing about the same both times |
 | `io_wait` | **threads the kernel parked waiting for a block device** |
 
-Three of them find a problem where nobody wrote a `trace{}` call:
-`uninstrumented_cpu` names a thread that burned CPU with no slices around it,
-`io_wait` a thread the kernel parked waiting for the disk, and `frame_jank` the
-frames that missed their deadline, from the platform's own record
-(Android 12+). What each of them sees, and how to read `main_thread_block`
-beside `main_thread_outlier`, is in [Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md).
-
-Each detector is one `.sql` file with its metadata in the header. Writing your
-own, and what shipping one takes, is in [Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md).
+`uninstrumented_cpu`, `io_wait` and `frame_jank` find a problem where nobody
+wrote a `trace{}` call. What each detector sees is in
+[Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md), and writing your own in
+[Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md).
 
 ## How it works
 
@@ -434,15 +361,8 @@ android-project/
 └── .echolot/         ← traces, reports, run log, reflect reports; in .gitignore
 ```
 
-When the project directory is the root of a git checkout, `echolot init` adds
-`.echolot/` and `local.yml` to its .gitignore; otherwise it says it did not
-and prints the two lines to add. A trace is tens of megabytes and a collect
-writes five, so without them the first `git add -A` after a run stages the
-lot.
-
-Read it the way you read `gradle.properties` and `local.properties`: one tool
-per machine, and the binding to a project living inside that project's
-repository.
+`echolot init` adds the last two to `.gitignore` at the root of a git checkout,
+and otherwise prints the two lines to add: a trace is tens of megabytes.
 
 ## Documentation
 
