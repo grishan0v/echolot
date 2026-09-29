@@ -138,7 +138,10 @@ def test_documented_detector_count_is_current(document, pattern):
 # The comparison table is printed in two documents, and it is the one sample
 # in the set that a reader is invited to match against their own output
 # column by column.
-COMPARE_SAMPLES = ["README.md", "docs/compare.md"]
+# The README shows the same rows as a picture, drawn from the table in
+# docs/compare.md by docs/assets/render.py; test_readme_pictures.py holds the
+# picture to that table, and this holds the table to what compare prints.
+COMPARE_SAMPLES = ["docs/compare.md"]
 
 
 @pytest.mark.parametrize("document", COMPARE_SAMPLES)

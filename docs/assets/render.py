@@ -6,8 +6,8 @@
 
 A picture makes claims the way the sentences around it do, so the numbers in
 these come from where the text gets them: the trace, report and sample figures
-are read out of README.md, and the cost of a hunt is worked out from the
-recorded runs listed below. tests/test_readme_pictures.py draws everything
+are read out of README.md, the sample comparison out of docs/compare.md, and
+the cost of a hunt is worked out from the recorded runs listed below. tests/test_readme_pictures.py draws everything
 again and fails when a committed file differs, so a README edit that moves a
 number fails until the pictures are drawn again.
 
@@ -26,6 +26,7 @@ from statistics import median
 HERE = Path(__file__).resolve().parent
 README = HERE.parent.parent / "README.md"
 AGENT = HERE.parent.parent / "echolot" / "claude" / "agents" / "perf-hunter.md"
+COMPARE_DOC = HERE.parent / "compare.md"
 
 SANS = ("-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', "
         "Helvetica, Arial, sans-serif")
@@ -76,8 +77,9 @@ def _find(pattern: str, text: str, what: str, flags: int = 0) -> re.Match:
 
 def readme_facts(text: str | None = None) -> dict:
     text = README.read_text(encoding="utf-8") if text is None else text
-    trace = _find(r"An (\d+) MB trace with (\d+)k slices comes out as a (\d+) KB "
-                  r"`report\.json` in\s+about (\w+) seconds", text,
+    # Markdown rewraps freely, so any whitespace may stand between the words.
+    trace = _find(r"An\s+(\d+)\s+MB\s+trace\s+with\s+(\d+)k\s+slices\s+comes\s+out\s+as\s+a\s+"
+                  r"(\d+)\s+KB\s+`report\.json`\s+in\s+about\s+(\w+)\s+seconds", text,
                   "the sentence about the size of a trace and its report")
     sample = _find(r"^```markdown\n(# Marker Report\n.*?)^```", text,
                    "the sample Marker Report", re.S | re.M).group(1)
@@ -434,6 +436,120 @@ def loop(c, f):
     return svg(880, 616, "".join(out), "echolot does the legwork, your agent decides")
 
 
+def compare_rows() -> list[dict]:
+    """The sample comparison in docs/compare.md, row by row.
+
+    That table is held to the columns `compare` prints by tests/test_docs.py,
+    so the picture drawn from it shows what the tool shows.
+    """
+    text_ = COMPARE_DOC.read_text(encoding="utf-8")
+    found = re.search(r"^\| Where \| Evidence \| Detector \| Before \| After \| Δ \| N \| Holds \|\n"
+                      r"\|[-|]+\|\n((?:\|.*\|\n)+)", text_, re.M)
+    if not found:
+        raise SystemExit("docs/compare.md: the sample comparison is gone or its columns "
+                         "changed, and the compare picture is drawn from it")
+
+    def median_of(cell):
+        return None if cell == "—" else cell.split()[0]
+
+    rows = []
+    for line in found.group(1).strip().splitlines():
+        cells = [cell.strip().replace("**", "") for cell in line.strip().strip("|").split("|")]
+        where, _evidence, detector, before, after, delta, calls, holds = cells
+        n_before, n_after = (None if v.strip() == "—" else int(v) for v in calls.split("→"))
+        verdict = None
+        if holds != "—":
+            m = re.match(r"(yes|no), ([+-]?[\d.]+) … ([+-]?[\d.]+)(?: · (.+))?$", holds)
+            if not m:
+                raise SystemExit(f"docs/compare.md: a Holds cell the picture cannot read: {holds!r}")
+            verdict = {"holds": m.group(1) == "yes", "lo": float(m.group(2)),
+                       "hi": float(m.group(3)), "note": m.group(4)}
+        rows.append(dict(where=where, detector=detector, before=median_of(before),
+                         after=median_of(after), delta=delta.split(), n_before=n_before,
+                         n_after=n_after, verdict=verdict))
+    return rows
+
+
+def spans(x, y, parts, *, size, family=SANS):
+    """One line of text in several colours: parts are (words, colour, weight)."""
+    inner = "".join(f'<tspan fill="{colour}" font-weight="{weight}">{html.escape(words)}</tspan>'
+                    for words, colour, weight in parts)
+    return (f'<text x="{x}" y="{y}" font-family="{family}" font-size="{size}" '
+            f'xml:space="preserve" style="white-space:pre">{inner}</text>')
+
+
+def compare(c, f):
+    """compare's sample, a card per finding: what moved, how often it ran, whether it holds."""
+    rows = compare_rows()
+    top, step = 112, 92
+    out = [text(40, 50, "What changed, and whether it holds", size=30, weight=700,
+                fill=c["ink"])]
+    for x, label in ((60, "Where"), (300, "Before → After"), (452, "Δ"), (560, "N"),
+                     (690, "Holds, 95% range")):
+        out.append(text(x, 96, label, size=13, weight=600, fill=c["sub"]))
+    for i, r in enumerate(rows):
+        y0 = top + i * step
+        out.append(f'<rect x="40" y="{y0}" width="800" height="80" rx="10" '
+                   f'fill="{c["card"]}" stroke="{c["line"]}" stroke-width="1"/>')
+        out.append(text(60, y0 + 34, r["where"], size=15, weight=700, fill=c["ink"],
+                        family=MONO))
+        out.append(text(60, y0 + 58, r["detector"], size=12.5, fill=c["sub"], family=MONO))
+        out.append(spans(300, y0 + 34, [(r["before"] or "—", c["sub"], 400),
+                                        ("  →  ", c["faint"], 400),
+                                        (r["after"], c["ink"], 700), (" ms", c["sub"], 400)],
+                         size=16))
+        if r["delta"] == ["new"]:
+            out.append(f'<rect x="452" y="{y0 + 17}" width="46" height="24" rx="6" '
+                       f'fill="{c["hot_tint"]}"/>')
+            out.append(text(475, y0 + 34, "new", size=14, weight=700, fill=c["brick"],
+                            anchor="middle"))
+        else:
+            grown, factor = r["delta"]
+            out.append(text(452, y0 + 34, grown, size=16, weight=700, fill=c["brick"]))
+            out.append(text(452, y0 + 58, factor, size=12.5, fill=c["sub"]))
+        before, after = r["n_before"], r["n_after"]
+        out.append(text(560, y0 + 34, f"{'—' if before is None else before} → {after}",
+                        size=15, fill=c["ink"]))
+        if before is None:
+            meaning = "no slices on it" if after == 0 else "new"
+        elif after > before:
+            meaning = "called more often"
+        elif after < before:
+            meaning = "called less often"
+        else:
+            meaning = "slower inside"
+        out.append(text(560, y0 + 58, meaning, size=12.5, fill=c["sub"]))
+        v = r["verdict"]
+        if v is None:
+            out.append(text(690, y0 + 34, "—", size=15, fill=c["faint"]))
+            out.append(text(690, y0 + 58, "new, no range yet", size=12.5, fill=c["sub"]))
+            continue
+        lo, hi = min(v["lo"], 0.0), max(v["hi"], 0.0)
+        pad = (hi - lo) * 0.08
+        x0, x1 = 690, 824
+
+        def at(value, lo=lo, hi=hi, pad=pad, x0=x0, x1=x1):
+            return round(x0 + (value - lo + pad) / (hi - lo + 2 * pad) * (x1 - x0), 1)
+
+        gy = y0 + 26
+        out.append(f'<path d="M{x0} {gy}H{x1}" stroke="{c["line"]}" stroke-width="2" '
+                   f'stroke-linecap="round"/>')
+        out.append(f'<rect x="{at(v["lo"])}" y="{gy - 4}" width="{round(at(v["hi"]) - at(v["lo"]), 1)}" '
+                   f'height="8" rx="4" fill="{c["teal"] if v["holds"] else c["faint"]}"/>')
+        out.append(f'<path d="M{at(0)} {gy - 9}V{gy + 9}" stroke="{c["ink"]}" stroke-width="1.5"/>')
+        out.append(spans(690, y0 + 52, [("yes" if v["holds"] else "no",
+                                         c["teal"] if v["holds"] else c["sub"], 700),
+                                        (f"  {v['lo']:+.1f} … {v['hi']:+.1f}".replace("-", "−"), c["sub"], 400)],
+                         size=12.5))
+        if v["note"]:
+            out.append(text(690, y0 + 70, f"needs {v['note']}", size=12, fill=c["sub"]))
+    foot = top + len(rows) * step + 16
+    out.append(text(40, foot, "The sample from Comparing, as compare prints it: medians of the "
+                    "runs on each side, sorted by how far each row moved.", size=13,
+                    fill=c["sub"]))
+    return svg(880, foot + 16, "".join(out), "What changed, and whether it holds")
+
+
 # The session is one picture for both themes: a terminal keeps its own colours.
 TERM = dict(bg="#10191D", fg="#E6E1D6", dim="#7A898F", edge="#33424A", sand="#E8C25B",
             green="#8DC9A0")
@@ -518,7 +634,8 @@ def session(f):
                style="".join(style))
 
 
-THEMED = {"hero": hero, "benefits": benefits, "versus": versus, "loop": loop}
+THEMED = {"hero": hero, "benefits": benefits, "versus": versus, "loop": loop,
+          "compare": compare}
 
 
 def pictures(readme: str | None = None) -> dict[str, str]:
@@ -556,6 +673,7 @@ pre{{background:{code_bg};border-radius:6px;padding:12px 16px;margin:0 0 12px;fo
 <p align="center"><img src="{assets / 'session.svg'}" width="880"></p>
 <h2>Quick start</h2><pre>pipx install echolot</pre><pre>cd ~/my-app &amp;&amp; echolot init</pre><pre>/echolot</pre>
 <h2>What it saves</h2>{themed('versus')}
+<h2>What changed</h2>{themed('compare')}
 <h2>How it works</h2>{themed('loop')}
 </div></div></body></html>"""
 
