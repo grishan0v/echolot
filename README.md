@@ -243,11 +243,12 @@ echolot compare old.json new.json     # or name them
 
 One table, sorted by how far each row moved. The top row is usually the answer.
 
-| Where | Evidence | Detector | Before | After | Δ | N | Holds |
-|---|---|---|---|---|---|---|---|
-| SyncAdapterThre | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
-| TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | yes, +831.3 … +911.3 |
-| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | no, -13.4 … +162.6 · ~7 runs a side |
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/compare-dark.svg">
+    <img alt="The sample comparison: a thread that is new and has no slices, a function that got slower inside and holds, and one called more often whose move does not hold yet" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/compare-light.svg" width="880">
+  </picture>
+</p>
 
 | column | what it says |
 |---|---|

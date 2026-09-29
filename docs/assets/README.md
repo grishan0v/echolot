@@ -24,6 +24,8 @@ the same place:
   pictures are drawn again;
 - the number of rounds a hunt may take is read out of `perf-hunter.md`, the
   instructions the agent follows;
+- the rows of the comparison are read out of the sample table in
+  `docs/compare.md`, which `tests/test_docs.py` holds to what `compare` prints;
 - the cost of a hunt is worked out from the recorded runs listed in the
   script, one number per run. The medians, the ratio and the count of models
   are computed from those runs and never typed.
