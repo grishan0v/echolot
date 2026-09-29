@@ -61,7 +61,7 @@ NUMBER = r"(\d+|" + "|".join(WORDS) + r")"
 # Every place a document states how many checks `doctor` runs. The last is the
 # sample output in determinism.md, which prints the tally twice on one line.
 CHECK_TALLIES = [
-    ("README.md", NUMBER + r" checks inside"),
+    ("docs/determinism.md", NUMBER + r" checks inside"),
     ("docs/determinism.md", r"All " + NUMBER + r" checks passed"),
     ("docs/determinism.md", r"self-check: " + NUMBER + r" of " + NUMBER + r" passed"),
 ]
@@ -174,7 +174,8 @@ def test_the_sample_comparison_has_the_columns_compare_prints(document):
 # --- anchors, which a heading can stop answering ----------------------------
 
 # The documents a link inside the repository may point into.
-LINKING = ["README.md", *sorted(f"docs/{p.name}" for p in (ROOT / "docs").glob("*.md"))]
+LINKING = ["README.md", "CONTRIBUTING.md",
+           *sorted(f"docs/{p.name}" for p in (ROOT / "docs").glob("*.md"))]
 
 
 def _unfenced(path: Path) -> str:

@@ -101,7 +101,7 @@ Describe the problem the way you would to a colleague:
 | Cold start got slower | `/echolot why is cold start slow` | — |
 | Scrolling stutters | `/echolot the feed janks on scroll` | a scroll scenario in `echolot.yml`, which holds one scenario at a time; `frame_jank` needs Android 12+ |
 | "App isn't responding" | `/echolot the app froze, here is anr.txt` | the report: an export from Crashlytics or Play Console, or `dumpsys dropbox` |
-| The nightly benchmark got slower | `echolot analyze` over its traces, then `echolot compare last-night.json` | wired by hand for now: [the CI shape](#there-is-no-performance-gate-on-purpose) |
+| The nightly benchmark got slower | `echolot analyze` over its traces, then `echolot compare last-night.json` | wired by hand for now; the shape, and why it never fails a build, is in [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md) |
 
 ### Coming back later
 
@@ -376,39 +376,12 @@ the agent has. One word, one meaning, both surfaces.
 
 ## The investigation
 
-`.echolot/traces/` and `.echolot/out/report.json` mean "the latest set". An
-investigation is the label that says which question that set was recorded for,
-so that coming back a week later does not answer a question about scrolling
-with cold-start traces.
-
-```bash
-echolot hunt "cold start was 3s, now 7s" --since "the tab redesign"
-```
-
-That opens one, moves the previous set of traces aside without deleting it,
-and says whether the last investigation left temporary markers in your
-sources. `echolot hunt` on its own says what is open.
-
-```
-echolot hunt --list          every investigation, newest first
-echolot hunt --show 2        one of them in full — including where its traces went
-echolot hunt --resume        carry on with the open one
-echolot hunt --done "..."    record what it came to
-```
-
-Each one is numbered, and everything it produces is filed under it: every
-round of traces by path, every report as a copy in
-`.echolot/hunts/<n>/reports/`. So a question asked three weeks ago still knows
-what was measured to answer it, and what each round concluded on the way.
-
-Nothing moves to make this work — `collect` still writes to `.echolot/traces/`
-and the latest report is still `.echolot/out/report.json`, so every example
-above and any CI job keep working unchanged.
-
-You rarely type any of it. `/echolot` reads the state and, when an
-investigation has been sitting untouched with traces behind it, asks whether
-to carry on or start something new — and never asks inside the hunting loop,
-which re-records and re-instruments on purpose.
+Each question you bring gets an investigation. `echolot hunt "cold start was
+3s, now 7s" --since "the tab redesign"` opens one, sets the previous traces
+aside without deleting them, and files every round of traces and every report
+under it, so a question asked weeks ago still knows what was measured to
+answer it. `/echolot` opens and closes them for you. The commands, and what
+each one keeps, are in [The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md).
 
 ## Detectors
 
@@ -428,51 +401,15 @@ which re-records and re-instruments on purpose.
 | `repeated_work` | the same work reached from more than one caller, costing about the same both times |
 | `io_wait` | **threads the kernel parked waiting for a block device** |
 
-Three of them find something where nobody wrote a `trace{}` call.
+Three of them find a problem where nobody wrote a `trace{}` call:
+`uninstrumented_cpu` names a thread that burned CPU with no slices around it,
+`io_wait` a thread the kernel parked waiting for the disk, and `frame_jank` the
+frames that missed their deadline, from the platform's own record
+(Android 12+). What each of them sees, and how to read `main_thread_block`
+beside `main_thread_outlier`, is in [Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md).
 
-`uninstrumented_cpu` does not guess — it states a fact:
-
-> thread `DefaultDispatch` was Running for 340 ms, zero slices
-
-Which is exactly where to add `trace{}` and record again. The name is cut
-at fifteen characters by Linux rather than by echolot: every worker of that
-pool reaches the trace as `DefaultDispatch`, so write thread masks with the
-truncation in mind.
-
-`io_wait` needs none either, and it is the one that answers a question the
-other two cannot even ask. A thread waiting for the disk burns no CPU, holds
-no lock of yours and has no slice around it: there is nothing to profile and
-nothing to instrument, so a cold start can spend hundreds of milliseconds
-there with every other detector silent. The kernel is the only witness, and
-it says so through `sched/sched_blocked_reason`.
-
-It names the thread and the milliseconds, not the kernel function. Turning the
-blocking address into a name needs `/proc/kallsyms`, which a production build
-does not let anyone read — on an SM-A515F the function came back empty for all
-6683 uninterruptible sleeps in the trace while the disk flag was set on 6486
-of them. The name appears on a userdebug kernel and the row is worth acting on
-without it.
-
-`frame_jank` needs no instrumentation at all: SurfaceFlinger records every
-frame's deadline and what it actually took, and says whose fault a miss was.
-Android 12 and up — see [requirements](#requirements).
-
-`main_thread_block` and `main_thread_outlier` are a pair, and reading one as
-the other wastes a round. The first gates on the **sum** for a name and answers
-"where did the time go". The second gates on a **single occurrence** against
-the median for that same name and answers "which one was out of line". A name
-can appear in both, saying different things — and they lead to different
-places: expensive every time means the fix is in that work, usually fine and
-once not means the cause is the state it hit that once.
-
-> [!NOTE]
-> Each detector is one self-contained `.sql` file with its metadata in the
-> header. Drop a file into `echolot/sql/detectors/` and it runs — there is no
-> registration step in code. Shipping it takes more than running: `doctor`'s
-> self-check fails until the fixture plants a problem for it or says why it
-> cannot, and the tests fail until the detector counts in this README are
-> brought up to date. The checklist is in
-> [docs/detectors.md](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md).
+Each detector is one `.sql` file with its metadata in the header. Writing your
+own, and what shipping one takes, is in [Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md).
 
 ## How it works
 
@@ -538,73 +475,13 @@ schema, how ART names things, and how to capture a trace by hand.
 
 ## Status
 
-**v0.** Everything planned for it is in place.
-
-The detectors were validated against a synthetic trace — 147 checks inside
-`doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
-(Galaxy A51). The naming masks for GC, locks and binder were narrowed against
-those real traces, and every narrowing is pinned by a check.
-
-Six are newer than that hardware round. `io_wait`, `anr` and `repeated_work`
-have each been run on real traces since — fifteen cold starts of a freshly
-installed app on an A51, an ANR raised on purpose on an Android 13 phone, the
-traces of the hunts that found a duplicate — and their headers say what those
-runs showed. `frame_jank` was built against the pinned `trace_processor` and a
-frame timeline written for the purpose — the column names, the jank vocabulary
-and where display frames live were all read back out of it rather than
-assumed — but no report from it has been compared with a real device's own
-frame statistics yet. `main_thread_outlier` was written for a miss recorded on
-an A51 and has so far answered only the fixture. `anr_risk` is silent on the
-fixture by construction: its bar is the platform's five seconds, and the
-fixture is a one-second cold start. Its checks run it there with the bar
-lowered, and one holds it to silence at the bar it ships with.
+**v0.** Everything planned for it is in place. What each detector was checked
+against, from the synthetic fixture to live traces, is in
+[Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md).
 
 A failed detector never fails the run: the error goes to stderr and into
-`report.json`.
-
-### Working on the tool
-
-```bash
-pip install -e '.[dev]'
-pytest                       # every check, including the ones doctor runs
-pytest -k uninstrumented     # one detector's claims, by name
-ruff check echolot tests     # the linter, which CI runs beside pytest
-```
-
-`doctor` stays dependency-free: it walks the same list itself, because it runs
-on a user's laptop where pytest is not installed.
-
-### There is no performance gate, on purpose
-
-An earlier plan had `analyze` exit non-zero against `scenario.budget_ms`, so a
-build could fail on a slow run. It is not being built, and this is the reason.
-
-"Did it get slower" is already answered. Macrobenchmark writes percentiles per
-iteration right next to the traces echolot collects from it, and comparing a
-median against a number is a few lines of anything. An eleventh implementation
-of that adds nothing. Worse, detector thresholds on a shared CI runner would
-fire on properties of the runner — the same caution this tool already gives
-about `runnable_starvation` on a loaded machine.
-
-Where echolot is hard to replace is the other question: *where* the time went.
-So the useful shape in CI is the opposite of a gate. Run `echolot doctor -q` as
-a precondition — it already answers "does this machine compute correctly" with
-an exit code — then `analyze` over the traces the benchmark has already
-written, `compare` against yesterday's report, and keep both JSON files as
-build artefacts. When someone asks a day later why the nightly regressed, the
-window, the thresholds, the evidence and the delta are already sitting next to
-the commit: no device, no re-recording.
-
-`compare` exits 0 whatever it finds, for the same reason. It reports; it does
-not stand guard.
-
-`scenario.budget_ms` stays in the config. It records what a team considers
-acceptable, which is worth writing down whether or not anything enforces it.
-
-CI does hold one gate, and it measures this repository rather than a device:
-`pytest` fails when statement coverage drops below the threshold in
-`pyproject.toml`. That number comes out the same on every runner, which is
-exactly what a trace threshold does not.
+`report.json`. Working on the tool itself starts at `CONTRIBUTING.md`, which
+GitHub shows as a tab beside this README.
 
 ## License
 

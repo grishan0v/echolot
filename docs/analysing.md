@@ -184,6 +184,38 @@ which of those modules actually burns CPU. And where the first markers go —
 the entry points, from the manifest and the SDK, with a source on every row
 — is `echolot mark`, in [mark.md](mark.md).
 
+## Three detectors that need no instrumentation
+
+Three of the detectors find a problem where nobody wrote a `trace{}` call,
+which makes them the ones to read first on a project with none.
+
+`uninstrumented_cpu` does not guess — it states a fact:
+
+> thread `DefaultDispatch` was Running for 340 ms, zero slices
+
+Which is exactly where to add `trace{}` and record again. The name is cut
+at fifteen characters by Linux rather than by echolot: every worker of that
+pool reaches the trace as `DefaultDispatch`, so write thread masks with the
+truncation in mind.
+
+`io_wait` needs none either, and it is the one that answers a question the
+other two cannot even ask. A thread waiting for the disk burns no CPU, holds
+no lock of yours and has no slice around it: there is nothing to profile and
+nothing to instrument, so a cold start can spend hundreds of milliseconds
+there with every other detector silent. The kernel is the only witness, and
+it says so through `sched/sched_blocked_reason`.
+
+It names the thread and the milliseconds, not the kernel function. Turning the
+blocking address into a name needs `/proc/kallsyms`, which a production build
+does not let anyone read — on an SM-A515F the function came back empty for all
+6683 uninterruptible sleeps in the trace while the disk flag was set on 6486
+of them. The name appears on a userdebug kernel and the row is worth acting on
+without it.
+
+`frame_jank` needs no instrumentation at all: SurfaceFlinger records every
+frame's deadline and what it actually took, and says whose fault a miss was.
+Android 12 and up — see [requirements](../README.md#requirements).
+
 ## Your own names, measured every time
 
 A detector shows a marker only when it clears a threshold, and a marker you
