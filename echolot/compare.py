@@ -17,11 +17,13 @@ Two things it refuses to do quietly:
     which is a different sentence. Reports built with different detector
     parameters say so at the top and every appeared/vanished row is suspect.
 
-  * call a difference real when the repeats do not support it. A row whose
-    before and after ranges overlap moved less than the runs disagree among
-    themselves; the report says `overlap` and leaves the conclusion alone.
-    That needs `spread` in the input, which `analyze` writes for two repeats
-    or more — with a single trace on either side the column reads `—`.
+  * call a difference real when the repeats do not support it. Every row
+    that exists on both sides carries the range its move lies in, at 95%
+    confidence, and a row whose range runs through zero moved less than the
+    runs disagree among themselves; the report says it does not hold and
+    leaves the conclusion alone. That needs the per-run values in `spread`,
+    which `analyze` writes for two repeats or more — with a single trace on
+    either side the column reads `—`.
 
 Rows are paired on everything the detector declared in `@identity`, which the
 report carries. Seven of the twelve shipped detectors name a second column
@@ -32,7 +34,10 @@ instead.
 
 from __future__ import annotations
 
+import functools
+import math
 from datetime import datetime, timezone
+from statistics import NormalDist, median
 from typing import Any
 
 from . import table
@@ -43,6 +48,12 @@ from .report import family, identity_of, metric_of
 # on a 900 ms slice is not a finding either.
 FLOOR_MS = 5.0
 FLOOR_RATIO = 0.10
+
+# How sure the table has to be before it says a move holds. The usual level,
+# and not a flag: a bar that could differ between two comparisons would be one
+# more thing they differ by without anyone seeing it. A percentage, so the
+# test in `_cut` stays in whole numbers.
+CONFIDENCE_PCT = 95
 
 APPEARED, VANISHED, GREW, SHRANK, STEADY = (
     "appeared", "vanished", "grew", "shrank", "steady")
@@ -100,7 +111,9 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
         counts[r["change"]] += 1
 
     return {
-        "schema": 1,
+        # 2 since `overlap` gave way to `shift` and `holds`: a reader written
+        # for the first shape finds the verdict it read gone, not moved.
+        "schema": 2,
         "kind": "comparison",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "comparable": comparable,
@@ -109,6 +122,7 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
         "after": _side(after, after_path),
         "window": _window(before, after),
         "noise_floor": {"abs_ms": floor_ms, "ratio": floor_ratio},
+        "confidence": CONFIDENCE_PCT / 100,
         "summary": {
             "moved": counts[GREW] + counts[SHRANK],
             "appeared": counts[APPEARED],
@@ -206,15 +220,25 @@ def _check(before: dict, after: dict) -> tuple[list[dict[str, str]], bool]:
         out.append({
             "id": "runs",
             "text": f"Different numbers of repeats — {nb} before, {na} after. "
-                    f"Medians stay comparable; the ranges are built from "
-                    f"unequal samples and the narrower side is the smaller one.",
+                    f"Medians stay comparable, and the Holds column allows "
+                    f"for the difference. The ± beside each median does not: "
+                    f"it is built from unequal samples, and the narrower side "
+                    f"is the smaller one.",
         })
     if nb == 1 or na == 1:
         out.append({
             "id": "single",
             "text": "A single trace on one side or both: there is no spread to "
-                    "check a difference against, and the Ranges column stays "
+                    "check a difference against, and the Holds column stays "
                     "empty. One run cannot tell a change from a hiccup.",
+        })
+    elif _cut(nb, na) is None:
+        out.append({
+            "id": "few",
+            "text": f"{nb} repeats before and {na} after are too few to be "
+                    f"{CONFIDENCE_PCT}% sure of any move, so the Holds column "
+                    f"stays empty. It takes four a side, or three against "
+                    f"five.",
         })
 
     only_before = {d["id"] for d in before.get("detectors", [])} - \
@@ -537,6 +561,7 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
         else:
             change = GREW if delta > 0 else SHRANK
 
+    shift = _shift(rb, ra, metric)
     row = {
         "location": loc,
         "detector": det_id,
@@ -547,7 +572,11 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
         "after": _face(ra, metric),
         "delta_ms": round(delta, 2) if delta is not None else None,
         "ratio": ratio,
-        "overlap": _overlap(rb, ra, metric),
+        "shift": shift,
+        # Read off the rounded ends, so the verdict and the numbers printed
+        # beside it cannot disagree about which side of zero they are on.
+        "holds": None if shift is None else (
+            shift["low_ms"] > 0 or shift["high_ms"] < 0),
     }
     if detail is not None:
         row["detail"] = detail
@@ -595,28 +624,132 @@ def _face(row: dict | None, metric: str) -> dict[str, Any] | None:
     return out
 
 
-def _overlap(rb: dict | None, ra: dict | None, metric: str) -> bool | None:
-    """Do the two sets of repeats disagree by more than they moved?
+def _shift(rb: dict | None, ra: dict | None,
+           metric: str) -> dict[str, float] | None:
+    """How far the runs after sit from the runs before, and how sure that is.
 
-    True means the ranges intersect: some run before was as slow as some run
-    after, and the difference in medians is within the noise the runs already
-    carry. False means they are apart — every repeat after was outside
-    everything seen before, which is as close to proof as five runs get.
-    None means one side had a single trace and there is nothing to test.
+    Every run after is paired with every run before, and the differences are
+    what is read. Their median is the move, `ms`; the interval, `low_ms` to
+    `high_ms`, is what is left once `_cut` has taken as many differences off
+    each end as it can while the chance of the true move lying outside stays
+    at 5% or less. Nothing is assumed about the shape of the runs, which on a
+    cold start is anything but a bell, and nothing is drawn at random, so the
+    same two reports give the same interval every time.
+
+    What it replaced asked whether the min–max ranges of the two sides
+    touched. That is this same interval with nothing taken off — from the
+    smallest difference to the largest — and so a test whose bar rose with
+    every run recorded: 90% sure at three a side, 99.2% at five, and at
+    fifteen a side sure to all but one chance in 77 million, which one slow
+    run among the thirty is enough to deny. It was checked on fifteen runs of
+    one build of a real app — the eleven rows found in at least ten of them
+    — split at random into a before and an after, with every run after made
+    a fifth slower. Seven against eight, the ranges caught the move in 15
+    comparisons of a hundred and this interval in 51; five against five, in
+    27 and 36. More runs made the old test see less; they make this one see
+    more.
+
+    The price is the other mistake. On the same splits with nothing made
+    slower, a row cleared the floor and held in 2 comparisons of a hundred
+    seven against eight, and in 1.6 five against five; the ranges had called
+    0.1 and 0.8 apart.
+
+    None where there is nothing to take off: a row on one side only, a side
+    without per-run values, or too few runs to be 95% sure of anything. Four
+    a side is enough; with fewer on one side the other has to make up for
+    it — three need five against them, two need eight, one needs thirty-nine.
     """
     if rb is None or ra is None:
         return None
-    b = (rb.get("spread") or {}).get(metric)
-    a = (ra.get("spread") or {}).get(metric)
+    b = ((rb.get("spread") or {}).get(metric) or {}).get("values")
+    a = ((ra.get("spread") or {}).get(metric) or {}).get("values")
     if not b or not a:
         return None
-    return not (a["max"] < b["min"] or b["max"] < a["min"])
+    cut = _cut(len(b), len(a))
+    if cut is None:
+        return None
+    diffs = sorted(y - x for y in a for x in b)
+    # `+ 0.0` turns a -0.0 from the rounding into the zero it is.
+    return {"ms": round(median(diffs), 2) + 0.0,
+            "low_ms": round(diffs[cut], 2) + 0.0,
+            "high_ms": round(diffs[-1 - cut], 2) + 0.0}
+
+
+@functools.lru_cache(maxsize=None)
+def _cut(before: int, after: int) -> int | None:
+    """How many differences come off each end of the interval, or None.
+
+    If nothing moved, which runs came out slower is chance, and every order
+    the runs can come in is as likely as any other. `_orderings` counts, for
+    each number of (before, after) pairs in which the run after was slower,
+    how many orders give it. Taking k differences off each end leaves an
+    interval that misses the true move in the orders with k such pairs or
+    fewer, and in as many at the other end; k is the largest that keeps the
+    two together at 5% or less.
+
+    None when even k = 0 misses too often. Three runs a side come in 20
+    orders, and the widest interval misses in 2 of them — 10%.
+    """
+    if min(before, after) * before * after > COUNTED_UP_TO:
+        return _cut_by_curve(before, after)
+    counts = _orderings(before, after)
+    total = math.comb(before + after, before)
+    cut, below = None, 0
+    for k, count in enumerate(counts):
+        below += count
+        # below / total > (1 - confidence) / 2, in whole numbers
+        if below * 200 > (100 - CONFIDENCE_PCT) * total:
+            break
+        cut = k
+    return cut
+
+
+# How much counting `_cut` does before it takes the curve instead: a hundred
+# runs a side, 86 ms. The work grows with the smaller side times both, so
+# twice that is eight times the wait, and five hundred a side a minute.
+COUNTED_UP_TO = 1_000_000
+
+
+def _cut_by_curve(before: int, after: int) -> int:
+    """The same cut, from the bell curve the counts tend to with many runs.
+
+    Checked against the count from twenty to a hundred and twenty runs a
+    side: the same k, or one less — an interval one difference wider, never
+    narrower. Plain arithmetic in floating point, so the same on every run.
+    """
+    z = NormalDist().inv_cdf(1 - (100 - CONFIDENCE_PCT) / 200)
+    pairs = before * after
+    spread = math.sqrt(pairs * (before + after + 1) / 12)
+    return max(0, math.floor(pairs / 2 - z * spread - 0.5))
+
+
+@functools.lru_cache(maxsize=None)
+def _orderings(before: int, after: int) -> tuple[int, ...]:
+    """Entry u: how many orders of the runs have u pairs with the run after slower.
+
+    Counted, not simulated: the counts are the coefficients of the Gaussian
+    binomial coefficient, built one run of the smaller side at a time — times
+    (1 - x^(m+i)), then divided by (1 - x^i), both exactly and in whole
+    numbers. They add up to the number of orders, (n + m choose n), and are
+    symmetric; the tests hold them to both and to a count by brute force.
+    Forty runs a side take milliseconds, and a pair of sizes is counted once;
+    past `COUNTED_UP_TO`, `_cut` does not ask.
+    """
+    n, m = sorted((before, after))
+    counts = [1]
+    for i in range(1, n + 1):
+        grown = counts + [0] * (m + i)
+        for j in range(len(grown) - 1, m + i - 1, -1):
+            grown[j] -= grown[j - m - i]
+        for j in range(i, len(grown)):
+            grown[j] += grown[j - i]
+        counts = grown[:i * m + 1]
+    return tuple(counts)
 
 
 # --- rendering --------------------------------------------------------------
 
 CHANGE_LABEL = {APPEARED: "**new**", VANISHED: "**gone**"}
-RANGE_LABEL = {True: "overlap", False: "apart", None: "—"}
 
 # The two tables this file prints, in the order they are read.
 #
@@ -626,10 +759,10 @@ RANGE_LABEL = {True: "overlap", False: "apart", None: "—"}
 # rows of every other detector, and `table.columns` leaves out a column no row
 # carries — so the table grows this one exactly where it is needed.
 MOVED_COLUMNS = ["location", "detail", "detector", "before", "after", "delta",
-                 "count", "ranges"]
+                 "count", "holds"]
 MOVED_HEADERS = {"location": "Where", "detail": "Evidence",
                  "detector": "Detector", "before": "Before",
-                 "after": "After", "delta": "Δ", "count": "N", "ranges": "Ranges"}
+                 "after": "After", "delta": "Δ", "count": "N", "holds": "Holds"}
 STATE_HEADERS = {"id": "detector", "before": "before", "after": "after"}
 
 
@@ -682,7 +815,9 @@ def to_markdown(cmp: dict[str, Any]) -> str:
             f"_by each detector's own measure; a row is listed when it moves by "
             f"more than {cmp['noise_floor']['abs_ms']} ms or "
             f"{int(cmp['noise_floor']['ratio'] * 100)}%, whichever is larger. "
-            f"± is the furthest a repeat got from the median._"
+            f"± is the furthest a repeat got from the median. Holds gives the "
+            f"range the move lies in, {CONFIDENCE_PCT}% sure: yes when it "
+            f"stays on one side of zero._"
         )
         out.append("")
         out.append(_table(moved))
@@ -747,8 +882,21 @@ def _table(rows: list[dict[str, Any]]) -> str:
         "after": _band(r["after"], r["metric"]),
         "delta": _delta(r),
         "count": _counts(r),
-        "ranges": RANGE_LABEL[r["overlap"]],
+        "holds": _holds(r),
     } for r in rows], order=MOVED_COLUMNS, headers=MOVED_HEADERS)
+
+
+def _holds(r: dict[str, Any]) -> str:
+    """The verdict first, then the range it was read from.
+
+    The word is what a reader scanning the column needs; the range is what
+    tells "at least 12 ms slower" from "at least 800".
+    """
+    shift = r.get("shift")
+    if shift is None:
+        return "—"
+    word = "yes" if r["holds"] else "no"
+    return f"{word}, {shift['low_ms']:+.1f} … {shift['high_ms']:+.1f}"
 
 
 def _band(face: dict | None, metric: str) -> str:

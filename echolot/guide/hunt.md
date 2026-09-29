@@ -89,8 +89,8 @@ round = 1
    the previous round against the one just recorded, sorted by what moved.
    New rows with the AGENTTMP_ prefix are your own markers breaking down a
    blind spot; the warning at the top names them. A row that grew with
-   Ranges `apart` is a real move, `overlap` means the repeats disagree by
-   more than the medians moved — record another round before concluding.
+   Holds `yes` is a real move, `no` means the repeats disagree by more
+   than it moved — record another round before concluding.
 
 5. otherwise pick a blind spot (usually uninstrumented_cpu):
    a thread the JDK named — pool-N-thread-M, Thread-N → echolot mark --pools

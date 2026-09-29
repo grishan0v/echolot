@@ -61,8 +61,8 @@ echolot compare <before.json> <after.json> # or name the two reports
 
 `compare` answers the other half of the question the report cannot: which rows
 appeared, which grew, and whether the repeats support calling that a change.
-Read `overlap` before acting on a row — `true` means the runs disagree among
-themselves by more than the medians moved.
+Read `holds` before acting on a row — `false` means the runs disagree among
+themselves by more than the row moved.
 
 ## Reading the report
 

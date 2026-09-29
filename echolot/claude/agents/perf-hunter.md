@@ -142,8 +142,8 @@ waiting for one.
    the previous round against the one just recorded, sorted by what moved.
    New rows with the AGENTTMP_ prefix are your own markers breaking down a
    blind spot; the warning at the top names them. A row that grew with
-   Ranges `apart` is a real move, `overlap` means the repeats disagree by
-   more than the medians moved — record another round before concluding.
+   Holds `yes` is a real move, `no` means the repeats disagree by more
+   than it moved — record another round before concluding.
    "nothing to compare" means no investigation is open, and nothing kept
    the previous round's report. Analyze the set `collect` put aside again
    with -o .echolot/out/previous, compare the two by path —

@@ -245,18 +245,19 @@ echolot compare old.json new.json     # or name them
 
 One table, sorted by how far each row moved. The top row is usually the answer.
 
-| Where | Evidence | Detector | Before | After | Δ | N | Ranges |
+| Where | Evidence | Detector | Before | After | Δ | N | Holds |
 |---|---|---|---|---|---|---|---|
 | SyncAdapterThre | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
-| TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | apart |
-| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | overlap |
+| TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | yes, +831.3 … +911.3 |
+| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | no, -13.4 … +162.6 |
 
 `N` separates "called more often" from "became slower inside" — two different
-bugs in two different places. **Ranges** is the column that decides whether a
-row is worth acting on: `apart` means every repeat after fell outside
-everything seen before, `overlap` means the runs disagree among themselves by
-more than the medians moved, and the honest next step is another round of
-`collect` rather than a conclusion.
+bugs in two different places. **Holds** is the column that decides whether a
+row is worth acting on. It gives the range the move lies in, 95% sure, worked
+out from every run after paired with every run before: `yes` when the whole
+range is on one side of zero, `no` when it runs through zero. `no` means the
+runs disagree among themselves by more than the row moved, and the honest next
+step is another round of `collect` rather than a conclusion.
 
 Reports built against different thresholds are compared with the reason printed
 above the table — a row can cross a moved bar without anything in the app
