@@ -326,20 +326,44 @@ there were too few runs. `confidence` is the level the ranges are drawn at.
 Schema 2 is this shape. Schema 1 carried `overlap` — whether the min–max
 ranges of the two sides touched — where `shift` and `holds` are now.
 
+## There is no performance gate, on purpose
+
+An earlier plan had `analyze` exit non-zero against `scenario.budget_ms`, so a
+build could fail on a slow run. It is not being built, and this is the reason.
+
+"Did it get slower" is already answered. Macrobenchmark writes percentiles per
+iteration right next to the traces echolot collects from it, and comparing a
+median against a number is a few lines of anything. An eleventh implementation
+of that adds nothing. Worse, detector thresholds on a shared CI runner would
+fire on properties of the runner — the same caution this tool already gives
+about `runnable_starvation` on a loaded machine.
+
+Where echolot is hard to replace is the other question: *where* the time went.
+So the useful shape in CI is the opposite of a gate, and the next section is
+that shape.
+
+`scenario.budget_ms` stays in the config. It records what a team considers
+acceptable, which is worth writing down whether or not anything enforces it.
+
+CI does hold one gate, and it measures this repository rather than a device:
+`pytest` fails when statement coverage drops below the threshold in
+`pyproject.toml`. That number comes out the same on every runner, which is
+exactly what a trace threshold does not.
+
 ## In CI
 
-The [README explains](../README.md#there-is-no-performance-gate-on-purpose) why `analyze`
-does not fail a build against a budget. A comparison is the other shape, and it
-is the one worth having: run `analyze` over the traces the benchmark already
-wrote, compare against yesterday's `report.json`, and keep `comparison.json` as
-a build artefact.
+Run `echolot doctor -q` as a precondition — it already answers "does this
+machine compute correctly" with an exit code — then `analyze` over the traces
+the benchmark has already written, `compare` against yesterday's
+`report.json`, and keep `report.json` and `comparison.json` as build
+artefacts.
 
 The exit code is 0 whatever the comparison says. This command reports; it does
 not stand guard.
 
 When someone asks a day later why the nightly regressed, the answer is already
-sitting next to the commit — with the window, the thresholds, the evidence and
-now the delta.
+sitting next to the commit — the window, the thresholds, the evidence and the
+delta: no device, no re-recording.
 
 ## Related
 

@@ -24,7 +24,7 @@ Before filing:
   the issue that has it.
 - **Check it against what this repository has already decided.** The decisions
   that come up most are [There is no performance gate, on
-  purpose](../README.md#there-is-no-performance-gate-on-purpose), [Why a CLI
+  purpose](compare.md#there-is-no-performance-gate-on-purpose), [Why a CLI
   and not an MCP server](agent-layer.md#why-a-cli-and-not-an-mcp-server), and
   [the one rule](../echolot/guide/overview.md#the-one-rule): never open the
   trace yourself. An idea that runs into one of them is rewritten to fit or

@@ -500,6 +500,35 @@ them out, while ones an agent added by hand carry only the prefix and have to
 go by hand. One number for both would send a human away believing the tree was
 clean.
 
+### From a shell
+
+`/echolot` runs all of this for you. By hand, or to look back:
+
+```bash
+echolot hunt "cold start was 3s, now 7s" --since "the tab redesign"
+```
+
+That opens one, moves the previous set of traces aside without deleting it,
+and says whether the last investigation left temporary markers in your
+sources. `echolot hunt` on its own says what is open.
+
+```
+echolot hunt --list          every investigation, newest first
+echolot hunt --show 2        one of them in full — including where its traces went
+echolot hunt --resume        carry on with the open one
+echolot hunt --done "..."    record what it came to
+```
+
+Each one is numbered, and everything it produces is filed under it: every
+round of traces by path, every report as a copy in
+`.echolot/hunts/<n>/reports/`. So a question asked three weeks ago still knows
+what was measured to answer it, and what each round concluded on the way.
+
+You rarely type any of it. `/echolot` reads the state and, when an
+investigation has been sitting untouched with traces behind it, asks whether
+to carry on or start something new — and never asks inside the hunting loop,
+which re-records and re-instruments on purpose.
+
 ## Three things this layer closes
 
 **The agent never looks at the trace.** The rule is the first item in the

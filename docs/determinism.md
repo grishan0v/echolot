@@ -153,6 +153,27 @@ down as an `@example`, and the strategy is weighted to reach it: the table
 tests draw `|` from an alphabet of their own, because one character in a
 million turns up in some runs and not others.
 
+## What the detectors were checked against
+
+The detectors were validated against a synthetic trace — 147 checks inside
+`doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
+(Galaxy A51). The naming masks for GC, locks and binder were narrowed against
+those real traces, and every narrowing is pinned by a check.
+
+Six are newer than that hardware round. `io_wait`, `anr` and `repeated_work`
+have each been run on real traces since — fifteen cold starts of a freshly
+installed app on an A51, an ANR raised on purpose on an Android 13 phone, the
+traces of the hunts that found a duplicate — and their headers say what those
+runs showed. `frame_jank` was built against the pinned `trace_processor` and a
+frame timeline written for the purpose — the column names, the jank vocabulary
+and where display frames live were all read back out of it rather than
+assumed — but no report from it has been compared with a real device's own
+frame statistics yet. `main_thread_outlier` was written for a miss recorded on
+an A51 and has so far answered only the fixture. `anr_risk` is silent on the
+fixture by construction: its bar is the platform's five seconds, and the
+fixture is a one-second cold start. Its checks run it there with the bar
+lowered, and one holds it to silence at the bar it ships with.
+
 ## Why the trace_processor version is pinned
 
 `pyproject.toml` holds `perfetto==0.57.2`, and that is not hygiene.
