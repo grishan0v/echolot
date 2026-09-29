@@ -476,8 +476,10 @@ echolot compare old.json new.json    # or name them
     { "location": "TeamRepository.loadAll", "detector": "main_thread_block",
       "metric": "self_ms", "change": "grew", "matched_by": "exact",
       "before": { "self_ms": 12.1, "min": 10.4, "max": 14.0, "count": 1 },
-      "after":  { "self_ms": 883.4, "min": 840.1, "max": 931.7, "count": 1 },
-      "delta_ms": 871.3, "ratio": 73.0, "overlap": false }
+      "after":  { "self_ms": 883.4, "min": 843.4, "max": 923.4, "count": 1 },
+      "delta_ms": 871.3, "ratio": 73.0,
+      "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3 },
+      "holds": true }
   ]
 }
 ```
@@ -487,12 +489,16 @@ sorted by the size of the move, so the first one is usually the answer. Steady
 rows stay in the JSON and are collapsed to one line in the markdown; nothing is
 dropped silently.
 
-**`overlap`** answers whether the repeats support calling it a change. `false`
-means the two sets are apart — every run after was outside everything seen
-before. `true` means they intersect, so the runs disagree among themselves by
-more than the medians moved: record another round before concluding. `null`
-means there was nothing to test: the row is on one side only — every
-`appeared` and `vanished` row — or one side was a single trace.
+**`holds`** answers whether the repeats support calling it a change. `shift`
+is the move with the range it lies in, 95% sure, worked out from every run
+after paired with every run before. `true` means the range is on one side of
+zero: the move survives a re-record, and the end nearer zero is the least it
+moved. `false` means the range runs through zero, so the runs disagree among
+themselves by more than the row moved: record another round before
+concluding. `null` in both means there was nothing to test: the row is on one
+side only — every `appeared` and `vanished` row — or there were too few runs
+to be 95% sure (four a side is always enough); the `single` or `few` warning
+says so.
 
 **`count` before and after** separates "called more often" from "became slower
 inside". `inflate` at 12 → 31 occurrences and `loadAll` growing 73× at one
@@ -517,6 +523,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `defaults` / `config` | one side used `--defaults`, or the config's hash changed |
 | `anchor-before` / `anchor-after` | that side's window is the whole trace |
 | `runs` / `single` | different repeat counts, or a single trace with no spread to test against |
+| `few` | too few repeats to be 95% sure of any move — four a side is always enough — so every `holds` is `null`. Record another round rather than read the moves as settled |
 | `detectors` | the two runs did not use the same set of detectors |
 
 A row is listed as moved when it changes by more than 5 ms or 10 %, whichever

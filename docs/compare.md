@@ -26,11 +26,11 @@ nothing, and says so on stderr.
 
 ## What the table says
 
-| Where | Evidence | Detector | Before | After | Δ | N | Ranges |
+| Where | Evidence | Detector | Before | After | Δ | N | Holds |
 |---|---|---|---|---|---|---|---|
 | SyncAdapterThre | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
-| TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | apart |
-| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | overlap |
+| TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | yes, +831.3 … +911.3 |
+| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | no, -13.4 … +162.6 |
 
 **One table, not one section per detector.** The Marker Report is grouped by detector
 because each answers a different question. A comparison has one question, so
@@ -57,19 +57,54 @@ Thread names are cut the same way wherever they appear: `uninstrumented_cpu`
 names threads, and `SyncAdapterThread-1` reaches the trace as
 `SyncAdapterThre`, fifteen characters.
 
-## The Ranges column
+## The Holds column
 
-This is the column that decides whether a row is worth acting on.
+This is the column that decides whether a row is worth acting on. It gives
+the range the move lies in, 95% sure, and a verdict read off that range.
 
 | value | meaning |
 |---|---|
-| `apart` | every repeat after fell outside everything seen before — the move survives a re-record |
-| `overlap` | the ranges intersect: some run before was already as slow as some run after |
-| `—` | nothing to test against: the row is on one side only — it appeared or went — or one side had a single trace |
+| `yes, +831.3 … +911.3` | the whole range is on one side of zero: the move survives a re-record, and the end nearer zero is the least it moved |
+| `no, -13.4 … +162.6` | the range runs through zero: the runs disagree among themselves by more than the row moved |
+| `—` | nothing to test: the row is on one side only — it appeared or went — or there are too few runs to be 95% sure of anything |
 
-`overlap` does not mean the row is uninteresting. It means the repeats disagree
-among themselves by more than the medians moved, and the honest next step is
-another round of `collect` rather than a conclusion.
+`no` does not mean the row is uninteresting. It means the honest next step is
+another round of `collect` rather than a conclusion, and the range says how
+open the question still is: `-13.4 … +162.6` is anything from no move at all
+to more than a doubling.
+
+**How the range is made.** Every run after is paired with every run before,
+and each pair gives a difference. The median of those differences is the move.
+The range is what is left of them once as many as possible come off each end
+while the chance of the true move lying outside stays at 5% or less (the
+Hodges–Lehmann estimate and its Moses interval, for anyone checking the
+arithmetic). Nothing is assumed about the shape of the runs, which on a cold
+start is anything but a bell curve, and nothing is drawn at random: the same
+two reports give the same range every time.
+
+**Why not the ranges of the runs.** This column used to be `Ranges`: `apart`
+when every run after fell outside everything seen before, `overlap` otherwise.
+That is the same range with nothing taken off, and so a test whose bar rose
+with every run recorded: 90% sure at three runs a side, 99.2% at five, and at
+fifteen a side all but certain, which a single slow run among the thirty is
+enough to deny. It was checked on fifteen runs of one build of a real app,
+split at random into a before and an after, with every run after made a fifth
+slower. Seven against eight, the old test caught the move in 15 comparisons of
+a hundred and this range in 51; five against five, in 27 and 36. More runs
+made the old test see less; they make this one see more.
+
+**What it costs.** At 95%, up to one row in twenty that did not move lands on
+one side of zero by chance. The floor below keeps most of those out of the
+table: on the same splits with nothing made slower, a row cleared the floor
+and held in about 2 comparisons of a hundred, where the old test called fewer
+than 1 apart. A `yes` that stands alone, with nothing around it in the table to
+explain it, is worth a second round before a conclusion.
+
+**How many runs.** Four a side is enough. With fewer on one side, the other
+has to make up for it: three need five against them, two need eight, one needs
+thirty-nine. Below that the column stays empty and the `few` warning at the
+top says why. The count is the row's own: a row found in `2/5` runs has two
+values, and against five it gets `—` while the rest of the table has a verdict.
 
 This works because `analyze` keeps the per-run values when it merges repeats —
 see [`spread`](#what-analyze-keeps-for-it) below. With one trace on each side
@@ -128,8 +163,9 @@ top, the way the Marker Report already states an anchor that never matched.
 | `defaults` | one side ran with `--defaults` and the other did not |
 | `config` | the config's hash changed between the two: anchors, process mask and thresholds all live there |
 | `anchor-before` / `anchor-after` | that side's window is the whole trace rather than the scenario |
-| `runs` | different numbers of repeats; the narrower range is the smaller sample |
-| `single` | one trace on a side: no spread, so the Ranges column is empty throughout |
+| `runs` | different numbers of repeats. Holds allows for it; the ± beside each median does not, and the narrower side is the smaller sample |
+| `single` | one trace on a side: no spread, so the Holds column is empty throughout |
+| `few` | too few repeats to be 95% sure of any move, so the Holds column is empty throughout. How many are enough is under [the Holds column](#the-holds-column) |
 | `detectors` | the two runs did not use the same set of detectors |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. Only with that key in the config — without it they are ordinary appeared rows |
 | `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock at all. Two rounds that recorded no platform state get no warning — see below |
@@ -195,12 +231,14 @@ exactly what hides one. `count` and `covered_ms` stay medians alone.
 `values` holds one entry per repeat **the row was found in**, which is what the
 `runs` column counts: a row with `3/5` has three values, not five. `report.md`
 is unchanged — this lives in the JSON, where the readers that need it are.
+`compare` reads every value, not only the two ends: the Holds column pairs each
+one after with each one before.
 
 ## The comparison JSON
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "kind": "comparison",
   "comparable": true,
   "warnings": [ { "id": "thresholds", "text": "…" } ],
@@ -210,6 +248,7 @@ is unchanged — this lives in the JSON, where the readers that need it are.
   "window": { "before_ms": 1184.0, "after_ms": 2960.4,
               "delta_ms": 1776.4, "ratio": 2.5 },
   "noise_floor": { "abs_ms": 5.0, "ratio": 0.1 },
+  "confidence": 0.95,
   "summary": { "moved": 4, "appeared": 2, "vanished": 1, "steady": 17,
                "fired_before": [ … ], "fired_after": [ … ],
                "state_changed": [ { "id": "binder_txn",
@@ -219,9 +258,11 @@ is unchanged — this lives in the JSON, where the readers that need it are.
       "metric": "self_ms", "change": "grew", "matched_by": "exact",
       "before": { "self_ms": 12.1, "min": 10.4, "max": 14.0,
                   "values": [ … ], "count": 1, "runs": "5/5" },
-      "after":  { "self_ms": 883.4, "min": 840.1, "max": 931.7,
+      "after":  { "self_ms": 883.4, "min": 843.4, "max": 923.4,
                   "values": [ … ], "count": 1, "runs": "5/5" },
-      "delta_ms": 871.3, "ratio": 73.0, "overlap": false }
+      "delta_ms": 871.3, "ratio": 73.0,
+      "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3 },
+      "holds": true }
   ]
 }
 ```
@@ -230,12 +271,18 @@ is unchanged — this lives in the JSON, where the readers that need it are.
 agent can take the rows worth looking at without parsing any numbers:
 
 ```
-rows[?change == 'appeared' || (change == 'grew' && overlap == false)]
+rows[?change == 'appeared' || (change == 'grew' && holds == true)]
 ```
 
-`overlap: false` means the ranges are apart. `null` means there was nothing to
+`holds: true` means the range in `shift` — `low_ms` to `high_ms` — is on one
+side of zero. `shift.ms` is the move it was read from: the median of every
+run-after-minus-run-before pair, close to `delta_ms`, the difference of the two
+medians, and not always equal to it. `null` in both means there was nothing to
 test: the row is on one side only — every `appeared` and `vanished` row — or
-one side had a single trace.
+there were too few runs. `confidence` is the level the ranges are drawn at.
+
+Schema 2 is this shape. Schema 1 carried `overlap` — whether the min–max
+ranges of the two sides touched — where `shift` and `holds` are now.
 
 ## In CI
 

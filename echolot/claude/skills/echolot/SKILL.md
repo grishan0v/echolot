@@ -165,10 +165,12 @@ report. Three things decide how to read it:
 
 - **`change`** — `appeared`, `grew`, `shrank`, `vanished`, `steady`. An
   appeared row is usually the answer.
-- **`overlap`** — `false` means the two sets of repeats are apart and the move
-  survives a re-record; `true` means they disagree among themselves by more
-  than the medians moved, so record another round before concluding; `null`
-  means one side was a single trace.
+- **`holds`** — `true` means the move's 95% range, in `shift`, is on one side
+  of zero and the move survives a re-record; `false` means the range runs
+  through zero — the runs disagree among themselves by more than the row
+  moved, so record another round before concluding; `null` means the row is
+  on one side only, or there were too few runs, which a `single` or `few`
+  warning says.
 - **`warnings`** — reasons the two may not be comparable. `thresholds` is the
   one to read first: against a moved bar, appeared and gone mean "the bar
   moved", not "the app changed". `instrumentation` names rows that appeared

@@ -16,11 +16,14 @@ the real pipeline, because the one failure none of the others would catch is
 
 from __future__ import annotations
 
+import itertools
 import json
+import math
 import os
 import subprocess
 import sys
 from pathlib import Path
+from statistics import median
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -334,32 +337,181 @@ def test_only_what_both_reports_declare_is_matched_on() -> None:
 
 # --- did the repeats move, or only the median -------------------------------
 
-def test_ranges_apart() -> None:
-    before = report([det("d", [row("A", 102.0, values=[100.0, 102.0, 104.0])])])
-    after = report([det("d", [row("A", 205.0, values=[200.0, 205.0, 210.0])])])
-    cmp = compare(before, after)
-    check("ranges that do not touch are apart", cmp["rows"][0]["overlap"] is False,
-          str(cmp["rows"][0]["overlap"]))
+def one_row(before: list[float], after: list[float]) -> dict:
+    """One row compared across two sets of runs, each with its values."""
+    b = report([det("d", [row("A", median(before), values=before)])],
+               runs=len(before))
+    a = report([det("d", [row("A", median(after), values=after)])],
+               runs=len(after))
+    return compare(b, a)
 
 
-def test_ranges_overlap() -> None:
-    """Medians moved, but every run after was inside what was already seen."""
-    before = report([det("d", [row("A", 100.0, values=[10.0, 100.0, 300.0])])])
-    after = report([det("d", [row("A", 150.0, values=[12.0, 150.0, 320.0])])])
-    cmp = compare(before, after)
-    check("overlapping ranges are called out", cmp["rows"][0]["overlap"] is True,
-          str(cmp["rows"][0]["overlap"]))
-    check("the move is still reported", cmp["rows"][0]["change"] == "grew")
+def test_the_orders_are_counted_not_guessed() -> None:
+    """What the interval stands on, against every order written out.
+
+    Small enough to enumerate: each way of placing n runs before and m after
+    in order of speed, and in each the pairs where the run after was the
+    slower one. The before run in place s, with i before runs ahead of it,
+    has m - s + i runs after behind it.
+    """
+    for n in range(1, 6):
+        for m in range(1, 6):
+            tally = [0] * (n * m + 1)
+            for places in itertools.combinations(range(n + m), n):
+                tally[sum(m - s + i for i, s in enumerate(places))] += 1
+            check(f"{n} before, {m} after: every order counted",
+                  compare_mod._orderings(n, m) == tuple(tally),
+                  f"{compare_mod._orderings(n, m)} vs {tuple(tally)}")
+    counts = compare_mod._orderings(40, 40)
+    check("forty a side: the counts add up to the orders",
+          sum(counts) == math.comb(80, 40))
+    check("and are symmetric", counts == counts[::-1])
 
 
-def test_ranges_unknown() -> None:
+def test_the_cut_is_the_textbook_one() -> None:
+    """The critical values of the Mann–Whitney test, two-sided at 5%.
+
+    The table printed in the back of every statistics book, read here as how
+    many differences come off each end. None where even the widest interval
+    is not 95% sure.
+    """
+    table = {(5, 5): 2, (6, 6): 5, (7, 7): 8, (8, 8): 13, (10, 10): 23,
+             (15, 15): 64, (20, 20): 127, (4, 4): 0, (3, 5): 0, (5, 3): 0,
+             (2, 8): 0, (1, 39): 0,
+             (3, 3): None, (3, 4): None, (2, 7): None, (1, 38): None}
+    for (n, m), want in table.items():
+        got = compare_mod._cut(n, m)
+        check(f"{n} before, {m} after: {want}", got == want, str(got))
+
+
+def test_many_runs_take_the_curve_and_err_wide() -> None:
+    """Past a hundred runs a side the count would take seconds, then minutes.
+
+    The curve has to agree with the count where both can be had, and where
+    it does not, keep one difference more — a wider interval, never a
+    narrower one. Five hundred a side must come back at once.
+    """
+    for n, m in [(20, 20), (30, 30), (40, 40), (50, 150), (80, 80), (100, 100)]:
+        counted = compare_mod._cut(n, m)
+        curve = compare_mod._cut_by_curve(n, m)
+        check(f"{n} before, {m} after: the curve is the count or one short",
+              counted - 1 <= curve <= counted, f"{curve} vs {counted}")
+    check("a hundred a side is still counted",
+          100 * 100 * 100 <= compare_mod.COUNTED_UP_TO)
+    check("five hundred a side takes the curve",
+          compare_mod._cut(500, 500) == compare_mod._cut_by_curve(500, 500))
+
+
+def test_the_interval_on_a_hand_count() -> None:
+    """Five runs a side, small enough to check with a pencil.
+
+    Twenty-five differences, run after minus run before: 8 to 21, median 14.
+    Two come off each end, so the interval is the third smallest to the
+    third largest.
+    """
+    cmp = one_row([1.0, 2.0, 3.0, 4.0, 5.0], [13.0, 16.0, 17.0, 19.0, 22.0])
+    r = cmp["rows"][0]
+    check("the move and the range it lies in",
+          r["shift"] == {"ms": 14.0, "low_ms": 10.0, "high_ms": 19.0},
+          str(r["shift"]))
+    check("above zero, so it holds", r["holds"] is True, str(r["holds"]))
+    check("the level is stated once, at the top", cmp["confidence"] == 0.95,
+          str(cmp.get("confidence")))
+    check("and the verdict it replaced is gone", "overlap" not in r, str(r))
+
+
+def test_an_interval_that_ends_at_zero_does_not_hold() -> None:
+    """Zero on the edge is zero inside: the runs allow for no move at all."""
+    r = one_row([1.0, 2.0, 3.0, 4.0, 5.0], [3.0, 6.0, 7.0, 9.0, 12.0])["rows"][0]
+    check("the interval starts at zero",
+          r["shift"] and r["shift"]["low_ms"] == 0.0, str(r["shift"]))
+    check("and does not hold", r["holds"] is False, str(r["holds"]))
+
+
+def test_one_slow_run_does_not_hide_a_move() -> None:
+    """What the range test got wrong, and why it was replaced.
+
+    Fifteen runs a side, every run after about 30 ms slower than the runs
+    before — and one run before that caught a hiccup and came in slower than
+    all of them. The min–max ranges touch, and the range test called that an
+    overlap. The move is plain in every pair the hiccup is not in.
+    """
+    before = [100.0 + i for i in range(14)] + [400.0]
+    after = [130.0 + i for i in range(15)]
+    r = one_row(before, after)["rows"][0]
+    check("the ranges touch", max(before) >= min(after))
+    check("the row grew", r["change"] == "grew", r["change"])
+    check("and the move holds anyway", r["holds"] is True, str(r))
+    check("all of the interval above zero",
+          r["shift"] and r["shift"]["low_ms"] > 0, str(r["shift"]))
+
+
+def test_the_same_runs_do_not_hold() -> None:
+    """Two sets of the same numbers: whatever the order, nothing moved."""
+    runs = [100.0, 131.0, 95.0, 120.0, 88.0, 142.0]
+    r = one_row(runs, list(reversed(runs)))["rows"][0]
+    check("the move is zero", r["shift"] and r["shift"]["ms"] == 0.0,
+          str(r["shift"]))
+    check("the interval runs through it",
+          r["shift"] and r["shift"]["low_ms"] < 0 < r["shift"]["high_ms"],
+          str(r["shift"]))
+    check("so it does not hold", r["holds"] is False, str(r["holds"]))
+
+
+def test_a_move_the_runs_cannot_settle() -> None:
+    """Medians moved, but the runs disagree among themselves by more."""
+    cmp = one_row([10.0, 100.0, 300.0, 90.0, 180.0],
+                  [12.0, 150.0, 320.0, 130.0, 60.0])
+    r = cmp["rows"][0]
+    check("the move is still reported", r["change"] == "grew", r["change"])
+    check("and does not hold", r["holds"] is False, str(r))
+
+
+def test_too_few_runs_for_a_verdict() -> None:
+    """Three a side cannot be 95% sure of anything, and the page says so.
+
+    The range test gave these a verdict anyway, 90% sure at best. Four a side
+    is enough, and so is three against five.
+    """
+    cmp = one_row([100.0, 102.0, 104.0], [200.0, 205.0, 210.0])
+    r = cmp["rows"][0]
+    check("no verdict", r["holds"] is None and r["shift"] is None, str(r))
+    check("and the reason is at the top", "few" in warned(cmp), str(warned(cmp)))
+    text = next(w["text"] for w in cmp["warnings"] if w["id"] == "few")
+    check("naming what would be enough", "four a side" in text, text)
+
+    four = one_row([100.0, 102.0, 104.0, 101.0], [200.0, 205.0, 210.0, 207.0])
+    check("four a side has one", four["rows"][0]["holds"] is True,
+          str(four["rows"][0]))
+    check("and no warning", "few" not in warned(four), str(warned(four)))
+    three_five = one_row([100.0, 102.0, 104.0],
+                         [200.0, 205.0, 210.0, 207.0, 203.0])
+    check("three against five has one", three_five["rows"][0]["holds"] is True,
+          str(three_five["rows"][0]))
+
+
+def test_a_single_trace_has_no_verdict() -> None:
     before = report([det("d", [row("A", 100.0)])], runs=1)
     after = report([det("d", [row("A", 200.0)])], runs=1)
     cmp = compare(before, after)
-    check("no spread means no verdict", cmp["rows"][0]["overlap"] is None,
-          str(cmp["rows"][0]["overlap"]))
+    check("no spread means no verdict",
+          cmp["rows"][0]["holds"] is None and cmp["rows"][0]["shift"] is None,
+          str(cmp["rows"][0]))
     check("and a single trace is said out loud", "single" in warned(cmp),
           str(warned(cmp)))
+    check("once: too few is the same news", "few" not in warned(cmp),
+          str(warned(cmp)))
+
+
+def test_the_verdict_reaches_the_table() -> None:
+    """The word first, then the range it was read from."""
+    text = compare_mod.to_markdown(
+        one_row([1.0, 2.0, 3.0, 4.0, 5.0], [13.0, 16.0, 17.0, 19.0, 22.0]))
+    check("the Holds column", "| Holds |" in text, text)
+    check("with the verdict and its range", "| yes, +10.0 … +19.0 |" in text, text)
+    shaky = compare_mod.to_markdown(one_row(
+        [10.0, 100.0, 300.0, 90.0, 180.0], [12.0, 150.0, 320.0, 130.0, 60.0]))
+    check("a move that does not hold says no", "| no, -" in shaky, shaky)
 
 
 # --- when two reports may not be compared -----------------------------------
