@@ -672,9 +672,9 @@ pre{{background:{code_bg};border-radius:6px;padding:12px 16px;margin:0 0 12px;fo
 {themed('hero')}{themed('benefits')}
 <p align="center"><img src="{assets / 'session.svg'}" width="880"></p>
 <h2>Quick start</h2><pre>pipx install echolot</pre><pre>cd ~/my-app &amp;&amp; echolot init</pre><pre>/echolot</pre>
+<h2>How it works</h2>{themed('loop')}
 <h2>What it saves</h2>{themed('versus')}
 <h2>What changed</h2>{themed('compare')}
-<h2>How it works</h2>{themed('loop')}
 </div></div></body></html>"""
 
 
