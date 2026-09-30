@@ -62,11 +62,26 @@ def test_a_themed_picture_falls_back_to_its_light_version():
     assert pictures, "the README has no <picture>"
     for block in pictures:
         dark = re.search(r'<source media="\(prefers-color-scheme: dark\)" '
-                         r'srcset="([^"]+)-dark\.svg"', block)
-        light = re.search(r'<img [^>]*src="([^"]+)-light\.svg"', block)
-        assert dark and light and dark.group(1) == light.group(1), (
+                         r'srcset="([^"]+)-dark\.(svg|png)"', block)
+        light = re.search(r'<img [^>]*src="([^"]+)-light\.(svg|png)"', block)
+        assert dark and light and dark.groups() == light.groups(), (
             f"a <picture> without a dark <source> and a light <img> of the "
             f"same name:\n{block.strip()}")
+
+
+def test_a_narrow_picture_comes_before_the_theme():
+    """A browser takes the first <source> that matches. A narrow version
+    placed after the dark one would never show on a phone with a dark
+    theme, and one that also names a theme is not safe on GitHub, which
+    rewrites that half of the condition — so it asks for the width alone."""
+    for block in re.findall(r"<picture>(.*?)</picture>", _readme(), re.S):
+        media = re.findall(r'<source media="([^"]+)"', block)
+        narrow = [i for i, m in enumerate(media) if "max-width" in m]
+        for i in narrow:
+            assert "prefers-color-scheme" not in media[i], (
+                f"a narrow <source> that also names a theme: {media[i]}")
+            assert all(i < j for j, m in enumerate(media) if "prefers-color-scheme" in m), (
+                f"a narrow <source> after a theme one:\n{block.strip()}")
 
 
 def test_the_numbers_come_from_the_readme():
