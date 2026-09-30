@@ -179,7 +179,8 @@ jobs:
       # if something keeps them equal: a version added to the classifiers and
       # forgotten in the README leaves the front page quietly wrong while every
       # other check stays green. The matrix in `selfchecks` is a third copy,
-      # written out by hand, and nothing here compares it with either.
+      # written out by hand, and nothing here compares it with either. The
+      # badge's colour is the README's business, so any colour passes.
       - name: Check that the README badge matches the classifiers
         run: |
           python - <<'PY'
@@ -200,7 +201,7 @@ jobs:
           want = "%d.%d--%d.%d" % (*versions[0], *versions[-1])
 
           readme = open("README.md", encoding="utf-8").read()
-          found = re.search(r"img\.shields\.io/badge/(\d+\.\d+--\d+\.\d+)-blue\?logo=python", readme)
+          found = re.search(r"img\.shields\.io/badge/(\d+\.\d+--\d+\.\d+)-\w+\?logo=python", readme)
           if not found:
               raise SystemExit("README.md has no Python version badge in the expected shape")
           if found.group(1) != want:

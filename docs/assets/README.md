@@ -37,6 +37,20 @@ the same place:
   light one as the `<img>`. PyPI removes the `<source>` and always shows that
   `<img>`, on white. The terminal replay, `session.svg`, keeps its own colours
   and needs one file.
+- **A phone gets its own hero.** Words inside an SVG shrink with it: the
+  880-wide hero on a 375-pixel screen had words 5 pixels high.
+  `hero-narrow.svg` stacks the same panels at 360 wide, and the hero's
+  `<picture>` offers it first, for screens up to 767 pixels. That `<source>`
+  asks for the width alone: GitHub rewrites the theme half of a condition that
+  names both. So the narrow file is one file, and CSS inside it follows the
+  reader's system theme.
+- **The first screen owns no margins.** The hero and the session are cropped
+  to what they draw, so their left edge is the text's and the space between
+  blocks is the README's own paragraph spacing. Their words come in two sizes:
+  16 for what a thing is, 13 for the detail under it.
+- **The logo is the one picture not drawn here.** `logo-light.png` is the
+  designer's lockup; `logo-dark.png` is the same bitmap with the plate and the
+  letters swapped. A new lockup replaces both.
 - **Flat SVG, system fonts.** GitHub's own font stacks, no web fonts: an SVG
   served from this repository cannot load them. Motion is CSS inside the SVG,
   and it stops for readers who ask for reduced motion.

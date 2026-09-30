@@ -1,44 +1,44 @@
 <p align="center">
-<img width="429" height="128" alt="echolot-lockup-inverse-2x" src="https://github.com/user-attachments/assets/1cea634c-f0cd-4b32-a32f-c221e2be8227" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/logo-dark.png">
+    <img alt="echolot" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/logo-light.png" width="429" height="128">
+  </picture>
 </p>
 <p align="center">
   <b>Turns a huge Android trace into 20 rows of facts an AI agent can actually use.</b>
 </p>
-
 <p align="center">
   <a href="https://github.com/grishan0v/echolot/actions/workflows/checks.yml"><img alt="checks" src="https://github.com/grishan0v/echolot/actions/workflows/checks.yml/badge.svg?branch=main"></a>
-  <a href="https://github.com/grishan0v/echolot/actions/workflows/codeql.yml"><img alt="codeql" src="https://github.com/grishan0v/echolot/actions/workflows/codeql.yml/badge.svg?branch=main"></a>
-  <a href="https://pypi.org/project/echolot/"><img alt="PyPI" src="https://img.shields.io/pypi/v/echolot.svg"></a>
-  <a href="https://pypi.org/project/echolot/"><img alt="Python versions" src="https://img.shields.io/badge/3.10--3.14-blue?logo=python&logoColor=white"></a>
-  <a href="https://github.com/grishan0v/echolot/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>
-  <a href="#status"><img alt="Status" src="https://img.shields.io/badge/status-v0-orange.svg"></a>
+  <a href="https://pypi.org/project/echolot/"><img alt="PyPI" src="https://img.shields.io/pypi/v/echolot.svg?color=%236e7781"></a>
+  <a href="https://pypi.org/project/echolot/"><img alt="Python versions" src="https://img.shields.io/badge/3.10--3.14-6e7781?logo=python&logoColor=white"></a>
+  <a href="https://github.com/grishan0v/echolot/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-6e7781.svg"></a>
+</p>
+<br>
+
+<p>
+  <picture>
+    <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/hero-narrow.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/hero-dark.svg">
+    <img alt="From a huge trace to the line to fix: echolot turns the trace into twenty rows of facts, and your agent follows one of them to the line in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/hero-light.svg">
+  </picture>
 </p>
 
----
+- **Finds the line to fix.** From a slow screen to a file and line, with the
+  numbers that prove it.
+- **Same answer, every run.** A pinned `trace_processor`: the same trace always
+  gives the same report.
+- **No tracing code needed.** Works on apps with zero `trace {}` calls; it
+  places temporary markers itself.
+- **Works with your agent.** Claude Code out of the box; Cursor, Codex and
+  others via `echolot guide`.
+
+<p>
+  <img alt="A condensed /echolot session: the question, three rounds of recording and reading, and the answer with its place in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/session.svg" width="880">
+</p>
 
 **Contents** · [Quick start](#quick-start) · [How it works](#how-it-works) · [What it saves](#what-it-saves) · [What you get](#what-you-get) · [What changed](#what-changed)
 
 **Reference** · [Detectors](#detectors) · [Commands](#commands) · [Requirements](#requirements) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
-
----
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/hero-dark.svg">
-    <img alt="From a huge trace to the line to fix: echolot turns the trace into twenty rows of facts, and your agent follows one of them to the line in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/hero-light.svg" width="880">
-  </picture>
-</p>
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/benefits-dark.svg">
-    <img alt="Finds the line to fix. Same answer, every run. No tracing code needed. Works with your agent." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/benefits-light.svg" width="880">
-  </picture>
-</p>
-
-<p align="center">
-  <img alt="A condensed /echolot session: the question, three rounds of recording and reading, and the answer with its place in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/session.svg" width="880">
-</p>
 
 ## Quick start
 

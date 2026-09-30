@@ -2,7 +2,8 @@
 """Draws the README's pictures from their sources.
 
     python docs/assets/render.py              write every picture next to this file
-    python docs/assets/render.py --preview D  also write two README-like pages into D
+    python docs/assets/render.py --preview D  also write README-like pages into D:
+                                              light and dark, desktop and phone
 
 A picture makes claims the way the sentences around it do, so the numbers in
 these come from where the text gets them: the trace, report and sample figures
@@ -156,155 +157,168 @@ def arrow(x1, x2, y, color):
             f'<path d="M{x2 - 10} {y - 6}L{x2} {y}L{x2 - 10} {y + 6}Z" fill="{color}"/>')
 
 
-def hero(c, f):
-    """From a huge trace to the line to fix, in three panels."""
-    out = [text(40, 62, f"From an {f['trace_mb']} MB trace to the line to fix", size=34,
-                weight=700, fill=c["ink"]),
-           text(40, 96, "Ask your AI agent in plain words. echolot gives it the facts "
-                "to answer with.", size=18, fill=c["sub"])]
-    top, ph = 128, 196
-    mid = top + ph / 2
+def panel(x, y, w, h, *, fill, stroke, width=1.5, rx=10):
+    """A card whose outer edge is exactly x, y, w, h: the stroke is drawn inside it,
+    so a picture cropped to its cards starts at 0 like the text beside it."""
+    s = width / 2
+    return (f'<rect x="{x + s:g}" y="{y + s:g}" width="{w - width:g}" height="{h - width:g}" '
+            f'rx="{rx}" fill="{fill}" stroke="{stroke}" stroke-width="{width:g}"/>')
 
-    # the trace: a crowd of slices, a few of them hot
-    ax, aw = 40, 196
-    out.append(f'<rect x="{ax}" y="{top}" width="{aw}" height="{ph}" rx="10" '
-               f'fill="{c["card"]}" stroke="{c["line"]}" stroke-width="1.5"/>')
+
+def arrow_down(x, y1, y2, color):
+    return (f'<path d="M{x} {y1}V{y2 - 9}" stroke="{color}" stroke-width="2" '
+            f'stroke-linecap="round" fill="none"/>'
+            f'<path d="M{x - 6} {y2 - 10}L{x} {y2}L{x + 6} {y2 - 10}Z" fill="{color}"/>')
+
+
+# Two sizes for every word in the hero, far enough apart to read as two levels:
+# what a thing is, and the detail under it.
+BIG, SMALL = 16, 13
+
+
+def trace_panel(x, y, w, h, c):
+    """The trace: a crowd of slices, a few of them hot."""
+    out = [panel(x, y, w, h, fill=c["card"], stroke=c["line"])]
     rng = random.Random(7)
-    y = top + 14
-    for _ in range(14):
-        x = ax + 12 + rng.randint(0, 8)
+    row = y + 14
+    while row + 7 <= y + h - 12:
+        bx = x + 12 + rng.randint(0, 8)
         while True:
             bw = rng.choice([3, 4, 5, 6, 8, 10, 12, 16, 22, 30])
-            if x + bw > ax + aw - 12:
+            if bx + bw > x + w - 12:
                 break
             roll = rng.random()
             col = (c["brick"] if roll < 0.03 else c["orange"] if roll < 0.06
                    else c["sand"] if roll < 0.09 else c["bar"])
-            out.append(f'<rect x="{x}" y="{y}" width="{bw}" height="7" rx="1.5" fill="{col}"/>')
-            x += bw + rng.choice([2, 3, 3, 4, 6])
-        y += 12
-    out.append(text(ax, top + ph + 28, f"{f['trace_mb']} MB Perfetto trace", size=16,
-                    weight=600, fill=c["ink"]))
-    out.append(text(ax, top + ph + 50, f"{f['slices']:,} slices", size=14, fill=c["sub"]))
+            out.append(f'<rect x="{bx}" y="{row}" width="{bw}" height="7" rx="1.5" fill="{col}"/>')
+            bx += bw + rng.choice([2, 3, 3, 4, 6])
+        row += 12
+    return "".join(out)
 
-    out.append(arrow(248, 316, mid, c["teal"]))
-    out.append(text(282, mid - 12, "echolot", size=15, weight=700, fill=c["teal"],
-                    anchor="middle"))
-    out.append(text(282, mid + 24, f"about {f['seconds']} s", size=13, fill=c["sub"],
-                    anchor="middle"))
 
-    # the report: twenty rows, one of them the lead
-    bx, bw_ = 328, 176
-    out.append(f'<rect x="{bx}" y="{top}" width="{bw_}" height="{ph}" rx="10" '
-               f'fill="{c["teal_tint"]}" stroke="{c["teal"]}" stroke-width="1.5"/>')
-    ry = top + 20
-    for length in (110, 80, 128, 60, 0, 96, 70, 118):
+def facts_panel(x, y, w, h, bars, c, f, *, first, step):
+    """The report: rows of facts, one of them the lead. A 0 in `bars` is the lead,
+    and it takes a little more room than a row, so it does not touch its neighbours."""
+    out = [panel(x, y, w, h, fill=c["teal_tint"], stroke=c["teal"])]
+    ry = y + first
+    for length in bars:
         if length:
-            out.append(f'<rect x="{bx + 20}" y="{ry}" width="{length}" height="10" rx="5" '
+            out.append(f'<rect x="{x + 20}" y="{ry}" width="{length}" height="10" rx="5" '
                        f'fill="{c["teal_line"]}"/>')
-        else:
-            out.append(f'<rect x="{bx + 10}" y="{ry - 8}" width="{bw_ - 20}" height="26" '
-                       f'rx="6" fill="{c["teal"]}"/>')
-            out.append(text(bx + 18, ry + 10, f"lock wait · {f['lock_ms']} ms", size=12,
-                            weight=600, fill=c["on_teal"], family=MONO))
-        ry += 21
-    out.append(text(bx, top + ph + 28, "20 rows of facts", size=16, weight=600, fill=c["ink"]))
-    out.append(text(bx, top + ph + 50, f"{f['report_kb']} KB, evidence included", size=14,
-                    fill=c["sub"]))
+            ry += step
+            continue
+        ry += 4
+        out.append(f'<rect x="{x + 8}" y="{ry - 8}" width="{w - 16}" height="26" '
+                   f'rx="6" fill="{c["teal"]}"/>')
+        out.append(text(x + 16, ry + 10, f"lock wait · {f['lock_ms']} ms", size=SMALL,
+                        weight=600, fill=c["on_teal"], family=MONO))
+        ry += step + 4
+    return "".join(out)
 
-    out.append(arrow(516, 584, mid, c["ink"]))
-    out.append(text(550, mid - 12, "your agent", size=14, weight=700, fill=c["ink"],
-                    anchor="middle"))
 
-    # the code: one line lit. The source is illustrative; the file and line
-    # are the sample report's.
-    cx, cw = 596, 244
-    out.append(f'<rect x="{cx}" y="{top}" width="{cw}" height="{ph}" rx="10" '
-               f'fill="{c["card"]}" stroke="{c["line"]}" stroke-width="1.5"/>')
-    out.append(text(cx + 14, top + 24, f"{f['lock_class']}.kt", size=12, fill=c["sub"],
-                    family=MONO))
-    out.append(f'<path d="M{cx} {top + 36}H{cx + cw}" stroke="{c["line"]}" stroke-width="1"/>')
+def code_panel(x, y, w, h, c, f):
+    """The code: one line lit. The source is illustrative; the file and line are
+    the sample report's."""
+    out = [panel(x, y, w, h, fill=c["card"], stroke=c["line"]),
+           text(x + 14, y + 24, f"{f['lock_class']}.kt", size=SMALL, fill=c["sub"], family=MONO),
+           f'<path d="M{x + 1.5} {y + 36}H{x + w - 1.5}" stroke="{c["line"]}" stroke-width="1"/>']
     n = f["lock_line"]
     code = [(n - 2, "fun update(item: Item) {"), (n - 1, "  synchronized(lock) {"),
             (n, "    store.write(item)"), (n + 1, "  }"), (n + 2, "}")]
-    ly = top + 62
+    ly = y + 62
     for num, src in code:
         if num == n:
-            out.append(f'<rect x="{cx + 1}" y="{ly - 16}" width="{cw - 2}" height="24" '
+            out.append(f'<rect x="{x + 1.5}" y="{ly - 16}" width="{w - 3}" height="24" '
                        f'fill="{c["hot_tint"]}"/>')
-            out.append(f'<rect x="{cx + 1}" y="{ly - 16}" width="3" height="24" '
+            out.append(f'<rect x="{x + 1.5}" y="{ly - 16}" width="3" height="24" '
                        f'fill="{c["brick"]}"/>')
-        out.append(text(cx + 14, ly, str(num), size=13, fill=c["faint"], family=MONO))
-        out.append(text(cx + 38, ly, src, size=13, fill=c["ink"], family=MONO,
+        out.append(text(x + 14, ly, str(num), size=SMALL, fill=c["faint"], family=MONO))
+        out.append(text(x + 38, ly, src, size=SMALL, fill=c["ink"], family=MONO,
                         weight=600 if num == n else 400))
         ly += 24
-    out.append(text(cx + 14, top + ph - 16, f"main thread waits here · {f['lock_ms']} ms",
-                    size=13, weight=600, fill=c["brick"]))
-    out.append(text(cx, top + ph + 28, "the line to fix", size=16, weight=600, fill=c["ink"]))
-    out.append(text(cx, top + ph + 50, f"{f['lock_class']}.kt:{n}", size=14, fill=c["sub"],
-                    family=MONO))
-    return svg(880, 400, "".join(out),
-               f"From an {f['trace_mb']} MB trace to the line to fix")
+    out.append(text(x + 14, y + h - 16, f"main thread waits here · {f['lock_ms']} ms",
+                    size=SMALL, weight=600, fill=c["brick"]))
+    return "".join(out)
 
 
-def icon_target(x, y, c):
-    return (f'<g fill="none" stroke="{c["teal"]}" stroke-width="2.25" stroke-linecap="round">'
-            f'<circle cx="{x + 16}" cy="{y + 16}" r="11"/>'
-            f'<circle cx="{x + 16}" cy="{y + 16}" r="4"/>'
-            f'<path d="M{x + 16} {y}V{y + 6}M{x + 16} {y + 26}V{y + 32}M{x} {y + 16}H{x + 6}'
-            f'M{x + 26} {y + 16}H{x + 32}"/></g>')
+def caption(x, y, title, detail, c, *, mono=False):
+    """What a thing is, and the detail under it."""
+    return (text(x, y, title, size=BIG, weight=600, fill=c["ink"])
+            + text(x, y + 20, detail, size=SMALL, fill=c["sub"], family=MONO if mono else SANS))
 
 
-def icon_same(x, y, c):
-    return (f'<g fill="none" stroke="{c["teal"]}" stroke-width="2.25" stroke-linecap="round">'
-            f'<circle cx="{x + 16}" cy="{y + 16}" r="14"/>'
-            f'<path d="M{x + 9} {y + 12}H{x + 23}M{x + 9} {y + 20}H{x + 23}"/></g>')
+def hero_title(f):
+    return f"From an {f['trace_mb']} MB trace to the line to fix"
 
 
-def icon_nocode(x, y, c):
-    brace = ("M{a} {t}Q{b} {t} {b} {u}V{v}Q{b} {m} {e} {m}Q{b} {m} {b} {w}V{z}"
-             "Q{b} {s} {a} {s}")
-    left = brace.format(a=x + 11, b=x + 5, e=x + 1, t=y + 4, u=y + 10, v=y + 13, m=y + 16,
-                        w=y + 19, z=y + 22, s=y + 28)
-    right = brace.format(a=x + 21, b=x + 27, e=x + 31, t=y + 4, u=y + 10, v=y + 13, m=y + 16,
-                         w=y + 19, z=y + 22, s=y + 28)
-    return (f'<g fill="none" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">'
-            f'<path d="{left}" stroke="{c["teal"]}"/><path d="{right}" stroke="{c["teal"]}"/>'
-            f'<path d="M{x + 4} {y + 30}L{x + 28} {y + 2}" stroke="{c["brick"]}"/></g>')
+def hero(c, f):
+    """From a huge trace to the line to fix, in three panels side by side.
+
+    No heading of its own: the line under the logo says what this shows. The
+    panels span the whole width, from 0 to 880, so their edges are the edges
+    of the text above and below."""
+    ph = 196
+    mid = ph / 2
+    ax, aw = 0, 212
+    bx, bw = 320, 196
+    cx, cw = 624, 256
+    out = [trace_panel(ax, 0, aw, ph, c),
+           caption(ax, ph + 28, f"{f['trace_mb']} MB Perfetto trace", f"{f['slices']:,} slices", c),
+           arrow(aw + 12, bx - 12, mid, c["teal"]),
+           text((aw + bx) / 2, mid - 12, "echolot", size=BIG, weight=600, fill=c["teal"],
+                anchor="middle"),
+           text((aw + bx) / 2, mid + 24, f"about {f['seconds']} s", size=SMALL, fill=c["sub"],
+                anchor="middle"),
+           facts_panel(bx, 0, bw, ph, (110, 80, 128, 60, 0, 96, 70, 118), c, f,
+                       first=16, step=21),
+           caption(bx, ph + 28, "20 rows of facts", f"{f['report_kb']} KB, evidence included", c),
+           arrow(bx + bw + 12, cx - 12, mid, c["ink"]),
+           text((bx + bw + cx) / 2, mid - 12, "your agent", size=BIG, weight=600, fill=c["ink"],
+                anchor="middle"),
+           code_panel(cx, 0, cw, ph, c, f),
+           caption(cx, ph + 28, "the line to fix", f"{f['lock_class']}.kt:{f['lock_line']}", c,
+                   mono=True)]
+    return svg(880, ph + 52, "".join(out), hero_title(f))
 
 
-def icon_agent(x, y, c):
-    return (f'<g fill="none" stroke="{c["teal"]}" stroke-width="2.25" stroke-linejoin="round" '
-            f'stroke-linecap="round"><path d="M{x + 3} {y + 6}Q{x + 3} {y + 2} {x + 7} {y + 2}'
-            f'H{x + 25}Q{x + 29} {y + 2} {x + 29} {y + 6}V{y + 20}Q{x + 29} {y + 24} {x + 25} '
-            f'{y + 24}H{x + 13}L{x + 7} {y + 30}V{y + 24}Q{x + 3} {y + 24} {x + 3} {y + 20}Z"/>'
-            f'<path d="M{x + 10} {y + 13}H{x + 22}"/></g>')
+def follows_the_system(light: dict, dark: dict) -> str:
+    """CSS that repaints a picture drawn in the light colours when the reader's
+    system asks for dark. Each light colour is used for one role only, so the
+    swap can go by the colour itself."""
+    rules = [f'[fill="{v}"]{{fill:{dark[k]}}}[stroke="{v}"]{{stroke:{dark[k]}}}'
+             for k, v in light.items() if dark[k] != v]
+    return "@media (prefers-color-scheme:dark){" + "".join(rules) + "}"
 
 
-BENEFITS = [
-    (icon_target, "Finds the line to fix",
-     ("From a slow screen to a file and line,", "with the numbers that prove it.")),
-    (icon_same, "Same answer, every run",
-     ("A pinned trace_processor: the same", "trace always gives the same report.")),
-    (icon_nocode, "No tracing code needed",
-     ("Works on apps with zero trace{} calls;", "it places temporary markers itself.")),
-    (icon_agent, "Works with your agent",
-     ("Claude Code out of the box; Cursor,", "Codex and others via echolot guide.")),
-]
+def hero_narrow(f):
+    """The hero for a phone: the same three panels, one under the other, at a
+    width a phone shows close to its own size, so the words stay readable.
 
-
-def benefits(c, f):
-    out = []
-    for i, (icon, head, body) in enumerate(BENEFITS):
-        tx, ty = 40 + (i % 2) * 408, 24 + (i // 2) * 128
-        out.append(f'<rect x="{tx}" y="{ty}" width="392" height="112" rx="12" '
-                   f'fill="{c["card"]}" stroke="{c["line"]}" stroke-width="1"/>')
-        out.append(icon(tx + 20, ty + 22, c))
-        out.append(text(tx + 72, ty + 42, head, size=20, weight=700, fill=c["ink"]))
-        out.append(text(tx + 72, ty + 70, body[0], size=15, fill=c["sub"]))
-        out.append(text(tx + 72, ty + 92, body[1], size=15, fill=c["sub"]))
-    return svg(880, 288, "".join(out),
-               ". ".join(head for _, head, _ in BENEFITS) + ".")
+    GitHub picks a README picture by the width of the screen or by its own
+    theme setting, but a <source> that asks for both is not safe there: GitHub
+    rewrites the theme half of the condition. So this one comes as a single
+    file that follows the reader's system theme on its own."""
+    c = THEMES["light"]
+    w, ph, gap = 360, 120, 52
+    pw, tx = 180, 200            # the panels on the left, every word on one line at tx
+    b_top = ph + gap
+    c_top = b_top + ph + gap
+    code_h = 196
+    out = [trace_panel(0, 0, pw, ph, c),
+           caption(tx, ph / 2 - 2, f"{f['trace_mb']} MB Perfetto trace", f"{f['slices']:,} slices", c),
+           arrow_down(pw / 2, ph + 8, b_top - 8, c["teal"]),
+           text(tx, ph + 22, "echolot", size=BIG, weight=600, fill=c["teal"]),
+           text(tx, ph + 42, f"about {f['seconds']} s", size=SMALL, fill=c["sub"]),
+           facts_panel(0, b_top, pw, ph, (104, 0, 90, 116), c, f, first=21, step=20),
+           caption(tx, b_top + ph / 2 - 2, "20 rows of facts",
+                   f"{f['report_kb']} KB, evidence included", c),
+           arrow_down(pw / 2, b_top + ph + 8, c_top - 8, c["ink"]),
+           text(tx, b_top + ph + gap / 2 + 5, "your agent", size=BIG, weight=600, fill=c["ink"]),
+           code_panel(0, c_top, w, code_h, c, f),
+           caption(0, c_top + code_h + 28, "the line to fix",
+                   f"{f['lock_class']}.kt:{f['lock_line']}", c, mono=True)]
+    return svg(w, c_top + code_h + 52, "".join(out), hero_title(f),
+               style=follows_the_system(THEMES["light"], THEMES["dark"]))
 
 
 def versus(c, f):
@@ -557,35 +571,39 @@ SESSION_SECONDS = 18.0
 
 
 def session(f):
-    """A condensed /echolot session, replayed as the protocol runs it."""
+    """A condensed /echolot session, replayed as the protocol runs it.
+
+    The session builds up in the first eight seconds and then stands whole for
+    the next nine, so a reader who looks at it at any moment mostly finds it
+    full, and one who arrives at the start sees lines within two seconds."""
     t = TERM
     total = SESSION_SECONDS
     command = "/echolot why is cold start slow"
     question = "After which change did it get slower?"
-    char_w = 9.0
+    char_w = BIG * 0.6            # a monospace advance
     lines = [  # (seconds, y, [(x, words, colour, weight)])
-        (3.0, 116, [(28, "?", t["sand"], 700), (48, question, t["fg"], 400)]),
-        (4.0, 116, [(48 + len(question) * char_w + 18, "since the tab redesign", t["green"], 400)]),
-        (5.2, 148, [(28, "✓", t["green"], 700),
+        (2.0, 116, [(28, "?", t["sand"], 700), (48, question, t["fg"], 400)]),
+        (2.6, 116, [(48 + len(question) * char_w + 18, "since the tab redesign", t["green"], 400)]),
+        (3.2, 148, [(28, "✓", t["green"], 700),
                     (48, "hunt #1 opened · 5 traces recorded", t["fg"], 400)]),
-        (6.8, 188, [(28, "round 1", t["dim"], 400),
+        (4.0, 188, [(28, "round 1", t["dim"], 400),
                     (128, f"analyze · {f['fired']} of {f['detectors']} detectors fired · "
                           f"window {round(f['window_ms']):,} ms", t["fg"], 400)]),
-        (8.6, 220, [(28, "round 2", t["dim"], 400),
+        (4.8, 220, [(28, "round 2", t["dim"], 400),
                     (128, "echolot mark --apply · 6 markers · recorded again · compare",
                      t["fg"], 400)]),
-        (10.4, 252, [(28, "round 3", t["dim"], 400),
+        (5.6, 252, [(28, "round 3", t["dim"], 400),
                      (128, f"markers around {f['lock_class']} · the move holds",
                       t["fg"], 400)]),
-        (12.2, 300, [(28, "Place", t["dim"], 400),
+        (6.6, 300, [(28, "Place", t["dim"], 400),
                      (160, f"{f['lock_class']}.kt:{f['lock_line']}", t["green"], 700)]),
-        (12.6, 330, [(28, "Evidence", t["dim"], 400),
+        (6.9, 330, [(28, "Evidence", t["dim"], 400),
                      (160, f"the main thread waits {f['lock_ms']} ms on a lock update() holds",
                       t["fg"], 400)]),
-        (13.0, 360, [(28, "Suggestion", t["dim"], 400),
+        (7.2, 360, [(28, "Suggestion", t["dim"], 400),
                      (160, "take store.write() out of the synchronized block", t["fg"], 400)]),
-        (13.4, 390, [(28, "Confidence", t["dim"], 400), (160, "high", t["fg"], 400)]),
-        (13.8, 420, [(28, "Cleanup", t["dim"], 400),
+        (7.5, 390, [(28, "Confidence", t["dim"], 400), (160, "high", t["fg"], 400)]),
+        (7.8, 420, [(28, "Cleanup", t["dim"], 400),
                      (160, "temporary markers removed", t["fg"], 400)]),
     ]
     def pct(seconds: float) -> str:
@@ -597,27 +615,27 @@ def session(f):
             f'stroke="{t["edge"]}"/>']
     for dx in (22, 40, 58):
         body.append(f'<circle cx="{dx}" cy="22" r="5" fill="{t["edge"]}"/>')
-    body.append(text(440, 27, "claude — ~/my-app", size=13, fill=t["dim"], family=MONO,
+    body.append(text(440, 27, "claude — ~/my-app", size=SMALL, fill=t["dim"], family=MONO,
                      anchor="middle"))
-    body.append(text(856, 27, "condensed replay", size=12, fill=t["dim"], anchor="end"))
+    body.append(text(856, 27, "condensed replay", size=SMALL, fill=t["dim"], anchor="end"))
     body.append(f'<path d="M1 44H879" stroke="{t["edge"]}"/>')
 
     # the command, typed: a block the colour of the terminal slides off it
     typed_w = len(command) * char_w
-    start, end = pct(0.3), pct(2.3)
+    start, end = pct(0.2), pct(1.4)
     style.append("@keyframes type{0%%{transform:translateX(0)}%s{transform:translateX(0);"
                  "animation-timing-function:steps(%d,end)}%s,98%%{transform:translateX(%gpx)}"
                  "100%%{transform:translateX(0)}}" % (start, len(command), end, typed_w))
     style.append("@keyframes cursor{0%%,%s{opacity:1}%s,100%%{opacity:0}}"
-                 % (pct(2.9), pct(3.0)))
+                 % (pct(1.8), pct(1.9)))
     style.append(".type{transform:translateX(%gpx);animation:type %gs linear infinite both}"
                  % (typed_w, total))
     style.append(".cursor{animation:cursor %gs linear infinite both}" % total)
-    body.append(text(28, 84, "›", size=15, weight=700, fill=t["sand"], family=MONO))
-    body.append(text(48, 84, command, size=15, fill=t["fg"], family=MONO))
-    body.append(f'<g class="type"><rect class="cursor" x="48" y="70" width="9" height="18" '
-                f'fill="{t["sand"]}"/><rect x="57" y="68" width="{typed_w + 10}" height="22" '
-                f'fill="{t["bg"]}"/></g>')
+    body.append(text(28, 84, "›", size=BIG, weight=700, fill=t["sand"], family=MONO))
+    body.append(text(48, 84, command, size=BIG, fill=t["fg"], family=MONO))
+    body.append(f'<g class="type"><rect class="cursor" x="48" y="69" width="{char_w:g}" '
+                f'height="19" fill="{t["sand"]}"/><rect x="{48 + char_w:g}" y="67" '
+                f'width="{typed_w + 10:g}" height="24" fill="{t["bg"]}"/></g>')
 
     for i, (at, y, words) in enumerate(lines):
         name = f"a{i}"
@@ -625,7 +643,7 @@ def session(f):
                      % (name, pct(at), pct(at + 0.25)))
         style.append(f".{name}{{animation-name:{name}}}")
         for x, s, colour, weight in words:
-            body.append(text(round(x, 1), y, s, size=15, weight=weight, fill=colour,
+            body.append(text(round(x, 1), y, s, size=BIG, weight=weight, fill=colour,
                              family=MONO, cls=f"l {name}"))
     style.append("@media (prefers-reduced-motion:reduce){.l,.type,.cursor{animation:none}"
                  ".type{display:none}}")
@@ -634,8 +652,7 @@ def session(f):
                style="".join(style))
 
 
-THEMED = {"hero": hero, "benefits": benefits, "versus": versus, "loop": loop,
-          "compare": compare}
+THEMED = {"hero": hero, "versus": versus, "loop": loop, "compare": compare}
 
 
 def pictures(readme: str | None = None) -> dict[str, str]:
@@ -645,36 +662,47 @@ def pictures(readme: str | None = None) -> dict[str, str]:
     for name, draw in THEMED.items():
         for theme, colours in THEMES.items():
             out[f"{name}-{theme}.svg"] = draw(colours, facts)
+    out["hero-narrow.svg"] = hero_narrow(facts)
     out["session.svg"] = session(facts)
     return out
 
 
-LOGO = "https://github.com/user-attachments/assets/1cea634c-f0cd-4b32-a32f-c221e2be8227"
-
-
-def preview_page(theme: str, assets: Path) -> str:
-    """A page shaped like the top of the README on GitHub, for looking at both themes."""
+def preview_page(theme: str, assets: Path, width: int = 928) -> str:
+    """A page shaped like the top of the README on GitHub, for looking at both
+    themes and at a phone's width. It picks each picture the way the README's
+    <picture> elements do: the narrow hero below 768 pixels, the theme's own
+    file above."""
     c = THEMES[theme]
-    code_bg = c["card"]
+    phone = width < 768
+    hero_file = "hero-narrow.svg" if phone else f"hero-{theme}.svg"
 
-    def themed(name):
-        return f'<p align="center"><img src="{assets / f"{name}-{theme}.svg"}" width="880"></p>'
+    def img(name, w=880):
+        return f'<p><img src="{assets / name}" width="{w}"></p>'
 
-    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="color-scheme" content="{theme}"><style>
 body{{margin:0;background:{c['page']};color:{c['ink']};font-family:{SANS};font-size:16px;line-height:1.5}}
-.box{{width:928px;margin:24px auto;border:1px solid {c['line']};border-radius:6px}}
-.md{{padding:24px}} img{{max-width:100%}} p{{margin:0 0 16px}}
+.box{{max-width:{width}px;margin:{0 if phone else 24}px auto;border:1px solid {c['line']};border-radius:6px}}
+.md{{padding:{16 if phone else 24}px}} img{{max-width:100%}} p,ul{{margin:0 0 16px}}
+.c{{text-align:center}} a{{color:{c['teal']}}}
 h2{{font-size:24px;border-bottom:1px solid {c['line']};padding-bottom:8px;margin:24px 0 16px}}
-pre{{background:{code_bg};border-radius:6px;padding:12px 16px;margin:0 0 12px;font-family:{MONO};font-size:14px}}
+pre{{background:{c['card']};border-radius:6px;padding:12px 16px;margin:0 0 12px;font-family:{MONO};font-size:14px}}
 </style></head><body><div class="box"><div class="md">
-<p align="center"><img src="{LOGO}" width="429"></p>
-<p align="center"><b>Turns a huge Android trace into 20 rows of facts an AI agent can actually use.</b></p>
-{themed('hero')}{themed('benefits')}
-<p align="center"><img src="{assets / 'session.svg'}" width="880"></p>
+<p class="c"><img src="{assets / f'logo-{theme}.png'}" width="429"></p>
+<p class="c"><b>Turns a huge Android trace into 20 rows of facts an AI agent can actually use.</b></p>
+<p class="c">[ checks ] [ PyPI ] [ license ]</p>
+<p><img src="{assets / hero_file}"></p>
+<ul><li><b>Finds the line to fix.</b> From a slow screen to a file and line, with the numbers that prove it.</li>
+<li><b>Same answer, every run.</b> A pinned trace_processor: the same trace always gives the same report.</li>
+<li><b>No tracing code needed.</b> Works on apps with zero trace {{}} calls; it places temporary markers itself.</li>
+<li><b>Works with your agent.</b> Claude Code out of the box; Cursor, Codex and others via echolot guide.</li></ul>
+{img('session.svg')}
+<p><b>Contents</b> · <a>Quick start</a> · <a>How it works</a> · <a>What it saves</a> · …</p>
+<p><b>Reference</b> · <a>Detectors</a> · <a>Commands</a> · <a>Requirements</a> · …</p>
 <h2>Quick start</h2><pre>pipx install echolot</pre><pre>cd ~/my-app &amp;&amp; echolot init</pre><pre>/echolot</pre>
-<h2>How it works</h2>{themed('loop')}
-<h2>What it saves</h2>{themed('versus')}
-<h2>What changed</h2>{themed('compare')}
+<h2>How it works</h2>{img(f'loop-{theme}.svg')}
+<h2>What it saves</h2>{img(f'versus-{theme}.svg')}
+<h2>What changed</h2>{img(f'compare-{theme}.svg')}
 </div></div></body></html>"""
 
 
@@ -686,9 +714,10 @@ def main(argv: list[str]) -> int:
         target = Path(argv[1])
         target.mkdir(parents=True, exist_ok=True)
         for theme in THEMES:
-            page = target / f"preview-{theme}.html"
-            page.write_text(preview_page(theme, HERE), encoding="utf-8")
-            print(f"→ {page}")
+            for kind, width in (("", 928), ("-phone", 375)):
+                page = target / f"preview-{theme}{kind}.html"
+                page.write_text(preview_page(theme, HERE, width), encoding="utf-8")
+                print(f"→ {page}")
     return 0
 
 
