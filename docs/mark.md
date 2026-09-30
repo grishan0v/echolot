@@ -242,10 +242,12 @@ weight is; the agent opens the one file the trace named. That order is what
   Compose app is missing it — one whose app module calls `setContent {` or
   declares a `@Composable` — and for such an app it is the first thing to
   add. An app without Compose is not told about it.
-- **Callstack sampling** (Perfetto's `linux.perf` on Android 12+) names Java
-  frames on a hot thread from symbols, no instrumentation, no naming — with
-  the caveats of profileable builds and R8 mapping. Not wired in yet; the
-  convention-free bridge for the `uninstrumented_cpu` case.
+- **Callstack sampling** (`runner.sampling`, Perfetto's `linux.perf`) names
+  the Java and Kotlin frames on a hot thread from symbols, no instrumentation,
+  no naming — with the caveats of profileable builds and R8 mapping.
+  `uninstrumented_cpu` reads it: a sampled row names what ran in the blind
+  spot and the project's method under it, which is where markers go. See
+  [Collecting](collecting.md#callstack-sampling).
 
 ## Where it will be wrong
 

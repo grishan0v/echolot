@@ -200,6 +200,42 @@ def test_evidence_comes_from_the_worst_repeat():
           got["detail"] == "owner tid 222", got)
 
 
+def test_what_the_samples_named_goes_with_the_evidence_that_quotes_it():
+    """The evidence names two functions; `stacks` lists them. Both from one repeat."""
+    light = {"samples": 3, "with_stack": 3, "leaf": [
+        {"frame": "inflate", "samples": 3, "pct": 100.0}], "ours": []}
+    heavy = {"samples": 9, "with_stack": 9, "leaf": [
+        {"frame": "deflate", "samples": 9, "pct": 100.0}], "ours": []}
+    runs = [one([row("worker", count=0, total_ms=30.0,
+                     detail="100.0% · 3 stacks: inflate 100%", stacks=light)]),
+            one([row("worker", count=0, total_ms=90.0,
+                     detail="100.0% · 9 stacks: deflate 100%", stacks=heavy)]),
+            one([row("worker", count=0, total_ms=60.0)])]
+    got = merged_rows(runs)["worker"]
+    check("the heavier repeat's evidence", got["detail"].endswith("deflate 100%"), got)
+    check("and its stacks, not the lighter one's", got["stacks"] == heavy, got)
+    check("json bookkeeping is not a column",
+          "stacks" not in report_mod._table([got]).splitlines()[0], report_mod._table([got]))
+
+
+def test_a_repeat_whose_sampler_lost_the_process_does_not_speak_for_the_row():
+    """One recording of six on a device came back with no stack at all."""
+    lost = {"samples": 200, "with_stack": 0, "leaf": [], "ours": []}
+    named = {"samples": 40, "with_stack": 40, "leaf": [
+        {"frame": "okio.GzipSink.write", "samples": 40, "pct": 100.0}], "ours": []}
+    runs = [one([row("pool-3-thread-1", count=0, total_ms=1100.0,
+                     detail="99.0% · 200 samples, none with a stack", stacks=lost)]),
+            one([row("pool-3-thread-1", count=0, total_ms=900.0,
+                     detail="98.0% · 40 stacks: GzipSink.write 100%", stacks=named)]),
+            one([row("pool-3-thread-1", count=0, total_ms=700.0,
+                     detail="97.0% · 38 stacks: GzipSink.write 100%", stacks=named)])]
+    got = merged_rows(runs)["pool-3-thread-1"]
+    check("the worst of the repeats with stacks gives the evidence",
+          got["detail"] == "98.0% · 40 stacks: GzipSink.write 100%", got)
+    check("and the stacks with it", got["stacks"] == named, got)
+    check("the numbers are the median of all three as ever", got["total_ms"] == 900.0, got)
+
+
 # --- detectors a config left out --------------------------------------------
 
 def test_a_report_names_the_detectors_the_config_left_out():

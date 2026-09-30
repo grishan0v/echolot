@@ -295,12 +295,17 @@ runner:
 ```
 
 `uninstrumented_cpu` finds a thread that burned CPU with no slice around it,
-and that is all it can say. What the thread was running takes another round:
-markers around the likely code, a new recording, another look. A callstack
-sampler records the answer alongside. Many times a second it notes which
-functions were on the stack of each thread that held a CPU, and the samples
-go into the same trace, on the same clock as everything else. The Perfetto UI
-shows them as a flame graph for any stretch of time you select.
+and without samples that is all it can say. What the thread was running takes
+another round: markers around the likely code, a new recording, another look.
+A callstack sampler records the answer alongside. Many times a second it notes
+which functions were on the stack of each thread that held a CPU, and the
+samples go into the same trace, on the same clock as everything else. The
+report reads them in the round that finds the blind spot: the row names what
+ran in the samples that fell there, and the nearest frame of the project's
+own code under it
+([Analysing](analysing.md#three-detectors-that-need-no-instrumentation)). The
+Perfetto UI shows the same samples as a flame graph for any stretch of time
+you select.
 
 It is off unless asked for, because it costs the app time. On the SM-A515F
 (Android 13, a `user` build), six cold starts of about 1.36 s recorded the
@@ -324,7 +329,9 @@ settled on that device:
 - **The app's frames, not the kernel's.** Kotlin and Java frames come back by
   name, interpreted, JIT-compiled and compiled ahead of time alike. Frames of
   the framework, compiled into the system image, come back without one, and
-  a minified build's frames carry their minified names.
+  the unwinder mostly stops at them: in the blind spots of six sampled cold
+  starts, 69% of the stacks ended there. A minified build's frames carry
+  their minified names.
 - **A buffer of its own**, the size of `buffer_kb`, so the samples can never
   push out the sched and atrace events every detector reads.
 

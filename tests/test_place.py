@@ -176,6 +176,42 @@ def test_annotate_places_both_sides_and_a_class_location(tmp_path):
     check("json bookkeeping is not a column", "places" not in head, head)
 
 
+def test_the_frame_of_ours_the_samples_put_first_is_placed(tmp_path):
+    root = checkout(tmp_path)
+    (root / "domain/src/main/java/com/example/app/data/Sync.kt").write_text(
+        "package com.example.app.data\n"
+        "\n"
+        "fun syncAll() {\n"
+        "}\n", encoding="utf-8")
+    ours = [{"frame": None, "samples": 9, "pct": 45.0},
+            {"frame": "com.example.app.data.StoreRepository.update", "samples": 6, "pct": 30.0},
+            {"frame": "com.example.app.data.SyncKt.syncAll", "samples": 5, "pct": 25.0}]
+    rep = {"detectors": [{"id": "uninstrumented_cpu", "rows": [
+        {"location": "DefaultDispatch", "total_ms": 300.0,
+         "detail": "100.0% of CPU outside slices · 20 stacks: …",
+         "stacks": {"samples": 20, "with_stack": 20, "leaf": [], "ours": ours}},
+        {"location": "Thread-9", "total_ms": 100.0,
+         "detail": "100.0% of CPU outside slices · 4 stacks: …",
+         "stacks": {"samples": 4, "with_stack": 4, "leaf": [],
+                    "ours": [{"frame": "com.example.app.data.SyncKt.syncAll",
+                              "samples": 4, "pct": 100.0}]}},
+        {"location": "Thread-10", "total_ms": 90.0,
+         "detail": "100.0% of CPU outside slices · 4 stacks: …",
+         "stacks": {"samples": 4, "with_stack": 4, "leaf": [],
+                    "ours": [{"frame": None, "samples": 4, "pct": 100.0}]}},
+    ]}]}
+    placed = place.annotate(rep, root)
+    worker, thread, pooled = rep["detectors"][0]["rows"]
+    check("two rows placed", placed == 2, placed)
+    check("past `none` to the first frame with a name, at its declaration",
+          worker["code"] == "sampled at StoreRepository.kt:6", worker)
+    check("the package picks the module", worker["places"][0]["file"].startswith("domain/"),
+          worker["places"])
+    check("a Kotlin top-level function is in the file its class is named after",
+          thread["code"] == "sampled at Sync.kt:3", thread)
+    check("nothing of ours on the stack is no place", "places" not in pooled, pooled)
+
+
 def test_annotate_walks_nothing_when_there_is_nothing_to_place(tmp_path):
     rep = {"detectors": [{"id": "gc_pressure", "rows": [
         {"location": "HeapTaskDaemon", "total_ms": 1.0, "detail": "GC"}]}]}

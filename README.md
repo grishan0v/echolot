@@ -280,7 +280,7 @@ throttled between the rounds, is named above the table. See
 | `monitor_contention` | lock contention, with the owner's tid as evidence |
 | `binder_txn` | long synchronous IPC, and death by a thousand cuts |
 | `runnable_starvation` | thread ready to run but preempted on CPU |
-| `uninstrumented_cpu` | **threads burning CPU with no instrumentation** |
+| `uninstrumented_cpu` | **threads burning CPU with no instrumentation**, and what they ran when the recording sampled callstacks |
 | `frame_jank` | frames that missed their deadline, and whose fault it was |
 | `anr_risk` | stretches where the main thread never got back to the message queue |
 | `anr` | ANRs the system recorded during the trace, with its own reason |

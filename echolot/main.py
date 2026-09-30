@@ -45,6 +45,7 @@ from . import compare as compare_mod
 from . import hunt as hunt_mod
 from . import codex, layer, recorder, state, table, when
 from . import report as report_mod
+from . import stacks as stacks_mod
 from .config import NO_ANCHOR, Config, ConfigError
 from .reflect.cli import cmd_reflect
 from .sandbox import SandboxError
@@ -433,6 +434,13 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         window = _window_info(tp, cfg, procs)
         environment = _environment_info(tp)
         markers = _markers_info(tp, cfg)
+        # What ran behind a row is read only where a sampler ran: a trace
+        # without samples gets the report it always got. The checkout, for
+        # whose code is whose, is the config's directory, and there is none
+        # for a config that lives in memory.
+        sampled = bool((environment.get("sampling") or {}).get("started"))
+        package = str(cfg.get("project.package") or "")
+        root = Path(cfg.path).resolve().parent if cfg.path else None
 
         # Stdlib modules the detectors declared, loaded once for the session.
         # A module that is not in this trace_processor is not fatal here: the
@@ -466,6 +474,11 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                     uncounted.append(d.id)
                 else:
                     spans.extend(behind)
+                if sampled and d.samples_sql:
+                    try:
+                        _stacks_behind(tp, d, params, rows, package, root)
+                    except Exception as e:  # the rows stand without it
+                        print(f"[!] {d.id} @samples: {e}", file=sys.stderr)
             entry = {
                 "id": d.id,
                 "title": d.title,
@@ -1292,18 +1305,58 @@ def _spans_behind(tp, d, params: dict,
 
     None when the detector has no such query: its rows are then named as not
     counted rather than counted as nothing, which would be a claim about them.
-    The rows go in as `_rows` one statement at a time — `exec_script` splits
-    on `;`, and a slice name is free to contain one.
     """
     sql = d.render_intervals(params)
     if sql is None:
         return None
+    _rows_table(tp, rows)
+    return [(int(r["ts"]), int(r["dur"])) for r in tp.query(sql)
+            if r.get("ts") is not None and (r.get("dur") or 0) > 0]
+
+
+def _stacks_behind(tp, d, params: dict, rows: list[dict], package: str,
+                   root: Path | None) -> None:
+    """What ran behind one detector's rows, from its `@samples`.
+
+    Every row gets `stacks` — what ran on its samples' stacks and the nearest
+    frames of the project's own, with their shares — and the gist at the end
+    of its evidence, where a reader of one row looks. A detector whose
+    identity holds `detail` keeps it as it was: there `detail` is part of the
+    row's name, and a name that changed with the samples would not merge
+    across repeats. Its rows carry `stacks` alone.
+
+    Nothing is written until every row has been read, so a failure leaves the
+    rows as the first query returned them. See stacks.py.
+    """
+    sql = d.render_samples(params)
+    if sql is None:
+        return
+    _rows_table(tp, rows)
+    behind: dict[Any, list[int | None]] = {}
+    for r in tp.query(sql):
+        c = r.get("callsite_id")
+        behind.setdefault(r.get("location"), []).append(None if c is None else int(c))
+    wanted = {c for found in behind.values() for c in found if c is not None}
+    chains = stacks_mod.chains(tp, wanted)
+    ours = stacks_mod.ownership(package, root) if chains else None
+    read = [stacks_mod.read(behind.get(row.get("location"), []), chains, ours)
+            for row in rows]
+    for row, (block, words) in zip(rows, read, strict=True):
+        row["stacks"] = block
+        if "detail" not in d.identity:
+            row["detail"] = f"{row['detail']} · {words}" if row.get("detail") else words
+
+
+def _rows_table(tp, rows: list[dict]) -> None:
+    """One detector's rows as `_rows`, for the queries after its first.
+
+    One statement at a time — `exec_script` splits on `;`, and a slice name is
+    free to contain one.
+    """
     tp.query("DROP TABLE IF EXISTS _rows")
     tp.query("CREATE TABLE _rows AS " + " UNION ALL ".join(
         f"SELECT {_sql_text(r.get('location'))} AS location, "
         f"{_sql_text(r.get('detail'))} AS detail" for r in rows))
-    return [(int(r["ts"]), int(r["dur"])) for r in tp.query(sql)
-            if r.get("ts") is not None and (r.get("dur") or 0) > 0]
 
 
 def _sql_text(value) -> str:

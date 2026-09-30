@@ -14,6 +14,7 @@ Run through `echolot doctor`.
 
 from __future__ import annotations
 
+import functools
 import os
 import tempfile
 from pathlib import Path
@@ -389,16 +390,29 @@ def _(report):
     env = report["environment"]
     assert env["sampling"] is None, env["sampling"]
     assert "sampling" not in env["missing"], env["missing"]
-    # The same trace with the sampler behind it. 30 samples of the worker
-    # inside the window, the first two without a stack; the main thread's
-    # four fall before and after it, and the other app's three are not ours.
-    # The rate is the recording's own, read back from the config in the trace.
-    sampled = build_report(sampling="arrived")
+    # The same trace with the sampler behind it. 46 samples of ours inside
+    # the window, 30 of the worker's and 16 of BlockingIO-1's, the worker's
+    # first two without a stack; the main thread's four fall before and after
+    # it, and the other app's three are not ours. The rate is the recording's
+    # own, read back from the config in the trace.
+    sampled = sampled_report()
     s = sampled["environment"]["sampling"]
-    assert s == {"hz": 100, "started": True, "samples": 30, "with_stack": 28}, s
-    # Samples are context, like the clock: they must not move a finding.
-    assert [d["rows"] for d in sampled["detectors"]] == \
+    assert s == {"hz": 100, "started": True, "samples": 46, "with_stack": 44}, s
+    # Samples are context, like the clock. They name what ran in a blind spot
+    # and move nothing else: no row comes or goes, and no number changes.
+    assert [_unsampled(d["rows"]) for d in sampled["detectors"]] == \
         [d["rows"] for d in report["detectors"]], "the samples changed a row"
+
+
+def _unsampled(found: list[dict]) -> list[dict]:
+    """Rows as a trace without samples gives them: `stacks` and its words gone."""
+    out = []
+    for row in found:
+        row = dict(row)
+        if row.pop("stacks", None) is not None:
+            row["detail"] = str(row["detail"]).split(" · ", 1)[0]
+        out.append(row)
+    return out
 
 
 # --- detectors -------------------------------------------------------------
@@ -808,6 +822,48 @@ def _(report):
     assert got[0]["covered_ms"] == 60.0, (
         f"expected the Running/slice intersection, not the slice length: {got[0]}"
     )
+
+
+@check("uninstrumented_cpu: the samples in a blind spot name what ran there")
+def _(report):
+    # The worker's 28 stacks. What ran is the first named method from the
+    # top: GzipSink.write under zlib's deflate on 15, Store.parse under ART's
+    # interpreter on 5. A stack with no method named is named by its first
+    # name, the read barrier's, read out of its mangled form, on 6; one with no
+    # name at all by its file, on 2. The nearest frame of ours: Store.save on
+    # 10, Store.parse on 5; of the stacks with nothing of ours, 5 reached the
+    # thread's start and 8 were cut short in the framework. The two samples
+    # that came without a stack are counted and name nothing.
+    row = next(r for r in rows(sampled_report(), "uninstrumented_cpu")
+               if r["location"] == "DefaultDispatcher-worker-1")
+    s = row["stacks"]
+    assert (s["samples"], s["with_stack"]) == (30, 28), s
+    assert [(e["frame"], e["samples"]) for e in s["leaf"]] == [
+        ("okio.GzipSink.write", 15), ("art::ReadBarrier::Mark", 6),
+        ("com.example.app.Store.parse", 5), ("[boot-framework.oat]", 2)], s["leaf"]
+    assert [(e["frame"], e["samples"], e.get("stack")) for e in s["ours"]] == [
+        ("com.example.app.Store.save", 10, None), (None, 8, "cut"),
+        ("com.example.app.Store.parse", 5, None), (None, 5, "whole")], s["ours"]
+    assert row["detail"].endswith(
+        " · 28 stacks: GzipSink.write 54%, ReadBarrier::Mark 21%"
+        " · ours: Store.save 36%, cut 29%"), row["detail"]
+    # Without samples, the row says what it always said.
+    plain = next(r for r in rows(report, "uninstrumented_cpu")
+                 if r["location"] == "DefaultDispatcher-worker-1")
+    assert "stacks" not in plain and " · " not in plain["detail"], plain
+
+
+@check("uninstrumented_cpu: a sample inside a slice is not the blind spot's")
+def _(report):
+    # BlockingIO-1 is on a CPU twice: in [200, 260], inside
+    # `blocking_io_wait`, and sampled six times on Disk.readSync there; and in
+    # [600, 700], after the slice closed, sampled ten times on Disk.checksum.
+    # Only the second stretch is a blind spot.
+    row = next(r for r in rows(sampled_report(), "uninstrumented_cpu")
+               if r["location"] == "BlockingIO-1")
+    s = row["stacks"]
+    assert (s["samples"], s["with_stack"]) == (10, 10), s
+    assert [e["frame"] for e in s["leaf"]] == ["com.example.app.Disk.checksum"], s
 
 
 @check("uninstrumented_cpu: coverage counts nested slices only once")
@@ -4039,6 +4095,16 @@ def build_report(tp_binary: str | None = None, sampling: str | None = None) -> d
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build(sampling=sampling))
         return analyze_trace(trace, Config(FIXTURE_CONFIG), tp_binary)
+
+
+@functools.lru_cache(maxsize=1)
+def sampled_report() -> dict:
+    """The fixture with a callstack sampler behind it, analysed once a process.
+
+    Three checks read it, and building it for each would run trace_processor
+    two more times in every `doctor`. None of them writes to it.
+    """
+    return build_report(sampling="arrived")
 
 
 def _where(e: BaseException) -> str:

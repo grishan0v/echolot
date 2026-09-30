@@ -102,6 +102,29 @@ def test_the_evidence_column_of_main_thread_block_is_explained():
           "Evidence: the thread's comm" in text and "15 characters" in text, text)
 
 
+def test_a_blind_spot_with_samples_behind_it_says_what_its_evidence_means():
+    """`ours: none 32%` reads as a glitch to someone who has not met it."""
+    stacks = {"samples": 30, "with_stack": 28,
+              "leaf": [{"frame": "deflate", "samples": 19, "pct": 67.9}],
+              "ours": [{"frame": None, "samples": 28, "pct": 100.0}]}
+    rep = {"detectors": [{
+        "id": "uninstrumented_cpu", "title": "Blind spots", "why": "", "params": {},
+        "params_source": "default", "error": None,
+        "rows": [{"location": "DefaultDispatch", "runs": "1/1", "count": 0,
+                  "total_ms": 300.0, "covered_ms": 0.0, "stacks": stacks,
+                  "detail": "100.0% of CPU outside slices · 28 stacks: GzipSink.write 54%, "
+                            "ReadBarrier::Mark 21% · ours: Store.save 36%, cut 29%"}],
+    }]}
+    text = report_mod.detector_view(rep, "uninstrumented_cpu")
+    check("the legend explains `ours:`, `none` and `cut`",
+          "Evidence: the share of the thread's CPU time" in text and "`none` where" in text
+          and "`cut` where" in text, text)
+    check("the json's list is pointed at", "`--json` carries `stacks`" in text, text)
+    check("and is no column of its own", "| stacks" not in text.lower(), text)
+    check("what the samples named is not cut off past a hundred characters",
+          "ours: Store.save 36%, cut 29% |" in text, text)
+
+
 def test_a_silent_detector_and_an_unknown_one_read_differently():
     check("silent", "_silent" in report_mod.detector_view(sample(), "gc_pressure"), "")
     text = report_mod.detector_view(sample(), "nothing")

@@ -17,7 +17,9 @@ Detector.identity for what goes wrong when it is left unsaid.
 
 A line reading `-- @intervals` after the query starts a second one, which
 says what stretches of the main thread's time the rows of the first stand
-for; see Detector.render_intervals.
+for; see Detector.render_intervals. A line reading `-- @samples` starts a
+third, which picks out the callstack samples behind each row; see
+Detector.render_samples.
 """
 
 from __future__ import annotations
@@ -46,9 +48,10 @@ _META_BLANK = re.compile(r"^\s*--\s*$")
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 # The trailing LIMIT is stripped only when measuring the distribution.
 _LIMIT_TAIL = re.compile(r"\bLIMIT\s+\d+\s*;?\s*$", re.IGNORECASE)
-# Where a detector's second query begins: a line of its own, straight after
-# the first query, so that the first still ends in its LIMIT.
-_INTERVALS = re.compile(r"^--\s*@intervals\s*$", re.MULTILINE)
+# Where a detector's second and third queries begin: a line of its own each,
+# the first of them straight after the first query, so that the first still
+# ends in its LIMIT.
+_SECTION = re.compile(r"^--\s*@(intervals|samples)\s*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -198,6 +201,8 @@ class Detector:
     path: Path | None = None
     # The query after `-- @intervals`, empty for a detector without one.
     intervals_sql: str = ""
+    # The query after `-- @samples`, the same.
+    samples_sql: str = ""
 
     @classmethod
     def from_file(cls, path: Path) -> "Detector":
@@ -206,7 +211,14 @@ class Detector:
             meta, params, calibrations = parse_meta(text)
         except ValueError as e:
             raise ValueError(f"{path.name}: {e}") from e
-        first, *second = _INTERVALS.split(text, maxsplit=1)
+        first, *rest = _SECTION.split(text)
+        sections: dict[str, str] = {}
+        for name, body in zip(rest[::2], rest[1::2], strict=True):
+            if name in sections:
+                # The second would quietly win, and the first would be a
+                # query nobody runs that still reads as the one in force.
+                raise ValueError(f"{path.name}: two `-- @{name}` sections")
+            sections[name] = body
         return cls(
             id=meta.get("id", path.stem),
             title=meta.get("title", path.stem),
@@ -218,7 +230,8 @@ class Detector:
                           if m.strip()),
             sql=first,
             path=path,
-            intervals_sql=second[0] if second else "",
+            intervals_sql=sections.get("intervals", ""),
+            samples_sql=sections.get("samples", ""),
         )
 
     def render_open(self, overrides: dict[str, Any] | None = None) -> str:
@@ -328,15 +341,32 @@ class Detector:
         None when the detector has no second query. `resolved` is what
         `render` returned, so both queries see the same thresholds.
         """
-        if not self.intervals_sql.strip():
+        return self._render_section(self.intervals_sql, "@intervals", resolved)
+
+    def render_samples(self, resolved: dict[str, Any]) -> str | None:
+        """The third query, with the values the first one ran with.
+
+        It picks out the callstack samples behind each row: `location`, and
+        `callsite_id`, NULL for a sample that came without a stack. One line
+        per sample, from `_samples_by_slice` or `_samples_win`, with the rows
+        in `_rows` as for the second query. What the samples name — what ran
+        on each stack, and the nearest frame of the project's own code — is
+        read in Python, the same way for every detector; see stacks.py.
+
+        `analyze` runs it only when the recording sampled, so that a trace
+        without samples gets the report it always got. None when the
+        detector has no third query.
+        """
+        return self._render_section(self.samples_sql, "@samples", resolved)
+
+    def _render_section(self, sql: str, name: str,
+                        resolved: dict[str, Any]) -> str | None:
+        if not sql.strip():
             return None
-        missing = {m for m in _PLACEHOLDER.findall(self.intervals_sql)
-                   if m not in resolved}
+        missing = {m for m in _PLACEHOLDER.findall(sql) if m not in resolved}
         if missing:
-            raise ValueError(
-                f"{self.id} @intervals: no values for {sorted(missing)}")
-        return _PLACEHOLDER.sub(
-            lambda m: sql_value(resolved[m.group(1)]), self.intervals_sql)
+            raise ValueError(f"{self.id} {name}: no values for {sorted(missing)}")
+        return _PLACEHOLDER.sub(lambda m: sql_value(resolved[m.group(1)]), sql)
 
 
 def _identity(declared: str | None) -> tuple[str, ...]:
