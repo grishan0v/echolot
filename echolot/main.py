@@ -37,6 +37,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
 
@@ -644,12 +645,17 @@ def cmd_analyze(args) -> int:
     (out_dir / "report.md").write_text(
         report_mod.to_markdown(rep), encoding="utf-8")
 
+    root = _project_root(cfg)
+    # A value a person confirmed, changed since the investigation opened:
+    # the report is about a window they did not agree to. Said before the
+    # report, where a reader who stops at its first lines still sees it, and
+    # logged, so `reflect` can say it without a transcript (#196).
+    _warn_confirmed_changed(root, cfg)
     print(report_mod.to_markdown(rep))
     print(f"\n→ {out_dir/'report.md'}\n→ {out_dir/'report.json'}",
           file=sys.stderr)
     # `touched_at` has to mean work, not "when someone last typed echolot":
     # the freshness rule that decides whether to ask stands on it.
-    root = _project_root(cfg)
     hunt_mod.touch(root, analyze=True)
     # .echolot/out/report.json is always the latest and every analyze
     # overwrites it, including one belonging to a different question. The
@@ -658,6 +664,27 @@ def cmd_analyze(args) -> int:
     if kept is not None:
         print(f"→ {kept}  (this investigation's copy)", file=sys.stderr)
     return 0
+
+
+def _warn_confirmed_changed(root: Path, cfg: Config) -> list[dict[str, Any]]:
+    """Say each value a person confirmed that differs from what they confirmed.
+
+    Only inside an open investigation, which recorded the values when it
+    opened; outside one there is nothing to hold the config to.
+    """
+    hunt = hunt_mod.load(root)
+    if not hunt or hunt.get("status") != "open":
+        return []
+    changed = hunt_mod.confirmed_changed(hunt, cfg.confirmed())
+    for c in changed:
+        print(f"[!] {c['field']} changed since this investigation opened: a "
+              f"person confirmed {c['was']!r}, and the config now says "
+              f"{c['now']!r}.\n    This report measures what they did not "
+              f"confirm. The value is theirs to change: ask them.",
+              file=sys.stderr)
+    if changed:
+        recorder.note(confirmed_changed=changed)
+    return changed
 
 
 def _reports_of_hunt(project: Path, ident: str) -> list[Path]:
@@ -1636,11 +1663,14 @@ def _clip(text: str, width: int = 58) -> str:
     return text if len(text) <= width else text[:width - 1] + "…"
 
 
-def _hunt_config(project: Path, config: str) -> tuple[str | None, str | None]:
-    """Scenario name and config hash — what an investigation is opened against.
+def _hunt_config(project: Path, config: str
+                 ) -> tuple[str | None, str | None, dict[str, Any]]:
+    """Scenario name, config hash and the confirmed values — what an
+    investigation is opened against.
 
     An investigation records what it was opened against so that `drift` can
-    later say "the scenario changed" instead of the human having to remember.
+    later say "the scenario changed" instead of the human having to remember,
+    and `analyze` can say which value a person confirmed has changed since.
 
     No config at all is `(None, None)`: nothing names a scenario yet. A config
     that is there and does not load raises, for `cmd_hunt` to refuse on. It
@@ -1650,9 +1680,9 @@ def _hunt_config(project: Path, config: str) -> tuple[str | None, str | None]:
     """
     path = project / config
     if not path.exists():
-        return None, None
+        return None, None, {}
     cfg = Config.load(path)
-    return cfg.scenario_name, cfg.sha
+    return cfg.scenario_name, cfg.sha, cfg.confirmed()
 
 
 def cmd_hunt(args) -> int:
@@ -1700,7 +1730,7 @@ def cmd_hunt(args) -> int:
         # stops `/echolot` at the door. Refused before anything is touched,
         # so asking again once the config loads loses nothing.
         try:
-            scenario, sha = _hunt_config(project, config)
+            scenario, sha, confirmed = _hunt_config(project, config)
         except (ConfigError, OSError) as e:
             print(f"error: {config} does not load: {e}", file=sys.stderr)
             print("Nothing was opened and no traces were moved aside. Fix the "
@@ -1723,7 +1753,7 @@ def cmd_hunt(args) -> int:
         h = hunt_mod.open_new(project, question,
                               since=getattr(args, "hunt_since", None),
                               scenario=scenario, config_sha=sha,
-                              traces_aside=aside)
+                              traces_aside=aside, confirmed=confirmed)
         print(f'opened #{h["n"]}: "{h["question"]}"')
         if h.get("since"):
             print(f'  after: {h["since"]}')

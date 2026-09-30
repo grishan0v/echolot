@@ -185,8 +185,15 @@ is which echolot commands ran, when, for how long, with what exit code, and
 the facts each attached.
 
 So the checks that read echolot's own calls run unchanged — `doctor_first`,
-`echolot_failures`, `retries`, `help_lookups`, `long_gaps`, the
-`FROM_CALLS_ALONE` set. The rest have nothing to read.
+`confirmed_changed`, `echolot_failures`, `retries`, `help_lookups`,
+`long_gaps`, the `FROM_CALLS_ALONE` set. The rest have nothing to read.
+
+`confirmed_changed` is there by design rather than by luck. An investigation
+records every value in `echolot.yml` a person confirmed when it opens, and
+each `analyze` inside it logs the ones that no longer hold, with both values.
+The first time it mattered was a Codex session, where there was no transcript
+to read: the hunt rewrote the end of the scenario a person had confirmed, and
+every report after that measured a window nobody had agreed to (#196).
 
 **And that is the part worth getting right.** A check that finds no evidence
 returns "clean": `trace_opened_directly` with nothing to look at reports "the

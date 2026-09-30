@@ -220,11 +220,16 @@ def archive(project: Path, hunt: dict[str, Any]) -> Path | None:
 def open_new(project: Path, question: str, since: str | None = None,
              scenario: str | None = None, config_sha: str | None = None,
              status: str = "abandoned",
-             traces_aside: Path | None = None) -> dict[str, Any]:
+             traces_aside: Path | None = None,
+             confirmed: dict[str, Any] | None = None) -> dict[str, Any]:
     """Close whatever was open, archive it, and start a new investigation.
 
     `status` is what the previous one is recorded as — `abandoned` when the
     human simply moved on, which is the common case and the honest word for it.
+
+    `confirmed` is every value in the config a person confirmed, as it stood
+    when the investigation opened: what `confirmed_changed` holds the config
+    to while it is open.
 
     `traces_aside` is where the loose set of traces was moved to make room.
     That set is the *previous* investigation's evidence, so it is recorded on
@@ -247,6 +252,7 @@ def open_new(project: Path, question: str, since: str | None = None,
         "since": since,
         "scenario": scenario,
         "config_sha": config_sha,
+        "confirmed": confirmed or {},
         "opened_at": _now(),
         "touched_at": _now(),
         "status": "open",
@@ -353,6 +359,23 @@ def needs_choice(hunt: dict[str, Any] | None, st: dict[str, Any]) -> bool:
     return not is_fresh(hunt)
 
 
+def confirmed_changed(hunt: dict[str, Any] | None,
+                      now: dict[str, Any]) -> list[dict[str, Any]]:
+    """The values a person confirmed that are no longer what they confirmed.
+
+    Held against what the investigation recorded when it opened, so it names
+    the field and both values where a changed hash could only say that the
+    file changed. A live hunt rewrote the end of the scenario, which a person
+    had confirmed as the moment the app is ready, and every report after the
+    edit measured a window nobody had agreed to (#196). A field that is gone
+    counts as changed; one confirmed since the investigation opened is not in
+    the record, and is not held to anything.
+    """
+    was = (hunt or {}).get("confirmed") or {}
+    return [{"field": key, "was": value, "now": now.get(key)}
+            for key, value in was.items() if now.get(key) != value]
+
+
 def drift(hunt: dict[str, Any] | None, st: dict[str, Any]) -> list[str]:
     """Signs the open investigation is no longer the one being asked about.
 
@@ -365,8 +388,13 @@ def drift(hunt: dict[str, Any] | None, st: dict[str, Any]) -> list[str]:
     cfg = st.get("config") or {}
     if not cfg.get("error"):
         scenario = hunt.get("scenario")
+        changed = confirmed_changed(hunt, cfg.get("confirmed") or {})
         if scenario and cfg.get("scenario") and scenario != cfg["scenario"]:
             out.append(f"the config's scenario changed: {scenario} → {cfg['scenario']}")
+        elif changed:
+            out.append("a value a person confirmed changed since this investigation "
+                       "opened: " + "; ".join(f"{c['field']} {c['was']!r} → {c['now']!r}"
+                                              for c in changed))
         elif hunt.get("config_sha") and cfg.get("sha") and hunt["config_sha"] != cfg["sha"]:
             out.append("echolot.yml changed since this investigation opened")
     t = _epoch(hunt.get("touched_at"))

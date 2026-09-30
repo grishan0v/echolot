@@ -48,6 +48,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                 "local": cfg.local_path is not None,
                 "runner": str(cfg.runner.get("mode", "launch")) if cfg.runner else None,
                 "sha": cfg.sha,
+                "confirmed": cfg.confirmed(),
             }
         except ConfigError as e:
             st["config"] = {"path": cfg_path, "error": str(e)}

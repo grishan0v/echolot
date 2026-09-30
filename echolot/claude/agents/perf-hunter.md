@@ -128,11 +128,17 @@ waiting for one.
 
 2. check the config before concluding anything:
    window.start_anchor.matches == 0     → anchor missed, window is not the scenario
+     (window.end_anchor the same)
    window.process_alternatives present  → possibly the wrong process
    config / params_source say calibrated on these very runs
                                         → analyze --defaults before believing silence
    everything silent on a plausible window → exit: "clean"
-   → in these cases fix the config, do not hunt a problem
+   → in these cases fix the config, do not hunt a problem — except a value
+     under `_source: confirmed_by_user`: a person chose it, and it is theirs.
+     When one looks wrong (an anchor that matched nothing in any run), exit
+     with that as the conclusion: the matches, and the candidates
+     `echolot probe` lists. They change it or confirm another; you do not.
+     A value marked `derived` or `default` is yours to fix.
 
 3. hypotheses: firing detectors → domains → files
    localised to a place in the code → exit with the finding

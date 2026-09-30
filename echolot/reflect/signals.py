@@ -506,6 +506,37 @@ def thresholds_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | Non
                   rows)
 
 
+def confirmed_changed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
+    """A value a person confirmed, changed while an investigation was open.
+
+    `analyze` holds the config to what the investigation recorded when it
+    opened, and logs each value that moved. So this reads echolot's own calls
+    and nothing else, and it works from the log where there is no
+    transcript — which is where it happened first: a Codex session rewrote
+    the end of the scenario a person had confirmed, and said so only after
+    the report on the new window was made (#196).
+    """
+    seen: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for c in f.echolot_calls:
+        facts = (c.recorded or {}).get("facts") or {}
+        for ch in facts.get("confirmed_changed") or []:
+            key = (str(ch.get("field")), repr(ch.get("was")), repr(ch.get("now")))
+            row = seen.setdefault(key, {"ts": _t(c.ts), "agent": c.agent,
+                                        "field": ch.get("field"), "was": ch.get("was"),
+                                        "now": ch.get("now"), "reports": 0})
+            row["reports"] += 1
+    if not seen:
+        return None
+    return Signal("confirmed_changed", "warn",
+                  "a value a person confirmed changed during an investigation",
+                  "`_source: confirmed_by_user` marks the person's own choice, and every "
+                  "report after the change measured a window they did not confirm.",
+                  list(seen.values()),
+                  hint="If the agent changed it, the loop went past what it may change: "
+                       "perf-hunter.md says to stop and ask. If the person did, the "
+                       "investigation holds the old value; a new one starts from theirs.")
+
+
 # ---------------------------------------------------------- workarounds
 
 def _around(text: str, needle: str, width: int = 110) -> str:
@@ -972,6 +1003,7 @@ SIGNALS: list[Detector] = [
     conclusion_shape,
     config_bypassed,
     thresholds_by_hand,
+    confirmed_changed,
     baseline_lost,
     # workarounds
     report_sliced_by_hand,
@@ -997,6 +1029,7 @@ SIGNALS: list[Detector] = [
 # reports "clean" over evidence it never had, which is worse than useless.
 FROM_CALLS_ALONE = {
     "doctor_first",
+    "confirmed_changed",
     "echolot_failures",
     "retries",
     "help_lookups",
