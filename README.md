@@ -16,7 +16,9 @@
 
 ---
 
-**Contents** · [Quick start](#quick-start) · [What it saves](#what-it-saves) · [What it is](#what-it-is) · [Requirements](#requirements) · [What you get](#what-you-get) · [What changed](#what-changed) · [Commands](#commands) · [Detectors](#detectors) · [How it works](#how-it-works) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
+**Contents** · [Quick start](#quick-start) · [How it works](#how-it-works) · [What it saves](#what-it-saves) · [What you get](#what-you-get) · [What changed](#what-changed)
+
+**Reference** · [Detectors](#detectors) · [Commands](#commands) · [Requirements](#requirements) · [Project layout](#project-layout) · [Documentation](#documentation) · [Status](#status)
 
 ---
 
@@ -105,6 +107,39 @@ echolot doctor -q                                                # is this envir
 Results land in `.echolot/out/` — `report.md` for you, `report.json` for the
 agent.
 
+## How it works
+
+echolot runs thirteen SQL detectors over a Perfetto trace and returns about
+twenty rows: where the time went, how much of it, and the evidence behind each
+claim. Same trace in, same report out: the `trace_processor` version is pinned.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/loop-dark.svg">
+    <img alt="The hunt as a loop: echolot records, analyzes and compares the same way every time; the agent reads the rows, marks one blind spot a round, and names the place in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/loop-light.svg" width="880">
+  </picture>
+</p>
+
+The recording, the detectors and the comparison are scripts that run the same
+way every time. In each round the agent makes one decision: where to look
+next. The loop ends when the report names a place in the code, or when the
+rounds run out.
+
+| where you run it | how |
+|---|---|
+| Claude Code | the full loop: `echolot init`, then `/echolot`. The agent records, reads the report and walks down to the code |
+| Cursor, Codex, other agents | `echolot init` points them at the tool, and `echolot guide` tells them how to work with it. The loop runs in your main context, so keep the passes short |
+| a shell or CI | the pipeline commands under [Without an agent](#without-an-agent) |
+
+### The investigation
+
+Each question you bring gets an investigation. `echolot hunt "cold start was
+3s, now 7s" --since "the tab redesign"` opens one, sets the previous traces
+aside without deleting them, and files every round of traces and every report
+under it, so a question asked weeks ago still knows what was measured to
+answer it. `/echolot` opens and closes them for you. The commands, and what
+each one keeps, are in [The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md).
+
 ## What it saves
 
 <p align="center">
@@ -116,32 +151,6 @@ agent.
 
 Cost is the measure because it includes the work of the agent's subagent:
 token counts leave that out, and time went both ways across the four models.
-
-## What it is
-
-echolot runs thirteen SQL detectors over a Perfetto trace and returns about
-twenty rows: where the time went, how much of it, and the evidence behind each
-claim. Same trace in, same report out: the `trace_processor` version is pinned.
-
-| where you run it | how |
-|---|---|
-| Claude Code | the full loop: `echolot init`, then `/echolot`. The agent records, reads the report and walks down to the code |
-| Cursor, Codex, other agents | `echolot init` points them at the tool, and `echolot guide` tells them how to work with it. The loop runs in your main context, so keep the passes short |
-| a shell or CI | the pipeline commands under [Without an agent](#without-an-agent) |
-
-## Requirements
-
-| | |
-|---|---|
-| **Python** | 3.10 or newer |
-| **`curl`** | on `PATH` — the one download in the next row goes through it |
-| **`trace_processor`** *(fetched once)* | downloaded by the first command that needs it, usually `echolot init`: 10–14 MB, checked against its SHA-256. Behind a proxy or offline, see [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) |
-| **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
-| **Device** | a phone or emulator with USB debugging on |
-| **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) for the full workflow; Cursor, Codex and others via `echolot guide` |
-| **Android 12+** *(for one detector)* | `frame_jank` reads SurfaceFlinger's frame timeline. Older devices do not have it, and the detector is then silent — which reads exactly like "no bad frames" |
-
-Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
 
 ## What you get
 
@@ -260,6 +269,29 @@ A report built against other thresholds, or on a device whose clock moved or
 throttled between the rounds, is named above the table. See
 [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md).
 
+## Detectors
+
+| detector | what it catches |
+|---|---|
+| `main_thread_block` | where the main thread spent its time, by self time |
+| `app_init` | what ran after the Application was created, before the first Activity: initializers by name, and the ContentProviders and `Application.onCreate` nobody traced |
+| `gc_pressure` | frequent or expensive GC, and waits on allocation |
+| `monitor_contention` | lock contention, with the owner's tid as evidence |
+| `binder_txn` | long synchronous IPC, and death by a thousand cuts |
+| `runnable_starvation` | thread ready to run but preempted on CPU |
+| `uninstrumented_cpu` | **threads burning CPU with no instrumentation** |
+| `frame_jank` | frames that missed their deadline, and whose fault it was |
+| `anr_risk` | stretches where the main thread never got back to the message queue |
+| `anr` | ANRs the system recorded during the trace, with its own reason |
+| `main_thread_outlier` | one occurrence far longer than that work usually takes |
+| `repeated_work` | the same work reached from more than one caller, costing about the same both times |
+| `io_wait` | **threads the kernel parked waiting for a block device** |
+
+`uninstrumented_cpu`, `io_wait` and `frame_jank` find a problem where nobody
+wrote a `trace{}` call. What each detector sees is in
+[Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md), and writing your own in
+[Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md).
+
 ## Commands
 
 `echolot --help` lists every command in four groups. Every verb after
@@ -273,7 +305,7 @@ only the agent has. The pipeline — `collect`, `analyze`, `compare` — is unde
 |---|---|
 | `echolot` | where this project stands, and the next step |
 | `echolot init` | install or update the `.claude/` layer; .gitignore, and checks the environment |
-| `echolot hunt "<what regressed>"` | open an investigation — see [below](#the-investigation) |
+| `echolot hunt "<what regressed>"` | open an investigation — see [The investigation](#the-investigation) |
 | `echolot doctor` | environment + self-check on a synthetic trace; exit 0 when every check passes, 1 when one fails or the self-check cannot run, 2 when trace_processor cannot be downloaded; `-q` for three lines |
 
 <details>
@@ -307,51 +339,19 @@ only the agent has. The pipeline — `collect`, `analyze`, `compare` — is unde
 
 </details>
 
-## The investigation
+## Requirements
 
-Each question you bring gets an investigation. `echolot hunt "cold start was
-3s, now 7s" --since "the tab redesign"` opens one, sets the previous traces
-aside without deleting them, and files every round of traces and every report
-under it, so a question asked weeks ago still knows what was measured to
-answer it. `/echolot` opens and closes them for you. The commands, and what
-each one keeps, are in [The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md).
-
-## Detectors
-
-| detector | what it catches |
+| | |
 |---|---|
-| `main_thread_block` | where the main thread spent its time, by self time |
-| `app_init` | what ran after the Application was created, before the first Activity: initializers by name, and the ContentProviders and `Application.onCreate` nobody traced |
-| `gc_pressure` | frequent or expensive GC, and waits on allocation |
-| `monitor_contention` | lock contention, with the owner's tid as evidence |
-| `binder_txn` | long synchronous IPC, and death by a thousand cuts |
-| `runnable_starvation` | thread ready to run but preempted on CPU |
-| `uninstrumented_cpu` | **threads burning CPU with no instrumentation** |
-| `frame_jank` | frames that missed their deadline, and whose fault it was |
-| `anr_risk` | stretches where the main thread never got back to the message queue |
-| `anr` | ANRs the system recorded during the trace, with its own reason |
-| `main_thread_outlier` | one occurrence far longer than that work usually takes |
-| `repeated_work` | the same work reached from more than one caller, costing about the same both times |
-| `io_wait` | **threads the kernel parked waiting for a block device** |
+| **Python** | 3.10 or newer |
+| **`curl`** | on `PATH` — the one download in the next row goes through it |
+| **`trace_processor`** *(fetched once)* | downloaded by the first command that needs it, usually `echolot init`: 10–14 MB, checked against its SHA-256. Behind a proxy or offline, see [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) |
+| **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
+| **Device** | a phone or emulator with USB debugging on |
+| **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) for the full workflow; Cursor, Codex and others via `echolot guide` |
+| **Android 12+** *(for one detector)* | `frame_jank` reads SurfaceFlinger's frame timeline. Older devices do not have it, and the detector is then silent — which reads exactly like "no bad frames" |
 
-`uninstrumented_cpu`, `io_wait` and `frame_jank` find a problem where nobody
-wrote a `trace{}` call. What each detector sees is in
-[Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md), and writing your own in
-[Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md).
-
-## How it works
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/loop-dark.svg">
-    <img alt="The hunt as a loop: echolot records, analyzes and compares the same way every time; the agent reads the rows, marks one blind spot a round, and names the place in the code" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/loop-light.svg" width="880">
-  </picture>
-</p>
-
-The recording, the detectors and the comparison are scripts that run the same
-way every time. In each round the agent makes one decision: where to look
-next. The loop ends when the report names a place in the code, or when the
-rounds run out.
+Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
 
 ## Project layout
 
