@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from echolot.layer import CLAUDE_DIR, GUIDE_DIR
+from echolot.layer import CLAUDE_DIR, GUIDE_DIR, guide_topics
 from echolot.main import build_parser
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,7 +44,9 @@ SOURCES = sorted(
      *(CLAUDE_DIR / "skills" / "echolot" / "references").glob("*.md"),
      CLAUDE_DIR / "agents" / "perf-hunter.md",
      *(CLAUDE_DIR / "commands").glob("*.md"),
-     *GUIDE_DIR.glob("*.md")])
+     *GUIDE_DIR.glob("*.md"),
+     # The plugin's skills, which Claude Code and Codex both load (#189).
+     *(ROOT / "plugins" / "echolot" / "skills").glob("*/SKILL.md")])
 
 FENCE = re.compile(r"^```[^\n]*\n(.*?)^```", re.S | re.M)
 SPAN = re.compile(r"`([^`]+)`")
@@ -104,7 +106,7 @@ def _topic(words: str) -> str | None:
 @pytest.mark.parametrize("path", SOURCES, ids=lambda p: str(p.relative_to(ROOT)))
 def test_every_command_in_the_agent_text_parses(path: Path) -> None:
     verbs = _subparsers()
-    topics = {p.stem for p in GUIDE_DIR.glob("*.md")}
+    topics = set(guide_topics())
     text = path.read_text(encoding="utf-8")
     wrong = []
     for line, verb, words in _calls(text):

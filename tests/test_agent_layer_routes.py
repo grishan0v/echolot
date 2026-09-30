@@ -37,7 +37,7 @@ import pytest
 
 from echolot import hosts, layer
 from echolot import hunt as hunt_mod
-from echolot.layer import CLAUDE_DIR, GUIDE_DIR
+from echolot.layer import CLAUDE_DIR, guide_topics
 from echolot.main import build_parser, main
 from echolot.state import next_kind, next_step, project_state
 from tests.support import check
@@ -403,7 +403,7 @@ def _help(verb: str) -> str:
 
 def test_the_help_lists_every_guide_topic_and_every_client() -> None:
     guide = _help("guide")
-    missing = [p.stem for p in GUIDE_DIR.glob("*.md") if p.stem not in guide]
+    missing = [t for t in guide_topics() if t not in guide]
     check("guide --help names every topic", not missing, missing)
     init_help = _help("init")
     missing = [h.key for h in hosts.HOSTS if h.key not in init_help]

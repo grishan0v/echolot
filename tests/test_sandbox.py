@@ -56,10 +56,15 @@ def outside(monkeypatch):
 
 
 @pytest.fixture
-def in_codex(monkeypatch):
-    """The marks Codex leaves on a command it runs with the network off."""
+def in_codex(monkeypatch, tmp_path):
+    """The marks Codex leaves on a command it runs with the network off.
+
+    And a Codex home of its own, so a rule on the machine running the tests
+    does not change what they read.
+    """
     monkeypatch.setenv("CODEX_SANDBOX", "seatbelt")
     monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
 
 
 @pytest.fixture
@@ -315,3 +320,42 @@ def test_under_a_real_sandbox_with_no_network_analyze_says_so(project):
     assert run.returncode == 2, run.stdout + run.stderr
     assert "Traceback" not in run.stderr, run.stderr
     assert "trace_processor could not get a port on localhost" in run.stderr, run.stderr
+
+
+# --- a rule that is there and did not match ----------------------------------------
+
+RULE = 'prefix_rule(\n    pattern = ["echolot"],\n    decision = "allow",\n)\n'
+
+
+@pytest.mark.parametrize("where", ["project", "codex-home"])
+def test_with_the_rule_in_place_the_refusal_names_the_command_line(
+        project, port_refused, in_codex, capsys, tmp_path, monkeypatch, where):
+    """What a live Codex session stopped on (#189): `analyze
+    .echolot/traces/*.perfetto-trace` with the rule in place. Codex does not
+    look inside a line with a glob, so the whole line stayed in the sandbox,
+    and "add the rule" was advice about a rule that was already there."""
+    home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    rules = project / ".codex" / "rules" if where == "project" else home / "rules"
+    rules.mkdir(parents=True)
+    (rules / "echolot.rules").write_text(RULE, encoding="utf-8")
+
+    code, err = _analyze(capsys)
+    assert code == 2, err
+    assert "lets echolot out of it" in err, err
+    assert "A glob such as `*.perfetto-trace`" in err, err
+    assert "put prefix_rule" not in err and "let it out for good" not in err, err
+    unread = "Codex has not read the rule" in err
+    assert unread is (where == "project"), err
+
+
+def test_a_rules_file_about_another_command_is_not_ours(
+        project, port_refused, in_codex, capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    rules = project / ".codex" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "gh.rules").write_text('prefix_rule(pattern = ["gh", "pr", "view"])\n',
+                                    encoding="utf-8")
+    code, err = _analyze(capsys)
+    assert code == 2, err
+    assert "let it out for good" in err and "lets echolot out of it" not in err, err

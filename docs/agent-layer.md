@@ -251,6 +251,51 @@ recorder log, which every command writes from every caller — so the report
 exists, it is smaller, and it says which checks it could not make. See
 [reflect.md](reflect.md) under "Without a transcript".
 
+### The plugin: one set of skills for Claude Code and Codex
+
+`plugins/echolot/` is a plugin both hosts load: four skills — the door,
+setup, the hunt and reflect — and a manifest. It is not the layer packaged
+again. Codex loads a plugin's skills and nothing else, turns a command into
+a skill only when it fits in 4,000 bytes and drops the rest without a word,
+and has no place for an agent file: today's layer, packaged as it is, arrived
+in Codex as a door that routed to two skills that were not there (#188). And a
+second set of texts written for Codex would be the drift #5 closed.
+
+So each skill is a door to a topic, and says little besides what to run.
+`echolot guide <topic>` prints the rest, from the files the layer is made of:
+
+| topic | printed from |
+|---|---|
+| `overview`, `hunt`, `anr` | the guide's own pages |
+| `setup` | `commands/echolot-setup.md` |
+| `reflect` | `commands/echolot-reflect.md` |
+| `loop` | `agents/perf-hunter.md` — the text a Claude Code subagent is given |
+| `report`, `config`, `naming`, `collect` | the skill's references |
+
+One file per text, and nothing printed can be older than the echolot that
+prints it. The guide used to keep a `setup.md` of its own beside the command;
+by then each of the two knew things the other did not, and they are one file
+now.
+
+The skills carry what a host needs and the guide cannot give: where to go
+next, and how to hand the loop over. The door runs `echolot` and routes on
+`next`; the hunt opens the investigation, then hands the loop to a subagent
+that starts with none of the conversation — Codex copies the whole of it into
+a subagent unless told otherwise — and waits for the conclusion. Nothing in
+them names a Claude Code tool, and each stays under 4,000 bytes; `tests/test_plugin.py`
+holds both, and that every topic a skill names exists.
+
+In Codex only the door is picked by a question's words: each skill's
+`agents/openai.yaml` turns implicit use off for the other three, which the
+door reaches, and keeps all four out of ChatGPT's chat, where there is no
+shell to run echolot in.
+
+A project whose skills come with the plugin does not get `.claude/` —
+Claude Code would load the skills twice. The door answers `next: init` with
+`echolot init --for plugin`, which writes the `.gitignore` lines, saves the
+choice, and installs nothing else; `echolot` then reads the layer as provided
+by the plugin, and stops asking for `init`.
+
 ### A sandbox with no network
 
 Codex runs every command in a sandbox, and by default the sandbox has no
@@ -316,19 +361,30 @@ echolot guide                        the same map, for a client without `.claude
  └─ guide/overview.md                echolot · status --next · init · doctor · collect
     │                                analyze · report · compare · domains · hunt
     │                                calibrate · explain · reflect · guide
-    ├─ guide/setup.md                scan · collect · probe · names · domains
-    │                                analyze · echolot
-    ├─ guide/hunt.md                 doctor · hunt · collect · analyze · report
-    │                                compare · names · domains · mark
+    ├─ guide setup                   commands/echolot-setup.md, printed
+    ├─ guide/hunt.md                 doctor · hunt · collect · domains · mark
+    │  └─ guide loop                 agents/perf-hunter.md, printed: the brief a
+    │                                subagent is given, or the loop run by hand
+    ├─ guide reflect                 commands/echolot-reflect.md, printed
+    ├─ guide report | config         references/*.md, printed
+    │  | naming | collect
     └─ guide/anr.md                  anr · mark
+
+plugins/echolot/skills/              the plugin: four skills, each a door to a topic
+ ├─ echolot/SKILL.md                 --version · echolot · status --next
+ │                                   init --for plugin · doctor · hunt --resume · guide
+ ├─ echolot-setup/SKILL.md           guide setup
+ ├─ echolot-hunt/SKILL.md            doctor -q · hunt · guide hunt · guide loop
+ └─ echolot-reflect/SKILL.md         guide reflect
 ```
 
 `report` (views of a report already on disk) sits beside `analyze` wherever a
 report is read row by row — the skill, its report reference, the hunter and
-the two guides that hunt; `scan` (the facts setup starts from) is in the two
-setup paths and nowhere else. Every invocation in these files, inline or
-fenced, is run past the CLI's own parser by a test: the verb has to exist and
-every flag has to be one that verb takes.
+the guide's overview; `scan` (the facts setup starts from) is in the setup
+command, which `guide setup` prints, and nowhere else. Every invocation in
+these files and in the plugin's skills, inline or fenced, is run past the
+CLI's own parser by a test: the verb has to exist and every flag has to be one
+that verb takes.
 
 Four things the shape says.
 
@@ -338,12 +394,14 @@ its `next` line (`echolot status --next` prints the word alone) rather than on
 the look of the project.
 
 **The references are one level down.** They name verbs, and one of them points
-further: `references/config.md` sends its reader to `references/naming.md` for
-why thread masks are masks — `comm` is cut to fifteen characters. Nothing in
-the layer sits more than three hops from `/echolot`. Two references are opened
-from below as well: `perf-hunter` reads `references/report.md` instead of
-working the schema out by hand, and setup reads `references/collect.md` to
-capture the probe trace while there is still no config.
+further: the config reference sends its reader to the naming one for why
+thread masks are masks — `comm` is cut to fifteen characters. Nothing in the
+layer sits more than three hops from `/echolot`. Two references are opened
+from below as well, by the topic `guide` prints them under, so the same line
+works with the layer and without it: `perf-hunter` reads `echolot guide report`
+instead of working the schema out by hand, and setup reads
+`echolot guide collect` to capture the probe trace while there is still no
+config.
 
 **One file puts markers in.** `perf-hunter` is the only place that adds
 anything to the sources, which is what makes `AGENTTMP_` a prefix one agent

@@ -269,5 +269,5 @@ currently left to whoever reads the report.
 Masks rather than names, because `comm` is truncated to fifteen characters:
 `DefaultDispatcher-worker-1` arrives as `DefaultDispatch` and the whole pool
 comes under that single name, while digits inside the cut survive and
-`arch_disk_io_*` still matches four distinct threads. See
-[naming.md](naming.md).
+`arch_disk_io_*` still matches four distinct threads. See the naming
+reference: `echolot guide naming`.

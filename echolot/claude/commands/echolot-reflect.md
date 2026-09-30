@@ -8,9 +8,10 @@ tool, not for the application being profiled.
 
 ## What the report is
 
-`echolot reflect` reads the session's transcript (this Claude Code project's
-`~/.claude/projects/…` files, subagents included) and the tool's own
-`.echolot/log/runs.jsonl`, and compresses them into `.echolot/reflect/<id>.json`
+`echolot reflect` reads the session's transcript — a Claude Code session's
+`~/.claude/projects/…` files, subagents included; other agents' sessions have
+no reader yet, and their report comes from the run log alone — and the tool's
+own `.echolot/log/runs.jsonl`, and compresses them into `.echolot/reflect/<id>.json`
 and `.md`. It is the Marker Report over the agent instead of the trace: facts
 and signals, no conclusions. You draw those.
 
@@ -35,7 +36,7 @@ signal id and the numbers from it — and a one-line diff-sized description:
 ```
 CLI
   - <change>            evidence: <signal id>, <rows/numbers>
-Skill / commands / perf-hunter.md
+Skill texts (the door, setup, the hunt, the loop)
   - <change>            evidence: …
 Config / calibrate
   - <change>            evidence: …

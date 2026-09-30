@@ -3487,13 +3487,15 @@ def _(report):
     the guide actually answers every state the tool can report.
     """
     from .state import NEXT_KINDS
-    from .layer import GUIDE_DIR
+    from .layer import GUIDE_DIR, guide_topics
 
     overview = (GUIDE_DIR / "overview.md").read_text(encoding="utf-8")
     missing = [k for k in NEXT_KINDS if f"`{k}`" not in overview]
     assert not missing, f"`next` words with no branch in the guide: {missing}"
-    for topic in ("setup", "hunt"):
-        assert (GUIDE_DIR / f"{topic}.md").exists(), f"guide {topic} is missing"
+    topics = guide_topics()
+    for topic in ("setup", "hunt", "loop"):
+        assert topics.get(topic) and topics[topic].exists(), \
+            f"guide {topic} is missing"
         assert f"guide {topic}" in overview, \
             f"the overview never sends anyone to `guide {topic}`"
     # The rule the whole design rests on, in the words an agent will act on.

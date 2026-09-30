@@ -1,0 +1,6 @@
+interface:
+  display_name: "echolot"
+  short_description: "Android performance, from a trace to the code"
+  default_prompt: "Use $echolot to find where this app's cold start time goes."
+policy:
+  products: ["CODEX"]

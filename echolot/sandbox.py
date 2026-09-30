@@ -29,6 +29,7 @@ import errno
 import os
 import re
 from collections.abc import Mapping
+from pathlib import Path
 
 from .config import ConfigError
 
@@ -95,8 +96,67 @@ def ways_out(where: str | None) -> list[str]:
     ]
 
 
+# A rule file names the command it lets out as a list of words; spaced
+# however its author spaced it.
+_ECHOLOT_RULE = re.compile(r'prefix_rule\(\s*pattern\s*=\s*\[\s*"echolot"\s*\]')
+
+
+def _codex_home(env: Mapping[str, str]) -> Path:
+    return Path(env.get("CODEX_HOME") or Path.home() / ".codex").resolve()
+
+
+def _shown(path: Path) -> str:
+    """A path the way a person would type it: from here, or from home."""
+    try:
+        return str(path.relative_to(Path.cwd().resolve()))
+    except ValueError:
+        home = str(Path.home())
+        return "~" + str(path)[len(home):] if str(path).startswith(home) else str(path)
+
+
+def codex_rule(start: Path | None = None,
+               env: Mapping[str, str] | None = None) -> Path | None:
+    """The rules file that lets echolot out of Codex's sandbox, when one exists.
+
+    Where Codex looks: `.codex/rules/` in the project, which may sit above the
+    directory the command ran in, and the user's own under CODEX_HOME.
+    """
+    env = os.environ if env is None else env
+    here = (start or Path.cwd()).resolve()
+    homes = [d / ".codex" for d in (here, *here.parents)]
+    homes.append(_codex_home(env))
+    for home in homes:
+        for rules in sorted((home / "rules").glob("*.rules")):
+            try:
+                if _ECHOLOT_RULE.search(rules.read_text(encoding="utf-8")):
+                    return rules
+            except OSError:
+                continue
+    return None
+
+
 def message(what: str, where: str | None) -> str:
     """The whole sentence: what was refused, whose sandbox, the way out."""
+    rule = codex_rule() if where == CODEX else None
+    if rule is not None:
+        # The rule is there and the command was refused all the same: Codex
+        # matched the command line against it and it did not match. A glob
+        # is the usual reason — the documented `analyze
+        # .echolot/traces/*.perfetto-trace` is one — and a live session
+        # stopped on it, taking the refusal for a missing rule (#189).
+        lines = [
+            f"{what}: this command ran in Codex's sandbox although "
+            f"{_shown(rule)} lets echolot out of it.",
+            "  Codex matches the whole command line against the rule. A glob "
+            "such as `*.perfetto-trace`, a pipe, or `&&` with another program "
+            "keeps the line in the sandbox: run echolot on its own, with the "
+            "trace files named (`ls .echolot/traces` lists them)."]
+        if not rule.is_relative_to(_codex_home(os.environ)):
+            lines.append(
+                "  If the line was echolot alone, Codex has not read the rule: "
+                "it reads a project's rules once it trusts the project, and "
+                "only when a session starts.")
+        return "\n".join(lines)
     if where == CODEX:
         head = (f"{what}: this command runs in Codex's sandbox, which has no "
                 f"network, localhost included.")

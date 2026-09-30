@@ -17,8 +17,8 @@ import json
 import os
 from pathlib import Path
 
+from . import hosts, layer, recorder
 from . import hunt as hunt_mod
-from . import layer, recorder
 from .config import Config, ConfigError
 
 
@@ -30,6 +30,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     """
     st: dict = {"project": project}
     st["layer_verdict"], st["layer_line"] = layer.one_line(project)
+    st["hosts"] = hosts.load_choice(project)
 
     cfg_path = project / config
     st["config"] = None
@@ -217,6 +218,8 @@ def _door(st: dict) -> str:
     the layer names a command its human does not have.
     """
     if st.get("layer_verdict") == "opted-out":
+        if "plugin" in (st.get("hosts") or []):
+            return "the plugin's echolot skill, or `echolot guide"
         return "`echolot guide"
     return "/echolot in Claude Code, or `echolot guide"
 

@@ -45,8 +45,8 @@ echolot guide    # how to work with it — read this before performance work
 ```
 
 `echolot guide` is printed by the installed package, so it always matches the
-version in use. `echolot guide hunt` is the loop; `echolot guide setup` builds
-the config.
+version in use. `echolot guide hunt` finds a regression; `echolot guide setup`
+builds the config.
 """
 
 BODY = _LEAD + END_MARKER + "\n"
@@ -99,6 +99,16 @@ HOSTS: tuple[Host, ...] = (
          path=".github/copilot-instructions.md",
          evidence=(".github/copilot-instructions.md",),
          note="repository instructions"),
+    # The plugin brings its own skills, in Claude Code and in Codex alike, so
+    # there is no file to write for it and no evidence in the tree to find:
+    # it is chosen by name, `init --for plugin`, and the plugin's own door
+    # does that. What choosing it still buys is everything `init` does
+    # besides the layer — the .gitignore lines above all — and a saved
+    # choice, so a project with no .claude/ stops reading as one that needs
+    # `echolot init` (#189).
+    Host(key="plugin", title="the echolot plugin", path="",
+         evidence=(),
+         note="its skills come with the plugin; nothing is installed here"),
 )
 
 BY_KEY = {h.key: h for h in HOSTS}

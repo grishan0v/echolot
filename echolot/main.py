@@ -1891,13 +1891,12 @@ def cmd_guide(args) -> int:
     that can run a command can read it.
     """
     topic = (args.topic or "overview").lower()
-    path = layer.GUIDE_DIR / f"{topic}.md"
-    if not path.exists():
-        available = sorted(p.stem for p in layer.GUIDE_DIR.glob("*.md"))
-        print(f"no guide for {topic!r}. There is: {', '.join(available)}",
+    topics = layer.guide_topics()
+    if topic not in topics:
+        print(f"no guide for {topic!r}. There is: {', '.join(sorted(topics))}",
               file=sys.stderr)
         return 2
-    print(path.read_text(encoding="utf-8").rstrip())
+    print(layer.guide_text(topics[topic]))
     return 0
 
 
@@ -2265,7 +2264,11 @@ def cmd_init(args) -> int:
         print(f"\n  {ignored}")
 
     if not any(h.key == "claude" for h in chosen):
-        print("\nClaude Code not selected — .claude/ stays out of this project.")
+        if any(h.key == "plugin" for h in chosen):
+            print("\nThe skills come with the echolot plugin — .claude/ stays "
+                  "out of this project.")
+        else:
+            print("\nClaude Code not selected — .claude/ stays out of this project.")
         layer.install_pointers(target, chosen)
         print("\nAny agent: `echolot guide`. The choice is kept — a plain "
               "`echolot init` points at\nthe same agents again; `--for` "
@@ -3254,12 +3257,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     gd = add("guide", "agent", "[<topic>]",
              "how to work with this tool — for any agent, not only Claude Code")
-    # Read off the guide directory, which is what `guide` itself reads: the
-    # list written out by hand went on without `anr` once it shipped.
+    # Read off the topics `guide` itself reads: the list written out by hand
+    # went on without `anr` once it shipped.
     gd.add_argument("topic", nargs="?",
                     help="overview (default), " + ", ".join(sorted(
-                        p.stem for p in layer.GUIDE_DIR.glob("*.md")
-                        if p.stem != "overview")))
+                        t for t in layer.guide_topics() if t != "overview")))
     gd.set_defaults(func=cmd_guide)
 
     ex = add("explain", "agent", "", "the detectors and their parameters")
