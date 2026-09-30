@@ -46,6 +46,7 @@ from . import layer, recorder, state, table, when
 from . import report as report_mod
 from .config import NO_ANCHOR, Config, ConfigError
 from .reflect.cli import cmd_reflect
+from .sandbox import SandboxError
 from .tp import (
     ToolchainError,
     TraceSession,
@@ -1841,7 +1842,16 @@ def cmd_status(args) -> int:
         facts = d.get("facts") or {}
         failed = facts.get("failed") or []
         ago = when.ago(when.iso_epoch(d.get("ts")))
-        if facts.get("checks") == 0:
+        if facts.get("checks") == 0 and facts.get("sandbox"):
+            # The why is known, and it is not the machine. Said here, the
+            # door can pass it on without running into the same refusal
+            # again to learn it.
+            lines.append(("doctor", f"{ago}, the self-check did not run: "
+                                    f"{state.whose_sandbox(facts['sandbox'])} "
+                                    f"refused trace_processor a port on "
+                                    f"localhost — echolot has to run outside "
+                                    f"it, and `echolot doctor` says how"))
+        elif facts.get("checks") == 0:
             # No check ran, so there is no count to give. A self-check that
             # could not start is logged with `checks: 0` and one entry in
             # `failed` (see `NOT_RUN`), and that entry was printed as "1
@@ -2566,17 +2576,24 @@ def _refused_without_asserts() -> bool:
     return True
 
 
-def _record_not_run(reason: str, info: dict | None = None) -> None:
+def _record_not_run(reason: str, info: dict | None = None,
+                    error: BaseException | None = None) -> None:
     """A self-check that never ran goes into the run log as one that failed.
 
     It used to go in as nothing. doctor printed "could not run", exited 1 and
     noted no checks at all, and `echolot` then read that line as "doctor 0s
     ago, passed" — with `next` pointing past the one command that had just
     said no report could be trusted.
+
+    When a sandbox is what stopped it, that goes in as a fact of its own,
+    `sandbox`, with whose it was: `status` and `next` say it from the log,
+    and a sentence is not something to match on.
     """
     recorder.note(checks=0, failed=[NOT_RUN])
     if info is not None:
         recorder.note(trace_processor=info.get("trace_processor"))
+    if isinstance(error, SandboxError):
+        recorder.note(sandbox=error.host or "unknown")
     recorder.failed(reason)
 
 
@@ -2711,9 +2728,16 @@ def cmd_doctor(args) -> int:
         results = selftest.run(tp_binary)
     except Exception as e:
         print(f"  could not run: {e}")
-        print("\nThe environment is broken. Until this is fixed, no report "
-              "from it can be trusted.")
-        _record_not_run(f"self-check could not run: {e}", info)
+        if isinstance(e, SandboxError):
+            # Nothing is known to be wrong with the install: the self-check
+            # never reached its first query. "The environment is broken" sent
+            # a reader to reinstall what a sandbox had stopped.
+            print("\nNothing was checked. Run echolot outside the sandbox, "
+                  "then check again.")
+        else:
+            print("\nThe environment is broken. Until this is fixed, no report "
+                  "from it can be trusted.")
+        _record_not_run(f"self-check could not run: {e}", info, e)
         return 1
 
     failed = [(name, why) for name, why in results if why]
@@ -2770,7 +2794,7 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
         return _no_trace_processor(e, info), False
     except Exception as e:
         print(f"self-check: could not run — {e}")
-        _record_not_run(f"self-check: could not run — {e}", info)
+        _record_not_run(f"self-check: could not run — {e}", info, e)
         return 1, False
     failed = [(name, why) for name, why in results if why]
     recorder.note(checks=len(results), failed=[name for name, _ in failed],

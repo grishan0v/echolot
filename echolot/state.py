@@ -205,6 +205,11 @@ def next_kind(st: dict) -> str:
     return "hunt"
 
 
+def whose_sandbox(host: str) -> str:
+    """The `sandbox` fact doctor logs, as the words `status` and `next` use."""
+    return "Codex's sandbox" if host == "codex" else "the agent's sandbox"
+
+
 def _door(st: dict) -> str:
     """How this project's agent is reached, in its own words.
 
@@ -233,6 +238,10 @@ def next_step(st: dict) -> str:
         # one `failed` entry (main.NOT_RUN): nothing in it was checked, so
         # nothing failed — it did not run.
         facts = (st.get("last_doctor") or {}).get("facts") or {}
+        if facts.get("checks") == 0 and facts.get("sandbox"):
+            return (f"run echolot outside {whose_sandbox(facts['sandbox'])}, "
+                    f"then `echolot doctor` — the last self-check could not "
+                    f"get trace_processor a port on localhost")
         what = "did not run" if facts.get("checks") == 0 else "failed"
         return (f"echolot doctor — the last self-check {what}; no report is "
                 f"trustworthy until it passes")

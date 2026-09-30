@@ -64,6 +64,27 @@ appeared, which grew, and whether the repeats support calling that a change.
 Read `holds` before acting on a row — `false` means the runs disagree among
 themselves by more than the row moved.
 
+## When a sandbox is in the way
+
+echolot needs a port on localhost, where trace_processor runs, and the adb
+server, which is how `collect` reaches the phone. A sandbox with no network
+refuses both, and Codex runs commands in one by default. `doctor`, `analyze`
+and `collect` then say so and name the way out; nothing is wrong with the
+install. If your client lets you ask to run a command outside its sandbox, ask
+for the echolot command, with that message as the reason. Otherwise show the
+message to the human and stop: the rule below is theirs to add.
+
+- Codex: approve running `echolot` outside the sandbox when it asks, or put
+  `prefix_rule(pattern = ["echolot"], decision = "allow")` in
+  `.codex/rules/echolot.rules`. Codex reads rules when a session starts.
+- Claude Code, with its sandbox turned on: `"echolot *"` in
+  `sandbox.excludedCommands`.
+
+Letting the one command out is the fix. Turning the network on for every
+command in the session is wider than it needs to be, and the first download of
+trace_processor still has nowhere to go: perfetto keeps it outside the
+workspace.
+
 ## Reading the report
 
 Three things you will get wrong without being told.

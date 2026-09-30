@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from . import sandbox
 from .config import ConfigError
 
 _CALIB = re.compile(
@@ -654,11 +655,21 @@ def _cannot_fetch(pin: PinnedBuild, cause: str) -> str:
     All three, whatever the cause: the cause says which one is likely, and
     the copy works where the other two cannot. Whole without the notice
     printed before it, because the run log keeps this and not that.
+
+    A fourth, first, when the command ran in Codex's sandbox: there the
+    download has neither the network nor a place to write, since perfetto
+    keeps the binary outside the workspace, and the likely cause is that.
     """
+    in_codex = ""
+    if sandbox.host() == sandbox.CODEX:
+        in_codex = (f"  - running echolot outside Codex's sandbox, where this "
+                    f"command ran: approve that when Codex asks, or put "
+                    f"{sandbox.CODEX_RULE} in .codex/rules/echolot.rules;\n")
     return (
         f"trace_processor {pin.version} could not be downloaded: {cause}.\n"
         f"  Every trace is read with it, so nothing that opens one can run "
         f"until it is here. Any one of these puts it in place:\n"
+        f"{in_codex}"
         f"  - a network that reaches {urlsplit(pin.url).netloc}. Behind a "
         f"proxy, export HTTPS_PROXY — curl honours it — and run this again;\n"
         f"  - curl, installed and on PATH: the download runs through it;\n"
@@ -754,6 +765,15 @@ class TraceSession:
                 f"{path}: trace_processor cannot read this file — {why}. A "
                 f"capture that was cut short, or a file that is not a trace; "
                 f"leave it out and run again.") from e
+        except OSError as e:
+            # Before trace_processor starts, perfetto binds a socket to find
+            # a free port for it. An agent's sandbox with no network refuses
+            # that, and it came out of `analyze` as a PermissionError
+            # traceback and out of `doctor` as "Operation not permitted" —
+            # both read as a broken install (#190).
+            if not sandbox.refused(e):
+                raise
+            raise sandbox.trace_processor_refused(e) from e
 
     def exec_script(self, sql: str) -> None:
         """Runs a multi-statement script (DDL), discarding the output."""
