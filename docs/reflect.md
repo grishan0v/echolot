@@ -31,7 +31,7 @@ Where things are looked for, when they are not where the defaults say:
 | flag | default | what it names |
 |---|---|---|
 | `--project ROOT` | `.` | the application project the agent worked in — its run log, its config, its source tree |
-| `--transcripts DIR` | `~/.claude/projects/<slug>` | where the agent's transcripts are |
+| `--transcripts DIR` | `~/.claude/projects/<slug>` | where Claude Code's transcripts are; naming it leaves Codex's sessions out |
 | `-c`, `--local` | `echolot.yml` in the project, `local.yml` beside it | the config the protocol checks read |
 | `-o DIR` | `.echolot/reflect` | where the reports go; relative to the project |
 | `--from-log` | off | ignore any transcript and read the run log alone — see below |
@@ -57,10 +57,25 @@ The format is undocumented; the reader treats every field as optional and
 puts anything surprising into the report's "Reader notes" rather than into an
 exception.
 
-`reflect` runs from the application project because that is where both live.
-Only sessions that used echolot for real work are candidates — one that merely
-ran `reflect` does not count, or the newest session would always be the one
-doing the reflecting.
+**Codex's sessions.** Codex keeps each thread under
+`~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl`, under
+`CODEX_HOME` when that is set, with the working directory in its first line.
+A subagent is a thread of its own, whose first line names its parent, so a
+hunt's loop is found from the main thread and read with it. Commands come
+with their exit codes and output, edits as the patches Codex applied, and
+tokens per response. Two things are not there to read. A subagent's file
+opens with a copy of its parent's history, and only what follows is the
+subagent's own. And the message the main thread hands a subagent is
+encrypted on disk, so the check on what the brief said (`agent_prompt_gaps`)
+is listed as not checked, with that reason, instead of finding a brief with
+nothing in it. A subagent is the loop when it ran `echolot guide loop`, which
+the hunt skill tells it to read first (#193).
+
+`reflect` runs from the application project because that is where all of
+them live. Claude Code's sessions and Codex's are read side by side, newest
+first, and `--list` says which agent each came from. Only sessions that used
+echolot for real work are candidates — one that merely ran `reflect` does not
+count, or the newest session would always be the one doing the reflecting.
 
 ## What is in the report
 
@@ -169,8 +184,8 @@ last row carries the final numbers.
 
 ## Without a transcript
 
-Only Claude Code has a reader for its transcripts. Every other client — and a
-run from a plain shell, or from CI — gets the report built from
+Claude Code and Codex have a reader each. Every other client — and a run
+from a plain shell, or from CI — gets the report built from
 `.echolot/log/runs.jsonl` alone:
 
 ```bash
@@ -232,6 +247,7 @@ findings came back, all true, none about anything anyone did wrong.
 Everything above the reader — facts, signals, report — works on the normalised
 session in `echolot/reflect/model.py`: turns, tool calls, questions, usage,
 subagents. Another client means another reader producing that shape, declaring
-what it carries, and nothing else changes. What degrades is what that client
+what it carries, and nothing else changes. Codex's reader is the second one:
+`codex.py`, beside `claude_code.py`. What degrades is what that client
 does not record: questions to the human become a heuristic over text, subagents
 may not exist, tokens may be missing.

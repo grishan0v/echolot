@@ -9,9 +9,10 @@ tool, not for the application being profiled.
 ## What the report is
 
 `echolot reflect` reads the session's transcript — a Claude Code session's
-`~/.claude/projects/…` files, subagents included; other agents' sessions have
-no reader yet, and their report comes from the run log alone — and the tool's
-own `.echolot/log/runs.jsonl`, and compresses them into `.echolot/reflect/<id>.json`
+`~/.claude/projects/…` files or a Codex session's `~/.codex/sessions/…`,
+subagents included; other agents' sessions have no reader yet, and their
+report comes from the run log alone — and the tool's own
+`.echolot/log/runs.jsonl`, and compresses them into `.echolot/reflect/<id>.json`
 and `.md`. It is the Marker Report over the agent instead of the trace: facts
 and signals, no conclusions. You draw those.
 

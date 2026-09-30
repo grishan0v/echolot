@@ -248,10 +248,10 @@ work in short passes and keep raw output out of the conversation. That is a
 mitigation, not a fix — Claude Code remains the better experience, and now it
 is the better one rather than the only one.
 
-`reflect` reads the full session only for Claude Code, because only that
-client's transcripts have a reader. Everywhere else it falls back to the
-recorder log, which every command writes from every caller — so the report
-exists, it is smaller, and it says which checks it could not make. See
+`reflect` reads the full session for Claude Code and for Codex, whose
+sessions have a reader each. Everywhere else it falls back to the recorder
+log, which every command writes from every caller — so the report exists, it
+is smaller, and it says which checks it could not make. See
 [reflect.md](reflect.md) under "Without a transcript".
 
 ### The plugin: one set of skills for Claude Code and Codex
