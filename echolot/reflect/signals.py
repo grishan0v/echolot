@@ -34,7 +34,7 @@ from .facts import (
     Facts,
     config_writes,
 )
-from .model import MAIN, TOOLS, Session, ts_to_epoch
+from .model import BRIEFS, MAIN, TOOLS, Session, ts_to_epoch
 
 
 @dataclass
@@ -1056,6 +1056,14 @@ MEANS_SOMETHING_WHILE_BUILDING = {
 }
 
 
+# A check that reads one thing more than tool calls, and the thing. Codex keeps
+# the message a subagent is handed encrypted on disk: read from there, the
+# brief is empty, and every piece of it would be reported as missing.
+NEEDS = {
+    "agent_prompt_gaps": (BRIEFS, "what the main context handed the subagent"),
+}
+
+
 def run(session: Session, facts: Facts, cfg: Config | None) -> list[Signal]:
     out: list[Signal] = []
     partial = not session.shows(TOOLS)
@@ -1076,6 +1084,13 @@ def run(session: Session, facts: Facts, cfg: Config | None) -> list[Signal]:
                 "This source carries echolot's own calls and nothing else, and "
                 "the check needs more than that. Silence here is not a clean "
                 "verdict; it is no verdict."))
+            continue
+        need = NEEDS.get(det.__name__)
+        if need and not session.shows(need[0]):
+            out.append(Signal(
+                det.__name__, "skip", f"{det.__name__} — not checked",
+                f"This source does not carry {need[1]}, and the check reads "
+                f"nothing else. Silence here is no verdict."))
             continue
         try:
             sig = det(session, facts, cfg)

@@ -3374,9 +3374,11 @@ def build_parser() -> argparse.ArgumentParser:
     rf.add_argument("--from-log", action="store_true",
                     help="read .echolot/log/runs.jsonl only, ignoring any "
                          "agent transcript — what every client but Claude Code "
-                         "gets by default")
+                         "and Codex gets by default")
     rf.add_argument("--transcripts", metavar="DIR",
-                    help="transcript directory, if not ~/.claude/projects/<slug>")
+                    help="a Claude Code transcript directory, if not "
+                         "~/.claude/projects/<slug>; Codex sessions are then "
+                         "left out")
     rf.add_argument("-c", "--config", default="echolot.yml",
                     help="the project config, for the protocol checks")
     rf.add_argument("--local", help="path to local.yml (defaults to alongside)")

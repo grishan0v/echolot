@@ -167,11 +167,19 @@ def to_markdown(report: dict[str, Any]) -> str:
     if skipped:
         out.append("## Not checked")
         out.append("")
-        out.append("_These read the agent's own tool calls, and this source "
-                   "does not carry them. Their silence is not a verdict._")
-        out.append("")
-        out.append(", ".join(f"`{x['id']}`" for x in skipped))
-        out.append("")
+        # Grouped by why, since the reasons differ: a source with echolot's
+        # calls alone, a brief Codex keeps encrypted, a session that was
+        # building the tool. One sentence over all of them said the first
+        # reason of every check, the brief's included.
+        by_why: dict[str, list[str]] = {}
+        for x in skipped:
+            by_why.setdefault(x.get("why") or "", []).append(x["id"])
+        for why, ids in by_why.items():
+            if why:
+                out.append(f"_{why}_")
+                out.append("")
+            out.append(", ".join(f"`{i}`" for i in ids))
+            out.append("")
 
     # ---- entry
     e = report.get("entry") or {}

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .. import recorder, table
 from ..config import Config, ConfigError
-from . import claude_code
+from . import claude_code, codex
 from . import facts as facts_mod
 from . import from_log
 from . import render as reflect_render
@@ -30,14 +30,20 @@ def cmd_reflect(args) -> int:
     Reads the agent's transcript plus the tool's own `runs.jsonl`, compresses
     them into facts and signals, and writes `.echolot/reflect/<session>.md`
     and `.json`. Run it from the application project the agent worked in —
-    that is where Claude Code keys the transcript, and where echolot.yml and
-    the recorder log live.
+    that is where Claude Code keys the transcript, where Codex records the
+    session's working directory, and where echolot.yml and the recorder log
+    live.
 
-    With no transcript to read — any client but Claude Code, or a run from a
-    plain shell or from CI — it falls back to the recorder log alone. That
-    report is smaller and says so: see `from_log.py`.
+    Claude Code's sessions and Codex's are read side by side, newest first:
+    `--last` is the newest of either that used echolot (#193).
+
+    With no transcript to read — any other client, or a run from a plain
+    shell or from CI — it falls back to the recorder log alone. That report
+    is smaller and says so: see `from_log.py`.
     """
     project = Path(args.project or ".").resolve()
+    # (reader, ref), newest first, whichever agent wrote the session.
+    found: list = []
     tdir = None
     if not args.from_log:
         tdir = (Path(args.transcripts).expanduser() if args.transcripts
@@ -47,15 +53,21 @@ def cmd_reflect(args) -> int:
         if tdir is None and args.transcripts:
             print(f"error: no transcripts at {args.transcripts}", file=sys.stderr)
             return 2
+        if tdir is not None:
+            found += [(claude_code, r) for r in claude_code.list_sessions(tdir)]
+        # `--transcripts` names a Claude Code folder, and asks for that alone.
+        if not args.transcripts:
+            found += [(codex, r) for r in codex.list_sessions(project)]
+    found.sort(key=lambda f: f[1].mtime, reverse=True)
 
-    reader, source = ((claude_code, tdir) if tdir is not None
-                      else (from_log, project))
-    if reader is from_log:
+    where = "this project's Claude Code and Codex sessions"
+    if not found:
         log = from_log.log_path(project)
         if not log.exists():
             looked = claude_code.PROJECTS_ROOT / claude_code.slug_candidates(project)[0]
             print(f"error: nothing to reflect on for {project}\n"
                   f"  no Claude Code transcripts:  {looked}\n"
+                  f"  no Codex sessions here:      {codex.sessions_root()}\n"
                   f"  and no run log:              {log}\n"
                   f"  Run it from the project the agent worked in. The log "
                   f"appears the first time any echolot command runs there.",
@@ -65,24 +77,26 @@ def cmd_reflect(args) -> int:
             print(f"[i] no agent transcript for this project — reading "
                   f"{recorder.LOG_FILE} instead. Fewer checks; the report "
                   f"lists which.", file=sys.stderr)
+        where = str(from_log.log_path(project))
+        found = [(from_log, r) for r in from_log.list_sessions(project)]
+    only_log = all(reader is from_log for reader, _ in found)
 
     try:
         since = _parse_since(args.since) if args.since else None
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    refs = reader.list_sessions(source)
     if since is not None:
-        refs = [r for r in refs if r.mtime >= since]
+        found = [(reader, r) for reader, r in found if r.mtime >= since]
     if args.session:
-        refs = [r for r in refs if r.id.startswith(args.session)]
-        if not refs:
+        found = [(reader, r) for reader, r in found if r.id.startswith(args.session)]
+        if not found:
             # The log's units are not sessions, so an id from Claude Code
             # cannot match one and never will. "No session starting with X"
             # is true and sends the reader to check the id they copied
             # correctly — the actual answer is that they are asking the wrong
             # source for it.
-            if reader is from_log:
+            if only_log:
                 print(f"error: '{args.session}' does not name a sitting in "
                       f"{recorder.LOG_FILE}.\n"
                       f"  The run log carries no session ids. It is a stream, "
@@ -100,20 +114,20 @@ def cmd_reflect(args) -> int:
             return 2
 
     picked = []
-    for ref in refs:
-        session = (claude_code.read_session(ref.path) if reader is claude_code
-                   else from_log.read_session(ref))
+    for reader, ref in found:
+        session = (from_log.read_session(ref) if reader is from_log
+                   else reader.read_session(ref.path))
         # An explicit id is taken as is; otherwise only sessions that used the
         # tool for real work count — a session that merely ran `reflect` is
         # not worth reflecting on.
         if not args.session and not reader.involves_echolot(session):
             continue
-        picked.append((ref, session))
+        picked.append((reader, ref, session))
         if not (args.all or args.list or args.session or since is not None):
             break   # --last: the newest one is enough
 
     if not picked:
-        print(f"nothing to reflect on: nothing under {source} used echolot"
+        print(f"nothing to reflect on: nothing in {where} used echolot"
               + (f" since {args.since}" if args.since else ""), file=sys.stderr)
         return 1
 
@@ -122,15 +136,16 @@ def cmd_reflect(args) -> int:
         # must not say "session" — this listing is where somebody comes after
         # being told an id did not match, and telling them the same wrong word
         # again is how the misunderstanding survives being corrected.
-        unit = "sitting" if reader is from_log else "session"
-        print(f"{unit:10} {'started (UTC)':17} {'dur':>7} {'echolot':>7} "
-              f"{'hunt':>4}  first prompt")
-        for ref, s in picked:
+        unit = "sitting" if only_log else "session"
+        print(f"{unit:10} {'agent':11} {'started (UTC)':17} {'dur':>7} "
+              f"{'echolot':>7} {'hunt':>4}  first prompt")
+        for reader, ref, s in picked:
             subs = reader.echolot_subcommands(s)
             hunts = sum(1 for a in s.subagents if a.type == "perf-hunter")
             first = next((t.text for t in s.turns if t.role == "user" and t.kind == "text"), "")
             dur = s.duration_s()
-            print(f"{ref.id[:8]:10} {(s.started or '')[:16].replace('T', ' '):17} "
+            print(f"{ref.id[:8]:10} {s.agent:11} "
+                  f"{(s.started or '')[:16].replace('T', ' '):17} "
                   f"{_fmt_dur(dur):>7} {len(subs):>7} {hunts:>4}  "
                   f"{' '.join(first.split())[:60]}")
         return 0
@@ -153,7 +168,7 @@ def cmd_reflect(args) -> int:
 
     reports = []
     written = []
-    for ref, session in picked:
+    for _reader, ref, session in picked:
         facts = facts_mod.gather(session, cfg, runs, project)
         sigs = signals_mod.run(session, facts, cfg)
         rep = reflect_render.build(session, facts, sigs)

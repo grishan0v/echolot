@@ -11,6 +11,7 @@ Layout:
 
     model.py        the normalised session — what every reader must produce
     claude_code.py  the reader for Claude Code transcripts (~/.claude/projects)
+    codex.py        the reader for Codex sessions (~/.codex/sessions)
     from_log.py     the reader that needs no transcript: .echolot/log/runs.jsonl
     signals.py      the detectors over a normalised session
     render.py       report.json / report.md

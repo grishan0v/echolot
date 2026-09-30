@@ -41,7 +41,8 @@ TOOLS = "tools"            # tool calls other than echolot's own
 ASKS = "asks"              # questions put to the human
 SUBAGENTS = "subagents"    # a loop running in its own context
 USAGE = "usage"            # tokens
-EVERYTHING = [TURNS, TOOLS, ASKS, SUBAGENTS, USAGE]
+BRIEFS = "briefs"          # what the main context handed a subagent
+EVERYTHING = [TURNS, TOOLS, ASKS, SUBAGENTS, USAGE, BRIEFS]
 
 
 @dataclass
