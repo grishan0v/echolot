@@ -128,6 +128,7 @@ rounds run out.
 | where you run it | how |
 |---|---|
 | Claude Code | the full loop: `echolot init`, then `/echolot`. The agent records, reads the report and walks down to the code |
+| Claude Code or Codex, as a plugin | `/plugin marketplace add grishan0v/echolot` in Claude Code, `codex plugin marketplace add grishan0v/echolot` in Codex. The plugin's door sets the project up itself, and the loop runs in a subagent in both |
 | Cursor, Codex, other agents | `echolot init` points them at the tool, and `echolot guide` tells them how to work with it. The loop runs in your main context, so keep the passes short |
 | a shell or CI | the pipeline commands under [Without an agent](#without-an-agent) |
 

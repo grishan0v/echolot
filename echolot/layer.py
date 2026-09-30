@@ -430,6 +430,27 @@ def assess(project: Path) -> dict:
                     "command": None, "says": says}
         return {"verdict": "absent", "status": None, "files": {},
                 "command": "echolot init", "says": "none installed here"}
+    if not hosts.wants_claude(project):
+        # A layer an earlier `init` put in, on a project that has since chosen
+        # something else: the plugin, most often. `init` keeps its hands off
+        # it, so reading its files as stale sent `next` to `init` for good —
+        # and with the plugin, Claude Code loads this copy's skills beside the
+        # plugin's own. Saying so is all echolot does: the files may be what
+        # teammates without the plugin work from (#144).
+        chosen = hosts.load_choice(project) or []
+        if "plugin" in chosen:
+            says = ("installed here and no longer kept current — the skills come "
+                    "with the echolot plugin, and Claude Code loads this copy "
+                    "beside them: remove the files .claude/echolot-layer.json "
+                    "lists, or `echolot init --for claude` to keep the layer "
+                    "instead")
+        else:
+            named = ", ".join(hosts.BY_KEY[k].title for k in chosen) or "nothing"
+            says = (f"installed here and no longer kept current — this project "
+                    f"points {named} at echolot; `echolot init --for claude` "
+                    f"keeps it current again")
+        return {"verdict": "opted-out", "status": status, "files": {},
+                "command": None, "says": says}
     files: dict[str, list[str]] = {}
     for r in status["rows"]:
         files.setdefault(r["state"], []).append(r["file"])
@@ -525,7 +546,12 @@ def print_status(project: Path) -> str | None:
               f"and the commands into ./.claude/")
         return verdict
     if verdict == "opted-out":
-        print(f"  {a['says']}, as .echolot/hosts.json records — nothing to do.")
+        if status is None:
+            print(f"  {a['says']}, as .echolot/hosts.json records — nothing to do.")
+        else:
+            print(textwrap.fill(f"The layer is {a['says']}.", width=80,
+                                initial_indent="  ", subsequent_indent="  ",
+                                break_on_hyphens=False, break_long_words=False))
         return verdict
     counts = _counts(files)
     print(f"  {len(status['rows'])} template files: "

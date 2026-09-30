@@ -1,0 +1,22 @@
+{
+  "name": "echolot",
+  "owner": {
+    "name": "Andrey Grishanov",
+    "url": "https://github.com/grishan0v"
+  },
+  "description": "echolot: Android performance regressions, from a Perfetto trace down to a place in the code",
+  "plugins": [
+    {
+      "name": "echolot",
+      "description": "Localise Android performance regressions from a Perfetto trace down to a place in the code. The skills drive the echolot CLI, installed separately: pipx install echolot.",
+      "category": "development",
+      "homepage": "https://github.com/grishan0v/echolot",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/grishan0v/echolot.git",
+        "path": "plugins/echolot",
+        "ref": "v0.9.0"
+      }
+    }
+  ]
+}

@@ -296,6 +296,36 @@ Claude Code would load the skills twice. The door answers `next: init` with
 choice, and installs nothing else; `echolot` then reads the layer as provided
 by the plugin, and stops asking for `init`.
 
+### Installing the plugin
+
+`.claude-plugin/marketplace.json` at the root of this repository is a
+marketplace with one plugin in it, and both hosts read it:
+
+```bash
+pipx install echolot                          # the CLI the skills drive
+```
+
+- **Claude Code:** `/plugin marketplace add grishan0v/echolot`, then
+  `/plugin install echolot@echolot`. The door is `/echolot:echolot`.
+- **Codex:** `codex plugin marketplace add grishan0v/echolot`, then install
+  it from `/plugins` in the CLI or the Plugins tab of the ChatGPT desktop app.
+  The door is the `echolot` skill, `echolot:echolot` in Codex's list, and it
+  also answers a plain question about slow startup.
+
+The entry fetches `plugins/echolot` at the release tag of the version in the
+code. So what a person installs is the plugin the CLI
+on PyPI was released with: served from `main`, it would name topics and flags
+that no released echolot has yet. A new plugin reaches people with the next
+release, when the tag and `version` move together — Claude Code copies a
+plugin again only when its `version` changes. `tests/test_plugin.py` fails
+when the tag, `plugin.json` and `echolot/__init__.py` disagree.
+
+On a project that ran `init` before, the `.claude/` layer is still there, and
+Claude Code loads its skills beside the plugin's. Once the plugin's door has
+run `echolot init --for plugin`, `echolot` says so on its layer line and stops
+asking for `init`; whether the files go is the human's call, since teammates
+without the plugin may work from them.
+
 ### A sandbox with no network
 
 Codex runs every command in a sandbox, and by default the sandbox has no
