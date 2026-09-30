@@ -67,35 +67,35 @@ none, the report will name system slices and threads, and your first move is
 ## The loop
 
 The loop itself — the protocol, the commands you will reach for, the rules for
-temporary markers and the eight fields of the conclusion — is
-`echolot guide loop`. It is the text a Claude Code subagent is given, from the
-same file.
+temporary markers and the eight fields of the conclusion — is the subagent's
+own guide, which it prints for itself. It is the text a Claude Code subagent
+is given, from the same file.
 
 **Hand it to a subagent when your host can start one.** The loop fills a
 window with raw output within two rounds: reports, repository searches, marker
 diffs. A subagent keeps that out of yours and returns the conclusion alone.
-Start it with none of this conversation, since the brief below is everything
-it needs and anything more is window it starts without. Then **wait for it**:
-its conclusion is the whole answer, and a turn that ends on "I will come back
-with its output" may never get a next one. The brief:
+Start it with none of this conversation, and with this brief as its first
+message, filled in:
 
-- its instructions: run `echolot guide loop` first, and follow it. That
-  guide is for the subagent to read; reading it yourself only fills your
-  window
-- the traces — the directory `echolot hunt` set aside, when they were recorded
-  before the investigation opened
-- what regressed and against what, and after which change, or "unknown"
-- that investigation #<n> is open: every `analyze` it runs is filed there,
-  and `echolot compare` reads from it
-- whether the config's thresholds can be trusted for this hunt, and if not,
-  to start with `echolot analyze --defaults`
-- that `doctor` passed, and when, so it does not run it again
-- whether the project has instrumentation (`echolot domains --root .`); with
-  none, its first move is `echolot mark`, not reading the app
+```text
+Run `echolot guide loop` first and follow it: it is your guide to the loop.
+Traces: <each trace file by name, from the directory `echolot hunt` set aside or from .echolot/traces>
+Regressed: <what, against what>, after <the change, or "unknown">
+Investigation #<n> is open: every `analyze` you run is filed under it, and `echolot compare` reads from it.
+Thresholds: <the config's can be trusted | start with `echolot analyze --defaults`>
+Doctor passed at <time>: do not run it again.
+Instrumentation: <what `echolot domains --root .` found | none: start with `echolot mark`, not with reading the app>
+```
 
-**No subagents?** Run `echolot guide loop` and follow it yourself, in short
-passes: quote the two or three rows that matter and keep the rest out of the
-conversation.
+The brief is everything it needs, and anything more is window it starts
+without. **Do not run `echolot guide loop` yourself**: it is the subagent's,
+eighteen thousand characters it reads on its own, and here it only fills your
+window. Then **wait for it**: its conclusion is the whole answer, and a turn
+that ends on "I will come back with its output" may never get a next one.
+
+**No subagents?** Then the loop is yours: run `echolot guide loop` and follow
+it, in short passes. Quote the two or three rows that matter and keep the rest
+out of the conversation.
 
 ## When the conclusion comes back
 

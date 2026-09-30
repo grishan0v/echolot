@@ -75,7 +75,8 @@ def _write(path: Path, rows: list[dict]) -> Path:
     return path
 
 
-def _session(home: Path, project: Path) -> tuple[Path, Path]:
+def _session(home: Path, project: Path,
+             loop_guide_in_main: bool = True) -> tuple[Path, Path]:
     """A hunt in Codex: the main thread and the loop's subagent."""
     day = home / "sessions" / "2026" / "09" / "30"
     source = str(project / "app" / "src" / "main" / "java" / "com" / "example" / "Startup.kt")
@@ -144,6 +145,10 @@ def _session(home: Path, project: Path) -> tuple[Path, Path]:
                                             "last_agent_message": CONCLUSION}),
         _usage(14, "02:50.200", "resp-9", inp=50000, cached=40000, out=3000),
     ]
+    if not loop_guide_in_main:
+        main_rows = [r for r in main_rows
+                     if (r["payload"].get("item") or {}).get("command")
+                     != ["/bin/zsh", "-lc", "echolot guide loop"]]
     main_file = _write(day / f"rollout-2026-09-30T13-00-00-{MAIN_ID}.jsonl", main_rows)
     sub_file = _write(day / f"rollout-2026-09-30T13-00-13-{SUB_ID}.jsonl", sub_rows)
     return main_file, sub_file
@@ -262,3 +267,34 @@ def test_list_names_the_agent_and_puts_the_newest_first(project, tmp_path):
     check("the agent column", lines[0].split()[:2] == ["session", "agent"], said)
     check("Codex first, then Claude Code",
           [ln.split()[1] for ln in lines[1:3]] == ["codex", "claude-code"], said)
+
+
+# --- the loop's guide, read where it should not be (#202) ----------------------
+
+def _signals(project: Path) -> dict:
+    code, said = _run(project, "reflect", "--last", "--project", str(project))
+    check("reflect exits 0", code == 0, said[-600:])
+    report = json.loads((project / ".echolot" / "reflect" / f"{MAIN_ID[:8]}.json")
+                        .read_text(encoding="utf-8"))
+    return {s["id"]: s for s in report["signals"]}
+
+
+def test_the_loops_guide_read_in_the_main_thread_is_a_warning(project):
+    sig = _signals(project)["guides_in_main"]
+    check("a warning", sig["severity"] == "warn", sig)
+    check("with the guide and what it cost",
+          sig["rows"] == [{"ts": "10:00:12", "guide": "echolot guide loop", "chars": 17933}],
+          sig["rows"])
+
+
+def test_a_main_thread_that_leaves_it_to_the_subagent_passes(tmp_path, monkeypatch):
+    p = tmp_path / "clean"
+    p.mkdir()
+    (p / "echolot.yml").write_text("project: {package: com.example.app}\n", encoding="utf-8")
+    home = tmp_path / "codex-home-clean"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("ECHOLOT_NO_RECORD", "1")
+    monkeypatch.setattr(claude_code, "PROJECTS_ROOT", tmp_path / "claude-projects")
+    _session(home, p, loop_guide_in_main=False)
+    sig = _signals(p)["guides_in_main"]
+    check("the check passes", sig["severity"] == "ok", sig)

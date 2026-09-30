@@ -5,8 +5,9 @@ description: Find the cause of one Android performance regression with echolot. 
 
 # The hunt
 
-Run `echolot guide hunt` and follow it. The installed echolot prints it in
-full; this is the order, with the steps that go wrong when they are skipped.
+This is the main thread's part, whole: `echolot guide hunt` prints the same
+for a host that does not list this skill, and the loop's guide is the
+subagent's.
 
 1. `echolot doctor -q`, on its own. A non-zero exit: show what failed, and
    stop. If it says a sandbox refused a port, ask to run it outside the
@@ -23,17 +24,27 @@ full; this is the order, with the steps that go wrong when they are skipped.
    ```
 
    Every later `collect` and `analyze` is filed under it, and `echolot compare`
-   reads from it. Traces it moved aside for this question are still its
-   evidence: the guide says where they went.
-4. **Hand the loop to a subagent that starts with none of this conversation.**
-   The loop fills a window with raw output within two rounds; the subagent
-   keeps it and returns only its conclusion. Give it what `echolot guide hunt`
-   lists, beginning with: run `echolot guide loop` first and follow it. That
-   guide is the subagent's to read; reading it here only fills this window. Then
-   **wait for its conclusion**. Do not end your turn while it runs: a turn that
-   ends on "I will come back with its output" may never get a next one. If
-   your host cannot start a subagent, run `echolot guide loop` yourself, in
-   short passes.
+   reads from it. Traces it moved aside are this question's evidence; stderr
+   names the directory. Exit 2 means `echolot.yml` does not load: show the
+   error and stop. No traces at all: `echolot collect -c echolot.yml -n 5`.
+4. **Hand the loop to a subagent that starts with none of this conversation**,
+   with this brief as its first message, filled in:
+
+   ```text
+   Run `echolot guide loop` first and follow it: it is your guide to the loop.
+   Traces: <each trace file by name, from the directory `echolot hunt` set aside or from .echolot/traces>
+   Regressed: <what, against what>, after <the change, or "unknown">
+   Investigation #<n> is open: every `analyze` you run is filed under it, and `echolot compare` reads from it.
+   Thresholds: <the config's can be trusted | start with `echolot analyze --defaults`>
+   Doctor passed at <time>: do not run it again.
+   Instrumentation: <what `echolot domains --root .` found | none: start with `echolot mark`, not with reading the app>
+   ```
+
+   **Do not run `echolot guide loop` yourself**: it is the subagent's, and here
+   it only fills this window. Then **wait for its conclusion**. Do not end
+   your turn while it runs: a turn that ends on "I will come back with its
+   output" may never get a next one. If your host cannot start a subagent,
+   the loop is yours: `echolot guide loop`, in short passes.
 5. **When the conclusion comes back, close the investigation first**, every
    time and whatever it came to, and only then answer the human. Left for
    after the answer, it is the step that gets skipped:
