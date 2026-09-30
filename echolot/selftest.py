@@ -3514,7 +3514,8 @@ def _(report):
     from . import hosts as hosts_mod
 
     for host in hosts_mod.HOSTS:
-        if host.key == "claude":
+        # Codex's rule is a file of its own, not a pointer to the guide.
+        if host.key == "claude" or not host.pointer:
             continue
         text = host.render()
         assert "echolot guide" in text, f"{host.key} never names the guide"

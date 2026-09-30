@@ -119,7 +119,10 @@ def test_with_no_agent_named_the_refusal_is_said_and_both_ways_out(
     assert code == 2, err
     assert "an agent's sandbox is the likely cause" in err, err
     assert "Codex's sandbox, which" not in err, err
-    assert sandbox.CODEX_RULE in err and "sandbox.excludedCommands" in err, err
+    # The command that writes the rule, with the agents a plain init keeps:
+    # `--for codex` alone would drop Claude Code from the saved choice.
+    assert "`echolot init --for claude,codex`" in err, err
+    assert "sandbox.excludedCommands" in err, err
 
 
 @pytest.mark.parametrize("error,is_sandbox", [
@@ -284,7 +287,7 @@ def test_a_download_that_failed_in_codex_leads_with_the_sandbox(in_codex):
         pytest.skip("no pinned trace_processor for this platform")
     said = tp._cannot_fetch(pin, "curl exited with status 7")
     ways = [ln for ln in said.splitlines() if ln.startswith("  - ")]
-    assert "Codex's sandbox" in ways[0] and sandbox.CODEX_RULE in ways[0], said
+    assert "Codex's sandbox" in ways[0] and "`echolot init --for" in ways[0], said
     assert len(ways) == 4, said
 
 
@@ -339,14 +342,47 @@ def test_with_the_rule_in_place_the_refusal_names_the_command_line(
     rules = project / ".codex" / "rules" if where == "project" else home / "rules"
     rules.mkdir(parents=True)
     (rules / "echolot.rules").write_text(RULE, encoding="utf-8")
+    home.mkdir(exist_ok=True)
+    _trusted(home, project)
 
     code, err = _analyze(capsys)
     assert code == 2, err
     assert "lets echolot out of it" in err, err
     assert "A glob such as `*.perfetto-trace`" in err, err
     assert "put prefix_rule" not in err and "let it out for good" not in err, err
-    unread = "Codex has not read the rule" in err
+    # A session that started before the rule was there has not read it; a
+    # rule for every project is read by every session there is.
+    unread = "the session started before the rule was there" in err
     assert unread is (where == "project"), err
+
+
+def _trusted(home: Path, project: Path, level: str = "trusted") -> None:
+    """The line Codex writes into its config when a person trusts a project."""
+    (home / "config.toml").write_text(
+        f'[projects."{project.resolve()}"]\ntrust_level = "{level}"\n',
+        encoding="utf-8")
+
+
+@pytest.mark.parametrize("level", [None, "untrusted"])
+def test_a_rule_in_a_project_codex_does_not_trust_is_said_to_be_unread(
+        project, port_refused, in_codex, capsys, tmp_path, level):
+    """Codex reads a project's `.codex/` only once it trusts the project, so
+    a refusal there is about trust, and never about the command line."""
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    if level:
+        _trusted(home, project, level)
+    rules = project / ".codex" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "echolot.rules").write_text(RULE, encoding="utf-8")
+
+    code, err = _analyze(capsys)
+    assert code == 2, err
+    assert "Codex has not read it" in err, err
+    said = "marks this project untrusted" if level else "does not list this project as trusted"
+    assert said in err, err
+    assert "codex-home/rules/" in err, err
+    assert "A glob" not in err, err
 
 
 def test_a_rules_file_about_another_command_is_not_ours(

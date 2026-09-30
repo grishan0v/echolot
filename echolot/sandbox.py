@@ -74,23 +74,35 @@ def refused(e: BaseException) -> bool:
             and e.filename is None)
 
 
+def rule_command() -> str:
+    """The `init` that writes the rule here, the project's other agents kept."""
+    from . import codex, hosts
+    return codex.init_command(hosts.keys(Path.cwd()))
+
+
 def ways_out(where: str | None) -> list[str]:
     """How to let `echolot` out, for the sandbox it is in.
 
     Both hosts when the environment names neither: the refusal is certain,
     whose it was is not, and the two lines cost less than a wrong guess.
+
+    The rule is written by `init`, and `init` has to run outside the sandbox
+    to write it: Codex keeps `.codex/` read-only for the commands it
+    sandboxes, so that an agent cannot grant itself a rule (#191).
     """
     if where == CODEX:
         return [
             "approve running echolot outside the sandbox when Codex asks;",
-            f"or let it out for good: {CODEX_RULE} in "
-            f".codex/rules/echolot.rules, which Codex reads once it trusts "
-            f"the project and a session starts, or the same line in "
-            f"~/.codex/rules/echolot.rules for every project.",
+            f"or let it out for good: `{rule_command()}`, run outside the "
+            f"sandbox, writes .codex/rules/echolot.rules, which Codex reads "
+            f"once it trusts the project and a session starts; or, for every "
+            f"project, {CODEX_RULE} in "
+            f"{shown(codex_home(os.environ) / 'rules' / 'echolot.rules')}.",
         ]
     return [
         f"Codex: approve running echolot outside the sandbox when it asks, or "
-        f"put {CODEX_RULE} in .codex/rules/echolot.rules;",
+        f"run `{rule_command()}` outside it, which writes the rule that lets "
+        f"echolot out;",
         'Claude Code, with its sandbox on: "echolot *" in '
         "sandbox.excludedCommands.",
     ]
@@ -101,17 +113,22 @@ def ways_out(where: str | None) -> list[str]:
 _ECHOLOT_RULE = re.compile(r'prefix_rule\(\s*pattern\s*=\s*\[\s*"echolot"\s*\]')
 
 
-def _codex_home(env: Mapping[str, str]) -> Path:
+def codex_home(env: Mapping[str, str]) -> Path:
     return Path(env.get("CODEX_HOME") or Path.home() / ".codex").resolve()
 
 
-def _shown(path: Path) -> str:
+def shown(path: Path) -> str:
     """A path the way a person would type it: from here, or from home."""
     try:
         return str(path.relative_to(Path.cwd().resolve()))
     except ValueError:
         home = str(Path.home())
         return "~" + str(path)[len(home):] if str(path).startswith(home) else str(path)
+
+
+def lets_echolot_out(text: str) -> bool:
+    """Whether a rules file names the `echolot` command."""
+    return bool(_ECHOLOT_RULE.search(text))
 
 
 def codex_rule(start: Path | None = None,
@@ -124,11 +141,11 @@ def codex_rule(start: Path | None = None,
     env = os.environ if env is None else env
     here = (start or Path.cwd()).resolve()
     homes = [d / ".codex" for d in (here, *here.parents)]
-    homes.append(_codex_home(env))
+    homes.append(codex_home(env))
     for home in homes:
         for rules in sorted((home / "rules").glob("*.rules")):
             try:
-                if _ECHOLOT_RULE.search(rules.read_text(encoding="utf-8")):
+                if lets_echolot_out(rules.read_text(encoding="utf-8")):
                     return rules
             except OSError:
                 continue
@@ -139,23 +156,39 @@ def message(what: str, where: str | None) -> str:
     """The whole sentence: what was refused, whose sandbox, the way out."""
     rule = codex_rule() if where == CODEX else None
     if rule is not None:
+        head = (f"{what}: this command ran in Codex's sandbox although "
+                f"{shown(rule)} lets echolot out of it.")
+        project_rule = not rule.is_relative_to(codex_home(os.environ))
+        if project_rule:
+            # A rule in a project Codex does not trust is never read, and
+            # nothing about the command line matters then.
+            from . import codex
+            level = codex.trust(rule.parents[2])
+            if level != "trusted":
+                return "\n".join([
+                    head,
+                    f"  Codex has not read it: it reads a project's rules only "
+                    f"once it trusts the project, and "
+                    f"{codex.trust_words(level)}. Trust the project when Codex "
+                    f"asks, at the start of a session here, or put the same "
+                    f"file in {codex.home_rules()}, which Codex reads in every "
+                    f"project."])
         # The rule is there and the command was refused all the same: Codex
         # matched the command line against it and it did not match. A glob
         # is the usual reason — the documented `analyze
         # .echolot/traces/*.perfetto-trace` is one — and a live session
         # stopped on it, taking the refusal for a missing rule (#189).
         lines = [
-            f"{what}: this command ran in Codex's sandbox although "
-            f"{_shown(rule)} lets echolot out of it.",
+            head,
             "  Codex matches the whole command line against the rule. A glob "
             "such as `*.perfetto-trace`, a pipe, or `&&` with another program "
             "keeps the line in the sandbox: run echolot on its own, with the "
             "trace files named (`ls .echolot/traces` lists them)."]
-        if not rule.is_relative_to(_codex_home(os.environ)):
+        if project_rule:
             lines.append(
-                "  If the line was echolot alone, Codex has not read the rule: "
-                "it reads a project's rules once it trusts the project, and "
-                "only when a session starts.")
+                "  If the line was echolot alone, the session started before "
+                "the rule was there: Codex reads rules only when a session "
+                "starts.")
         return "\n".join(lines)
     if where == CODEX:
         head = (f"{what}: this command runs in Codex's sandbox, which has no "

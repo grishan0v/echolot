@@ -17,7 +17,7 @@ import json
 import os
 from pathlib import Path
 
-from . import hosts, layer, recorder
+from . import codex, hosts, layer, recorder
 from . import hunt as hunt_mod
 from .config import Config, ConfigError
 
@@ -31,6 +31,9 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     st: dict = {"project": project}
     st["layer_verdict"], st["layer_line"] = layer.one_line(project)
     st["hosts"] = hosts.load_choice(project)
+    # Where Codex is used: whether a rule lets echolot out of its sandbox.
+    said = codex.one_line(project, hosts.keys(project))
+    st["codex_line"] = said[1] if said else None
 
     cfg_path = project / config
     st["config"] = None

@@ -42,7 +42,7 @@ from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
 
 from . import compare as compare_mod
 from . import hunt as hunt_mod
-from . import layer, recorder, state, table, when
+from . import codex, layer, recorder, state, table, when
 from . import report as report_mod
 from .config import NO_ANCHOR, Config, ConfigError
 from .reflect.cli import cmd_reflect
@@ -1803,6 +1803,8 @@ def cmd_status(args) -> int:
 
     lines: list[tuple[str, str]] = []
     lines.append(("layer", st["layer_line"].split(": ", 1)[1]))
+    if st.get("codex_line"):
+        lines.append(("codex", st["codex_line"]))
     cfg = st["config"]
     if cfg is None:
         lines.append(("config", "none — no echolot.yml here"))
@@ -2274,7 +2276,7 @@ def cmd_init(args) -> int:
                   "out of this project.")
         else:
             print("\nClaude Code not selected — .claude/ stays out of this project.")
-        layer.install_pointers(target, chosen)
+        layer.install_pointers(target, chosen, force=getattr(args, "force", False))
         print("\nAny agent: `echolot guide`. The choice is kept — a plain "
               "`echolot init` points at\nthe same agents again; `--for` "
               "changes it, and `echolot init --for all` adds the rest.")
@@ -2375,7 +2377,7 @@ def cmd_init(args) -> int:
               "git after.", width=80, break_on_hyphens=False,
             break_long_words=False))
 
-    layer.install_pointers(target, chosen)
+    layer.install_pointers(target, chosen, force=getattr(args, "force", False))
     recorder.note(hosts=[h.key for h in chosen])
     if before is None:
         print("\nLayer installed.")
@@ -2729,6 +2731,11 @@ def cmd_doctor(args) -> int:
     # copy on purpose.
     verdict = layer.print_status(Path.cwd())
     recorder.note(layer=verdict)
+    # Right before the self-check, which is what the sandbox refuses first:
+    # whether a rule lets echolot out, and whether Codex reads it here.
+    said = codex.print_status(Path.cwd(), layer.hosts.keys(Path.cwd()))
+    if said:
+        recorder.note(codex=said)
 
     print("\n## Self-check on a synthetic trace\n")
     try:
@@ -2792,9 +2799,16 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
     print(f"echolot {recorder.version()} · trace_processor {tp}{src} · "
           f"perfetto {info.get('perfetto_package') or 'unknown'} · "
           f"python {py_platform.python_version()}")
-    verdict, line = layer.one_line(project or Path.cwd())
+    here = project or Path.cwd()
+    verdict, line = layer.one_line(here)
     recorder.note(layer=verdict)
     print(line)
+    # A fourth line where Codex is used: the self-check below is what its
+    # sandbox refuses, and this says whether anything lets echolot out.
+    said = codex.one_line(here, layer.hosts.keys(here))
+    if said:
+        recorder.note(codex=said[0])
+        print(f"codex: {said[1]}")
     try:
         from . import selftest
         results = selftest.run(info.get("binary"))
@@ -3177,11 +3191,13 @@ def build_parser() -> argparse.ArgumentParser:
     # they are echolot's copies, under the project's git. Named for what it
     # does rather than for insistence: an agent's harness that screens shell
     # commands for harm refused `init --force` twice on a real project, and
-    # the person had to type it. Nothing outside `.claude/` is touched
-    # either way, and settings.json is merged under both.
+    # the person had to type it. Outside `.claude/` it touches one file, and
+    # only where Codex was chosen: `.codex/rules/echolot.rules`, which is
+    # echolot's alone as well. settings.json is merged under both.
     ini.add_argument("--all", dest="force", action="store_true",
                      help="update every file of the layer, the ones you edited too "
-                          "(they are echolot's copies, under your git)")
+                          "(they are echolot's copies, under your git), and "
+                          "Codex's rule with them")
     ini.add_argument("--force", dest="force", action="store_true", help=argparse.SUPPRESS)
     # The clients are read off the list `init` knows, so a new one cannot be
     # left out of the help the way gemini was.

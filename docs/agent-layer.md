@@ -188,7 +188,10 @@ echolot guide anr      # an ANR report from the field, read and then measured
 
 `echolot init` writes a few lines into whatever the project shows evidence of —
 `AGENTS.md`, `GEMINI.md`, `.cursor/rules/echolot.mdc`,
-`.github/copilot-instructions.md` — each naming that command.
+`.github/copilot-instructions.md` — each naming that command. For Codex it
+writes one more file, which is not a pointer: `.codex/rules/echolot.rules`,
+the rule that lets `echolot` out of Codex's sandbox (see
+[A sandbox with no network](#a-sandbox-with-no-network)).
 
 Gemini CLI has its own entry rather than riding on `AGENTS.md`, and that is
 worth recording because the obvious assumption is wrong: its context file is
@@ -294,7 +297,8 @@ A project whose skills come with the plugin does not get `.claude/` —
 Claude Code would load the skills twice. The door answers `next: init` with
 `echolot init --for plugin`, which writes the `.gitignore` lines, saves the
 choice, and installs nothing else; `echolot` then reads the layer as provided
-by the plugin, and stops asking for `init`.
+by the plugin, and stops asking for `init`. In Codex the door runs
+`echolot init --for plugin,codex`, which writes Codex's rule as well.
 
 ### Installing the plugin
 
@@ -345,10 +349,9 @@ so `echolot` and its `next` line say it too.
 The way out is to let the one command through:
 
 - **Codex:** approve running `echolot` outside the sandbox when Codex asks,
-  or add `prefix_rule(pattern = ["echolot"], decision = "allow")` to
-  `.codex/rules/echolot.rules` in the project. Codex reads a project's rules
-  once it trusts the project, and only when a session starts;
-  `~/.codex/rules/` works for every project.
+  or let it out for good with a rule, which `echolot init` writes when
+  `codex` is among its agents (below). `~/.codex/rules/` holds the same rule
+  for every project.
 - **Claude Code**, when its own sandbox is turned on: `"echolot *"` in
   `sandbox.excludedCommands`.
 
@@ -357,6 +360,53 @@ still leaves the first download of trace_processor nowhere to write: perfetto
 keeps it outside the workspace. The rule was tried in a live Codex session
 (#188): with it, all three commands passed, in the main thread and in a
 subagent.
+
+### Codex's rule, from `init`
+
+`codex` is an agent of its own in `init`'s list, apart from `AGENTS.md`:
+Codex reads `AGENTS.md` like many clients do, and the rule is Codex's alone.
+A project with a `.codex/` folder gets it by default; `--for` names it
+anywhere else. `init` writes `.codex/rules/echolot.rules`:
+`prefix_rule(pattern = ["echolot"], decision = "allow")`, with a few
+`echolot` commands as examples that Codex checks when it loads the file, so
+a rule that stopped matching says so as a session starts. The file is
+echolot's alone, so it is written whole; an edit made here is kept, and
+`--all` puts echolot's back, as with the files of the layer.
+
+Three things decide whether the rule works, and `doctor` and `status` say
+each of them on a `codex` line, shown wherever Codex is chosen, has a
+`.codex/` folder, or is what runs the command:
+
+- **The file**: there, as echolot wrote it, edited, or gone.
+- **Trust.** Codex reads a project's `.codex/` only once the person has said
+  they trust the project, and records that in `~/.codex/config.toml`
+  (`[projects."<path>"]`, `trust_level = "trusted"`). echolot reads that the
+  way Codex does: the folder, then the repository it is in, then the main
+  checkout of a linked worktree. An untrusted project is told both ways out:
+  trust it when Codex asks, or put the same file in `~/.codex/rules/`.
+- **The moment.** Codex reads rules when a session starts. A session open
+  when the rule was written keeps echolot in the sandbox until it restarts.
+
+One thing `init` cannot do from inside: Codex keeps `.codex/` read-only for
+the commands it sandboxes (`.agents/` and `.git/` too), so that no command
+can let itself out. Tried on `codex sandbox`, `init --for codex` there got
+`Operation not permitted` making `.codex/`. So it says that, and names the
+command to run outside the sandbox — with the project's other agents in
+`--for`, since `--for` replaces the saved choice and `--for codex` alone
+would stop keeping `.claude/` current.
+
+The `AGENTS.md` pointer carries one sentence about this, so that an agent
+which read only the pointer knows why its first `analyze` failed.
+
+### The copies `/import` leaves
+
+Codex's `/import` turns a Claude Code project's `.claude/` into
+`.agents/skills/echolot/`, `.agents/skills/source-command-echolot-*/` and
+`.codex/agents/perf-hunter.toml`, and rewrites `.claude/` to `.Codex/` in
+them on the way. The manifest knows only `.claude/`, so the layer line went
+on saying `current` while an agent in Codex followed copies that described a
+`.Codex/settings.json` nobody has. `doctor` now lists them, says the plugin
+replaces them, and deletes nothing: someone may have edited them on purpose.
 
 ## What calls what
 
@@ -402,7 +452,8 @@ echolot guide                        the same map, for a client without `.claude
 
 plugins/echolot/skills/              the plugin: four skills, each a door to a topic
  ├─ echolot/SKILL.md                 --version · echolot · status --next
- │                                   init --for plugin · doctor · hunt --resume · guide
+ │                                   init --for plugin[,codex] · doctor · hunt --resume
+ │                                   guide
  ├─ echolot-setup/SKILL.md           guide setup
  ├─ echolot-hunt/SKILL.md            doctor -q · hunt · guide hunt · guide loop
  └─ echolot-reflect/SKILL.md         guide reflect
