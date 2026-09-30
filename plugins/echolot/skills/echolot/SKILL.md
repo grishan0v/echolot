@@ -59,8 +59,9 @@ the output.
 Where a step says ask, ask in plain words and wait for the answer, with your
 host's question tool if it has one. Never answer for the human to move on.
 
-## Before reading a report
+## Before reading a report yourself
 
 Read `echolot guide` once: how to read the report through `echolot report`,
 what a silent detector means, and how a finding leads to a file. The
-installed echolot prints it, so it matches the version you are running.
+installed echolot prints it, so it matches the version you are running. A
+hunt skips it: the reports are the loop's, read in its subagent.

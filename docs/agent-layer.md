@@ -288,10 +288,26 @@ a subagent unless told otherwise — and waits for the conclusion. Nothing in
 them names a Claude Code tool, and each stays under 4,000 bytes; `tests/test_plugin.py`
 holds both, and that every topic a skill names exists.
 
-In Codex only the door is picked by a question's words: each skill's
-`agents/openai.yaml` turns implicit use off for the other three, which the
-door reaches, and keeps all four out of ChatGPT's chat, where there is no
-shell to run echolot in.
+The hunt skill is the main thread's part whole, and the loop's first message
+is a brief to fill in, a block the skill and `echolot guide hunt` print alike
+(a test holds the two to one text). The main thread never needs the loop's
+own guide. It used to be told where to find the brief rather than given it,
+and in two live Codex runs it read `echolot guide`, `guide hunt` and
+`guide loop` before starting the subagent: about 35,000 characters in the
+window the subagent is there to protect, `guide loop` alone half of it, and
+the subagent read the loop's guide again (#202). With the brief handed over
+as a block, a live Codex run read `echolot guide hunt` alone before the
+hand-off: 5,878 characters of guides, and 13,504 in all against 47,354 in
+the run before. `reflect` says when the loop's guide is read in the main
+context (`guides_in_main`).
+
+In Codex only the door is listed to the model at all. Each of the other
+three turns implicit use off in its `agents/openai.yaml`, and Codex leaves
+such a skill out of the list a session starts with; a person can still call
+it by name (`$echolot-hunt`). So the door reaches them through the guide:
+`echolot guide hunt`, `setup` and `reflect` print their text, and that is
+what the live runs read. All four stay out of ChatGPT's chat, where there is
+no shell to run echolot in.
 
 A project whose skills come with the plugin does not get `.claude/` —
 Claude Code would load the skills twice. The door answers `next: init` with

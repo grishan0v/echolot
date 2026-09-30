@@ -20,6 +20,7 @@ import json
 import re
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -122,6 +123,38 @@ def test_the_hunt_hands_the_loop_to_a_clean_subagent_and_waits():
     check("its instructions are the loop the package prints",
           "echolot guide loop" in body, body)
     check("the investigation is closed every time", "echolot hunt --done" in body, body)
+
+
+def _brief(text: str) -> str | None:
+    """The brief block a text hands the loop, without its indentation."""
+    m = re.search(r"```text\n(.*?)```", text, re.S)
+    return textwrap.dedent(m.group(1)).strip() if m else None
+
+
+def test_the_brief_is_handed_down_whole_and_the_loops_guide_stays_below():
+    """Told where the brief was rather than given it, the main thread read
+    `echolot guide`, `guide hunt` and `guide loop` before starting the loop in
+    two live Codex runs: about 35,000 characters in the window the subagent is
+    there to protect (#202). Now the brief is a block to fill in, the same in
+    the skill a Claude Code session loads and in `echolot guide hunt`, which is
+    what a Codex session reads: Codex does not list the hunt skill to the
+    model at all."""
+    _, body = _skill("echolot-hunt")
+    guide = (layer.GUIDE_DIR / "hunt.md").read_text(encoding="utf-8")
+    brief = _brief(body)
+    check("the skill carries the brief", brief, body)
+    check("the same brief as `echolot guide hunt`", brief == _brief(guide),
+          f"{brief}\n---\n{_brief(guide)}")
+    check("the brief starts the loop at its own guide",
+          brief.startswith("Run `echolot guide loop` first"), brief)
+    for where, text in (("skill", body), ("guide", guide)):
+        check(f"the {where} tells the main thread to leave the loop's guide alone",
+              "Do not run `echolot guide loop` yourself" in " ".join(text.split()), text)
+    check("the skill no longer sends the main thread to `guide hunt` first",
+          "Run `echolot guide hunt`" not in body, body)
+    _, door = _skill("echolot")
+    check("the door keeps a hunt away from the overview",
+          "A hunt skips it" in " ".join(door.split()), door)
 
 
 @pytest.mark.parametrize("name", SKILLS)

@@ -217,6 +217,49 @@ def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | N
                   "the command should refuse to loop in place.")
 
 
+# `echolot guide <topic>`, the topic captured; the overview has none.
+_GUIDE = re.compile(r"\becholot\s+guide(?:\s+([a-z][a-z-]*))?")
+# The guides the loop reads for itself, in its subagent.
+_LOOP_GUIDES = ("loop", "report")
+
+
+def guides_in_main(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
+    """The loop's own guides, read in the main context before it handed the loop down.
+
+    A hunt starts the loop in a subagent so that the main thread's window sees
+    the conclusion and nothing else. In two live Codex runs the main thread
+    read `echolot guide loop` first — 17,933 characters — although the text it
+    was following said the guide was the subagent's, and the subagent read
+    it again (#202). The overview is left out: it is every host's door to
+    the tool, and `context_hogs` counts it anyway.
+    """
+    loops = [a for a in s.subagents if a.type == "perf-hunter"]
+    if not loops:
+        return None
+    handed = min((ts_to_epoch(a.started) for a in loops if a.started), default=None)
+    rows = []
+    for c in s.bash(MAIN):
+        m = _GUIDE.search(c.shell)
+        if not m or m.group(1) not in _LOOP_GUIDES:
+            continue
+        if handed is not None and ts_to_epoch(c.ts) > handed:
+            continue
+        rows.append({"ts": _t(c.ts), "guide": f"echolot guide {m.group(1)}",
+                     "chars": c.output_chars})
+    if not rows:
+        return Signal("guides_in_main", "ok",
+                      "the loop's guides stayed with the subagent",
+                      "The main thread handed the loop down without reading them.")
+    return Signal("guides_in_main", "warn" if any(r["guide"].endswith("loop") for r in rows)
+                  else "info",
+                  "the loop's guides were read in the main context",
+                  "They are the subagent's to read, and it reads them again; in the main "
+                  "thread they fill the window the subagent is there to protect.",
+                  rows,
+                  "The hunt skill and `echolot guide hunt` hand the brief over as a "
+                  "block; whatever sent the main thread to the guide is what to change.")
+
+
 def rounds_over_max(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     if not f.hunts:
         return None
@@ -996,6 +1039,7 @@ SIGNALS: list[Detector] = [
     doctor_first,
     trace_opened_directly,
     loop_in_main_context,
+    guides_in_main,
     rounds_over_max,
     instrumentation_prefix,
     edits_outside_allowed,
