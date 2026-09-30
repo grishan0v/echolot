@@ -2264,7 +2264,12 @@ def cmd_init(args) -> int:
         print(f"\n  {ignored}")
 
     if not any(h.key == "claude" for h in chosen):
-        if any(h.key == "plugin" for h in chosen):
+        if layer.audit(target) is not None:
+            # An earlier init put it in. It is left exactly as it is: the
+            # files may be what teammates without the plugin work from, and
+            # `echolot` says what to do about them.
+            print("\n" + layer.one_line(target)[1])
+        elif any(h.key == "plugin" for h in chosen):
             print("\nThe skills come with the echolot plugin — .claude/ stays "
                   "out of this project.")
         else:

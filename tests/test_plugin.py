@@ -214,3 +214,66 @@ def test_the_plugin_is_never_found_by_looking_at_the_tree(tmp_path):
         (tmp_path / evidence).mkdir(exist_ok=True)
     found = {h.key for h in hosts.detect(tmp_path)}
     check("detection never picks the plugin", "plugin" not in found, found)
+
+
+# --- the marketplace ---------------------------------------------------------------
+
+MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
+
+
+def test_the_marketplace_serves_the_plugin_from_this_versions_release_tag():
+    """One file, and both hosts read it: `/plugin marketplace add
+    grishan0v/echolot` in Claude Code, `codex plugin marketplace add
+    grishan0v/echolot` in Codex (#144).
+
+    The plugin is fetched at the release tag, so what a person installs is
+    the plugin the CLI on PyPI was released with. Served from `main`, it
+    would name topics and flags that no released echolot has yet. The
+    release that moves the version moves the tag here too, or this fails.
+    """
+    m = json.loads(MARKETPLACE.read_text("utf-8"))
+    check("the marketplace names its owner", (m.get("owner") or {}).get("name"), m)
+    entries = m.get("plugins") or []
+    check("one plugin, echolot", [e.get("name") for e in entries] == ["echolot"], entries)
+    source = entries[0].get("source") or {}
+    check("fetched from this repository", source.get("source") == "git-subdir"
+          and source.get("url") == "https://github.com/grishan0v/echolot.git", source)
+    check("from the directory the plugin is kept in",
+          (ROOT / source.get("path", "") / ".claude-plugin" / "plugin.json").is_file(),
+          source)
+    check("at this version's release tag", source.get("ref") == f"v{echolot.__version__}",
+          (source.get("ref"), echolot.__version__))
+    check("the version is plugin.json's alone: set in both, Claude Code "
+          "takes plugin.json's without a word", "version" not in entries[0], entries[0])
+
+
+@pytest.mark.skipif(shutil.which("claude") is None, reason="Claude Code is not installed")
+def test_claude_code_accepts_the_marketplace():
+    run = subprocess.run(["claude", "plugin", "validate", str(ROOT)],
+                         capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_a_layer_left_from_an_earlier_init_is_said_and_not_asked_for(tmp_path, capsys):
+    """The plugin chosen on a project that already has the `.claude/` layer.
+
+    `init` keeps its hands off the layer then, so its stale files used to
+    send `next` to `init` for good. It is said instead: Claude Code loads
+    that copy beside the plugin's skills, and the files may be what
+    teammates without the plugin work from, so removing them is the human's
+    call (#144).
+    """
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    assert main(["init", "--into", str(tmp_path), "--for", "claude", "--no-input"]) in (0, 1)
+    agent = tmp_path / ".claude" / "agents" / "perf-hunter.md"
+    agent.write_text(agent.read_text(encoding="utf-8") + "\n# older\n", encoding="utf-8")
+    layer.write_manifest(tmp_path / ".claude", {"agents/perf-hunter.md": layer.sha(agent)})
+    assert main(["init", "--into", str(tmp_path), "--for", "plugin", "--no-input"]) == 0
+    capsys.readouterr()
+
+    check("the layer's files are still there", agent.exists(), agent)
+    st = state.project_state(tmp_path)
+    check("read as not kept current", st["layer_verdict"] == "opted-out", st["layer_line"])
+    check("and said, with what to do",
+          "Claude Code loads this copy beside them" in st["layer_line"], st["layer_line"])
+    check("`next` stops asking for init", state.next_kind(st) != "init", state.next_kind(st))

@@ -80,8 +80,11 @@ The bump goes through a pull request like any other change, because the
 after, on the commit the merge put there.
 
 ```bash
-# 1. on a branch, bump __version__ in echolot/__init__.py, and open a pull
-#    request into main (pyproject.toml reads the version from that attribute)
+# 1. on a branch, bump __version__ in echolot/__init__.py, "version" in
+#    plugins/echolot/.claude-plugin/plugin.json and "ref" in
+#    .claude-plugin/marketplace.json ("v" + the version), and open a pull
+#    request into main (pyproject.toml reads the version from that attribute;
+#    tests/test_plugin.py fails until the three agree)
 # 2. once it is merged, tag the merged commit — the tag must be "v" + that
 #    version, the workflow checks
 git switch main && git pull
@@ -94,6 +97,10 @@ Watch the run under **Actions**. When it is green the package is at
 release is listed at <https://github.com/grishan0v/echolot/releases>. The
 generated notes list the pull requests merged since the previous tag, by
 title — edit them in the GitHub UI if a version deserves a paragraph.
+
+The same tag releases the plugin. The marketplace entry fetches
+`plugins/echolot` at that tag, so until it is pushed the entry points at a tag
+that does not exist yet, and an install fails; push it right after the merge.
 
 A tag, and therefore a release, is a snapshot: it contains what was committed
 before the tag was made and nothing after. To ship a fix, bump the version in
