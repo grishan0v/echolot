@@ -3921,6 +3921,29 @@ def _(report):
             assert re.search(_CONCLUSION_FIELDS[field], phrase), (field, phrase)
 
 
+@check(".claude/ layer: the hunter leaves a value a person confirmed to them")
+def _(report):
+    """A value under `_source: confirmed_by_user` is the person's.
+
+    A live hunt found that the end of the scenario matched nothing, took
+    step 2's "fix the config" at its word, and rewrote the end a person had
+    confirmed as the moment the app is ready: every report after that
+    measured a window nobody had agreed to (#196). Setup calls such a value
+    untouchable, and the loop reads neither setup nor the config reference,
+    so the loop's own step 2 has to say it.
+    """
+    from .layer import CLAUDE_DIR
+
+    hunter = (CLAUDE_DIR / "agents" / "perf-hunter.md").read_text(encoding="utf-8")
+    step = " ".join(hunter.split("## The protocol", 1)[-1].split("```")[1].split())
+    assert "confirmed_by_user" in step, (
+        "the loop's step 2 says to fix the config and never says that a value "
+        "a person confirmed is theirs")
+    assert "exit with that as the conclusion" in step, (
+        "the loop is told the value is the person's, and not what to do "
+        "instead of changing it")
+
+
 @check(".claude/ layer: the skill and the agent have frontmatter")
 def _(report):
     from .layer import CLAUDE_DIR

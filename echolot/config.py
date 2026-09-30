@@ -121,6 +121,30 @@ class Config:
             node = node[part]
         return node
 
+    def confirmed(self) -> dict[str, Any]:
+        """Every value a person confirmed, by its dotted key.
+
+        Setup marks a block `_source: confirmed_by_user` when a human chose
+        it — the end of the scenario, most often — and that choice is theirs:
+        an agent that finds it wrong asks, and does not change it. Each key of
+        such a block is listed, the provenance keys (`_source`, `_evidence`)
+        left out.
+        """
+        found: dict[str, Any] = {}
+
+        def walk(node: Any, prefix: str) -> None:
+            if not isinstance(node, dict):
+                return
+            if node.get("_source") == "confirmed_by_user":
+                for key, value in node.items():
+                    if not str(key).startswith("_"):
+                        found[f"{prefix}{key}"] = value
+            for key, value in node.items():
+                walk(value, f"{prefix}{key}.")
+
+        walk(self.raw, "")
+        return found
+
     # --- the fields context.sql relies on ---
 
     @property

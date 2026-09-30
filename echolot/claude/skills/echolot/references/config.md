@@ -204,6 +204,12 @@ rounds from rows that appeared because the app did something new.
 an agent knows that `confirmed_by_user` is untouchable, and when debugging you
 can see where a piece of nonsense came from.
 
+Untouchable holds inside a hunt too. A confirmed value that looks wrong — an
+anchor that matched nothing in any run — is a question for the person, with
+the matches and the candidates `echolot probe` lists; the loop stops there
+instead of changing it. An investigation records the confirmed values when it
+opens, and `analyze` inside it says when one no longer holds.
+
 **The rule:** every field is justified by a finding. A slice name only if it
 was found in the code or in the trace, with a `file:line` or a table row.
 Nothing found — write `null` and say so out loud, do not invent something
