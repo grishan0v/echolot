@@ -251,6 +251,38 @@ recorder log, which every command writes from every caller — so the report
 exists, it is smaller, and it says which checks it could not make. See
 [reflect.md](reflect.md) under "Without a transcript".
 
+### A sandbox with no network
+
+Codex runs every command in a sandbox, and by default the sandbox has no
+network. On macOS that takes localhost with it. echolot needs localhost twice:
+perfetto binds a free port before it starts trace_processor, and `collect`
+reaches the phone through the adb server on port 5037. So in Codex, as it
+comes, `doctor`, `analyze` and `collect` all fail.
+
+They used to fail in ways that looked like a broken install: `doctor` said
+"could not run — [Errno 1] Operation not permitted", `analyze` ended in a
+traceback, and `collect` passed on twenty lines of adb's startup log. Now each
+says that a sandbox refused the port, whose sandbox it was when the
+environment names it (Codex marks the commands it sandboxes with
+`CODEX_SANDBOX_NETWORK_DISABLED`), and the way out. `doctor` logs the reason,
+so `echolot` and its `next` line say it too.
+
+The way out is to let the one command through:
+
+- **Codex:** approve running `echolot` outside the sandbox when Codex asks,
+  or add `prefix_rule(pattern = ["echolot"], decision = "allow")` to
+  `.codex/rules/echolot.rules` in the project. Codex reads a project's rules
+  once it trusts the project, and only when a session starts;
+  `~/.codex/rules/` works for every project.
+- **Claude Code**, when its own sandbox is turned on: `"echolot *"` in
+  `sandbox.excludedCommands`.
+
+Turning the network on for every command is wider than it needs to be, and
+still leaves the first download of trace_processor nowhere to write: perfetto
+keeps it outside the workspace. The rule was tried in a live Codex session
+(#188): with it, all three commands passed, in the main thread and in a
+subagent.
+
 ## What calls what
 
 Left is a file an agent reads; right is what it may run once it has. There is

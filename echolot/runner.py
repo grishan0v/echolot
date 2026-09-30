@@ -20,6 +20,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from . import sandbox
+
 # Default atrace categories. sched in ftrace_events is mandatory: without it
 # there is no thread_state, and both runnable_starvation and uninstrumented_cpu
 # go silent.
@@ -382,6 +384,13 @@ def _run(args: list[str], stdin: str | None = None, timeout: int = 120) -> str:
         # The last line is the one that says why: adb's `error: …`, or
         # perfetto's own complaint under the lines it logs on the way.
         last = said.splitlines()[-1].strip() if said else f"exit {done.returncode}"
+        if Path(args[0]).name == "adb" and sandbox.adb_refused(said):
+            # An agent's sandbox refused adb's server its port on localhost.
+            # What adb prints then is twenty lines of its startup log, and
+            # `collect` passed them on whole: no word in them says sandbox
+            # (#190). The sentence that does, and adb's own last line.
+            told = sandbox.adb_message(last[:200])
+            raise RunnerError(told, gist=told.splitlines()[0])
         raise RunnerError(f"{' '.join(args)}\n{said}",
                           gist=f"{' '.join(args)[:120]}: {last[:200]}")
     return done.stdout
