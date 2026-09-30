@@ -30,7 +30,7 @@ echolot status --next   # the same as one word, for switching on
 | `next` | what to do |
 |---|---|
 | `upgrade` | the `.claude/` layer here was written by a newer echolot than the one installed, or its manifest names a version the installed one cannot read, and the installed one writes nothing into it. Show the `layer` line to the human as it is — it names both versions and the command to upgrade — and stop. Do not run `echolot init`: it refuses |
-| `init` | run `echolot init`, then run `echolot` again |
+| `init` | run `echolot init`, then run `echolot` again. Brought here by the echolot plugin's skills, it is `echolot init --for plugin`: the plugin brings the skills, and `.claude/` would be a second copy |
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | build `echolot.yml` — run `echolot guide setup` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |
@@ -76,7 +76,12 @@ message to the human and stop: the rule below is theirs to add.
 
 - Codex: approve running `echolot` outside the sandbox when it asks, or put
   `prefix_rule(pattern = ["echolot"], decision = "allow")` in
-  `.codex/rules/echolot.rules`. Codex reads rules when a session starts.
+  `.codex/rules/echolot.rules`. Codex reads rules when a session starts, and
+  a rule covers a command line that is echolot alone: run each `echolot`
+  command on its own, with the trace files named. `git status && echolot
+  doctor -q` runs whole inside the sandbox, and so does a
+  `.echolot/traces/*.perfetto-trace` — Codex does not look inside a line
+  with a glob.
 - Claude Code, with its sandbox turned on: `"echolot *"` in
   `sandbox.excludedCommands`.
 
@@ -150,11 +155,12 @@ for adding `trace{}`, not the location of a bug.
 ## Watch your context
 
 The loop generates a lot of raw output — reports, repository searches,
-instrumentation diffs, several rounds. If your host can run this in a separate
-context or a subagent, do that — and wait for it rather than ending your turn
-while it runs. Its conclusion is the whole answer, and a host that only hands
-it back on a later turn may not get one. Return the conclusion alone. If it
-cannot run a separate context,
+instrumentation diffs, several rounds. If your host can start a subagent, hand
+the loop to one, with none of this conversation: `echolot guide hunt` says
+what to give it, and `echolot guide loop` is its instructions. Then wait for it
+rather than ending your turn while it runs. Its conclusion is the whole answer,
+and a host that only hands it back on a later turn may not get one. Return the
+conclusion alone. If it cannot run a separate context,
 work in short passes and keep raw output out of the conversation: read
 `report.json`, quote the two or three rows that matter, and drop the rest. A
 window filled with raw output is where the instability this tool exists to
@@ -199,7 +205,9 @@ Thresholds are tied to a device and a scenario. When either changes, run
 echolot reflect --last  # how this session went, and what to change in the tool
 echolot compare --help  # the forms it takes and the floor it uses
 echolot guide setup     # building echolot.yml for a project that has none
-echolot guide hunt      # the loop: from a report down to a place in the code
+echolot guide hunt      # a hunt: the facts, the investigation, handing over the loop
+echolot guide loop      # the loop itself: from a report down to a place in the code
+echolot guide report    # report.json, field by field; also config, naming, collect
 echolot guide anr       # the app stopped answering: reading an ANR report, and measuring one
 echolot explain         # the detectors and their parameters
 echolot --help          # every command, grouped by who runs it

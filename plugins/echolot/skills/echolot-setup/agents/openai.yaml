@@ -1,0 +1,7 @@
+interface:
+  display_name: "echolot setup"
+  short_description: "Build echolot.yml from the repository and a trace"
+  default_prompt: "Use $echolot-setup to build echolot.yml for this project."
+policy:
+  allow_implicit_invocation: false
+  products: ["CODEX"]

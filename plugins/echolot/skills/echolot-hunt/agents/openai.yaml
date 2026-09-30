@@ -1,0 +1,7 @@
+interface:
+  display_name: "echolot hunt"
+  short_description: "Find the cause of one performance regression"
+  default_prompt: "Use $echolot-hunt: cold start was 3 s, now it is 7 s."
+policy:
+  allow_implicit_invocation: false
+  products: ["CODEX"]

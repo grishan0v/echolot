@@ -8,6 +8,14 @@ The guiding principle: **the user does not open the config**. You obtain
 everything obtainable and ask only about what exists neither in the repository
 nor in the trace. Of roughly 25 fields, four need a human decision.
 
+| section | what it decides |
+|---|---|
+| `project.process` | which process is measured; an app usually has several |
+| `scenario.start` / `end` | the window. Anchors are globs over slice names |
+| `runner` | who drives the scenario: `launch`, `command` or `gradle` |
+| `domains` | slice name → module and file, for turning a finding into a place |
+| `instrumentation.allowed` | where the hunt may write its temporary markers, and nowhere else |
+
 ## The order: actions first, conversation after
 
 Do not ask anything before you have data. By the time of the first question you
@@ -64,7 +72,7 @@ of the application's to name.
 ### 2. A probe trace
 
 Capture a cold start with `echolot collect -c echolot.yml -n 1`, or by the
-recipe in `references/collect.md` if there is no config yet. Check that a
+recipe `echolot guide collect` prints if there is no config yet. Check that a
 device is connected (`adb devices`). `-n 1` holds in `launch` and `command`
 mode; in `gradle` mode the macrobenchmark sets its own iteration count and
 `-n` never reaches it, so the probe is the whole set it records.
@@ -79,6 +87,12 @@ echolot names <trace> --process '<package>*'
 `probe` gives processes, threads (sorted by CPU, so blind spots show at once)
 and anchor candidates. `names` shows whether the detector masks land on the
 names this device produces.
+
+Pick the process deliberately: `com.example.app*` also catches `:pushservice`
+and `:webview`. A candidate whose thread reads `(async)` is a
+`Trace.beginAsyncSection` span on no thread — usually the app's own marker,
+and almost always the right end anchor. It is an anchor and nothing else: no
+detector reads it.
 
 ### 4. Four questions
 
@@ -98,6 +112,9 @@ What counts as "the app is ready to use" for you?  [1]
    question, not derivable from the trace
 3. **The budget** — propose `baseline * 1.1`
 4. **May we write into the code** for temporary instrumentation, and where
+
+And which process, when the probe shows several plausible ones: a fifth
+question, asked only then.
 
 You **do not decide** — you present candidates and ask for confirmation. That
 makes it impossible to get wrong, and the decision is fixed in the config for
@@ -164,3 +181,12 @@ Whoever hunts later can still see what the shipped numbers say without
 touching the config: `echolot analyze --defaults` (every detector, built-in
 thresholds) and `--set detector.param=value` (one threshold, one run). Both
 leave a mark in the report.
+
+## When you are done
+
+```bash
+echolot                 # should now say next: hunt
+```
+
+`echolot.yml` is committed — it describes the project. Device serials and the
+path to a binary go in `local.yml`, which is not.

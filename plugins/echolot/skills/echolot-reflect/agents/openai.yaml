@@ -1,0 +1,7 @@
+interface:
+  display_name: "echolot reflect"
+  short_description: "How the last session went, and what to change"
+  default_prompt: "Use $echolot-reflect on the last echolot session."
+policy:
+  allow_implicit_invocation: false
+  products: ["CODEX"]

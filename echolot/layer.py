@@ -24,6 +24,39 @@ from . import hosts, recorder
 
 GUIDE_DIR = Path(__file__).resolve().parent / "guide"
 CLAUDE_DIR = Path(__file__).parent / "claude"
+REFERENCES_DIR = CLAUDE_DIR / "skills" / "echolot" / "references"
+COMMANDS_DIR = CLAUDE_DIR / "commands"
+HUNTER = CLAUDE_DIR / "agents" / "perf-hunter.md"
+
+
+def guide_topics() -> dict[str, Path]:
+    """Every topic `echolot guide` prints, and the one file each is read from.
+
+    The guide's own pages, and then files the layer already has: `setup` and
+    `reflect` are the commands of those names, `loop` is what perf-hunter is
+    told, and the rest are the references the skill reads. A client without
+    the layer — Codex, Cursor, the plugin's skills — gets the text a Claude
+    Code session does, from the same file. The guide used to keep its own
+    `setup.md` beside the command, and the two had already drifted apart:
+    each knew things the other did not (#189).
+    """
+    topics = {p.stem: p for p in sorted(GUIDE_DIR.glob("*.md"))}
+    topics["setup"] = COMMANDS_DIR / "echolot-setup.md"
+    topics["reflect"] = COMMANDS_DIR / "echolot-reflect.md"
+    topics["loop"] = HUNTER
+    for p in sorted(REFERENCES_DIR.glob("*.md")):
+        topics.setdefault(p.stem, p)
+    return topics
+
+
+def guide_text(path: Path) -> str:
+    """A topic's text as printed: without the frontmatter a subagent file has."""
+    text = path.read_text(encoding="utf-8")
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end >= 0:
+            text = text[end + len("\n---\n"):]
+    return text.strip()
 # What `init` installed, file by file: the manifest lets `doctor` tell a file
 # the project customised from one the package has since moved on from.
 LAYER_MANIFEST = "echolot-layer.json"
@@ -165,7 +198,8 @@ def install_pointers(project: Path, chosen: list) -> None:
     package rather than being copied per client.
     """
 
-    stubs = [h for h in chosen if h.key != "claude"]
+    # The plugin has no file here: its skills arrive with it.
+    stubs = [h for h in chosen if h.key != "claude" and h.path]
     if not stubs:
         return
 
@@ -387,10 +421,13 @@ def assess(project: Path) -> dict:
         # project that had just declined the layer.
         if not hosts.wants_claude(project):
             chosen = hosts.load_choice(project) or []
-            named = ", ".join(hosts.BY_KEY[k].title for k in chosen) or "nothing"
+            if "plugin" in chosen:
+                says = "not installed — the skills come with the echolot plugin"
+            else:
+                named = ", ".join(hosts.BY_KEY[k].title for k in chosen) or "nothing"
+                says = f"not installed — this project points {named} at echolot"
             return {"verdict": "opted-out", "status": None, "files": {},
-                    "command": None,
-                    "says": f"not installed — this project points {named} at echolot"}
+                    "command": None, "says": says}
         return {"verdict": "absent", "status": None, "files": {},
                 "command": "echolot init", "says": "none installed here"}
     files: dict[str, list[str]] = {}

@@ -120,8 +120,8 @@ waiting for one.
    round = 1
 
 1. report = echolot analyze <traces> -c echolot.yml
-   read .echolot/out/report.json — the schema is in
-   .claude/skills/echolot/references/report.md, do not discover it by hand
+   read .echolot/out/report.json — the schema is what `echolot guide report`
+   prints, do not discover it by hand
    report.markers.rows is every AGENTTMP_ name and every `domains` name,
    medians per run with self time: the table for your own markers. Do not
    rebuild it from `names` in a loop.

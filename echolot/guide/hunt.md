@@ -66,130 +66,42 @@ none, the report will name system slices and threads, and your first move is
 
 ## The loop
 
-```
-round = 1
+The loop itself — the protocol, the commands you will reach for, the rules for
+temporary markers and the eight fields of the conclusion — is
+`echolot guide loop`. It is the text a Claude Code subagent is given, from the
+same file.
 
-1. echolot analyze <traces> -c echolot.yml
-   echolot report                       what fired, one line per detector
-   echolot report -d <id> --top 5       one detector's rows; --json for the rest
-   (the views of .echolot/out/report.json — do not cut the json up by hand)
+**Hand it to a subagent when your host can start one.** The loop fills a
+window with raw output within two rounds: reports, repository searches, marker
+diffs. A subagent keeps that out of yours and returns the conclusion alone.
+Start it with none of this conversation, since the brief below is everything
+it needs and anything more is window it starts without. Then **wait for it**:
+its conclusion is the whole answer, and a turn that ends on "I will come back
+with its output" may never get a next one. The brief:
 
-2. check the config before concluding anything:
-   window.start_anchor.matches == 0     → the anchor missed; the window is not the scenario
-   window.process_alternatives present  → possibly the wrong process
-   thresholds calibrated on these runs  → analyze --defaults before believing silence
-   everything silent on a plausible window → exit: "clean"
-   → in these cases fix the config, do not hunt a problem
+- its instructions: run `echolot guide loop` first, and follow it. That
+  guide is for the subagent to read; reading it yourself only fills your
+  window
+- the traces — the directory `echolot hunt` set aside, when they were recorded
+  before the investigation opened
+- what regressed and against what, and after which change, or "unknown"
+- that investigation #<n> is open: every `analyze` it runs is filed there,
+  and `echolot compare` reads from it
+- whether the config's thresholds can be trusted for this hunt, and if not,
+  to start with `echolot analyze --defaults`
+- that `doctor` passed, and when, so it does not run it again
+- whether the project has instrumentation (`echolot domains --root .`); with
+  none, its first move is `echolot mark`, not reading the app
 
-3. hypotheses: firing detectors → domains → files
-   localised to a place in the code → exit with the finding
+**No subagents?** Run `echolot guide loop` and follow it yourself, in short
+passes: quote the two or three rows that matter and keep the rest out of the
+conversation.
 
-4. from round 2 on, before anything else:
-   echolot compare
-   the previous round against the one just recorded, sorted by what moved.
-   New rows with the AGENTTMP_ prefix are your own markers breaking down a
-   blind spot; the warning at the top names them. A row that grew with
-   Holds `yes` is a real move, `no` means the repeats disagree by more
-   than it moved — record another round before concluding, as many runs
-   a side as the cell says. Hundreds means another round will not settle
-   it: say the move is below what these runs resolve.
+## When the conclusion comes back
 
-5. otherwise pick a blind spot (usually uninstrumented_cpu):
-   a thread the JDK named — pool-N-thread-M, Thread-N → echolot mark --pools
-     first: name the pool, re-record, and the row stops being anonymous
-   no instrumentation → echolot mark, then echolot mark --apply
-   app_init's (no section) → the app's own ContentProviders and
-     Application.onCreate: AGENTTMP_ markers there; what stays unnamed is
-     libraries, listed as <provider> in the merged manifest
-   a named place → a few AGENTTMP_ markers around it, by hand
-   re-record, round += 1
-   round > loop.max_rounds (config, default 3) → exit with an interim conclusion
-
-6. cleanup: remove every AGENTTMP_ marker — always
-```
-
-Stopping is a number from the config, not a feeling. Without a limit you will
-spin and burn context.
-
-## Commands you will reach for
-
-```
-echolot analyze <traces> -c echolot.yml        report → .echolot/out/
-echolot analyze … --defaults                   every detector, built-in thresholds
-echolot analyze … --set main_thread_block.min_slice_ms=4
-                                               one threshold, this run only
-echolot report                                 what fired, one line per detector
-echolot report -d <id> --top 5                 one detector's rows, evidence cut short
-echolot report --markers                       every AGENTTMP_ name and domains name,
-                                               measured across the runs
-echolot compare                                previous round vs the latest — what moved
-echolot compare --hunt <n>                     an investigation's first report vs its last
-echolot compare <a.json> <b.json>              or name the two reports
-echolot names <trace> --grep <regex> --json    one family of slice names, whole
-echolot domains --root .                       slice name → file
-echolot mark [--apply|--remove]                first markers, and taking them out
-echolot mark --pools                           threads and pools the JDK will name
-echolot hunt --show <n>                        this investigation: rounds, reports, evidence
-```
-
-Do not write a config of your own. `--defaults` and `--set` exist so you do not
-have to, and both leave a mark in the report.
-
-Do not re-record over the traces you analysed — they are the baseline.
-`echolot collect` sets them aside for you and records where they went.
-
-## Rules for temporary instrumentation
-
-**Write only inside `instrumentation.allowed`** from `echolot.yml` — the
-places the human said code may be written — and never into generated code,
-`build/` output or a third-party module.
-
-**Every temporary slice carries the prefix** — `AGENTTMP_` unless
-`instrumentation.temp_prefix` says otherwise:
-
-```kotlin
-androidx.tracing.trace("AGENTTMP_collection_mapping") { … }
-```
-
-The prefix is what makes cleanup deterministic: a grep and a delete, rather
-than remembering what you added.
-
-**Name a marker after the work it wraps, never after where you put it.** Two
-markers around the same work must end up with the same name —
-`AGENTTMP_fill_presets`, not `AGENTTMP_fill_presets_v6`. `repeated_work` finds
-the same named work entered from two callers; named by call site, the two get
-two names and there is nothing to compare. When you need to say where a call
-came from, put a second marker around the caller.
-
-**One round, one blind spot**, five to seven slices around the boundaries of
-the suspicious stretch — instrumentation costs time.
-
-**Before you finish, grep for the prefix** — on success and on running out of
-rounds alike. `grep -rn AGENTTMP_ <source_root>` must come back empty, and
-your conclusion says so. `echolot mark --remove` takes out what
-`mark --apply` put in; what you added by hand goes by hand.
-
-## What to report back
-
-```
-Place:         <file:line or module>
-Evidence:      <detector, numbers from the report — measured, nothing else>
-Mechanism:     <why this costs that much time; mark a step you did not
-               measure (inferred), and one you could not check (gap)>
-Suggestion:    <what to do>
-Confidence:    high | medium | low — and why
-Ruled out:     <what you checked and did not carry to a cause, strongest
-               evidence first — or `nothing else was checked`>
-Also measured: <every marker you planted, one line and one number each>
-Cleanup:       temporary instrumentation removed | none was added
-```
-
-`Also measured` is every number you took, whether or not it turned out to be
-the answer: a measurement you hold and do not pass on is one nobody has.
-`Ruled out` saves the next hunt a round spent where you already looked.
-
-Close the investigation with what it came to — every time, an interim
-conclusion or "clean" included:
+Close the investigation first — every time, an interim conclusion or "clean"
+included — and only then answer the human. Left for after the answer, it is
+the step that gets skipped:
 
 ```bash
 echolot hunt --done "TextLayout:initLayout on the main thread, :feature:profile — confidence high"
@@ -199,9 +111,12 @@ Left open, a finished hunt stays the open one: every later `analyze` is filed
 under it, and the next visit is asked whether to carry on with work that is
 over.
 
-If the finding is about the device rather than the code — `runnable_starvation`
-on an emulator or a loaded machine — say the run is worth repeating on real
-hardware before anything is fixed.
+Then show the conclusion as it is: do not retell it, and do not pad it with
+guesses.
 
-If confidence is low, say so rather than smoothing it over. An interim
-conclusion with an honest assessment beats a confident look at weak data.
+- **Cleanup.** It says whether the temporary markers were removed. If that is
+  unclear, check: `grep -rn AGENTTMP_ <source_root>` must come back empty.
+- **Confidence.** If it is low, say so rather than smoothing it over.
+- **The device.** A finding about the device rather than the code —
+  `runnable_starvation` on an emulator or a loaded machine — is worth a run
+  on real hardware before anything is fixed.
