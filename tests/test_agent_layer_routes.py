@@ -270,7 +270,7 @@ def test_the_agents_md_section_can_be_pasted_as_printed(tmp_path: Path) -> None:
     section = said[said.index(hosts.MARKER):said.index(hosts.END_MARKER)
                    + len(hosts.END_MARKER)]
     check("exactly the section init itself writes",
-          section + "\n" == hosts.BODY, section)
+          section + "\n" == hosts.BY_KEY["agents"].render(), section)
 
     own.write_text(own.read_text(encoding="utf-8") + "\n" + section + "\n",
                    encoding="utf-8")

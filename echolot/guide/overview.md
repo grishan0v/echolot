@@ -30,7 +30,7 @@ echolot status --next   # the same as one word, for switching on
 | `next` | what to do |
 |---|---|
 | `upgrade` | the `.claude/` layer here was written by a newer echolot than the one installed, or its manifest names a version the installed one cannot read, and the installed one writes nothing into it. Show the `layer` line to the human as it is — it names both versions and the command to upgrade — and stop. Do not run `echolot init`: it refuses |
-| `init` | run `echolot init`, then run `echolot` again. Brought here by the echolot plugin's skills, it is `echolot init --for plugin`: the plugin brings the skills, and `.claude/` would be a second copy |
+| `init` | run `echolot init`, then run `echolot` again. Brought here by the echolot plugin's skills, it is `echolot init --for plugin`: the plugin brings the skills, and `.claude/` would be a second copy. In Codex it is `echolot init --for plugin,codex`, which also writes the rule that lets echolot out of the sandbox |
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | build `echolot.yml` — run `echolot guide setup` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |
@@ -72,16 +72,18 @@ refuses both, and Codex runs commands in one by default. `doctor`, `analyze`
 and `collect` then say so and name the way out; nothing is wrong with the
 install. If your client lets you ask to run a command outside its sandbox, ask
 for the echolot command, with that message as the reason. Otherwise show the
-message to the human and stop: the rule below is theirs to add.
+message to the human and stop: letting echolot out is theirs to approve.
 
-- Codex: approve running `echolot` outside the sandbox when it asks, or put
-  `prefix_rule(pattern = ["echolot"], decision = "allow")` in
-  `.codex/rules/echolot.rules`. Codex reads rules when a session starts, and
-  a rule covers a command line that is echolot alone: run each `echolot`
-  command on its own, with the trace files named. `git status && echolot
-  doctor -q` runs whole inside the sandbox, and so does a
-  `.echolot/traces/*.perfetto-trace` — Codex does not look inside a line
-  with a glob.
+- Codex: approve running `echolot` outside the sandbox when it asks, or let
+  it out for good with the rule `init` writes into
+  `.codex/rules/echolot.rules` when `codex` is among its agents — the `codex`
+  line of `echolot` names the command. `init` has to run outside the sandbox
+  for that, since Codex keeps `.codex/` read-only inside it. Codex reads the
+  rule when a session starts, in a project it trusts, and a rule covers a
+  command line that is echolot alone: run each `echolot` command on its own,
+  with the trace files named. `git status && echolot doctor -q` runs whole
+  inside the sandbox, and so does a `.echolot/traces/*.perfetto-trace` —
+  Codex does not look inside a line with a glob.
 - Claude Code, with its sandbox turned on: `"echolot *"` in
   `sandbox.excludedCommands`.
 

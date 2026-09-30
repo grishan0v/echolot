@@ -663,8 +663,9 @@ def _cannot_fetch(pin: PinnedBuild, cause: str) -> str:
     in_codex = ""
     if sandbox.host() == sandbox.CODEX:
         in_codex = (f"  - running echolot outside Codex's sandbox, where this "
-                    f"command ran: approve that when Codex asks, or put "
-                    f"{sandbox.CODEX_RULE} in .codex/rules/echolot.rules;\n")
+                    f"command ran: approve that when Codex asks, or let it out "
+                    f"for good with the rule `{sandbox.rule_command()}` writes, "
+                    f"run outside the sandbox;\n")
     return (
         f"trace_processor {pin.version} could not be downloaded: {cause}.\n"
         f"  Every trace is read with it, so nothing that opens one can run "

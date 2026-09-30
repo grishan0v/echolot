@@ -20,7 +20,7 @@ import re
 import textwrap
 from pathlib import Path
 
-from . import hosts, recorder
+from . import codex, hosts, recorder
 
 GUIDE_DIR = Path(__file__).resolve().parent / "guide"
 CLAUDE_DIR = Path(__file__).parent / "claude"
@@ -187,7 +187,7 @@ def template_files() -> list[Path]:
             if p.is_file() and not p.name.startswith(".")]
 
 
-def install_pointers(project: Path, chosen: list) -> None:
+def install_pointers(project: Path, chosen: list, force: bool = False) -> None:
     """Tell the other clients this tool exists.
 
     `.claude/` is a Claude Code mechanism, and in Cursor or Codex it is an
@@ -196,6 +196,10 @@ def install_pointers(project: Path, chosen: list) -> None:
     when the model happened to read the file while looking around. Each client
     gets a few lines saying "run `echolot guide`"; the knowledge stays in the
     package rather than being copied per client.
+
+    Codex gets one more file, and not a pointer: the rule that lets echolot
+    out of its sandbox. `force` is `--all`, which puts echolot's rule back
+    over an edited one the way it does for the files of the layer.
     """
 
     # The plugin has no file here: its skills arrive with it.
@@ -206,10 +210,13 @@ def install_pointers(project: Path, chosen: list) -> None:
     print()
     manual = []
     for host in stubs:
+        if not host.pointer:
+            codex.install(project, [h.key for h in chosen], force)
+            continue
         what, dest = hosts.write_stub(project, host)
         rel = dest.relative_to(project)
         if what == "exists-without-ours":
-            manual.append(rel)
+            manual.append((rel, host))
             print(f"  ≠ {rel} exists and is yours — left alone")
         elif what == "ours-without-an-end":
             # Installed before the section had a closing marker, and edited
@@ -225,16 +232,20 @@ def install_pointers(project: Path, chosen: list) -> None:
         else:
             print(f"  {'↑' if what == 'updated' else '+'} {rel} ({host.title})")
 
-    if manual:
-        # The whole section, both markers included and nothing indented, so
-        # that what is pasted is exactly what `init` would have written. It
-        # used to print four lines and an ellipsis: pasted as shown, the
-        # section had no end marker, and every later `init` found an echolot
-        # section it could not bound and left it alone as edited.
-        print(f"\nAdd this to {', '.join(str(m) for m in manual)} so the agent "
+    # The whole section, both markers included and nothing indented, so that
+    # what is pasted is exactly what `init` would have written. It used to
+    # print four lines and an ellipsis: pasted as shown, the section had no
+    # end marker, and every later `init` found an echolot section it could
+    # not bound and left it alone as edited. One block per text: AGENTS.md
+    # carries a line about Codex's sandbox that the other files do not.
+    sections: dict[str, list] = {}
+    for rel, host in manual:
+        sections.setdefault(hosts.section(host.render()), []).append(rel)
+    for text, files in sections.items():
+        print(f"\nAdd this to {', '.join(str(m) for m in files)} so the agent "
               f"finds the tool — as it is,\nboth marker lines included; `init` "
               f"keeps what is between them current from then on:\n")
-        print(hosts.BODY.rstrip("\n"))
+        print(text.rstrip("\n"))
 
 
 def _read_manifest(root: Path) -> dict:

@@ -35,7 +35,7 @@ Show the output to the human as it is, then act on its `next` line
 
 | `next` | what you do |
 |---|---|
-| `init` | `echolot init --for plugin`, then `echolot` again: the .gitignore lines, and no `.claude/`. Never plain `echolot init`, whatever else says it: that installs `.claude/`, and the skills would load twice |
+| `init` | `echolot init --for plugin`, then `echolot` again: the .gitignore lines, and no `.claude/`. In Codex, `echolot init --for plugin,codex`: it also writes the rule that lets echolot out of the sandbox, which Codex allows only from outside it, so ask to run it there. Never plain `echolot init`, whatever else says it: that installs `.claude/`, and the skills would load twice |
 | `upgrade` | show the `layer` line as it is, it names the upgrade, and stop |
 | `doctor` | `echolot doctor`: show what failed, and stop. A sandbox's refusal names its own way out |
 | `setup` | the `echolot-setup` skill, or `echolot guide setup` where the host does not list it |
@@ -50,8 +50,9 @@ Show the output to the human as it is, then act on its `next` line
 The argument wins over the state. `setup`, `hunt <words>` and `reflect` are
 the skills of those names; `hunt <words>`, or free text about slowness, starts
 a hunt with those words as the question, and the open investigation is not
-asked about. `init` is `echolot init --for plugin`. Any other word is the
-`echolot` command of that name: run it, show the output.
+asked about. `init` is `echolot init --for plugin`, and `--for plugin,codex`
+in Codex. Any other word is the `echolot` command of that name: run it, show
+the output.
 
 ## Asking the human
 

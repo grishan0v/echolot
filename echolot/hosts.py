@@ -21,6 +21,9 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
+
+from . import codex
 
 # Both ends, and the second one is load-bearing. `AGENTS.md`, `GEMINI.md` and
 # `copilot-instructions.md` belong to the project — they are where a team keeps
@@ -51,6 +54,16 @@ builds the config.
 
 BODY = _LEAD + END_MARKER + "\n"
 
+# AGENTS.md is the file Codex reads, and in Codex the first `analyze` fails
+# before the agent has read anything else: the sandbox refuses it a port. The
+# pointer says why, so an agent that reads only the pointer is not left to
+# guess at a broken install (#191).
+_CODEX_NOTE = """
+In Codex, the sandbox stops `echolot` until the rule in
+`.codex/rules/echolot.rules` lets it out; `echolot` says whether it does, and
+the command that writes it.
+"""
+
 
 @dataclass(frozen=True)
 class Host:
@@ -59,12 +72,20 @@ class Host:
     path: str          # where the stub goes, relative to the project
     evidence: tuple[str, ...]   # paths whose presence means this client is in use
     note: str = ""
+    # A few lines in a file that may be the project's own, between markers.
+    # Not every client's file is one: Codex's rule is echolot's whole file.
+    pointer: ClassVar[bool] = True
 
     def detected(self, project: Path) -> bool:
         return any((project / e).exists() for e in self.evidence)
 
     def render(self) -> str:
         return BODY
+
+
+class Agents(Host):
+    def render(self) -> str:
+        return _LEAD + _CODEX_NOTE + END_MARKER + "\n"
 
 
 class Cursor(Host):
@@ -77,13 +98,31 @@ class Cursor(Host):
                 "---\n\n" + BODY)
 
 
+class Codex(Host):
+    """The rule that runs `echolot` outside Codex's sandbox, and not a pointer.
+
+    The file is echolot's alone, so it is written whole, by `codex.install`,
+    rather than as a section of a file the project keeps its own words in.
+    """
+    pointer: ClassVar[bool] = False
+
+    def render(self) -> str:
+        return codex.RULE_FILE
+
+
 HOSTS: tuple[Host, ...] = (
     Host(key="claude", title="Claude Code", path=".claude/",
          evidence=(".claude",),
          note="skill, perf-hunter subagent, commands — the loop gets its own context"),
-    Host(key="agents", title="AGENTS.md", path="AGENTS.md",
-         evidence=("AGENTS.md", ".codex"),
-         note="Codex, and a growing set of clients that read it"),
+    Agents(key="agents", title="AGENTS.md", path="AGENTS.md",
+           evidence=("AGENTS.md", ".codex"),
+           note="Codex, and a growing set of clients that read it"),
+    # What Codex needs beyond the pointer: its sandbox has no network, and
+    # echolot needs localhost. Its own entry, since AGENTS.md is read by many
+    # clients and the rule is Codex's alone (#191).
+    Codex(key="codex", title="Codex", path=codex.RULE_SHOWN,
+          evidence=(".codex",),
+          note="the rule that runs echolot outside its sandbox"),
     # Gemini CLI reads GEMINI.md from the project root by default. AGENTS.md
     # reaches it only when someone has set context.fileName in
     # .gemini/settings.json — the docs show it as an example of overriding the
@@ -146,7 +185,7 @@ def _ours(text: str) -> tuple[int, int] | None:
     return None if end < 0 else (start, end + len(END_MARKER))
 
 
-def _section(text: str) -> str:
+def section(text: str) -> str:
     """Our section out of a rendered stub, without the host's own preamble.
 
     Cursor's rule carries frontmatter above the marker, and that frontmatter
@@ -199,7 +238,7 @@ def write_stub(project: Path, host: Host) -> tuple[str, Path]:
             return "ours-without-an-end", dest
         updated = text
     else:
-        updated = current[:span[0]] + _section(text) + current[span[1]:]
+        updated = current[:span[0]] + section(text) + current[span[1]:]
 
     if updated == current:
         return "current", dest
@@ -260,6 +299,11 @@ def starting_set(project: Path) -> list[Host]:
     if saved is None:
         return detect(project)
     return [BY_KEY[k] for k in saved]
+
+
+def keys(project: Path) -> list[str]:
+    """The agents a plain `init` points at here, by key."""
+    return [h.key for h in starting_set(project)]
 
 
 # --- the screen --------------------------------------------------------------
