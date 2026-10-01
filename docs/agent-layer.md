@@ -326,11 +326,19 @@ pipx install echolot                          # the CLI the skills drive
 ```
 
 - **Claude Code:** `/plugin marketplace add grishan0v/echolot`, then
-  `/plugin install echolot@echolot`. The door is `/echolot:echolot`.
-- **Codex:** `codex plugin marketplace add grishan0v/echolot`, then install
-  it from `/plugins` in the CLI or the Plugins tab of the ChatGPT desktop app.
-  The door is the `echolot` skill, `echolot:echolot` in Codex's list, and it
-  also answers a plain question about slow startup.
+  `/plugin install echolot@echolot`, or from a shell `claude plugin
+  marketplace add grishan0v/echolot` and `claude plugin install
+  echolot@echolot`. The door is `/echolot:echolot`.
+- **Codex:** `codex plugin marketplace add grishan0v/echolot`, then
+  `codex plugin add echolot@echolot`, or install it from `/plugins` in the
+  CLI or the Plugins tab of the ChatGPT desktop app. The door is the
+  `echolot` skill, `$echolot` in a prompt and `echolot:echolot` in Codex's
+  list, and it also answers a plain question about slow startup.
+
+An upgrade is `pipx upgrade echolot`, and then the plugin: `claude plugin
+marketplace update echolot` and `claude plugin update echolot@echolot`, which
+Claude Code applies after a restart; `codex plugin marketplace upgrade
+echolot` and `codex plugin add echolot@echolot` again in Codex.
 
 The entry fetches `plugins/echolot` at the release tag of the version in the
 code. So what a person installs is the plugin the CLI
