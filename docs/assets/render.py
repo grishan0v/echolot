@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Draws the README's pictures from their sources.
 
-    python docs/assets/render.py              write every picture next to this file
+    python docs/assets/render.py              write the README's sample report, then
+                                              every picture next to this file
     python docs/assets/render.py --preview D  also write README-like pages into D:
                                               light and dark, desktop and phone
 
@@ -11,6 +12,11 @@ are read out of README.md, the sample comparison out of docs/compare.md, and
 the cost of a hunt is worked out from the recorded runs listed below. tests/test_readme_pictures.py draws everything
 again and fails when a committed file differs, so a README edit that moves a
 number fails until the pictures are drawn again.
+
+The README's sample report is not written by hand either: it is what `analyze`
+prints for the demo app (echolot/demo.py), and it is written first, because the
+pictures read their numbers from it. tests/test_doc_samples.py renders it again
+and fails when the README's copy differs.
 
 The rules every picture follows are in docs/assets/README.md.
 """
@@ -706,7 +712,30 @@ pre{{background:{c['card']};border-radius:6px;padding:12px 16px;margin:0 0 12px;
 </div></div></body></html>"""
 
 
+SAMPLE = re.compile(r"^```markdown\n# Marker Report\n.*?^```", re.S | re.M)
+
+
+def write_sample() -> bool:
+    """The README's sample report, rendered from the demo app. True when it changed."""
+    sys.path.insert(0, str(README.parent))
+    from echolot import demo, recorder
+    from echolot import report as report_mod
+
+    with recorder.isolated():
+        rendered = report_mod.to_markdown(demo.report()).rstrip("\n")
+    text = README.read_text(encoding="utf-8")
+    if not SAMPLE.search(text):
+        raise SystemExit("README.md: the ```markdown block holding the sample report is gone")
+    new = SAMPLE.sub(lambda _: f"```markdown\n{rendered}\n```", text, count=1)
+    if new == text:
+        return False
+    README.write_text(new, encoding="utf-8")
+    return True
+
+
 def main(argv: list[str]) -> int:
+    if write_sample():
+        print(f"→ {README} (the sample report)")
     for name, body in pictures().items():
         (HERE / name).write_text(body, encoding="utf-8")
         print(f"→ {HERE / name}")

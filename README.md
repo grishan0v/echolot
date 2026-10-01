@@ -167,21 +167,21 @@ fired. The silent ones are named too.
 Runs: **5**, numbers are medians across them
 Traces: `coldStart_iter000`, `coldStart_iter001`, `coldStart_iter002`, `coldStart_iter003`, `coldStart_iter004`
 Process: `com.example.app` (pid 12903)
-Scenario window: **1184.37 ms** (from 1102.14 to 1291.52)
-Main thread: 49% on a CPU · 8% waiting for a CPU · 10% blocked in the kernel · 33% sleeping
-Covered by the findings below: **31%** of the main thread's window, each moment counted once
-Startup: cold, **1302 ms** from the launch to the first frame: 41% on a CPU · 17% `bind_application` · 9% `monitor_contention` · 8% `choreographer_do_frame` · 7% `binder` · 5% `launch_delay` · 4% `activity_start` · 4% `io` · 3% sleeping · 2% waiting for a CPU
-That is the platform's measure rather than the window: the startup began 118 ms before the window opened, and ended with it.
-Device: clock **1481 MHz** (from 1204 to 1622 across repeats), peak 54 °C, 1536 MB free at the low point
+Scenario window: **1136.05 ms** (from 1084.25 to 1214.18)
+Main thread: 40% on a CPU · 1% waiting for a CPU · 9% blocked in the kernel · 49% sleeping
+Covered by the findings below: **42%** of the main thread's window, each moment counted once
+Startup: cold, **1174 ms** from the launch to the first frame: 42% sleeping · 17% `choreographer_do_frame` · 17% `inflate` · 6% blocked in the kernel · 5% `monitor_contention` · 3% `launch_delay` · 2% `bind_application` · 2% `activity_start`
+That is the platform's measure rather than the window: the startup began 38 ms before the window opened, and ended with it.
+Device: clock **1478 MHz** (from 1325 to 1574 across repeats), peak 54 °C, 1514 MB free at the low point
 Detectors fired: **5 of 13**
-Config: `/home/you/my-app/echolot.yml` (sha 3f9a1c2b7d40) · thresholds: built-in defaults
+Config: `/home/you/my-app/echolot.yml` (sha 3d78738defec) · thresholds: built-in defaults
 
 ## Markers
 _the names `domains` lists and the `AGENTTMP_` ones; medians per run, self time with children subtracted_
 
 | Marker | Runs | N | Self, ms | Total, ms | Max, ms | Threads |
 |---|---|---|---|---|---|---|
-| collection_load | 5/5 | 1 | 212.4 | 212.4 | 212.4 | (async) |
+| collection_load | 5/5 | 1 | 923.8 | 923.8 | 923.8 | (async) |
 | collection_mapping | 5/5 | 1 | 96.0 | 118.3 | 118.3 | arch_disk_io_1 |
 
 ## Frames that missed their deadline
@@ -189,7 +189,7 @@ _the platform classifies every frame itself, and says whose fault it was. The on
 
 | Where | Runs | N | Total, ms | Max, ms | Evidence |
 |---|---|---|---|---|---|
-| App Deadline Missed | 5/5 | 14 | 412.0 | 70.1 | Self Jank · 14 of 300 frames · longest 86.2 ms |
+| App Deadline Missed | 5/5 | 4 | 427.51 | 130.89 | Self Jank · 4 of 19 frames · longest 188.7 ms |
 
 <sub>detector `frame_jank`, params: {'min_frames': 3, 'min_overrun_ms': 4}</sub>
 
@@ -198,9 +198,10 @@ _measured as SELF time, children subtracted — otherwise one event lands in the
 
 | Where | Runs | N | Self, ms | Total, ms | Max, ms | Evidence |
 |---|---|---|---|---|---|---|
-| draw | 5/5 | 4 | 125.4 | 130.1 | 61.2 | com.example.app |
-| TextLayout:initLayout | 5/5 | 61 | 88.0 | 88.0 | 4.1 | com.example.app |
-| inflate | 5/5 | 12 | 47.3 | 162.4 | 21.7 | com.example.app |
+| inflate | 5/5 | 15 | 222.68 | 241.38 | 49.28 | com.example.app |
+| draw | 5/5 | 7 | 120.8 | 120.8 | 34.0 | com.example.app |
+| TextLayout:initLayout | 5/5 | 51 | 73.95 | 73.95 | 1.45 | com.example.app |
+| Lock contention on a monitor lock (owner tid: 12931) | 5/5 | 9 | 61.6 | 61.6 | 22.4 | com.example.app |
 
 <sub>detector `main_thread_block`, params: {'min_slice_ms': 16}</sub>
 
@@ -209,7 +210,7 @@ _the pair to main_thread_block. That one asks where the main thread's time went 
 
 | Where | Runs | N | Total, ms | Max, ms | Evidence |
 |---|---|---|---|---|---|
-| inflate | 2/5 | 1 | 86.2 | 86.2 | median 12.9 ms of 12 · worst 6.7× |
+| inflate | 2/5 | 1 | 86.2 | 86.2 | median 12.1 ms of 15 · worst 7.1× |
 
 <sub>detector `main_thread_outlier`, params: {'factor': 4, 'min_abs_ms': 40, 'min_occurrences': 5}</sub>
 
@@ -218,7 +219,7 @@ _ART writes a "Lock contention on ..." slice with the owner's tid — ready-made
 
 | Where | Runs | N | Total, ms | Max, ms | In the code | Evidence |
 |---|---|---|---|---|---|---|
-| com.example.app | 5/5 | 9 | 61.5 | 22.4 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:66 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:66) |
+| com.example.app | 5/5 | 9 | 61.6 | 22.4 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:66 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:66) |
 
 <sub>detector `monitor_contention`, params: {'min_block_ms': 8, 'max_total_ms': 50, 'name_glob': 'Lock contention on a monitor lock*', 'name_glob_alt': 'monitor contention with owner*'}</sub>
 
@@ -227,7 +228,7 @@ _the ONLY detector that finds a problem inside uninstrumented code. The agent do
 
 | Where | Runs | N | Total, ms | Instrumented, ms | Evidence |
 |---|---|---|---|---|---|
-| DefaultDispatch | 5/5 | 0 | 340.2 | 0.0 | 100.0% of CPU outside slices |
+| DefaultDispatch | 5/5 | 0 | 522.09 | 0.0 | 100.0% of CPU outside slices |
 
 <sub>detector `uninstrumented_cpu`, params: {'min_running_ms': 50, 'max_covered_pct': 50}</sub>
 
@@ -235,6 +236,10 @@ _the ONLY detector that finds a problem inside uninstrumented code. The agent do
 
 <sub>trace_processor v56.1</sub>
 ```
+
+The example is what `analyze` prints, number for number, for the demo that
+comes with echolot: five cold starts of an app that does not exist, built by
+code.
 
 </details>
 
