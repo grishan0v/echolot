@@ -25,14 +25,27 @@
 -- accounted for 129 of them. There is no application code behind those, and an
 -- agent handed them as evidence goes hunting for something that isn't there.
 
+--
+-- One wait is often both shapes at once: ART opens `monitor contention with
+-- owner …` and writes `Lock contention on a monitor lock …` inside it. On six
+-- cold starts on an SM-A515F, 2,490 of 2,522 `Lock contention` slices sat
+-- inside one, and summing both masks counted each of those waits twice, its
+-- time with it. So a slice of the first mask inside one of the second is left
+-- out: the outer one stays, because it names both frames — which `code`
+-- places in the checkout — and the owner by name. One that stands alone is
+-- a wait of its own, and counts.
 SELECT
-    thread_name                       AS location,
+    s.thread_name                     AS location,
     COUNT(*)                          AS count,
-    ROUND(SUM(dur) / 1e6, 2)          AS total_ms,
-    ROUND(MAX(dur) / 1e6, 2)          AS max_ms,
-    name                              AS detail
-FROM _slice_win
-WHERE (name GLOB '{{name_glob}}' OR name GLOB '{{name_glob_alt}}')
+    ROUND(SUM(s.dur) / 1e6, 2)        AS total_ms,
+    ROUND(MAX(s.dur) / 1e6, 2)        AS max_ms,
+    s.name                            AS detail
+FROM _slice_win s
+JOIN slice x ON x.id = s.slice_id
+LEFT JOIN slice parent ON parent.id = x.parent_id
+WHERE (s.name GLOB '{{name_glob}}' OR s.name GLOB '{{name_glob_alt}}')
+  AND NOT (s.name GLOB '{{name_glob}}'
+           AND COALESCE(parent.name GLOB '{{name_glob_alt}}', 0))
 -- Grouped by thread, not by slice name. The owner's tid sits inside the name
 -- ('owner tid: 13533'), so grouping by name shatters one finding into a dozen
 -- rows, one per owner: on the gameplay scenario 190 blocks scattered so widely
@@ -43,9 +56,9 @@ WHERE (name GLOB '{{name_glob}}' OR name GLOB '{{name_glob_alt}}')
 -- query, SQLite takes the remaining columns from the record-holding row. That
 -- keeps the owner's tid in the evidence, which is what the investigation
 -- hooks onto.
-GROUP BY thread_name
-HAVING MAX(dur) >= {{min_block_ms}} * 1000000
-    OR SUM(dur) >= {{max_total_ms}} * 1000000
+GROUP BY s.thread_name
+HAVING MAX(s.dur) >= {{min_block_ms}} * 1000000
+    OR SUM(s.dur) >= {{max_total_ms}} * 1000000
 ORDER BY total_ms DESC
 LIMIT 20;
 
