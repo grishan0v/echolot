@@ -44,6 +44,7 @@ from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
 from . import compare as compare_mod
 from . import hunt as hunt_mod
 from . import codex, layer, recorder, state, table, when
+from . import mapping as mapping_mod
 from . import report as report_mod
 from . import stacks as stacks_mod
 from .config import NO_ANCHOR, Config, ConfigError
@@ -423,8 +424,13 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     """
     plan = plan_detectors(cfg, cli_overrides=cli_overrides, use_defaults=use_defaults)
     results = []
+    package = str(cfg.get("project.package") or "")
+    # The build's R8 mapping, read before the trace is opened: a path that is
+    # not there is the config's mistake, and is said before any work is done.
+    mapping = cfg.mapping
+    extra = mapping_mod.packet_for(mapping, package) if mapping else None
 
-    with TraceSession(trace, tp_binary) as tp:
+    with TraceSession(trace, tp_binary, extra=extra) as tp:
         procs = _resolve_process(tp, cfg.process, str(trace))
         # The masks as this run has them: `--set` moves a boundary the same
         # way the config does, and `_claimed_name` is drawn from where they
@@ -432,14 +438,15 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         _setup_context(tp, cfg, procs[0]["upid"],
                        {d.id: ov for d, ov, _ in plan if ov})
         window = _window_info(tp, cfg, procs)
-        environment = _environment_info(tp)
+        environment = _environment_info(
+            tp, package or str(procs[0].get("name") or "").split(":")[0],
+            mapped=extra is not None)
         markers = _markers_info(tp, cfg)
         # What ran behind a row is read only where a sampler ran: a trace
         # without samples gets the report it always got. The checkout, for
         # whose code is whose, is the config's directory, and there is none
         # for a config that lives in memory.
         sampled = bool((environment.get("sampling") or {}).get("started"))
-        package = str(cfg.get("project.package") or "")
         root = Path(cfg.path).resolve().parent if cfg.path else None
 
         # Stdlib modules the detectors declared, loaded once for the session.
@@ -1079,7 +1086,7 @@ def _opened_inside(tp, window: dict) -> dict | None:
     return found
 
 
-def _environment_info(tp) -> dict:
+def _environment_info(tp, package: str = "", mapped: bool = False) -> dict:
     """What the platform was doing to the app, from the views environment.sql left.
 
     Three blocks, each one either measured or absent. Absent means the trace
@@ -1096,7 +1103,9 @@ def _environment_info(tp) -> dict:
 
     `sampling` is the fourth block and works the other way round: `None` is a
     definite answer, "nothing sampled this recording", so it never goes into
-    `missing`. See `_sampling_info`.
+    `missing`. See `_sampling_info`. `package` and `mapped` are for what it
+    says about the names of the app's frames: the package whose frames they
+    are, and whether the build's mapping was handed to trace_processor.
     """
     def one(sql: str) -> dict:
         try:
@@ -1163,9 +1172,53 @@ def _environment_info(tp) -> dict:
         env["memory"] = None
 
     env["sampling"] = _sampling_info(tp, one)
+    if env["sampling"] and env["sampling"]["with_stack"]:
+        names = _names_info(tp, package, mapped)
+        if names:
+            env["sampling"]["names"] = names
     env["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if env[k] is None)
     return env
+
+
+def _names_info(tp, package: str, mapped: bool) -> dict | None:
+    """How the app's own sampled methods are named: by name, or as R8 left them.
+
+    A minified build's frames come back as `a.b.c`, and a row that names them
+    names nothing a reader can find. The report says how many there are, so
+    that a minified build is told to hand over its mapping, and one that did
+    is told whether the mapping was this build's: a mapping from another build
+    renames some frames wrongly and leaves the rest as they were, and the ones
+    left are what gives it away.
+
+    The app's code is what the device installed under the package, and what
+    the JIT compiled: every method of the app runs from one or the other.
+    None when the samples hold no method of the app's at all.
+    """
+    where = ["m.name GLOB '*jit-cache*'", "m.name GLOB '*jit-code-cache*'"]
+    if package:
+        where.append(f"m.name GLOB '*/{sql_value(package)}-*'")
+    rows = tp.query(f"""
+        SELECT DISTINCT f.name AS name, NULLIF(f.deobfuscated_name, '') AS real,
+               m.name AS file
+        FROM stack_profile_frame f
+        JOIN stack_profile_mapping m ON m.id = f.mapping
+        WHERE {' OR '.join(where)}
+    """)
+    methods: dict[str, tuple[bool, bool]] = {}
+    for r in rows:
+        method = stacks_mod.Frame(r.get("real") or r.get("name"), r.get("file")).method
+        if method:
+            methods[method] = (
+                r.get("real") is not None,
+                any(mapping_mod.minified(m) for m in method.split(" | ")))
+    if not methods:
+        return None
+    names = {"methods": len(methods),
+             "minified": sum(left for _, left in methods.values())}
+    if mapped:
+        names["renamed"] = sum(renamed for renamed, _ in methods.values())
+    return names
 
 
 def _sampling_info(tp, one) -> dict | None:

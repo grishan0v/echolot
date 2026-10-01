@@ -20,6 +20,7 @@ project:
   package: com.example.app
   process: com.example.app     # GLOB over process.name
   source_root: app/src/main/kotlin
+  mapping: app/build/outputs/mapping/benchmark/mapping.txt   # a minified build's R8 map
 
 scenario:
   name: coldStart
@@ -55,6 +56,24 @@ A GLOB, not an exact name. An app usually has several processes
 takes the largest by slice count and **says so** — on stderr and in
 `report.json` as `process_alternatives`. If the wrong process is being
 analysed, narrow the mask.
+
+### `project.mapping`
+
+The R8 or ProGuard `mapping.txt` of the build that was recorded, for a
+minified build. Its sampled frames come back as `a.b.c`, and `analyze` hands
+this file to trace_processor, which names them back in every report the
+build gives. Optional; without it, names stay as recorded. A relative path is
+taken from the config's directory, and R8 writes the file to
+`build/outputs/mapping/<variant>/mapping.txt`.
+
+It needs `project.package`, the package as installed on the device — for a
+benchmark build often the release's with a suffix — because the mapping
+names back that package's frames. The mapping has to be **this** build's: one
+from another build renames the frames it happens to match, wrongly, and leaves
+the rest. The report's header warns when a tenth or more of the app's sampled
+methods read as minified, with a mapping and without one; fewer than that is
+code that arrived minified, as some SDKs ship, and no mapping of this build
+names it.
 
 ### `scenario.start` / `scenario.end`
 

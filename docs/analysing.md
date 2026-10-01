@@ -224,6 +224,11 @@ comes back without names and where the unwinder stops: 69% of those stacks
 ended there. What asked for the work is not in a cut stack, and the row
 says so rather than guessing.
 
+A minified build's frames come back as R8 named them, `a.b.c`, and the row
+is only worth reading once `project.mapping` names the build's `mapping.txt`
+([A minified build](collecting.md#a-minified-build)); the header says when the
+app's methods still read as minified.
+
 The shares are of the samples that came with a stack. `report.json` keeps
 the ten largest of each list in the row's `stacks`, with their counts; the
 kernel cuts a thread's name to fifteen characters, so a pool's workers share

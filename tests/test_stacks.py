@@ -196,6 +196,21 @@ def test_what_a_row_says_when_the_samples_name_nothing() -> None:
     check("and one of them", words == "1 sample, none with a stack", words)
 
 
+def test_a_frame_the_mapping_named_as_several_methods_is_all_of_them() -> None:
+    # R8 gives overloads one name, and trace_processor names such a frame back
+    # as every method it can be.
+    both = Frame("com.example.app.Disk.checksum | com.example.app.Disk.checksumLegacy", APP)
+    check("a method of the JVM, each part", both.method == both.name, both.method)
+    check("each part short", both.short == "Disk.checksum | Disk.checksumLegacy", both.short)
+    mixed = Frame("com.example.app.Disk.checksum | not a method", APP)
+    check("and not one when a part is not", mixed.method is None, mixed.method)
+    block, words = stacks.read([1], {1: [both, *POOL]}, OURS)
+    check("it is ours, what ran, and named whole in the json",
+          block["ours"][0]["frame"] == block["leaf"][0]["frame"] == both.name, block)
+    check("the words keep both", words.endswith("ours: Disk.checksum | Disk.checksumLegacy 100%"),
+          words)
+
+
 def test_a_long_name_is_cut_in_the_words_and_kept_whole_in_the_json() -> None:
     # A lambda's synthetic name, the shape one had on a phone.
     lam = ("com.example.app.sync.HeartBeatController.lambda$registerHeartBeat$0"

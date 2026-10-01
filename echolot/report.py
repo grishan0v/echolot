@@ -278,7 +278,7 @@ def _merge_sampling(samplings: list[dict[str, Any] | None]) -> dict[str, Any] | 
         return None
     ran = [s for s in asked if s.get("started")]
     rates = {s.get("hz") for s in asked}
-    return {
+    merged = {
         "hz": rates.pop() if len(rates) == 1 else None,
         "started": bool(ran),
         "samples": round(median([s["samples"] for s in ran])) if ran else 0,
@@ -286,6 +286,13 @@ def _merge_sampling(samplings: list[dict[str, Any] | None]) -> dict[str, Any] | 
         "runs": f"{len(ran)}/{len(samplings)}",
         "runs_with_stack": f"{sum(1 for s in ran if s.get('with_stack'))}/{len(ran)}",
     }
+    # How the app's methods were named: the most any repeat saw. A minified
+    # method in one repeat is the warning's whole point, and a median would
+    # vote it away.
+    names = [s["names"] for s in ran if s.get("names")]
+    if names:
+        merged["names"] = {key: max(n.get(key) or 0 for n in names) for key in names[0]}
+    return merged
 
 
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
@@ -611,7 +618,58 @@ def _environment_lines(env: dict[str, Any]) -> list[str]:
             f"slower machine from a slower app."
         )
     out.extend(_sampling_lines(env.get("sampling")))
+    out.extend(_names_lines((env.get("sampling") or {}).get("names")))
     return out
+
+
+# The share of the app's sampled methods that has to read as minified before
+# the header warns. Some code arrives minified from elsewhere — SDKs ship that
+# way — and no mapping of this build names it: on a phone, a build that kept
+# its names had 38 of its 3,309 sampled methods so, a little over 1%. A build
+# R8 minified reads that way in most of its own code and of the libraries it
+# ships, and so does one given another build's mapping.
+MINIFIED_SHARE = 0.10
+
+
+def _names_lines(names: dict[str, Any] | None) -> list[str]:
+    """Whether the app's sampled methods came back by name.
+
+    Nothing for a build that kept its names and was given no mapping. A
+    warning for a minified build without one: the frames of the app read as
+    `a.b.c`, and `project.mapping` is the fix. With a mapping, one line saying
+    how many methods it named back — or a warning when many still read as
+    minified, which is what a mapping from another build leaves: it renames
+    the frames it happens to match, wrongly, and misses the rest, and the rows
+    then mix real names with minified ones as if they were one list.
+    """
+    if not names:
+        return []
+    total, left = names.get("methods") or 0, names.get("minified") or 0
+    many = bool(total) and left / total >= MINIFIED_SHARE
+    if "renamed" not in names:
+        if not many:
+            return []
+        return [
+            f"> ⚠️ {left} of the app's {total} sampled methods read as minified, "
+            f"`a.b.c`: a reader cannot find them, and neither can `code`. Set "
+            f"`project.mapping` to the build's `mapping.txt` and the frames "
+            f"come back by name."
+        ]
+    if many:
+        return [
+            f"> ⚠️ {left} of the app's {total} sampled methods still read as "
+            f"minified after `project.mapping` renamed {names['renamed']}. A "
+            f"mapping from another build renames the frames it happens to "
+            f"match, wrongly, and misses the rest: check that it is this "
+            f"build's."
+        ]
+    line = (f"`project.mapping` named {names['renamed']} of the app's {total} "
+            f"sampled methods back")
+    if not left:
+        return [f"{line}, and none reads as minified."]
+    return [f"{line}. {left} still read as minified, too few to be this build's "
+            f"own: code that arrived minified, as some SDKs ship, which no "
+            f"mapping of this build names."]
 
 
 def _sampling_lines(s: dict[str, Any] | None) -> list[str]:

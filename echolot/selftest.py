@@ -395,9 +395,12 @@ def _(report):
     # first two without a stack; the main thread's four fall before and after
     # it, and the other app's three are not ours. The rate is the recording's
     # own, read back from the config in the trace.
+    # The app's eight methods on those stacks came back by name, so nothing is
+    # said about names.
     sampled = sampled_report()
     s = sampled["environment"]["sampling"]
-    assert s == {"hz": 100, "started": True, "samples": 46, "with_stack": 44}, s
+    assert s == {"hz": 100, "started": True, "samples": 46, "with_stack": 44,
+                 "names": {"methods": 8, "minified": 0}}, s
     # Samples are context, like the clock. They name what ran in a blind spot
     # and move nothing else: no row comes or goes, and no number changes.
     assert [_unsampled(d["rows"]) for d in sampled["detectors"]] == \
@@ -864,6 +867,33 @@ def _(report):
     s = row["stacks"]
     assert (s["samples"], s["with_stack"]) == (10, 10), s
     assert [e["frame"] for e in s["leaf"]] == ["com.example.app.Disk.checksum"], s
+
+
+@check("R8 mapping: a minified build's frames come back by their names")
+def _(report):
+    # The same samples from a build R8 minified, and the build's mapping.txt
+    # handed to trace_processor. The worker's row reads exactly as the named
+    # build's. Disk's two methods R8 gave one name come back as both, and all
+    # eight of the app's methods are named back.
+    named = minified_report(fixture.MAPPING)
+    worker = next(r for r in rows(named, "uninstrumented_cpu")
+                  if r["location"] == "DefaultDispatcher-worker-1")
+    plain = next(r for r in rows(sampled_report(), "uninstrumented_cpu")
+                 if r["location"] == "DefaultDispatcher-worker-1")
+    assert worker["stacks"] == plain["stacks"], (worker["stacks"], plain["stacks"])
+    disk = next(r for r in rows(named, "uninstrumented_cpu") if r["location"] == "BlockingIO-1")
+    assert [e["frame"] for e in disk["stacks"]["leaf"]] == [
+        "com.example.app.Disk.checksum | com.example.app.Disk.checksumLegacy"], disk["stacks"]
+    names = named["environment"]["sampling"]["names"]
+    assert names == {"methods": 8, "minified": 0, "renamed": 8}, names
+
+
+@check("R8 mapping: one from another build is called out")
+def _(report):
+    # Another build's mapping knows one of these minified names and renames
+    # it wrongly; the other seven stay as R8 left them, and say so.
+    names = minified_report(fixture.OTHER_MAPPING)["environment"]["sampling"]["names"]
+    assert names == {"methods": 8, "minified": 7, "renamed": 1}, names
 
 
 @check("uninstrumented_cpu: coverage counts nested slices only once")
@@ -4101,10 +4131,23 @@ def build_report(tp_binary: str | None = None, sampling: str | None = None) -> d
 def sampled_report() -> dict:
     """The fixture with a callstack sampler behind it, analysed once a process.
 
-    Three checks read it, and building it for each would run trace_processor
-    two more times in every `doctor`. None of them writes to it.
+    Several checks read it, and building it for each would run trace_processor
+    again in every `doctor`. None of them writes to it.
     """
     return build_report(sampling="arrived")
+
+
+def minified_report(mapping: str) -> dict:
+    """The sampled fixture from a minified build, analysed with `mapping` as its mapping.txt."""
+    from .main import analyze_trace  # late import: main imports us
+
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build(sampling="minified"))
+        path = Path(tmp) / "mapping.txt"
+        path.write_text(mapping, encoding="utf-8")
+        project = {**FIXTURE_CONFIG["project"], "mapping": str(path)}
+        return analyze_trace(trace, Config({**FIXTURE_CONFIG, "project": project}))
 
 
 def _where(e: BaseException) -> str:

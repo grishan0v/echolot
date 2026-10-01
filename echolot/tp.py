@@ -734,9 +734,16 @@ def render_sql(text: str, params: dict[str, Any]) -> str:
 
 
 class TraceSession:
-    """A thin wrapper over perfetto.trace_processor.TraceProcessor."""
+    """A thin wrapper over perfetto.trace_processor.TraceProcessor.
 
-    def __init__(self, trace_path: str | Path, binary: str | None = None):
+    `extra` is packets for trace_processor to read after the trace, as if the
+    trace had carried them — the build's R8 mapping (mapping.py). They are
+    streamed behind the file rather than written into a copy of it: a trace
+    runs to hundreds of megabytes, and the file stays as it was recorded.
+    """
+
+    def __init__(self, trace_path: str | Path, binary: str | None = None,
+                 extra: bytes | None = None):
         try:
             from perfetto.trace_processor import (
                 TraceProcessor,
@@ -778,7 +785,7 @@ class TraceSession:
                 f"a file")
         try:
             self._tp = TraceProcessor(
-                trace=str(trace_path),
+                trace=str(trace_path) if extra is None else _then(path, extra),
                 config=TraceProcessorConfig(bin_path=binary))
         except TraceProcessorException as e:
             # A file that is there and is not a trace: a capture cut short, a
@@ -828,6 +835,18 @@ class TraceSession:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def _then(path: Path, extra: bytes):
+    """The trace's bytes, then `extra`.
+
+    A trace is a run of packets, so packets added at its end are read as part
+    of it — which is how Perfetto's own tools attach a deobfuscation map.
+    """
+    with path.open("rb") as trace:
+        while chunk := trace.read(32 << 20):
+            yield chunk
+    yield extra
 
 
 def _split_statements(sql: str) -> list[str]:

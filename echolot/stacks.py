@@ -106,11 +106,18 @@ class Frame:
 
     @property
     def method(self) -> str | None:
-        """`pkg.Class.method` for a frame of the JVM, None for anything else."""
+        """`pkg.Class.method` for a frame of the JVM, None for anything else.
+
+        A mapping that gave several methods one minified name names the frame
+        all of them, `pkg.Store.load | pkg.Store.save`, and then each of them
+        has to be a method.
+        """
         if not self.name or (self.mapping and _SHARED.search(self.mapping)):
             return None
-        m = _JVM.match(self.name.strip())
-        return m.group("method") if m else None
+        found = [_JVM.match(part.strip()) for part in self.name.split(" | ")]
+        if not all(found):
+            return None
+        return " | ".join(m.group("method") for m in found)
 
     @property
     def label(self) -> str:
@@ -135,14 +142,18 @@ class Frame:
         """
         method = self.method
         if method:
-            parts = method.split(".")
-            for i, part in enumerate(parts[:-1]):
-                if part[:1].isupper():
-                    return ".".join(parts[i:])
-            return ".".join(parts[-2:])
+            return " | ".join(_short_method(m) for m in method.split(" | "))
         if self.name:
             return "::".join(_native(self.name).split("::")[-2:])
         return self.label
+
+
+def _short_method(method: str) -> str:
+    parts = method.split(".")
+    for i, part in enumerate(parts[:-1]):
+        if part[:1].isupper():
+            return ".".join(parts[i:])
+    return ".".join(parts[-2:])
 
 
 def _native(name: str) -> str:
@@ -336,10 +347,15 @@ def _top(chain: list[Frame]) -> Frame:
 
 
 def _nearest(chain: list[Frame], ours: anr.Ownership | None) -> Frame | None:
-    """The frame of the project's own code closest to the top, if any."""
+    """The frame of the project's own code closest to the top, if any.
+
+    A frame a mapping named as several methods is ours when one of them is:
+    R8 gives one name to methods of one class, and the class is what decides.
+    """
     if ours is None:
         return None
-    return next((f for f in chain if f.method and ours.claims(f.method)), None)
+    return next((f for f in chain if f.method
+                 and any(ours.claims(m) for m in f.method.split(" | "))), None)
 
 
 def _whole(chain: list[Frame]) -> bool:
