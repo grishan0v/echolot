@@ -350,7 +350,12 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
                       if f.get(col) is not None]
             if not values:
                 continue
-            row[col] = round(median(values), 2)
+            mid = round(median(values), 2)
+            # The median of an even number of counts is the mean of the middle
+            # two, a float even when the two are equal: two repeats of one
+            # trace printed `N 6.0` where one printed `6`. A whole one stays
+            # whole; one between two counts keeps its half.
+            row[col] = int(mid) if col == "count" and mid == int(mid) else mid
             if col in SPREAD:
                 # In report order, and only the repeats where this row was
                 # found at all — which is what the `runs` column counts.
