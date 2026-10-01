@@ -737,9 +737,24 @@ def _(report):
         assert "contention" not in str(r["detail"]), (
             f"a lock wait came back as a place work is called from: {r}")
     waiter = one_row(report, "monitor_contention", "LockWaiter")
-    assert waiter["count"] == 4 and waiter["total_ms"] == 102.0, (
+    assert waiter["count"] == 2 and waiter["total_ms"] == 53.0, (
         "the planted wait must still be reported by the detector that owns "
         f"it, or the fixture proves nothing: {waiter}")
+
+
+@check("monitor_contention: a wait ART writes as two nested slices counts once")
+def _(report):
+    # LockWaiter waits twice, 26 and 27 ms, and ART writes each wait as
+    # `monitor contention with owner …` with `Lock contention on a monitor
+    # lock …` inside it. Summing both masks reported 4 waits and 102 ms. The
+    # outer slice is the one kept: it names both frames, and its evidence is
+    # what `code` places. The main thread's two waits are the inner shape
+    # alone, and still count.
+    waiter = one_row(report, "monitor_contention", "LockWaiter")
+    assert (waiter["count"], waiter["total_ms"], waiter["max_ms"]) == (2, 53.0, 27.0), waiter
+    assert waiter["detail"].startswith("monitor contention with owner Thread-3"), waiter
+    main = one_row(report, "monitor_contention", "m.example.app")
+    assert (main["count"], main["total_ms"]) == (2, 42.0), main
 
 
 @check("repeated_work: the boundary moves when a mask does")
