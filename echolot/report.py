@@ -22,8 +22,9 @@ COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
 # Keys a row may carry that are not columns. `_table` renders anything it does
 # not know as an extra column, which is right for a detector that invents one
 # and wrong for bookkeeping the report writes itself. `places` is the json
-# side of the `code` column — see place.py.
-HIDDEN = {"spread", "places"}
+# side of the `code` column — see place.py — and `stacks` the json side of
+# what the evidence says the samples named — see stacks.py.
+HIDDEN = {"spread", "places", "stacks"}
 HEADERS = {
     "location": "Where",
     "runs": "Runs",
@@ -336,8 +337,22 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
         # Unless it is part of what names the row, in which case it is the
         # same in every repeat by construction and already set above.
         worst = max(found, key=_rank)
+        # Unless it is a repeat whose sampler lost the process, while the
+        # others got stacks: its evidence would say nothing ran that anyone
+        # could name. On a device one recording of six lost every stack, and
+        # for a thread it happened to be the worst in, the merged row said
+        # "none with a stack" over five repeats that named the work. The worst
+        # of the repeats with stacks speaks for the row then.
+        stacked = [f for f in found if (f.get("stacks") or {}).get("with_stack")]
+        if stacked and not (worst.get("stacks") or {}).get("with_stack"):
+            worst = max(stacked, key=_rank)
         if "detail" not in identity and worst.get("detail") is not None:
             row["detail"] = worst["detail"]
+        # What the samples named goes with the evidence that quotes it: from
+        # one repeat, the same one, or the row would name functions in one
+        # place and other shares of them in the other.
+        if worst.get("stacks") is not None:
+            row["stacks"] = worst["stacks"]
         out.append(row)
     return sorted(out, key=_rank, reverse=True)
 
@@ -833,6 +848,14 @@ def to_markdown(report: dict[str, Any]) -> str:
 EVIDENCE_LEGEND = {
     "main_thread_block": "the thread's comm — always the main thread here; "
                          "the kernel cuts the name to 15 characters",
+    "uninstrumented_cpu": "the share of the thread's CPU time outside every "
+                          "top-level slice; when the recording sampled "
+                          "callstacks, how many stacks fell there, what ran on "
+                          "them — the first named Kotlin or Java method from "
+                          "the top — and after `ours:` the nearest frame of the "
+                          "project's own code: `none` where a whole stack had "
+                          "nothing of it, `cut` where the stack ended in the "
+                          "framework before its thread's start",
 }
 
 
@@ -930,7 +953,10 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
         r = dict(r)
         if not wide:
             r["location"] = clip(r.get("location"), 60)
-            if r.get("detail") is not None:
+            # Evidence that ends in what the samples named is kept whole: that
+            # end is what a reader of the row came for, and it is short by
+            # construction — two names a list, each cut to stacks.LONGEST.
+            if r.get("detail") is not None and not r.get("stacks"):
                 r["detail"] = clip(r["detail"], 100)
         shown.append(r)
     out.append(_table(shown))
@@ -944,6 +970,10 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
     if any(r.get("places") for r in rows[:top]):
         out.append("")
         out.append("`--json` carries `places`: file and line for every symbol the rows name.")
+    if any(r.get("stacks") for r in rows[:top]):
+        out.append("")
+        out.append("`--json` carries `stacks`: the ten methods that ran most often, and "
+                   "the ten nearest frames of the project's own, with their shares.")
     return "\n".join(out)
 
 

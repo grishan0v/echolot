@@ -14,6 +14,11 @@ This module reads those names off a row and puts the file next to them:
 `places` in the json with the symbol, the path and the line, and one short
 `code` column in the markdown. Nothing here moves a measurement.
 
+A row with callstack samples behind it names a third kind of place: the
+frame of the project's own code the samples put first (stacks.py). The
+runtime gives a sampled frame no file, so the class decides, and a Kotlin
+top-level function's class is its file's name with `Kt` after it.
+
 The walk is `domains.source_files`, in the direction that keeps the import
 graph a tree: `domains` imports nothing of ours.
 """
@@ -53,7 +58,7 @@ _CLASS = re.compile(r"^(?:[a-z_]\w*\.){2,}(?P<cls>[A-Z]\w*)$")
 
 @dataclass
 class Place:
-    role: str            # owner, blocked, or location
+    role: str            # owner, blocked, location, or sampled
     symbol: str          # pkg.Class.method, or pkg.Class for a location
     file: str | None     # relative to the root; None when not in this checkout
     line: int | None
@@ -157,6 +162,8 @@ def locate(symbol: str, file: str | None, line: int | None,
     names = [file] if file else []
     if cls:
         names += [f"{cls}.kt", f"{cls}.java"]
+        if cls.endswith("Kt") and len(cls) > 2:
+            names.append(f"{cls[:-2]}.kt")
     candidates = next((idx[n] for n in names if idx.get(n)), None)
     if not candidates:
         return Place(role, symbol, None, None, False)
@@ -188,7 +195,25 @@ def places_of(row: dict[str, Any], idx: dict[str, list[Path]], root: Path) -> li
         here = locate(m.group(0), None, None, idx, root, "location")
         if here.file:
             out.append(here)
+    sampled = _sampled(row)
+    if sampled:
+        here = locate(sampled, None, None, idx, root, "sampled")
+        if here.file:
+            out.append(here)
     return out
+
+
+def _sampled(row: dict[str, Any]) -> str | None:
+    """The frame of the project's own code the samples behind a row put first.
+
+    The first one with a name: `none` and `cut` ahead of it say how much of
+    the work had no frame of ours on the stack that came back, and are no
+    place.
+    """
+    for entry in (row.get("stacks") or {}).get("ours") or []:
+        if entry.get("frame"):
+            return str(entry["frame"])
+    return None
 
 
 def code_column(places: list[Place]) -> str | None:
@@ -217,7 +242,8 @@ def annotate(report: dict[str, Any], root: Path) -> int:
     for det in report.get("detectors") or []:
         for row in det.get("rows") or []:
             needs = _CONTENTION.match(str(row.get("detail") or "")) \
-                or _CLASS.match(str(row.get("location") or ""))
+                or _CLASS.match(str(row.get("location") or "")) \
+                or _sampled(row)
             if not needs:
                 continue
             if idx is None:

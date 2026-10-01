@@ -66,3 +66,17 @@ WHERE t.upid = p.upid
   AND t.tid = p.pid
   AND c.instrumented IS NULL
   AND t.name IN (SELECT location FROM _rows);
+
+-- @samples
+--
+-- What ran in the blind spot: the row's thread's callstack samples in the
+-- same stretches the query above calls uninstrumented, on a CPU with no
+-- top-level slice open. A sample that came without a stack stays, with a NULL
+-- callsite: sampled and not unwound is a different answer from not sampled.
+-- `_samples_win` is already this process's alone.
+
+SELECT t.name AS location, s.callsite_id
+FROM _samples_by_slice s
+JOIN thread t ON t.utid = s.utid
+WHERE s.instrumented IS NULL
+  AND t.name IN (SELECT location FROM _rows);

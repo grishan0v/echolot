@@ -57,6 +57,7 @@ project-specific belongs inside a detector.
 | `_aslice_win` | async sections **overlapping** the window |
 | `_tstate_win` | thread states **clipped** to the window |
 | `_cpu_in_slice` | time **on CPU inside** top-level slices |
+| `_samples_by_slice` | the process's **callstack samples** in the window, each marked inside a top-level slice or outside every one |
 | `_claimed_name` | slice names a `*name_glob*` already speaks for |
 
 The async ones are kept apart on purpose. A section on no thread has no place
@@ -313,6 +314,52 @@ Every shipped detector has one, and the tests hold each to its own rows: on
 the fixture, the stretches behind the rows about the main thread add up to
 those rows' own milliseconds.
 
+## What ran there
+
+A line reading `-- @samples` starts a third query, which picks out the
+callstack samples behind each row. `uninstrumented_cpu` has one:
+
+```sql
+-- @samples
+SELECT t.name AS location, s.callsite_id
+FROM _samples_by_slice s
+JOIN thread t ON t.utid = s.utid
+WHERE s.instrumented IS NULL
+  AND t.name IN (SELECT location FROM _rows);
+```
+
+It sees the same `_rows` as the second query and returns `location` and
+`callsite_id`, one line per sample, with a NULL callsite for a sample that
+came without a stack. A row is a thread's name, so the samples are every
+thread's of that name. The rest is the same for every detector and happens
+in `echolot/stacks.py`: each stack is walked from its leaf, and two things are
+counted — what ran, the first Kotlin or Java method with a name, and the
+nearest frame of the project's own code, decided the way an ANR's frames are,
+or whether the stack had none of it all the way down or was cut short. The
+row gets `stacks` in the json and the gist at the end of its `detail`:
+
+```
+100.0% of CPU outside slices · 28 stacks: GzipSink.write 54%, ReadBarrier::Mark 21% · ours: Store.save 36%, cut 29%
+```
+
+Why those rules, from a phone's stacks, is in [Analysing](analysing.md#three-detectors-that-need-no-instrumentation).
+
+What decides the query:
+
+- **It runs only where a sampler ran.** `analyze` asks the trace whether a
+  sampler started, and a trace without samples gets the rows it always got.
+- **`_samples_by_slice`, not a join on `ts`.** Placing a sample inside a
+  stretch by hand is the nested loop the section above warns about.
+  `_samples_by_slice` is `SPAN_JOIN` over `_cpu_by_slice`, with each sample
+  given one nanosecond.
+- **A `detail` in the identity stays as it is.** There it is part of the
+  row's name, and a name that moved with the samples would not merge across
+  repeats. Such a row carries `stacks` alone.
+- **Repeats keep the evidence of one that has stacks.** The worst repeat
+  gives a merged row its `detail` and `stacks`, unless its sampler lost the
+  process while another repeat's did not; then the worst of those with
+  stacks does.
+
 ## What trips people up
 
 Three things that cost an afternoon each. All three are about trace_processor
@@ -413,9 +460,10 @@ until somebody reads the report or writes a config.
   a merged row keeps its `@identity` columns, `runs`, the numeric contract
   columns — `count`, `self_ms`, `total_ms`, `max_ms` and `covered_ms`, as
   medians — and `detail`, taken from the worst repeat unless the identity
-  already holds it. A column the detector invents is rendered in a report of
-  one trace and is gone from a report of five, so what a reader needs goes
-  into `detail`.
+  already holds it. `stacks`, from a `-- @samples` query, comes from that same
+  repeat, so the evidence and the list it quotes agree. A column the detector
+  invents is rendered in a report of one trace and is gone from a report of
+  five, so what a reader needs goes into `detail`.
 - **A threshold keeps the kind of its default.** An override from
   `echolot.yml` or from `--set` must be what the `@param` default is — a
   number for a number, a string for a string, and a bool is neither — and a

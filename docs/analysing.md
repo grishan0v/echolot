@@ -198,6 +198,44 @@ at fifteen characters by Linux rather than by echolot: every worker of that
 pool reaches the trace as `DefaultDispatch`, so write thread masks with the
 truncation in mind.
 
+A recording with callstack samples ([`runner.sampling`](collecting.md#callstack-sampling))
+answers the next question in the same round: what the thread ran. The row
+reads the samples that fell in its blind spot — on a CPU, outside every
+top-level slice — and says so at the end of its evidence:
+
+> 100.0% of CPU outside slices · 28 stacks: GzipSink.write 54%, ReadBarrier::Mark 21% · ours: Store.save 36%, cut 29%
+
+Before `ours:` is what ran: on each stack, the first Kotlin or Java method
+with a name, counted from the top. The frames above it are passed over,
+because on a phone they are mostly the runtime's: of 8,092 stacks in the blind
+spots of six sampled cold starts, 47% had ART's own code on top — the
+interpreter, class loading, the collector — and 21% the C library's. A stack
+with no method named is counted under its first named frame, a C++ one read
+back from its mangled form, and a stack with no name at all under its file,
+`[boot.oat]`.
+
+After `ours:` is the nearest frame of the project's own code on each stack,
+the place that asked for the work, and the `code` column names its file:
+`sampled at Store.kt:12`. A stack with nothing of the project on it is one of
+two things. `none` went down to its thread's start: work nobody of ours asked
+for, or asked for by handing it to a pool, whose task runs without its
+caller. `cut` ended before that, in the framework's compiled code, which
+comes back without names and where the unwinder stops: 69% of those stacks
+ended there. What asked for the work is not in a cut stack, and the row
+says so rather than guessing.
+
+The shares are of the samples that came with a stack. `report.json` keeps
+the ten largest of each list in the row's `stacks`, with their counts; the
+kernel cuts a thread's name to fifteen characters, so a pool's workers share
+one row and one set of samples. Which frames are the project's is decided the
+way it is for an ANR, by the packages the checkout's sources declare
+([ANR](anr.md#from-a-frame-to-a-file)), so a benchmark build installed under
+a suffix of its own still finds its code. A config kept outside the checkout
+leaves only the package to go by, and then a library the platform lists do
+not name reads as the project's. When repeats are merged, the evidence comes
+from the worst repeat that has stacks: one recording of six can lose every
+stack. A recording without samples gets the row it always got.
+
 `io_wait` needs none either, and it is the one that answers a question the
 other two cannot even ask. A thread waiting for the disk burns no CPU, holds
 no lock of yours and has no slice around it: there is nothing to profile and
@@ -273,10 +311,12 @@ Some rows name the code themselves. ART's contention slice carries both
 sides of the lock as frames — `at void pkg.StoreRepository.update(…)(StoreRepository.kt:30)
 waiters=0 blocking from … StoreRepository.find()(StoreRepository.kt:66)` — and
 `main_thread_block` names a class when the slice is a View being inflated.
-`analyze` looks those up in the checkout the config sits in and writes the
-answer into the row: a `code` column in the markdown, and `places` in the
-json with the symbol, the file relative to the project, the line and which
-side it is (`owner`, `blocked`, or the `location` itself).
+A blind spot with samples behind it names the project's method the samples
+fell under most. `analyze` looks those up in the checkout the config sits in
+and writes the answer into the row: a `code` column in the markdown, and
+`places` in the json with the symbol, the file relative to the project, the
+line and which it is (`owner`, `blocked`, the `location` itself, or
+`sampled`).
 
 The line is the runtime's when the build kept line numbers and the
 declaration's when it did not — a release build says `(File.kt:-1)` for

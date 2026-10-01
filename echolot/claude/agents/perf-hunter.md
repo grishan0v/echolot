@@ -159,6 +159,13 @@ waiting for one.
    — and say in your conclusion that no investigation was open
 
 5. otherwise pick a blind spot (usually uninstrumented_cpu):
+   its evidence names what ran (a recording with runner.sampling) →
+     `ours: Store.save 36%`: AGENTTMP_ markers inside that method, in the
+     file `code` names. `ours: none` is work a pool ran with its caller off
+     the stack: what ran, before `ours:`, says what the work is — mark where
+     the project hands it to the pool. `ours: cut` is a stack that ended in
+     the framework: nobody is named, so treat the row as below, with what
+     ran as the hint
    a thread the JDK named — pool-N-thread-M, Thread-N → `echolot mark --pools`
      FIRST. Name the pool, re-record, and the row stops being anonymous. Do
      not mark the work there: you do not know what it is yet, and that is the

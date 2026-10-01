@@ -604,31 +604,88 @@ SYS_STATS = [
 # config at the head of the trace, which is where the rate is read from.
 #
 # The report counts this process's samples inside the window and how many of
-# them came with a stack: 30 and 28. The rest is there to be left out:
+# them came with a stack: 46 and 44. `uninstrumented_cpu` reads them again, for
+# what ran in its two blind spots. The rest is there to be left out:
 #
 #   * DefaultDispatcher-worker-1 is sampled at 100 Hz through both of its
 #     stretches on a CPU, [200, 350] and [400, 550]: 30 samples. The first two
 #     arrive without a stack, the way a new process's first samples do while
-#     the sampler is still opening its memory;
+#     the sampler is still opening its memory. The other 28 are five kinds of
+#     stack, WORKER_STACKS below;
+#   * BlockingIO-1 is sampled through both of its stretches too: six in
+#     [200, 260], inside `blocking_io_wait` and so no blind spot's, and ten in
+#     [600, 700], after the slice closed;
 #   * the main thread is sampled at 60 and 80 ms, before the window opens,
 #     and at 1150 and 1200, after it closes;
 #   * com.other.app is sampled inside the window, on the core nothing of ours
 #     runs on, and without a stack: every app that is not profileable comes
 #     back that way.
 #
-# (cpu, pid, tid, at_ms, with_stack)
+# (cpu, pid, tid, at_ms, stack) — the stack by its key in SAMPLE_STACKS, None
+# for a sample that came without one.
 SAMPLING_HZ = 100
-SAMPLES = [
-    *[(1, APP_PID, TID_WORKER, at, at >= 225) for at in range(205, 350, 10)],
-    *[(1, APP_PID, TID_WORKER, at, True) for at in range(405, 550, 10)],
-    *[(0, APP_PID, TID_MAIN, at, True) for at in (60, 80, 1150, 1200)],
-    *[(9, OTHER_PID, OTHER_PID, at, False) for at in (300, 500, 700)],
-]
 
-# One stack, root first, as a callstack lists its frames. The mapping is the
-# app's compiled code, which is where a sampled Kotlin frame comes from.
-SAMPLE_MAPPING = "/data/app/com.example.app/oat/arm64/base.odex"
-SAMPLE_STACK = ["java.lang.Thread.run", "com.example.app.Store.load"]
+# The files the frames come from. On a device the app's own code comes back
+# by name, interpreted, JIT-compiled or ahead of time; the framework's,
+# compiled into the boot image, comes back with no name at all, and the
+# unwinder often stops in it.
+APP_CODE = "/data/app/com.example.app/oat/arm64/base.odex"
+FRAMEWORK = "/system/framework/arm64/boot-framework.oat"
+LIBC = "/apex/com.android.runtime/lib64/bionic/libc.so"
+LIBART = "/apex/com.android.art/lib64/libart.so"
+LIBZ = "/system/lib64/libz.so"
+
+# A worker's stack from where its thread began, root first: bionic's thread
+# start, Thread.run from the framework, then the pool's own loop, which the
+# app ships in its own code.
+_POOL = [("__start_thread", LIBC), (None, FRAMEWORK),
+         ("kotlinx.coroutines.scheduling.CoroutineScheduler$Worker.run", APP_CODE),
+         ("kotlinx.coroutines.DispatchedTask.run", APP_CODE)]
+
+# Root first, as a callstack lists its frames: (function, file), and None for a
+# function the unwinder could not name.
+SAMPLE_STACKS = {
+    # The project's own code saving through a gzip sink: zlib on top, the
+    # sink's method the first one named, and Store.save the nearest of ours.
+    "saved": [*_POOL, ("com.example.app.Store.save", APP_CODE),
+              ("okio.GzipSink.write", APP_CODE), (None, FRAMEWORK), ("deflate", LIBZ)],
+    # The same work with nothing of ours under it, down to the thread's start:
+    # a task handed to the pool runs without its caller.
+    "pooled": [*_POOL, ("okio.GzipSink.write", APP_CODE), (None, FRAMEWORK),
+               ("deflate", LIBZ)],
+    # The project's parser, interpreted: ART's helper on top, passed over for
+    # the method it was running.
+    "interpreted": [*_POOL, ("com.example.app.Store.load", APP_CODE),
+                    ("com.example.app.Store.parse", APP_CODE), ("nterp_helper", LIBART)],
+    # Cut short: the unwinder stopped in the framework's unnamed code, and
+    # what is left is the collector's read barrier, mangled as C++ names come.
+    "cut": [(None, FRAMEWORK), ("_ZN3art11ReadBarrier4MarkEPNS_6mirror6ObjectE", LIBART)],
+    # Nothing named at all.
+    "unnamed": [(None, FRAMEWORK)],
+    # BlockingIO-1 inside its slice, and after it.
+    "inside": [("__start_thread", LIBC), (None, FRAMEWORK),
+               ("com.example.app.Disk.readSync", APP_CODE)],
+    "after": [("__start_thread", LIBC), (None, FRAMEWORK),
+              ("com.example.app.Disk.checksum", APP_CODE)],
+    # The main thread, outside the window.
+    "main": [(None, FRAMEWORK), ("com.example.app.Store.load", APP_CODE)],
+}
+
+# What the worker's 28 stacks are. What ran: GzipSink.write 15,
+# ReadBarrier::Mark 6, Store.parse 5, the unnamed framework 2. Nearest of ours:
+# Store.save 10, cut short 8, Store.parse 5, none on a whole stack 5.
+WORKER_STACKS = (["saved"] * 10 + ["cut"] * 6 + ["pooled"] * 5
+                 + ["interpreted"] * 5 + ["unnamed"] * 2)
+
+SAMPLES = [
+    *[(1, APP_PID, TID_WORKER, at, None) for at in (205, 215)],
+    *[(1, APP_PID, TID_WORKER, at, stack) for at, stack in zip(
+        [*range(225, 350, 10), *range(405, 550, 10)], WORKER_STACKS, strict=True)],
+    *[(6, APP_PID, TID_BLOCKED, at, "inside") for at in range(205, 260, 10)],
+    *[(6, APP_PID, TID_BLOCKED, at, "after") for at in range(605, 700, 10)],
+    *[(0, APP_PID, TID_MAIN, at, "main") for at in (60, 80, 1150, 1200)],
+    *[(9, OTHER_PID, OTHER_PID, at, None) for at in (300, 500, 700)],
+]
 
 
 def _flatten(slices, out, seq):
@@ -712,36 +769,57 @@ def _samples(builder, arrived: bool = True) -> None:
         return
 
     # The sequence opens the way traced_perf opens it: state cleared, the
-    # defaults it samples with, and the frames every sample below refers to.
+    # defaults it samples with, and the files, names, frames and stacks every
+    # sample below refers to.
     packet = builder.add_packet()
     packet.trusted_packet_sequence_id = 3000
     packet.sequence_flags = pb.TracePacket.SEQ_INCREMENTAL_STATE_CLEARED
     packet.trace_packet_defaults.perf_sample_defaults.timebase.frequency = SAMPLING_HZ
     interned = packet.interned_data
-    path = interned.mapping_paths.add()
-    path.iid, path.str = 1, SAMPLE_MAPPING.encode()
-    mapping = interned.mappings.add()
-    mapping.iid, mapping.start, mapping.end = 1, 0x1000, 0x100000
-    mapping.path_string_ids.append(1)
-    for iid, name in enumerate(SAMPLE_STACK, start=1):
-        function = interned.function_names.add()
-        function.iid, function.str = iid, name.encode()
-        frame = interned.frames.add()
-        frame.iid, frame.function_name_id, frame.mapping_id = iid, iid, 1
-        frame.rel_pc = 0x100 * iid
-    stack = interned.callstacks.add()
-    stack.iid = 1
-    stack.frame_ids.extend(range(1, len(SAMPLE_STACK) + 1))
 
-    for cpu, pid, tid, at, with_stack in SAMPLES:
+    files = {path: iid for iid, path in enumerate(dict.fromkeys(
+        path for stack in SAMPLE_STACKS.values() for _, path in stack), start=1)}
+    for path, iid in files.items():
+        string = interned.mapping_paths.add()
+        string.iid, string.str = iid, path.encode()
+        mapping = interned.mappings.add()
+        mapping.iid = iid
+        mapping.start, mapping.end = iid * 0x100000, (iid + 1) * 0x100000
+        mapping.path_string_ids.append(iid)
+
+    # A frame with no name is written without one, which is how the sampler
+    # writes a function it could not symbolize.
+    frames: dict[tuple[str | None, str], int] = {}
+    names: dict[str, int] = {}
+    for stack in SAMPLE_STACKS.values():
+        for name, path in stack:
+            if (name, path) in frames:
+                continue
+            iid = frames[(name, path)] = len(frames) + 1
+            frame = interned.frames.add()
+            frame.iid, frame.mapping_id, frame.rel_pc = iid, files[path], 0x100 * iid
+            if name is not None:
+                if name not in names:
+                    names[name] = len(names) + 1
+                    function = interned.function_names.add()
+                    function.iid, function.str = names[name], name.encode()
+                frame.function_name_id = names[name]
+
+    callstacks: dict[str, int] = {}
+    for iid, (key, stack) in enumerate(SAMPLE_STACKS.items(), start=1):
+        callstack = interned.callstacks.add()
+        callstack.iid = callstacks[key] = iid
+        callstack.frame_ids.extend(frames[frame] for frame in stack)
+
+    for cpu, pid, tid, at, stack in SAMPLES:
         packet = builder.add_packet()
         packet.trusted_packet_sequence_id = 3000
         packet.timestamp = ms(at)
         sample = packet.perf_sample
         sample.cpu, sample.pid, sample.tid = cpu, pid, tid
         sample.cpu_mode = pb.Profiling.MODE_USER
-        if with_stack:
-            sample.callstack_iid = 1
+        if stack is not None:
+            sample.callstack_iid = callstacks[stack]
         else:
             # What traced_perf writes for a sample it could not unwind: the
             # sample, without its stack, and why.

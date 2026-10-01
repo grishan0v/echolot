@@ -125,3 +125,23 @@ FROM perf_sample s
 JOIN thread t ON s.utid = t.utid
 JOIN _proc p  ON t.upid = p.upid
 WHERE s.ts >= {{ts_start}} AND s.ts <= {{ts_end}};
+
+-- Each sample on its thread's CPU time, with `instrumented` from
+-- `_cpu_by_slice`: 1 inside a top-level slice, NULL outside every one. The
+-- NULL ones are what ran in a blind spot, and `uninstrumented_cpu` reads them
+-- in its `@samples` query.
+--
+-- A sample is an instant, and SPAN_JOIN needs a length: one nanosecond. The
+-- partition by utid holds no overlap for a reason worth writing down, since
+-- SPAN_JOIN would double-count one without a word — the sampler visits a
+-- thread once per tick, so no two samples of one thread share a nanosecond.
+-- A sample that fell outside the thread's Running time drops out, and that is
+-- right: nothing says where it was.
+DROP VIEW IF EXISTS _sample_span;
+CREATE VIEW _sample_span AS
+SELECT utid, ts, 1 AS dur, callsite_id
+FROM _samples_win;
+
+DROP TABLE IF EXISTS _samples_by_slice;
+CREATE VIRTUAL TABLE _samples_by_slice
+USING SPAN_JOIN(_sample_span PARTITIONED utid, _cpu_by_slice PARTITIONED utid);

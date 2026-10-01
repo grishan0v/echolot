@@ -152,7 +152,12 @@ that did not ask for it. Check before calling a scenario smooth.
 
 When `uninstrumented_cpu` fires there is no code behind the finding by
 definition: the thread burned CPU with no instrumentation. That is an address
-for adding `trace{}`, not the location of a bug.
+for adding `trace{}`, not the location of a bug. A recording with callstack
+samples narrows the address in the same round: the end of the row's evidence
+names what ran on the stacks, then `ours:` and the nearest method of the
+project's own under it, and `code` gives that method's file. `ours: none` is
+work a pool ran with its caller off the stack; `ours: cut` is a stack that
+ended in the framework before anything of ours.
 
 ## Watch your context
 

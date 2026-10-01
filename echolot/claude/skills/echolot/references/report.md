@@ -288,15 +288,17 @@ The contract is shared, but not every detector fills every column.
 | `max_ms` | the longest single occurrence |
 | `covered_ms` | how much on-CPU time ran inside instrumented code |
 | `code` | where that is in the checkout, when the row names a method or a class — see below |
-| `detail` | the evidence: thread, state, lock name with the owner's tid |
+| `detail` | the evidence: thread, state, lock name with the owner's tid; in a blind spot of a sampled recording, what the samples named |
 | `places` | the json behind `code`: every symbol the row names, with `file`, `line` and `role` |
+| `stacks` | the json behind what `detail` says the samples named: `samples`, `with_stack`, and the ten largest of `leaf` and `ours`, each `frame` with its `samples` and `pct` |
 | `spread` | the per-run values behind the medians, for three columns — see below |
 
 **`code` and `places` save the grep.** A contention slice names both sides of
 the lock — the thread holding it and where it is, the method that waited and
 where that is — and `main_thread_block` names a class when the slice is a
-View being inflated. `analyze` looks those up in the checkout the config
-sits in and writes what it found:
+View being inflated. A blind spot with samples behind it names the project's
+method the samples fell under most, as `sampled`. `analyze` looks those up
+in the checkout the config sits in and writes what it found:
 
 ```json
 "code": "owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:66",
@@ -366,7 +368,7 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 | `monitor_contention` | monitor contention | `places` names both sides of the lock in the checkout; `detail` carries the owner's tid |
 | `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |
 | `runnable_starvation` | thread ready but preempted | this is about the device, not the code |
-| `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}` |
+| `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}`; in a sampled recording, the method after `ours:` in `detail`, at the file `code` names |
 | `frame_jank` | frames that missed their deadline | `location` is why it missed, `detail` says whose fault |
 | `main_thread_outlier` | one occurrence far longer than usual | `detail` carries the median it is measured against |
 | `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |
@@ -408,9 +410,27 @@ sure the run happened on a real device with nothing else loading it.
 
 **`uninstrumented_cpu`** is the only one that finds a problem inside
 uninstrumented code. `covered_ms` far below `total_ms` means the thread worked
-and what it did is unknown. This is where adding `AGENTTMP_` instrumentation
-and re-recording makes sense. There is no code behind the finding yet; looking
-for it is pointless.
+outside every slice. Without callstack samples, what it did is unknown: this
+is where adding `AGENTTMP_` instrumentation and re-recording makes sense, and
+there is no code behind the finding to look for.
+
+A recording made with `runner.sampling` says what ran, at the end of `detail`:
+
+    100.0% of CPU outside slices · 28 stacks: GzipSink.write 54%, ReadBarrier::Mark 21% · ours: Store.save 36%, cut 29%
+
+Before `ours:` is what ran: the first named Kotlin or Java method on each
+stack, from the top — the runtime's and native frames above it are passed
+over; a stack with no method shows its first native name, or `[boot.oat]`
+when nothing on it had a name. After `ours:` is the nearest frame of the
+project's own code — the place that asked for the work — and `code` names
+the file of the first one. Put the markers in that method rather than
+spending a round to find it. A stack with nothing of the project on it is
+`none` when it went down to its thread's start: a coroutine pool runs a task
+without its caller, so mark where the project hands that work to the pool.
+It is `cut` when the unwinder stopped in the framework first, which on a
+phone is most stacks: what asked is unknown, and the row is an address for
+markers again, with what ran as the hint. `no samples` or `none with a stack`
+means the samples name nothing here.
 
 **`io_wait`** is about work the app asked the disk to do, and it is the only
 detector whose finding has nothing to profile behind it. The thread is in
