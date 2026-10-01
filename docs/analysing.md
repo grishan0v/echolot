@@ -310,6 +310,38 @@ location at 60 characters and the evidence at 100; `--wide` keeps both
 whole. `--json` keeps everything and cuts only the rows, and only when
 `--top` says how many.
 
+## Where a cold start went
+
+The header's budget says where the window went by thread state. When the
+trace holds a launch of the app, a line under it says where the launch went,
+by Perfetto's own account:
+
+```
+Startup: cold, 1359 ms from the launch to the first frame: 42% `bind_application` · 13% `monitor_contention` · 12% `choreographer_do_frame` · 7% `binder` · …
+That is the platform's measure rather than the window: the startup began 121 ms before the window opened, and ended 4039 ms before it closed.
+```
+
+The standard library finds the launch (`android_startups`) and gives every
+moment of it to one reason (`android_startup_opinionated_breakdown`): the
+platform's sections on the main thread, `binder`, the lock waits, `io`, the
+thread states for what no section covers, and `launch_delay` for the time
+before the app's main thread ran at all. On six cold starts of a large Kotlin
+app on an SM-A515F it found the launch every time and accounted for all of
+it. The reasons go into `report.json` as `window.startup`, in milliseconds,
+merged across repeats by the median of each.
+
+The launch is the platform's measure, from the intent to the first frame. The
+window is the config's. They rarely coincide: a window opened at
+`bindApplication` misses the process starting, and one with no end anchor
+runs on for seconds after the first frame, as it did above. The second line
+says how far apart they are, and warns when they do not overlap at all. For a
+cold-start question, the launch's reasons are the account of the time the
+user waited.
+
+It costs time only on a trace that has a launch to break down: the breakdown's
+tables are computed when the module is included, which took 0.8 s on each of
+those starts.
+
 ## From a row to a line, without `domains`
 
 Some rows name the code themselves. ART's contention slice carries both
