@@ -430,7 +430,14 @@ without its caller, so mark where the project hands that work to the pool.
 It is `cut` when the unwinder stopped in the framework first, which on a
 phone is most stacks: what asked is unknown, and the row is an address for
 markers again, with what ran as the hint. `no samples` or `none with a stack`
-means the samples name nothing here.
+means the samples name nothing here. When the header warns that the app's
+sampled methods read as minified, the names here are R8's, `a.b.c`, and no
+file holds them: set `project.mapping` to the build's `mapping.txt` — R8
+writes it to `build/outputs/mapping/<variant>/` — and analyze again before
+acting on them. When it warns that they still read as minified after the
+mapping, the mapping is from another build, and the names it did give may be
+wrong. A few minified names with no warning are code that arrived that way,
+from an SDK.
 
 **`io_wait`** is about work the app asked the disk to do, and it is the only
 detector whose finding has nothing to profile behind it. The thread is in

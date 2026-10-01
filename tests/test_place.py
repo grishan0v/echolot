@@ -183,8 +183,11 @@ def test_the_frame_of_ours_the_samples_put_first_is_placed(tmp_path):
         "\n"
         "fun syncAll() {\n"
         "}\n", encoding="utf-8")
+    # The frame of ours first in line was named back by the build's mapping as
+    # two methods of one class; the first places it.
     ours = [{"frame": None, "samples": 9, "pct": 45.0},
-            {"frame": "com.example.app.data.StoreRepository.update", "samples": 6, "pct": 30.0},
+            {"frame": "com.example.app.data.StoreRepository.update | "
+                      "com.example.app.data.StoreRepository.updateAll", "samples": 6, "pct": 30.0},
             {"frame": "com.example.app.data.SyncKt.syncAll", "samples": 5, "pct": 25.0}]
     rep = {"detectors": [{"id": "uninstrumented_cpu", "rows": [
         {"location": "DefaultDispatch", "total_ms": 300.0,

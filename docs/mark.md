@@ -244,7 +244,8 @@ weight is; the agent opens the one file the trace named. That order is what
   add. An app without Compose is not told about it.
 - **Callstack sampling** (`runner.sampling`, Perfetto's `linux.perf`) names
   the Java and Kotlin frames on a hot thread from symbols, no instrumentation,
-  no naming — with the caveats of profileable builds and R8 mapping.
+  no naming. The build has to be profileable, and a minified one needs its R8
+  mapping as `project.mapping`.
   `uninstrumented_cpu` reads it: a sampled row names what ran in the blind
   spot and the project's method under it, which is where markers go. See
   [Collecting](collecting.md#callstack-sampling).

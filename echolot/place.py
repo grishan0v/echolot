@@ -208,11 +208,12 @@ def _sampled(row: dict[str, Any]) -> str | None:
 
     The first one with a name: `none` and `cut` ahead of it say how much of
     the work had no frame of ours on the stack that came back, and are no
-    place.
+    place. A frame the build's mapping named as several methods of one class
+    is placed by the first: the file is the class's either way.
     """
     for entry in (row.get("stacks") or {}).get("ours") or []:
         if entry.get("frame"):
-            return str(entry["frame"])
+            return str(entry["frame"]).split(" | ", 1)[0]
     return None
 
 

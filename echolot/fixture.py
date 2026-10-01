@@ -628,8 +628,11 @@ SAMPLING_HZ = 100
 # The files the frames come from. On a device the app's own code comes back
 # by name, interpreted, JIT-compiled or ahead of time; the framework's,
 # compiled into the boot image, comes back with no name at all, and the
-# unwinder often stops in it.
-APP_CODE = "/data/app/com.example.app/oat/arm64/base.odex"
+# unwinder often stops in it. The app's path is the shape Android gives an
+# install, and trace_processor reads the package out of it: that is how the
+# build's mapping finds the frames it renames.
+APP_CODE = ("/data/app/~~4P0Sh9WdPWBQZ7Lr3ihzDQ==/"
+            "com.example.app-9QUkqHeqXmFKvBz0ZQ-Fhw==/oat/arm64/base.odex")
 FRAMEWORK = "/system/framework/arm64/boot-framework.oat"
 LIBC = "/apex/com.android.runtime/lib64/bionic/libc.so"
 LIBART = "/apex/com.android.art/lib64/libart.so"
@@ -676,6 +679,59 @@ SAMPLE_STACKS = {
 # Store.save 10, cut short 8, Store.parse 5, none on a whole stack 5.
 WORKER_STACKS = (["saved"] * 10 + ["cut"] * 6 + ["pooled"] * 5
                  + ["interpreted"] * 5 + ["unnamed"] * 2)
+
+# --- a minified build --------------------------------------------------------
+#
+# The same samples from a build R8 minified: the app's methods and those of
+# the libraries it ships come back with the names R8 gave them. `MAPPING` is
+# the build's `mapping.txt`, which names them back. Two methods of Disk got one
+# minified name, as overloads do, and come back as both. `OTHER_MAPPING` is
+# another build's: it renames the one frame it happens to match, wrongly, and
+# misses the rest.
+MINIFIED = {
+    "com.example.app.Store.save": "a.b.c",
+    "com.example.app.Store.load": "a.b.d",
+    "com.example.app.Store.parse": "a.b.e",
+    "com.example.app.Disk.checksum": "a.f.c",
+    "com.example.app.Disk.readSync": "a.f.d",
+    "okio.GzipSink.write": "b.c.a",
+    "kotlinx.coroutines.DispatchedTask.run": "c.a.run",
+    "kotlinx.coroutines.scheduling.CoroutineScheduler$Worker.run": "c.b$a.run",
+}
+
+MAPPING = """\
+# compiler: R8
+# compiler_version: 8.5.35
+# min_api: 24
+# pg_map_id: 3f9a2c1
+com.example.app.Store -> a.b:
+# {"id":"sourceFile","fileName":"Store.kt"}
+    1:6:void save(java.lang.String):22:27 -> c
+    7:9:void save(java.lang.String):30:32 -> c
+    1:4:java.util.List load():40:43 -> d
+    1:8:com.example.app.Model parse(java.lang.String):60:67 -> e
+    java.lang.String path -> f
+com.example.app.Disk -> a.f:
+# {"id":"sourceFile","fileName":"Disk.kt"}
+    1:3:long checksum(java.io.File):12:14 -> c
+    4:4:long checksumLegacy(java.io.File):30:30 -> c
+    1:2:byte[] readSync(java.io.File):20:21 -> d
+okio.GzipSink -> b.c:
+    1:20:void write(okio.Buffer,long):70:89 -> a
+kotlinx.coroutines.DispatchedTask -> c.a:
+    1:30:void run():90:119 -> run
+kotlinx.coroutines.scheduling.CoroutineScheduler$Worker -> c.b$a:
+    1:40:void run():700:739 -> run
+"""
+
+OTHER_MAPPING = """\
+# compiler: R8
+# pg_map_id: 77d01e5
+com.example.app.Cache -> a.b:
+    1:5:void evict(int):12:16 -> c
+com.example.app.Store -> a.g:
+    1:6:void save(java.lang.String):22:27 -> a
+"""
 
 SAMPLES = [
     *[(1, APP_PID, TID_WORKER, at, None) for at in (205, 215)],
@@ -753,11 +809,12 @@ def _frames(builder) -> None:
               gpu_composition=False, prediction_type=FT.PREDICTION_VALID)
 
 
-def _samples(builder, arrived: bool = True) -> None:
+def _samples(builder, arrived: bool = True, minified: bool = False) -> None:
     """Callstack sampling: the config that asked for it, then what the sampler wrote.
 
     `arrived=False` keeps the config and drops the rest — a recording that
-    asked for samples on a device whose sampler never ran.
+    asked for samples on a device whose sampler never ran. `minified` writes
+    the frames under the names R8 gave them, `MINIFIED`.
     """
     packet = builder.add_packet()
     perf = packet.trace_config.data_sources.add().config
@@ -802,7 +859,8 @@ def _samples(builder, arrived: bool = True) -> None:
                 if name not in names:
                     names[name] = len(names) + 1
                     function = interned.function_names.add()
-                    function.iid, function.str = names[name], name.encode()
+                    written = MINIFIED.get(name, name) if minified else name
+                    function.iid, function.str = names[name], written.encode()
                 frame.function_name_id = names[name]
 
     callstacks: dict[str, int] = {}
@@ -895,9 +953,10 @@ def build(frames: bool = True, environment: bool = True,
     on.
 
     `sampling` is what became of callstack sampling: `"arrived"`, `"asked"`
-    for a config that asked and a sampler that never ran, or `None` for a
-    recording that never asked. `None` by default, because that is the
-    default recording, and the sample report in the README is this one.
+    for a config that asked and a sampler that never ran, `"minified"` for
+    samples that arrived from a build R8 minified, or `None` for a recording
+    that never asked. `None` by default, because that is the default
+    recording, and the sample report in the README is this one.
     """
     builder = TraceProtoBuilder()
 
@@ -924,7 +983,8 @@ def build(frames: bool = True, environment: bool = True,
     if frames:
         _frames(builder)
     if sampling:
-        _samples(builder, arrived=sampling == "arrived")
+        _samples(builder, arrived=sampling in ("arrived", "minified"),
+                 minified=sampling == "minified")
 
     # Collect ftrace events per CPU.
     by_cpu: dict[int, list] = {}

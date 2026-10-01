@@ -331,7 +331,8 @@ settled on that device:
   the framework, compiled into the system image, come back without one, and
   the unwinder mostly stops at them: in the blind spots of six sampled cold
   starts, 69% of the stacks ended there. A minified build's frames carry
-  their minified names.
+  their minified names, `a.b.c`, until `project.mapping` names the build's
+  `mapping.txt` — see below.
 - **A buffer of its own**, the size of `buffer_kb`, so the samples can never
   push out the sched and atrace events every detector reads.
 
@@ -370,6 +371,48 @@ What the report reads is the trace, never the config, so a trace recorded
 some other way says the same. In `gradle` mode the benchmark records with its
 own config and `runner.sampling` does not apply, but the report still says
 whether its traces hold samples.
+
+### A minified build
+
+A benchmark build is meant to run what the release runs, and that usually
+means minified: the frames of the app's code, and of the libraries it ships,
+come back with the names R8 gave them, `a.b.c`. Name the build's mapping in
+the config:
+
+```yaml
+project:
+  package: com.example.app.benchmark   # as installed on the device
+  mapping: app/build/outputs/mapping/benchmark/mapping.txt
+```
+
+`analyze` reads the file into a deobfuscation packet and hands it to
+trace_processor after each trace, the way Perfetto's own tools attach one; the
+trace on disk is not touched. trace_processor matches the packet to the
+frames by the package in their file's path on the device, so the package has
+to be the one installed, suffix and all. A method R8 gave the same name as
+another — overloads usually share one — comes back as both,
+`Store.load | Store.save`, because a sample has no line to tell them apart.
+
+Reading a mapping costs seconds once per `analyze`: a synthetic one of 125 MB
+took 4.6 s to read, and each trace loaded 1.5 s slower with it.
+
+The header says how the app's sampled methods came back:
+
+| the report says | what happened |
+|---|---|
+| … of the app's … sampled methods read as minified, `a.b.c` | a minified build and no `project.mapping` |
+| `project.mapping` named … of the app's … sampled methods back | the mapping is this build's; any still minified arrived that way |
+| … still read as minified after `project.mapping` renamed … | a mapping from another build: it renames the frames it happens to match, wrongly, and misses the rest |
+
+The first and the last are warnings, and both wait for a tenth of the app's
+sampled methods to read as minified. Some code arrives minified from
+elsewhere — SDKs ship that way — and no mapping of this build names it: a
+build that kept its names had 38 of its 3,309 sampled methods so on the
+SM-A515F, a little over 1%. Another build's mapping is told by what it
+misses: R8's names are short and reused, so it knows a few of this build's
+names, renames those wrongly, and leaves the rest as they were. The names it
+got wrong cannot be told from right ones; the ones it left are what gives it
+away.
 
 ## Merging repeats
 

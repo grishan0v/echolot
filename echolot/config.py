@@ -155,6 +155,36 @@ class Config:
         return str(proc)
 
     @property
+    def mapping(self) -> Path | None:
+        """The build's R8 or ProGuard `mapping.txt`, or None when there is none.
+
+        A relative path is taken from the config's directory, where the build
+        outputs live as well. The mapping names a package's frames back, so it
+        needs `project.package`: the package as installed on the device, which
+        for a benchmark build is often the release's with a suffix.
+        """
+        value = self.get("project.mapping")
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            raise ConfigError(
+                f"project.mapping must be a path to the build's mapping.txt — "
+                f"got {value!r}")
+        if not self.get("project.package"):
+            raise ConfigError(
+                "project.mapping needs project.package: the mapping names back "
+                "the frames of that package, as it is installed on the device")
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = (Path(self.path).parent if self.path else Path.cwd()) / path
+        if not path.is_file():
+            raise ConfigError(
+                f"project.mapping: no such file {path} — R8 writes it to "
+                f"build/outputs/mapping/<variant>/mapping.txt when the build "
+                f"is minified")
+        return path
+
+    @property
     def scenario_start(self) -> str:
         return self._anchor("scenario.start")
 
