@@ -170,6 +170,8 @@ Process: `com.example.app` (pid 12903)
 Scenario window: **1184.37 ms** (from 1102.14 to 1291.52)
 Main thread: 49% on a CPU · 8% waiting for a CPU · 10% blocked in the kernel · 33% sleeping
 Covered by the findings below: **31%** of the main thread's window, each moment counted once
+Startup: cold, **1302 ms** from the launch to the first frame: 41% on a CPU · 17% `bind_application` · 9% `monitor_contention` · 8% `choreographer_do_frame` · 7% `binder` · 5% `launch_delay` · 4% `activity_start` · 4% `io` · 3% sleeping · 2% waiting for a CPU
+That is the platform's measure rather than the window: the startup began 118 ms before the window opened, and ended with it.
 Device: clock **1481 MHz** (from 1204 to 1622 across repeats), peak 54 °C, 1536 MB free at the low point
 Detectors fired: **5 of 13**
 Config: `/home/you/my-app/echolot.yml` (sha 3f9a1c2b7d40) · thresholds: built-in defaults

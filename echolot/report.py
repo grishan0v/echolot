@@ -199,6 +199,36 @@ def _merge_budget(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     return out
 
 
+
+def _merge_startup(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The startup across repeats, reason by reason, by median, like the budget.
+
+    A reason one repeat did not have counts as nothing in it. The type is the
+    one every repeat agrees on, or all of them named: a set that mixes cold
+    starts with warm ones is two measurements, and a median over both is
+    neither.
+    """
+    found = [r["window"]["startup"] for r in reports
+             if (r.get("window") or {}).get("startup")]
+    if not found:
+        return None
+    names = sorted({name for s in found for name in s.get("reasons") or {}})
+    reasons = {name: round(median([(s.get("reasons") or {}).get(name, 0.0) for s in found]), 2)
+               for name in names}
+    types = sorted({s.get("type") or "unknown" for s in found})
+    out: dict[str, Any] = {
+        "type": types[0] if len(types) == 1 else " and ".join(types),
+        "dur_ms": round(median([s["dur_ms"] for s in found]), 2),
+        "reasons": dict(sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))),
+    }
+    for key in ("from_window_start_ms", "from_window_end_ms", "in_window_ms"):
+        out[key] = round(median([s.get(key) or 0.0 for s in found]), 2)
+    several = [s["startups"] for s in found if s.get("startups")]
+    if several:
+        out["startups"] = max(several)
+    out["runs"] = f"{len(found)}/{len(reports)}"
+    return out
+
 def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
     """The platform state across repeats — median for the clock, worst case for the rest.
 
@@ -410,6 +440,7 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"]["duration_ms_min"] = min(windows)
         merged["window"]["duration_ms_max"] = max(windows)
         merged["window"]["main_thread"] = _merge_budget(reports)
+        merged["window"]["startup"] = _merge_startup(reports)
 
     merged["environment"] = _merge_environment(reports)
 
@@ -556,6 +587,72 @@ def _in_rows_line(budget: dict[str, Any]) -> list[str]:
                    "timeline")
     return [line]
 
+
+
+# The thread states among the startup's reasons, in the budget's words. The
+# other reasons are the names the standard library gives them, kept as they
+# are: a reader can look them up there.
+STARTUP_STATES = {
+    "Running": "on a CPU",
+    "R": "waiting for a CPU",
+    "R+": "waiting for a CPU",
+    "D": "blocked in the kernel",
+    "DK": "blocked in the kernel",
+    "S": "sleeping",
+}
+
+
+def _startup_lines(startup: dict[str, Any] | None) -> list[str]:
+    """The app's startup by Perfetto's own account, under the window's.
+
+    The budget says where the window went by thread state. This says where
+    the startup went by reason — `bind_application`, `binder`, `io`, the
+    thread states — as the standard library divides it. It is the platform's
+    measure, from the launch to the first frame, and a second line says how it
+    sits against the window whenever the two do not coincide: a window from
+    `bindApplication` misses the process start, and one that stops before the
+    first frame misses the end of the startup.
+
+    Reasons under a percent are dropped from the line and kept in the JSON,
+    as in the budget.
+    """
+    if not startup or not startup.get("dur_ms"):
+        return []
+    dur = startup["dur_ms"]
+    shares: dict[str, float] = {}
+    for reason, ms in (startup.get("reasons") or {}).items():
+        label = STARTUP_STATES.get(reason, f"`{reason}`")
+        shares[label] = shares.get(label, 0.0) + ms / dur * 100
+    parts = [f"{share:.0f}% {label}" for label, share
+             in sorted(shares.items(), key=lambda kv: (-kv[1], kv[0])) if share >= 1]
+    kind = startup.get("type") or "of a kind Perfetto could not tell"
+    line = f"Startup: {kind}, **{dur:.0f} ms** from the launch to the first frame"
+    if startup.get("startups"):
+        line += (f" (the one of {startup['startups']} in the trace that shares "
+                 f"the most with the window)")
+    if parts:
+        line += ": " + " · ".join(parts)
+    return [line, *_startup_against_window(startup)]
+
+
+def _startup_against_window(startup: dict[str, Any]) -> list[str]:
+    """Where the startup began and ended against the scenario's window, when not with it."""
+    began = startup.get("from_window_start_ms") or 0.0
+    ended = startup.get("from_window_end_ms") or 0.0
+    if not startup.get("in_window_ms"):
+        return [
+            "> ⚠️ The startup does not overlap the scenario's window: its "
+            "shares are of the launch, and the findings below are of the "
+            "window."
+        ]
+    if abs(began) < 1 and abs(ended) < 1:
+        return []
+    start = ("began with the window" if abs(began) < 1 else
+             f"began {abs(began):.0f} ms {'before' if began < 0 else 'after'} the window opened")
+    end = ("ended with it" if abs(ended) < 1 else
+           f"ended {abs(ended):.0f} ms {'before' if ended < 0 else 'after'} it closed")
+    return [f"That is the platform's measure rather than the window: the startup "
+            f"{start}, and {end}."]
 
 def _environment_lines(env: dict[str, Any]) -> list[str]:
     """One line for the machine the numbers below were measured on.
@@ -784,6 +881,7 @@ def to_markdown(report: dict[str, Any]) -> str:
             )
 
     out.extend(_budget_lines(w.get("main_thread")))
+    out.extend(_startup_lines(w.get("startup")))
 
     # An anchor that never matched silently collapses the window onto the whole
     # trace. That has to be shouted, not hidden: otherwise the report looks
@@ -949,6 +1047,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
         out.append(f"⚠️ {w.get('process_alternatives_total') or len(alts)} other "
                    f"process(es) matched the mask; the largest was taken")
     out.extend(_budget_lines(w.get("main_thread")))
+    out.extend(_startup_lines(w.get("startup")))
     out.extend(_environment_lines(report.get("environment") or {}))
     return out
 

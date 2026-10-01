@@ -1005,6 +1005,7 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
             "matches": hits[0]["n"] if hits else 0,
         }
     window["opened_inside"] = _opened_inside(tp, window)
+    window["startup"] = _startup_info(tp, window, procs[0]["name"])
     return window
 
 
@@ -1084,6 +1085,76 @@ def _opened_inside(tp, window: dict) -> dict | None:
     found["material"] = bool(found["before_ms"] >= inside
                              and found["before_ms"] >= compare_mod.FLOOR_MS)
     return found
+
+
+def _startup_info(tp, window: dict, process: str) -> dict | None:
+    """The app's startup as Perfetto's standard library measures it.
+
+    The budget says where the main thread's time went by thread state. A
+    startup has a finer account, and the standard library keeps it:
+    `android_startups` finds the launch — cold, warm or hot, from the intent
+    to the first frame — and `android_startup_opinionated_breakdown` divides
+    every moment of it among reasons: `bind_application`, `binder`, `io`, lock
+    waits, the thread states. On a cold start of a large Kotlin app on a phone
+    it accounted for all 1,357 ms, across 17 reasons.
+
+    It is the platform's measure and not the scenario's window, so the two
+    are set side by side: where the startup began and ended against the
+    window, in milliseconds, negative for before. A trace with several
+    startups of the app — a benchmark that launches it more than once — has
+    them counted, and the one that shares the most time with the window is the
+    one described.
+
+    None when the trace holds no startup of this app's package, and when the
+    trace_processor has no such module; the second is said on stderr, the way
+    a failed detector is.
+
+    The breakdown is included only for a trace that has a startup to break
+    down. Its tables are computed as it is included, and on a phone's cold
+    start that took 0.77 s against 0.04 s for the startups alone; a scroll or a
+    warm scenario has nothing for it to do.
+    """
+    start, end = window.get("ts_start"), window.get("ts_end")
+    if start is None or end is None:
+        return None
+    package = process.split(":", 1)[0]
+    try:
+        tp.exec_script("INCLUDE PERFETTO MODULE android.startup.startups;")
+        startups = tp.query(f"""
+            SELECT startup_id, ts, ts_end, dur, startup_type AS type
+            FROM android_startups
+            WHERE package = '{sql_value(package)}' AND dur > 0
+            ORDER BY ts
+        """)
+        if not startups:
+            return None
+
+        def shared(s: dict) -> int:
+            return max(0, min(s["ts_end"], end) - max(s["ts"], start))
+
+        chosen = max(startups, key=lambda s: (shared(s), -s["ts"]))
+        tp.exec_script("INCLUDE PERFETTO MODULE android.startup.startup_breakdowns;")
+        reasons = tp.query(f"""
+            SELECT reason, SUM(dur) AS ns
+            FROM android_startup_opinionated_breakdown
+            WHERE startup_id = {int(chosen["startup_id"])} AND reason IS NOT NULL
+            GROUP BY reason
+            ORDER BY ns DESC, reason
+        """)
+    except Exception as e:  # a trace_processor without the module
+        print(f"[!] startup: {e}", file=sys.stderr)
+        return None
+    out = {
+        "type": chosen["type"],
+        "dur_ms": round(chosen["dur"] / 1e6, 2),
+        "reasons": {r["reason"]: round((r["ns"] or 0) / 1e6, 2) for r in reasons},
+        "from_window_start_ms": round((chosen["ts"] - start) / 1e6, 2),
+        "from_window_end_ms": round((chosen["ts_end"] - end) / 1e6, 2),
+        "in_window_ms": round(shared(chosen) / 1e6, 2),
+    }
+    if len(startups) > 1:
+        out["startups"] = len(startups)
+    return out
 
 
 def _environment_info(tp, package: str = "", mapped: bool = False) -> dict:

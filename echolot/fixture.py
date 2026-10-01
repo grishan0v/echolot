@@ -337,6 +337,13 @@ SLICES = {
             # blocks scattered exactly that way and none cleared the threshold.
             ("Lock contention on a monitor lock (owner tid: 4202)", 880, 12, []),
 
+            # The Activity's start and resume, as ActivityThread traces them,
+            # kept short and in gaps. `android_startups` counts the launch
+            # below (LAUNCH) as the app's only where its main thread ran
+            # these, and calls it cold for bindApplication with them.
+            ("activityStart", 396.5, 3, []),
+            ("activityResume", 866, 3, []),
+
             # --- main_thread_outlier -----------------------------------
             # A group with a history and one occurrence far outside it. Six
             # inflates of 4 ms and one of 44: 11x the median, and past the
@@ -906,6 +913,21 @@ SS_PID = 1200
 SS_NAME = "system_server"
 SS_THREADS = {SS_PID: "system_server"}
 
+# --- the launch, as system_server records it ----------------------------------
+#
+# What Perfetto's `android_startups` reads on Android 13, as a phone wrote it:
+# an async section `launchingActivity#<id>` from the intent to the first frame,
+# and an instant `launchingActivity#<id>:completed:<package>` when the frame is
+# drawn. The startup's type is the module's own inference: cold, for a main
+# thread that ran bindApplication, activityStart and activityResume inside it.
+#
+# It begins at 40, 60 ms before the scenario's window opens, and ends with the
+# window at 1105. The startup is the platform's measure and the window is the
+# config's, and the report has to say which is which.
+LAUNCH_ID = 1
+LAUNCH_AT_MS = 40
+LAUNCH_DRAWN_MS = 1105
+
 ANR_UUID = "0123abcd-1111-2222-3333-444455556666"
 ANR_SUBJECT = "Input dispatching timed out (fixture)"
 ANR_AT_MS = 1300
@@ -1035,6 +1057,15 @@ def build(frames: bool = True, environment: bool = True,
         by_cpu.setdefault(0, []).append(
             (ms(at), next(seq), "print", SS_PID, f"C|{SS_PID}|{name}|1\n")
         )
+
+    # The launch, from system_server too. The completion is an instant: a
+    # begin and an end at one timestamp, which is a slice of no length.
+    launch = f"launchingActivity#{LAUNCH_ID}"
+    for at, buf in ((LAUNCH_AT_MS, f"S|{SS_PID}|{launch}|{LAUNCH_ID}"),
+                    (LAUNCH_DRAWN_MS, f"F|{SS_PID}|{launch}|{LAUNCH_ID}"),
+                    (LAUNCH_DRAWN_MS, f"B|{SS_PID}|{launch}:completed:{APP_NAME}"),
+                    (LAUNCH_DRAWN_MS, f"E|{SS_PID}")):
+        by_cpu.setdefault(0, []).append((ms(at), next(seq), "print", SS_PID, buf + "\n"))
 
     # The platform state. Frequency belongs to its own CPU's bundle — that is
     # where a real kernel writes it. Thermal is a property of the device rather

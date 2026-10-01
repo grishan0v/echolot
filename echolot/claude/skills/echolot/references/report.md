@@ -187,6 +187,24 @@ background `binder_txn`. A low share with the main thread mostly on a CPU
 means it ran code no row names: slices below the thresholds, or none at all —
 `echolot names` shows which, and `mark` names the rest.
 
+**`window.startup`** — the app's launch as Perfetto's standard library
+measures it, when the trace holds one: `type` (cold, warm, hot), `dur_ms` from
+the intent to the first frame, and `reasons`, every millisecond of it given to
+one cause — `bind_application`, `activity_start`, `choreographer_do_frame`,
+`binder`, `io`, `monitor_contention`, `launch_delay` (before the app's main
+thread ran at all), the thread states for the rest. The header prints it under
+the budget: `Startup: cold, 1359 ms from the launch to the first frame: 42%
+bind_application · 13% monitor_contention · …`.
+
+It is the platform's measure, not the window, and `from_window_start_ms` and
+`from_window_end_ms` say where it sits against the window, negative for
+before; the header says it in words when they differ. A window opened at
+`bindApplication` misses the launch's first hundred milliseconds, and one that
+runs to the end of the recording holds seconds after the first frame. For a
+cold-start question, read the startup's reasons before the window's tables:
+they divide the time the user waited, and nothing else. Absent when the trace
+holds no launch of this app.
+
 ## `markers` — your own names, measured every time
 
 A detector shows a marker only where a threshold says so. `markers` shows

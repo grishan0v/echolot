@@ -300,6 +300,24 @@ def _(report):
     no_slice_named(report, "After_OUTSIDE")       # 200 ms after the window
 
 
+@check("startup: Perfetto's own account of the launch, set against the window")
+def _(report):
+    # system_server's launch runs from 40 to the first frame at 1105, and
+    # the main thread ran bindApplication, activityStart and activityResume
+    # inside it: cold, 1065 ms. It began 60 ms before the window and ended
+    # with it. Every moment of it has a reason: bindApplication's 98 ms, the
+    # 60 ms the main thread waited for the disk, the 10 ms before the main
+    # thread ran at all, and so on down to the activity's 3 ms each.
+    s = report["window"]["startup"]
+    assert (s["type"], s["dur_ms"]) == ("cold", 1065.0), s
+    assert (s["from_window_start_ms"], s["from_window_end_ms"], s["in_window_ms"]) \
+        == (-60.0, 0.0, 1005.0), s
+    r = s["reasons"]
+    assert (r["bind_application"], r["io"], r["launch_delay"],
+            r["activity_start"], r["activity_resume"]) == (98.0, 60.0, 10.0, 3.0, 3.0), r
+    assert round(sum(r.values()), 2) == s["dur_ms"], f"not every moment has a reason: {r}"
+
+
 # --- the platform state ----------------------------------------------------
 #
 # Not findings: the denominator under every duration above. Each check is
@@ -442,7 +460,7 @@ def _(report):
                if r["location"] == "AppStart")
     assert row["total_ms"] == 1006.0, row
     assert row["self_ms"] < row["total_ms"], f"children not subtracted: {row}"
-    assert row["self_ms"] == 177.0, f"1006 minus 829 ms of children: {row}"
+    assert row["self_ms"] == 171.0, f"1006 minus 835 ms of children: {row}"
 
 
 @check("main_thread_block: self time never exceeds the window")
