@@ -77,6 +77,30 @@ def test_an_outlier_seen_in_one_run_of_three_survives_the_merge():
           got["inflate"]["runs"] == "1/3", got["inflate"])
 
 
+def test_a_whole_count_stays_whole_across_an_even_number_of_repeats():
+    """`N 6.0` beside `6`: the median of two counts is their mean, and a float.
+
+    A report of two repeats printed every count with a decimal point, and a
+    report of five printed one for each row found in two or four of them.
+    The count is the one column that is a number of things, so it is the one
+    that is kept whole; a median that falls between two counts is a real one
+    and keeps its half.
+    """
+    def twice(a: int, b: int) -> dict:
+        return merged_rows([one([row("inflate", count=a, total_ms=52.0)]),
+                            one([row("inflate", count=b, total_ms=52.0)])])["inflate"]
+
+    agreed = twice(6, 6)
+    check("two repeats that agree on 6 merge to 6, an int in report.json",
+          agreed["count"] == 6 and isinstance(agreed["count"], int), agreed)
+    printed = report_mod.to_markdown(report_mod.aggregate(
+        [one([row("inflate", count=6, total_ms=52.0)]) for _ in range(2)]))
+    check("and the table prints it as 6", "| inflate | 2/2 | 6 |" in printed, printed)
+    check("a median between two counts keeps its half", twice(12, 13)["count"] == 12.5)
+    check("and the time columns are left as they were",
+          isinstance(agreed["total_ms"], float), agreed)
+
+
 def test_the_clock_is_merged_across_repeats_and_keeps_its_spread():
     """A median clock, and the range that says whether the median means anything."""
     got = report_mod.aggregate([one([], environment=env(mhz)) for mhz in
