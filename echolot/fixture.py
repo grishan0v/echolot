@@ -981,26 +981,10 @@ def build(frames: bool = True, environment: bool = True,
     recording, and the sample report in the README is this one.
     """
     builder = TraceProtoBuilder()
-
-    # ProcessTree is the only source of process names.
-    packet = builder.add_packet()
-    packet.timestamp = BASE_NS
-    tree = packet.process_tree
-    for pid, name, threads in (
-        (APP_PID, APP_NAME, THREADS),
-        (OTHER_PID, OTHER_NAME, OTHER_THREADS),
-        (SF_PID, SF_NAME, SF_THREADS),
-        (SS_PID, SS_NAME, SS_THREADS),
-    ):
-        proc = tree.processes.add()
-        proc.pid = pid
-        proc.ppid = 1
-        proc.cmdline.append(name)
-        for tid, tname in threads.items():
-            thread = tree.threads.add()
-            thread.tid = tid
-            thread.tgid = pid
-            thread.name = tname
+    process_tree(builder, [(APP_PID, APP_NAME, THREADS),
+                           (OTHER_PID, OTHER_NAME, OTHER_THREADS),
+                           (SF_PID, SF_NAME, SF_THREADS),
+                           (SS_PID, SS_NAME, SS_THREADS)])
 
     if frames:
         _frames(builder)
@@ -1082,6 +1066,43 @@ def build(frames: bool = True, environment: bool = True,
         for at, device, level in COOLING:
             by_cpu.setdefault(0, []).append((ms(at), next(seq), "cdev", device, level))
 
+    ftrace(builder, by_cpu)
+    sys_stats(builder, SYS_STATS if environment else [])
+
+    return builder.serialize()
+
+
+# --- the packets, for any scene ------------------------------------------------
+#
+# The trace's packets are written the same way whatever the scene: the demo
+# (demo.py) builds an app of its own with these.
+
+def process_tree(builder, processes) -> None:
+    """ProcessTree, the only source of process and thread names: (pid, name, {tid: name})."""
+    packet = builder.add_packet()
+    packet.timestamp = BASE_NS
+    tree = packet.process_tree
+    for pid, name, threads in processes:
+        proc = tree.processes.add()
+        proc.pid = pid
+        proc.ppid = 1
+        proc.cmdline.append(name)
+        for tid, tname in threads.items():
+            thread = tree.threads.add()
+            thread.tid = tid
+            thread.tgid = pid
+            thread.name = tname
+
+
+def ftrace(builder, by_cpu: dict[int, list]) -> None:
+    """One ftrace bundle per CPU, its events in time order.
+
+    An event is a tuple: its timestamp, a sequence number that orders events
+    of one timestamp, its kind, and the fields the kind needs — `sched`
+    (prev_comm, prev_pid, prev_state, next_comm, next_pid), `blocked` (tid,
+    io_wait), `freq` (cpu, khz), `temp` (zone, millidegrees), `cdev` (device,
+    level), and `print` (tid, atrace line).
+    """
     for cpu in sorted(by_cpu):
         packet = builder.add_packet()
         packet.trusted_packet_sequence_id = 1000 + cpu
@@ -1127,9 +1148,12 @@ def build(frames: bool = True, environment: bool = True,
                 event.pid = tid
                 event.print.buf = buf
 
-    # Memory, as its own packets rather than ftrace events: on a device this
-    # is linux.sys_stats polling /proc, and it arrives the same way here.
-    for at, avail_kb, faults in (SYS_STATS if environment else []):
+
+def sys_stats(builder, rows) -> None:
+    """Memory, as its own packets rather than ftrace events: on a device this
+    is linux.sys_stats polling /proc, and it arrives the same way here.
+    (at_ms, MemAvailable in kB, major faults so far)."""
+    for at, avail_kb, faults in rows:
         packet = builder.add_packet()
         packet.timestamp = ms(at)
         packet.trusted_packet_sequence_id = 2000
@@ -1139,8 +1163,6 @@ def build(frames: bool = True, environment: bool = True,
         vmstat = packet.sys_stats.vmstat.add()
         vmstat.key = pb.VMSTAT_PGMAJFAULT
         vmstat.value = faults
-
-    return builder.serialize()
 
 
 def main(argv=None) -> int:

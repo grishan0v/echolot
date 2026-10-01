@@ -6,10 +6,14 @@ Every picture in the README is drawn by [render.py](render.py) and committed
 next to it. Change the script or the README, then draw them again:
 
 ```bash
-python docs/assets/render.py                     # writes the .svg files here
+python docs/assets/render.py                     # writes the sample report and the .svg files here
 python docs/assets/render.py --preview /tmp/pv   # plus two README-like pages, light and dark
 ```
 
+The script first writes the README's sample report: what `analyze` prints
+for the demo app, `echolot/demo.py`. The pictures that quote the sample are
+then drawn from the new text. `tests/test_doc_samples.py` fails when the
+README's sample differs from the demo's report, and
 `tests/test_readme_pictures.py` draws everything once more and fails when a
 committed file differs from what the script draws now.
 

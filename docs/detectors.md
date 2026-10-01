@@ -450,11 +450,13 @@ until somebody reads the report or writes a config.
 - **The counts in the README.** `tests/test_docs.py` reads the number in
   "runs thirteen SQL detectors" and in the sample report's
   `Detectors fired: **N of 13**`, and fails while either disagrees with the
-  files. `tests/test_doc_samples.py` holds the sample report itself to what
-  the renderer prints, down to the **Silent** line, which names every
-  detector that did not fire. The README's pictures state the count too,
-  read out of that tally: `tests/test_readme_pictures.py` fails until
-  `python docs/assets/render.py` draws them again. The detector tables in the
+  files. The sample report is what `analyze` prints for the demo app,
+  `echolot/demo.py`, and `tests/test_doc_samples.py` holds it to that
+  character for character, down to the **Silent** line, which names every
+  detector that did not fire there — a new detector included. The README's
+  pictures state the count too, read out of that tally. Both tests fail
+  until `python docs/assets/render.py` writes the sample and draws the
+  pictures again. The detector tables in the
   README and in `references/report.md` are lists kept by hand.
 - **Only part of a row survives a merge.** Repeats are folded row by row, and
   a merged row keeps its `@identity` columns, `runs`, the numeric contract

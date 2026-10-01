@@ -153,6 +153,39 @@ down as an `@example`, and the strategy is weighted to reach it: the table
 tests draw `|` from an alphabet of their own, because one character in a
 million turns up in some runs and not others.
 
+## The demo app
+
+The fixture reads as a test because it is one: a problem planted for every
+detector, under names that say so — `DiskWaiter`, `LockWaiter`. A sample
+report written from it would show the reader eleven findings and a thread
+called `LockWaiter`. `echolot/demo.py` is the other kind of synthetic trace,
+built with the same packet writers: the cold start of an app that does not
+exist, a little over a second long, with the five findings a cold start like
+it has, under the names the README uses — `com.example.app`, a
+`StoreRepository` whose lock the main thread waits on, a coroutine worker
+holding it with nothing traced.
+
+```bash
+python -m echolot.demo demo             # five repeats, their echolot.yml, and the sources the rows name
+python -m echolot.demo demo --changed   # the same, with one change planted: the lock is held longer
+echolot analyze demo/coldStart_iter00*.perfetto-trace -c demo/echolot.yml
+```
+
+The five repeats differ the way a device's do — the pace of the main thread,
+whether one slow inflate happened, the clock — so the medians, the `±` and
+the Runs column have something to say. The sources sit where the contention
+slice says the lock is taken and waited for, so the lock's row gets its
+"In the code" cell.
+
+The README's sample report is what `analyze` prints for it, and
+`tests/test_doc_samples.py` holds the two together character for character.
+A change to a detector or to the renderer that moves the sample fails that
+test, and `python docs/assets/render.py` writes the sample again, with the
+pictures that quote it. `tests/test_demo.py` checks the story the sample
+tells: the five findings, the outlier in two repeats of five, and that
+`compare` between the two variants moves the lock's two rows and nothing
+else. `doctor` runs the fixture only.
+
 ## What the detectors were checked against
 
 The detectors were validated against a synthetic trace — 154 checks inside

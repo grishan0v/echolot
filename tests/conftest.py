@@ -84,3 +84,24 @@ def sampled_report():
     """
     with recorder.isolated():
         return selftest.build_report(sampling="arrived")
+
+
+@pytest.fixture(scope="session")
+def demo_report():
+    """The demo app's five repeats, analysed and merged once.
+
+    The README's sample is this report, and the cases about the demo read it
+    too: analysing five traces is not instant, and every one of them gets
+    the same answer.
+    """
+    from echolot import demo
+    with recorder.isolated():
+        return demo.report()
+
+
+@pytest.fixture(scope="session")
+def demo_changed_report():
+    """The same five repeats with the demo's one change planted."""
+    from echolot import demo
+    with recorder.isolated():
+        return demo.report(changed=True)
