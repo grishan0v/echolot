@@ -28,7 +28,7 @@ Why the answers can be trusted, and what the tool refuses to do.
 | document | about |
 |---|---|
 | 🔒 **[Determinism](determinism.md)** | the pinned `trace_processor`, the synthetic fixture, what `doctor` actually checks, and where determinism ends |
-| 🤖 **[The agent layer](agent-layer.md)** | what `echolot init` installs, the plugin for Claude Code and Codex, why a CLI rather than an MCP server, why the loop lives in a subagent |
+| 🤖 **[The agent layer](agent-layer.md)** | what `echolot init` installs, and a private install git does not see; the plugin for Claude Code and Codex, why a CLI rather than an MCP server, why the loop lives in a subagent |
 
 ## Extending it
 

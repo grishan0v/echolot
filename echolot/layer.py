@@ -66,6 +66,16 @@ LAYER_MANIFEST = "echolot-layer.json"
 # template over it — which is what `init --force` did — hands the project
 # back that one line and takes the rest of its configuration with it.
 MERGED = ("settings.json",)
+# Where the permission goes in a private install (`init --private`): Claude
+# Code's per-machine settings, which it reads beside settings.json. The
+# project's settings.json may be tracked, and a change to a tracked file shows
+# in `git status` whatever the exclude file says.
+PRIVATE_SETTINGS = "settings.local.json"
+
+
+def merged_into(rel: str, private: bool) -> str:
+    """The file a template file in MERGED is merged into: settings.local.json when private."""
+    return PRIVATE_SETTINGS if private and rel in MERGED else rel
 # How a person gets a newer echolot: the two tools that install it as a
 # command of its own. One string, because the layer line, the full doctor
 # section and `next` all say it.
@@ -187,7 +197,8 @@ def template_files() -> list[Path]:
             if p.is_file() and not p.name.startswith(".")]
 
 
-def install_pointers(project: Path, chosen: list, force: bool = False) -> None:
+def install_pointers(project: Path, chosen: list, force: bool = False,
+                     tracked: frozenset[Path] | set[Path] = frozenset()) -> list[Path]:
     """Tell the other clients this tool exists.
 
     `.claude/` is a Claude Code mechanism, and in Cursor or Codex it is an
@@ -200,21 +211,40 @@ def install_pointers(project: Path, chosen: list, force: bool = False) -> None:
     Codex gets one more file, and not a pointer: the rule that lets echolot
     out of its sandbox. `force` is `--all`, which puts echolot's rule back
     over an edited one the way it does for the files of the layer.
+
+    Returns the files echolot wrote whole: a pointer file it created, or one
+    that holds nothing but its section, and Codex's rule. A private install
+    keeps those from git. `tracked` names the files git tracks, which a
+    private install does not write at all: the section is printed to paste,
+    as for a file that is the project's own.
     """
 
     # The plugin has no file here: its skills arrive with it.
     stubs = [h for h in chosen if h.key != "claude" and h.path]
     if not stubs:
-        return
+        return []
 
     print()
     manual = []
+    whole: list[Path] = []
     for host in stubs:
+        if project / host.path in tracked:
+            print(f"  ≠ {host.path} is tracked by git — a private install leaves it "
+                  f"alone")
+            if host.pointer:
+                manual.append((Path(host.path), host))
+            continue
         if not host.pointer:
             codex.install(project, [h.key for h in chosen], force)
+            if (project / codex.RULE_PATH).exists():
+                whole.append(project / codex.RULE_PATH)
             continue
         what, dest = hosts.write_stub(project, host)
         rel = dest.relative_to(project)
+        if what == "written" or (
+                dest.exists()
+                and dest.read_text(encoding="utf-8", errors="replace") == host.render()):
+            whole.append(dest)
         if what == "exists-without-ours":
             manual.append((rel, host))
             print(f"  ≠ {rel} exists and is yours — left alone")
@@ -246,6 +276,7 @@ def install_pointers(project: Path, chosen: list, force: bool = False) -> None:
               f"finds the tool — as it is,\nboth marker lines included; `init` "
               f"keeps what is between them current from then on:\n")
         print(text.rstrip("\n"))
+    return whole
 
 
 def _read_manifest(root: Path) -> dict:
@@ -298,10 +329,12 @@ def audit(project: Path) -> dict | None:
         return None
     manifest = _read_manifest(root)
     installed = manifest.get("files") or {}
+    private = hosts.load_private(project)
     rows = []
     for src in template_files():
         rel = str(src.relative_to(CLAUDE_DIR))
-        rows.append({"file": rel, "state": _state(rel, src, root / rel, installed)})
+        dst = root / merged_into(rel, private)
+        rows.append({"file": rel, "state": _state(rel, src, dst, installed)})
     return {
         "rows": rows,
         "manifest": bool(installed),
@@ -491,8 +524,20 @@ _NO_MANIFEST = (f"if this is already the newest echolot, the manifest is what "
                 f"then keeps every file that differs until `--all` is chosen")
 
 
+# Said on the layer line when `init --private` installed here: a reader of
+# `status` should know that the team does not see this install.
+PRIVATE_NOTE = "private to this clone: git ignores what init wrote"
+
+
 def one_line(project: Path) -> tuple[str, str]:
     """(verdict, one line) about the project's .claude/ layer — for -q."""
+    verdict, line = _one_line(project)
+    if verdict not in ("absent", "newer") and hosts.load_private(project):
+        line += f" · {PRIVATE_NOTE}"
+    return verdict, line
+
+
+def _one_line(project: Path) -> tuple[str, str]:
     a = assess(project)
     verdict, files = a["verdict"], a["files"]
     if verdict == "newer":
@@ -520,7 +565,8 @@ def one_line(project: Path) -> tuple[str, str]:
     # `doctor -q` show, and the only other place it is printed is the full
     # doctor run, ten kilobytes for one line of JSON.
     adds = "; ".join(contribution(CLAUDE_DIR / rel) for rel in files[BY_HAND[0]])
-    return verdict, ("layer: UNREADABLE — .claude/settings.json is not JSON "
+    name = merged_into(MERGED[0], hosts.load_private(project))
+    return verdict, (f"layer: UNREADABLE — .claude/{name} is not JSON "
                      "echolot can add to, and no flag of init touches it → "
                      f"fix it by hand, and merge in {adds}")
 
@@ -574,6 +620,8 @@ def print_status(project: Path) -> str | None:
     if status["installed_by"]:
         print(f"  installed by echolot {status['installed_by']}, "
               f"this is {recorder.version()}")
+    if hosts.load_private(project):
+        print(f"  {PRIVATE_NOTE} — `echolot init --shared` hands it to the team")
     if verdict == "current":
         print("  the layer is current.")
     elif verdict == "stale":
@@ -599,7 +647,8 @@ def print_status(project: Path) -> str | None:
             break_on_hyphens=False, break_long_words=False))
     else:
         for rel in files.get("unreadable", []):
-            print(f"  → fix it by hand: .claude/{rel} is not JSON echolot can "
+            name = merged_into(rel, hosts.load_private(project))
+            print(f"  → fix it by hand: .claude/{name} is not JSON echolot can "
                   f"add to, and it is\n    merged rather than overwritten, so "
                   f"no flag of init touches it. What echolot\n    adds to it: "
                   f"{contribution(CLAUDE_DIR / rel)}")
