@@ -17,7 +17,7 @@ body:
       description: |
         The output of `echolot doctor -q`, run in the project. Three lines,
         and the first carries every version that can change the answer:
-        `echolot 0.9.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7`.
+        `echolot 0.10.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7`.
         The second is the state of the `.claude/` layer, and the third how
         many self-checks passed — with every failure listed under it.
 
