@@ -158,6 +158,53 @@ files back; the rule holds once the whole team is on a later one. And
 between releases a checkout carries the number of the last one, so two
 builds with the same number are the same version as far as this goes.
 
+### A private install
+
+`init` is built for a team that commits its layer. Sometimes the repository
+is not yours to change: one the team shares, before anyone has agreed to a
+new tool, or one a client owns. For that there is `echolot init --private`,
+which installs the same files and keeps all of them out of git.
+
+- **Where the paths go.** Every path `init` writes goes into the clone's own
+  ignore file, `info/exclude`. git reads it like a `.gitignore` and never
+  commits it. echolot asks git where the file is: in a worktree, `.git` is a
+  file, and the exclude file is the one in the repository it points to. The
+  paths sit in one block between two marker lines, written from the top of
+  the repository, since the project may live in a subdirectory of it.
+- **What the block names.** The layer's files and its manifest, the pointers
+  `init` created for other agents, Codex's rule, and `/.echolot/`,
+  `/local.yml` and `/echolot.yml`. A pattern works before its file exists, so
+  the config setup writes later is covered too. Every private `init` writes
+  the block anew, so a file a later release stops installing drops out of
+  it. The rest of the exclude file is the person's, and `init` never touches
+  it.
+- **No file git tracks is written.** An exclude file hides untracked files
+  only, so `init` asks git which of its targets are tracked.
+  - The two `.gitignore` lines go into the block instead.
+  - The permission goes into `.claude/settings.local.json`, Claude Code's
+    per-machine settings, which it reads beside `settings.json`. `status`
+    and `doctor` look for it there.
+  - A tracked pointer file, such as an `AGENTS.md` with the team's rules,
+    is left alone. `init` prints the section to paste, as it does for a
+    file that is the project's own.
+- **The choice is kept.** It goes into `.echolot/hosts.json` with the choice
+  of agents, so a later plain `init` stays private: the one `/echolot` runs
+  when the layer goes stale, or the plugin door's `init --for plugin`. The
+  layer line in `status` and `doctor` says "private to this clone".
+- **`echolot init --shared` hands it back to the team.** It takes the block
+  out and does what a plain `init` does: the `.gitignore` lines, the
+  permission in `settings.json`. The files stay where they are, and git
+  sees them from then on.
+- **Outside a git repository** there is nothing to keep from git: `init
+  --private` says so and installs as usual.
+
+The agents read their files whether or not git ignores them. With
+everything `init` wrote kept from git:
+- Claude Code loaded the skill, the three commands and the subagent;
+- Codex's prompt carried the `AGENTS.md` section.
+
+Cursor, Copilot and Gemini CLI were not checked.
+
 ## Why a CLI and not an MCP server
 
 - MCP tools sit in the context permanently, even when unused — a tax on every

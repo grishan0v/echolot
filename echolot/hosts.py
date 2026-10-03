@@ -260,14 +260,34 @@ def choice_path(project: Path) -> Path:
     return project / CHOICE_FILE
 
 
-def save_choice(project: Path, chosen: list[Host]) -> None:
+def save_choice(project: Path, chosen: list[Host], private: bool | None = None) -> None:
+    """The agents chosen, and whether the install is private to this clone.
+
+    `private` None keeps what was saved: a plain `init` — the one the skill
+    runs when the layer goes stale — stays private, as a plain `init` keeps
+    the agents. The file is under `.echolot/`, which git never sees, so the
+    choice belongs to this clone and to no one else's.
+    """
+    if private is None:
+        private = load_private(project)
+    data: dict = {"hosts": [h.key for h in chosen]}
+    if private:
+        data["private"] = True
     try:
         p = choice_path(project)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"hosts": [h.key for h in chosen]}, indent=2) + "\n",
-                     encoding="utf-8")
+        p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     except OSError:
         pass
+
+
+def load_private(project: Path) -> bool:
+    """Whether `init --private` installed here: git is kept from everything it wrote."""
+    try:
+        data = json.loads(choice_path(project).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("private") is True
 
 
 def load_choice(project: Path) -> list[str] | None:

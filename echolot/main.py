@@ -2421,6 +2421,54 @@ def cmd_collect(args) -> int:
     return 0
 
 
+def _private_repo(args, target: Path):
+    """(private, repository) for this run of `init`.
+
+    `--private` or `--shared` when given, else what this clone chose last
+    time. Outside a git repository there is nothing to keep from git: said,
+    and the install is the usual one. `--shared` takes echolot's block out of
+    the exclude file and leaves the files where they are; from then on they
+    are the team's to commit.
+    """
+    from . import exclude as exclude_mod
+    from . import hosts as hosts_mod
+
+    asked = getattr(args, "private", None)
+    if asked is False:
+        repo = exclude_mod.find(target)
+        if repo is not None and exclude_mod.remove(repo):
+            print(f"\n  ↓ {repo.show()}: echolot's block taken out — what a private "
+                  f"install wrote is still here, and git sees it now")
+        return False, None
+    if not (asked or hosts_mod.load_private(target)):
+        return False, None
+    repo = exclude_mod.find(target)
+    if repo is None:
+        print("\n  · --private: this directory is not inside a git repository, so "
+              "there is nothing to keep from\n    git — installing as usual")
+        return False, None
+    return True, repo
+
+
+def _private_targets(target: Path, chosen: list) -> list[Path]:
+    """Every file a private `init` may write, to ask git which of them it tracks."""
+    root = target / ".claude"
+    files = [root / layer.merged_into(str(src.relative_to(layer.CLAUDE_DIR)), True)
+             for src in layer.template_files()]
+    files.append(root / layer.LAYER_MANIFEST)
+    files += [target / h.path for h in chosen if h.path and h.key != "claude"]
+    return files
+
+
+def _keep_from_git(repo, patterns: list[str]) -> None:
+    from . import exclude as exclude_mod
+    said = exclude_mod.write(repo, patterns)
+    print(f"\n  {said}")
+    if not said.startswith("!"):
+        print("  A private install: git sees none of it in this clone. "
+              "`echolot init --shared`\n  hands it to the team.")
+
+
 def cmd_init(args) -> int:
     """Installs the .claude/ layer into a project.
 
@@ -2449,6 +2497,10 @@ def cmd_init(args) -> int:
     One layer it does not touch at all: one a newer echolot wrote. It says
     so, names the upgrade, and exits 1 having written none of the above —
     see `layer.ahead` for what it used to do instead.
+
+    `--private` installs the same files for this clone alone: every path it
+    writes goes into the repository's own ignore file, and no file git
+    tracks is written. See `exclude.py`.
     """
     target = Path(args.into)
     if not target.is_dir():
@@ -2491,15 +2543,26 @@ def cmd_init(args) -> int:
         if getattr(args, "interactive", False) and hosts_mod.interactive(sys.stdout):
             chosen = hosts_mod.pick(
                 chosen, found={h.key for h in hosts_mod.detect(target)})
-    hosts_mod.save_choice(target, chosen)
+    from . import exclude as exclude_mod
+    private, repo = _private_repo(args, target)
+    hosts_mod.save_choice(target, chosen, private=private)
 
     # Before the layer, and whatever client was chosen: the traces and the
     # machine-local config are echolot's own leavings, and a repository is
-    # where they must not end up.
-    from . import ignore as ignore_mod
-    ignored = ignore_mod.ensure(target)
-    if ignored:
-        print(f"\n  {ignored}")
+    # where they must not end up. A private install keeps them in its block,
+    # with echolot.yml, which setup writes later: a pattern works before its
+    # file exists.
+    hidden: list[str] = []
+    tracked: set[Path] = set()
+    if private:
+        hidden = [repo.pattern(target / ".echolot", directory=True),
+                  repo.pattern(target / "local.yml"), repo.pattern(target / "echolot.yml")]
+        tracked = exclude_mod.tracked(repo, _private_targets(target, chosen))
+    else:
+        from . import ignore as ignore_mod
+        ignored = ignore_mod.ensure(target)
+        if ignored:
+            print(f"\n  {ignored}")
 
     if not any(h.key == "claude" for h in chosen):
         if layer.audit(target) is not None:
@@ -2512,7 +2575,10 @@ def cmd_init(args) -> int:
                   "out of this project.")
         else:
             print("\nClaude Code not selected — .claude/ stays out of this project.")
-        layer.install_pointers(target, chosen, force=getattr(args, "force", False))
+        whole = layer.install_pointers(target, chosen, force=getattr(args, "force", False),
+                                       tracked=tracked)
+        if private:
+            _keep_from_git(repo, hidden + [repo.pattern(f) for f in whole])
         print("\nAny agent: `echolot guide`. The choice is kept — a plain "
               "`echolot init` points at\nthe same agents again; `--for` "
               "changes it, and `echolot init --for all` adds the rest.")
@@ -2524,12 +2590,18 @@ def cmd_init(args) -> int:
     states = {r["file"]: r["state"] for r in (before or {}).get("rows", [])}
 
     written, updated, same, kept, overwritten = [], [], [], [], []
-    folded, unmergeable = [], []
+    folded, unmergeable, left = [], [], []
     installed: dict[str, str] = {}
     for src in layer.template_files():
         rel = str(src.relative_to(layer.CLAUDE_DIR))
-        dst = root / rel
+        # The file it lands in: settings.json is merged into
+        # settings.local.json when private. Named that way in what is printed.
+        dst = root / layer.merged_into(rel, private)
+        shown = dst.relative_to(root).as_posix()
         was = states.get(rel)
+        if dst in tracked:
+            left.append((shown, layer.contribution(src) if rel in layer.MERGED else None))
+            continue
         if dst.exists():
             if rel in layer.MERGED:
                 # settings.json belongs to the project — its hooks, its
@@ -2538,12 +2610,12 @@ def cmd_init(args) -> int:
                 # "overwrite the copies of my files", not "throw away yours".
                 verdict, text = layer.merge(src, dst)
                 if verdict == "current":
-                    same.append(rel)
+                    same.append(shown)
                 elif verdict == "unreadable":
-                    unmergeable.append((rel, layer.contribution(src)))
+                    unmergeable.append((shown, layer.contribution(src)))
                 else:
                     dst.write_text(text, encoding="utf-8")
-                    folded.append(rel)
+                    folded.append(shown)
                 continue
             if was == "current":
                 same.append(rel)
@@ -2563,7 +2635,7 @@ def cmd_init(args) -> int:
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(src.read_bytes())
         if rel not in updated:
-            written.append(rel)
+            written.append(shown)
         installed[rel] = layer.sha(src)
 
     for rel in written:
@@ -2587,8 +2659,12 @@ def cmd_init(args) -> int:
     for rel in kept:
         print(f"  ≠ .claude/{rel} (already there and {states.get(rel, 'differs')}, "
               f"untouched)")
+    for shown, wanted in left:
+        print(f"  ≠ .claude/{shown} (tracked by git — a private install leaves it "
+              f"alone)" + (f"\n      Merge this into it by hand: {wanted}" if wanted else ""))
 
-    if written or updated or same or folded:
+    manifest = root / layer.LAYER_MANIFEST
+    if (written or updated or same or folded) and manifest not in tracked:
         # Only what was verified against the template goes into the manifest;
         # a file left untouched keeps whatever the old manifest said about it.
         layer.write_manifest(root, installed)
@@ -2613,8 +2689,17 @@ def cmd_init(args) -> int:
               "git after.", width=80, break_on_hyphens=False,
             break_long_words=False))
 
-    layer.install_pointers(target, chosen, force=getattr(args, "force", False))
-    recorder.note(hosts=[h.key for h in chosen])
+    whole = layer.install_pointers(target, chosen, force=getattr(args, "force", False),
+                                   tracked=tracked)
+    if private:
+        # Every file of the layer that is here and not the team's, the
+        # manifest, and what the pointers wrote whole.
+        ours = [root / layer.merged_into(str(src.relative_to(layer.CLAUDE_DIR)), True)
+                for src in layer.template_files()] + [manifest]
+        _keep_from_git(repo, [repo.pattern(f) for f in ours
+                              if f.exists() and f not in tracked]
+                       + [repo.pattern(f) for f in whole] + hidden)
+    recorder.note(hosts=[h.key for h in chosen], private=private)
     if before is None:
         print("\nLayer installed.")
     elif written or updated or folded:
@@ -3452,6 +3537,18 @@ def build_parser() -> argparse.ArgumentParser:
                           "without a terminal)")
     ini.add_argument("--no-doctor", action="store_true",
                      help="skip the environment check at the end")
+    # Named for whom the install is for. `--silent` read as "prints less",
+    # beside `doctor -q`; `--local` is already a path to local.yml in every
+    # command that takes one. Neither given: what this clone chose last time.
+    who = ini.add_mutually_exclusive_group()
+    who.add_argument("--private", dest="private", action="store_true", default=None,
+                     help="for this clone only: everything init writes goes into "
+                          "the repository's own ignore file, and no file git "
+                          "tracks is written; kept for later runs")
+    who.add_argument("--shared", dest="private", action="store_false",
+                     help="for the team, the default: the layer and the "
+                          ".gitignore lines are meant to be committed; undoes "
+                          "--private")
     ini.set_defaults(func=cmd_init)
 
     cal = add("calibrate", "agent", "<trace...>", "thresholds from known-healthy runs")
