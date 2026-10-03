@@ -1,0 +1,81 @@
+name: docs
+
+# docs/ as a site: built on every pull request that could change it, the way
+# `--strict` builds it, so a broken link or an anchor that no longer exists
+# fails here instead of on the site; built again and published to GitHub
+# Pages from main. CONTRIBUTING.md says how to build it locally, and
+# docs/site.py what is rewritten on the way.
+#
+# Pages has to be switched on once, by hand: Settings → Pages → Source:
+# GitHub Actions. Until it is, the deploy job fails and the build still
+# passes; `workflow_dispatch` publishes again once it is on.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A pull request's build may give way to the next push; a deploy may not be
+# cut off halfway.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # The `docs` extra holds the generator and the one extension the pages
+      # need, pinned, and nothing a user of echolot installs.
+      - name: Install
+        run: python -m pip install '.[docs]'
+
+      - name: Build
+        run: |
+          python docs/site.py
+          zensical build --strict
+
+      - name: Keep the site for the deploy
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: build/site
+
+  deploy:
+    name: deploy
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    # Only this job writes: to Pages, with a token it asks for itself.
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1

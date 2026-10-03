@@ -87,6 +87,10 @@ dependencies = [
 # repeatable one in CI.
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-cov>=7", "ruff>=0.14", "hypothesis>=6.100"]
+# The documentation site (.github/workflows/docs.yml): the generator and the
+# extension that renders GitHub's callouts, pinned, since zensical is at 0.0.x
+# and moves between releases. Nothing here reaches `pip install echolot`.
+docs = ["zensical==0.0.67", "markdown-callouts==0.4.0"]
 
 # What a linter is here for, and what it is not.
 #
