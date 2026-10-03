@@ -1,0 +1,81 @@
+name: action
+
+# The action in action.yml, called the way a project calls it, on the demo
+# app's traces (echolot/demo.py). Twice:
+#
+# - as a run on main would: it looks up the report the last good run of this
+#   workflow on main kept, compares against it when there is one, and keeps
+#   its own. A pull request is compared with main, and a push to main with the
+#   run before it;
+# - on the demo's planted change, against the report the first call wrote,
+#   where exactly the lock's two rows have to move.
+#
+# The second call is the one that can fail on what the action says. The first
+# can only fail on the action breaking: what a pull request changes in the
+# report is that pull request's business, and the comparison is in the job
+# summary for whoever wants to read it.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# `actions: read` is what the baseline lookup needs: the runs of this
+# workflow, and the artifacts they kept.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: action-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demo:
+    name: the action on the demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: The demo's traces
+        run: |
+          python -m pip install --quiet .
+          python -m echolot.demo demo
+          python -m echolot.demo changed --changed
+
+      - name: The action, as a run on main calls it
+        id: base
+        uses: ./
+        with:
+          traces: demo/coldStart_iter*.perfetto-trace
+          config: demo/echolot.yml
+          python: python
+
+      - name: The action on the change, against that report
+        id: changed
+        uses: ./
+        with:
+          traces: changed/coldStart_iter*.perfetto-trace
+          config: changed/echolot.yml
+          baseline: ${{ steps.base.outputs.report }}
+          artifact-name: echolot-report-changed
+          python: python
+
+      - name: What the action said
+        env:
+          REPORT: ${{ steps.base.outputs.report }}
+          COMPARISON: ${{ steps.changed.outputs.comparison }}
+          MOVED: ${{ steps.changed.outputs.moved }}
+        run: |
+          test -s "$REPORT" || { echo "::error::the first call left no report.json"; exit 1; }
+          test -s "$COMPARISON" || { echo "::error::the second call left no comparison.json"; exit 1; }
+          if [ "$MOVED" != 2 ]; then
+            echo "::error::the planted change moves the lock's two rows, and the comparison says $MOVED moved"
+            exit 1
+          fi
+          echo "the change moved the lock's two rows, and nothing else"

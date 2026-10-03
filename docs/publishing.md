@@ -84,7 +84,9 @@ after, on the commit the merge put there.
 #    plugins/echolot/.claude-plugin/plugin.json and "ref" in
 #    .claude-plugin/marketplace.json ("v" + the version), and open a pull
 #    request into main (pyproject.toml reads the version from that attribute;
-#    tests/test_plugin.py fails until the three agree)
+#    tests/test_plugin.py fails until the three agree). Past 0.10.0, the
+#    action's `uses: grishan0v/echolot@...` lines in README.md and
+#    docs/compare.md name the same tag; tests/test_action.py holds them
 # 2. once it is merged, tag the merged commit — the tag must be "v" + that
 #    version, the workflow checks
 git switch main && git pull
@@ -101,6 +103,10 @@ title — edit them in the GitHub UI if a version deserves a paragraph.
 The same tag releases the plugin. The marketplace entry fetches
 `plugins/echolot` at that tag, so until it is pushed the entry points at a tag
 that does not exist yet, and an install fails; push it right after the merge.
+
+It releases the GitHub Action as well: `uses: grishan0v/echolot@vX.Y.Z`
+installs the echolot of that tag from the action's own checkout, so the
+action and the tool it runs are always the same version.
 
 A tag, and therefore a release, is a snapshot: it contains what was committed
 before the tag was made and nothing after. To ship a fix, bump the version in
