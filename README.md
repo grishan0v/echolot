@@ -29,7 +29,7 @@
   gives the same report.
 - **No tracing code needed.** Works on apps with zero `trace {}` calls; it
   places temporary markers itself.
-- **Works with your agent.** Claude Code out of the box; Cursor, Codex and
+- **Works with your agent.** A plugin for Claude Code and Codex; Cursor and
   others via `echolot guide`.
 
 <p>
@@ -45,7 +45,7 @@
 You need Python 3.10+, `adb`, and a phone or emulator with USB debugging on.
 The full list is under [Requirements](#requirements).
 
-### 1. Install
+### 1. Install the tool
 
 ```bash
 pipx install echolot
@@ -55,14 +55,38 @@ pipx install echolot
 environment whose scripts are not on `PATH`, `python -m echolot` is the same
 command.
 
-### 2. Set up your project
+### 2. Add the plugin to your agent
+
+The plugin works in Claude Code and in Codex. It comes from the marketplace in
+this repository, and it drives the `echolot` you installed in step 1:
+
+```bash
+claude plugin marketplace add grishan0v/echolot && claude plugin install echolot@echolot   # Claude Code
+codex plugin marketplace add grishan0v/echolot && codex plugin add echolot@echolot         # Codex
+```
+
+Inside a Claude Code session the same two steps are
+`/plugin marketplace add grishan0v/echolot` and
+`/plugin install echolot@echolot`. Once the marketplace is added, Codex also
+installs the plugin from `/plugins` in the CLI or from the Plugins tab of the
+ChatGPT desktop app. The plugin is not in Anthropic's or OpenAI's catalogs
+yet.
+
+<details>
+<summary><b>Without the plugin</b>: the <code>.claude/</code> layer in Claude Code, and other agents</summary>
+
+<br>
 
 ```bash
 cd ~/my-app && echolot init
 ```
 
-This installs the `.claude/` layer — a skill, the `perf-hunter` agent and three
-commands — and checks that this machine computes traces correctly.
+In Claude Code this installs the `.claude/` layer into the project: a skill,
+the `perf-hunter` agent and three commands. Cursor, Codex and other agents get
+a pointer to the tool instead, and `echolot guide` tells them how to work with
+it. There the loop runs in your main context, so keep the passes short.
+
+</details>
 
 ### 3. Open the agent and type one word
 
@@ -72,7 +96,13 @@ commands — and checks that this machine computes traces correctly.
 /echolot init | setup | hunt | reflect | doctor
 ```
 
-The first run builds `echolot.yml` from your repository and a probe trace,
+The word depends on how your agent got echolot: `/echolot:echolot` with the
+plugin in Claude Code, `$echolot` with the plugin in Codex, and `/echolot` with
+the `.claude/` layer. This page writes it as `/echolot`. In Codex a plain
+question about slow startup reaches it as well.
+
+The first run sets the project up, checks that this machine computes traces
+correctly, and builds `echolot.yml` from your repository and a probe trace,
 asking you four questions along the way. Every run after that hunts down the
 regression you describe.
 
@@ -89,9 +119,19 @@ Describe the problem the way you would to a colleague:
 
 ### Coming back later
 
-`echolot` on its own prints where the project stands and the next step. After
-upgrading the package, run `echolot init` again: it brings the `.claude/` layer
-up to date and leaves the files you edited alone.
+`echolot` on its own prints where the project stands and the next step.
+
+To upgrade, run `pipx upgrade echolot`, then update what your agent uses:
+
+```bash
+claude plugin marketplace update echolot && claude plugin update echolot@echolot   # Claude Code, applied after a restart
+codex plugin marketplace upgrade echolot && codex plugin add echolot@echolot       # Codex
+cd ~/my-app && echolot init                                                        # the .claude/ layer
+```
+
+A new plugin comes out with each release of the tool, so the two stay in step.
+`echolot init` brings the `.claude/` layer up to date and leaves the files you
+edited alone.
 
 ### Without an agent
 
@@ -127,9 +167,9 @@ rounds run out.
 
 | where you run it | how |
 |---|---|
-| Claude Code | the full loop: `echolot init`, then `/echolot`. The agent records, reads the report and walks down to the code |
-| Claude Code or Codex, as a plugin | `/plugin marketplace add grishan0v/echolot` in Claude Code, `codex plugin marketplace add grishan0v/echolot` in Codex. The plugin's door sets the project up itself, and the loop runs in a subagent in both |
-| Cursor, Codex, other agents | `echolot init` points them at the tool, and `echolot guide` tells them how to work with it. For Codex it also writes the rule that lets echolot out of the sandbox. The loop runs in your main context, so keep the passes short |
+| Claude Code or Codex, with the plugin | the full loop, in a subagent in both: the agent records, reads the report and walks down to the code. The plugin sets the project up itself; installing it is under [Quick start](#quick-start) |
+| Claude Code, with the `.claude/` layer | the same loop: `echolot init`, then `/echolot` |
+| Cursor, other agents, Codex without the plugin | `echolot init` points them at the tool, and `echolot guide` tells them how to work with it. For Codex it also writes the rule that lets echolot out of the sandbox. The loop runs in your main context, so keep the passes short |
 | a shell or CI | the pipeline commands under [Without an agent](#without-an-agent) |
 
 ### The investigation
@@ -312,7 +352,7 @@ only the agent has. The pipeline — `collect`, `analyze`, `compare` — is unde
 | command | what it does |
 |---|---|
 | `echolot` | where this project stands, and the next step |
-| `echolot init` | install or update the `.claude/` layer; .gitignore, and checks the environment |
+| `echolot init` | install or update the `.claude/` layer; .gitignore, and checks the environment. With the plugin, its door runs `echolot init --for plugin`, which leaves `.claude/` out |
 | `echolot hunt "<what regressed>"` | open an investigation — see [The investigation](#the-investigation) |
 | `echolot doctor` | environment + self-check on a synthetic trace; exit 0 when every check passes, 1 when one fails or the self-check cannot run, 2 when trace_processor cannot be downloaded; `-q` for three lines |
 
@@ -356,7 +396,8 @@ only the agent has. The pipeline — `collect`, `analyze`, `compare` — is unde
 | **`trace_processor`** *(fetched once)* | downloaded by the first command that needs it, usually `echolot init`: 10–14 MB, checked against its SHA-256. Behind a proxy or offline, see [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) |
 | **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
 | **Device** | a phone or emulator with USB debugging on |
-| **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) for the full workflow; Cursor, Codex and others via `echolot guide` |
+| **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) with the plugin, or Claude Code with the `.claude/` layer, for the full workflow; Cursor and others via `echolot guide` |
+| **`git`** *(for the plugin)* | the marketplace fetches the plugin with it. The install failed with git 2.33 and works with 2.50; the versions in between are not checked yet ([#205](https://github.com/grishan0v/echolot/issues/205)) |
 | **Android 12+** *(for one detector)* | `frame_jank` reads SurfaceFlinger's frame timeline. Older devices do not have it, and the detector is then silent — which reads exactly like "no bad frames" |
 
 Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
@@ -387,7 +428,7 @@ Start at the [documentation index](https://github.com/grishan0v/echolot/tree/mai
 | ⚙️ | [Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md) | writing your own, the context views, self time versus total |
 | 📏 | [Calibrating](https://github.com/grishan0v/echolot/blob/main/docs/calibrate.md) | thresholds from healthy runs, why rank beats percentile |
 | 🔒 | [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) | the pinned `trace_processor`, `doctor`, the self-check |
-| 🤖 | [The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md) | the `.claude/` layer, and why the loop lives in a subagent |
+| 🤖 | [The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md) | the plugin and the `.claude/` layer, and why the loop lives in a subagent |
 | 🪞 | [Reflect](https://github.com/grishan0v/echolot/blob/main/docs/reflect.md) | the report over an agent session, for improving the tool |
 
 Agent-facing reference material ships inside the package under
