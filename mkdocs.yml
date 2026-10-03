@@ -1,0 +1,74 @@
+# The documentation site, built from docs/ by zensical, which reads this file
+# the way MkDocs does: the configuration stays the same whichever of the two
+# builds it.
+#
+#   python docs/site.py && zensical build --strict
+#
+# docs/site.py writes the pages this reads (build/site-docs/) from docs/; see
+# there for what it rewrites and why. The nav holds the groups docs/README.md
+# lists, in its order, and tests/test_docs_site.py fails when the two drift.
+site_name: echolot
+site_description: Turns a huge Android trace into 20 rows of facts an AI agent can actually use.
+site_url: https://grishan0v.github.io/echolot/
+repo_url: https://github.com/grishan0v/echolot
+repo_name: grishan0v/echolot
+docs_dir: build/site-docs
+site_dir: build/site
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.footer
+    - navigation.top
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  # `> [!NOTE]` and its kin, as GitHub writes them: the one kind of callout
+  # that reads the same on GitHub and here.
+  - github-callouts
+  - tables
+  - attr_list
+  - md_in_html
+  # Anchors the way GitHub makes them, so a link written for GitHub lands
+  # here too: `a — b` is `#a--b` there, and toc's own slugs would say `#a-b`.
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Using it:
+      - Collecting traces: collecting.md
+      - ANRs: anr.md
+      - Marking: mark.md
+      - Analysing: analysing.md
+      - Comparing: compare.md
+      - Calibrating: calibrate.md
+  - Understanding it:
+      - Determinism: determinism.md
+      - The agent layer: agent-layer.md
+  - Extending it:
+      - Detectors: detectors.md
+      - Reflect: reflect.md
+  - Maintaining it:
+      - Publishing: publishing.md
+      - Planning: planning.md
