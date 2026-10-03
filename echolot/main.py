@@ -1606,35 +1606,7 @@ def cmd_names(args) -> int:
     THIS device names GC, locks and binder — and whether the detector masks
     land on those names.
     """
-    from .mark import DEFAULT_PREFIX
-
-    overrides, tp_bin = {}, args.tp_binary
-    process = args.process
-    # The markers this project plants. Their numbers were chosen to tell two
-    # things apart, so they are the one kind of name `family` must not fold —
-    # see there.
-    prefix = DEFAULT_PREFIX
-    if args.config and Path(args.config).exists():
-        try:
-            cfg_names = Config.load(args.config, getattr(args, "local", None))
-            overrides = cfg_names.detector_overrides
-            tp_bin = _tp_binary(args, cfg_names)
-            prefix = str(cfg_names.get("instrumentation.temp_prefix") or prefix)
-            # Without --process the fattest process wins, and on a real
-            # device that is surfaceflinger, not the app. When the config is
-            # right there, its process is the obvious default.
-            if process is None:
-                try:
-                    process = cfg_names.process
-                    print(f"[i] --process taken from {args.config}: {process}",
-                          file=sys.stderr)
-                except ConfigError:
-                    pass
-        except ConfigError as e:
-            print(f"config ignored: {e}", file=sys.stderr)
-    if process is None:
-        process = "*"
-
+    overrides, tp_bin, prefix, process = _names_setup(args)
     try:
         session = TraceSession(args.trace, tp_bin)
     except ConfigError as e:
@@ -1698,27 +1670,61 @@ def cmd_names(args) -> int:
     # Cells are cut to fit a terminal, and only a terminal: a pipe or an
     # agent gets the whole name, and so does `--wide` on a screen.
     wide = args.wide or args.json or not sys.stdout.isatty()
+    sections, missed = _name_sections(families, args.min_ms * 1e6, pattern)
+    if args.json:
+        _names_json(args, procs[0], async_rows, sections, missed)
+    else:
+        _names_text(args, async_rows, pattern, len(families), sections, missed, wide)
+    return 0
 
-    floor_ns = args.min_ms * 1e6
+
+def _names_setup(args) -> tuple[dict, Any, str, str]:
+    """The masks' overrides, the binary, the markers' prefix and the process
+    `names` reads: from the config when one is named and there."""
+    from .mark import DEFAULT_PREFIX
+
+    overrides, tp_bin = {}, args.tp_binary
+    process = args.process
+    # The markers this project plants. Their numbers were chosen to tell two
+    # things apart, so they are the one kind of name `family` must not fold —
+    # see there.
+    prefix = DEFAULT_PREFIX
+    if args.config and Path(args.config).exists():
+        try:
+            cfg_names = Config.load(args.config, getattr(args, "local", None))
+            overrides = cfg_names.detector_overrides
+            tp_bin = _tp_binary(args, cfg_names)
+            prefix = str(cfg_names.get("instrumentation.temp_prefix") or prefix)
+            if process is None:
+                process = _names_process(args.config, cfg_names)
+        except ConfigError as e:
+            print(f"config ignored: {e}", file=sys.stderr)
+    return overrides, tp_bin, prefix, "*" if process is None else process
+
+
+def _names_process(path: str, cfg: Config) -> str | None:
+    """The config's process, said aloud, or None when it names none.
+
+    Without --process the fattest process wins, and on a real device that is
+    surfaceflinger, not the app. When the config is right there, its process
+    is the obvious default.
+    """
+    try:
+        process = cfg.process
+    except ConfigError:
+        return None
+    print(f"[i] --process taken from {path}: {process}", file=sys.stderr)
+    return process
+
+
+def _name_sections(families: dict, floor_ns: float, pattern) -> tuple[list, list]:
+    """The families in BUCKETS' sections, then "Everything else"; and the
+    ones a bucket holds that no mask sees, the biggest first."""
     assigned: set[str] = set()
     sections: list[tuple[str, list[tuple[str, dict]]]] = []
     missed: list[tuple[str, str, dict]] = []
     for title, keywords in BUCKETS:
-        picked = []
-        for fam, data in families.items():
-            if fam in assigned:
-                continue
-            # The section is decided by the slice NAME and nothing else.
-            # Thread names used to go through the same sieve — and then
-            # `merge`, `wait` and `releaseBuffer` drifted into "Binder /
-            # IPC" merely because they ran on `binder:*` threads, while
-            # `Thread::Init` landed under garbage collection because one of
-            # its threads happened to be HeapTaskDaemon. A thread says
-            # WHERE code ran, not what it did.
-            if any(k in fam.lower() for k in keywords):
-                assigned.add(fam)
-                if data["ns"] >= floor_ns and (pattern is None or pattern.search(fam)):
-                    picked.append((fam, data))
+        picked = _bucket(families, keywords, assigned, floor_ns, pattern)
         if not picked:
             continue
         picked.sort(key=lambda x: -x[1]["ns"])
@@ -1733,24 +1739,48 @@ def cmd_names(args) -> int:
         rest.sort(key=lambda x: -x[1]["ns"])
         sections.append(("Everything else", rest))
     missed.sort(key=lambda x: -x[2]["ns"])
+    return sections, missed
 
-    if args.json:
-        def family_json(fam: str, d: dict) -> dict:
-            return {"family": fam, "n": d["n"], "total_ms": round(d["ns"] / 1e6, 1),
-                    "threads": sorted(d["threads"]), "detectors": sorted(d["dets"]),
-                    "excluded": sorted(d["skips"])}
-        print(json.dumps({
-            "process": procs[0]["name"], "pid": procs[0]["pid"],
-            "async_sections": sum(r["n"] for r in async_rows),
-            "grep": args.grep,
-            "sections": [{"title": title, "shown": len(items[:args.top]), "total": len(items),
-                          "families": [family_json(f, d) for f, d in items[:args.top]]}
-                         for title, items in sections],
-            "missed": [{"section": title, **family_json(f, d)}
-                       for title, f, d in missed[:args.top]],
-        }, ensure_ascii=False, indent=2))
-        return 0
 
+def _bucket(families: dict, keywords, assigned: set[str], floor_ns: float,
+            pattern) -> list[tuple[str, dict]]:
+    """The families one section takes, marked as taken, and of them the ones it shows."""
+    picked = []
+    for fam, data in families.items():
+        # The section is decided by the slice NAME and nothing else.
+        # Thread names used to go through the same sieve — and then
+        # `merge`, `wait` and `releaseBuffer` drifted into "Binder /
+        # IPC" merely because they ran on `binder:*` threads, while
+        # `Thread::Init` landed under garbage collection because one of
+        # its threads happened to be HeapTaskDaemon. A thread says
+        # WHERE code ran, not what it did.
+        if fam in assigned or not any(k in fam.lower() for k in keywords):
+            continue
+        assigned.add(fam)
+        if data["ns"] >= floor_ns and (pattern is None or pattern.search(fam)):
+            picked.append((fam, data))
+    return picked
+
+
+def _names_json(args, proc: dict, async_rows: list, sections: list, missed: list) -> None:
+    def family_json(fam: str, d: dict) -> dict:
+        return {"family": fam, "n": d["n"], "total_ms": round(d["ns"] / 1e6, 1),
+                "threads": sorted(d["threads"]), "detectors": sorted(d["dets"]),
+                "excluded": sorted(d["skips"])}
+    print(json.dumps({
+        "process": proc["name"], "pid": proc["pid"],
+        "async_sections": sum(r["n"] for r in async_rows),
+        "grep": args.grep,
+        "sections": [{"title": title, "shown": len(items[:args.top]), "total": len(items),
+                      "families": [family_json(f, d) for f, d in items[:args.top]]}
+                     for title, items in sections],
+        "missed": [{"section": title, **family_json(f, d)}
+                   for title, f, d in missed[:args.top]],
+    }, ensure_ascii=False, indent=2))
+
+
+def _names_text(args, async_rows: list, pattern, families: int, sections: list,
+                missed: list, wide: bool) -> None:
     if async_rows:
         print(f"{sum(r['n'] for r in async_rows)} async section(s) on "
               f"{len(async_rows)} name(s), shown as thread `{ASYNC_THREAD}`: "
@@ -1764,7 +1794,7 @@ def cmd_names(args) -> int:
     )
     if pattern is not None:
         shown = sum(len(items) for _, items in sections)
-        print(f"\n_Only families matching `{args.grep}`: {shown} of {len(families)}._")
+        print(f"\n_Only families matching `{args.grep}`: {shown} of {families}._")
     for title, items in sections:
         print(f"\n## {title}\n")
         _families_table(items[:args.top], wide=wide)
@@ -1774,17 +1804,16 @@ def cmd_names(args) -> int:
     if not missed:
         print("_Everything resembling GC, locks or binder is covered._"
               if pattern is None else "_Nothing matching is missed by a mask._")
-    else:
-        print("These families sit in sections the detectors are "
-              "responsible for, yet no mask sees them. If there is a real "
-              "problem among them, widen the mask in `echolot.yml`.\n")
-        table.show([
-            {"section": title, "family": fam if wide else _clip(fam), "N": d["n"],
-             "total, ms": f"{d['ns']/1e6:.1f}"}
-            for title, fam, d in missed[:args.top]
-        ])
-        _note_dropped(len(missed), args.top)
-    return 0
+        return
+    print("These families sit in sections the detectors are "
+          "responsible for, yet no mask sees them. If there is a real "
+          "problem among them, widen the mask in `echolot.yml`.\n")
+    table.show([
+        {"section": title, "family": fam if wide else _clip(fam), "N": d["n"],
+         "total, ms": f"{d['ns']/1e6:.1f}"}
+        for title, fam, d in missed[:args.top]
+    ])
+    _note_dropped(len(missed), args.top)
 
 
 def group_families(rows, covered, skipped, keep: str | None = None) -> dict:

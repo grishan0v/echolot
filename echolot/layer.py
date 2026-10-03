@@ -301,33 +301,33 @@ def audit(project: Path) -> dict | None:
     rows = []
     for src in template_files():
         rel = str(src.relative_to(CLAUDE_DIR))
-        dst = root / rel
-        t_sha = sha(src)
-        if not dst.exists():
-            state = "missing"
-        elif rel in MERGED:
-            verdict, _ = merge(src, dst)
-            state = "stale" if verdict == "merged" else verdict
-        else:
-            d_sha = sha(dst)
-            if d_sha == t_sha:
-                state = "current"
-            elif rel in installed:
-                was = installed[rel]
-                if d_sha == was:
-                    state = "stale"
-                elif t_sha == was:
-                    state = "customised"
-                else:
-                    state = "conflict"
-            else:
-                state = "differs"
-        rows.append({"file": rel, "state": state})
+        rows.append({"file": rel, "state": _state(rel, src, root / rel, installed)})
     return {
         "rows": rows,
         "manifest": bool(installed),
         "installed_by": manifest.get("echolot"),
     }
+
+
+def _state(rel: str, src: Path, dst: Path, installed: dict[str, str]) -> str:
+    """One template file's row in `audit`, in the order its docstring lists them."""
+    if not dst.exists():
+        return "missing"
+    if rel in MERGED:
+        verdict, _ = merge(src, dst)
+        return "stale" if verdict == "merged" else verdict
+    t_sha, d_sha = sha(src), sha(dst)
+    if d_sha == t_sha:
+        return "current"
+    if rel not in installed:
+        return "differs"
+    # The manifest says what was installed: the project's copy still being
+    # that means only the template moved, the template still being it means
+    # only the project did.
+    was = installed[rel]
+    if d_sha == was:
+        return "stale"
+    return "customised" if t_sha == was else "conflict"
 
 
 # Who can bring a file in each state up to date. `init` does stale and

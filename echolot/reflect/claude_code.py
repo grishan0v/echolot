@@ -231,25 +231,54 @@ def _usage_of(msg: dict[str, Any]) -> Usage:
 def _parse_rows(rows: Iterable[dict[str, Any]], session: Session, agent: str,
                 sub: SubAgent | None, pending_agents: dict[str, SubAgent]) -> None:
     """One pass over one transcript file. Fills the session in place."""
-    open_calls: dict[str, Call] = {}
-    open_asks: dict[str, list[dict[str, Any]]] = {}
-    # One API response is written as several rows (thinking, text, each
-    # tool_use) and the usage on them grows as the response streams: the last
-    # row carries the final numbers. Per message id, keep the maximum of each
-    # counter and add them up once at the end.
-    per_msg: dict[str, Usage] = {}
-    last_assistant_text = ""
-
+    one = _Pass(session, agent, sub, pending_agents)
     for row in rows:
-        rtype = row.get("type")
-        ts = row.get("timestamp") or ""
-        if row.get("isSidechain") and agent == MAIN:
+        one.row(row)
+    one.finish()
+
+
+class _Pass:
+    """One transcript file read row by row, and what stays open between rows.
+
+    A tool call is answered rows after it is made, a question's options are
+    read when its answer comes, and one response's usage is spread over
+    several rows. Each kind of row and of block has a method of its own; this
+    class is the state they share.
+    """
+
+    def __init__(self, session: Session, agent: str, sub: SubAgent | None,
+                 pending_agents: dict[str, SubAgent]) -> None:
+        self.session = session
+        self.agent = agent
+        self.sub = sub
+        self.pending_agents = pending_agents
+        self.open_calls: dict[str, Call] = {}
+        self.open_asks: dict[str, list[dict[str, Any]]] = {}
+        # One API response is written as several rows (thinking, text, each
+        # tool_use) and the usage on them grows as the response streams: the
+        # last row carries the final numbers. Per message id, keep the maximum
+        # of each counter and add them up once at the end.
+        self.per_msg: dict[str, Usage] = {}
+        self.last_assistant_text = ""
+
+    def row(self, row: dict[str, Any]) -> None:
+        if row.get("isSidechain") and self.agent == MAIN:
             # Older layout: subagent rows inline. Group them under one label
             # so that they do not pollute the main context's numbers.
             row_agent = "sub:inline"
         else:
-            row_agent = agent
+            row_agent = self.agent
+        self._where(row)
+        ts = row.get("timestamp") or ""
+        msg = row.get("message") or {}
+        if row.get("type") == "assistant":
+            self._assistant(msg, row, ts, row_agent)
+        elif row.get("type") == "user":
+            self._user(msg.get("content"), row, ts, row_agent)
 
+    def _where(self, row: dict[str, Any]) -> None:
+        """The directory, the agent's version and the branch: each from the first row that has it."""
+        session = self.session
         if session.cwd is None and row.get("cwd"):
             session.cwd = row["cwd"]
         if session.agent_version is None and row.get("version"):
@@ -260,104 +289,122 @@ def _parse_rows(rows: Iterable[dict[str, Any]], session: Session, agent: str,
                 and row["gitBranch"] != "HEAD":
             session.git_branch = row["gitBranch"]
 
-        msg = row.get("message") or {}
-        content = msg.get("content")
+    # --- what the model wrote ---------------------------------------------
 
-        if rtype == "assistant":
-            model = msg.get("model")
-            # Claude Code injects synthetic assistant rows (model "<synthetic>")
-            # for its own bookkeeping; the real model is on the others.
-            if session.model is None and model and not str(model).startswith("<"):
-                session.model = model
-            mid = msg.get("id") or row.get("requestId") or row.get("uuid")
-            if mid:
-                u = _usage_of(msg)
-                prev = per_msg.get(mid)
-                if prev is None:
-                    per_msg[mid] = u
-                else:
-                    prev.input = max(prev.input, u.input)
-                    prev.cache_read = max(prev.cache_read, u.cache_read)
-                    prev.cache_create = max(prev.cache_create, u.cache_create)
-                    prev.output = max(prev.output, u.output)
-            for b in _blocks(content):
-                bt = b.get("type")
-                if bt == "thinking":
-                    if sub:
-                        sub.thinking_blocks += 1
-                    else:
-                        session.thinking_blocks += 1
-                elif bt == "text":
-                    text = str(b.get("text") or "")
-                    if text.strip():
-                        last_assistant_text = text
-                        session.turns.append(Turn(
-                            ts=ts, role="assistant", text=clip(text, 600),
-                            agent=row_agent))
-                elif bt == "tool_use":
-                    call = _call_from_use(b, ts, row_agent)
-                    session.calls.append(call)
-                    open_calls[call.id] = call
-                    if call.tool == "AskUserQuestion":
-                        qs = (b.get("input") or {}).get("questions") or []
-                        open_asks[call.id] = [q for q in qs if isinstance(q, dict)]
-                    elif call.tool == "Agent":
-                        inp = b.get("input") or {}
-                        placeholder = SubAgent(
-                            id=call.id,   # replaced by agentId on result
-                            type=inp.get("subagent_type"),
-                            description=inp.get("description"),
-                            prompt=str(inp.get("prompt") or ""),
-                            started=ts,
-                        )
-                        pending_agents[call.id] = placeholder
-                        session.subagents.append(placeholder)
-                    elif call.tool == "Skill":
-                        name = (b.get("input") or {}).get("skill")
-                        if name and name not in session.skills_loaded:
-                            session.skills_loaded.append(str(name))
-            continue
+    def _assistant(self, msg: dict[str, Any], row: dict[str, Any], ts: str,
+                   row_agent: str) -> None:
+        model = msg.get("model")
+        # Claude Code injects synthetic assistant rows (model "<synthetic>")
+        # for its own bookkeeping; the real model is on the others.
+        if self.session.model is None and model and not str(model).startswith("<"):
+            self.session.model = model
+        self._usage(msg, row)
+        for block in _blocks(msg.get("content")):
+            kind = block.get("type")
+            if kind == "thinking":
+                self._thinking()
+            elif kind == "text":
+                self._said(str(block.get("text") or ""), ts, row_agent)
+            elif kind == "tool_use":
+                self._tool_use(block, ts, row_agent)
 
-        if rtype != "user":
-            continue
+    def _usage(self, msg: dict[str, Any], row: dict[str, Any]) -> None:
+        mid = msg.get("id") or row.get("requestId") or row.get("uuid")
+        if not mid:
+            return
+        u = _usage_of(msg)
+        prev = self.per_msg.setdefault(mid, u)
+        if prev is not u:
+            prev.input = max(prev.input, u.input)
+            prev.cache_read = max(prev.cache_read, u.cache_read)
+            prev.cache_create = max(prev.cache_create, u.cache_create)
+            prev.output = max(prev.output, u.output)
 
+    def _thinking(self) -> None:
+        if self.sub:
+            self.sub.thinking_blocks += 1
+        else:
+            self.session.thinking_blocks += 1
+
+    def _said(self, text: str, ts: str, row_agent: str) -> None:
+        if not text.strip():
+            return
+        self.last_assistant_text = text
+        self.session.turns.append(Turn(ts=ts, role="assistant", text=clip(text, 600),
+                                       agent=row_agent))
+
+    def _tool_use(self, block: dict[str, Any], ts: str, row_agent: str) -> None:
+        call = _call_from_use(block, ts, row_agent)
+        self.session.calls.append(call)
+        self.open_calls[call.id] = call
+        inp = block.get("input") or {}
+        if call.tool == "AskUserQuestion":
+            questions = inp.get("questions") or []
+            self.open_asks[call.id] = [q for q in questions if isinstance(q, dict)]
+        elif call.tool == "Agent":
+            self._agent_started(call, inp, ts)
+        elif call.tool == "Skill":
+            self._skill(inp.get("skill"))
+
+    def _agent_started(self, call: Call, inp: dict[str, Any], ts: str) -> None:
+        placeholder = SubAgent(
+            id=call.id,   # replaced by agentId on result
+            type=inp.get("subagent_type"),
+            description=inp.get("description"),
+            prompt=str(inp.get("prompt") or ""),
+            started=ts,
+        )
+        self.pending_agents[call.id] = placeholder
+        self.session.subagents.append(placeholder)
+
+    def _skill(self, name: Any) -> None:
+        if name and name not in self.session.skills_loaded:
+            self.session.skills_loaded.append(str(name))
+
+    # --- what came back ---------------------------------------------------
+
+    def _user(self, content: Any, row: dict[str, Any], ts: str, row_agent: str) -> None:
         if isinstance(content, str):
-            _user_text(content, ts, row, session, row_agent, pending_agents)
-            continue
+            _user_text(content, ts, row, self.session, row_agent, self.pending_agents)
+            return
+        for block in _blocks(content):
+            kind = block.get("type")
+            if kind == "text":
+                _user_text(str(block.get("text") or ""), ts, row, self.session,
+                           row_agent, self.pending_agents)
+            elif kind == "tool_result":
+                self._tool_result(block, row, ts, row_agent)
 
-        for b in _blocks(content):
-            bt = b.get("type")
-            if bt == "text":
-                _user_text(str(b.get("text") or ""), ts, row, session,
-                           row_agent, pending_agents)
-            elif bt == "tool_result":
-                use_id = b.get("tool_use_id")
-                call = open_calls.get(use_id)
-                text = _result_text(b.get("content"))
-                if call is None:
-                    continue
-                call.is_error = bool(b.get("is_error"))
-                call.output_chars = len(text)
-                call.output_head = clip(text, 300)
-                if ts and call.ts:
-                    call.duration_s = round(
-                        max(0.0, ts_to_epoch(ts) - ts_to_epoch(call.ts)), 1)
-                tr = row.get("toolUseResult")
-                if use_id in open_asks:
-                    session.asks.extend(_asks_from(
-                        open_asks.pop(use_id), call, ts, text, tr, row_agent))
-                elif call.tool == "Agent":
-                    _agent_result(call, text, tr, ts, session, pending_agents)
+    def _tool_result(self, block: dict[str, Any], row: dict[str, Any], ts: str,
+                     row_agent: str) -> None:
+        use_id = block.get("tool_use_id")
+        call = self.open_calls.get(use_id)
+        if call is None:
+            return
+        text = _result_text(block.get("content"))
+        call.is_error = bool(block.get("is_error"))
+        call.output_chars = len(text)
+        call.output_head = clip(text, 300)
+        if ts and call.ts:
+            call.duration_s = round(
+                max(0.0, ts_to_epoch(ts) - ts_to_epoch(call.ts)), 1)
+        tr = row.get("toolUseResult")
+        if use_id in self.open_asks:
+            self.session.asks.extend(_asks_from(
+                self.open_asks.pop(use_id), call, ts, text, tr, row_agent))
+        elif call.tool == "Agent":
+            _agent_result(call, text, tr, ts, self.session, self.pending_agents)
 
-    target = sub.usage if sub else session.usage
-    for u in per_msg.values():
-        target.add(u)
-    if sub is not None and last_assistant_text:
-        sub.final_text = clip(last_assistant_text, FINAL_TEXT_LIMIT)
-    elif sub is None and agent == MAIN and last_assistant_text:
-        # The main context's own last word, kept the way a subagent's is:
-        # for a session without a hunt it is the whole result.
-        session.final_text = clip(last_assistant_text, FINAL_TEXT_LIMIT)
+    def finish(self) -> None:
+        target = self.sub.usage if self.sub else self.session.usage
+        for u in self.per_msg.values():
+            target.add(u)
+        if self.sub is not None and self.last_assistant_text:
+            self.sub.final_text = clip(self.last_assistant_text, FINAL_TEXT_LIMIT)
+        elif self.sub is None and self.agent == MAIN and self.last_assistant_text:
+            # The main context's own last word, kept the way a subagent's is:
+            # for a session without a hunt it is the whole result.
+            self.session.final_text = clip(self.last_assistant_text, FINAL_TEXT_LIMIT)
 
 
 def _call_from_use(block: dict[str, Any], ts: str, agent: str) -> Call:

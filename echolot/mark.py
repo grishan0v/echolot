@@ -210,45 +210,55 @@ def strip_noise(text: str, strings: bool = True) -> str:
     thread with a name — and still not take a quote inside a comment for one.
     """
     out = list(text)
-    i, n = 0, len(text)
-    while i < n:
-        c = text[i]
-        if text.startswith("//", i):
-            j = text.find("\n", i)
-            j = n if j < 0 else j
-            for k in range(i, j):
-                out[k] = " "
-            i = j
-        elif text.startswith("/*", i):
-            j = text.find("*/", i + 2)
-            j = n if j < 0 else j + 2
-            for k in range(i, j):
-                if out[k] != "\n":
-                    out[k] = " "
-            i = j
-        elif text.startswith('"""', i):
-            j = text.find('"""', i + 3)
-            j = n if j < 0 else j + 3
-            if strings:
-                for k in range(i, j):
-                    if out[k] != "\n":
-                        out[k] = " "
-            i = j
-        elif c == '"' or c == "'":
-            j = i + 1
-            while j < n and text[j] != c and text[j] != "\n":
-                if text[j] == "\\":
-                    j += 1
-                j += 1
-            j = min(n, j + 1)
-            if strings:
-                for k in range(i, j):
-                    if out[k] != "\n":
-                        out[k] = " "
-            i = j
-        else:
+    i = 0
+    while i < len(text):
+        end, is_string = _noise_at(text, i)
+        if end is None:
             i += 1
+            continue
+        if strings or not is_string:
+            _blank(out, i, end)
+        i = end
     return "".join(out)
+
+
+def _noise_at(text: str, i: int) -> tuple[int | None, bool]:
+    """Where the comment or string literal that starts at `i` ends, and
+    whether it is a string. None when neither starts there.
+
+    An unclosed comment or triple-quoted string runs to the end of the text;
+    a quoted string that meets the end of its line ends there.
+    """
+    n = len(text)
+    if text.startswith("//", i):
+        j = text.find("\n", i)
+        return (n if j < 0 else j), False
+    if text.startswith("/*", i):
+        j = text.find("*/", i + 2)
+        return (n if j < 0 else j + 2), False
+    if text.startswith('"""', i):
+        j = text.find('"""', i + 3)
+        return (n if j < 0 else j + 3), True
+    if text[i] in "\"'":
+        return _quoted_end(text, i), True
+    return None, False
+
+
+def _quoted_end(text: str, i: int) -> int:
+    """Just past the quote that closes the one opened at `i`, a backslash
+    escaping the character after it; or past the end of the line, for a
+    string the line ends first."""
+    quote, j = text[i], i + 1
+    while j < len(text) and text[j] != quote and text[j] != "\n":
+        j += 2 if text[j] == "\\" else 1
+    return min(len(text), j + 1)
+
+
+def _blank(out: list[str], start: int, end: int) -> None:
+    """Spaces over [start, end), every newline kept where it was."""
+    for k in range(start, end):
+        if out[k] != "\n":
+            out[k] = " "
 
 
 def match_brace(clean: str, open_at: int) -> int | None:
@@ -723,21 +733,7 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
     out = Plan(root=str(root), module=None, package=package)
 
     # 1. the app module: the manifest with a launcher activity
-    candidates = []
-    for mf in manifests(root):
-        text = mf.read_text(encoding="utf-8", errors="replace")
-        launchers = launcher_activities(text)
-        if not launchers:
-            continue
-        mdir = module_dir_of(mf)
-        candidates.append((mf, mdir, text, launchers, module_package(mdir, text)))
-    if module:
-        candidates = [c for c in candidates
-                      if gradle_module(c[0], root) == module or _rel(c[1], root) == module.strip(":").replace(":", "/")]
-    if len(candidates) > 1 and package:
-        narrowed = [c for c in candidates if c[4] == package]
-        if len(narrowed) == 1:
-            candidates = narrowed
+    candidates = _app_candidates(root, package, module)
     if not candidates:
         out.notes.append("no launcher Activity in any AndroidManifest.xml under src/main — "
                          "this tree has no app entry point to mark (a library, or the app "
@@ -761,112 +757,10 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
             + ", ".join(launchers) + " — the proposals below are for the first, and "
             "--apply will not choose between two entry points: mark by hand")
 
-    def add(p: Proposal) -> None:
-        _refuse_outside(p, allowed)
-        out.proposals.append(p)
-
-    # 2. Application.onCreate
-    app_cls = application_class(mtext)
-    if app_cls:
-        f = find_class_file(root, mdir, simple_name(app_cls), sources)
-        if f is None:
-            out.notes.append(f"Application class {app_cls} is declared in the manifest but no "
-                             f"source declares it under src/ (generated, or in a dependency)")
-        else:
-            t = sources[f]
-            oc = find_on_create(t)
-            if oc is None:
-                out.notes.append(f"{_rel(f, root)}: {simple_name(app_cls)} does not override "
-                                 f"onCreate — nothing of yours runs at bindApplication")
-            else:
-                line, o, c, ret = oc
-                why = _why_not(o, ret, one_line_body(t, o, c), c, t)
-                add(Proposal("app_oncreate", _rel(f, root), line,
-                             f"{simple_name(app_cls)}.onCreate — what runs inside bindApplication",
-                             prefix + "app_oncreate", "manifest+lifecycle",
-                             gradle_module(f, root),
-                             applicable=not why, reason=why,
-                             open_at=o, close_at=c))
-    else:
-        out.notes.append("no custom Application class in the manifest — bindApplication is "
-                         "the framework's alone")
-
-    # 3. launcher Activity: onCreate, setContent / setContentView
-    act = launchers[0]
-    f = find_class_file(root, mdir, simple_name(act), sources)
-    if f is None:
-        out.notes.append(f"launcher Activity {act} is declared in the manifest but no source "
-                         f"declares it under src/ (generated, or in a dependency)")
-    else:
-        t = sources[f]
-        oc = find_on_create(t)
-        if oc is None:
-            base = base_class(t, simple_name(act))
-            out.notes.append(
-                f"{_rel(f, root)}: {simple_name(act)} does not override onCreate"
-                + (f" — it inherits from {base}; the override, if any, is there" if base else ""))
-        else:
-            line, o, c, ret = oc
-            why = _why_not(o, ret, one_line_body(t, o, c), c, t)
-            add(Proposal("activity_oncreate", _rel(f, root), line,
-                         f"{simple_name(act)}.onCreate — the launcher Activity, what runs inside activityStart",
-                         prefix + "activity_oncreate", "manifest+lifecycle",
-                         gradle_module(f, root),
-                         applicable=not why, reason=why,
-                         open_at=o, close_at=c))
-        sc = find_lambda(t, _SET_CONTENT)
-        if sc:
-            line, o, c = sc
-            why = _why_not(o, False, one_line_body(t, o, c), c, t)
-            add(Proposal("set_content", _rel(f, root), line,
-                         "setContent { } — the root of the Compose tree; recomposition re-enters it",
-                         prefix + "set_content", "api", gradle_module(f, root),
-                         applicable=not why, reason=why,
-                         open_at=o, close_at=c, lambda_body=True))
-            # one hop: what setContent calls, when it is this project's code
-            if o is not None and c is not None:
-                clean = strip_noise(t)
-                found = 0
-                for name in calls_inside(clean[o + 1:c]):
-                    hit = find_composable_decl(name, sources)
-                    if hit is None:
-                        continue
-                    hf, hl = hit
-                    add(Proposal("compose_root", _rel(hf, root), hl,
-                                 f"@Composable {name}() — called from setContent, defined here",
-                                 prefix + "compose_" + name, "call-from-setContent",
-                                 gradle_module(hf, root), applicable=False,
-                                 reason="a composable: wrap its call site by hand, or use "
-                                        "androidx.compose.runtime:runtime-tracing (see notes)"))
-                    found += 1
-                    if found >= 3:
-                        break
-        else:
-            m = _SET_CONTENT_VIEW.search(t)
-            if m:
-                add(Proposal("set_content_view", _rel(f, root), line_of(t, m.start()),
-                             "setContentView(…) — the View hierarchy is inflated here",
-                             prefix + "set_content_view", "api", gradle_module(f, root),
-                             applicable=False, reason="a call, not a block — mark the "
-                             "surrounding onCreate instead (proposed above)"))
-
-    # 4. Room, Koin, Hilt — API strings anywhere in the sources
-    for p, t in sources.items():
-        rel = _rel(p, root)
-        for m in _ROOM_BUILDER.finditer(t):
-            add(Proposal("room_open", rel, line_of(t, m.start()),
-                         "Room.databaseBuilder — the database is opened here",
-                         prefix + "room_open", "api", gradle_module(p, root),
-                         applicable=False,
-                         reason="a builder chain — wrap the enclosing function by hand"))
-        for m in _KOIN_START.finditer(t):
-            add(Proposal("di_koin", rel, line_of(t, m.start()),
-                         "startKoin { } — the DI graph is built here",
-                         prefix + "di_koin", "api", gradle_module(p, root),
-                         applicable=False, reason="mark the enclosing function by hand"))
-        if _HILT_APP.search(t) and not any("Hilt" in n for n in out.notes):
-            out.notes.append(f"{rel}: @HiltAndroidApp — the graph is generated; its cost sits "
-                             f"inside Application.onCreate (super.onCreate), nothing separate to mark")
+    planner = _Planner(root, sources, prefix, allowed, out)
+    planner.application(mdir, mtext)
+    planner.activity(mdir, launchers[0])
+    planner.apis()
 
     # 5. what would give names for free — to an app with composables to name
     if _uses_compose(sources, mdir, out.proposals):
@@ -882,6 +776,152 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
         out.hidden = len(out.proposals) - CAP
         out.proposals = out.proposals[:CAP]
     return out
+
+
+def _app_candidates(root: Path, package: str | None, module: str | None) -> list[tuple]:
+    """The modules whose manifest has a launcher activity, narrowed by
+    `--module`, and by the package when that leaves exactly one."""
+    candidates = []
+    for mf in manifests(root):
+        text = mf.read_text(encoding="utf-8", errors="replace")
+        launchers = launcher_activities(text)
+        if not launchers:
+            continue
+        mdir = module_dir_of(mf)
+        candidates.append((mf, mdir, text, launchers, module_package(mdir, text)))
+    if module:
+        candidates = [c for c in candidates
+                      if gradle_module(c[0], root) == module or _rel(c[1], root) == module.strip(":").replace(":", "/")]
+    if len(candidates) > 1 and package:
+        narrowed = [c for c in candidates if c[4] == package]
+        if len(narrowed) == 1:
+            candidates = narrowed
+    return candidates
+
+
+@dataclass
+class _Planner:
+    """What steps 2 to 4 of `plan` share: the tree, its sources, and the plan
+    they add to."""
+
+    root: Path
+    sources: dict[Path, str]
+    prefix: str
+    allowed: list[str]
+    out: Plan
+
+    def add(self, p: Proposal) -> None:
+        _refuse_outside(p, self.allowed)
+        self.out.proposals.append(p)
+
+    def application(self, mdir: Path, mtext: str) -> None:
+        """2. Application.onCreate"""
+        root, out = self.root, self.out
+        app_cls = application_class(mtext)
+        if not app_cls:
+            out.notes.append("no custom Application class in the manifest — bindApplication is "
+                             "the framework's alone")
+            return
+        f = find_class_file(root, mdir, simple_name(app_cls), self.sources)
+        if f is None:
+            out.notes.append(f"Application class {app_cls} is declared in the manifest but no "
+                             f"source declares it under src/ (generated, or in a dependency)")
+            return
+        t = self.sources[f]
+        oc = find_on_create(t)
+        if oc is None:
+            out.notes.append(f"{_rel(f, root)}: {simple_name(app_cls)} does not override "
+                             f"onCreate — nothing of yours runs at bindApplication")
+            return
+        line, o, c, ret = oc
+        why = _why_not(o, ret, one_line_body(t, o, c), c, t)
+        self.add(Proposal("app_oncreate", _rel(f, root), line,
+                          f"{simple_name(app_cls)}.onCreate — what runs inside bindApplication",
+                          self.prefix + "app_oncreate", "manifest+lifecycle",
+                          gradle_module(f, root),
+                          applicable=not why, reason=why,
+                          open_at=o, close_at=c))
+
+    def activity(self, mdir: Path, act: str) -> None:
+        """3. launcher Activity: onCreate, setContent / setContentView"""
+        root = self.root
+        f = find_class_file(root, mdir, simple_name(act), self.sources)
+        if f is None:
+            self.out.notes.append(f"launcher Activity {act} is declared in the manifest but no "
+                                  f"source declares it under src/ (generated, or in a dependency)")
+            return
+        t = self.sources[f]
+        oc = find_on_create(t)
+        if oc is None:
+            base = base_class(t, simple_name(act))
+            self.out.notes.append(
+                f"{_rel(f, root)}: {simple_name(act)} does not override onCreate"
+                + (f" — it inherits from {base}; the override, if any, is there" if base else ""))
+        else:
+            line, o, c, ret = oc
+            why = _why_not(o, ret, one_line_body(t, o, c), c, t)
+            self.add(Proposal("activity_oncreate", _rel(f, root), line,
+                              f"{simple_name(act)}.onCreate — the launcher Activity, what runs inside activityStart",
+                              self.prefix + "activity_oncreate", "manifest+lifecycle",
+                              gradle_module(f, root),
+                              applicable=not why, reason=why,
+                              open_at=o, close_at=c))
+        sc = find_lambda(t, _SET_CONTENT)
+        if sc:
+            line, o, c = sc
+            why = _why_not(o, False, one_line_body(t, o, c), c, t)
+            self.add(Proposal("set_content", _rel(f, root), line,
+                              "setContent { } — the root of the Compose tree; recomposition re-enters it",
+                              self.prefix + "set_content", "api", gradle_module(f, root),
+                              applicable=not why, reason=why,
+                              open_at=o, close_at=c, lambda_body=True))
+            if o is not None and c is not None:
+                self.compose_roots(t, o, c)
+            return
+        m = _SET_CONTENT_VIEW.search(t)
+        if m:
+            self.add(Proposal("set_content_view", _rel(f, root), line_of(t, m.start()),
+                              "setContentView(…) — the View hierarchy is inflated here",
+                              self.prefix + "set_content_view", "api", gradle_module(f, root),
+                              applicable=False, reason="a call, not a block — mark the "
+                              "surrounding onCreate instead (proposed above)"))
+
+    def compose_roots(self, t: str, o: int, c: int) -> None:
+        """One hop: what setContent calls, when it is this project's code."""
+        found = 0
+        for name in calls_inside(strip_noise(t)[o + 1:c]):
+            hit = find_composable_decl(name, self.sources)
+            if hit is None:
+                continue
+            hf, hl = hit
+            self.add(Proposal("compose_root", _rel(hf, self.root), hl,
+                              f"@Composable {name}() — called from setContent, defined here",
+                              self.prefix + "compose_" + name, "call-from-setContent",
+                              gradle_module(hf, self.root), applicable=False,
+                              reason="a composable: wrap its call site by hand, or use "
+                                     "androidx.compose.runtime:runtime-tracing (see notes)"))
+            found += 1
+            if found >= 3:
+                break
+
+    def apis(self) -> None:
+        """4. Room, Koin, Hilt — API strings anywhere in the sources"""
+        for p, t in self.sources.items():
+            rel = _rel(p, self.root)
+            for m in _ROOM_BUILDER.finditer(t):
+                self.add(Proposal("room_open", rel, line_of(t, m.start()),
+                                  "Room.databaseBuilder — the database is opened here",
+                                  self.prefix + "room_open", "api", gradle_module(p, self.root),
+                                  applicable=False,
+                                  reason="a builder chain — wrap the enclosing function by hand"))
+            for m in _KOIN_START.finditer(t):
+                self.add(Proposal("di_koin", rel, line_of(t, m.start()),
+                                  "startKoin { } — the DI graph is built here",
+                                  self.prefix + "di_koin", "api", gradle_module(p, self.root),
+                                  applicable=False, reason="mark the enclosing function by hand"))
+            if _HILT_APP.search(t) and not any("Hilt" in n for n in self.out.notes):
+                self.out.notes.append(f"{rel}: @HiltAndroidApp — the graph is generated; its cost sits "
+                                      f"inside Application.onCreate (super.onCreate), nothing separate to mark")
 
 
 # --- markers from a stack ---------------------------------------------------

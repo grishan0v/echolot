@@ -81,7 +81,14 @@ def to_json(report: dict[str, Any]) -> str:
 # ---------------------------------------------------------------- markdown
 
 def to_markdown(report: dict[str, Any]) -> str:
+    """The report as a page: a section per function below, in this order."""
     out: list[str] = []
+    for section in _SECTIONS:
+        section(report, out)
+    return "\n".join(out)
+
+
+def _head(report: dict[str, Any], out: list[str]) -> None:
     src, ctx = report["source"], report["context"]
     out.append("# Reflect Report")
     out.append("")
@@ -97,19 +104,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     if src.get("cwd"):
         out.append(f"cwd `{src['cwd']}`" + (f" · branch `{src['git_branch']}`"
                                             if src.get("git_branch") else ""))
-    cfg = ctx.get("config") or {}
-    if cfg.get("present"):
-        bits = [f"`{cfg.get('path')}`"]
-        if cfg.get("scenario"):
-            bits.append(f"scenario `{cfg['scenario']}`")
-        if cfg.get("max_rounds") is not None:
-            bits.append(f"max_rounds {cfg['max_rounds']}")
-        if cfg.get("instrumentation_allowed"):
-            bits.append("allowed " + ", ".join(f"`{a}`" for a in cfg["instrumentation_allowed"]))
-        out.append("Config: " + " · ".join(bits))
-    else:
-        out.append("Config: _none found in this directory — protocol checks that "
-                   "need it were skipped_")
+    out.append(_config_line(ctx.get("config") or {}))
     # Said here rather than left to the Not-checked section. Sixteen checks
     # held back is the loudest number in the tally below, and a reader who
     # does not know why reads it as a report that failed to do its job.
@@ -120,6 +115,22 @@ def to_markdown(report: dict[str, Any]) -> str:
                    "back below: a session spent writing detectors breaks every "
                    "one of them by definition._")
 
+
+def _config_line(cfg: dict[str, Any]) -> str:
+    if not cfg.get("present"):
+        return ("Config: _none found in this directory — protocol checks that "
+                "need it were skipped_")
+    bits = [f"`{cfg.get('path')}`"]
+    if cfg.get("scenario"):
+        bits.append(f"scenario `{cfg['scenario']}`")
+    if cfg.get("max_rounds") is not None:
+        bits.append(f"max_rounds {cfg['max_rounds']}")
+    if cfg.get("instrumentation_allowed"):
+        bits.append("allowed " + ", ".join(f"`{a}`" for a in cfg["instrumentation_allowed"]))
+    return "Config: " + " · ".join(bits)
+
+
+def _tally(report: dict[str, Any], out: list[str]) -> None:
     s = report["summary"]
     out.append("")
     sig = s["signals"]
@@ -138,50 +149,62 @@ def to_markdown(report: dict[str, Any]) -> str:
     if (report.get("source") or {}).get("notes"):
         out.append("")
 
-    # ---- signals: warn and info in full, ok as a checklist
+
+def _signals(report: dict[str, Any], out: list[str]) -> None:
+    """Warn and info in full."""
     loud = [x for x in report["signals"] if x["severity"] in ("warn", "info")]
+    if not loud:
+        return
+    out.append("## Signals")
+    out.append("")
+    for x in loud:
+        out.append(f"### {_MARK[x['severity']]} {x['title']}")
+        out.append(f"_{x['why']}_")
+        out.append("")
+        if x["rows"]:
+            out.append(_table(x["rows"]))
+            out.append("")
+        if x.get("hint"):
+            out.append(f"> {x['hint']}")
+            out.append("")
+        out.append(f"<sub>signal `{x['id']}`</sub>")
+        out.append("")
+
+
+def _passed(report: dict[str, Any], out: list[str]) -> None:
+    """Ok as a checklist."""
     quiet = [x for x in report["signals"] if x["severity"] == "ok"]
-    if loud:
-        out.append("## Signals")
-        out.append("")
-        for x in loud:
-            out.append(f"### {_MARK[x['severity']]} {x['title']}")
-            out.append(f"_{x['why']}_")
-            out.append("")
-            if x["rows"]:
-                out.append(_table(x["rows"]))
-                out.append("")
-            if x.get("hint"):
-                out.append(f"> {x['hint']}")
-                out.append("")
-            out.append(f"<sub>signal `{x['id']}`</sub>")
-            out.append("")
-    if quiet:
-        out.append("## Protocol checks passed")
-        out.append("")
-        for x in quiet:
-            out.append(f"- ✓ **{x['title']}** — {x['why']}")
-        out.append("")
+    if not quiet:
+        return
+    out.append("## Protocol checks passed")
+    out.append("")
+    for x in quiet:
+        out.append(f"- ✓ **{x['title']}** — {x['why']}")
+    out.append("")
 
+
+def _not_checked(report: dict[str, Any], out: list[str]) -> None:
     skipped = [x for x in report["signals"] if x["severity"] == "skip"]
-    if skipped:
-        out.append("## Not checked")
-        out.append("")
-        # Grouped by why, since the reasons differ: a source with echolot's
-        # calls alone, a brief Codex keeps encrypted, a session that was
-        # building the tool. One sentence over all of them said the first
-        # reason of every check, the brief's included.
-        by_why: dict[str, list[str]] = {}
-        for x in skipped:
-            by_why.setdefault(x.get("why") or "", []).append(x["id"])
-        for why, ids in by_why.items():
-            if why:
-                out.append(f"_{why}_")
-                out.append("")
-            out.append(", ".join(f"`{i}`" for i in ids))
+    if not skipped:
+        return
+    out.append("## Not checked")
+    out.append("")
+    # Grouped by why, since the reasons differ: a source with echolot's
+    # calls alone, a brief Codex keeps encrypted, a session that was
+    # building the tool. One sentence over all of them said the first
+    # reason of every check, the brief's included.
+    by_why: dict[str, list[str]] = {}
+    for x in skipped:
+        by_why.setdefault(x.get("why") or "", []).append(x["id"])
+    for why, ids in by_why.items():
+        if why:
+            out.append(f"_{why}_")
             out.append("")
+        out.append(", ".join(f"`{i}`" for i in ids))
+        out.append("")
 
-    # ---- entry
+
+def _entry(report: dict[str, Any], out: list[str]) -> None:
     e = report.get("entry") or {}
     out.append("## Entry")
     out.append("")
@@ -203,163 +226,183 @@ def to_markdown(report: dict[str, Any]) -> str:
             out.append(f"- `{_t(p['ts'])}` {_oneline(p['text'], 200)}")
     out.append("")
 
-    # ---- timeline
-    if report.get("timeline"):
-        out.append("## Timeline")
-        out.append("")
-        out.append(_table([{"time": _t(m["ts"]), "agent": m["agent"],
-                            "milestone": m["label"], "detail": _oneline(m["detail"], 80)}
-                           for m in report["timeline"]]))
-        out.append("")
 
-    # ---- echolot calls
+def _timeline(report: dict[str, Any], out: list[str]) -> None:
+    if not report.get("timeline"):
+        return
+    out.append("## Timeline")
+    out.append("")
+    out.append(_table([{"time": _t(m["ts"]), "agent": m["agent"],
+                        "milestone": m["label"], "detail": _oneline(m["detail"], 80)}
+                       for m in report["timeline"]]))
+    out.append("")
+
+
+def _echolot_calls(report: dict[str, Any], out: list[str]) -> None:
     calls = report.get("echolot_calls") or []
     out.append("## echolot calls")
     out.append("")
-    if calls:
-        rows = []
-        for c in calls:
-            note = []
-            if c.get("traceback"):
-                note.append("traceback")
-            if c.get("is_help"):
-                note.append("help")
-            if c.get("config"):
-                note.append(f"-c {c['config'][-40:]}")
-            if c.get("recorded"):
-                r = c["recorded"]
-                facts = r.get("facts") or {}
-                if "fired" in facts:
-                    note.append(f"fired {len(facts['fired'])}")
-                if facts.get("failed"):
-                    note.append(f"doctor failed {len(facts['failed'])}")
-            if not c.get("ran", True):
-                note.append("shell skipped it")
-            elif c.get("shared", 1) > 1:
-                note.append(f"{c['shared']} calls in one line")
-            dur = c.get("duration_s")
-            if dur is None:
-                dur_cell: Any = "—"
-            elif c.get("shared", 1) > 1:
-                dur_cell = f"≤{dur}"    # the line's time, not this call's
-            else:
-                dur_cell = dur
-            rows.append({
-                "time": _t(c["ts"]), "agent": c["agent"],
-                "command": f"echolot {c['sub']} {c['argv']}"[:90],
-                "exit": "—" if c.get("exit") is None else c["exit"],
-                "s": dur_cell,
-                "out": c.get("output_chars", 0),
-                "note": ", ".join(note),
-            })
-        out.append(_table(rows))
-        by_sub: dict[str, int] = {}
-        for c in calls:
-            by_sub[c["sub"]] = by_sub.get(c["sub"], 0) + 1
-        out.append("")
-        out.append("By subcommand: " + ", ".join(f"{k} {v}" for k, v in sorted(by_sub.items())))
-    else:
+    if not calls:
         out.append("_none_")
+        out.append("")
+        return
+    out.append(_table([_call_row(c) for c in calls]))
+    by_sub: dict[str, int] = {}
+    for c in calls:
+        by_sub[c["sub"]] = by_sub.get(c["sub"], 0) + 1
+    out.append("")
+    out.append("By subcommand: " + ", ".join(f"{k} {v}" for k, v in sorted(by_sub.items())))
     out.append("")
 
-    # ---- questions
+
+def _call_row(c: dict[str, Any]) -> dict[str, Any]:
+    dur = c.get("duration_s")
+    if dur is None:
+        dur_cell: Any = "—"
+    elif c.get("shared", 1) > 1:
+        dur_cell = f"≤{dur}"    # the line's time, not this call's
+    else:
+        dur_cell = dur
+    return {
+        "time": _t(c["ts"]), "agent": c["agent"],
+        "command": f"echolot {c['sub']} {c['argv']}"[:90],
+        "exit": "—" if c.get("exit") is None else c["exit"],
+        "s": dur_cell,
+        "out": c.get("output_chars", 0),
+        "note": ", ".join(_call_notes(c)),
+    }
+
+
+def _call_notes(c: dict[str, Any]) -> list[str]:
+    """What the table's note cell says about one call, in its order."""
+    note = []
+    if c.get("traceback"):
+        note.append("traceback")
+    if c.get("is_help"):
+        note.append("help")
+    if c.get("config"):
+        note.append(f"-c {c['config'][-40:]}")
+    facts = (c.get("recorded") or {}).get("facts") or {}
+    if "fired" in facts:
+        note.append(f"fired {len(facts['fired'])}")
+    if facts.get("failed"):
+        note.append(f"doctor failed {len(facts['failed'])}")
+    if not c.get("ran", True):
+        note.append("shell skipped it")
+    elif c.get("shared", 1) > 1:
+        note.append(f"{c['shared']} calls in one line")
+    return note
+
+
+def _questions(report: dict[str, Any], out: list[str]) -> None:
     qs = report.get("questions") or []
-    if qs:
-        out.append("## Questions to the human")
+    if not qs:
+        return
+    out.append("## Questions to the human")
+    out.append("")
+    out.append(_table([{
+        "time": _t(q["ts"]), "question": _oneline(q["question"], 90),
+        "options": len(q.get("options") or []),
+        "recommended": _oneline(q.get("recommended") or "—", 40),
+        "chosen": _oneline(q.get("chosen") or "—", 40),
+        "answered after": _dur(q.get("answered_after_s")),
+    } for q in qs]))
+    chosen_rec = sum(1 for q in qs if q.get("recommended") and q.get("chosen")
+                     and q["chosen"] == q["recommended"])
+    with_rec = sum(1 for q in qs if q.get("recommended") and q.get("chosen"))
+    if with_rec:
         out.append("")
-        out.append(_table([{
-            "time": _t(q["ts"]), "question": _oneline(q["question"], 90),
-            "options": len(q.get("options") or []),
-            "recommended": _oneline(q.get("recommended") or "—", 40),
-            "chosen": _oneline(q.get("chosen") or "—", 40),
-            "answered after": _dur(q.get("answered_after_s")),
-        } for q in qs]))
-        chosen_rec = sum(1 for q in qs if q.get("recommended") and q.get("chosen")
-                         and q["chosen"] == q["recommended"])
-        with_rec = sum(1 for q in qs if q.get("recommended") and q.get("chosen"))
-        if with_rec:
-            out.append("")
-            out.append(f"Recommended option taken {chosen_rec} of {with_rec} time(s).")
-        out.append("")
+        out.append(f"Recommended option taken {chosen_rec} of {with_rec} time(s).")
+    out.append("")
 
-    # ---- what the main context concluded
+
+def _conclusion(report: dict[str, Any], out: list[str]) -> None:
     concl = report.get("conclusion") or {}
-    if concl.get("text"):
-        out.append("## What the main context concluded")
-        out.append("")
-        out.append("_its last message — for a session without a hunt, the whole result_")
-        out.append("")
-        for line in concl["text"][:1800].splitlines():
-            out.append(f"> {line}")
-        out.append("")
+    if not concl.get("text"):
+        return
+    out.append("## What the main context concluded")
+    out.append("")
+    out.append("_its last message — for a session without a hunt, the whole result_")
+    out.append("")
+    for line in concl["text"][:1800].splitlines():
+        out.append(f"> {line}")
+    out.append("")
 
-    # ---- hunts
+
+def _hunts(report: dict[str, Any], out: list[str]) -> None:
     for h in report.get("hunts") or []:
-        out.append(f"## Subagent `{h.get('type') or '?'}` — {h.get('description') or h['id']}")
-        out.append("")
-        u = h.get("usage") or {}
-        facts = [
-            f"duration **{_dur(h.get('duration_s'))}**",
-            f"rounds **{h['rounds']}**" + (f" of {h['max_rounds']}" if h.get("max_rounds") else " (max_rounds not set, default 3)"),
-            f"re-records {h['re_records']}",
-            f"analyze calls {h['analyze_calls']}",
-            "tools " + ", ".join(f"{k} {v}" for k, v in sorted(h["tools"].items(), key=lambda kv: -kv[1])),
-            f"tokens out {u.get('output', 0):,} · in {u.get('input', 0):,} · cache read {u.get('cache_read', 0):,}",
-            f"thinking blocks {h.get('thinking_blocks', 0)}",
-        ]
-        mix = _mix_line(h.get("window") or {})
-        if mix:
-            facts.append(mix)
-        for line in facts:
-            out.append(f"- {line}")
-        pm = h.get("prompt_mentions") or {}
-        out.append("- prompt ({} chars) mentions: {}".format(
-            h.get("prompt_chars", 0),
-            ", ".join(f"{k} {'✓' if v else '✗'}" for k, v in pm.items())))
-        cf = h.get("conclusion_fields") or {}
-        out.append("- conclusion fields: " + ", ".join(
-            f"{k} {'✓' if v else '✗'}" for k, v in cf.items()) +
-            (f" · confidence: {h['confidence']}" if h.get("confidence") else ""))
-        if not h.get("has_transcript"):
-            out.append("- _no separate transcript found for this subagent; "
-                       "tool counts and tokens are unavailable_")
-        if h.get("final_text"):
-            out.append("")
-            out.append("Returned upward:")
-            out.append("")
-            for line in h["final_text"][:1800].splitlines():
-                out.append(f"> {line}")
-        out.append("")
+        _hunt(h, out)
 
-    # ---- instrumentation
+
+def _hunt(h: dict[str, Any], out: list[str]) -> None:
+    out.append(f"## Subagent `{h.get('type') or '?'}` — {h.get('description') or h['id']}")
+    out.append("")
+    u = h.get("usage") or {}
+    facts = [
+        f"duration **{_dur(h.get('duration_s'))}**",
+        f"rounds **{h['rounds']}**" + (f" of {h['max_rounds']}" if h.get("max_rounds") else " (max_rounds not set, default 3)"),
+        f"re-records {h['re_records']}",
+        f"analyze calls {h['analyze_calls']}",
+        "tools " + ", ".join(f"{k} {v}" for k, v in sorted(h["tools"].items(), key=lambda kv: -kv[1])),
+        f"tokens out {u.get('output', 0):,} · in {u.get('input', 0):,} · cache read {u.get('cache_read', 0):,}",
+        f"thinking blocks {h.get('thinking_blocks', 0)}",
+    ]
+    mix = _mix_line(h.get("window") or {})
+    if mix:
+        facts.append(mix)
+    for line in facts:
+        out.append(f"- {line}")
+    pm = h.get("prompt_mentions") or {}
+    out.append("- prompt ({} chars) mentions: {}".format(
+        h.get("prompt_chars", 0),
+        ", ".join(f"{k} {'✓' if v else '✗'}" for k, v in pm.items())))
+    cf = h.get("conclusion_fields") or {}
+    out.append("- conclusion fields: " + ", ".join(
+        f"{k} {'✓' if v else '✗'}" for k, v in cf.items()) +
+        (f" · confidence: {h['confidence']}" if h.get("confidence") else ""))
+    if not h.get("has_transcript"):
+        out.append("- _no separate transcript found for this subagent; "
+                   "tool counts and tokens are unavailable_")
+    if h.get("final_text"):
+        out.append("")
+        out.append("Returned upward:")
+        out.append("")
+        for line in h["final_text"][:1800].splitlines():
+            out.append(f"> {line}")
+    out.append("")
+
+
+def _instrumentation(report: dict[str, Any], out: list[str]) -> None:
     inst = report.get("instrumentation") or {}
-    if inst.get("files"):
-        out.append("## Temporary instrumentation")
-        out.append("")
-        out.append(_table([{"file": f, "added": v["added"], "removed": v["removed"],
-                            "shell edits": v.get("shell", 0)}
-                           for f, v in inst["files"].items()]))
-        out.append("")
-        verdict = inst.get("cleanup_grep_clean")
-        found = ("found nothing" if verdict is True else
-                 "still found the prefix" if verdict is False else "result unclear")
-        out.append(f"Prefix `{inst.get('prefix')}` · grep for it after the last edit: "
-                   f"{inst.get('cleanup_grep_after_last_edit', 0)}"
-                   + (f" ({found})" if inst.get('cleanup_grep_after_last_edit') else "")
-                   + f" · grep calls in total: {inst.get('grep_calls_total', 0)}")
-        if inst.get("shell_edits"):
-            out.append(f"{inst['shell_edits']} edit(s) went through the shell (python, sed) — "
-                       f"no add/remove direction to balance; the grep verdict stands for them.")
-        tree = inst.get("tree") or {}
-        if tree.get("checked"):
-            left = tree.get("files") or []
-            out.append("The tree when this report was made: "
-                       + (f"{len(left)} file(s) still carry the prefix — "
-                          + ", ".join(f"`{p}`" for p in left[:6]) if left
-                          else "no file carries the prefix."))
-        out.append("")
+    if not inst.get("files"):
+        return
+    out.append("## Temporary instrumentation")
+    out.append("")
+    out.append(_table([{"file": f, "added": v["added"], "removed": v["removed"],
+                        "shell edits": v.get("shell", 0)}
+                       for f, v in inst["files"].items()]))
+    out.append("")
+    verdict = inst.get("cleanup_grep_clean")
+    found = ("found nothing" if verdict is True else
+             "still found the prefix" if verdict is False else "result unclear")
+    out.append(f"Prefix `{inst.get('prefix')}` · grep for it after the last edit: "
+               f"{inst.get('cleanup_grep_after_last_edit', 0)}"
+               + (f" ({found})" if inst.get('cleanup_grep_after_last_edit') else "")
+               + f" · grep calls in total: {inst.get('grep_calls_total', 0)}")
+    if inst.get("shell_edits"):
+        out.append(f"{inst['shell_edits']} edit(s) went through the shell (python, sed) — "
+                   f"no add/remove direction to balance; the grep verdict stands for them.")
+    tree = inst.get("tree") or {}
+    if tree.get("checked"):
+        left = tree.get("files") or []
+        out.append("The tree when this report was made: "
+                   + (f"{len(left)} file(s) still carry the prefix — "
+                      + ", ".join(f"`{p}`" for p in left[:6]) if left
+                      else "no file carries the prefix."))
+    out.append("")
 
-    # ---- cost
+
+def _cost(report: dict[str, Any], out: list[str]) -> None:
     c = report.get("cost") or {}
     out.append("## Cost")
     out.append("")
@@ -394,7 +437,8 @@ def to_markdown(report: dict[str, Any]) -> str:
                             "after": _oneline(g["after"], 80)} for g in c["gaps"]]))
     out.append("")
 
-    # ---- recorder
+
+def _recorder(report: dict[str, Any], out: list[str]) -> None:
     runs = report.get("runs_recorded") or []
     out.append("## Recorder (`.echolot/log/runs.jsonl`)")
     out.append("")
@@ -410,15 +454,25 @@ def to_markdown(report: dict[str, Any]) -> str:
                    "was not there yet, or the session ran from another directory_")
     out.append("")
 
-    if report.get("notes"):
-        out.append("## Reader notes")
-        out.append("")
-        for n in report["notes"]:
-            out.append(f"- {n}")
-        out.append("")
 
-    out.append("<sub>sources: " + ", ".join(f"`{f}`" for f in src.get("files", [])) + "</sub>")
-    return "\n".join(out)
+def _notes(report: dict[str, Any], out: list[str]) -> None:
+    if not report.get("notes"):
+        return
+    out.append("## Reader notes")
+    out.append("")
+    for n in report["notes"]:
+        out.append(f"- {n}")
+    out.append("")
+
+
+def _sources(report: dict[str, Any], out: list[str]) -> None:
+    out.append("<sub>sources: " + ", ".join(f"`{f}`" for f in report["source"].get("files", []))
+               + "</sub>")
+
+
+_SECTIONS = (_head, _tally, _signals, _passed, _not_checked, _entry, _timeline,
+             _echolot_calls, _questions, _conclusion, _hunts, _instrumentation,
+             _cost, _recorder, _notes, _sources)
 
 
 # ------------------------------------------------------------------ helpers

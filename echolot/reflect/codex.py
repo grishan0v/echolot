@@ -262,103 +262,120 @@ def _diff_sides(diff: str) -> tuple[str, str]:
 def _parse(path: Path, session: Session, agent: str, sub: SubAgent | None,
            start: int) -> None:
     """One thread's own rows into the session: from `start` on."""
-    usage: dict[str, Usage] = {}
-    asks: dict[str, Call] = {}
-    last_text, final_text = "", ""
+    thread = _Thread(session, agent, sub)
     for row in _rows(path):
         ordinal = row.get("ordinal")
         if isinstance(ordinal, int) and ordinal < start:
             continue
+        thread.row(row)
+    thread.finish()
+
+
+# Rows read whatever their payload's type; the others are told apart by it.
+_WHOLE_ROWS = ("turn_context", "token_usage_record")
+
+
+class _Thread:
+    """One thread's file read row by row, and what stays open between rows.
+
+    Shaped like the Claude Code reader's pass: a method for each kind of row
+    and of item, and this class for the state they share. A question is
+    answered rows after it is asked, and the last thing the agent said is
+    known only at the end.
+    """
+
+    def __init__(self, session: Session, agent: str, sub: SubAgent | None) -> None:
+        self.session = session
+        self.agent = agent
+        self.sub = sub
+        self.usage: dict[str, Usage] = {}
+        self.asks: dict[str, Call] = {}
+        self.last_text = ""
+        self.final_text = ""
+
+    def row(self, row: dict[str, Any]) -> None:
         ts = str(row.get("timestamp") or "")
         rtype = row.get("type")
         p = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        kind = str(rtype) if rtype in _WHOLE_ROWS else f"{rtype}:{p.get('type')}"
+        read = _ROWS.get(kind)
+        if read is not None:
+            read(self, p, ts)
 
-        if rtype == "turn_context":
-            if session.model is None and p.get("model"):
-                session.model = str(p["model"])
-        elif rtype == "token_usage_record":
-            u = p.get("usage") or {}
-            cached = int(u.get("cached_input_tokens") or 0)
-            usage[str(p.get("response_id") or len(usage))] = Usage(
-                input=max(0, int(u.get("input_tokens") or 0) - cached),
-                cache_read=cached,
-                cache_create=int(u.get("cache_write_input_tokens") or 0),
-                output=int(u.get("output_tokens") or 0),
-                messages=1)
-        elif rtype == "response_item" and p.get("type") == "function_call":
-            name = str(p.get("name") or "?")
-            try:
-                args = json.loads(p.get("arguments") or "{}")
-            except (TypeError, json.JSONDecodeError):
-                args = {}
-            if not isinstance(args, dict):
-                args = {}
-            call = Call(id=str(p.get("call_id") or ""), ts=ts,
-                        tool=_TOOL_NAMES.get(name, name),
-                        input={"codex_tool": name, **{k: clip(v, 300) if isinstance(v, str)
-                                                      else v for k, v in args.items()}},
-                        agent=agent)
-            session.calls.append(call)
-            if name == "request_user_input_async":
-                asks[call.id] = call
-                for q in args.get("questions") or []:
-                    if not isinstance(q, dict):
-                        continue
-                    labels = [str(o.get("label") or o) if isinstance(o, dict) else str(o)
-                              for o in (q.get("options") or [])]
-                    session.asks.append(Ask(
-                        ts=ts, question=clip(q.get("question") or q.get("title") or "", 300),
-                        options=labels, agent=agent))
-        elif rtype == "response_item" and p.get("type") == "function_call_output":
-            call = asks.get(str(p.get("call_id") or ""))
-            if call is not None:
-                out = _text(p.get("output")) if not isinstance(p.get("output"), str) \
-                    else p["output"]
-                call.output_chars, call.output_head = len(out), clip(out, 300)
-        elif rtype == "event_msg" and p.get("type") == "task_complete":
-            if p.get("last_agent_message"):
-                final_text = str(p["last_agent_message"])
-            if sub is not None:
-                sub.ended = ts or sub.ended
-        elif rtype == "event_msg" and p.get("type") == "item_completed":
-            item = p.get("item") if isinstance(p.get("item"), dict) else {}
-            started = _ms(p.get("started_at_ms")) or ts
-            last = _item(item, started, ts, session, agent, sub)
-            if last:
-                last_text = last
-                if item.get("phase") == "final_answer":
-                    final_text = last
+    def _turn_context(self, p: dict[str, Any], ts: str) -> None:
+        if self.session.model is None and p.get("model"):
+            self.session.model = str(p["model"])
 
-    target = sub.usage if sub is not None else session.usage
-    for u in usage.values():
-        target.add(u)
-    said = clip(final_text or last_text, FINAL_TEXT_LIMIT)
-    if sub is not None:
-        sub.final_text = said
-    elif said:
-        session.final_text = said
+    def _token_usage(self, p: dict[str, Any], ts: str) -> None:
+        u = p.get("usage") or {}
+        cached = int(u.get("cached_input_tokens") or 0)
+        self.usage[str(p.get("response_id") or len(self.usage))] = Usage(
+            input=max(0, int(u.get("input_tokens") or 0) - cached),
+            cache_read=cached,
+            cache_create=int(u.get("cache_write_input_tokens") or 0),
+            output=int(u.get("output_tokens") or 0),
+            messages=1)
 
+    def _function_call(self, p: dict[str, Any], ts: str) -> None:
+        name = str(p.get("name") or "?")
+        args = _arguments(p.get("arguments"))
+        call = Call(id=str(p.get("call_id") or ""), ts=ts,
+                    tool=_TOOL_NAMES.get(name, name),
+                    input={"codex_tool": name, **{k: clip(v, 300) if isinstance(v, str)
+                                                  else v for k, v in args.items()}},
+                    agent=self.agent)
+        self.session.calls.append(call)
+        if name == "request_user_input_async":
+            self.asks[call.id] = call
+            self.session.asks.extend(_questions(args, ts, self.agent))
 
-def _item(item: dict[str, Any], started: str, ts: str, session: Session,
-          agent: str, sub: SubAgent | None) -> str:
-    """One completed item; returns the agent's text when it was a message."""
-    kind = item.get("type")
-    if kind == "UserMessage":
+    def _function_output(self, p: dict[str, Any], ts: str) -> None:
+        call = self.asks.get(str(p.get("call_id") or ""))
+        if call is None:
+            return
+        raw = p.get("output")
+        out = raw if isinstance(raw, str) else _text(raw)
+        call.output_chars, call.output_head = len(out), clip(out, 300)
+
+    def _task_complete(self, p: dict[str, Any], ts: str) -> None:
+        if p.get("last_agent_message"):
+            self.final_text = str(p["last_agent_message"])
+        if self.sub is not None:
+            self.sub.ended = ts or self.sub.ended
+
+    def _item_completed(self, p: dict[str, Any], ts: str) -> None:
+        item = p.get("item") if isinstance(p.get("item"), dict) else {}
+        started = _ms(p.get("started_at_ms")) or ts
+        read = _ITEMS.get(item.get("type"))
+        said = read(self, item, started, ts) if read is not None else None
+        if said:
+            self.last_text = said
+            if item.get("phase") == "final_answer":
+                self.final_text = said
+
+    # --- one completed item each; a message returns what the agent said ---
+
+    def _user_message(self, item: dict[str, Any], started: str, ts: str) -> None:
         text = _text(item.get("content"))
         if text.strip():
-            session.turns.append(Turn(ts=ts, role="user", text=clip(text, 600), agent=agent))
-    elif kind == "AgentMessage":
+            self.session.turns.append(Turn(ts=ts, role="user", text=clip(text, 600),
+                                           agent=self.agent))
+
+    def _agent_message(self, item: dict[str, Any], started: str, ts: str) -> str | None:
         text = _text(item.get("content"))
-        if text.strip():
-            session.turns.append(Turn(ts=ts, role="assistant", text=clip(text, 600),
-                                      agent=agent))
-            return text
-    elif kind == "Reasoning":
-        if sub is not None:
-            sub.thinking_blocks += 1
+        if not text.strip():
+            return None
+        self.session.turns.append(Turn(ts=ts, role="assistant", text=clip(text, 600),
+                                       agent=self.agent))
+        return text
+
+    def _reasoning(self, item: dict[str, Any], started: str, ts: str) -> None:
+        if self.sub is not None:
+            self.sub.thinking_blocks += 1
         else:
-            session.thinking_blocks += 1
-    elif kind == "CommandExecution":
+            self.session.thinking_blocks += 1
+
+    def _command(self, item: dict[str, Any], started: str, ts: str) -> None:
         script = _script(item.get("command"))
         out = str(item.get("aggregated_output") or "")
         code = item.get("exit_code")
@@ -366,32 +383,92 @@ def _item(item: dict[str, Any], started: str, ts: str, session: Session,
         # the facts read the code off that line; the same line here keeps
         # one parser for both.
         head = f"Exit code {code}\n{out}" if isinstance(code, int) and code else out
-        took = item.get("duration") or {}
-        session.calls.append(Call(
+        self.session.calls.append(Call(
             id=str(item.get("id") or ""), ts=started, tool="Bash",
-            input={"command": clip(script, 1200)}, agent=agent,
+            input={"command": clip(script, 1200)}, agent=self.agent,
             is_error=isinstance(code, int) and code != 0,
             output_chars=len(out), output_head=clip(head, 300),
-            duration_s=round(float(took.get("secs") or 0)
-                             + float(took.get("nanos") or 0) / 1e9, 1)
-            if isinstance(took, dict) else None,
+            duration_s=_seconds(item.get("duration") or {}),
             command=clip(script, COMMAND_LIMIT)))
-    elif kind == "FileChange":
+
+    def _file_change(self, item: dict[str, Any], started: str, ts: str) -> None:
         for file, change in (item.get("changes") or {}).items():
-            if not isinstance(change, dict):
-                continue
-            old, new = _diff_sides(str(change.get("unified_diff") or change.get("content") or ""))
-            if change.get("type") == "add":
-                tool, inp = "Write", {"file_path": file, "content": clip(new, 1200)}
-            else:
-                tool, inp = "Edit", {"file_path": file, "old_string": clip(old, 1200),
-                                     "new_string": clip(new, 1200)}
-            session.calls.append(Call(id=str(item.get("id") or ""), ts=started, tool=tool,
-                                      input=inp, agent=agent, path=str(file),
-                                      is_error=item.get("status") == "failed"))
-    elif kind == "SubAgentActivity" and item.get("kind") == "started":
+            if isinstance(change, dict):
+                self.session.calls.append(_edit(file, change, item, started, self.agent))
+
+    def _subagent_activity(self, item: dict[str, Any], started: str, ts: str) -> None:
+        if item.get("kind") != "started":
+            return
         tid = str(item.get("agent_thread_id") or "")
-        if tid and not any(s.id == tid for s in session.subagents):
-            session.subagents.append(SubAgent(
+        if tid and not any(s.id == tid for s in self.session.subagents):
+            self.session.subagents.append(SubAgent(
                 id=tid, description=item.get("agent_path"), started=ts))
-    return ""
+
+    def finish(self) -> None:
+        target = self.sub.usage if self.sub is not None else self.session.usage
+        for u in self.usage.values():
+            target.add(u)
+        said = clip(self.final_text or self.last_text, FINAL_TEXT_LIMIT)
+        if self.sub is not None:
+            self.sub.final_text = said
+        elif said:
+            self.session.final_text = said
+
+
+_ROWS = {
+    "turn_context": _Thread._turn_context,
+    "token_usage_record": _Thread._token_usage,
+    "response_item:function_call": _Thread._function_call,
+    "response_item:function_call_output": _Thread._function_output,
+    "event_msg:task_complete": _Thread._task_complete,
+    "event_msg:item_completed": _Thread._item_completed,
+}
+
+_ITEMS = {
+    "UserMessage": _Thread._user_message,
+    "AgentMessage": _Thread._agent_message,
+    "Reasoning": _Thread._reasoning,
+    "CommandExecution": _Thread._command,
+    "FileChange": _Thread._file_change,
+    "SubAgentActivity": _Thread._subagent_activity,
+}
+
+
+def _arguments(raw: Any) -> dict[str, Any]:
+    """A function call's arguments: a JSON object in a string, or nothing."""
+    try:
+        args = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return args if isinstance(args, dict) else {}
+
+
+def _questions(args: dict[str, Any], ts: str, agent: str) -> list[Ask]:
+    asks = []
+    for q in args.get("questions") or []:
+        if not isinstance(q, dict):
+            continue
+        labels = [str(o.get("label") or o) if isinstance(o, dict) else str(o)
+                  for o in (q.get("options") or [])]
+        asks.append(Ask(ts=ts, question=clip(q.get("question") or q.get("title") or "", 300),
+                        options=labels, agent=agent))
+    return asks
+
+
+def _seconds(took: Any) -> float | None:
+    if not isinstance(took, dict):
+        return None
+    return round(float(took.get("secs") or 0) + float(took.get("nanos") or 0) / 1e9, 1)
+
+
+def _edit(file: str, change: dict[str, Any], item: dict[str, Any], started: str,
+          agent: str) -> Call:
+    """One file of a patch, as the Write or Edit call Claude Code would have made."""
+    old, new = _diff_sides(str(change.get("unified_diff") or change.get("content") or ""))
+    if change.get("type") == "add":
+        tool, inp = "Write", {"file_path": file, "content": clip(new, 1200)}
+    else:
+        tool, inp = "Edit", {"file_path": file, "old_string": clip(old, 1200),
+                             "new_string": clip(new, 1200)}
+    return Call(id=str(item.get("id") or ""), ts=started, tool=tool, input=inp,
+                agent=agent, path=str(file), is_error=item.get("status") == "failed")
