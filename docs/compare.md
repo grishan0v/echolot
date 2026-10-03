@@ -354,7 +354,7 @@ exactly what a trace threshold does not.
 
 Run `echolot doctor -q` as a precondition — it already answers "does this
 machine compute correctly" with an exit code — then `analyze` over the traces
-the benchmark has already written, `compare` against yesterday's
+the benchmark has already written, `compare` against the last run's
 `report.json`, and keep `report.json` and `comparison.json` as build
 artefacts.
 
@@ -364,6 +364,72 @@ not stand guard.
 When someone asks a day later why the nightly regressed, the answer is already
 sitting next to the commit — the window, the thresholds, the evidence and the
 delta: no device, no re-recording.
+
+### The action
+
+`action.yml` at the root of this repository does all of that as one step,
+after the one that runs the benchmark:
+
+```yaml
+permissions:
+  contents: read
+  actions: read            # to fetch the report the last run kept
+
+steps:
+  # … check out, start the device, run the benchmark …
+  - uses: grishan0v/echolot@main
+    with:
+      traces: app/benchmark/build/outputs/**/StartupBenchmark_startup_iter*.perfetto-trace
+```
+
+It does five things:
+
+1. It installs the echolot of the ref it was called at, in a virtualenv of its
+   own, and caches `trace_processor`. A release tag pins the action and the
+   tool together; `@main` runs both as they are on `main`.
+2. It runs `echolot doctor -q`. A runner that fails it fails the job: nothing
+   it computes can be trusted, and that is a fact about the runner, never
+   about the app.
+3. It runs `echolot analyze` over the traces. Name the repeats of one test.
+   The benchmark's output directory holds every test it ran, and `analyze`
+   merges whatever it is given as repeats of one scenario. A line that names
+   no trace fails the step.
+4. It fetches the `report.json` that the last successful run of the same
+   workflow kept on the base branch. That is the pull request's base, or the
+   default branch for a push or a nightly. Then it runs `compare` against
+   it.
+5. It writes the comparison to the job summary, with the report under it, and
+   keeps the report, the comparison and the baseline as the artifact
+   `echolot-report`.
+
+The job fails when the runner cannot compute or the traces are missing,
+never over what moved. The first run on a branch has nothing to compare
+against and says so; the next run compares against it. The action runs on
+Linux and macOS runners.
+
+| input | default | what it is |
+|---|---|---|
+| `traces` | — | the repeats of one test: paths or globs, one per line, relative to the workspace; `**` reaches into subdirectories |
+| `config` | `echolot.yml` | the project's config |
+| `baseline` | — | a `report.json` to compare against, in place of the lookup |
+| `baseline-branch` | the base branch, or else the default branch | whose last good run holds the baseline |
+| `baseline-workflow` | this workflow | the workflow file whose runs keep the baseline, such as `nightly.yml`, for a pull request job that compares against a nightly |
+| `artifact-name` | `echolot-report` | what the reports are kept as and looked up by; each leg of a matrix needs its own |
+| `comment` | `false` | `true` posts the comparison on the pull request and edits that one comment on every push. It needs `pull-requests: write`, which a pull request from a fork does not get |
+| `python` | `python3` | the Python, 3.10 or newer, echolot is installed with |
+| `token` | the job's token | reads the earlier runs' artifacts and posts the comment |
+
+Its outputs are:
+
+- `report`: this run's `report.json`;
+- `baseline`: the report it was compared with;
+- `comparison`: `comparison.json`;
+- `moved`: how many rows moved past the noise floor.
+
+The last three are empty when there was nothing to compare against.
+`.github/workflows/action.yml` runs the action this way on the demo app's
+traces for every pull request here, and on the demo's planted change,
+where exactly the lock's two rows have to move.
 
 ## Related
 

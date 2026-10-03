@@ -132,7 +132,7 @@ jobs:
           python -m pip install -e '.[dev]'
 
       - name: ruff
-        run: ruff check --output-format=github echolot tests
+        run: ruff check --output-format=github echolot tests action
 
   # One context for the matrix and the linter, so the branch rule does not name
   # Python versions. Required checks are matched by context name: with the matrix

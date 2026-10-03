@@ -1,0 +1,218 @@
+# The CI shape docs/compare.md describes under "In CI", as one step:
+#
+#   - uses: grishan0v/echolot@<tag>
+#     with:
+#       traces: app/benchmark/build/outputs/**/StartupBenchmark_startup_iter*.perfetto-trace
+#
+# It installs the echolot of the tag it was called at, checks the runner with
+# `doctor -q`, analyzes the traces an earlier step wrote, compares the report
+# with the one the last good run on the base branch kept, and keeps both. It
+# fails the job when the runner cannot compute or the traces are missing, and
+# never over what `compare` found: whether the build got slower is the
+# benchmark's answer. The glue lives in action/ci.py; docs/compare.md has the
+# inputs, the permissions and the first run.
+name: echolot
+description: Where the time went in a benchmark's Perfetto traces, and what moved since the last run on the base branch
+author: grishan0v
+branding:
+  icon: activity
+  color: blue
+
+inputs:
+  traces:
+    description: >-
+      The repeats of one test: paths or globs, one per line, relative to the
+      workspace. `**` reaches into subdirectories.
+    required: true
+  config:
+    description: The project's echolot.yml.
+    required: false
+    default: echolot.yml
+  baseline:
+    description: >-
+      A report.json to compare against. Left empty, the action fetches the one
+      the last successful run of `baseline-workflow` on `baseline-branch` kept.
+    required: false
+    default: ""
+  baseline-branch:
+    description: >-
+      The branch whose last good run holds the baseline. Empty: the pull
+      request's base branch, or else the repository's default branch.
+    required: false
+    default: ""
+  baseline-workflow:
+    description: The workflow file whose runs keep the baseline, such as `nightly.yml`. Empty is this workflow.
+    required: false
+    default: ""
+  artifact-name:
+    description: >-
+      What the reports are kept as and looked up by. Each leg of a matrix
+      needs its own.
+    required: false
+    default: echolot-report
+  comment:
+    description: >-
+      `true` posts the comparison on the pull request and edits that one
+      comment on every push. Needs `pull-requests: write`.
+    required: false
+    default: "false"
+  python:
+    description: The Python, 3.10 or newer, that echolot is installed with.
+    required: false
+    default: python3
+  token:
+    description: >-
+      Reads the earlier runs' artifacts (`actions: read`) and posts the
+      comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  report:
+    description: This run's report.json.
+    value: ${{ steps.analyze.outputs.report }}
+  baseline:
+    description: The report.json it was compared with; empty when there was none.
+    value: ${{ steps.compare.outputs.baseline }}
+  comparison:
+    description: comparison.json; empty when there was nothing to compare with.
+    value: ${{ steps.compare.outputs.comparison }}
+  moved:
+    description: How many rows moved past the noise floor; empty without a comparison.
+    value: ${{ steps.compare.outputs.moved }}
+
+runs:
+  using: composite
+  steps:
+    # Every input reaches a script through `env`, never written into its text,
+    # so a branch name or a glob is data and cannot become a command.
+    - name: Where the reports go
+      id: where
+      shell: bash
+      env:
+        OUT: ${{ runner.temp }}/echolot/${{ inputs.artifact-name }}
+        # A scheduled run has no repository in its event, hence the last one.
+        BRANCH: ${{ inputs.baseline-branch || github.base_ref || github.event.repository.default_branch || github.ref_name }}
+      run: |
+        echo "out=$OUT" >> "$GITHUB_OUTPUT"
+        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+    # The echolot of the tag this action was called at, from the action's own
+    # checkout, in a virtualenv of its own: the job's Python is left as it was.
+    - name: Install echolot
+      id: install
+      shell: bash
+      env:
+        PYTHON: ${{ inputs.python }}
+        VENV: ${{ runner.temp }}/echolot-venv
+      run: |
+        if [ ! -x "$VENV/bin/echolot" ]; then
+          "$PYTHON" -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check "$GITHUB_ACTION_PATH"
+        fi
+        version=$("$VENV/bin/echolot" --version)
+        echo "$version"
+        echo "python=$VENV/bin/python" >> "$GITHUB_OUTPUT"
+        echo "echolot=$VENV/bin/echolot" >> "$GITHUB_OUTPUT"
+        echo "trace-processor=$(printf '%s\n' "$version" | sed -n 's/.*trace_processor \([^ ]*\).*/\1/p')" >> "$GITHUB_OUTPUT"
+
+    # Fetched on first use and checked against the SHA-256 the perfetto
+    # package pins; the version echolot names is the key.
+    - name: Cache trace_processor
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: ~/.local/share/perfetto/prebuilts
+        key: echolot-tp-${{ runner.os }}-${{ runner.arch }}-${{ steps.install.outputs.trace-processor }}
+
+    # The one check that says something about the runner and nothing about
+    # the app. A report from a machine that fails it would mean nothing.
+    - name: echolot doctor
+      shell: bash
+      env:
+        ECHOLOT: ${{ steps.install.outputs.echolot }}
+      run: |
+        if ! "$ECHOLOT" doctor -q; then
+          echo "::error title=echolot::doctor says this runner does not compute traces correctly; a report from it would mean nothing"
+          exit 1
+        fi
+
+    - name: echolot analyze
+      id: analyze
+      shell: bash
+      env:
+        PY: ${{ steps.install.outputs.python }}
+        ECHOLOT: ${{ steps.install.outputs.echolot }}
+        CONFIG: ${{ inputs.config }}
+        TRACES: ${{ inputs.traces }}
+        OUT: ${{ steps.where.outputs.out }}
+      run: >-
+        "$PY" "$GITHUB_ACTION_PATH/action/ci.py" analyze
+        --echolot "$ECHOLOT" --config "$CONFIG" --out "$OUT" --traces "$TRACES"
+
+    - name: Find the baseline
+      id: baseline
+      if: inputs.baseline == ''
+      shell: bash
+      env:
+        PY: ${{ steps.install.outputs.python }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        BRANCH: ${{ steps.where.outputs.branch }}
+        WORKFLOW: ${{ inputs.baseline-workflow }}
+        ARTIFACT: ${{ inputs.artifact-name }}
+        DEST: ${{ runner.temp }}/echolot/baseline-of-${{ inputs.artifact-name }}
+      run: >-
+        "$PY" "$GITHUB_ACTION_PATH/action/ci.py" baseline
+        --artifact "$ARTIFACT" --branch "$BRANCH" --workflow "$WORKFLOW" --dest "$DEST"
+
+    - name: echolot compare
+      id: compare
+      shell: bash
+      env:
+        PY: ${{ steps.install.outputs.python }}
+        ECHOLOT: ${{ steps.install.outputs.echolot }}
+        CONFIG: ${{ inputs.config }}
+        OUT: ${{ steps.where.outputs.out }}
+        BASELINE: ${{ inputs.baseline || steps.baseline.outputs.path }}
+      run: >-
+        "$PY" "$GITHUB_ACTION_PATH/action/ci.py" compare
+        --echolot "$ECHOLOT" --config "$CONFIG" --out "$OUT" --baseline "$BASELINE"
+
+    - name: Summary
+      shell: bash
+      env:
+        PY: ${{ steps.install.outputs.python }}
+        OUT: ${{ steps.where.outputs.out }}
+        ARTIFACT: ${{ inputs.artifact-name }}
+        BRANCH: ${{ steps.where.outputs.branch }}
+        NOTE: ${{ steps.baseline.outputs.note }}
+        RUN: ${{ steps.baseline.outputs.run }}
+        URL: ${{ steps.baseline.outputs.url }}
+      run: >-
+        "$PY" "$GITHUB_ACTION_PATH/action/ci.py" summary
+        --out "$OUT" --artifact "$ARTIFACT" --branch "$BRANCH"
+        --note "$NOTE" --run "$RUN" --url "$URL"
+
+    - name: Keep the reports
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.where.outputs.out }}
+        if-no-files-found: error
+
+    - name: Comment on the pull request
+      if: inputs.comment == 'true'
+      shell: bash
+      env:
+        PY: ${{ steps.install.outputs.python }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        OUT: ${{ steps.where.outputs.out }}
+        ARTIFACT: ${{ inputs.artifact-name }}
+        BRANCH: ${{ steps.where.outputs.branch }}
+        NOTE: ${{ steps.baseline.outputs.note }}
+        RUN: ${{ steps.baseline.outputs.run }}
+        URL: ${{ steps.baseline.outputs.url }}
+        PR: ${{ github.event.pull_request.number }}
+      run: >-
+        "$PY" "$GITHUB_ACTION_PATH/action/ci.py" comment
+        --out "$OUT" --artifact "$ARTIFACT" --branch "$BRANCH"
+        --note "$NOTE" --run "$RUN" --url "$URL" --pr "$PR"
