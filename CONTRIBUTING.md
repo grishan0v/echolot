@@ -29,7 +29,7 @@ says how.
 ## The documentation site
 
 `docs/` is also published as a site, with search and a sidebar, to GitHub
-Pages from `main`. The pages stay Markdown written for GitHub and read the
+Pages from `main`: <https://grishan0v.github.io/echolot/>. The pages stay Markdown written for GitHub and read the
 same there. On the way to the site, [docs/site.py](docs/site.py) rewrites the
 three things in them that are GitHub's: the navigation line under a title,
 links that leave `docs/`, and `README.md` as a folder's first page.

@@ -144,7 +144,7 @@ version = { attr = "echolot.__version__" }
 
 [project.urls]
 Homepage = "https://github.com/grishan0v/echolot"
-Documentation = "https://github.com/grishan0v/echolot/tree/main/docs"
+Documentation = "https://grishan0v.github.io/echolot/"
 Repository = "https://github.com/grishan0v/echolot"
 Issues = "https://github.com/grishan0v/echolot/issues"
 

@@ -416,7 +416,7 @@ and otherwise prints the two lines to add: a trace is tens of megabytes.
 
 ## Documentation
 
-Start at the [documentation index](https://github.com/grishan0v/echolot/tree/main/docs), or jump straight in:
+The documentation is a site with search across every page: [grishan0v.github.io/echolot](https://grishan0v.github.io/echolot/). The same pages are on GitHub, starting at the [documentation index](https://github.com/grishan0v/echolot/tree/main/docs). Or jump straight in:
 
 | | document | about |
 |---|---|---|
