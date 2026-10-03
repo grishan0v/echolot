@@ -41,7 +41,7 @@ Why the answers can be trusted, and what the tool refuses to do.
 
 | document | about |
 |---|---|
-| 📦 **[Publishing](publishing.md)** | cutting a release — the tag, Trusted Publishing, checking artefacts locally |
+| 📦 **[Publishing](publishing.md)** | cutting a release — the tag, Trusted Publishing, how the notes are grouped, checking artefacts locally |
 | 🗺️ **[Planning](planning.md)** | where work is tracked — filing an issue, the four fields the roadmap board sorts by, when a spike comes first, and how a card reaches Done |
 
 ---

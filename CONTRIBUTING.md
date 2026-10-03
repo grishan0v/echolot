@@ -30,3 +30,9 @@ says how.
 
 A change reaches `main` through a pull request whose base is `main`. The
 pull request template lists what it is checked against.
+
+The title opens with the kind of change: `feat:`, `fix:`, `docs:`, `build:`,
+`ci:`, `test:`, `refactor:` or `chore:`, with a scope if it helps,
+`fix(report): …`. A workflow labels the pull request from it, and the release
+notes are grouped by that label; [docs/publishing.md](docs/publishing.md#how-the-notes-are-grouped)
+has the sections.

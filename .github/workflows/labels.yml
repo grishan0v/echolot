@@ -1,0 +1,100 @@
+name: labels
+
+# Labels a pull request by the kind of change it is, so the notes of the
+# release it ships in can group it: .github/release.yml maps each label to a
+# section. The kind is the type its title opens with, as in `fix(report): …`.
+# The title is what the notes print, and it can still be corrected after the
+# pull request is opened, which a branch name cannot.
+#
+# A title whose type is known decides the kind: the label for that kind goes
+# on, and the label of any other kind comes off, so a title corrected from
+# `feat:` to `fix:` moves the pull request from Features to Fixes. A title
+# without a known type leaves the kind labels as they are, so a label put on
+# by hand stays. `detector` goes on when the pull request changes a file in
+# echolot/sql/detectors/, and nothing here takes it off.
+#
+# `pull_request_target` rather than `pull_request`: a pull request from a fork,
+# or from dependabot, runs `pull_request` with a read-only token, and labelling
+# needs write. `pull_request_target` runs this file as it is on main, with a
+# token that can write. That is safe only while nothing here checks out or
+# runs the pull request's code: the job reads the title from the event and the
+# list of files from the API, and nothing else. tests/test_release_notes.py
+# holds it to that.
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+# A title edited twice in a row: the second run has the title that counts.
+concurrency:
+  group: labels-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  kind:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write   # to read the files and set the labels
+    steps:
+      # The title travels in the environment, never inside the script: a title
+      # is text anyone opening a pull request chooses.
+      - name: Label the pull request by the kind of change
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess, urllib.parse
+
+          # The type a title opens with, and the label .github/release.yml
+          # groups it by.
+          KINDS = {
+              "feat": "enhancement",
+              "perf": "enhancement",
+              "fix": "bug",
+              "docs": "documentation",
+              "build": "maintenance",
+              "chore": "maintenance",
+              "ci": "maintenance",
+              "refactor": "maintenance",
+              "style": "maintenance",
+              "test": "maintenance",
+          }
+          DETECTORS = "echolot/sql/detectors/"
+
+
+          def api(*args):
+              done = subprocess.run(["gh", "api", *args], check=True,
+                                    capture_output=True, text=True)
+              return [line for line in done.stdout.splitlines() if line]
+
+
+          repo, number = os.environ["GH_REPO"], os.environ["NUMBER"]
+          labels = f"repos/{repo}/issues/{number}/labels"
+          have = set(api(labels, "--jq", ".[].name"))
+
+          want, drop = set(), set()
+          found = re.match(r"([a-z]+)(\([^)]*\))?!?: ", os.environ["TITLE"])
+          kind = KINDS.get(found.group(1)) if found else None
+          if kind:
+              want.add(kind)
+              drop = (set(KINDS.values()) - {kind}) & have
+          files = api("--paginate", f"repos/{repo}/pulls/{number}/files",
+                      "--jq", ".[].filename")
+          if any(path.startswith(DETECTORS) for path in files):
+              want.add("detector")
+
+          add = sorted(want - have)
+          if add:
+              api("-X", "POST", labels,
+                  *[arg for name in add for arg in ("-f", f"labels[]={name}")])
+          for name in sorted(drop):
+              api("-X", "DELETE", f"{labels}/{urllib.parse.quote(name, safe='')}")
+          print(f"kind: {kind or 'none in the title'}; "
+                f"added: {', '.join(add) or 'nothing'}; "
+                f"removed: {', '.join(sorted(drop)) or 'nothing'}")
+          PY
