@@ -7,7 +7,8 @@ name: publish
 # Three jobs, in order: build the sdist and wheel; upload them to PyPI; create
 # the GitHub Release for the tag with the same two files attached, and notes
 # that list the pull requests merged since the previous tag under a link to
-# the version on PyPI.
+# the version on PyPI. `--generate-notes` groups them by the sections in
+# .github/release.yml.
 #
 # PyPI authentication is Trusted Publishing (OIDC): no token lives in the
 # repository. PyPI must know this workflow — see docs/publishing.md.

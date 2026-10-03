@@ -1,0 +1,31 @@
+# The sections of a release's notes. publish.yml creates the release with
+# `gh release create --generate-notes`, and GitHub reads this file by itself:
+# each pull request merged since the previous tag goes under the first section
+# whose labels it carries, and one with none of them under Other.
+#
+# The labels come from labels.yml, which sets one from the type a pull
+# request's title opens with, and adds `detector` when it changes a detector's
+# SQL. Detectors come first because they are what a reader of a release most
+# wants to know about: a release that touches one can change what the report
+# says about the same trace, fix or feature alike.
+#
+# Documentation is docs/ and the README. echolot/guide/ and echolot/claude/
+# are what an agent reads, and they ship in the package, so a change there is
+# a feature or a fix.
+
+changelog:
+  categories:
+    - title: Detectors
+      labels: [detector]
+    - title: Features
+      labels: [enhancement]
+    - title: Fixes
+      labels: [bug]
+    - title: Documentation
+      labels: [documentation]
+    # `dependencies` and `github_actions` are the labels dependabot puts on its
+    # own pull requests.
+    - title: Maintenance
+      labels: [maintenance, dependencies, github_actions]
+    - title: Other
+      labels: ["*"]

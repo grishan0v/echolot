@@ -6,8 +6,8 @@ A release is a git tag. `.github/workflows/publish.yml` builds the sdist and
 wheel on the tag, uploads them with PyPI Trusted Publishing — no API token is
 stored anywhere in the repository or in GitHub secrets — and then creates the
 GitHub Release for that tag: the same two files attached, notes listing the
-pull requests merged since the previous tag, a link to the version on PyPI on
-top. The GitHub Release is created only after PyPI has accepted the upload, so
+pull requests merged since the previous tag by kind of change, a link to the
+version on PyPI on top. The GitHub Release is created only after PyPI has accepted the upload, so
 the two never disagree about which versions exist.
 
 ## One-time setup on PyPI
@@ -98,7 +98,8 @@ Watch the run under **Actions**. When it is green the package is at
 <https://pypi.org/project/echolot/>, `pipx install echolot` works, and the
 release is listed at <https://github.com/grishan0v/echolot/releases>. The
 generated notes list the pull requests merged since the previous tag, by
-title — edit them in the GitHub UI if a version deserves a paragraph.
+title, in the sections [below](#how-the-notes-are-grouped) — edit them in the
+GitHub UI if a version deserves a paragraph.
 
 The same tag releases the plugin. The marketplace entry fetches
 `plugins/echolot` at that tag, so until it is pushed the entry points at a tag
@@ -112,6 +113,45 @@ A tag, and therefore a release, is a snapshot: it contains what was committed
 before the tag was made and nothing after. To ship a fix, bump the version in
 another pull request and tag again — an uploaded version number can never be
 reused on PyPI, even after deletion.
+
+## How the notes are grouped
+
+GitHub writes the notes, and `.github/release.yml` gives it the sections: a
+pull request goes under the first section whose label it carries.
+
+| section | label | set by |
+|---|---|---|
+| Detectors | `detector` | a change to a file in `echolot/sql/detectors/` |
+| Features | `enhancement` | a title opening with `feat:` or `perf:` |
+| Fixes | `bug` | `fix:` |
+| Documentation | `documentation` | `docs:` |
+| Maintenance | `maintenance`, `dependencies`, `github_actions` | `build:`, `chore:`, `ci:`, `refactor:`, `style:`, `test:`; dependabot puts the other two on its own pull requests |
+| Other | any other | a title with none of these types |
+
+`.github/workflows/labels.yml` sets the labels when a pull request is opened,
+and again when its title or its commits change. The type may carry a scope and
+a `!`: `fix(report): …`, `feat!: …`. A title corrected from `feat:` to `fix:`
+moves the pull request from Features to Fixes. A title without one of these
+types gets no label from the workflow, and a label put on by hand stays.
+
+`detector` goes on and stays on. A fix to a detector lands under Detectors,
+because it changes what the report says about the same trace, and that is
+what a reader of the notes most wants to know.
+
+Documentation is `docs/` and the README. `echolot/guide/` and
+`echolot/claude/` are what an agent reads, and they ship in the package, so a
+change there is a feature or a fix.
+
+A pull request in the wrong section is fixed on the pull request, before the
+tag: correct the title, or the label. After the tag, edit the release's notes
+in the GitHub UI.
+
+The workflow runs on `pull_request_target`, so a pull request from a fork or
+from dependabot gets its label too. That trigger's token can write, which is
+why the workflow reads the title and the list of files and never checks out
+the pull request's code; `tests/test_release_notes.py` holds it to that. The
+labels do not decide the version: the bump pull request says why a release is
+a minor or a patch.
 
 ## Checking the artefacts locally
 
