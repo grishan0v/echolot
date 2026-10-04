@@ -392,7 +392,7 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 | `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |
 | `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
 | `repeated_work` | the same named work entered from more than one caller | `detail` names the callers; a `near miss` row means the occurrences are too unlike to be one work |
-| `io_wait` | threads the kernel parked waiting for a block device | `detail` says `main` or `background`; there is no code to look at, only I/O to remove or move |
+| `io_wait` | threads the kernel parked waiting for a block device | `thread` says `main` or `background`, and so does `detail`; there is no code to look at, only I/O to remove or move |
 
 ### What matters about individual ones
 

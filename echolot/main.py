@@ -536,7 +536,9 @@ def _markers_info(tp, cfg: Config) -> dict:
     are usually async — see `_aslice` in context.sql. Self time comes from
     the same child sum the detectors use, so a marker wrapping another
     reads as the difference: the hunt above needed `store_update` minus
-    `store_update_locked` to say how long the lock was waited for.
+    `store_update_locked` to say how long the lock was waited for. The
+    total counts an occurrence inside one of the same name once, as part of
+    the outer one: a marker in a recursive function doubled it otherwise.
 
     Grouped by name in the end, with the threads listed: a marker that ran
     on two threads is one marker, and the reader wants one row and the
@@ -564,7 +566,9 @@ def _markers_info(tp, cfg: Config) -> dict:
         )
         SELECT seen.name AS location, seen.thread AS thread,
                COUNT(*) AS count,
-               SUM(MAX(seen.dur, 0)) AS total_ns,
+               SUM(CASE WHEN EXISTS (SELECT 1 FROM ancestor_slice(seen.slice_id) a
+                                     WHERE a.name = seen.name)
+                        THEN 0 ELSE MAX(seen.dur, 0) END) AS total_ns,
                SUM(MAX(seen.dur, 0) - COALESCE(c.ns, 0)) AS self_ns,
                MAX(MAX(seen.dur, 0)) AS max_ns
         FROM seen LEFT JOIN child_sum c ON c.parent_id = seen.slice_id
