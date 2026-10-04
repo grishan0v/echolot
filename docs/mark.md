@@ -151,6 +151,14 @@ around them:
   function and measure another;
 - **a `return` in the body**, **a body on one line**, and **code sharing a
   line with the `{` or the `}`** — the refusals of `--apply` above;
+- **a frame entered through a lambda** — `onCreate$lambda$0`,
+  `Repo$refresh$1.invokeSuspend`, javac's `lambda$flush$0`. The lambda often
+  runs later than the function that made it, a click listener or a `launch`,
+  so a pair around that function would time making it; mark inside the
+  lambda by hand;
+- **a `suspend fun`** — `beginSection` and `endSection` act on the calling
+  thread, and the function can resume on another after a `withContext` or a
+  `delay`; mark a stretch with no suspension point by hand;
 - **a frame outside `instrumentation.allowed`** — shown and not applied,
   like any site outside; the frame under it may be the allowed caller;
 - **most frames landing nowhere** — one sentence naming the build the report
