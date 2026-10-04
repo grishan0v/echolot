@@ -449,7 +449,9 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
             "duration_s": dur,
             "prompt_chars": len(s.prompt),
             "prompt_head": s.prompt[:400],
-            "prompt_mentions": _prompt_mentions(s.prompt),
+            # Not judged where the source does not carry the brief.
+            "prompt_mentions": (_prompt_mentions(s.prompt)
+                                if session.shows("briefs") else None),
             "rounds": rounds,
             "max_rounds": (cfg.get("loop.max_rounds") if cfg else None),
             "analyze_calls": len(analyzes),
@@ -469,15 +471,24 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
 
 
 def _prompt_mentions(prompt: str) -> dict[str, bool]:
-    """The three things echolot-hunt.md says to pass down."""
-    p = prompt or ""
+    """The three things echolot-hunt.md says to pass down.
+
+    Read off the values, not the brief's own labels: the template always
+    carries `Traces:` and `Regressed:`, and its placeholders mention
+    `.echolot/traces`, so a brief sent unfilled passed both. A `<…>` left in
+    is no value. And the change is given when anything follows `after`,
+    `unknown` included, which is what the template asks for.
+    """
+    p = re.sub(r"<[^<>\n]*>", " ", prompt or "")
+    bare = re.sub(r"(?im)^\s*(?:traces|regressed)\s*:", " ", p)
     return {
-        "traces": bool(RE_TRACE_LITERAL.search(p) or re.search(r"\btraces?\b|трейс", p, re.I)),
+        "traces": bool(RE_TRACE_LITERAL.search(p) or re.search(r"\btraces?\b|трейс", bare, re.I)),
         "regression": bool(re.search(
-            r"было|стало|regress|was\b.*\bnow\b|просел|P9\d|\d+\s*(?:ms|мс|s|с)\b", p, re.I)),
+            r"было|стало|regress|was\b.*\bnow\b|просел|P9\d|\d+\s*(?:ms|мс|s|с)\b", bare, re.I)),
         "since_change": bool(re.search(
             r"после\s+(?:какого|коммит|измен)|after\s+(?:which|the)\s+(?:change|commit)|"
-            r"since\s+commit|\bcommit\b|\bPR\b|\bMR\b", p, re.I)),
+            r"since\s+commit|\bcommit\b|\bPR\b|\bMR\b|\bafter[ \t]+[\w\"'«]|\bunknown\b",
+            p, re.I)),
     }
 
 
