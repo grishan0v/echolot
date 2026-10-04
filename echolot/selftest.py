@@ -147,13 +147,12 @@ def _(report):
     threads', and `matches` counts the same set the window was built from.
     """
     from .config import Config
-    from .main import analyze_trace
     cfg = {**FIXTURE_CONFIG,
            "scenario": {**FIXTURE_CONFIG["scenario"], "end": {"name": "Screen.loaded"}}}
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "async.perfetto-trace"
         path.write_bytes(fixture.build())
-        w = analyze_trace(path, Config(cfg))["window"]
+        w = _analyze(path, Config(cfg))["window"]
     assert w["end_anchor"]["matches"] == 1, w["end_anchor"]
     assert w["duration_ms"] == 900.0, (
         f"AppStart opens at 100 and Screen.loaded closes at 1000: {w}")
@@ -387,11 +386,10 @@ def _(report):
     # the three facts named as missing rather than as zeroes, because
     # `compare` decides whether it may trust its own table on this.
     from .config import Config
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "bare.perfetto-trace"
         path.write_bytes(fixture.build(environment=False))
-        bare = analyze_trace(path, Config(FIXTURE_CONFIG))
+        bare = _analyze(path, Config(FIXTURE_CONFIG))
     env = bare["environment"]
     assert env["missing"] == ["cpu", "memory", "thermal"], env
     assert env["cpu"] is None and env["thermal"] is None, env
@@ -772,11 +770,10 @@ def _(report):
     Costs a second session over the fixture, which is what it takes to run the
     pipeline with one mask moved.
     """
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build())
-        freed = analyze_trace(trace, Config(FIXTURE_CONFIG), cli_overrides={
+        freed = _analyze(trace, Config(FIXTURE_CONFIG), cli_overrides={
             "monitor_contention": {"name_glob": "no-such-name*",
                                    "name_glob_alt": "no-such-name*"}})
     names = {r["location"] for r in rows(freed, "repeated_work")}
@@ -1055,12 +1052,17 @@ def _(report):
         root = Path(tmp)
         recorder.at(root)
         recorder.failed("collection error: no device")
-        os.environ.pop("ECHOLOT_NO_RECORD", None)
+        # Put back as it was, and only if it was there. Set to "1"
+        # unconditionally, it stayed set in the `doctor` process after this
+        # check, and no doctor run — nor the `init` that runs the self-check
+        # — reached the run log again.
+        quiet = os.environ.pop("ECHOLOT_NO_RECORD", None)
         try:
             recorder.record(type("A", (), {"cmd": "collect", "config": None})(),
                             ["collect"], _time.time(), exit_code=2)
         finally:
-            os.environ["ECHOLOT_NO_RECORD"] = "1"
+            if quiet is not None:
+                os.environ["ECHOLOT_NO_RECORD"] = quiet
         runs = recorder.read(root / recorder.LOG_FILE)
     assert runs and runs[0].get("error") == "collection error: no device", runs
 
@@ -1440,11 +1442,10 @@ def _(report):
     # trace_processor and are simply empty — but "still exist" is an
     # assumption, and if it ever stops holding, every such trace comes back
     # with an error in detectors[].error instead of a clean silent detector.
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "no-frames.perfetto-trace"
         trace.write_bytes(fixture.build(frames=False))
-        plain = analyze_trace(trace, Config(FIXTURE_CONFIG))
+        plain = _analyze(trace, Config(FIXTURE_CONFIG))
     det = next(d for d in plain["detectors"] if d["id"] == "frame_jank")
     assert det["error"] is None, f"empty tables must not be an error: {det['error']}"
     assert det["rows"] == [], det["rows"]
@@ -1463,11 +1464,10 @@ def _anchored_at(anchor: str):
     else is the shipped behaviour: this is a config a project could
     legitimately have, not a special mode.
     """
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "late.perfetto-trace"
         trace.write_bytes(fixture.build())
-        return analyze_trace(trace, Config({
+        return _analyze(trace, Config({
             **FIXTURE_CONFIG,
             "scenario": {**FIXTURE_CONFIG["scenario"],
                          "start": {"name": anchor}},
@@ -1523,11 +1523,10 @@ def _lowered_bar():
     known exactly. Costs one more pass over the fixture, which is the price of
     testing a five-second rule on a one-second scenario.
     """
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "lowered.perfetto-trace"
         trace.write_bytes(fixture.build())
-        return analyze_trace(trace, Config({
+        return _analyze(trace, Config({
             **FIXTURE_CONFIG,
             "detectors": {"anr_risk": {"min_stall_ms": 100}},
         }))
@@ -2214,7 +2213,6 @@ def _(report):
 @check("markers: a domains entry is measured, async or not, and an unseen one is named")
 def _(report):
     from .config import Config
-    from .main import analyze_trace
     from .report import to_markdown
     cfg = {**FIXTURE_CONFIG, "domains": [
         {"slice": "Screen.loaded", "module": ":app"},
@@ -2224,7 +2222,7 @@ def _(report):
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "markers.perfetto-trace"
         path.write_bytes(fixture.build())
-        rep = analyze_trace(path, Config(cfg))
+        rep = _analyze(path, Config(cfg))
     rows = {r["location"]: r for r in rep["markers"]["rows"]}
     # The async section: 700 ms on no thread, and the table says so.
     assert rows["Screen.loaded"]["total_ms"] == 700.0, rows["Screen.loaded"]
@@ -4146,51 +4144,81 @@ def _(report):
 
 # --- the run ---------------------------------------------------------------
 
+# The trace_processor this self-check is checking: what `doctor
+# --tp-binary` or `toolchain.tp_binary` named, set by `run` for the length of
+# the run, and None for the pinned build. Only the main report was given it,
+# so seventeen of the eighteen trace sessions ran the pin: vouching for a
+# binary they never started, or failing where the pin has no build for the
+# machine — which is when a person is told to name a binary in the first
+# place.
+_binary: str | None = None
+
+
+def _analyze(trace, cfg: Config, **kwargs) -> dict:
+    """`analyze_trace` on the binary this run is checking. Every trace a check
+    opens goes through here."""
+    from .main import analyze_trace  # late import: main imports us
+    return analyze_trace(trace, cfg, _binary, **kwargs)
+
+
 def build_report(tp_binary: str | None = None, sampling: str | None = None) -> dict:
     """Builds the fixture into a temp file and runs the detectors over it.
 
     `sampling` is `fixture.build`'s: the same trace with a callstack sampler
     behind it, for the checks that are about one.
     """
-    from .main import analyze_trace# late import: main imports us
+    from .main import analyze_trace  # late import: main imports us
 
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build(sampling=sampling))
-        return analyze_trace(trace, Config(FIXTURE_CONFIG), tp_binary)
+        return analyze_trace(trace, Config(FIXTURE_CONFIG), tp_binary or _binary)
 
 
-@functools.lru_cache(maxsize=1)
 def sampled_report() -> dict:
-    """The fixture with a callstack sampler behind it, analysed once a process.
+    """The fixture with a callstack sampler behind it, analysed once a process
+    for each binary.
 
     Several checks read it, and building it for each would run trace_processor
     again in every `doctor`. None of them writes to it.
     """
-    return build_report(sampling="arrived")
+    return _sampled(_binary)
+
+
+@functools.lru_cache(maxsize=2)
+def _sampled(binary: str | None) -> dict:
+    return build_report(binary, sampling="arrived")
 
 
 def minified_report(mapping: str) -> dict:
     """The sampled fixture from a minified build, analysed with `mapping` as its mapping.txt."""
-    from .main import analyze_trace  # late import: main imports us
-
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build(sampling="minified"))
         path = Path(tmp) / "mapping.txt"
         path.write_text(mapping, encoding="utf-8")
         project = {**FIXTURE_CONFIG["project"], "mapping": str(path)}
-        return analyze_trace(trace, Config({**FIXTURE_CONFIG, "project": project}))
+        return _analyze(trace, Config({**FIXTURE_CONFIG, "project": project}))
 
 
 def _where(e: BaseException) -> str:
-    """`at selftest.py:412` — the line the check gave up on."""
+    """`at selftest.py:412` — the line the check gave up on.
+
+    The check's own line, and where it was raised beside it when that is
+    somewhere else. The deepest frame alone named a library file —
+    `decoder.py:361` — and the check's line was nowhere in the message.
+    """
     import traceback
     frames = traceback.extract_tb(e.__traceback__)
     if not frames:
         return ""
-    last = frames[-1]
-    return f" at {Path(last.filename).name}:{last.lineno}"
+    here = Path(__file__).name
+    deepest = frames[-1]
+    ours = next((f for f in reversed(frames) if Path(f.filename).name == here), deepest)
+    where = f" at {Path(ours.filename).name}:{ours.lineno}"
+    if ours is not deepest:
+        where += f" (raised in {Path(deepest.filename).name}:{deepest.lineno})"
+    return where
 
 
 def _why(e: BaseException) -> str:
@@ -4263,4 +4291,9 @@ def run_checks(report: dict, checks) -> list[tuple[str, str | None]]:
 
 def run(tp_binary: str | None = None) -> list[tuple[str, str | None]]:
     """[(check name, None if it passed else the mismatch text)]."""
-    return run_checks(build_report(tp_binary), CHECKS)
+    global _binary
+    _binary, before = tp_binary, _binary
+    try:
+        return run_checks(build_report(tp_binary), CHECKS)
+    finally:
+        _binary = before
