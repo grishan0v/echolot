@@ -36,7 +36,7 @@ runner:
   mode: launch                 # launch | command | gradle
   iterations: 5
   duration_ms: 12000
-  reset_policy: force-stop     # force-stop (cold) | none (warm)
+  reset_policy: force-stop     # force-stop (cold) | none (nothing between repeats)
   environment: true            # record CPU clock, thermal, memory
   sampling: false              # callstack samples, in Hz; true is 100
 
