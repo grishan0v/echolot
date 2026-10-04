@@ -35,6 +35,7 @@ instead.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from statistics import median
 from typing import Any
 
 from . import stats, table
@@ -55,7 +56,7 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
           floor_ms: float = FLOOR_MS,
           floor_ratio: float = FLOOR_RATIO,
           temp_prefix: str | None = None) -> dict[str, Any]:
-    warnings, comparable = _check(before, after)
+    warnings, comparable = _check(before, after, floor_ratio)
 
     rows: list[dict[str, Any]] = []
     state_changed: list[dict[str, Any]] = []
@@ -68,6 +69,28 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
         da = by_id_after.get(det_id)
         rows_b = (db or {}).get("rows") or []
         rows_a = (da or {}).get("rows") or []
+
+        # A detector that failed did not look, and it is neither silent nor
+        # the reason the other side's rows are gone or new. It used to be
+        # both, and the error was not mentioned.
+        failed = [(side, d) for side, d in (("before", db), ("after", da))
+                  if _failed(d)]
+        if failed:
+            for side, d in failed:
+                warnings.append({
+                    "id": "detector-failed",
+                    "text": f"`{det_id}` failed on the {side} side: "
+                            f"{d['error']}. It did not look there, so its rows "
+                            f"are left out of the table rather than called "
+                            f"gone or new.",
+                })
+            if db is not None and da is not None:
+                state_changed.append({
+                    "id": det_id,
+                    "before": "failed" if _failed(db) else _state(rows_b),
+                    "after": "failed" if _failed(da) else _state(rows_a),
+                })
+            continue
 
         if db is not None and da is not None and bool(rows_b) != bool(rows_a):
             state_changed.append({
@@ -145,7 +168,8 @@ def _planted(rows: list[dict], temp_prefix: str | None) -> list[str]:
 
 # --- what may be compared with what ----------------------------------------
 
-def _check(before: dict, after: dict) -> tuple[list[dict[str, str]], bool]:
+def _check(before: dict, after: dict,
+           floor_ratio: float = FLOOR_RATIO) -> tuple[list[dict[str, str]], bool]:
     """Everything that makes two reports say less about each other than it looks.
 
     A comparison is arithmetic and will happily subtract numbers about two
@@ -167,14 +191,21 @@ def _check(before: dict, after: dict) -> tuple[list[dict[str, str]], bool]:
         })
         comparable = False
 
+    # Either anchor, as report.md warns about either. With no end anchor the
+    # window runs on to the end of the recording, which is how ten detectors
+    # once fired on a scenario that had not been cut out.
     for side, w in (("before", wb), ("after", wa)):
-        anchor = w.get("start_anchor") or {}
-        if anchor.get("matches") == 0:
+        missed = [(key, a) for key in ("start", "end")
+                  if (a := w.get(f"{key}_anchor") or {}).get("matches") == 0]
+        if missed:
             out.append({
                 "id": f"anchor-{side}",
-                "text": f"The {side} report's start anchor `{anchor.get('glob')}` "
-                        f"never matched — its window is the whole trace, not the "
-                        f"scenario. Fix the config and analyze again.",
+                "text": f"The {side} report's "
+                        + " and ".join(f"{key} anchor `{a.get('glob')}`"
+                                       for key, a in missed)
+                        + " never matched — its window is not the scenario's, "
+                          "and runs to the edge of the trace. Fix the config "
+                          "and analyze again.",
             })
 
     cb, ca = before.get("config") or {}, after.get("config") or {}
@@ -204,7 +235,7 @@ def _check(before: dict, after: dict) -> tuple[list[dict[str, str]], bool]:
                       "with like.",
         })
 
-    out.extend(_environment_moved(before, after))
+    out.extend(_environment_moved(before, after, floor_ratio))
     out.extend(_sampling_moved(before, after))
 
     nb, na = _runs(before), _runs(after)
@@ -253,13 +284,19 @@ def _check(before: dict, after: dict) -> tuple[list[dict[str, str]], bool]:
 
 
 # How far the clock may drift before the table below stops being about the
-# app. Deliberately the same number as FLOOR_RATIO: that is the bar a row has
-# to clear to be called moved at all, so a clock that differs by as much can
-# produce every row in the table on code nobody touched.
-CLOCK_TOLERANCE = FLOOR_RATIO
+# app: the floor this comparison runs with, `--floor-pct`, FLOOR_RATIO by
+# default. That is the bar a row has to clear to be called moved at all, so a
+# clock that differs by as much can produce every row in the table on code
+# nobody touched.
+#
+# The drift is the factor a CPU-bound row moves by, the faster clock over the
+# slower, less one. Measured against the before clock, a drop from 2200 to
+# 2000 MHz was 9.1% and passed in silence, while it makes such a row 10%
+# longer: listed as grew, and the one case that looks like a regression.
 
 
-def _environment_moved(before: dict, after: dict) -> list[dict[str, str]]:
+def _environment_moved(before: dict, after: dict,
+                       floor_ratio: float = FLOOR_RATIO) -> list[dict[str, str]]:
     """The platform state the two rounds were measured under.
 
     This is the warning the whole comparison rests on and the one it went
@@ -313,15 +350,15 @@ def _environment_moved(before: dict, after: dict) -> list[dict[str, str]]:
                     "on to have this answered.",
         })
     else:
-        drift = (ma - mb) / mb
-        if abs(drift) >= CLOCK_TOLERANCE:
-            slower, faster = ("after", "before") if drift < 0 else ("before", "after")
+        drift = max(mb, ma) / min(mb, ma) - 1
+        if drift >= floor_ratio:
+            slower, faster = ("after", "before") if ma < mb else ("before", "after")
             out.append({
                 "id": "environment",
                 "text": f"The clock moved between the rounds: {mb:.0f} MHz "
-                        f"before, {ma:.0f} MHz after — {abs(drift) * 100:.0f}% "
+                        f"before, {ma:.0f} MHz after — {drift * 100:.0f}% "
                         f"apart, weighted by the time this app held a core. "
-                        f"That is at or above the {CLOCK_TOLERANCE * 100:.0f}% "
+                        f"That is at or above the {floor_ratio * 100:.0f}% "
                         f"a row must move to be called moved at all, so the "
                         f"table below cannot separate the app from the machine. "
                         f"The {slower} round ran slower than the {faster} one "
@@ -410,8 +447,13 @@ def _params_moved(before: dict, after: dict) -> list[str]:
     while `main_thread_block.min_slice_ms 16 → 3089.5` explains the whole
     report on its own.
     """
-    pb = {d["id"]: (d.get("params") or {}) for d in before.get("detectors", [])}
-    pa = {d["id"]: (d.get("params") or {}) for d in after.get("detectors", [])}
+    # A failed side reports the shipped params, not the ones it would have
+    # run with; set against the other side's calibrated ones, that read as a
+    # threshold change nobody made.
+    pb = {d["id"]: (d.get("params") or {}) for d in before.get("detectors", [])
+          if not _failed(d)}
+    pa = {d["id"]: (d.get("params") or {}) for d in after.get("detectors", [])
+          if not _failed(d)}
     moved = []
     for det_id in sorted(set(pb) & set(pa)):
         for key in sorted(set(pb[det_id]) | set(pa[det_id])):
@@ -450,6 +492,13 @@ def _window(before: dict, after: dict) -> dict[str, Any]:
 
 def _state(rows: list[dict]) -> str:
     return "silent" if not rows else f"{len(rows)} row(s)"
+
+
+def _failed(d: dict | None) -> bool:
+    """A detector whose SQL failed and left nothing: `analyze` writes its
+    error beside empty rows and the shipped params. One merged from repeats
+    that failed only in some has rows from the others, and is compared."""
+    return bool(d and d.get("error") and not d.get("rows"))
 
 
 # --- pairing rows across two reports ---------------------------------------
@@ -579,20 +628,32 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
     va = (ra or {}).get(metric)
     loc, detail = _name(rb if rb is not None else ra, identity, how, keep)
 
+    # How often the row was there is part of what moved. A median covers the
+    # repeats a row was found in, so a row in 1 of 5 before and in 5 of 5
+    # after, at the same milliseconds, read as steady though the work now
+    # happens on every run. Where the two shares differ, each side's repeats
+    # without the row count as zero, as `_merge_startup` counts a reason a
+    # repeat lacked, and the move, its range and the runs it would take are
+    # all read from those.
+    shares = _shares(rb, ra)
+    b_vals, a_vals = _values(rb, metric, shares), _values(ra, metric, shares)
     if rb is None:
         change, delta, ratio = APPEARED, va or 0.0, None
     elif ra is None:
         change, delta, ratio = VANISHED, -(vb or 0.0), None
     else:
-        delta = round((va or 0.0) - (vb or 0.0), 2)
-        ratio = round((va or 0.0) / vb, 2) if vb else None
-        floor = max(floor_ms, floor_ratio * (vb or 0.0))
+        mb, ma = vb or 0.0, va or 0.0
+        if shares and b_vals and a_vals:
+            mb, ma = median(b_vals), median(a_vals)
+        delta = round(ma - mb, 2)
+        ratio = round(ma / mb, 2) if mb else None
+        floor = max(floor_ms, floor_ratio * mb)
         if abs(delta) < floor:
             change = STEADY
         else:
             change = GREW if delta > 0 else SHRANK
 
-    shift = _shift(rb, ra, metric)
+    shift = _shift(b_vals, a_vals, delta if rb and ra else 0.0)
     row = {
         "location": loc,
         "detector": det_id,
@@ -611,7 +672,39 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
     }
     if detail is not None:
         row["detail"] = detail
+    if shares:
+        row["shares"] = shares
     return row
+
+
+def _share(row: dict | None) -> tuple[int, int] | None:
+    """`(k, n)` from a row's `runs`: found in k of n repeats."""
+    try:
+        k, n = (int(x) for x in str((row or {}).get("runs")).split("/"))
+    except ValueError:
+        return None
+    return (k, n) if 0 < k <= n else None
+
+
+def _shares(rb: dict | None, ra: dict | None) -> dict[str, str] | None:
+    """Both sides' `runs`, when the share of repeats differs between them."""
+    sb, sa = _share(rb), _share(ra)
+    if sb is None or sa is None or sb[0] * sa[1] == sa[0] * sb[1]:
+        return None
+    return {"before": f"{sb[0]}/{sb[1]}", "after": f"{sa[0]}/{sa[1]}"}
+
+
+def _values(row: dict | None, metric: str,
+            shares: dict[str, str] | None) -> list[float] | None:
+    """A side's per-repeat values; with `shares`, a zero for each repeat the
+    row was not found in."""
+    if row is None:
+        return None
+    values = ((row.get("spread") or {}).get(metric) or {}).get("values")
+    if not values:
+        return None
+    share = _share(row) if shares else None
+    return list(values) + [0.0] * (share[1] - share[0] if share else 0)
 
 
 def _name(row: dict, identity: tuple[str, ...], how: str,
@@ -655,8 +748,8 @@ def _face(row: dict | None, metric: str) -> dict[str, Any] | None:
     return out
 
 
-def _shift(rb: dict | None, ra: dict | None,
-           metric: str) -> dict[str, float | int | None] | None:
+def _shift(b: list[float] | None, a: list[float] | None,
+           move: float) -> dict[str, float | int | None] | None:
     """The move with the range it lies in, and what these runs could resolve.
 
     `stats.shift` pairs every run after with every run before; see there for
@@ -668,16 +761,11 @@ def _shift(rb: dict | None, ra: dict | None,
     None where there is nothing to pair: a row on one side only, a side
     without per-run values, or too few runs to be 95% sure of anything.
     """
-    if rb is None or ra is None:
-        return None
-    b = ((rb.get("spread") or {}).get(metric) or {}).get("values")
-    a = ((ra.get("spread") or {}).get(metric) or {}).get("values")
     if not b or not a:
         return None
     out = stats.shift(b, a)
     if out is None:
         return None
-    move = (ra.get(metric) or 0.0) - (rb.get(metric) or 0.0)
     out["resolves_ms"] = stats.resolves(b, a, upward=move >= 0)
     out["runs_needed"] = stats.runs_needed(len(b), len(a),
                                            out["resolves_ms"], move)
@@ -842,16 +930,21 @@ def _holds(r: dict[str, Any]) -> str:
 
 
 def _band(face: dict | None, metric: str) -> str:
-    """The median with how far the repeats strayed from it."""
+    """The median with how far the repeats strayed from it, and in how many
+    repeats the row was found when that was not all of them."""
     if face is None:
         return "—"
     value = face.get(metric)
     if value is None:
         return "—"
+    text = f"{value}"
     if "min" in face and face["min"] != face["max"]:
         off = max(value - face["min"], face["max"] - value)
-        return f"{value} ±{off:.0f}"
-    return f"{value}"
+        text += f" ±{off:.0f}"
+    share = _share(face)
+    if share and share[0] < share[1]:
+        text += f" ({share[0]}/{share[1]})"
+    return text
 
 
 def _num(face: dict | None, metric: str) -> str:
