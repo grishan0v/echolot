@@ -31,6 +31,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -427,8 +428,8 @@ def toolchain_info(bin_path: str | None = None,
         # A custom binary bypasses the pin: asking for the package version here
         # would be meaningless.
         info["source"] = source or "--tp-binary"
-        info["binary"] = str(bin_path)
-        info["trace_processor"] = _binary_version(bin_path)
+        info["binary"] = named_binary(bin_path)
+        info["trace_processor"] = _binary_version(info["binary"])
         return info
 
     try:
@@ -536,6 +537,22 @@ def pinned_build() -> PinnedBuild | None:
     return None
 
 
+def named_binary(bin_path: str | Path) -> str:
+    """A binary somebody named, as the absolute path that will be run.
+
+    Checked with `is_file`, which looks in the current directory, and then
+    started by `Popen`, which looks a bare name up in PATH: a
+    `trace_processor_shell` beside the user passed the check and failed to
+    start, or another one on PATH ran instead. A file at the path as named
+    is that file; a bare name that is no file here is looked up in PATH, the
+    way a shell would; anything else stays where it would have been.
+    """
+    path = Path(bin_path).expanduser()
+    if not path.exists() and path.name == str(bin_path) and (found := shutil.which(str(bin_path))):
+        return found
+    return str(path.resolve())
+
+
 def resolve_binary_path(bin_path: str | None = None) -> str:
     """The trace_processor a session runs: the one named, else the pin.
 
@@ -554,11 +571,12 @@ def resolve_binary_path(bin_path: str | None = None) -> str:
     SHA-256 from the manifest the package pins, fetched by its own
     downloader. The pin is the point.
 
-    A named binary comes back as named. Whether it is there is the session's
-    question, and doctor shows the path either way.
+    A named binary comes back as an absolute path — see `named_binary`.
+    Whether it is there is the session's question, and doctor shows the path
+    either way.
     """
     if bin_path:
-        return str(bin_path)
+        return named_binary(bin_path)
     try:
         pin = pinned_build()
     except ImportError as e:
@@ -607,6 +625,38 @@ def _fetch(pin: PinnedBuild) -> str:
     sys.stdout.flush()
     print(_notice(pin), file=sys.stderr, flush=True)
     _, download = _perfetto_prebuilts()
+    # One download at a time per build, across processes: the files that
+    # appear while this one holds the lock are this attempt's own, and a
+    # failure no longer deletes another echolot's download in progress. The
+    # second to get the lock finds the binary there.
+    with _download_lock(pin):
+        if pin.path.is_file():
+            return str(pin.path)
+        return _download(pin, download)
+
+
+@contextlib.contextmanager
+def _download_lock(pin: PinnedBuild):
+    """An exclusive lock for this build; none off POSIX.
+
+    In the system's temporary directory rather than in perfetto's cache,
+    which holds nothing of ours.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    import tempfile
+    with open(Path(tempfile.gettempdir()) / f"echolot-{pin.file_name}.lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+
+
+def _download(pin: PinnedBuild, download) -> str:
     before = _partials(pin)
     try:
         # perfetto announces the download itself, with a `print` — to
@@ -616,7 +666,7 @@ def _fetch(pin: PinnedBuild) -> str:
         with contextlib.redirect_stdout(io.StringIO()):
             return download(file_name=pin.file_name, url=pin.url,
                             sha256=pin.sha256)
-    except Exception as e:
+    except BaseException as e:
         # The file this attempt created goes with it. perfetto leaves it
         # under its temporary name when curl fails or the hash does not
         # match, and names the next attempt's file afresh, so every failure
@@ -626,9 +676,15 @@ def _fetch(pin: PinnedBuild) -> str:
         # builds' files never have that name, and an earlier run's leftover
         # was there before. Nothing is said about it either way; the error
         # below is what happened.
+        #
+        # Ctrl-C too: it skipped an `except Exception`, and the file stayed in
+        # the cache for good. An interruption is not a failure to remember,
+        # though — the next attempt in this process may well succeed.
         for leftover in _partials(pin) - before:
             with contextlib.suppress(OSError):
                 leftover.unlink()
+        if not isinstance(e, Exception):
+            raise
         _FAILED[pin.path] = _cannot_fetch(pin, _cause(e))
         raise ToolchainError(_FAILED[pin.path]) from e
 
@@ -770,6 +826,19 @@ class TraceSession:
                 + ("  (a glob that matches nothing is passed through as "
                    "written — is the directory empty?)" if "*" in str(path)
                    else ""))
+        # Read before trace_processor starts. perfetto starts it first and
+        # stops it only on its own parse error: a trace this process may not
+        # read raised past that, out of the CLI as a traceback, and left the
+        # shell running with init as its parent.
+        try:
+            with path.open("rb") as f:
+                f.read(1)
+        except OSError as e:
+            raise ConfigError(f"cannot read trace {path}: {e.strerror or e}") from e
+        # By its absolute path. perfetto reads a string that does not start
+        # with `/` or `.` and has a colon in it as `resolver:args`, so
+        # `run12:00.perfetto-trace` failed with `KeyError: 'run12'`.
+        path = path.resolve()
 
         # The binary is settled before perfetto is asked to start it, and
         # handed over by path: left to perfetto, the pin would be downloaded
@@ -785,7 +854,7 @@ class TraceSession:
                 f"a file")
         try:
             self._tp = TraceProcessor(
-                trace=str(trace_path) if extra is None else _then(path, extra),
+                trace=str(path) if extra is None else _then(path, extra),
                 config=TraceProcessorConfig(bin_path=binary))
         except TraceProcessorException as e:
             # A file that is there and is not a trace: a capture cut short, a
@@ -857,9 +926,27 @@ def _split_statements(sql: str) -> list[str]:
     fragment that begins mid-word and fails to parse and another that silently
     never runs — and the error names a line of English, which reads as
     anything but "your comment has a semicolon in it". Twice in one sitting.
+
+    And a `;` inside a string literal ends nothing. An anchor or a name mask
+    is a quoted value from the config, and ART names a class initialisation
+    after its descriptor, `Lcom/example/app/Store;`: split there, the
+    literal was cut in half and `analyze` stopped on a syntax error. A piece
+    is added to the statement until SQLite calls it complete.
     """
     body = "\n".join(
         line for line in sql.splitlines()
         if not line.strip().startswith("--")
     )
-    return [chunk.strip() for chunk in body.split(";") if chunk.strip()]
+    out: list[str] = []
+    buf = ""
+    for piece in body.split(";"):
+        buf += piece + ";"
+        if sqlite3.complete_statement(buf):
+            stmt = buf.strip()[:-1].strip()
+            if stmt:
+                out.append(stmt)
+            buf = ""
+    rest = buf.strip()[:-1].strip()
+    if rest:
+        out.append(rest)
+    return out
