@@ -79,18 +79,24 @@ the count beyond it is printed.
 
 `--apply` inserts, at each applicable site, a begin line under the line that
 holds the block's `{` and an end line over the line that holds its `}`,
-indented like the body:
+indented like the body. In a function body the end goes in a `finally`, so the
+section closes however the body is left — a `return`, a `throw`, an exception
+from a callee, or no end at all after a `while (true)`, which in Java would
+make a bare end line unreachable and the file stop compiling. A lambda's and a
+composable's end go in bare: the Compose compiler refuses a `try` around
+composable calls.
 
 ```kotlin
 override fun onCreate(savedInstanceState: Bundle?) {
     android.os.Trace.beginSection("AGENTTMP_activity_oncreate") // echolot:mark
+    try { // echolot:mark
     super.onCreate(savedInstanceState)
     setContent {
         android.os.Trace.beginSection("AGENTTMP_set_content") // echolot:mark
         AppTheme { AppNavHost() }
         android.os.Trace.endSection() // echolot:mark
     }
-    android.os.Trace.endSection() // echolot:mark
+    } finally { android.os.Trace.endSection() } // echolot:mark
 }
 ```
 
@@ -104,7 +110,11 @@ the self-check applies, removes and compares, and `tests/test_mark_edits.py`
 does the same over generated Kotlin and Java sources, CRLF files among them.
 A line that carries the tag in any other shape has more on it than a marker,
 so it stays where it is and `--remove` lists it with its file and line, to be
-cleaned by hand. Applying twice adds nothing. Braces are matched on a view of
+cleaned by hand. Applying twice adds nothing: a block whose begin and end are
+already there is named as marked, and a block around one that is marked still
+gets its own pair. `--remove` walks every source file under `--root`, the ones
+outside a `src/` too, since `--from-anr` marks wherever a frame was placed. A
+file that will not take the write is named and the run goes on. Braces are matched on a view of
 the file with strings and comments blanked out, so a `}` inside a literal
 does not count.
 
@@ -112,7 +122,13 @@ That promise decides what is refused. A block is proposed but not applied,
 with the reason on its row, when a pair of whole lines cannot go in without
 changing a line of the project's:
 
-- **a `return` in the body** — the end line would be skipped on that path;
+- **a `return` in a lambda or a composable's body** — its end goes in bare
+  and would be skipped on that path;
+- **a file in shared Kotlin source**, `src/commonMain` and the other source
+  sets but `androidMain` — `android.os.Trace` does not resolve there;
+- **a marker longer than 127 characters**, which `Trace.beginSection` throws
+  on while recording — a name from a generated class is cut to fit, and a
+  prefix that leaves no room is refused;
 - **the whole body on one line**, `setContent { AppRoot() }` — there is no
   line between the braces to put anything on;
 - **code after the `{`, or before the `}`, on the brace's own line** —

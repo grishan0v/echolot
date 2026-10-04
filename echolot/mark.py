@@ -36,7 +36,10 @@ project's and never into one, and `--remove` deletes exactly those lines.
 Both halves of that sentence are load-bearing, so a block that cannot take a
 line of its own is refused rather than approximated:
 
-    a `return` in the body   the end would be skipped;
+    a `return` in a lambda   its end goes in bare, and would be skipped —
+    or a composable          Compose refuses a `try` around composable
+                             calls (a function body gets its end in a
+                             `finally` and takes a return as it is);
     a body written on one    the begin and end lines would cross, and the
     line                     body would end up inside the begin line's
                              comment — where `--remove` would then delete it;
@@ -44,7 +47,9 @@ line of its own is refused rather than approximated:
     before the `}`, on the   line of the project's, and `--remove` deletes
     brace's line             lines, it does not join them back.
 
-All three are reported as "mark by hand" and shown with the reason. A comment
+Each is reported as "mark by hand" and shown with the reason, as is a file
+in shared Kotlin source (`src/commonMain` and its kin, where `android.*`
+does not resolve) and a marker longer than `Trace.beginSection` takes. A comment
 after the `{` is not code: the begin line goes in under it and the comment
 stays where it was. Nothing else in the file is touched, its line endings
 included, so `--remove` gives back the bytes `--apply` was given.
@@ -53,9 +58,10 @@ included, so `--remove` gives back the bytes `--apply` was given.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import re
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .domains import files_ending, files_named, gradle_module
@@ -70,9 +76,20 @@ TAG = "// echolot:mark"
 # returns it with its line number so the command can say where it is: kept
 # without a word, it let "no `echolot:mark` lines found" stand over a tree
 # that still had them.
+#
+# A function body gets its end in a `finally`, so the section closes on every
+# way out: a `return`, a `throw`, an exception from a callee, and the end of a
+# body Java would call unreachable after a `while (true)`. The `try {` and
+# `} finally { … }` lines are written whole and tagged like the others.
 _APPLIED_LINE = re.compile(
-    r"^\s*android\.os\.Trace\.(?:begin|end)Section\s*\([^)]*\)\s*;?\s*"
+    r"^\s*(?:android\.os\.Trace\.(?:begin|end)Section\s*\([^)]*\)\s*;?"
+    r"|try \{"
+    r"|\} finally \{ android\.os\.Trace\.endSection\(\)\s*;?\s*\})\s*"
     + re.escape(TAG) + r"\s*$")
+# `android.os.Trace.beginSection` throws for a longer name, and only while the
+# app's trace tag is on: the app runs for the developer and crashes during the
+# recording.
+SECTION_NAME_MAX = 127
 CAP = 7   # proposals shown; the rest is a count. Five to seven is a skeleton, not a survey.
 
 # --- the vocabulary -----------------------------------------------------------
@@ -161,6 +178,9 @@ class Proposal:
     open_at: int | None = None
     close_at: int | None = None
     lambda_body: bool = False
+    # A composable's body, or a lambda: the end goes in bare. The Compose
+    # compiler refuses a `try` around composable calls.
+    composable: bool = False
 
 
 @dataclass
@@ -176,7 +196,7 @@ class Plan:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         for p in d["proposals"]:
-            for k in ("open_at", "close_at", "lambda_body"):
+            for k in ("open_at", "close_at", "lambda_body", "composable"):
                 p.pop(k, None)
         return d
 
@@ -370,10 +390,16 @@ def _why_not(open_at: int | None, has_return: bool, flat: bool,
 
 
 def _rel(path: Path, root: Path) -> str:
+    """A path relative to root, with `/` on every system.
+
+    `under_allowed` splits on `/`, and `scan` writes these into YAML in
+    double quotes: on Windows every site read as outside `allowed`, and a
+    `\\s` in a path did not load.
+    """
     try:
-        return str(path.relative_to(root))
+        return path.relative_to(root).as_posix()
     except ValueError:
-        return str(path)
+        return path.as_posix()
 
 
 # --- discovery -----------------------------------------------------------------
@@ -547,17 +573,24 @@ def find_on_create(text: str) -> tuple[int, int | None, int | None, bool] | None
     return (line_of(text, m.start()), j, k, has_return)
 
 
-def find_lambda(text: str, rx: re.Pattern) -> tuple[int, int | None, int | None] | None:
-    """(line, open_at, close_at) of the first `name { … }` matched by rx."""
+def find_lambda(text: str, rx: re.Pattern
+                ) -> tuple[int, int | None, int | None, bool] | None:
+    """(line, open_at, close_at, has_return) of the first `name { … }` matched by rx.
+
+    A lambda's end goes in bare (see `Proposal.composable`), so a
+    `return@setContent` in it would skip the end and leave the section open:
+    the plan refuses that block, and says why.
+    """
     m = rx.search(text)
     if not m:
         return None
     clean = strip_noise(text)
     j = clean.find("{", m.start())
     if j < 0:
-        return (line_of(text, m.start()), None, None)
+        return (line_of(text, m.start()), None, None, False)
     k = match_brace(clean, j)
-    return (line_of(text, m.start()), j, k)
+    has_return = k is not None and re.search(r"\breturn\b", clean[j + 1:k]) is not None
+    return (line_of(text, m.start()), j, k, has_return)
 
 
 def calls_inside(clean_body: str) -> list[str]:
@@ -643,6 +676,37 @@ def _refuse_outside(p: Proposal, allowed: list[str], why: str = _OUTSIDE) -> Non
         return
     p.applicable = False
     p.reason = "; ".join(r for r in (p.reason, why) if r)
+
+
+def shared_source(rel: str) -> str | None:
+    """The Kotlin Multiplatform source set a file sits in, when it is not Android's.
+
+    `src/commonMain`, `jvmMain`, `iosMain`, and shared ones such as
+    `mobileMain`: no `android.*` resolves there, and a marker written into one
+    stopped the shared module compiling.
+    """
+    parts = PurePosixPath(rel).parts
+    for i, part in enumerate(parts[:-1]):
+        if part == "src":
+            name = parts[i + 1]
+            if name.endswith("Main") and name not in ("main", "androidMain"):
+                return name
+    return None
+
+
+def _refuse_unfit(p: Proposal) -> None:
+    """A row `--apply` cannot write: shared Kotlin source, or a name too long to trace."""
+    if not p.applicable:
+        return
+    shared = shared_source(p.file)
+    if shared:
+        p.applicable = False
+        p.reason = (f"shared Kotlin source ({shared}): android.os.Trace does not resolve "
+                    f"here — mark the Android caller, or androidMain")
+    elif len(p.marker) > SECTION_NAME_MAX:
+        p.applicable = False
+        p.reason = (f"the marker is {len(p.marker)} characters and Trace.beginSection takes "
+                    f"{SECTION_NAME_MAX} — shorten instrumentation.temp_prefix")
 
 
 def _build_files(root: Path, mdir: Path) -> tuple[list[Path], list[Path]]:
@@ -812,6 +876,7 @@ class _Planner:
 
     def add(self, p: Proposal) -> None:
         _refuse_outside(p, self.allowed)
+        _refuse_unfit(p)
         self.out.proposals.append(p)
 
     def application(self, mdir: Path, mtext: str) -> None:
@@ -833,8 +898,10 @@ class _Planner:
             out.notes.append(f"{_rel(f, root)}: {simple_name(app_cls)} does not override "
                              f"onCreate — nothing of yours runs at bindApplication")
             return
-        line, o, c, ret = oc
-        why = _why_not(o, ret, one_line_body(t, o, c), c, t)
+        line, o, c, _ = oc
+        # A function body: its end goes in a `finally`, so a return in it
+        # skips nothing.
+        why = _why_not(o, False, one_line_body(t, o, c), c, t)
         self.add(Proposal("app_oncreate", _rel(f, root), line,
                           f"{simple_name(app_cls)}.onCreate — what runs inside bindApplication",
                           self.prefix + "app_oncreate", "manifest+lifecycle",
@@ -858,8 +925,8 @@ class _Planner:
                 f"{_rel(f, root)}: {simple_name(act)} does not override onCreate"
                 + (f" — it inherits from {base}; the override, if any, is there" if base else ""))
         else:
-            line, o, c, ret = oc
-            why = _why_not(o, ret, one_line_body(t, o, c), c, t)
+            line, o, c, _ = oc
+            why = _why_not(o, False, one_line_body(t, o, c), c, t)
             self.add(Proposal("activity_oncreate", _rel(f, root), line,
                               f"{simple_name(act)}.onCreate — the launcher Activity, what runs inside activityStart",
                               self.prefix + "activity_oncreate", "manifest+lifecycle",
@@ -868,13 +935,13 @@ class _Planner:
                               open_at=o, close_at=c))
         sc = find_lambda(t, _SET_CONTENT)
         if sc:
-            line, o, c = sc
-            why = _why_not(o, False, one_line_body(t, o, c), c, t)
+            line, o, c, ret = sc
+            why = _why_not(o, ret, one_line_body(t, o, c), c, t)
             self.add(Proposal("set_content", _rel(f, root), line,
                               "setContent { } — the root of the Compose tree; recomposition re-enters it",
                               self.prefix + "set_content", "api", gradle_module(f, root),
                               applicable=not why, reason=why,
-                              open_at=o, close_at=c, lambda_body=True))
+                              open_at=o, close_at=c, lambda_body=True, composable=True))
             if o is not None and c is not None:
                 self.compose_roots(t, o, c)
             return
@@ -1015,6 +1082,20 @@ def enclosing_block(text: str, suffix: str, line: int):
     return best
 
 
+def _annotated_composable(text: str, decl_line: int) -> bool:
+    """Whether the declaration at this 1-based line carries `@Composable`."""
+    lines = text.splitlines()
+    i = decl_line - 1
+    if 0 <= i < len(lines) and _COMPOSABLE.search(lines[i]):
+        return True
+    i -= 1
+    while 0 <= i < len(lines) and lines[i].strip().startswith("@"):
+        if _COMPOSABLE.search(lines[i]):
+            return True
+        i -= 1
+    return False
+
+
 # The two ways into a lambda that Kotlin compiled into a class of its own. A
 # method a person named is hardly ever one of them on a class numbered last:
 # an anonymous object's `onClick` is declared in the source, and is the answer
@@ -1078,15 +1159,39 @@ def frame_function(symbol: str) -> str:
     return _as_written(member)
 
 
+# What the compiler adds to a generated class's name: a lambda's or a flow
+# operator's numbers, `invokeSuspend`, `$$inlined`. Dropped first when a name
+# has to be cut.
+_COMPILER_PART = re.compile(r"^(?:\d+|invoke|invokeSuspend|inlined|lambda)$")
+
+
 def marker_for(symbol: str, prefix: str) -> str:
     """`pkg.Class$1.method` as `AGENTTMP_Class_1_method`.
 
     The package is dropped: a trace section name is read in a list of twenty
     and the last two parts are what tell them apart.
+
+    Kept within `SECTION_NAME_MAX`, prefix included. A coroutine's or a flow's
+    generated class runs past it: the compiler's own parts go first, and if
+    that is not enough the middle is cut and a short hash of the whole keeps
+    two cut names apart. A prefix that leaves no room comes back too long,
+    and the row is refused for it.
     """
     parts = symbol.split(".")
     tail = ".".join(parts[-2:]) if len(parts) > 1 else symbol
-    return prefix + re.sub(r"\W+", "_", tail).strip("_")
+    name = prefix + re.sub(r"\W+", "_", tail).strip("_")
+    if len(name) <= SECTION_NAME_MAX:
+        return name
+    words = [w for w in re.split(r"\W+", tail) if w and not _COMPILER_PART.match(w)]
+    body = "_".join(words)
+    if len(prefix) + len(body) <= SECTION_NAME_MAX:
+        return prefix + body
+    digest = hashlib.sha1(tail.encode("utf-8")).hexdigest()[:6]
+    room = SECTION_NAME_MAX - len(prefix) - len(digest) - 2
+    if room < 8:
+        return name
+    head = room // 2
+    return f"{prefix}{body[:head]}_{digest}_{body[len(body) - (room - head):]}"
 
 
 def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
@@ -1144,13 +1249,18 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
             f"the line falls inside `{name}` while the frame names "
             f"`{wanted}` — the compiler moved it; mark by hand")
         flat = one_line_body(text, open_at, close_at)
-        why = disagree or _why_not(open_at, has_return, flat, close_at, text)
-        out.proposals.append(Proposal(
+        # A function body takes its end in a `finally`, and a return then
+        # skips nothing. A composable's cannot: the end goes in bare.
+        composable = _annotated_composable(text, decl_line)
+        why = disagree or _why_not(open_at, has_return and composable, flat, close_at, text)
+        proposal = Proposal(
             "anr_frame", rel, decl_line,
             f"{name} — on the stack when it froze, at line {line}",
             marker, "anr", gradle_module(path, root),
             applicable=not why, reason=why,
-            open_at=open_at, close_at=close_at))
+            open_at=open_at, close_at=close_at, composable=composable)
+        _refuse_unfit(proposal)
+        out.proposals.append(proposal)
 
     # A frame outside `instrumentation.allowed` was dropped here without a
     # row, while `plan` shows such a site and refuses it. It is still on the
@@ -1382,10 +1492,46 @@ def _ending_before(text: str, at: int) -> str:
     return "\r\n" if text[max(0, at - 2):at] == "\r\n" else "\n"
 
 
-def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]:
+class Applied(tuple):
+    """What `apply` did: (edited files with their markers, files that could
+    not be read), unpacked as a pair, and two more lists beside it —
+    `unwritable`, the files a write failed on, and `already`, the markers of
+    blocks found marked and left as they were."""
+
+    unwritable: list[str]
+    already: list[tuple[str, str]]
+
+    def __new__(cls, done, unreadable, unwritable=(), already=()):
+        self = super().__new__(cls, (done, unreadable))
+        self.unwritable = list(unwritable)
+        self.already = list(already)
+        return self
+
+
+def _marked(text: str, begin_at: int, end_at: int) -> bool:
+    """Whether this block carries an applied begin under its `{` and an end over its `}`.
+
+    The block itself, not anything inside it: a nested block's marker used
+    to make an outer block count as marked, and a second `--apply` after the
+    outer one was fixed skipped it without a word.
+    """
+    stop = text.find("\n", begin_at)
+    first = text[begin_at:stop if stop >= 0 else len(text)]
+    start = text.rfind("\n", 0, max(end_at - 1, 0)) + 1
+    return is_applied_line(first) and is_applied_line(text[start:end_at])
+
+
+def apply(root: Path, pl: Plan) -> Applied:
     """Insert begin/end pairs for the applicable proposals.
 
-    Returns (edited files with their markers, files that could not be read).
+    Returns (edited files with their markers, files that could not be read),
+    with the files a write failed on and the blocks already marked beside
+    them — see `Applied`.
+
+    A function body gets its end in a `finally`, with `try {` under the begin
+    line, so the section closes however the body is left. A lambda's and a
+    composable's go in bare: the Compose compiler refuses a `try` around
+    composable calls, and the plan refuses such a body when it returns.
 
     A begin line under the line holding the block's `{`, an end line over
     the line holding its `}`, both tagged so `remove` can find them without
@@ -1412,6 +1558,8 @@ def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]
             by_file.setdefault(p.file, []).append(p)
     done: list[tuple[str, list[str]]] = []
     unreadable: list[str] = []
+    unwritable: list[str] = []
+    already: list[tuple[str, str]] = []
     for rel in sorted(by_file):
         path = root / rel
         try:
@@ -1426,19 +1574,29 @@ def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]
         marked = []
         blocks: set[tuple[int, int]] = set()
         for p in by_file[rel]:
-            if TAG in text[p.open_at:p.close_at + 1] or (p.open_at, p.close_at) in blocks:
-                continue   # already marked here
+            if (p.open_at, p.close_at) in blocks:
+                continue
             room = brace_lines(text, p.open_at, p.close_at)
             if isinstance(room, str):
                 continue   # refused, and the plan printed why — see brace_lines
             begin_at, end_at = room
+            if _marked(text, begin_at, end_at):
+                already.append((rel, p.marker))
+                continue
             blocks.add((p.open_at, p.close_at))
             marked.append(p.marker)
             ind = _inner_indent(text, p.open_at)
+            begin_end = _ending_before(text, begin_at)
+            end_end = _ending_before(text, end_at)
             edits.append((begin_at, 0, f"{ind}android.os.Trace.beginSection(\"{p.marker}\")"
-                                       f"{semi} {TAG}{_ending_before(text, begin_at)}"))
-            edits.append((end_at, 1, f"{ind}android.os.Trace.endSection(){semi} {TAG}"
-                                     f"{_ending_before(text, end_at)}"))
+                                       f"{semi} {TAG}{begin_end}"))
+            if p.composable or p.lambda_body:
+                edits.append((end_at, 2, f"{ind}android.os.Trace.endSection(){semi} {TAG}"
+                                         f"{end_end}"))
+            else:
+                edits.append((begin_at, 1, f"{ind}try {{ {TAG}{begin_end}"))
+                edits.append((end_at, 2, f"{ind}}} finally {{ android.os.Trace.endSection()"
+                                         f"{semi} }} {TAG}{end_end}"))
         if not edits:
             continue
         pieces, last = [], 0
@@ -1446,12 +1604,20 @@ def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]
             pieces += [text[last:offset], line]
             last = offset
         pieces.append(text[last:])
-        path.write_bytes("".join(pieces).encode("utf-8"))
+        # A file that will not take the write is named and the rest go on:
+        # a read-only file used to stop the run with a traceback, the files
+        # before it already edited and nothing said about them.
+        try:
+            path.write_bytes("".join(pieces).encode("utf-8"))
+        except OSError:
+            unwritable.append(rel)
+            continue
         done.append((rel, marked))
-    return done, unreadable
+    return Applied(done, unreadable, unwritable, already)
 
 
-def remove(root: Path) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]]]:
+def remove(root: Path, unwritable: list[str] | None = None
+           ) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]]]:
     """Delete every line `apply` wrote, under root.
 
     Returns (files edited, with the number of lines taken out of each; lines
@@ -1468,11 +1634,16 @@ def remove(root: Path) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]
     take that code along. It is handed back instead of passed over: kept in
     silence, it let the command say "no `echolot:mark` lines found" about a
     tree that still had them.
+
+    Every source file under root, not only those under a `src/`: `--from-anr`
+    marks whatever file `anr.locate` placed a frame in, custom `sourceSets`
+    included, and a file `--remove` never opened kept its lines. A file a
+    write fails on is added to `unwritable` and the rest go on.
     """
     root = root.resolve()
     touched: list[tuple[str, int]] = []
     kept: list[tuple[str, int, str]] = []
-    for p in source_files(root):
+    for p in domains_source_files(root):
         try:
             text = read_source(p, strict=True)
         except (OSError, UnicodeDecodeError):
@@ -1484,7 +1655,12 @@ def remove(root: Path) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]
         rel = _rel(p, root)
         kept += [(rel, n, ln.strip()) for n, ln in enumerate(rest, 1) if TAG in ln]
         if len(rest) < len(lines):
-            p.write_bytes("\n".join(rest).encode("utf-8"))
+            try:
+                p.write_bytes("\n".join(rest).encode("utf-8"))
+            except OSError:
+                if unwritable is not None:
+                    unwritable.append(rel)
+                continue
             touched.append((rel, len(lines) - len(rest)))
     return touched, kept
 

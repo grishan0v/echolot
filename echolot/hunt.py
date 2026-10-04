@@ -426,8 +426,9 @@ def leftovers(root: Path, prefix: str | None = None) -> dict[str, Any]:
     prefix = prefix or mark_mod.DEFAULT_PREFIX
     files: list[str] = []
     total = tagged = 0
+    # The walk `mark --remove` takes, so the count is of what it removes.
     try:
-        sources = mark_mod.source_files(root)
+        sources = mark_mod.domains_source_files(root)
     except OSError:
         return {"files": [], "markers": 0, "removable": 0, "prefix": prefix}
     for p in sources:

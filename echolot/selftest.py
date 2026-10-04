@@ -2578,7 +2578,7 @@ def _(report):
         assert {p.marker for p in pl2.proposals} >= {"AGENTTMP_compose_Wv3", "AGENTTMP_compose_Ut4"}
 
 
-@check("mark: what it cannot see it says — no launcher, two launchers, an early return")
+@check("mark: what it cannot see it says — no launcher, two launchers; an early return is closed")
 def _(report):
     from . import mark as mk
     with tempfile.TemporaryDirectory() as tmp:
@@ -2600,7 +2600,8 @@ def _(report):
         _mark_repo(root, app_return=True)
         pl = mk.plan(root, package="com.example.app")
         app = next(p for p in pl.proposals if p.kind == "app_oncreate")
-        assert not app.applicable and "return" in app.reason, app
+        # A function body takes its end in a `finally`: the return skips nothing.
+        assert app.applicable, app
     # Every refusal carries its reason. A row printed with `·` and nothing
     # after it reads as the tool declining without saying why, and a reader
     # cannot tell that from a bug. An unclosed brace was the one shape that
@@ -2742,20 +2743,23 @@ def _(report):
         assert files == {"app/src/main/kotlin/x/ExampleApp.kt", "app/src/main/kotlin/x/MainActivity.kt"}, files
         act = (root / "app/src/main/kotlin/x/MainActivity.kt").read_text(encoding="utf-8")
         tagged = [ln for ln in act.splitlines() if mk.TAG in ln]
-        assert len(tagged) == 4, tagged      # onCreate pair + setContent pair
+        # onCreate: begin, `try {`, `} finally { … }`; setContent, a lambda
+        # whose body Compose will not let a `try` wrap: a bare pair.
+        assert len(tagged) == 5, tagged
         assert tagged[0].strip().startswith('android.os.Trace.beginSection("AGENTTMP_activity_oncreate")'), tagged
-        # order inside the file: begin(onCreate) … begin(setContent) … end … end,
+        assert tagged[1].strip().startswith("try {"), tagged
+        assert "AGENTTMP_set_content" in tagged[2], tagged
+        assert tagged[3].strip().startswith("android.os.Trace.endSection()"), tagged
+        assert tagged[4].strip().startswith("} finally {"), tagged
         # the inner pair indented one level deeper
-        assert ["begin" in t for t in tagged] == [True, True, False, False], tagged
-        assert "AGENTTMP_set_content" in tagged[1], tagged
         indent = [len(t) - len(t.lstrip()) for t in tagged]
-        assert indent[0] == indent[3] < indent[1] == indent[2], indent
+        assert indent[0] == indent[1] == indent[4] < indent[2] == indent[3], indent
         # applying twice does not double the markers
         again, _ = mk.apply(root, mk.plan(root, package="com.example.app",
                                           allowed=["app/src/main"]))
         assert again == [], again
         touched, kept = mk.remove(root)
-        assert {rel for rel, _ in touched} == files and all(n == 2 or n == 4 for _, n in touched), touched
+        assert {rel for rel, _ in touched} == files and all(n in (3, 5) for _, n in touched), touched
         assert kept == [], f"every tagged line here is one apply wrote: {kept}"
         after = {p: p.read_bytes() for p in mk.source_files(root)}
         assert after == before, "remove must restore every file byte for byte"
