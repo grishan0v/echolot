@@ -193,6 +193,10 @@ echolot reflect --last              # falls back on its own, and says it did
 echolot reflect --last --from-log   # ignore any transcript and use the log
 ```
 
+`--last` falls back when the project has no transcript, and also when it has
+some and none of them used echolot: an old Claude Code session that edited
+the README, while the hunt ran from Cursor.
+
 The recorder is the floor because it does not depend on who was driving. Every
 command writes a line from every caller, and it keeps the exit code a
 transcript loses the moment a call is wrapped in `2>&1 | tail`. What it holds

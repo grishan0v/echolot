@@ -575,7 +575,10 @@ def cost(session: Session) -> dict[str, Any]:
         "tools_subagents": dict(sorted(tools_sub.items(), key=lambda kv: -kv[1])),
         "thinking_blocks_main": session.thinking_blocks,
         "tool_output_chars": total_output_chars,
-        "user_turns": sum(1 for t in session.turns if t.role == "user" and t.kind == "text"),
+        # The human's turns: a subagent's brief is a user row in its own
+        # transcript, and counted, every subagent added one.
+        "user_turns": sum(1 for t in session.turns
+                          if t.role == "user" and t.kind == "text" and t.agent == MAIN),
         "asks": len(session.asks),
     }
 

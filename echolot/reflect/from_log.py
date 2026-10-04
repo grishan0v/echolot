@@ -32,6 +32,7 @@ before asking a question.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -67,12 +68,23 @@ def sittings(runs: list[dict[str, Any]],
                      key=lambda r: ts_to_epoch(r["ts"]))
     out: list[list[dict[str, Any]]] = []
     gap = gap_minutes * 60
+    end = 0.0
     for run in ordered:
-        if out and ts_to_epoch(run["ts"]) - _end_epoch(out[-1][-1]) <= gap:
+        # From the latest end the sitting has reached, not the end of the run
+        # that started last: a `status` a minute into a 45-minute `collect`
+        # ends long before it, and the sitting was cut in two there.
+        if out and ts_to_epoch(run["ts"]) - end <= gap:
             out[-1].append(run)
         else:
             out.append([run])
+            end = 0.0
+        end = max(end, _end_epoch(run))
     return out
+
+
+def _last_end(entries: list[dict[str, Any]]) -> float:
+    """Where a sitting ends: the latest end among its runs."""
+    return max(_end_epoch(e) for e in entries)
 
 
 def _end_epoch(run: dict[str, Any]) -> float:
@@ -91,7 +103,7 @@ def list_sessions(project: Path) -> list[SessionRef]:
         # sitting before it on the same day.
         ident = hashlib.sha256(
             f"{project}\n{first}".encode()).hexdigest()[:12]
-        refs.append(SessionRef(ident, path, _end_epoch(entries[-1]),
+        refs.append(SessionRef(ident, path, _last_end(entries),
                                len(entries), entries))
     refs.sort(key=lambda r: r.mtime, reverse=True)
     return refs
@@ -121,7 +133,7 @@ def read_session(ref: SessionRef) -> Session:
         agent_version=next((e.get("version") for e in reversed(entries)
                             if e.get("version")), None),
         started=entries[0].get("ts"),
-        ended=epoch_to_ts(_end_epoch(entries[-1])),
+        ended=epoch_to_ts(_last_end(entries)),
         # Nothing but echolot's own calls. Named rather than left empty, so a
         # check that needs more is skipped instead of reading as clean.
         carries=[],
@@ -133,7 +145,11 @@ def read_session(ref: SessionRef) -> Session:
     )
     for i, entry in enumerate(entries):
         argv = entry.get("argv") or []
-        command = " ".join(["echolot", *(str(a) for a in argv)]).strip()
+        # An argument is one word whatever it holds. A newline, `;`, `|` or
+        # `&` in it — a multi-line `hunt --done` conclusion — would start a
+        # second invocation when the line is read back as shell.
+        command = " ".join(["echolot", *(re.sub(r"[\n;&|]+", " ", str(a))
+                                         for a in argv)]).strip()
         exit_code = entry.get("exit")
         session.calls.append(Call(
             id=f"{ref.id}-{i}",

@@ -290,6 +290,9 @@ class _Thread:
         self.sub = sub
         self.usage: dict[str, Usage] = {}
         self.asks: dict[str, Call] = {}
+        # A call's questions wait for its answer: Codex rejects many of them
+        # with a parse error, and the agent asks again with other fields.
+        self.waiting: dict[str, list[Ask]] = {}
         self.last_text = ""
         self.final_text = ""
 
@@ -327,7 +330,7 @@ class _Thread:
         self.session.calls.append(call)
         if name == "request_user_input_async":
             self.asks[call.id] = call
-            self.session.asks.extend(_questions(args, ts, self.agent))
+            self.waiting[call.id] = _questions(args, ts, self.agent)
 
     def _function_output(self, p: dict[str, Any], ts: str) -> None:
         call = self.asks.get(str(p.get("call_id") or ""))
@@ -336,6 +339,14 @@ class _Thread:
         raw = p.get("output")
         out = raw if isinstance(raw, str) else _text(raw)
         call.output_chars, call.output_head = len(out), clip(out, 300)
+        # Only a call Codex accepted put a question to the human. A rejected
+        # one stayed in the report as a question asked, once per attempt, and
+        # was no error for `env_friction` to see.
+        asked = self.waiting.pop(call.id, [])
+        if _accepted(out):
+            self.session.asks.extend(asked)
+        else:
+            call.is_error = True
 
     def _task_complete(self, p: dict[str, Any], ts: str) -> None:
         if p.get("last_agent_message"):
@@ -405,6 +416,9 @@ class _Thread:
                 id=tid, description=item.get("agent_path"), started=ts))
 
     def finish(self) -> None:
+        # Asked and never answered before the file ends: the question stands.
+        for asked in self.waiting.values():
+            self.session.asks.extend(asked)
         target = self.sub.usage if self.sub is not None else self.session.usage
         for u in self.usage.values():
             target.add(u)
@@ -441,6 +455,15 @@ def _arguments(raw: Any) -> dict[str, Any]:
     except (TypeError, json.JSONDecodeError):
         return {}
     return args if isinstance(args, dict) else {}
+
+
+def _accepted(out: str) -> bool:
+    """Whether Codex took a question call: its output is JSON saying so."""
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return False
+    return isinstance(data, dict) and data.get("accepted") is True
 
 
 def _questions(args: dict[str, Any], ts: str, agent: str) -> list[Ask]:
