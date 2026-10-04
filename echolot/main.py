@@ -556,7 +556,7 @@ def _markers_info(tp, cfg: Config) -> dict:
             FROM slice WHERE parent_id IS NOT NULL GROUP BY parent_id
         ),
         seen AS (
-            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur
+            SELECT s.slice_id, s.name, COALESCE(s.thread_name, 'tid ' || s.tid) AS thread, s.dur
             FROM _slice_win s WHERE {wanted}
             UNION ALL
             SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur
@@ -822,7 +822,9 @@ def cmd_compare(args) -> int:
     return 0
 
 
-def _resolve_process(tp, glob: str, trace: str | None = None) -> list[dict]:
+def _resolve_process(tp, glob: str, trace: str | None = None, *,
+                     source: str = "project.process",
+                     flag: bool = False) -> list[dict]:
     """Target process candidates, the fattest by slice count first.
 
     An Android app usually has more than one process: `com.example.app*` also
@@ -836,6 +838,11 @@ def _resolve_process(tp, glob: str, trace: str | None = None) -> list[dict]:
     process name fails on that one and stops everything, and "no process
     matches" without a filename sends the reader to check a config that is
     right about fourteen of them.
+
+    `source` is what gave the mask — `project.process`, `--process`, or
+    `default` for `names`' own `*` — and every sentence names that one.
+    `flag` is whether the command has `--process`: `analyze` and `calibrate`
+    do not, and advice to use it ended in `unrecognized arguments`.
     """
     rows = tp.query(f"""
         SELECT p.upid AS upid, p.pid AS pid, p.name AS name,
@@ -850,6 +857,23 @@ def _resolve_process(tp, glob: str, trace: str | None = None) -> list[dict]:
     """)
     if not rows:
         where = f" {Path(trace).name}" if trace else ""
+        # A file trace_processor opens without complaint and that holds no
+        # trace data: a report.json, the benchmarkData.json a macrobenchmark
+        # writes beside its traces, an empty file. No config is wrong about
+        # it, and `probe` on it lists no process either.
+        named = tp.query("SELECT COUNT(*) AS n FROM process "
+                         "WHERE name IS NOT NULL AND name != ''")
+        if not (named and named[0]["n"]):
+            raise ConfigError(
+                f"{Path(trace).name if trace else 'the trace'} holds no process "
+                f"with a name: it is no trace data, or a recording without the "
+                f"process list. A report.json or a macrobenchmark's "
+                f"benchmarkData.json opens like a trace and holds none.")
+        said = {"--process": f"--process '{glob}'",
+                "default": f"the default mask '{glob}'"}.get(
+                    source, f"project.process = '{glob}'")
+        message = (f"no process in trace{where} matches {said}. Look at the "
+                   f"real names: echolot probe <trace>.")
         # The name a trace carries is not always the one the package has.
         # Linux truncates comm to 15 characters and keeps the TAIL, so
         # `com.example.myapp` can arrive as `m.example.myapp` — which a
@@ -857,13 +881,14 @@ def _resolve_process(tp, glob: str, trace: str | None = None) -> list[dict]:
         # of fifteen from a single macrobenchmark round, where the other
         # fourteen carried the full name.
         tail = glob.rstrip("*")[-15:]
-        raise ConfigError(
-            f"no process in trace{where} matches project.process = '{glob}'. "
-            f"Look at the real names: echolot probe <trace>. If the name is "
-            f"there but cut to fifteen characters, the trace has it from "
-            f"comm rather than from the process list, and the head is what "
-            f"was cut — try project.process = '*{tail}'."
-        )
+        if tail and source != "default":
+            again = (f"--process '*{tail}'" if source == "--process"
+                     else f"project.process = '*{tail}'")
+            message += (f" If the name is there but cut to fifteen characters, "
+                        f"the trace has it from comm rather than from the "
+                        f"process list, and the head is what was cut — try "
+                        f"{again}.")
+        raise ConfigError(message)
     if len(rows) > 1:
         # A `*` on a real device matches six hundred processes; naming them
         # all is a fifteen-kilobyte line into the agent's window. The next
@@ -876,7 +901,8 @@ def _resolve_process(tp, glob: str, trace: str | None = None) -> list[dict]:
         print(
             f"[!] '{glob}' matched {len(rows)} processes. "
             f"Took {rows[0]['name']} ({rows[0]['slices']} slices). "
-            f"Others: {others}. Narrow it with --process or project.process.",
+            f"Others: {others}. Narrow it with "
+            f"{'--process or project.process' if flag else 'project.process in the config'}.",
             file=sys.stderr,
         )
     return rows
@@ -900,6 +926,14 @@ def _setup_context(tp, cfg: Config, upid: int,
         cfg.context_params(upid),
     ))
     bounds = tp.query("SELECT ts_start, ts_end FROM _window")[0]
+    if bounds["ts_start"] is None or bounds["ts_end"] is None:
+        # Rendered as `None` into the SQL below, this came out of
+        # trace_processor as a schema error and out of the command as a
+        # traceback.
+        raise ConfigError(
+            "the process has no thread slices, so there is nothing to build a "
+            "window from. Check project.process and that the app's atrace was "
+            "recorded: echolot probe <trace>")
     for phase in ("window.sql", "environment.sql"):
         tp.exec_script(render_sql(
             (SQL_DIR / phase).read_text(encoding="utf-8"),
@@ -1265,14 +1299,27 @@ def _names_info(tp, package: str, mapped: bool) -> dict | None:
     The app's code is what the device installed under the package, and what
     the JIT compiled: every method of the app runs from one or the other.
     None when the samples hold no method of the app's at all.
+
+    Only the frames on this process's own stacks, in the window: every ART
+    process has a JIT cache of its own, and another profileable one's
+    methods diluted the share behind the minified-names warning.
     """
     where = ["m.name GLOB '*jit-cache*'", "m.name GLOB '*jit-code-cache*'"]
     if package:
         where.append(f"m.name GLOB '*/{sql_value(package)}-*'")
     rows = tp.query(f"""
+        WITH RECURSIVE chain(id) AS (
+            SELECT DISTINCT callsite_id FROM _samples_win WHERE callsite_id IS NOT NULL
+            UNION
+            SELECT c.parent_id FROM chain
+            JOIN stack_profile_callsite c ON c.id = chain.id
+            WHERE c.parent_id IS NOT NULL
+        )
         SELECT DISTINCT f.name AS name, NULLIF(f.deobfuscated_name, '') AS real,
                m.name AS file
-        FROM stack_profile_frame f
+        FROM chain
+        JOIN stack_profile_callsite c ON c.id = chain.id
+        JOIN stack_profile_frame f ON f.id = c.frame_id
         JOIN stack_profile_mapping m ON m.id = f.mapping
         WHERE {' OR '.join(where)}
     """)
@@ -1544,16 +1591,20 @@ BUCKETS = (
     ("Binder / IPC", ("binder", "transact", "ipc")),
 )
 
-def _detector_masks(overrides: dict | None = None) -> list[tuple[str, str, str]]:
+def _detector_masks(overrides: dict | None = None,
+                    off: set[str] | frozenset[str] = frozenset()) -> list[tuple[str, str, str]]:
     """The name masks detectors declare through @param.
 
     Naming convention: `*name_glob*` is a slice-name mask, `*thread_glob*` a
     thread-name mask, `*skip_glob*` an exclusion. That keeps the mask a single
     source of truth: the SQL substitutes it and `names` knows exactly what the
-    detector will see.
+    detector will see. A detector in `off` is one the config turned off: it
+    sees nothing, and what only it would have seen is missed.
     """
     out = []
     for d in load_detectors(DETECTOR_DIR):
+        if d.id in off:
+            continue
         params = dict(d.params)
         params.update((overrides or {}).get(d.id) or {})
         for key, value in params.items():
@@ -1606,7 +1657,7 @@ def cmd_names(args) -> int:
     THIS device names GC, locks and binder — and whether the detector masks
     land on those names.
     """
-    overrides, tp_bin, prefix, process = _names_setup(args)
+    overrides, tp_bin, prefix, process, source, off = _names_setup(args)
     try:
         session = TraceSession(args.trace, tp_bin)
     except ConfigError as e:
@@ -1615,7 +1666,7 @@ def cmd_names(args) -> int:
 
     with session as tp:
         try:
-            procs = _resolve_process(tp, process)
+            procs = _resolve_process(tp, process, args.trace, source=source, flag=True)
         except ConfigError as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
@@ -1649,10 +1700,13 @@ def cmd_names(args) -> int:
         """)
         rows += async_rows
         if not rows:
-            print("_this process has no slices in the trace_")
+            if args.json:
+                _names_json(args, procs[0], [], [], [])
+            else:
+                print("_this process has no slices in the trace_")
             return 0
 
-        covered, skipped = _name_coverage(tp, upid, _detector_masks(overrides))
+        covered, skipped = _name_coverage(tp, upid, _detector_masks(overrides, off))
         families = group_families(rows, covered, skipped, keep=prefix)
 
     # A filter over the family name, because that is what the reader was
@@ -1678,13 +1732,15 @@ def cmd_names(args) -> int:
     return 0
 
 
-def _names_setup(args) -> tuple[dict, Any, str, str]:
-    """The masks' overrides, the binary, the markers' prefix and the process
-    `names` reads: from the config when one is named and there."""
+def _names_setup(args) -> tuple[dict, Any, str, str, str, set[str]]:
+    """The masks' overrides, the binary, the markers' prefix, the process
+    `names` reads and what named it, and the detectors turned off: from the
+    config when one is named and there."""
     from .mark import DEFAULT_PREFIX
 
-    overrides, tp_bin = {}, args.tp_binary
+    overrides, tp_bin, off = {}, args.tp_binary, set()
     process = args.process
+    source = "--process" if process is not None else "default"
     # The markers this project plants. Their numbers were chosen to tell two
     # things apart, so they are the one kind of name `family` must not fold —
     # see there.
@@ -1693,13 +1749,16 @@ def _names_setup(args) -> tuple[dict, Any, str, str]:
         try:
             cfg_names = Config.load(args.config, getattr(args, "local", None))
             overrides = cfg_names.detector_overrides
+            off = cfg_names.disabled_detectors
             tp_bin = _tp_binary(args, cfg_names)
             prefix = str(cfg_names.get("instrumentation.temp_prefix") or prefix)
             if process is None:
                 process = _names_process(args.config, cfg_names)
+                if process is not None:
+                    source = "project.process"
         except ConfigError as e:
             print(f"config ignored: {e}", file=sys.stderr)
-    return overrides, tp_bin, prefix, "*" if process is None else process
+    return overrides, tp_bin, prefix, "*" if process is None else process, source, off
 
 
 def _names_process(path: str, cfg: Config) -> str | None:
@@ -1755,6 +1814,11 @@ def _bucket(families: dict, keywords, assigned: set[str], floor_ns: float,
         # its threads happened to be HeapTaskDaemon. A thread says
         # WHERE code ran, not what it did.
         if fam in assigned or not any(k in fam.lower() for k in keywords):
+            continue
+        # A section on no thread is read by no detector, so no mask can reach
+        # it, and listed among GC, locks and binder it landed in "Missed by
+        # the masks" under advice to widen one. It goes to "Everything else".
+        if data["threads"] == {ASYNC_THREAD}:
             continue
         assigned.add(fam)
         if data["ns"] >= floor_ns and (pattern is None or pattern.search(fam)):
@@ -2802,10 +2866,10 @@ def cmd_calibrate(args) -> int:
         with session as tp:
             try:
                 procs = _resolve_process(tp, cfg.process)
+                bounds = _setup_context(tp, cfg, procs[0]["upid"])
             except ConfigError as e:
                 print(f"{trace}: {e}", file=sys.stderr)
                 return 2
-            bounds = _setup_context(tp, cfg, procs[0]["upid"])
             windows.append((bounds["ts_end"] - bounds["ts_start"]) / 1e6)
             for d in detectors:
                 try:

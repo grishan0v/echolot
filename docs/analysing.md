@@ -61,14 +61,16 @@ land on them.
 
 The section that matters most is **"Missed by the masks"**: everything that
 looks like GC, locks or binder yet no detector will see. That is the list to
-act on.
+act on. A detector the config turned off (`gc_pressure: false`) sees nothing,
+so the names only it would have seen are listed there too.
 
 Two subtleties in the output. Something excluded on purpose via `skip_glob` is
 marked as excluded rather than missed — it is a decision, not a gap. And the
 mask column speaks only about detectors that search by name; a dash next to
 `AppStart` does not mean nobody will find it. The one place the dash is exact
 is a row whose thread reads `(async)`: an async section is listed here because
-an anchor may name it, and no detector reads it.
+an anchor may name it, and no detector reads it. Such a section goes under
+"Everything else" whatever its name says, since no mask could reach it.
 
 ### Masks live in the config
 
