@@ -791,6 +791,10 @@ def test_a_root_with_no_sources_costs_the_report_nothing(tmp_path):
     check("the findings are still there", "## What was holding the lock" in out, out)
     check("and no empty section is printed",
           "Where these frames are" not in out, out)
+    check("nor a frame said to be missing from it",
+          "this checkout does not have" not in out, out)
+    code, out, _ = run("anr", str(report_file), "--root", str(empty), "--json")
+    check("and the json has no checkout to report on", json.loads(out)["code"] is None, out)
 
 
 # --- markers from a stack ---------------------------------------------------

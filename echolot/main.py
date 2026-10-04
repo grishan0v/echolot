@@ -2177,7 +2177,12 @@ def cmd_anr(args) -> int:
     code = None
     root = Path(args.root).resolve()
     if root.is_dir():
-        code = anr_mod.locate(report, root)
+        # A directory with no sources in it is no checkout, and costs the
+        # report nothing: every frame "missing from it" sent the reader off
+        # to look for another build.
+        index = anr_mod.source_index(root)
+        if index:
+            code = anr_mod.locate(report, root, index)
 
     found = anr_mod.chains(report)
     recorder.note(anr=source.name, threads=len(report.threads),
