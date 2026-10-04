@@ -278,7 +278,7 @@ def in_use(project: Path, keys: list[str], env: Mapping[str, str] | None = None)
             or sandbox.host(env) == sandbox.CODEX or bool(imported(project)))
 
 
-def init_command(keys: list[str]) -> str:
+def init_command(keys: list[str], project: Path | None = None) -> str:
     """The `init` that writes the rule and keeps the rest of the choice.
 
     `--for` replaces the choice, so `--for codex` alone on a project that
@@ -286,7 +286,17 @@ def init_command(keys: list[str]) -> str:
     the whole list even when codex is in it already: the plugin's door
     forbids a plain `echolot init`, which would install `.claude/` on a
     project that never chose (#189).
+
+    On a project that never chose, the list is detection's, and detection
+    puts Claude Code in whatever is there — so the advice installed
+    `.claude/` beside a plugin that brings the same skills. Then Claude Code
+    is left out, and AGENTS.md, which Codex reads, stands in for it.
     """
+    from . import hosts  # late: hosts imports this module
+    if project is not None and hosts.load_choice(project) is None:
+        keys = [k for k in keys if k != "claude"]
+        if "agents" not in keys:
+            keys = ["agents", *keys]
     return "echolot init --for " + ",".join([*(k for k in keys if k != KEY), KEY])
 
 
@@ -316,7 +326,8 @@ def assess(project: Path, keys: list[str],
         verdict = "current" if level == "trusted" else "untrusted"
     own = found is not None and found == (project / RULE_PATH).resolve()
     return {"verdict": verdict, "state": state, "found": found, "own": own,
-            "trust": level, "copies": imported(project), "command": init_command(keys)}
+            "trust": level, "copies": imported(project),
+            "command": init_command(keys, project)}
 
 
 def one_line(project: Path, keys: list[str],

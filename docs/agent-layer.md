@@ -249,7 +249,11 @@ does not yet cover everyone. On a terminal `init` shows a set and lets you
 change it — the choice saved last time, or on a first run the detected set,
 with whatever the tree shows evidence of marked `(found)` either way.
 `--for claude,cursor` (or `--for all`) skips the question and replaces the
-choice, and `--no-input` keeps it as it is.
+choice, and `--no-input` keeps it as it is. `all` is every client but one of
+a pair: the plugin, or Claude Code where the plugin is chosen already. The
+`.claude/` layer and the plugin bring the same skills and Claude Code would
+load both, so `--for` that names the two together is refused, and a layer
+kept current beside a chosen plugin says so on its line.
 
 The question is asked only when the CLI parser turned it on **and** there is a
 terminal at both ends, and never under `CI`. `init` is run by agents, and by

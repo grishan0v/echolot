@@ -2453,7 +2453,7 @@ def _private_repo(args, target: Path):
 def _private_targets(target: Path, chosen: list) -> list[Path]:
     """Every file a private `init` may write, to ask git which of them it tracks."""
     root = target / ".claude"
-    files = [root / layer.merged_into(str(src.relative_to(layer.CLAUDE_DIR)), True)
+    files = [root / layer.merged_into(src.relative_to(layer.CLAUDE_DIR).as_posix(), True)
              for src in layer.template_files()]
     files.append(root / layer.LAYER_MANIFEST)
     files += [target / h.path for h in chosen if h.path and h.key != "claude"]
@@ -2510,11 +2510,16 @@ def cmd_init(args) -> int:
     from . import hosts as hosts_mod
 
     spec = getattr(args, "for_hosts", None)
-    chosen = hosts_mod.parse(spec) if spec else None
+    chosen = hosts_mod.parse(spec, hosts_mod.load_choice(target)) if spec else None
     if spec and chosen is None:
         print(f"unknown client in --for {spec!r}. There is: "
               f"{', '.join(h.key for h in hosts_mod.HOSTS)}, or `all`",
               file=sys.stderr)
+        return 2
+    if chosen is not None and hosts_mod.both_layers(chosen):
+        print("--for names both `claude` and `plugin`: the .claude/ layer and "
+              "the plugin bring the same skills, and Claude Code would load "
+              "them twice. Choose one.", file=sys.stderr)
         return 2
 
     # Before the first write, and whatever the flags say: `--all` is about
@@ -2579,9 +2584,12 @@ def cmd_init(args) -> int:
                                        tracked=tracked)
         if private:
             _keep_from_git(repo, hidden + [repo.pattern(f) for f in whole])
+        # `--for all` beside the plugin used to mean `.claude/` too; the rest
+        # is named instead, so following the line keeps the plugin alone.
+        rest = ",".join(h.key for h in hosts_mod.every([h.key for h in chosen]))
         print("\nAny agent: `echolot guide`. The choice is kept — a plain "
               "`echolot init` points at\nthe same agents again; `--for` "
-              "changes it, and `echolot init --for all` adds the rest.")
+              f"changes it, and `echolot init --for {rest}` adds the rest.")
         recorder.note(hosts=[h.key for h in chosen], layer="skipped")
         return 0
 
@@ -2593,7 +2601,7 @@ def cmd_init(args) -> int:
     folded, unmergeable, left = [], [], []
     installed: dict[str, str] = {}
     for src in layer.template_files():
-        rel = str(src.relative_to(layer.CLAUDE_DIR))
+        rel = src.relative_to(layer.CLAUDE_DIR).as_posix()
         # The file it lands in: settings.json is merged into
         # settings.local.json when private. Named that way in what is printed.
         dst = root / layer.merged_into(rel, private)
@@ -2694,7 +2702,7 @@ def cmd_init(args) -> int:
     if private:
         # Every file of the layer that is here and not the team's, the
         # manifest, and what the pointers wrote whole.
-        ours = [root / layer.merged_into(str(src.relative_to(layer.CLAUDE_DIR)), True)
+        ours = [root / layer.merged_into(src.relative_to(layer.CLAUDE_DIR).as_posix(), True)
                 for src in layer.template_files()] + [manifest]
         _keep_from_git(repo, [repo.pattern(f) for f in ours
                               if f.exists() and f not in tracked]
@@ -3525,7 +3533,9 @@ def build_parser() -> argparse.ArgumentParser:
     ini.add_argument("--for", dest="for_hosts", metavar="CLIENTS",
                      help="which agents to point at the tool: "
                           + ", ".join(h.key for h in layer.hosts.HOSTS)
-                          + " — comma-separated, or `all`. Default: the choice "
+                          + " — comma-separated, or `all`: every one but the "
+                            "plugin, or but claude where the plugin is chosen, "
+                            "since the two bring the same skills. Default: the choice "
                             "this project saved last time, else whichever it "
                             "shows evidence of")
     # Only the parser turns prompting on: cmd_init is also called directly,

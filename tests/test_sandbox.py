@@ -119,9 +119,10 @@ def test_with_no_agent_named_the_refusal_is_said_and_both_ways_out(
     assert code == 2, err
     assert "an agent's sandbox is the likely cause" in err, err
     assert "Codex's sandbox, which" not in err, err
-    # The command that writes the rule, with the agents a plain init keeps:
-    # `--for codex` alone would drop Claude Code from the saved choice.
-    assert "`echolot init --for claude,codex`" in err, err
+    # The command that writes the rule. The project never chose, so it does
+    # not name Claude Code, which detection adds whatever is there: that
+    # installed `.claude/` beside a plugin that brings the same skills.
+    assert "`echolot init --for agents,codex`" in err, err
     assert "sandbox.excludedCommands" in err, err
 
 

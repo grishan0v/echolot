@@ -77,7 +77,7 @@ def refused(e: BaseException) -> bool:
 def rule_command() -> str:
     """The `init` that writes the rule here, the project's other agents kept."""
     from . import codex, hosts
-    return codex.init_command(hosts.keys(Path.cwd()))
+    return codex.init_command(hosts.keys(Path.cwd()), Path.cwd())
 
 
 def ways_out(where: str | None) -> list[str]:
