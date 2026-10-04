@@ -469,7 +469,11 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 rows = tp.query(sql)
                 err = None
             except Exception as e:  # SQL is version-fragile — never fail the run
-                rows, params, err = [], d.params, str(e)
+                # The values it was asked to run with, as `render` resolves
+                # them. The shipped ones in their place made a calibrated
+                # detector that failed read as one whose thresholds moved,
+                # to `compare` and to anyone reading the report.
+                rows, params, err = [], {**d.params, **(overrides or {})}, str(e)
                 print(f"[!] {d.id}: {e}", file=sys.stderr)
             if rows:
                 try:
@@ -556,14 +560,15 @@ def _markers_info(tp, cfg: Config) -> dict:
             FROM slice WHERE parent_id IS NOT NULL GROUP BY parent_id
         ),
         seen AS (
-            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur
+            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur, s.unfinished
             FROM _slice_win s WHERE {wanted}
             UNION ALL
-            SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur
+            SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur, a.unfinished
             FROM _aslice_win a WHERE {wanted}
         )
         SELECT seen.name AS location, seen.thread AS thread,
                COUNT(*) AS count,
+               MAX(seen.unfinished) AS unfinished,
                SUM(MAX(seen.dur, 0)) AS total_ns,
                SUM(MAX(seen.dur, 0) - COALESCE(c.ns, 0)) AS self_ns,
                MAX(MAX(seen.dur, 0)) AS max_ns
@@ -574,8 +579,9 @@ def _markers_info(tp, cfg: Config) -> dict:
     for r in rows:
         row = by_name.setdefault(r["location"], {
             "location": r["location"], "count": 0, "self_ns": 0,
-            "total_ns": 0, "max_ns": 0, "threads": set()})
+            "total_ns": 0, "max_ns": 0, "threads": set(), "unfinished": False})
         row["count"] += r["count"]
+        row["unfinished"] = row["unfinished"] or bool(r["unfinished"])
         row["self_ns"] += r["self_ns"] or 0
         row["total_ns"] += r["total_ns"] or 0
         row["max_ns"] = max(row["max_ns"], r["max_ns"] or 0)
@@ -591,6 +597,12 @@ def _markers_info(tp, cfg: Config) -> dict:
             "max_ms": round(row["max_ns"] / 1e6, 2),
             "detail": ", ".join(threads[:3]) + (f" +{len(threads) - 3}" if len(threads) > 3 else ""),
         })
+        # One that never closed runs to the end of the window: its end did
+        # not run — an exception, a suspended coroutine, an end on another
+        # thread — or the recording stopped first. Its number is a floor,
+        # and without the flag it read as a measurement.
+        if row["unfinished"]:
+            out[-1]["unfinished"] = True
     out.sort(key=lambda r: (-r["total_ms"], r["location"]))
     # A name the config lists that the window never held is worth a line:
     # the map points at something this scenario does not run, or the name
@@ -997,13 +1009,21 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
         # `_anchor` rather than `_slice`: the same set the window was built
         # from, async sections included. Counting the one and building from
         # the other is how `matches` would say 0 for a window that closed.
+        #
+        # The end anchor by the rule the window is closed by: an occurrence at
+        # or after the start. One only before it — the anchors swapped — left
+        # the window running to the end of the trace while `matches: 1` said
+        # it had closed. Those are counted apart, so the report can say the
+        # name exists, just not where it would end anything.
         hits = tp.query(
-            f"SELECT COUNT(*) AS n FROM _anchor WHERE name GLOB '{sql_value(glob)}'"
+            f"SELECT COUNT(*) AS n, COALESCE(SUM(ts >= {window.get('ts_start') or 0}), 0) AS after "
+            f"FROM _anchor WHERE name GLOB '{sql_value(glob)}'"
         )
-        window[f"{key}_anchor"] = {
-            "glob": glob,
-            "matches": hits[0]["n"] if hits else 0,
-        }
+        n, after = (hits[0]["n"], hits[0]["after"]) if hits else (0, 0)
+        matches = after if key == "end" else n
+        window[f"{key}_anchor"] = {"glob": glob, "matches": matches}
+        if n - matches:
+            window[f"{key}_anchor"]["before_start"] = n - matches
     window["opened_inside"] = _opened_inside(tp, window)
     window["startup"] = _startup_info(tp, window, procs[0]["name"])
     return window
@@ -1050,38 +1070,46 @@ def _opened_inside(tp, window: dict) -> dict | None:
     blocked" and sent someone looking for a stall that was the app behaving
     correctly.
     """
-    start = window.get("ts_start")
-    if start is None:
+    start, end = window.get("ts_start"), window.get("ts_end")
+    if start is None or end is None:
         return None
+    # A state the thread was still in when the recording stopped runs to the
+    # end of the window, as in window.sql; dropped, the freeze that never let
+    # go was the one block this could not see. The part inside the window
+    # stops at its end: a block running past a short window counted its tail
+    # as inside, and outweighed what came before the anchor.
+    until = f"CASE WHEN ts.dur < 0 THEN {end} ELSE ts.ts + ts.dur END"
     rows = tp.query(f"""
-        SELECT ts.state                              AS state,
-               th.name                               AS thread_name,
-               ROUND(({start} - ts.ts) / 1e6, 2)     AS before_ms,
-               ROUND(ts.dur / 1e6, 2)                AS total_ms
+        SELECT ts.state                                          AS state,
+               th.name                                           AS thread_name,
+               ROUND(({start} - ts.ts) / 1e6, 2)                 AS before_ms,
+               ROUND(({until} - ts.ts) / 1e6, 2)                 AS total_ms,
+               ROUND((MIN({until}, {end}) - {start}) / 1e6, 2)   AS inside_ms
         FROM thread_state ts
         JOIN thread th ON ts.utid = th.utid
         JOIN _proc p   ON th.upid = p.upid
         WHERE th.tid = p.pid
-          AND ts.dur > 0
+          AND ts.dur != 0
           AND ts.ts < {start}
-          AND ts.ts + ts.dur > {start}
+          AND {until} > {start}
     """)
     if not rows or rows[0]["state"] == "Running":
         return None
     if rows[0]["state"] not in ("R", "R+", "D", "DK"):
         # Sleeping. Only a block if a message was open at the time — otherwise
         # the looper had reached the queue, which is the app working properly.
+        # From `_slice_win`, where a message that never closed runs to the
+        # end of the window rather than being no message at all.
         inside_message = tp.query(f"""
             SELECT COUNT(*) AS n
-            FROM _slice s
-            WHERE s.is_main_thread = 1 AND s.depth >= 1 AND s.dur > 0
+            FROM _slice_win s
+            WHERE s.is_main_thread = 1 AND s.depth >= 1
               AND s.ts < {start} AND s.ts + s.dur > {start}
         """)
         if not inside_message or not inside_message[0]["n"]:
             return None
     found = dict(rows[0])
-    inside = found["total_ms"] - found["before_ms"]
-    found["inside_ms"] = round(inside, 2)
+    inside = found["inside_ms"]
     found["material"] = bool(found["before_ms"] >= inside
                              and found["before_ms"] >= compare_mod.FLOOR_MS)
     return found

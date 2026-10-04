@@ -23,8 +23,9 @@ COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
 # not know as an extra column, which is right for a detector that invents one
 # and wrong for bookkeeping the report writes itself. `places` is the json
 # side of the `code` column — see place.py — and `stacks` the json side of
-# what the evidence says the samples named — see stacks.py.
-HIDDEN = {"spread", "places", "stacks"}
+# what the evidence says the samples named — see stacks.py. `unfinished` is a
+# marker that never closed, which its numbers say with a `≥`.
+HIDDEN = {"spread", "places", "stacks", "unfinished"}
 HEADERS = {
     "location": "Where",
     "runs": "Runs",
@@ -409,10 +410,17 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     sections = [r.get("markers") or {} for r in reports]
     head = next((s for s in sections if s), {})
     seen = {row["location"] for s in sections for row in s.get("rows") or []}
+    rows = merge_rows([s.get("rows") or [] for s in sections], ("location",), total)
+    # A marker that never closed in any repeat stays a floor in the merge.
+    open_in = {row["location"] for s in sections for row in s.get("rows") or []
+               if row.get("unfinished")}
+    for row in rows:
+        if row["location"] in open_in:
+            row["unfinished"] = True
     return {
         "prefix": head.get("prefix"),
         "globs": head.get("globs") or [],
-        "rows": merge_rows([s.get("rows") or [] for s in sections], ("location",), total),
+        "rows": rows,
         "absent": [g for g in head.get("globs") or []
                    if g in set(head.get("absent") or []) and not any(
                        fnmatch.fnmatchcase(n, g) for n in seen)],
@@ -893,7 +901,15 @@ def to_markdown(report: dict[str, Any]) -> str:
     # plausible and leads somewhere else entirely.
     for key, label in (("start_anchor", "Start"), ("end_anchor", "End")):
         anchor = w.get(key)
-        if anchor and anchor.get("matches") == 0:
+        if anchor and anchor.get("matches") == 0 and anchor.get("before_start"):
+            out.append(
+                f"> ⚠️ {label} anchor `{anchor['glob']}` occurs only before the "
+                f"start anchor ({anchor['before_start']} time(s)), so nothing "
+                f"closed the window and it ran to the end of the trace. Are the "
+                f"two anchors swapped? The numbers below are not about your "
+                f"scenario."
+            )
+        elif anchor and anchor.get("matches") == 0:
             out.append(
                 f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in the "
                 f"trace — the window expanded to the whole trace. Check against "
@@ -1216,10 +1232,19 @@ def _markers_lines(markers: dict[str, Any]) -> list[str]:
                "_the names `domains` lists; medians per run_")
     out.append("")
     if rows:
-        out.append(table.render(rows, order=COLUMNS,
+        # A marker that never closed is a floor, and the table says so.
+        shown = [{**r, **{c: f"≥ {r[c]}" for c in ("self_ms", "total_ms", "max_ms")
+                          if r.get(c) is not None}} if r.get("unfinished") else r
+                 for r in rows]
+        out.append(table.render(shown, order=COLUMNS,
                                 headers={**HEADERS, "location": "Marker", "detail": "Threads"},
                                 skip=HIDDEN))
         out.append("")
+        if any(r.get("unfinished") for r in rows):
+            out.append("≥ — the marker never closed: its end did not run, or the "
+                       "recording stopped first. The number runs to the end of "
+                       "the window and is a floor.")
+            out.append("")
     if absent:
         out.append("Not in the window: " + ", ".join(f"`{g}`" for g in absent)
                    + " — listed in `domains`, never seen in this scenario.")
