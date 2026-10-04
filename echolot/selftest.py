@@ -3539,7 +3539,14 @@ def _(report):
         (project / ".echolot" / "traces" / "checkout_iter000.perfetto-trace").write_bytes(b"x")
         st = project_state(project)
         assert st["traces"]["scenario"] == 1 and \
-            "analyze .echolot/traces/checkout_iter*.perfetto-trace " in next_step(st), next_step(st)
+            "analyze .echolot/traces/checkout_iter000.perfetto-trace -c" in next_step(st), next_step(st)
+        # named, not globbed: Codex keeps a line with a glob in its sandbox
+        assert "*" not in next_step(st), next_step(st)
+        # a dangling symlink among them is left out, not a traceback
+        (project / ".echolot" / "traces" / "checkout_iter001.perfetto-trace").symlink_to(
+            project / "nowhere.perfetto-trace")
+        st = project_state(project)
+        assert st["traces"]["scenario"] == 1, st["traces"]
         # a config that does not load is said, not swallowed
         (project / "echolot.yml").write_text("project: [\n", encoding="utf-8")
         st = project_state(project)

@@ -1987,8 +1987,9 @@ def cmd_hunt(args) -> int:
                 if hosts_mod.wants_claude(project)
                 else "any agent, after `echolot guide hunt`")
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
-        print("By hand: echolot collect -c echolot.yml -n 5, then echolot analyze "
-              f"{state.analyze_glob(scenario)}", file=sys.stderr)
+        print("By hand: echolot collect -c echolot.yml -n 5, then "
+              + state.analyze_line(state.repeats(scenario, 5) if scenario else None),
+              file=sys.stderr)
         return 0
 
     if conclusion:

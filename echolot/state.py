@@ -55,18 +55,27 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
             st["config"] = {"path": cfg_path, "error": str(e)}
 
     traces_dir = project / ".echolot" / "traces"
-    traces = [p for pat in ("*.perfetto-trace", "*.pftrace")
-              for p in traces_dir.glob(pat)] if traces_dir.is_dir() else []
-    # The repeats of the config's scenario, counted apart: the directory
-    # keeps every scenario's set side by side, and the next step names this
-    # one's alone.
+    # Each modification time read once, and a file that will not stat left
+    # out: a dangling symlink matched the glob and ended `echolot` with a
+    # traceback, and so could a trace `collect` moved aside in between.
+    stamps: dict[Path, float] = {}
+    for pat in ("*.perfetto-trace", "*.pftrace"):
+        for p in (traces_dir.glob(pat) if traces_dir.is_dir() else []):
+            try:
+                stamps[p] = p.stat().st_mtime
+            except OSError:
+                continue
+    # The repeats of the config's scenario, named apart: the directory keeps
+    # every scenario's set side by side, and the next step names this one's
+    # alone.
     scenario = (st.get("config") or {}).get("scenario")
-    st["traces"] = {"dir": traces_dir, "count": len(traces),
-                    "scenario": sum(1 for p in traces
-                                    if (m := runner._ITERATION.match(p.name))
-                                    and m.group("scenario") == scenario)
-                    if scenario else None,
-                    "newest": max((p.stat().st_mtime for p in traces), default=None)}
+    mine = sorted(f".echolot/traces/{p.name}" for p in stamps
+                  if (m := runner._ITERATION.match(p.name))
+                  and m.group("scenario") == scenario) if scenario else None
+    st["traces"] = {"dir": traces_dir, "count": len(stamps),
+                    "scenario": None if mine is None else len(mine),
+                    "files": mine,
+                    "newest": max(stamps.values(), default=None)}
     st["collect"] = collect_state(project)
 
     st["report"] = None
@@ -283,24 +292,32 @@ def next_step(st: dict) -> str:
 
 def _hunt_step(st: dict) -> str:
     traces = st["traces"]
-    scenario = (st.get("config") or {}).get("scenario")
     if not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
         return (f"{_door(st)} hunt` — or by hand: "
                 f"echolot collect -c echolot.yml -n 5")
     return (f"{_door(st)} hunt` — or by hand: "
-            f"echolot analyze {analyze_glob(scenario)} -c echolot.yml")
+            f"{analyze_line(traces.get('files'))}")
 
 
-def analyze_glob(scenario: str | None) -> str:
-    """The traces one report is built from: the repeats of one scenario.
+def analyze_line(files: list[str] | None) -> str:
+    """`echolot analyze` over the repeats of one scenario, each file named.
 
     `.echolot/traces/` keeps every scenario's set, since re-recording one
     leaves the others where they are. `*.perfetto-trace` took `scroll`'s
     repeats along with `coldStart`'s after the config switched, and every
-    median in the report mixed the two. With no scenario to name, the whole
-    directory is all there is to say.
+    median in the report mixed the two. And named rather than globbed, as
+    the guides tell an agent to: Codex keeps a line with a glob inside its
+    sandbox, where trace_processor cannot start. With no scenario to name
+    the files by, the line says what to put there.
     """
-    if not scenario:
-        return ".echolot/traces/*.perfetto-trace"
-    return f".echolot/traces/{shlex.quote(scenario)}_iter*.perfetto-trace"
+    if not files:
+        return ("echolot analyze <each trace of the scenario in "
+                ".echolot/traces, named> -c echolot.yml")
+    return ("echolot analyze " + " ".join(shlex.quote(f) for f in files)
+            + " -c echolot.yml")
+
+
+def repeats(scenario: str, n: int) -> list[str]:
+    """The files `collect -n <n>` writes for a scenario, by name."""
+    return [f".echolot/traces/{scenario}_iter{i:03d}.perfetto-trace" for i in range(n)]
 

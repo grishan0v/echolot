@@ -214,8 +214,10 @@ def test_cli_round_trip(tmp_path: Path) -> None:
         check("and names the half it cannot do", "/echolot" in text, text)
         # Another scenario's repeats stay in the directory, so the glob it
         # names takes this scenario's alone.
-        check("and the by-hand analyze names the scenario's repeats",
-              "analyze .echolot/traces/coldStart_iter*.perfetto-trace" in text, text)
+        check("and the by-hand analyze names the scenario's repeats, file by file",
+              "analyze .echolot/traces/coldStart_iter000.perfetto-trace" in text
+              and "coldStart_iter004.perfetto-trace -c echolot.yml" in text
+              and "*" not in text.split("By hand:")[1], text)
         check("traces no longer loose",
               not list((p / ".echolot" / "traces").glob("*.perfetto-trace")))
 
