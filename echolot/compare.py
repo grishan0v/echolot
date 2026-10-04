@@ -133,8 +133,9 @@ def _planted(rows: list[dict], temp_prefix: str | None) -> list[str]:
     Inside the loop, a round is compared against the one before it — and
     between the two the agent added `AGENTTMP_` markers on purpose. Those
     arrive as large new rows, which is exactly the shape a regression has. The
-    difference is that they were planted, and only the config knows the prefix
-    they were planted with.
+    difference is that they were planted, under the config's prefix, or
+    `AGENTTMP_` when it names none: `cmd_compare` falls back the way
+    `analyze` and `mark` do.
     """
     if not temp_prefix:
         return []

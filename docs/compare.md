@@ -19,10 +19,14 @@ echolot compare old.json new.json     # exactly those two
 It writes `comparison.md` and `comparison.json` next to the report, by the same
 rule `analyze` uses: a relative `-o` is taken from the config's directory, so
 running it from a build folder full of traces still lands the output in the
-project. The config is `echolot.yml` in the working directory; `-c` names
-another, although `--help` does not list the flag. Run from a folder without
-one — or with a `-c` that does not load — it prints the comparison and writes
-nothing, and says so on stderr.
+project. The config is `echolot.yml` in the working directory, or else the
+nearest one up the tree within the checkout, so `compare` run from a build
+folder finds the project and its open investigation; `-c` names another,
+although `--help` does not list the flag. With one report named, the newer
+side is `.echolot/out/report.json` next to the config, whatever `-o` says: `-o`
+is where the comparison goes. Run from a folder with no config it prints the
+comparison and writes nothing, and says so on stderr; with a config that does
+not load it says that, and why.
 
 ## What the table says
 
@@ -157,8 +161,8 @@ inventory.
 
 A name carrying the config's `instrumentation.temp_prefix` keeps its digits:
 `AGENTTMP_fill_v4` and `AGENTTMP_fill_v6` are two markers somebody wrote to
-tell two things apart, not one marker renamed. `compare` takes the prefix from
-the config only, so without one planted markers fold like any other name.
+tell two things apart, not one marker renamed. Without the key, or without a
+config, the prefix is `AGENTTMP_`, as for `analyze` and `mark`.
 
 The second pass only fires when the family is unambiguous — exactly one
 unmatched row on each side. With two workers before and three after there is no
