@@ -263,7 +263,7 @@ _ART writes a "Lock contention on ..." slice with the owner's tid — ready-made
 
 | Where | Runs | N | Total, ms | Max, ms | In the code | Evidence |
 |---|---|---|---|---|---|---|
-| com.example.app | 5/5 | 9 | 61.6 | 22.4 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:66 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:66) |
+| com.example.app | 5/5 | 9 | 61.6 | 22.4 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:61 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:61) |
 
 <sub>detector `monitor_contention`, params: {'min_block_ms': 8, 'max_total_ms': 50, 'name_glob': 'Lock contention on a monitor lock*', 'name_glob_alt': 'monitor contention with owner*'}</sub>
 

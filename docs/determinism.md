@@ -312,6 +312,9 @@ A trace_processor of your own goes in one of two ways:
 - `toolchain.tp_binary: <path>` in `local.yml`, beside `echolot.yml` — for
   every run on this machine. `init` puts `local.yml` in `.gitignore`, so the
   path stays yours. The key works in `echolot.yml` too, where everyone gets it.
+  `~` is expanded, and a relative path is taken from the config's directory,
+  wherever the command runs; `--tp-binary` is taken from the working
+  directory.
 
 `analyze`, `calibrate`, `names`, `probe` and `doctor` choose in the same
 order: the flag, then the config, then the pin. `probe` and `doctor` read the

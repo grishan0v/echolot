@@ -319,7 +319,7 @@ method the samples fell under most, as `sampled`. `analyze` looks those up
 in the checkout the config sits in and writes what it found:
 
 ```json
-"code": "owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:66",
+"code": "owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:61",
 "places": [
   { "role": "owner",   "symbol": "com.example.app.data.StoreRepository.update",
     "file": "data/src/main/java/com/example/app/data/StoreRepository.kt",

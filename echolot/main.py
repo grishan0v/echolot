@@ -256,9 +256,11 @@ def _note_detectors(cfg: Config) -> None:
     sections nobody configured. It also answers the question the change
     raises: how do I turn one off now.
     """
-    tuned = set(cfg.detector_overrides)
     shipped = {d.id for d in load_detectors(DETECTOR_DIR)}
-    off = cfg.disabled_detectors
+    # Shipped ids only: a misspelled one is refused by `plan_detectors`, and
+    # counted here it made a sum that did not add up.
+    tuned = set(cfg.detector_overrides) & shipped
+    off = cfg.disabled_detectors & shipped
     rest = shipped - tuned - off
     if tuned and rest:
         print(f"[i] the config tunes {len(tuned)} of {len(shipped)} detectors; "
@@ -376,6 +378,8 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
     `parse_set` already gives a `--set` typo, before a trace is opened.
     """
     detectors = load_detectors(DETECTOR_DIR)
+    if not use_defaults:
+        cfg.unknown_detectors({d.id for d in detectors})
     cli_overrides = cli_overrides or {}
     cfg_overrides = {} if use_defaults else cfg.detector_overrides
     # Only what the config turned off, and only what it turned off on purpose.
@@ -2783,6 +2787,7 @@ def cmd_calibrate(args) -> int:
     # section's own shape is refused here too: `detectors:` written as a
     # list was read outside this handler and came out as a traceback.
     try:
+        cfg.unknown_detectors({d.id for d in load_detectors(DETECTOR_DIR)})
         overrides = cfg.detector_overrides
         for d in detectors:
             d.check(overrides.get(d.id), "from the config")
@@ -2802,10 +2807,12 @@ def cmd_calibrate(args) -> int:
         with session as tp:
             try:
                 procs = _resolve_process(tp, cfg.process)
+                # The anchors are read here, and one the config cannot mean
+                # came out of calibrate as a traceback.
+                bounds = _setup_context(tp, cfg, procs[0]["upid"])
             except ConfigError as e:
                 print(f"{trace}: {e}", file=sys.stderr)
                 return 2
-            bounds = _setup_context(tp, cfg, procs[0]["upid"])
             windows.append((bounds["ts_end"] - bounds["ts_start"]) / 1e6)
             for d in detectors:
                 try:
