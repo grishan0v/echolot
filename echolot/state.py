@@ -49,6 +49,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                 "runner": str(cfg.runner.get("mode", "launch")) if cfg.runner else None,
                 "sha": cfg.sha,
                 "confirmed": cfg.confirmed(),
+                "temp_prefix": cfg.get("instrumentation.temp_prefix"),
             }
         except ConfigError as e:
             st["config"] = {"path": cfg_path, "error": str(e)}
@@ -110,18 +111,38 @@ def collect_state(project: Path) -> dict | None:
     if not isinstance(p, dict) or "started" not in p:
         return None
     if p.get("finished") is None:
-        alive = False
         pid = p.get("pid")
-        if isinstance(pid, int):
-            try:
-                os.kill(pid, 0)
-                alive = True
-            except OSError:
-                alive = False
+        alive = isinstance(pid, int) and _alive(pid)
         p["status"] = "running" if alive else "interrupted"
     else:
         p["status"] = "failed" if p.get("exit") else "done"
     return p
+
+
+def _alive(pid: int) -> bool:
+    """Whether a process with this pid is still running.
+
+    Signal 0 asks that on POSIX. On Windows 0 is `CTRL_C_EVENT`, and
+    `os.kill` sends it to the console's processes instead of asking
+    anything, so there the process is opened and its exit code read.
+    """
+    if os.name == "nt":
+        import ctypes
+        kernel = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) \
+                and code.value == 259                    # STILL_ACTIVE
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def collect_line(st: dict) -> str | None:
