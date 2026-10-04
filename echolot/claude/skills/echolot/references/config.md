@@ -201,7 +201,9 @@ back as a near miss, and it does not follow the other. A project that changes
 its prefix changes both.
 
 Thresholds are not picked by hand: `echolot calibrate` derives them from
-healthy runs and prints a ready section with the reasoning attached.
+healthy runs and prints a ready section with the reasoning attached, which
+can replace this one whole: it carries over every `false` and every value it
+did not measure.
 
 ### `instrumentation`
 

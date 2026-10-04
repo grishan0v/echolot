@@ -12,16 +12,25 @@ echolot calibrate run1.perfetto-trace run2.perfetto-trace -c echolot.yml
 ```
 
 The detectors run with their thresholds **opened up**, a statistic is taken per
-report column, then a safety factor is applied. The output is a ready
-`detectors:` section with the reasoning on every line:
+report column on each trace, the median across the traces stands for the set,
+then a safety factor is applied. The output is a ready `detectors:` section
+with the reasoning on every line:
 
 ```yaml
 detectors:
+  frame_jank: false
   main_thread_block:
-    min_slice_ms: 26.6    # top10(self_ms)=17.7 × 1.5, sample 175
+    min_slice_ms: 26.6    # top10(self_ms)=17.7 × 1.5, median of 5 run(s), sample 175 per run
   runnable_starvation:
-    min_runnable_ms: 27.2    # top10(total_ms)=18.1 × 1.5, sample 48
+    min_runnable_ms: 27.2    # top10(total_ms)=18.1 × 1.5, median of 5 run(s), sample 46–50 per run
+    skip_glob: "*Binder*"    # from the config
 ```
+
+The section can replace the config's whole. A detector the config turned off
+comes back as `false` and is not measured; whatever the config sets that is
+not calibrated — a mask, a ratio, a detector with no `@calibrate` — is carried
+over as it stands; and a threshold left uncalibrated keeps the config's value
+as a setting, or the shipped one as a comment.
 
 The command deliberately **does not edit the config itself**. Thresholds define
 what counts as normal, and that decision is not handed to a script: it prints a
@@ -55,7 +64,11 @@ Both forms are supported:
 
 The default is `topN`, "the Nth largest value". It reads as *on a healthy run
 this detector should produce no more than N rows*, which sets the report size
-directly.
+directly. That is why it is taken per run: `analyze` folds the repeats into one
+row per identity, so a report is the size of one run. Over the rows of five
+traces pooled, each value came five times, `top10` landed near the second
+largest of one run, and the threshold grew with the number of repeats — on the
+demo app's cold starts, 4.7 from one trace and 170.3 from five.
 
 A percentile behaves worse on live traces, because it depends on the size of
 the population — and that jumps around:
@@ -73,8 +86,10 @@ population is.
 
 Two cases, and both are more honest than a number.
 
-**The sample is below `--min-sample`** (10 by default). A statistic over a
-handful of values is a random number wearing the look of a justified one.
+**The sample is below `--min-sample`** (10 by default) in every run. A
+statistic over a handful of values is a random number wearing the look of a
+justified one. The sample is counted per run, as the statistic is taken; a run
+short of it is left out of the median.
 
 **A degenerate tail.** The sample is large enough, but the Nth value is already
 near zero. A threshold of zero means "report everything", which is not a
@@ -83,6 +98,10 @@ barely feeds this detector.
 
 In both cases the output keeps a comment with the default and the reason, plus
 a summary line at the end.
+
+A detector whose query **failed** is neither: its error is on stderr, its line
+says it failed on every trace, or on how many, and the summary names it. When
+it failed on every trace, `calibrate` exits 1.
 
 ## Calibrate on repeats of one scenario
 

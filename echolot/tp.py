@@ -67,7 +67,9 @@ class Calibration:
 
     `topN(column)` is the Nth largest value. It reads as "on a healthy run this
     detector should produce no more than N rows", so it sets the report size
-    directly and does not depend on how many groups the sample holds.
+    directly and does not depend on how many groups the sample holds. It is
+    taken over one run's rows, and `calibrate` takes the median across runs:
+    over the rows of k runs pooled, N would count rows of all of them.
 
     `pNN(column)` is a percentile. Fine when the population is stable, but on
     live traces it jumps around: a cold start has 175 distinct slice names, a
