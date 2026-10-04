@@ -2274,10 +2274,12 @@ def _sample_repo(root: Path) -> None:
         "    }\n"
         "}\n", encoding="utf-8")
 
-    # The trap: a logging function with the same name but no tracing import.
+    # The trap: a logging function with the same name but no tracing import,
+    # and a logger's own `trace` handed a variable.
     (java / "Noise.kt").write_text(
         "package app\n"
-        "fun handle() { trace(\"this is a log line, not instrumentation\") }\n",
+        "fun handle() { trace(\"this is a log line, not instrumentation\") }\n"
+        "fun report(message: String) { log.trace(message) }\n",
         encoding="utf-8")
 
     # Names held in constants and passed through a wrapper of the project's
@@ -2303,6 +2305,8 @@ def _sample_repo(root: Path) -> None:
         "        TimeProfiler.start(Marks.LOAD)\n"
         "        trace.putAttribute(Marks.RESULT, \"x\")\n"
         "        AppTraces.start(NOT_A_CONSTANT)\n"
+        "        log.trace(Marks.RESULT)\n"
+        "        AppTraces.stop(LOAD)\n"
         "        return traces.trace<Items>(Marks.SPLIT) { fetch() }\n"
         "    }\n"
         "}\n", encoding="utf-8")
@@ -2372,10 +2376,11 @@ def _(report):
     split = by_name["collection_split"]
     assert len(split) == 1 and split[0].via == "Marks.SPLIT", split
     # What must not be a site: a profiler handed the same constant, an
-    # attribute the trace was given, an identifier no constant declares, a
-    # benchmark reading the marker, a test faking it.
+    # attribute the trace was given, a logger handed a constant, an
+    # identifier no constant declares, the end of the section, a benchmark
+    # reading the marker, a test faking it.
     assert "result_error" not in by_name, sorted(by_name)
-    assert len(loading) == 1, "the profiler, the benchmark or the test got in"
+    assert len(loading) == 1, "the profiler, the end, the benchmark or the test got in"
     # And the reader is told at the line what to grep for, since the literal
     # is not there.
     assert "Loader.kt:6 — fun load, via LOAD" in text, text
@@ -2388,10 +2393,15 @@ def _(report):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _sample_repo(root)
-        names = {s.name for s in dm.scan(root)[0]}
+        sites, stats = dm.scan(root)
+        names = {s.name for s in sites}
+        noise = [s for s in stats.values() if s.module == ":app"]
     # Without an androidx.tracing import, a bare trace(...) is someone else's
     # function.
     assert "this is a log line, not instrumentation" not in names, names
+    # And `log.trace(message)` is no name built at runtime: the one counted in
+    # :app is `Trace.beginSection(tag)`.
+    assert sum(s.dynamic for s in noise) == 1, noise
     # And generated code is no place for hypotheses.
     assert "generated_noise" not in names, names
 

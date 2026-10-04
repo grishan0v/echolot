@@ -131,12 +131,17 @@ empty over the whole tree.
 
 Precision rules worth knowing:
 
-- a bare `trace("…")` counts only in files that import `androidx.tracing`,
-  otherwise every logging function with that name lands in the map;
+- a bare `trace("…")` or `traceAsync("…", …)` counts only in files that
+  import `androidx.tracing`, otherwise every logging function with that name
+  lands in the map. A `trace` called on `log` or `logger` is a log line
+  wherever it is, with a literal, a constant or a variable;
 - a constant resolves only through a call whose name says `trace` (or
   `beginSection` and its kin): `TimeProfiler.start(Marks.X)` writes no
   slice. A callee that puts, sets or gets, or says metric, attribute or
   counter, is handing the trace something other than a name;
+- a call that closes a section — one whose last part starts with `end`,
+  `stop` or `finish`, such as `Trace.endAsyncSection(Marks.LOAD, 7)` or
+  `AppTraces.stop(LOAD)` — is no site: its begin already named the slice;
 - `const val` and Java's `static final String` only. A plain `val` shares
   its name with every local in the project, and a map keyed on the simple
   name would resolve them into each other. Two constants of one name
@@ -149,18 +154,22 @@ Precision rules worth knowing:
 
 What reaches the map, then: a literal in `Trace.beginSection`,
 `Trace.beginAsyncSection` or their `TraceCompat` twins, a bare `trace("…")`
-under the import above, and a constant handed to a call whose name says
-`trace`. A name built at runtime cannot reach it, and only some of those calls
-are counted: `trace(…)`, `Trace.beginSection(…)` and
-`TraceCompat.beginSection(…)` with an identifier where the literal would be
-and no constant to resolve it. Those are mentioned in the header — they are
-visible in the trace, and staying quiet about them would pass a gap off as
-its absence. Anything else is neither mapped nor counted, so that count is a
-floor: `Trace.beginAsyncSection(tag, …)`, and a wrapper of the project's own
-by any other name, called with a literal or a variable —
-`Traces.createTrace("OkHttp CALL $path")` is one. A template inside a literal,
-`Trace.beginSection("load_$id")`, is mapped as written, `$id` and all, and
-will not match the name the trace carries.
+or `traceAsync("…", …)` under the import above, and a constant handed to a
+call whose name says `trace`. A literal is written as the string it holds:
+Kotlin's `"cost \$5"` is `cost $5` in the map. A name with `[`, `*` or `?`
+is written with each of them escaped, `cache[[]hit]`, since `analyze` reads
+every entry as a GLOB and the name must match itself.
+
+A name built at runtime cannot reach the map, and only some of those calls
+are counted: `Trace.beginSection(…)`, `Trace.beginAsyncSection(…)` and their
+`TraceCompat` twins, and `trace(…)` or `traceAsync(…)` under the import, with
+an identifier where the literal would be and no constant to resolve it; and
+a Kotlin literal with a template in it, `Trace.beginSection("load_$id")`.
+Those are mentioned in the header — they are visible in the trace, and
+staying quiet about them would pass a gap off as its absence. Anything else
+is neither mapped nor counted, so that count is a floor: a wrapper of the
+project's own by any other name, called with a literal or a variable —
+`Traces.createTrace("OkHttp CALL $path")` is one.
 
 ### When there is no instrumentation
 
