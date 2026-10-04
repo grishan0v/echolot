@@ -131,6 +131,13 @@ note to mark the nearest allowed caller instead. A frame from `--from-anr` is
 shown the same way rather than left out, and a place to name from `--pools`
 says it is outside.
 
+The config is the one `-c` names, else `echolot.yml` in the working directory
+or under `--root`. A `-c` that names no file stops `mark` with exit 2, and so
+does a config that does not load, except for `--remove`: an empty
+`instrumentation.allowed` allows every place, so a mistake elsewhere in the
+file must not lift the guard. With no config at all, `mark` says on stderr that
+nothing is guarded.
+
 ## `--from-anr`: targets from a stack instead of the manifest
 
 ```bash

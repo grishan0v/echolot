@@ -32,6 +32,7 @@ import argparse
 import contextlib
 import fnmatch
 import json
+import os
 import re
 import sys
 import time
@@ -294,6 +295,9 @@ def _project_root(cfg: Config) -> Path:
     return Path(cfg.path).resolve().parent if cfg.path else Path.cwd()
 
 
+_PROJECT_MARKS = (".echolot", ".git", "settings.gradle", "settings.gradle.kts")
+
+
 def project_of(args) -> Path:
     """The same question `_project_root` answers, from the arguments alone.
 
@@ -312,9 +316,18 @@ def project_of(args) -> Path:
         named = getattr(args, flag, None)
         if named:
             return Path(named).resolve()
+    # The config's directory when it is the project: the command runs inside
+    # it (a build directory), or it holds what a project holds. A draft kept
+    # in a scratch directory (`-c ../scratch/draft.yml`) is neither, and
+    # sent the line next to the draft, where the project's log never heard
+    # of the run; `argv` and `config.path` keep the draft's path either way.
     config = getattr(args, "config", None)
     if config and Path(config).exists():
-        return Path(config).resolve().parent
+        home = Path(config).resolve().parent
+        here = Path.cwd().resolve()
+        if here == home or home in here.parents or any(
+                (home / mark).exists() for mark in _PROJECT_MARKS):
+            return home
     return Path.cwd()
 
 
@@ -608,6 +621,11 @@ def cmd_analyze(args) -> int:
         if not args.defaults:
             _note_detectors(cfg)
         cli_overrides = parse_set(args.set or [], load_detectors(DETECTOR_DIR))
+        # Before the traces are read: an -o that names a file used to fail
+        # at the end, after the whole analysis, with a traceback.
+        planned = _out_dir(args.out, cfg)
+        if planned.exists() and not planned.is_dir():
+            raise ConfigError(f"-o {args.out}: {planned} is a file, not a directory")
         if args.defaults:
             print("[i] --defaults: the config's detectors section is ignored, "
                   "every detector runs with its built-in thresholds",
@@ -2176,8 +2194,12 @@ def cmd_anr(args) -> int:
     # answers what froze; pointed at a checkout it also says where to open.
     code = None
     root = Path(args.root).resolve()
-    if root.is_dir():
-        code = anr_mod.locate(report, root)
+    if not root.is_dir():
+        # A mistyped --root used to drop the placement without a word; the
+        # default `.` is always there, so this is a path typed by hand.
+        print(f"no such directory: {root}", file=sys.stderr)
+        return 2
+    code = anr_mod.locate(report, root)
 
     found = anr_mod.chains(report)
     recorder.note(anr=source.name, threads=len(report.threads),
@@ -2228,14 +2250,31 @@ def cmd_mark(args) -> int:
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
     package, allowed, prefix = None, [], mark_mod.DEFAULT_PREFIX
-    if args.config and Path(args.config).exists():
+    # `instrumentation.allowed` is a guard, and an empty one allows every
+    # place. So a config named and not there is refused, the default one is
+    # looked for under --root as well as here (mark is pointed at the app
+    # from elsewhere), and one that does not load stops the run: a mistake
+    # in `detectors:` used to lift a guard set under `instrumentation:`.
+    config = _mark_config(args, root)
+    if config is None and args.config is not None:
+        print(f"config not found: {args.config}", file=sys.stderr)
+        recorder.failed(f"config not found: {args.config}")
+        return 2
+    if config is not None:
         try:
-            cfg = Config.load(args.config, getattr(args, "local", None))
+            cfg = Config.load(config, getattr(args, "local", None))
             package = cfg.get("project.package") or cfg.get("project.process")
             allowed = list(cfg.get("instrumentation.allowed") or [])
             prefix = str(cfg.get("instrumentation.temp_prefix") or prefix)
         except ConfigError as e:
-            print(f"config ignored: {e}", file=sys.stderr)
+            if not args.remove:
+                print(f"error: {config} does not load, and instrumentation.allowed "
+                      f"is read from it: {e}", file=sys.stderr)
+                recorder.failed(f"{config} does not load: {e}")
+                return 2
+    elif not args.remove:
+        print("[i] no echolot.yml here or under --root, so instrumentation.allowed "
+              "is not applied: every place counts as allowed", file=sys.stderr)
 
     if args.remove:
         touched, kept = mark_mod.remove(root)
@@ -2286,8 +2325,19 @@ def cmd_mark(args) -> int:
     else:
         pl = mark_mod.plan(root, package=package, allowed=allowed, prefix=prefix,
                            module=args.module)
+    # Applied before anything is printed, so that `--json` is one document
+    # with what was applied in it: the summary used to follow the JSON on
+    # the same stdout, and whatever parsed it stopped there.
+    applied = None
+    if args.apply and not pl.ambiguity:
+        applied = mark_mod.apply(root, pl)
     if args.json:
-        print(json.dumps(pl.to_dict(), ensure_ascii=False, indent=2))
+        data = pl.to_dict()
+        if applied is not None:
+            data["applied"] = [{"file": rel, "markers": list(markers)}
+                               for rel, markers in applied[0]]
+            data["unreadable"] = list(applied[1])
+        print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
         for line in mark_mod.render(pl):
             print(line)
@@ -2297,21 +2347,32 @@ def cmd_mark(args) -> int:
     if pl.ambiguity:
         return 2
 
-    if args.apply:
-        done, unreadable = mark_mod.apply(root, pl)
-        print()
-        for rel, markers in done:
-            print(f"  + {rel}: {', '.join(markers)}")
+    if applied is not None:
+        done, unreadable = applied
         for rel in unreadable:
             print(f"  ! {rel}: not valid UTF-8 — skipped. Marking it "
                   f"mechanically would put the lines at the wrong offsets.",
                   file=sys.stderr)
-        print(f"applied {sum(len(m) for _, m in done)} marker(s) in {len(done)} file(s); "
-              f"every inserted line ends with `{mark_mod.TAG}` — `echolot mark --remove` "
-              f"takes them out" if done else "nothing applicable to apply")
+        if not args.json:
+            print()
+            for rel, markers in done:
+                print(f"  + {rel}: {', '.join(markers)}")
+            print(f"applied {sum(len(m) for _, m in done)} marker(s) in {len(done)} file(s); "
+                  f"every inserted line ends with `{mark_mod.TAG}` — `echolot mark --remove` "
+                  f"takes them out" if done else "nothing applicable to apply")
         recorder.note(applied=sum(len(m) for _, m in done),
                       unreadable=len(unreadable))
     return 0
+
+
+def _mark_config(args, root: Path) -> str | None:
+    """The config `mark` reads: the one `-c` names, else `echolot.yml` here or under --root."""
+    if args.config is not None:
+        return args.config if Path(args.config).is_file() else None
+    for place in (Path("echolot.yml"), root / "echolot.yml"):
+        if place.is_file():
+            return str(place)
+    return None
 
 
 def cmd_collect(args) -> int:
@@ -3457,7 +3518,7 @@ def build_parser() -> argparse.ArgumentParser:
                       help="the same findings in the shape an agent walks")
     an_r.set_defaults(func=cmd_anr)
 
-    dom = add("domains", "agent", "--root <repo>", "slice-to-code map and instrumentation coverage")
+    dom = add("domains", "agent", "[--root <repo>]", "slice-to-code map and instrumentation coverage")
     dom.add_argument("--root", default=".", help="repository root")
     dom.add_argument("--top", type=int, default=12,
                      help="how many modules to list when there is none")
@@ -3472,7 +3533,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "begin/end pairs tagged `// echolot:mark`; --remove deletes "
                     "exactly those lines.")
     mk.add_argument("--root", default=".", help="repository root")
-    mk.add_argument("-c", "--config", default="echolot.yml",
+    mk.add_argument("-c", "--config", default=None,
                     help="for project.package (which app module) and instrumentation.allowed")
     mk.add_argument("--local", help="path to local.yml (defaults to alongside)")
     mk.add_argument("--module", help="the app module when several declare a launcher, e.g. :app")
@@ -3737,32 +3798,114 @@ def _streams_that_carry_the_output() -> None:
                            (sys.stdin, "replace")):
         try:
             OWN_SYMBOLS.encode(stream.encoding)
-            continue
         except Exception:
-            pass
-        with contextlib.suppress(Exception):
-            stream.reconfigure(encoding="utf-8", errors=errors)
+            with contextlib.suppress(Exception):
+                stream.reconfigure(encoding="utf-8", errors=errors)
+            continue
+        # It carries the symbols; a strict one still raised on a lone
+        # surrogate, which is what a file name that is not UTF-8 decodes to.
+        if getattr(stream, "errors", None) == "strict":
+            with contextlib.suppress(Exception):
+                stream.reconfigure(errors=errors)
+
+
+class _LastWords:
+    """stderr, remembering the lines it carried.
+
+    `recorder.failed` keeps a refusal's sentence in the run log, and most
+    refusals never called it: their lines held `exit: 2` and nothing else.
+    What the command last said on stderr is that sentence, whichever
+    command it was.
+    """
+
+    def __init__(self, stream) -> None:
+        self.stream = stream
+        self.lines: list[str] = []
+
+    def write(self, text: str) -> int:
+        written = self.stream.write(text)
+        self.lines = (self.lines + [ln.strip() for ln in text.splitlines()
+                                    if ln.strip()])[-20:]
+        return len(text) if written is None else written
+
+    def reason(self) -> str | None:
+        said = next((ln for ln in reversed(self.lines)
+                     if ln.startswith(("error:", "config error:"))), None)
+        return said or (self.lines[-1] if self.lines else None)
+
+    def __getattr__(self, name: str):
+        return getattr(self.stream, name)
+
+
+def _record_bad_call(argv: list[str] | None, started: float, said: str | None) -> None:
+    """A call argparse refused, in the run log like any other run.
+
+    It refuses by raising SystemExit(2) from `parse_args`, before the
+    recorder knew the run, so an agent's wrong flag and the retry after it
+    were missing from every log `reflect` reads.
+    """
+    words = list(sys.argv[1:] if argv is None else argv)
+    sub = next((a for a in build_parser()._actions
+                if isinstance(a, argparse._SubParsersAction)), None)
+    known = set(sub.choices) if sub else set()
+    cmd = next((w for w in words if w in known), words[0] if words else None)
+    with contextlib.suppress(Exception):
+        recorder.at(None)   # no project was named: the working directory
+        recorder.failed(said or "the arguments were refused")
+        recorder.record(argparse.Namespace(cmd=cmd), words, started, exit_code=2)
 
 
 def main(argv=None) -> int:
     # First: argparse prints too — a usage line, `--help` — and the first
     # character a stream cannot carry is a traceback wherever it comes.
     _streams_that_carry_the_output()
-    args = build_parser().parse_args(argv)
+    started = time.time()
+    heard = _LastWords(sys.stderr)
+    try:
+        with contextlib.redirect_stderr(heard):
+            args = build_parser().parse_args(argv)
+    except SystemExit as e:
+        # `--help` and `--version` leave with 0 and stay out of the log.
+        if e.code not in (0, None):
+            _record_bad_call(argv, started, heard.reason())
+        raise
     # Every invocation leaves one line in .echolot/log/runs.jsonl — the tool's
     # own record of what was asked and how it went, independent of whichever
     # agent (or human) was typing. `echolot reflect` reads it later.
     #
     # Which project's log, decided before the command runs: it has to hold
     # even when the command fails, and a failure is exactly the line worth
-    # keeping.
-    recorder.at(project_of(args))
-    started = time.time()
+    # keeping. Only a directory that is there: `init --into <typo>` refused,
+    # and then the log created the directory it had refused.
+    root = project_of(args)
+    recorder.at(root if root.is_dir() else None)
+    heard = _LastWords(sys.stderr)
     try:
-        code = args.func(args)
+        with contextlib.redirect_stderr(heard):
+            code = args.func(args)
+            sys.stdout.flush()
+    except BrokenPipeError:
+        # The reader closed the pipe early — `| head`. Not a fault: the rest
+        # of the output goes nowhere, and the run is logged without a
+        # traceback, with the exit code a shell gives SIGPIPE.
+        with contextlib.suppress(Exception):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        recorder.record(args, argv, started, exit_code=141)
+        return 141
+    except (OSError, UnicodeError) as e:
+        # A file the person named that cannot be read or written: a
+        # directory given as a report, a trace without read permission, an
+        # -o that is a file, a config that is not UTF-8. A sentence and exit
+        # 2, the way every refusal reads; a traceback is for faults in echolot.
+        print(f"error: {e}", file=sys.stderr)
+        recorder.failed(str(e))
+        recorder.record(args, argv, started, exit_code=2)
+        return 2
     except BaseException as e:
         recorder.record(args, argv, started, exit_code=1, error=e)
         raise
+    if code not in (0, None) and recorder.reason() is None and heard.reason():
+        recorder.failed(heard.reason())
     recorder.record(args, argv, started, exit_code=code)
     return code
 

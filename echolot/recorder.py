@@ -43,6 +43,11 @@ def note(**facts: Any) -> None:
     _facts.update(facts)
 
 
+def reason() -> str | None:
+    """The reason the current run gave for failing, if it gave one."""
+    return _reason
+
+
 def failed(reason: str) -> None:
     """Why the command is about to exit non-zero, in the words it printed.
 

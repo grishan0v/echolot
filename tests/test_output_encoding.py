@@ -124,12 +124,13 @@ def test_a_stream_that_cannot_carry_the_symbols_becomes_utf8(monkeypatch, name):
     check(f"and cannot raise: {wanted}", stream.errors == wanted, stream.errors)
 
 
-def test_a_stream_that_can_carry_them_is_left_as_it_is(monkeypatch):
+def test_a_stream_that_can_carry_them_keeps_its_encoding(monkeypatch):
     stream = _stream("utf-16")
     monkeypatch.setattr(sys, "stdout", stream)
     main_mod._streams_that_carry_the_output()
     check("the encoding it had", stream.encoding == "utf-16", stream.encoding)
-    check("and the error handler it had", stream.errors == "strict", stream.errors)
+    # Strict, it raised on a lone surrogate: a file name that is not UTF-8.
+    check("and no strict handler", stream.errors == "backslashreplace", stream.errors)
 
 
 def test_a_stream_that_is_not_a_real_one_is_left_alone(monkeypatch):

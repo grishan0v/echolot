@@ -2052,6 +2052,9 @@ def _(report):
     could not meet: `status` said "doctor: never run here" on a project where
     doctor had just passed, and `reflect` saw only the runs that happened to
     be typed in the right place.
+
+    From inside the project, that is. A draft config kept outside it, in a
+    scratch directory, is no project: the line stays where the command ran.
     """
     import json
 
@@ -2059,9 +2062,9 @@ def _(report):
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        project, elsewhere = root / "proj", root / "builddir"
-        project.mkdir()
-        elsewhere.mkdir()
+        project = root / "proj"
+        elsewhere = project / "bench" / "build" / "outputs" / "x"
+        elsewhere.mkdir(parents=True)
         config = _write_pair(project, "project:\n  process: com.example.app\n"
                                       "scenario:\n  name: firstLaunch\n", None)
 
@@ -2085,7 +2088,7 @@ def _(report):
                 os.environ["ECHOLOT_NO_RECORD"] = quiet
 
         assert code == 0, f"`status` exited {code}"
-        stray = list(elsewhere.rglob("runs.jsonl"))
+        stray = list((project / "bench").rglob("runs.jsonl"))
         assert not stray, f"the run log was left in the working directory: {stray}"
 
         landed = project / recorder.LOG_FILE
