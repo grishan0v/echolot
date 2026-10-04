@@ -305,16 +305,24 @@ def assess(project: Path, keys: list[str],
     if not in_use(project, keys, env):
         return None
     state = rule_state(project)
-    found = sandbox.codex_rule(project, env)
-    level = None
-    if found is None:
-        verdict = "edited-out" if state == "edited" else "missing"
-    elif found.is_relative_to(sandbox.codex_home(env)):
-        verdict = "home"
-    else:
-        level = trust(found.parents[2], env)
-        verdict = "current" if level == "trusted" else "untrusted"
+    found = sandbox.project_rule(project)
+    home = sandbox.home_rule(env)
     own = found is not None and found == (project / RULE_PATH).resolve()
+    level = None
+    if found is not None:
+        # The project's own rule by the project's path, as `install` looks it
+        # up, both spellings; a rule found above it, by where it sits.
+        level = trust(project if own else found.parents[2], env)
+    if found is not None and level == "trusted":
+        verdict = "current"
+    elif home is not None:
+        # Read in every project, whatever the project's own rule is: one
+        # Codex does not trust no longer hides it.
+        found, own, verdict = home, False, "home"
+    elif found is not None:
+        verdict = "untrusted"
+    else:
+        verdict = "edited-out" if state == "edited" else "missing"
     return {"verdict": verdict, "state": state, "found": found, "own": own,
             "trust": level, "copies": imported(project), "command": init_command(keys)}
 
@@ -442,6 +450,12 @@ def install(project: Path, keys: list[str], force: bool = False,
     if level == "trusted":
         _say("Codex reads it when a session starts: one already running keeps "
              "echolot in the sandbox until it is restarted.",
+             first="      ", rest="      ")
+    elif sandbox.home_rule(env) is not None:
+        # The advice below is to do what is done already.
+        _say(f"Codex reads a project's rules only once it trusts the project — "
+             f"{trust_words(level, env)} — and the rule in {home_rules(env)} "
+             f"lets echolot out here in the meantime.",
              first="      ", rest="      ")
     else:
         _say(f"Codex reads it when a session starts, and only in a project it "

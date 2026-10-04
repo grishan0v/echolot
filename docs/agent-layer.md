@@ -448,15 +448,28 @@ Three things decide whether the rule works, and `doctor` and `status` say
 each of them on a `codex` line, shown wherever Codex is chosen, has a
 `.codex/` folder, or is what runs the command:
 
-- **The file**: there, as echolot wrote it, edited, or gone.
+- **The file**: there, as echolot wrote it, edited, or gone. A rule counts
+  when it is a `prefix_rule` with the pattern `["echolot"]` and
+  `decision = "allow"`, not commented out, in either quote and laid out any
+  way Starlark allows. It is looked for from the directory the command ran
+  in up to the project's root, the first directory with a `.git` in it, as
+  Codex bounds a project, and under `~/.codex/rules/`. A worktree under the
+  main checkout is a project of its own, and the main checkout's rule is not
+  its rule.
 - **Trust.** Codex reads a project's `.codex/` only once the person has said
   they trust the project, and records that in `~/.codex/config.toml`
   (`[projects."<path>"]`, `trust_level = "trusted"`). echolot reads that the
   way Codex does: the folder, then the repository it is in, then the main
   checkout of a linked worktree. An untrusted project is told both ways out:
-  trust it when Codex asks, or put the same file in `~/.codex/rules/`.
-- **The moment.** Codex reads rules when a session starts. A session open
-  when the rule was written keeps echolot in the sandbox until it restarts.
+  trust it when Codex asks, or put the same file in `~/.codex/rules/`. A rule
+  there is read in every project, so with one in place an untrusted
+  project's own rule hides nothing: the line says `in every project`.
+- **The moment.** Codex reads rules when a session starts, a rule under
+  `~/.codex/rules/` as much as a project's. A session open when the rule was
+  written keeps echolot in the sandbox until it restarts.
+
+The rule lets out a command line that starts with the word `echolot`.
+`python -m echolot` is not one, and a refusal under it says so.
 
 One thing `init` cannot do from inside: Codex keeps `.codex/` read-only for
 the commands it sandboxes (`.agents/` and `.git/` too), so that no command
