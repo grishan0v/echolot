@@ -1988,7 +1988,7 @@ def cmd_hunt(args) -> int:
                 else "any agent, after `echolot guide hunt`")
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
         print("By hand: echolot collect -c echolot.yml -n 5, then echolot analyze "
-              ".echolot/traces/*.perfetto-trace", file=sys.stderr)
+              f"{state.analyze_glob(scenario)}", file=sys.stderr)
         return 0
 
     if conclusion:

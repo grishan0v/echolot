@@ -3530,11 +3530,16 @@ def _(report):
         st = project_state(project)
         assert st["config"]["scenario"] == "checkout" and st["config"]["thresholds"] == "built-in defaults", st["config"]
         assert next_kind(st) == "hunt" and "collect" in next_step(st), next_step(st)
-        # traces present: hunt or analyze
+        # another scenario's traces only: this one still has to be recorded
         (project / ".echolot" / "traces").mkdir(parents=True)
+        (project / ".echolot" / "traces" / "scroll_iter000.perfetto-trace").write_bytes(b"x")
+        st = project_state(project)
+        assert st["traces"]["count"] == 1 and "collect" in next_step(st), next_step(st)
+        # traces present: hunt or analyze, over this scenario's repeats alone
         (project / ".echolot" / "traces" / "checkout_iter000.perfetto-trace").write_bytes(b"x")
         st = project_state(project)
-        assert st["traces"]["count"] == 1 and "analyze" in next_step(st), next_step(st)
+        assert st["traces"]["scenario"] == 1 and \
+            "analyze .echolot/traces/checkout_iter*.perfetto-trace " in next_step(st), next_step(st)
         # a config that does not load is said, not swallowed
         (project / "echolot.yml").write_text("project: [\n", encoding="utf-8")
         st = project_state(project)

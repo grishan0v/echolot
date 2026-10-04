@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from pathlib import Path
 
-from . import codex, hosts, layer, recorder
+from . import codex, hosts, layer, recorder, runner
 from . import hunt as hunt_mod
 from .config import Config, ConfigError
 
@@ -56,7 +57,15 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     traces_dir = project / ".echolot" / "traces"
     traces = [p for pat in ("*.perfetto-trace", "*.pftrace")
               for p in traces_dir.glob(pat)] if traces_dir.is_dir() else []
+    # The repeats of the config's scenario, counted apart: the directory
+    # keeps every scenario's set side by side, and the next step names this
+    # one's alone.
+    scenario = (st.get("config") or {}).get("scenario")
     st["traces"] = {"dir": traces_dir, "count": len(traces),
+                    "scenario": sum(1 for p in traces
+                                    if (m := runner._ITERATION.match(p.name))
+                                    and m.group("scenario") == scenario)
+                    if scenario else None,
                     "newest": max((p.stat().st_mtime for p in traces), default=None)}
     st["collect"] = collect_state(project)
 
@@ -273,9 +282,25 @@ def next_step(st: dict) -> str:
 
 
 def _hunt_step(st: dict) -> str:
-    if not st["traces"]["count"]:
+    traces = st["traces"]
+    scenario = (st.get("config") or {}).get("scenario")
+    if not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
         return (f"{_door(st)} hunt` — or by hand: "
                 f"echolot collect -c echolot.yml -n 5")
     return (f"{_door(st)} hunt` — or by hand: "
-            f"echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml")
+            f"echolot analyze {analyze_glob(scenario)} -c echolot.yml")
+
+
+def analyze_glob(scenario: str | None) -> str:
+    """The traces one report is built from: the repeats of one scenario.
+
+    `.echolot/traces/` keeps every scenario's set, since re-recording one
+    leaves the others where they are. `*.perfetto-trace` took `scroll`'s
+    repeats along with `coldStart`'s after the config switched, and every
+    median in the report mixed the two. With no scenario to name, the whole
+    directory is all there is to say.
+    """
+    if not scenario:
+        return ".echolot/traces/*.perfetto-trace"
+    return f".echolot/traces/{shlex.quote(scenario)}_iter*.perfetto-trace"
 
