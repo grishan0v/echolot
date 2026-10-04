@@ -2153,14 +2153,23 @@ def _(report):
         root = Path(tmp)
         _android_repo(root)
         facts = scan.describe(root, devices=False)
+        script = root / "app/build.gradle"
+        script.write_text(script.read_text(encoding="utf-8").replace("; profileable = true", ""),
+                          encoding="utf-8")
+        bare = scan.describe(root, devices=False)
     assert facts.app and facts.app["application_id"] == "com.example.app", facts.app
     assert facts.app["module"] == ":app", facts.app
     names = {v["name"]: v for v in facts.variants}
     assert names["betaBenchmark"]["application_id"] == "com.example.app.beta", names
     assert names["betaDebug"]["measure"].startswith("no"), names["betaDebug"]
     assert scan.preferred(facts.variants)["name"] == "betaBenchmark", facts.variants
-    # No <profileable> in the manifest is the first thing setup must say.
-    assert any("profileable" in n for n in facts.notes), facts.notes
+    # The benchmark build type sets `profileable`, so the build it recommends
+    # traces with the app's slices whatever the manifest says.
+    assert facts.app.get("profileable_by") == ["benchmark"], facts.app
+    assert not any("profileable" in n for n in facts.notes), facts.notes
+    # With neither, no <profileable> in the manifest is the first thing setup
+    # must say.
+    assert any("profileable" in n for n in bare.notes), bare.notes
 
 
 @check("scan: the benchmark, what it measures, and the task that runs it")
