@@ -78,8 +78,16 @@ outputs:
     description: comparison.json; empty when there was nothing to compare with.
     value: ${{ steps.compare.outputs.comparison }}
   moved:
-    description: How many rows moved past the noise floor; empty without a comparison.
+    description: >-
+      How many rows grew or shrank past the noise floor; empty without a
+      comparison. Rows that appeared or vanished are counted apart.
     value: ${{ steps.compare.outputs.moved }}
+  appeared:
+    description: How many rows appeared since the baseline; empty without a comparison.
+    value: ${{ steps.compare.outputs.appeared }}
+  vanished:
+    description: How many rows vanished since the baseline; empty without a comparison.
+    value: ${{ steps.compare.outputs.vanished }}
 
 runs:
   using: composite
@@ -99,13 +107,18 @@ runs:
 
     # The echolot of the tag this action was called at, from the action's own
     # checkout, in a virtualenv of its own: the job's Python is left as it was.
+    # The virtualenv is named after that checkout and that interpreter, so a
+    # second call in the job, at another ref or with another Python, installs
+    # its own rather than running the first one's.
     - name: Install echolot
       id: install
       shell: bash
       env:
         PYTHON: ${{ inputs.python }}
-        VENV: ${{ runner.temp }}/echolot-venv
+        TEMP_ROOT: ${{ runner.temp }}
       run: |
+        key=$("$PYTHON" -c 'import hashlib, os, sys; print(hashlib.sha256((os.environ["GITHUB_ACTION_PATH"] + "\0" + sys.executable).encode()).hexdigest()[:12])')
+        VENV="$TEMP_ROOT/echolot-venv-$key"
         if [ ! -x "$VENV/bin/echolot" ]; then
           "$PYTHON" -m venv "$VENV"
           "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check "$GITHUB_ACTION_PATH"
@@ -125,15 +138,24 @@ runs:
         key: echolot-tp-${{ runner.os }}-${{ runner.arch }}-${{ steps.install.outputs.trace-processor }}
 
     # The one check that says something about the runner and nothing about
-    # the app. A report from a machine that fails it would mean nothing.
+    # the app. A report from a machine that fails it would mean nothing. Given
+    # the config `analyze` reads, so it checks the trace_processor the report
+    # is computed with. Exit 2 is a trace_processor that never arrived, and
+    # the log above says why.
     - name: echolot doctor
       shell: bash
       env:
         ECHOLOT: ${{ steps.install.outputs.echolot }}
+        CONFIG: ${{ inputs.config }}
       run: |
-        if ! "$ECHOLOT" doctor -q; then
+        code=0
+        "$ECHOLOT" doctor -q -c "$CONFIG" || code=$?
+        if [ "$code" -eq 2 ]; then
+          echo "::error title=echolot::trace_processor could not be downloaded, so nothing was checked; the error above says why"
+          exit 2
+        elif [ "$code" -ne 0 ]; then
           echo "::error title=echolot::doctor says this runner does not compute traces correctly; a report from it would mean nothing"
-          exit 1
+          exit "$code"
         fi
 
     - name: echolot analyze
@@ -187,10 +209,11 @@ runs:
         NOTE: ${{ steps.baseline.outputs.note }}
         RUN: ${{ steps.baseline.outputs.run }}
         URL: ${{ steps.baseline.outputs.url }}
+        FAILED: ${{ steps.compare.outputs.failed }}
       run: >-
         "$PY" "$GITHUB_ACTION_PATH/action/ci.py" summary
         --out "$OUT" --artifact "$ARTIFACT" --branch "$BRANCH"
-        --note "$NOTE" --run "$RUN" --url "$URL"
+        --note "$NOTE" --run "$RUN" --url "$URL" --failed "$FAILED"
 
     - name: Keep the reports
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -211,8 +234,9 @@ runs:
         NOTE: ${{ steps.baseline.outputs.note }}
         RUN: ${{ steps.baseline.outputs.run }}
         URL: ${{ steps.baseline.outputs.url }}
+        FAILED: ${{ steps.compare.outputs.failed }}
         PR: ${{ github.event.pull_request.number }}
       run: >-
         "$PY" "$GITHUB_ACTION_PATH/action/ci.py" comment
         --out "$OUT" --artifact "$ARTIFACT" --branch "$BRANCH"
-        --note "$NOTE" --run "$RUN" --url "$URL" --pr "$PR"
+        --note "$NOTE" --run "$RUN" --url "$URL" --failed "$FAILED" --pr "$PR"
