@@ -663,6 +663,7 @@ def cmd_analyze(args) -> int:
         fired=rep["summary"]["fired_ids"],
         window_ms=w.get("duration_ms"),
         start_anchor_matches=(w.get("start_anchor") or {}).get("matches"),
+        end_anchor_matches=(w.get("end_anchor") or {}).get("matches"),
         process_alternatives=len(w.get("process_alternatives") or []),
     )
     if args.defaults or cli_overrides:

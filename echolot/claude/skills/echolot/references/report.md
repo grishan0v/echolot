@@ -256,10 +256,11 @@ name is in the trace, but only before the start anchor, so nothing closed the
 window and it ran to the end of the trace. The anchors are most likely
 swapped.
 
-**`window.start_anchor.matches == 0`** — the anchor never matched and the
-window expanded to the whole trace. None of the numbers are about your
-scenario. Do not investigate, fix the config: look at the real names via
-`echolot probe` and correct `scenario.start`.
+**`window.start_anchor.matches == 0` or `window.end_anchor.matches == 0`** —
+the anchor never matched and the window ran to that edge of the trace: from
+the process's first slice, or to the end of the recording. None of the numbers
+are about your scenario. Do not investigate, fix the config: look at the real
+names via `echolot probe` and correct `scenario.start` or `scenario.end`.
 
 **`window.end_anchor.unfinished`** — the end anchor opened and never closed:
 the scenario had not reached its end when the recording stopped, and the
@@ -672,17 +673,21 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `id` | what it means |
 |---|---|
 | `thresholds` | detector parameters differ. **appeared** and **gone** mean the bar moved, not that the app changed. Re-run both with `--defaults` |
-| `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock, or read its clock or thermal state in only some of its repeats. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
+| `environment` | the clock the two rounds ran at differs by the relative floor or more (10% unless `--floor-pct` says otherwise), either way, or a side carries no clock, or read its clock or thermal state in only some of its repeats. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
 | `environment-thermal` | the kernel throttled the device during one round and not the other: that side is slower for a reason outside the code. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
 | `process` | two different apps. `comparable: false` |
 | `defaults` / `config` | one side used `--defaults`, or the config's hash changed |
-| `anchor-before` / `anchor-after` | that side's window is the whole trace |
+| `anchor-before` / `anchor-after` | that side's start or end anchor never matched: its window runs to the edge of the trace |
 | `runs` / `single` | different repeat counts, or a single trace with no spread to test against |
 | `few` | too few repeats to be 95% sure of any move — four a side is always enough — so every `holds` is `null`. Record another round rather than read the moves as settled |
 | `detectors` | the two runs did not use the same set of detectors |
+| `detector-failed` | a detector failed on that side. Its rows on the other side are left out rather than called gone or new; the failure is no answer about the app |
 
 A row is listed as moved when it changes by more than 5 ms or 10 %, whichever
-is larger — `--floor-ms` and `--floor-pct` change that. The exit code is 0
+is larger — `--floor-ms` and `--floor-pct` change that. A row whose share of
+repeats differs between the sides — `120.0 (1/5)` before, `(5/5)` after —
+counts each repeat without it as zero, so work that now happens on every run
+is listed as grew. The exit code is 0
 whatever the comparison finds.

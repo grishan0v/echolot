@@ -107,8 +107,9 @@ they nest inside one another. Nor `self_ms` across detectors: a disk wait
 inside a slice is in both. How much of the window the findings cover is
 `window.main_thread.in_rows_pct`, each moment counted once.
 
-**Warnings inside `window`.** If `start_anchor.matches == 0` the window
-expanded to the whole trace and none of the numbers are about your scenario.
+**Warnings inside `window`.** If `start_anchor.matches == 0` or
+`end_anchor.matches == 0` the window ran to the edge of the trace and none of
+the numbers are about your scenario.
 Same for `process_alternatives` — you may be analysing the wrong process. Fix
 the config rather than hunting a problem.
 

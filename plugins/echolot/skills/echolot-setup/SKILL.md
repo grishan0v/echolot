@@ -19,6 +19,7 @@ present candidates and the human decides; a value nobody could find is
 written as `null` and said out loud, never invented.
 
 Before calling the config done, `echolot analyze` the probe trace and read
-the window, not the findings: `start_anchor.matches` above zero, a window
+the window, not the findings: `start_anchor.matches` and
+`end_anchor.matches` above zero, a window
 that looks like the scenario, and not every detector firing at once. Then
 `echolot` should say `next: hunt`.
