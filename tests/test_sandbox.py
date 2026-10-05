@@ -350,10 +350,10 @@ def test_with_the_rule_in_place_the_refusal_names_the_command_line(
     assert "lets echolot out of it" in err, err
     assert "A glob such as `*.perfetto-trace`" in err, err
     assert "put prefix_rule" not in err and "let it out for good" not in err, err
-    # A session that started before the rule was there has not read it; a
-    # rule for every project is read by every session there is.
-    unread = "the session started before the rule was there" in err
-    assert unread is (where == "project"), err
+    # A session that started before the rule was there has not read it,
+    # whichever folder the rule is in: Codex reads rules when a session
+    # starts, and one added under CODEX_HOME mid-session is not read either.
+    assert "the session started before the rule was there" in err, err
 
 
 def _trusted(home: Path, project: Path, level: str = "trusted") -> None:

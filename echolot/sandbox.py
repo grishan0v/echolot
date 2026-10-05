@@ -28,6 +28,7 @@ from __future__ import annotations
 import errno
 import os
 import re
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -108,9 +109,10 @@ def ways_out(where: str | None) -> list[str]:
     ]
 
 
-# A rule file names the command it lets out as a list of words; spaced
-# however its author spaced it.
-_ECHOLOT_RULE = re.compile(r'prefix_rule\(\s*pattern\s*=\s*\[\s*"echolot"\s*\]')
+# A rule file names the command it lets out as a list of words. It is
+# Starlark: either quote, a trailing comma, the list on lines of its own.
+_ECHOLOT_PATTERN = re.compile(r"""\bpattern\s*=\s*\[\s*(["'])echolot\1\s*,?\s*\]""")
+_DECISION = re.compile(r"""\bdecision\s*=\s*(["'])(\w+)\1""")
 
 
 def codex_home(env: Mapping[str, str]) -> Path:
@@ -118,17 +120,114 @@ def codex_home(env: Mapping[str, str]) -> Path:
 
 
 def shown(path: Path) -> str:
-    """A path the way a person would type it: from here, or from home."""
+    """A path the way a person would type it: from here, or from home.
+
+    From home only below it: by the string, `/opt/dev2/…` under a home of
+    `/opt/dev` came out as `~2/…`, a path that does not exist.
+    """
     try:
         return str(path.relative_to(Path.cwd().resolve()))
     except ValueError:
-        home = str(Path.home())
-        return "~" + str(path)[len(home):] if str(path).startswith(home) else str(path)
+        pass
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
 
 
 def lets_echolot_out(text: str) -> bool:
-    """Whether a rules file names the `echolot` command."""
-    return bool(_ECHOLOT_RULE.search(text))
+    """Whether a rules file lets the `echolot` command out of the sandbox.
+
+    A `prefix_rule` call, not commented out, whose pattern is that one word
+    and whose decision is `allow`. Only the pattern was looked for: a rule
+    set to `prompt` or `forbidden`, or the one line commented out, still
+    counted as letting echolot out; and a rule written in single quotes, with
+    its arguments in another order or the list laid out one item a line, did
+    not count at all.
+    """
+    for call in _calls(_uncommented(text), "prefix_rule"):
+        decision = _DECISION.search(call)
+        if _ECHOLOT_PATTERN.search(call) and decision and decision.group(2) == "allow":
+            return True
+    return False
+
+
+def _uncommented(text: str) -> str:
+    """Starlark with its `#` comments blanked, strings left as they are."""
+    out, quote, i = [], None, 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#":
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _calls(code: str, name: str) -> list[str]:
+    """The argument text of every `name(...)` call, parentheses matched."""
+    found = []
+    for m in re.finditer(r"\b" + re.escape(name) + r"\s*\(", code):
+        depth, quote = 1, None
+        for j in range(m.end(), len(code)):
+            ch = code[j]
+            if quote:
+                if ch == quote and code[j - 1] != "\\":
+                    quote = None
+            elif ch in "\"'":
+                quote = ch
+            elif ch in "([":
+                depth += 1
+            elif ch in ")]":
+                depth -= 1
+                if depth == 0:
+                    found.append(code[m.end():j])
+                    break
+    return found
+
+
+def _first_rule(home: Path) -> Path | None:
+    for rules in sorted((home / "rules").glob("*.rules")):
+        try:
+            if lets_echolot_out(rules.read_text(encoding="utf-8")):
+                return rules
+        except OSError:
+            continue
+    return None
+
+
+def project_rule(start: Path | None = None) -> Path | None:
+    """A rule in the project's `.codex/rules/` that lets echolot out.
+
+    From the directory the command ran in up to the project's root, the
+    first directory with a `.git` in it, file or directory — where Codex
+    bounds a project. Past it, a worktree under `<main>/.claude/worktrees/`
+    found the main checkout's rule, which Codex in the worktree never reads.
+    """
+    here = (start or Path.cwd()).resolve()
+    for d in (here, *here.parents):
+        found = _first_rule(d / ".codex")
+        if found is not None:
+            return found
+        if (d / ".git").exists():
+            return None
+    return None
+
+
+def home_rule(env: Mapping[str, str] | None = None) -> Path | None:
+    """A rule under CODEX_HOME that lets echolot out, in every project."""
+    return _first_rule(codex_home(os.environ if env is None else env))
 
 
 def codex_rule(start: Path | None = None,
@@ -138,28 +237,32 @@ def codex_rule(start: Path | None = None,
     Where Codex looks: `.codex/rules/` in the project, which may sit above the
     directory the command ran in, and the user's own under CODEX_HOME.
     """
-    env = os.environ if env is None else env
-    here = (start or Path.cwd()).resolve()
-    homes = [d / ".codex" for d in (here, *here.parents)]
-    homes.append(codex_home(env))
-    for home in homes:
-        for rules in sorted((home / "rules").glob("*.rules")):
-            try:
-                if lets_echolot_out(rules.read_text(encoding="utf-8")):
-                    return rules
-            except OSError:
-                continue
-    return None
+    return project_rule(start) or home_rule(env)
+
+
+def _through_python_m() -> bool:
+    """Whether this process is `python -m echolot` rather than `echolot`."""
+    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    return getattr(spec, "name", None) in ("echolot.__main__", "echolot.main")
 
 
 def message(what: str, where: str | None) -> str:
     """The whole sentence: what was refused, whose sandbox, the way out."""
-    rule = codex_rule() if where == CODEX else None
+    rule = project_rule() if where == CODEX else None
+    home = home_rule() if where == CODEX else None
+    if rule is not None and home is not None:
+        # A rule in a project Codex does not trust is not read, and the one
+        # under CODEX_HOME is, in every project: that is the rule that
+        # counts then.
+        from . import codex
+        if codex.trust(rule.parents[2]) != "trusted":
+            rule = home
+    rule = rule or home
     if rule is not None:
         head = (f"{what}: this command ran in Codex's sandbox although "
                 f"{shown(rule)} lets echolot out of it.")
-        project_rule = not rule.is_relative_to(codex_home(os.environ))
-        if project_rule:
+        in_project = not rule.is_relative_to(codex_home(os.environ))
+        if in_project:
             # A rule in a project Codex does not trust is never read, and
             # nothing about the command line matters then.
             from . import codex
@@ -178,18 +281,26 @@ def message(what: str, where: str | None) -> str:
         # is the usual reason — the documented `analyze
         # .echolot/traces/*.perfetto-trace` is one — and a live session
         # stopped on it, taking the refusal for a missing rule (#189).
-        lines = [
+        if _through_python_m():
+            # Started as `python -m echolot`: the rule covers a line that
+            # starts with the word `echolot`, and its own `not_match` names
+            # this one. Blaming a glob sent the agent after one it never had.
+            return "\n".join([
+                head,
+                "  This echolot was started as `python -m echolot`, and the "
+                "rule lets out only a command line that starts with `echolot`: "
+                "run `echolot` itself, or add a rule for the `python -m` form."])
+        # Codex reads rules when a session starts, a rule under CODEX_HOME
+        # as much as a project's: one added mid-session is not read yet.
+        return "\n".join([
             head,
             "  Codex matches the whole command line against the rule. A glob "
             "such as `*.perfetto-trace`, a pipe, or `&&` with another program "
             "keeps the line in the sandbox: run echolot on its own, with the "
-            "trace files named (`ls .echolot/traces` lists them)."]
-        if project_rule:
-            lines.append(
-                "  If the line was echolot alone, the session started before "
-                "the rule was there: Codex reads rules only when a session "
-                "starts.")
-        return "\n".join(lines)
+            "trace files named (`ls .echolot/traces` lists them).",
+            "  If the line was echolot alone, the session started before "
+            "the rule was there: Codex reads rules only when a session "
+            "starts."])
     if where == CODEX:
         head = (f"{what}: this command runs in Codex's sandbox, which has no "
                 f"network, localhost included.")
