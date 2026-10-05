@@ -47,7 +47,7 @@ runner:
   mode: launch              # launch | command | gradle
   iterations: 5
   duration_ms: 12000
-  reset_policy: force-stop  # force-stop (cold) | none (warm)
+  reset_policy: force-stop  # force-stop (cold) | none (nothing between repeats)
 ```
 
 `duration_ms` is sized for a start, and a freeze does not fit in it. Hunting
@@ -63,7 +63,9 @@ before the device is touched. A `reset_policy` other than `force-stop` or
 ### `launch` — we drive it
 
 `force-stop`, start recording, `am start -W`, wait, pull. A cold start. With
-`reset_policy: none` it becomes a warm one.
+`reset_policy: none` nothing is reset between repeats, and that is not a warm
+start: the app is still in front from the repeat before, so `am start -W` has
+nothing to start and only the first repeat can measure one.
 
 `am start -W` prints `TotalTime`, which the runner reports — an independent
 check that the window in the report is plausible. `TotalTime: 0` is the
@@ -198,8 +200,8 @@ Four gradle failures come with the one thing that fixes them:
 | the output says | what it is | the fix |
 |---|---|---|
 | `Perfetto SDK` / `binary verification` | the SDK half of the tracing could not be set up in the app — usually a stale `libtracing_perfetto.so` in its code_cache | reinstall, or `pm clear` where the device allows it; or turn that half off with `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=false` in `runner.gradle_args` |
-| `ERRORS (not suppressed): EMULATOR, …` | the benchmark refuses the device or its state | fix the state, or `…androidx.benchmark.suppressErrors=EMULATOR,LOW-BATTERY,UNLOCKED` in `runner.gradle_args` |
-| `No online devices found` / `DeviceException` | gradle found no device it could use | `adb devices` should list one as `device`; a serial named with `--device` or `runner.device` reaches gradle as `ANDROID_SERIAL` and has to be one of those listed |
+| `ERRORS (not suppressed): EMULATOR, …` | the benchmark refuses the device or its state | fix the state, or `…androidx.benchmark.suppressErrors=` with the names it lists, `EMULATOR,LOW-BATTERY` for one in `runner.gradle_args` |
+| `No online devices found` / `no devices/emulators found` / `device offline` | gradle found no device it could use | `adb devices` should list one as `device`; a serial named with `--device` or `runner.device` reaches gradle as `ANDROID_SERIAL` and has to be one of those listed |
 | `INSTALL_FAILED` / `signatures do not match` | the APK did not install | uninstall the app from the device first — a build signed differently cannot go over the one that is there |
 
 ## `pm clear` is deliberately unsupported
