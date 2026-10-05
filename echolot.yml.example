@@ -58,7 +58,9 @@ runner:
   # writes its record down. A freeze eight seconds in needs about sixteen
   # seconds, past the twelve below — see docs/anr.md.
   duration_ms: 12000
-  # force-stop (cold) or none (warm). pm clear is deliberately unsupported:
+  # force-stop (cold) or none (nothing between repeats: in launch mode the
+  # app stays in front, so only the first repeat measures a start). pm clear
+  # is deliberately unsupported:
   # wiping data changes the scenario rather than repeating it.
   reset_policy: force-stop
   # Record what the device was doing to the app: CPU frequency, thermal

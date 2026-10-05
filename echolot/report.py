@@ -23,8 +23,9 @@ COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
 # not know as an extra column, which is right for a detector that invents one
 # and wrong for bookkeeping the report writes itself. `places` is the json
 # side of the `code` column — see place.py — and `stacks` the json side of
-# what the evidence says the samples named — see stacks.py.
-HIDDEN = {"spread", "places", "stacks"}
+# what the evidence says the samples named — see stacks.py. `unfinished` is a
+# marker that never closed, which its numbers say with a `≥`.
+HIDDEN = {"spread", "places", "stacks", "unfinished"}
 HEADERS = {
     "location": "Where",
     "runs": "Runs",
@@ -273,7 +274,10 @@ def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
                                  None),
             "throttled": bool(throttled),
             "throttle_device": throttled[0].get("throttle_device") if throttled else None,
-            "throttled_runs": f"{len(throttled)}/{len(reports)}",
+            # Out of the repeats that recorded it: one repeat with a
+            # temperature among five read `0/5`, as if all five were checked.
+            "throttled_runs": f"{len(throttled)}/{len(thermals)}",
+            "runs": f"{len(thermals)}/{len(reports)}",
         }
     if memories:
         avail = [m["available_mb_min"] for m in memories
@@ -288,6 +292,15 @@ def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
     out["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if out[k] is None)
     return out
+
+
+def short_runs(runs: Any) -> tuple[int, int] | None:
+    """`(k, n)` from a `runs` field such as `"1/5"`, when k is short of n."""
+    try:
+        k, n = (int(x) for x in str(runs).split("/"))
+    except ValueError:
+        return None
+    return (k, n) if k < n else None
 
 
 def _merge_sampling(samplings: list[dict[str, Any] | None]) -> dict[str, Any] | None:
@@ -319,9 +332,16 @@ def _merge_sampling(samplings: list[dict[str, Any] | None]) -> dict[str, Any] | 
     # How the app's methods were named: the most any repeat saw. A minified
     # method in one repeat is the warning's whole point, and a median would
     # vote it away.
+    #
+    # The whole block from the repeat with the largest minified share, which
+    # is what the warning tests. Each key's maximum on its own came from
+    # different repeats and made a block no repeat had: three minified of
+    # eight after one repeat's mapping renamed eight, while the repeat that
+    # had three minified renamed five.
     names = [s["names"] for s in ran if s.get("names")]
     if names:
-        merged["names"] = {key: max(n.get(key) or 0 for n in names) for key in names[0]}
+        merged["names"] = dict(max(names, key=lambda n: (
+            (n.get("minified") or 0) / (n.get("methods") or 1), n.get("minified") or 0)))
     return merged
 
 
@@ -409,14 +429,64 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     sections = [r.get("markers") or {} for r in reports]
     head = next((s for s in sections if s), {})
     seen = {row["location"] for s in sections for row in s.get("rows") or []}
+    rows = merge_rows([s.get("rows") or [] for s in sections], ("location",), total)
+    # A marker that never closed in any repeat stays a floor in the merge.
+    open_in = {row["location"] for s in sections for row in s.get("rows") or []
+               if row.get("unfinished")}
+    for row in rows:
+        if row["location"] in open_in:
+            row["unfinished"] = True
     return {
         "prefix": head.get("prefix"),
         "globs": head.get("globs") or [],
-        "rows": merge_rows([s.get("rows") or [] for s in sections], ("location",), total),
+        "rows": rows,
         "absent": [g for g in head.get("globs") or []
                    if g in set(head.get("absent") or []) and not any(
                        fnmatch.fnmatchcase(n, g) for n in seen)],
     }
+
+
+def _merge_window_checks(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """What the window says about how it was cut, for every repeat at once.
+
+    These fields are checks rather than measurements, and a check holds for
+    the set only if it held in each repeat. Copied from the first repeat, a
+    start anchor that missed in the third read `matches: 1`: that repeat's
+    window was the whole trace, its rows were in the medians, and the warning
+    that has to be shouted never was. So the worst case speaks: the fewest
+    matches per anchor, with `missed` counting the repeats where it found
+    nothing; `opened_inside` from a repeat where it is material; and the
+    process names, when the repeats measured more than one.
+    """
+    total = len(reports)
+    windows = [r.get("window") or {} for r in reports]
+    out: dict[str, Any] = {}
+    for key in ("start_anchor", "end_anchor"):
+        anchors = [w.get(key) for w in windows if w.get(key)]
+        if not anchors:
+            continue
+        worst = dict(min(anchors, key=lambda a: a.get("matches") or 0))
+        missed = sum(1 for a in anchors if not a.get("matches"))
+        if missed:
+            worst["missed"] = f"{missed}/{total}"
+        # An end that never closed in any repeat ran that window to the end
+        # of its trace, whichever repeat matched least.
+        if any(a.get("unfinished") for a in anchors):
+            worst["unfinished"] = True
+        out[key] = worst
+    material = [w["opened_inside"] for w in windows
+                if (w.get("opened_inside") or {}).get("material")]
+    if material:
+        out["opened_inside"] = dict(max(material, key=lambda o: o.get("before_ms") or 0),
+                                    runs=f"{len(material)}/{total}")
+    names = sorted({w["process"] for w in windows if w.get("process")})
+    if len(names) > 1:
+        out["processes"] = names
+    alternatives = next((w for w in windows if w.get("process_alternatives")), None)
+    if alternatives:
+        out["process_alternatives"] = alternatives["process_alternatives"]
+        out["process_alternatives_total"] = alternatives.get("process_alternatives_total")
+    return out
 
 
 def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
@@ -446,6 +516,7 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"]["duration_ms_max"] = max(windows)
         merged["window"]["main_thread"] = _merge_budget(reports)
         merged["window"]["startup"] = _merge_startup(reports)
+        merged["window"].update(_merge_window_checks(reports))
 
     merged["environment"] = _merge_environment(reports)
 
@@ -465,9 +536,16 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         # then read that against the next report and announced a threshold
         # change nobody had made.
         head = dict(next((r for r in runs if not r["error"]), runs[0]))
-        head["rows"] = merge_rows([run["rows"] for run in runs],
-                                  identity_of(head), total)
+        # Only the repeats it ran in, and their count for `runs`. Counted
+        # against every repeat, a row found each time the detector ran read
+        # `1/3` when it had failed in the other two, and `1/3` means caught
+        # once. How many failed is said beside the rows instead.
+        ran = [run for run in runs if not run["error"]]
+        head["rows"] = merge_rows([run["rows"] for run in ran],
+                                  identity_of(head), len(ran)) if ran else []
         head["error"] = next((r["error"] for r in runs if r["error"]), None)
+        if head["error"]:
+            head["failed_runs"] = f"{len(runs) - len(ran)}/{len(runs)}"
         detectors.append(head)
 
     merged["detectors"] = detectors
@@ -554,8 +632,9 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
     out = ["Main thread: " + " · ".join(parts)]
     out.extend(_in_rows_line(budget))
     accounted = budget.get("accounted_pct")
-    # Anything much short of the whole window means the thread was not there
-    # for all of it. Silence would read as "the rest was nothing".
+    # Anything much short of the whole window means the thread had no state
+    # for part of it; a state still open when the recording stopped is counted
+    # to the window's end. Silence would read as "the rest was nothing".
     if accounted is not None and accounted < 95:
         out.append(
             f"> ⚠️ Only {accounted:.0f}% of the window is accounted for on the "
@@ -688,9 +767,17 @@ def _environment_lines(env: dict[str, Any]) -> list[str]:
         covered, total = cpu.get("measured_ms"), cpu.get("on_cpu_ms")
         if covered and total and covered < total * 0.99:
             bit += f", measured over {covered / total * 100:.0f}% of on-CPU time"
+        # The same for repeats: a clock read in one of five is that one's.
+        short = short_runs(cpu.get("runs"))
+        if short:
+            bit += f", read in {short[0]} of {short[1]} repeats"
         bits.append(bit)
     if thermal and thermal.get("max_celsius") is not None:
-        bits.append(f"peak {thermal['max_celsius']:.0f} °C")
+        bit = f"peak {thermal['max_celsius']:.0f} °C"
+        short = short_runs(thermal.get("runs"))
+        if short:
+            bit += f" in {short[0]} of {short[1]} repeats"
+        bits.append(bit)
     memory = env.get("memory")
     if memory and memory.get("available_mb_min") is not None:
         bits.append(f"{memory['available_mb_min']:.0f} MB free at the low point")
@@ -711,13 +798,30 @@ def _environment_lines(env: dict[str, Any]) -> list[str]:
 
     # Absence is a third answer and has to look like one. Without this the
     # header simply says nothing about the device, which reads as a device
-    # with nothing to say.
+    # with nothing to say. Worded by what is absent: a trace that has its
+    # clock and lacks only a temperature still lets `compare` judge the
+    # machine, and saying otherwise sent a reader to re-record for nothing.
     missing = env.get("missing") or []
-    if missing:
+    if set(missing) >= {"cpu", "thermal", "memory"}:
         out.append(
             f"Device state not recorded: {', '.join(missing)} — this trace "
             f"carries no platform-state sources, so `compare` cannot tell a "
             f"slower machine from a slower app."
+        )
+    elif missing:
+        line = f"Device state not recorded: {', '.join(missing)}"
+        if "cpu" in missing:
+            line += (" — without the clock, `compare` cannot tell a slower "
+                     "machine from a slower app")
+        elif "thermal" in missing:
+            line += " — whether the kernel throttled the device is not known"
+        out.append(line + ".")
+    short = short_runs((cpu or {}).get("runs")) or short_runs((thermal or {}).get("runs"))
+    if short:
+        out.append(
+            f"> ⚠️ The device state comes from {short[0]} of {short[1]} "
+            f"repeats; the others carry none. What it says about the machine "
+            f"is about those repeats alone, and `compare` says so too."
         )
     out.extend(_sampling_lines(env.get("sampling")))
     out.extend(_names_lines((env.get("sampling") or {}).get("names")))
@@ -893,12 +997,42 @@ def to_markdown(report: dict[str, Any]) -> str:
     # plausible and leads somewhere else entirely.
     for key, label in (("start_anchor", "Start"), ("end_anchor", "End")):
         anchor = w.get(key)
-        if anchor and anchor.get("matches") == 0:
+        missed = short_runs(anchor.get("missed")) if anchor else None
+        if anchor and anchor.get("matches") == 0 and anchor.get("before_start"):
+            out.append(
+                f"> ⚠️ {label} anchor `{anchor['glob']}` occurs only before the "
+                f"start anchor ({anchor['before_start']} time(s)), so nothing "
+                f"closed the window and it ran to the end of the trace. Are the "
+                f"two anchors swapped? The numbers below are not about your "
+                f"scenario."
+            )
+        elif missed:
+            out.append(
+                f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in "
+                f"{missed[0]} of {missed[1]} repeats — in those the window "
+                f"expanded to the whole trace, and their rows are in the "
+                f"medians below. Check against `probe`."
+            )
+        elif anchor and anchor.get("matches") == 0:
             out.append(
                 f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in the "
                 f"trace — the window expanded to the whole trace. Check against "
                 f"`probe`; the numbers below are not about your scenario."
             )
+        elif anchor and anchor.get("unfinished"):
+            out.append(
+                f"> ⚠️ {label} anchor `{anchor['glob']}` never closed: the "
+                f"scenario had not reached its end when the recording stopped, "
+                f"so the window runs to the end of the trace."
+            )
+    processes = w.get("processes")
+    if processes:
+        out.append(
+            f"> ⚠️ The repeats measured different processes: "
+            f"{', '.join(f'`{p}`' for p in processes)}. The process mask "
+            f"matched more than one, and the medians below mix them. Narrow "
+            f"`project.process` to the one you mean."
+        )
 
     # A partial account looks exactly like a complete one, which is the only
     # reason this is worth a line. Slices keep their real length across the
@@ -943,12 +1077,23 @@ def to_markdown(report: dict[str, Any]) -> str:
 
     out.extend(_markers_lines(report.get("markers") or {}))
 
+    # A detector that failed did not look, and that is no answer: it is not
+    # silence, and the ground it covers was not checked. Listed apart, above
+    # the findings, with its error. It used to land under Silent beside the
+    # detectors that looked and found nothing, and a report where every one
+    # had failed called the run clean.
+    failed = [d for d in report["detectors"] if d.get("error") and not d["rows"]]
+    for d in failed:
+        out.append(f"> ⚠️ Failed: `{d['id']}` — {d['error']}")
+    if failed:
+        out.append("")
+
     # Nothing fired still ends the way every report does, with the Silent
     # line and the toolchain footer. It used to return here, before both —
     # and the footer is where a trace_processor other than the pinned one is
     # named, so a clean report from a binary that bypassed the pin did not
     # say so.
-    if s["detectors_fired"] == 0:
+    if s["detectors_fired"] == 0 and not failed:
         out.append("_No detector fired._")
         out.append("")
         out.append(
@@ -967,11 +1112,19 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
         out.append(_table(d["rows"]))
         out.append("")
+        # Failed in some repeats and ran in the rest: the rows are from the
+        # rest, and `runs` counts those.
+        part = short_runs(d.get("failed_runs"))
+        if part:
+            out.append(f"> ⚠️ Failed in {part[0]} of {part[1]} repeats: "
+                       f"{d.get('error')}. The rows are from the others.")
+            out.append("")
         out.append(f"<sub>detector `{d['id']}`, params: {d['params']}"
                    f"{_source_note(d)}</sub>")
         out.append("")
 
-    quiet = [d["id"] for d in report["detectors"] if not d["rows"]]
+    quiet = [d["id"] for d in report["detectors"]
+             if not d["rows"] and not d.get("error")]
     if quiet:
         out.append(f"**Silent:** {', '.join(quiet)}")
 
@@ -1044,7 +1197,8 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
         if a:
             hit = a.get("matches")
             anchors.append(f"{label} `{a.get('glob')}` "
-                           + ("⚠️ 0 matches" if hit == 0 else f"{hit} match(es)"))
+                           + ("⚠️ 0 matches" if hit == 0 else f"{hit} match(es)")
+                           + (", ⚠️ never closed" if a.get("unfinished") else ""))
     if anchors:
         out.append("Anchors: " + " · ".join(anchors))
     alts = w.get("process_alternatives")
@@ -1216,10 +1370,19 @@ def _markers_lines(markers: dict[str, Any]) -> list[str]:
                "_the names `domains` lists; medians per run_")
     out.append("")
     if rows:
-        out.append(table.render(rows, order=COLUMNS,
+        # A marker that never closed is a floor, and the table says so.
+        shown = [{**r, **{c: f"≥ {r[c]}" for c in ("self_ms", "total_ms", "max_ms")
+                          if r.get(c) is not None}} if r.get("unfinished") else r
+                 for r in rows]
+        out.append(table.render(shown, order=COLUMNS,
                                 headers={**HEADERS, "location": "Marker", "detail": "Threads"},
                                 skip=HIDDEN))
         out.append("")
+        if any(r.get("unfinished") for r in rows):
+            out.append("≥ — the marker never closed: its end did not run, or the "
+                       "recording stopped first. The number runs to the end of "
+                       "the window and is a floor.")
+            out.append("")
     if absent:
         out.append("Not in the window: " + ", ".join(f"`{g}`" for g in absent)
                    + " — listed in `domains`, never seen in this scenario.")

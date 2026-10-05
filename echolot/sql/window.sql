@@ -47,6 +47,28 @@ WHERE s.ts < {{ts_end}}
   AND s.ts + CASE WHEN s.dur < 0 THEN {{ts_end}} - s.ts
                   ELSE MAX(s.dur, 0) END > {{ts_start}};
 
+-- How much of each slice its children account for, with an open child read
+-- the way _slice_win reads an open slice: running to the end of the window.
+-- Taken as zero long, its time landed in its own self time and again in each
+-- open ancestor's — with B/E events the parent of an open slice is open too —
+-- and self times added up to more than the window.
+--
+-- `ns` is all of the children, for a slice that closed. `ns_win` stops each
+-- child at the end of the window, for a slice that did not close: its own
+-- length stops there, and a child it opened after the window is not part of
+-- it. One pass over the whole trace; a correlated subquery per slice would
+-- cost an order of magnitude more.
+DROP VIEW IF EXISTS _child_sum;
+CREATE VIEW _child_sum AS
+SELECT
+    parent_id,
+    SUM(CASE WHEN dur < 0 THEN MAX({{ts_end}} - ts, 0) ELSE dur END)    AS ns,
+    SUM(MAX(MIN(CASE WHEN dur < 0 THEN {{ts_end}} ELSE ts + dur END,
+                {{ts_end}}) - ts, 0))                                   AS ns_win
+FROM slice
+WHERE parent_id IS NOT NULL
+GROUP BY parent_id;
+
 -- The process's async sections that overlap the window, read the same way.
 -- Not part of _slice_win, and for the same reason it is not part of _slice:
 -- a section on no thread has no place in a per-thread sum. What reads this is
@@ -82,6 +104,12 @@ WHERE a.ts < {{ts_end}}
 -- All three are carried rather than used here: environment.sql weighs the
 -- clock by the cores we actually ran on, and none of them costs anything to a
 -- detector that does not select it.
+--
+-- A thread's last state comes back with dur = -1 when the thread was still in
+-- it as the recording stopped, and it runs to the end of the window, as an
+-- open slice does above. Dropped, it took each thread's last stretch with it:
+-- a main thread asleep from before the window to the end had no budget at
+-- all, and the report put the gap down to a thread that was not there.
 DROP VIEW IF EXISTS _tstate_win;
 CREATE VIEW _tstate_win AS
 SELECT
@@ -93,13 +121,14 @@ SELECT
     ts.io_wait,
     ts.blocked_function,
     MAX(ts.ts, {{ts_start}})                                        AS ts,
-    MIN(ts.ts + ts.dur, {{ts_end}}) - MAX(ts.ts, {{ts_start}})      AS dur
+    MIN(CASE WHEN ts.dur < 0 THEN {{ts_end}} ELSE ts.ts + ts.dur END, {{ts_end}})
+        - MAX(ts.ts, {{ts_start}})                                  AS dur
 FROM thread_state ts
 JOIN thread th ON ts.utid = th.utid
 JOIN _proc p   ON th.upid = p.upid
-WHERE ts.dur > 0
+WHERE ts.dur != 0
   AND ts.ts < {{ts_end}}
-  AND ts.ts + ts.dur > {{ts_start}};
+  AND CASE WHEN ts.dur < 0 THEN {{ts_end}} ELSE ts.ts + ts.dur END > {{ts_start}};
 
 -- --- intersecting "thread on CPU" with "top-level slices" ------------------
 --

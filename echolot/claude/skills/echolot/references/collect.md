@@ -175,7 +175,7 @@ device:
 | the line says | what it is | the fix |
 |---|---|---|
 | `Perfetto SDK` / `binary verification` | the SDK half of the tracing could not be set up in the app — a stale `libtracing_perfetto.so` in its code_cache | reinstall or `pm clear`; or `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=false` in `runner.gradle_args` — the atrace half still carries the app's sections |
-| `ERRORS (not suppressed): EMULATOR, …` | the benchmark refuses the device or its state | fix the state, or `…androidx.benchmark.suppressErrors=EMULATOR,LOW-BATTERY,UNLOCKED` |
+| `ERRORS (not suppressed): EMULATOR, …` | the benchmark refuses the device or its state | fix the state, or `…androidx.benchmark.suppressErrors=` with the names it lists, `EMULATOR,LOW-BATTERY` for one |
 | `No online devices found` | gradle found no device it could use | `adb devices`; with several attached, `--device` or `runner.device` picks one — `collect` hands it to gradle as `ANDROID_SERIAL`, so it has to be one `adb devices` lists |
 | `INSTALL_FAILED` / `signatures do not match` | the APK did not install | uninstall the app from the device first — a build signed differently cannot go over the one that is there |
 

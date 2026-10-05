@@ -20,8 +20,9 @@ project: it binds to the platform's vocabulary and never to the project's.
                 — one hop, resolved by an exact `fun Name(` search, kept
                 only when the definition is in this project.
     jdk         `--pools`: `Executors.new*`, `ThreadPoolExecutor(`, a bare
-                `Thread(` — the places that hand the JDK's default factory a
-                thread to name, so the report ends up saying
+                `Thread(` or Kotlin's `Thread { … }` — the places that hand
+                the JDK's default factory a thread to name, so the report
+                ends up saying
                 `pool-7-thread-1`. A different question from the rest, and
                 the only one that starts from the report; see `plan_pools`.
 
@@ -36,7 +37,10 @@ project's and never into one, and `--remove` deletes exactly those lines.
 Both halves of that sentence are load-bearing, so a block that cannot take a
 line of its own is refused rather than approximated:
 
-    a `return` in the body   the end would be skipped;
+    a `return` in a lambda   its end goes in bare, and would be skipped —
+    or a composable          Compose refuses a `try` around composable
+                             calls (a function body gets its end in a
+                             `finally` and takes a return as it is);
     a body written on one    the begin and end lines would cross, and the
     line                     body would end up inside the begin line's
                              comment — where `--remove` would then delete it;
@@ -44,7 +48,9 @@ line of its own is refused rather than approximated:
     before the `}`, on the   line of the project's, and `--remove` deletes
     brace's line             lines, it does not join them back.
 
-All three are reported as "mark by hand" and shown with the reason. A comment
+Each is reported as "mark by hand" and shown with the reason, as is a file
+in shared Kotlin source (`src/commonMain` and its kin, where `android.*`
+does not resolve) and a marker longer than `Trace.beginSection` takes. A comment
 after the `{` is not code: the begin line goes in under it and the comment
 stays where it was. Nothing else in the file is touched, its line endings
 included, so `--remove` gives back the bytes `--apply` was given.
@@ -53,9 +59,10 @@ included, so `--remove` gives back the bytes `--apply` was given.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import re
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .domains import files_ending, files_named, gradle_module
@@ -70,9 +77,20 @@ TAG = "// echolot:mark"
 # returns it with its line number so the command can say where it is: kept
 # without a word, it let "no `echolot:mark` lines found" stand over a tree
 # that still had them.
+#
+# A function body gets its end in a `finally`, so the section closes on every
+# way out: a `return`, a `throw`, an exception from a callee, and the end of a
+# body Java would call unreachable after a `while (true)`. The `try {` and
+# `} finally { … }` lines are written whole and tagged like the others.
 _APPLIED_LINE = re.compile(
-    r"^\s*android\.os\.Trace\.(?:begin|end)Section\s*\([^)]*\)\s*;?\s*"
+    r"^\s*(?:android\.os\.Trace\.(?:begin|end)Section\s*\([^)]*\)\s*;?"
+    r"|try \{"
+    r"|\} finally \{ android\.os\.Trace\.endSection\(\)\s*;?\s*\})\s*"
     + re.escape(TAG) + r"\s*$")
+# `android.os.Trace.beginSection` throws for a longer name, and only while the
+# app's trace tag is on: the app runs for the developer and crashes during the
+# recording.
+SECTION_NAME_MAX = 127
 CAP = 7   # proposals shown; the rest is a count. Five to seven is a skeleton, not a survey.
 
 # --- the vocabulary -----------------------------------------------------------
@@ -94,9 +112,12 @@ _MANIFEST_PACKAGE = re.compile(r"<manifest\b[^>]*\bpackage\s*=\s*\"([^\"]+)\"", 
 _NAMESPACE = re.compile(r"\b(?:namespace|applicationId)\s*(?:=|\s)\s*[\"']([^\"']+)[\"']")
 
 # Kotlin `override fun onCreate(` / Java `protected void onCreate(`.
+# An annotation on the same line (`@Override protected void onCreate(`) and
+# `final` count: missing them, the launcher was said not to override onCreate.
 _ON_CREATE = re.compile(
-    r"^[ \t]*(?:override\s+)?(?:public\s+|protected\s+|private\s+)?(?:override\s+)?"
-    r"(?:fun|void)\s+onCreate\s*\(", re.M)
+    r"^[ \t]*(?:@[\w.]+(?:\([^)]*\))?[ \t]+)*"
+    r"(?:(?:override|open|final|public|protected|private)[ \t]+)*"
+    r"(?:fun|void)[ \t]+onCreate[ \t]*\(", re.M)
 _SET_CONTENT = re.compile(r"\bsetContent\s*(?:\([^)]*\)\s*)?\{")
 _SET_CONTENT_VIEW = re.compile(r"\bsetContentView\s*\(")
 _COMPOSABLE = re.compile(r"@Composable\b")
@@ -117,6 +138,10 @@ _HILT_APP = re.compile(r"@HiltAndroidApp\b")
 _EXECUTORS = re.compile(r"\bExecutors\s*\.\s*new([A-Za-z]+)\s*\(")
 _POOL_CTOR = re.compile(r"\b(ThreadPoolExecutor|ScheduledThreadPoolExecutor|ForkJoinPool)\s*\(")
 _BARE_THREAD = re.compile(r"(?<![A-Za-z0-9_])Thread\s*\(")
+# Kotlin's `Thread { work() }`: the Runnable as a trailing lambda, and no
+# parentheses to find. Its thread is `Thread-N` like any other; a return type,
+# `fun worker(): Thread {`, is told apart by the colon before it.
+_THREAD_LAMBDA = re.compile(r"(?<![A-Za-z0-9_.])Thread\s*\{")
 # Already named, and the reason each is not a finding.
 _NAMED_ALREADY = re.compile(
     r"\bThreadFactoryBuilder\b|\bsetNameFormat\b|"
@@ -161,6 +186,9 @@ class Proposal:
     open_at: int | None = None
     close_at: int | None = None
     lambda_body: bool = False
+    # A composable's body, or a lambda: the end goes in bare. The Compose
+    # compiler refuses a `try` around composable calls.
+    composable: bool = False
 
 
 @dataclass
@@ -176,7 +204,7 @@ class Plan:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         for p in d["proposals"]:
-            for k in ("open_at", "close_at", "lambda_body"):
+            for k in ("open_at", "close_at", "lambda_body", "composable"):
                 p.pop(k, None)
         return d
 
@@ -370,10 +398,16 @@ def _why_not(open_at: int | None, has_return: bool, flat: bool,
 
 
 def _rel(path: Path, root: Path) -> str:
+    """A path relative to root, with `/` on every system.
+
+    `under_allowed` splits on `/`, and `scan` writes these into YAML in
+    double quotes: on Windows every site read as outside `allowed`, and a
+    `\\s` in a path did not load.
+    """
     try:
-        return str(path.relative_to(root))
+        return path.relative_to(root).as_posix()
     except ValueError:
-        return str(path)
+        return path.as_posix()
 
 
 # --- discovery -----------------------------------------------------------------
@@ -394,8 +428,10 @@ def manifests(root: Path) -> list[Path]:
     the app module appeared twice and `plan` asked for `--module` to tell two
     copies of the same manifest apart.
     """
+    # Relative to the root: a checkout inside a directory named `main` let
+    # every `src/debug` manifest through.
     return [p for p in files_named(root, "AndroidManifest.xml")
-            if "main" in p.parts]
+            if "main" in p.relative_to(root).parts]
 
 
 def launcher_activities(text: str) -> list[str]:
@@ -463,6 +499,33 @@ def module_package(module_dir: Path, manifest_text: str) -> str | None:
     return None
 
 
+def module_ids(module_dir: Path, manifest_text: str) -> set[str]:
+    """Every id a module is known by: the manifest's package, its namespace
+    and its applicationId — what `project.package` can be one of, with a
+    suffix after it."""
+    ids = set(_MANIFEST_PACKAGE.findall(manifest_text))
+    for name in ("build.gradle.kts", "build.gradle"):
+        f = module_dir / name
+        if f.exists():
+            ids.update(_NAMESPACE.findall(f.read_text(encoding="utf-8", errors="replace")))
+    return ids
+
+
+def _installs_as(package: str, ids: set[str], exact: bool) -> bool:
+    """Whether a module known by `ids` installs as `package`.
+
+    `project.package` is the package as installed — for a benchmark build
+    often `com.example.app.benchmark` — and a module's namespace equalled it
+    only without a suffix. A glob, what `project.process` holds, is matched as
+    one.
+    """
+    if any(c in package for c in "*?["):
+        return any(fnmatch.fnmatchcase(i, package) for i in ids)
+    if exact:
+        return package in ids
+    return any(package.startswith(i + ".") for i in ids)
+
+
 def simple_name(class_ref: str) -> str:
     return class_ref.rsplit(".", 1)[-1]
 
@@ -516,12 +579,71 @@ def base_class(text: str, name: str) -> str | None:
     return m.group(1) if m else None
 
 
-def find_on_create(text: str) -> tuple[int, int | None, int | None, bool] | None:
-    """(line, open_at, close_at, has_return) of the first onCreate override."""
-    m = _ON_CREATE.search(text)
+_RETURN = re.compile(r"\breturn\b(?:@(\w+))?")
+_JAVA_NESTED = re.compile(r"->\s*\{|\bnew\s+[\w.<>]+\s*\([^()]*\)\s*\{")
+
+
+def leaves(body: str, name: str, java: bool = False) -> bool:
+    """Whether a `return` in this (noise-stripped) body leaves the function `name`.
+
+    Kotlin: a bare `return`, which in an inline lambda leaves the function
+    too, and `return@name`; any other label leaves only its lambda —
+    `return@setOnClickListener` skipped no end line, and refused a whole
+    onCreate. Java: a `return` inside a lambda body or an anonymous class
+    leaves only that, so those bodies are blanked out first.
+    """
+    if java:
+        out = list(body)
+        for m in _JAVA_NESTED.finditer(body):
+            close = match_brace(body, m.end() - 1)
+            if close is not None:
+                _blank(out, m.end(), close)
+        return re.search(r"\breturn\b", "".join(out)) is not None
+    return any(m.group(1) in (None, name) for m in _RETURN.finditer(body))
+
+
+def class_body(clean: str, name: str) -> tuple[int, int] | None:
+    """The `{` and `}` of class `name`'s body, in text with the noise blanked.
+
+    Past a primary constructor and the supertypes, to the first `{` outside
+    parentheses. None when the class is not declared here or has no body.
+    """
+    m = re.search(r"\b(?:class|object)\s+" + re.escape(name) + r"\b", clean)
     if not m:
         return None
+    depth = 0
+    for i in range(m.end(), len(clean)):
+        if clean[i] == "(":
+            depth += 1
+        elif clean[i] == ")":
+            depth -= 1
+        elif clean[i] == "{" and depth == 0:
+            k = match_brace(clean, i)
+            return (i, k) if k is not None else None
+    return None
+
+
+def find_on_create(text: str, cls: str | None = None
+                   ) -> tuple[int, int | None, int | None, bool] | None:
+    """(line, open_at, close_at, has_return) of `cls`'s own onCreate override.
+
+    The one directly in that class's body, one level deep. The first in the
+    file was taken whoever it belonged to: a `RoomDatabase.Callback`'s
+    `onCreate(db)` in a property above `App.onCreate`, or the Application's
+    where the Activity shares its file, got the marker. And it is looked for
+    in the code alone: an old `onCreate` kept in a comment made the next `{`
+    in code the block, inside another function. Without a class, or with one
+    this file does not declare, the first in the file.
+    """
     clean = strip_noise(text)
+    body = class_body(clean, cls) if cls else None
+    lo, hi = (body[0] + 1, body[1]) if body else (0, len(clean))
+    for m in _ON_CREATE.finditer(clean, lo, hi):
+        before = clean[lo:m.start()]
+        if body is None or before.count("{") == before.count("}"):
+            break
+    else:
+        return None
     # the `{` after the signature's closing paren, allowing an annotation-free
     # single-line signature and a multi-line parameter list
     depth = 0
@@ -542,22 +664,32 @@ def find_on_create(text: str) -> tuple[int, int | None, int | None, bool] | None
     k = match_brace(clean, j)
     if k is None:
         return (line_of(text, m.start()), None, None, False)
-    body = clean[j + 1:k]
-    has_return = re.search(r"\breturn\b", body) is not None
+    java = "void" in m.group(0)
+    has_return = leaves(clean[j + 1:k], "onCreate", java)
     return (line_of(text, m.start()), j, k, has_return)
 
 
-def find_lambda(text: str, rx: re.Pattern) -> tuple[int, int | None, int | None] | None:
-    """(line, open_at, close_at) of the first `name { … }` matched by rx."""
-    m = rx.search(text)
+def find_lambda(text: str, rx: re.Pattern
+                ) -> tuple[int, int | None, int | None, bool] | None:
+    """(line, open_at, close_at, has_return) of the first `name { … }` matched by rx.
+
+    In the code, not in a comment about it: a KDoc that said "Compose starts
+    in setContent { } below" put the pair on the class body.
+
+    A lambda's end goes in bare (see `Proposal.composable`), so a
+    `return@setContent` in it would skip the end and leave the section open:
+    the plan refuses that block, and says why.
+    """
+    clean = strip_noise(text)
+    m = rx.search(clean)
     if not m:
         return None
-    clean = strip_noise(text)
     j = clean.find("{", m.start())
     if j < 0:
-        return (line_of(text, m.start()), None, None)
+        return (line_of(text, m.start()), None, None, False)
     k = match_brace(clean, j)
-    return (line_of(text, m.start()), j, k)
+    has_return = k is not None and re.search(r"\breturn\b", clean[j + 1:k]) is not None
+    return (line_of(text, m.start()), j, k, has_return)
 
 
 def calls_inside(clean_body: str) -> list[str]:
@@ -643,6 +775,37 @@ def _refuse_outside(p: Proposal, allowed: list[str], why: str = _OUTSIDE) -> Non
         return
     p.applicable = False
     p.reason = "; ".join(r for r in (p.reason, why) if r)
+
+
+def shared_source(rel: str) -> str | None:
+    """The Kotlin Multiplatform source set a file sits in, when it is not Android's.
+
+    `src/commonMain`, `jvmMain`, `iosMain`, and shared ones such as
+    `mobileMain`: no `android.*` resolves there, and a marker written into one
+    stopped the shared module compiling.
+    """
+    parts = PurePosixPath(rel).parts
+    for i, part in enumerate(parts[:-1]):
+        if part == "src":
+            name = parts[i + 1]
+            if name.endswith("Main") and name not in ("main", "androidMain"):
+                return name
+    return None
+
+
+def _refuse_unfit(p: Proposal) -> None:
+    """A row `--apply` cannot write: shared Kotlin source, or a name too long to trace."""
+    if not p.applicable:
+        return
+    shared = shared_source(p.file)
+    if shared:
+        p.applicable = False
+        p.reason = (f"shared Kotlin source ({shared}): android.os.Trace does not resolve "
+                    f"here — mark the Android caller, or androidMain")
+    elif len(p.marker) > SECTION_NAME_MAX:
+        p.applicable = False
+        p.reason = (f"the marker is {len(p.marker)} characters and Trace.beginSection takes "
+                    f"{SECTION_NAME_MAX} — shorten instrumentation.temp_prefix")
 
 
 def _build_files(root: Path, mdir: Path) -> tuple[list[Path], list[Path]]:
@@ -733,19 +896,29 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
     out = Plan(root=str(root), module=None, package=package)
 
     # 1. the app module: the manifest with a launcher activity
-    candidates = _app_candidates(root, package, module)
+    candidates, found = _app_candidates(root, package, module)
+    if not candidates and found:
+        # A mistyped --module: the launchers are there.
+        out.ambiguity.append(
+            f"--module {module} matches none of: "
+            + ", ".join(f"{gradle_module(c[0], root)} ({c[4] or 'package unknown'})" for c in found))
+        return out
     if not candidates:
         out.notes.append("no launcher Activity in any AndroidManifest.xml under src/main — "
                          "this tree has no app entry point to mark (a library, or the app "
                          "module lives elsewhere: pass --root)")
         return out
     if len(candidates) > 1:
+        # project.package can settle it only when the modules are known by
+        # different ids; two copies of one module are not.
+        distinct = len({frozenset(c[5]) for c in candidates}) == len(candidates)
         out.ambiguity.append(
             "several modules declare a launcher Activity: "
             + ", ".join(f"{gradle_module(c[0], root)} ({c[4] or 'package unknown'})" for c in candidates)
-            + " — pass --module, or set project.package so one matches")
+            + (" — pass --module, or set project.package so one matches" if distinct
+               else " — pass --module"))
         return out
-    mf, mdir, mtext, launchers, pkg = candidates[0]
+    mf, mdir, mtext, launchers, pkg, _ = candidates[0]
     out.module = gradle_module(mf, root)
     out.package = out.package or pkg
     if len(launchers) > 1:
@@ -778,25 +951,33 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
     return out
 
 
-def _app_candidates(root: Path, package: str | None, module: str | None) -> list[tuple]:
+def _app_candidates(root: Path, package: str | None, module: str | None
+                    ) -> tuple[list[tuple], list[tuple]]:
     """The modules whose manifest has a launcher activity, narrowed by
-    `--module`, and by the package when that leaves exactly one."""
-    candidates = []
+    `--module`, and by the package when that leaves exactly one; and every
+    launcher module before `--module`, for saying what it matched none of."""
+    found = []
     for mf in manifests(root):
         text = mf.read_text(encoding="utf-8", errors="replace")
         launchers = launcher_activities(text)
         if not launchers:
             continue
         mdir = module_dir_of(mf)
-        candidates.append((mf, mdir, text, launchers, module_package(mdir, text)))
+        found.append((mf, mdir, text, launchers, module_package(mdir, text),
+                      module_ids(mdir, text)))
+    candidates = found
     if module:
         candidates = [c for c in candidates
                       if gradle_module(c[0], root) == module or _rel(c[1], root) == module.strip(":").replace(":", "/")]
     if len(candidates) > 1 and package:
-        narrowed = [c for c in candidates if c[4] == package]
-        if len(narrowed) == 1:
-            candidates = narrowed
-    return candidates
+        # Exact first: an installed id that is a module's own beats one that
+        # merely starts with it.
+        for exact in (True, False):
+            narrowed = [c for c in candidates if _installs_as(package, c[5], exact)]
+            if len(narrowed) == 1:
+                candidates = narrowed
+                break
+    return candidates, found
 
 
 @dataclass
@@ -812,6 +993,7 @@ class _Planner:
 
     def add(self, p: Proposal) -> None:
         _refuse_outside(p, self.allowed)
+        _refuse_unfit(p)
         self.out.proposals.append(p)
 
     def application(self, mdir: Path, mtext: str) -> None:
@@ -819,8 +1001,9 @@ class _Planner:
         root, out = self.root, self.out
         app_cls = application_class(mtext)
         if not app_cls:
-            out.notes.append("no custom Application class in the manifest — bindApplication is "
-                             "the framework's alone")
+            out.notes.append("no custom Application class in the manifest — what runs at "
+                             "bindApplication is the ContentProviders and library initializers; "
+                             "see app_init")
             return
         f = find_class_file(root, mdir, simple_name(app_cls), self.sources)
         if f is None:
@@ -828,13 +1011,16 @@ class _Planner:
                              f"source declares it under src/ (generated, or in a dependency)")
             return
         t = self.sources[f]
-        oc = find_on_create(t)
+        oc = find_on_create(t, simple_name(app_cls))
         if oc is None:
             out.notes.append(f"{_rel(f, root)}: {simple_name(app_cls)} does not override "
-                             f"onCreate — nothing of yours runs at bindApplication")
+                             f"onCreate — what runs at bindApplication is its constructor, the "
+                             f"ContentProviders and library initializers; see app_init")
             return
-        line, o, c, ret = oc
-        why = _why_not(o, ret, one_line_body(t, o, c), c, t)
+        line, o, c, _ = oc
+        # A function body: its end goes in a `finally`, so a return in it
+        # skips nothing.
+        why = _why_not(o, False, one_line_body(t, o, c), c, t)
         self.add(Proposal("app_oncreate", _rel(f, root), line,
                           f"{simple_name(app_cls)}.onCreate — what runs inside bindApplication",
                           self.prefix + "app_oncreate", "manifest+lifecycle",
@@ -851,15 +1037,15 @@ class _Planner:
                                   f"source declares it under src/ (generated, or in a dependency)")
             return
         t = self.sources[f]
-        oc = find_on_create(t)
+        oc = find_on_create(t, simple_name(act))
         if oc is None:
             base = base_class(t, simple_name(act))
             self.out.notes.append(
                 f"{_rel(f, root)}: {simple_name(act)} does not override onCreate"
                 + (f" — it inherits from {base}; the override, if any, is there" if base else ""))
         else:
-            line, o, c, ret = oc
-            why = _why_not(o, ret, one_line_body(t, o, c), c, t)
+            line, o, c, _ = oc
+            why = _why_not(o, False, one_line_body(t, o, c), c, t)
             self.add(Proposal("activity_oncreate", _rel(f, root), line,
                               f"{simple_name(act)}.onCreate — the launcher Activity, what runs inside activityStart",
                               self.prefix + "activity_oncreate", "manifest+lifecycle",
@@ -868,17 +1054,17 @@ class _Planner:
                               open_at=o, close_at=c))
         sc = find_lambda(t, _SET_CONTENT)
         if sc:
-            line, o, c = sc
-            why = _why_not(o, False, one_line_body(t, o, c), c, t)
+            line, o, c, ret = sc
+            why = _why_not(o, ret, one_line_body(t, o, c), c, t)
             self.add(Proposal("set_content", _rel(f, root), line,
                               "setContent { } — the root of the Compose tree; recomposition re-enters it",
                               self.prefix + "set_content", "api", gradle_module(f, root),
                               applicable=not why, reason=why,
-                              open_at=o, close_at=c, lambda_body=True))
+                              open_at=o, close_at=c, lambda_body=True, composable=True))
             if o is not None and c is not None:
                 self.compose_roots(t, o, c)
             return
-        m = _SET_CONTENT_VIEW.search(t)
+        m = _SET_CONTENT_VIEW.search(strip_noise(t))
         if m:
             self.add(Proposal("set_content_view", _rel(f, root), line_of(t, m.start()),
                               "setContentView(…) — the View hierarchy is inflated here",
@@ -908,18 +1094,20 @@ class _Planner:
         """4. Room, Koin, Hilt — API strings anywhere in the sources"""
         for p, t in self.sources.items():
             rel = _rel(p, self.root)
-            for m in _ROOM_BUILDER.finditer(t):
+            # The code only: a commented-out call is not where anything opens.
+            code = strip_noise(t)
+            for m in _ROOM_BUILDER.finditer(code):
                 self.add(Proposal("room_open", rel, line_of(t, m.start()),
                                   "Room.databaseBuilder — the database is opened here",
                                   self.prefix + "room_open", "api", gradle_module(p, self.root),
                                   applicable=False,
                                   reason="a builder chain — wrap the enclosing function by hand"))
-            for m in _KOIN_START.finditer(t):
+            for m in _KOIN_START.finditer(code):
                 self.add(Proposal("di_koin", rel, line_of(t, m.start()),
                                   "startKoin { } — the DI graph is built here",
                                   self.prefix + "di_koin", "api", gradle_module(p, self.root),
                                   applicable=False, reason="mark the enclosing function by hand"))
-            if _HILT_APP.search(t) and not any("Hilt" in n for n in self.out.notes):
+            if _HILT_APP.search(code) and not any("Hilt" in n for n in self.out.notes):
                 self.out.notes.append(f"{rel}: @HiltAndroidApp — the graph is generated; its cost sits "
                                       f"inside Application.onCreate (super.onCreate), nothing separate to mark")
 
@@ -973,7 +1161,9 @@ def _body_of(clean: str, paren_at: int) -> tuple[int | None, int | None]:
                 break
         i += 1
     j = clean.find("{", i)
-    if j < 0 or "=" in clean[i:j] or ";" in clean[i:j]:
+    # A `fun` before the brace is the next declaration: an `abstract fun` or
+    # an interface's ends with neither `{` nor `;`, and took the next one's body.
+    if j < 0 or "=" in clean[i:j] or ";" in clean[i:j] or re.search(r"\bfun\b", clean[i:j]):
         return (None, None)
     k = match_brace(clean, j)
     return (j, k) if k is not None else (None, None)
@@ -991,7 +1181,10 @@ def enclosing_block(text: str, suffix: str, line: int):
     function containing both would put the marker around far too much.
     """
     clean = strip_noise(text)
-    lines = text.splitlines(keepends=True)
+    # Split on `\n` alone, as `line_of` counts and as a compiler does:
+    # `splitlines` also breaks at a form feed, and every declaration after
+    # one came out a line late.
+    lines = re.findall(r"[^\n]*\n|[^\n]+$", text)
     if not 1 <= line <= len(lines):
         return None
     pattern = _KOTLIN_FUN if suffix == ".kt" else _JAVA_DECL
@@ -1004,15 +1197,33 @@ def enclosing_block(text: str, suffix: str, line: int):
     for number, raw in enumerate(lines, 1):
         found = pattern.match(raw)
         if found:
-            paren = clean.find("(", offset)
-            open_at, close_at = _body_of(clean, paren) if paren >= 0 else (None, None)
+            # The parameter list's own `(`, where the match ends: the line's
+            # first one can be an annotation's.
+            paren = offset + found.end() - 1
+            open_at, close_at = _body_of(clean, paren)
             if open_at is not None and number <= line <= line_of(text, close_at):
-                if best is None or open_at > best[2]:
-                    body = clean[open_at + 1:close_at]
-                    best = (found.group("name").strip("`"), number, open_at,
-                            close_at, re.search(r"\breturn\b", body) is not None)
+                # On a tie the later declaration: the earlier one is a
+                # declaration that found nobody's body but this one's.
+                if best is None or open_at >= best[2]:
+                    name = found.group("name").strip("`")
+                    best = (name, number, open_at, close_at,
+                            leaves(clean[open_at + 1:close_at], name, suffix != ".kt"))
         offset += len(raw)
     return best
+
+
+def _annotated_composable(text: str, decl_line: int) -> bool:
+    """Whether the declaration at this 1-based line carries `@Composable`."""
+    lines = text.splitlines()
+    i = decl_line - 1
+    if 0 <= i < len(lines) and _COMPOSABLE.search(lines[i]):
+        return True
+    i -= 1
+    while 0 <= i < len(lines) and lines[i].strip().startswith("@"):
+        if _COMPOSABLE.search(lines[i]):
+            return True
+        i -= 1
+    return False
 
 
 # The two ways into a lambda that Kotlin compiled into a class of its own. A
@@ -1040,7 +1251,20 @@ def _as_written(member: str) -> str:
     return written or member
 
 
-def frame_function(symbol: str) -> str:
+def declared_functions(text: str, suffix: str) -> set[str]:
+    """The functions a source file declares, by name."""
+    pattern = _KOTLIN_FUN if suffix == ".kt" else _JAVA_DECL
+    return {m.group("name").strip("`") for m in re.finditer(pattern.pattern, text, re.M)}
+
+
+def lambda_frame(symbol: str) -> bool:
+    """A frame of a class the compiler numbered: a lambda's, or an anonymous object's."""
+    owner = symbol.rpartition(".")[0].partition("$$")[0]
+    nested = owner.split("$")[1:]
+    return bool(nested) and nested[-1].isdigit()
+
+
+def frame_function(symbol: str, declared: set[str] | None = None) -> str:
     """The source function a frame belongs to, seen through the compiler.
 
     A plain frame names it directly, and so does a frame of a class nested in
@@ -1073,9 +1297,45 @@ def frame_function(symbol: str) -> str:
     nested = written.split("$")[1:]
     if made or (member in _LAMBDA_ENTRY and nested and nested[-1].isdigit()):
         named = [s for s in nested if s.isidentifier() and s not in _LAMBDA_ENTRY]
+        # A lambda in a local variable's initializer is named after the
+        # variable: `Repo$updateLocality$fresh$1`. With the file's functions
+        # at hand, a segment it does not declare is passed over for the one
+        # above it.
+        if declared is not None:
+            named = [s for s in named if s in declared] or named
         if named:
             return named[-1]
     return _as_written(member)
+
+
+# What the compiler adds to a generated class's name: a lambda's or a flow
+# operator's numbers, `invokeSuspend`, `$$inlined`. Dropped first when a name
+# has to be cut.
+_COMPILER_PART = re.compile(r"^(?:\d+|invoke|invokeSuspend|inlined|lambda)$")
+
+
+def through_lambda(symbol: str) -> bool:
+    """Whether a frame was entered through a lambda rather than the function
+    it was written in.
+
+    `onCreate$lambda$0`, `$lambda-0`, javac's `lambda$flush$0`, or `invoke`
+    and `invokeSuspend` on a class numbered last. A lambda with a frame of its
+    own was not inlined, and it often runs later — a click listener, `post`,
+    `launch` — so the function around it only registers it, and a pair there
+    times the registering while the code that froze runs outside it.
+    """
+    owner, _, member = symbol.rpartition(".")
+    nested = owner.partition("$$")[0].split("$")[1:]
+    return (member.startswith("lambda$")
+            or re.search(r"\$lambda[$-]\d+", member) is not None
+            or (member in _LAMBDA_ENTRY and bool(nested) and nested[-1].isdigit()))
+
+
+def _suspends(text: str, decl_line: int) -> bool:
+    """Whether the declaration on this line is a `suspend fun`."""
+    lines = text.splitlines()
+    head = lines[decl_line - 1] if 0 < decl_line <= len(lines) else ""
+    return re.search(r"\bsuspend\b[^(]*\bfun\b", head) is not None
 
 
 def marker_for(symbol: str, prefix: str) -> str:
@@ -1083,10 +1343,28 @@ def marker_for(symbol: str, prefix: str) -> str:
 
     The package is dropped: a trace section name is read in a list of twenty
     and the last two parts are what tell them apart.
+
+    Kept within `SECTION_NAME_MAX`, prefix included. A coroutine's or a flow's
+    generated class runs past it: the compiler's own parts go first, and if
+    that is not enough the middle is cut and a short hash of the whole keeps
+    two cut names apart. A prefix that leaves no room comes back too long,
+    and the row is refused for it.
     """
     parts = symbol.split(".")
     tail = ".".join(parts[-2:]) if len(parts) > 1 else symbol
-    return prefix + re.sub(r"\W+", "_", tail).strip("_")
+    name = prefix + re.sub(r"\W+", "_", tail).strip("_")
+    if len(name) <= SECTION_NAME_MAX:
+        return name
+    words = [w for w in re.split(r"\W+", tail) if w and not _COMPILER_PART.match(w)]
+    body = "_".join(words)
+    if len(prefix) + len(body) <= SECTION_NAME_MAX:
+        return prefix + body
+    digest = hashlib.sha1(tail.encode("utf-8")).hexdigest()[:6]
+    room = SECTION_NAME_MAX - len(prefix) - len(digest) - 2
+    if room < 8:
+        return name
+    head = room // 2
+    return f"{prefix}{body[:head]}_{digest}_{body[len(body) - (room - head):]}"
 
 
 def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
@@ -1106,6 +1384,7 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
     """
     out = Plan(root=str(root), module=None, package=None)
     seen: set[str] = set()
+    recurs: set[str] = set()
     for symbol, rel, line in frames:
         if line is None:
             out.notes.append(f"{symbol} — the frame carries no line, so there "
@@ -1113,6 +1392,15 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
             continue
         marker = marker_for(symbol, prefix)
         if marker in seen:
+            # A function on the stack twice calls itself, and its one marker
+            # will open inside itself. Said once, so the nesting in the trace
+            # is not read as a second caller.
+            if marker not in recurs:
+                recurs.add(marker)
+                out.notes.append(
+                    f"{symbol} is on the stack more than once: it calls itself, "
+                    f"so `{marker}` will open inside itself. The report counts "
+                    f"the outermost one")
             continue
         seen.add(marker)
 
@@ -1139,18 +1427,46 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
         # Bracketing the block the line landed in would have put a marker
         # named after one function around the body of another, and the trace
         # would then say that function took the time.
-        wanted = frame_function(symbol)
-        disagree = "" if name == wanted else (
-            f"the line falls inside `{name}` while the frame names "
-            f"`{wanted}` — the compiler moved it; mark by hand")
+        declared = declared_functions(text, path.suffix)
+        wanted = frame_function(symbol, declared)
+        if name == wanted:
+            disagree = ""
+        elif lambda_frame(symbol) and wanted not in declared:
+            # On purpose, and on the right build: see `frame_function`.
+            disagree = (f"a lambda the compiler made into a class of its own "
+                        f"(`{wanted}`), inside `{name}` — a pair around `{name}` "
+                        f"would time the call that set it up; mark inside it by hand")
+        elif wanted not in declared:
+            disagree = (f"the frame names `{wanted}`, which this file does not "
+                        f"declare — mark by hand")
+        else:
+            disagree = (f"the line falls inside `{name}` while the frame names "
+                        f"`{wanted}` — the compiler moved it; mark by hand")
         flat = one_line_body(text, open_at, close_at)
-        why = disagree or _why_not(open_at, has_return, flat, close_at, text)
-        out.proposals.append(Proposal(
+        # A function body takes its end in a `finally`, and a return then
+        # skips nothing. A composable's cannot: the end goes in bare.
+        composable = _annotated_composable(text, decl_line)
+        why = (disagree
+               or (f"a lambda: a pair around `{name}` would time setting it up, "
+                   f"and it runs later — mark inside the lambda by hand"
+                   if through_lambda(symbol) else "")
+               # `beginSection` and `endSection` act on the calling thread,
+               # and a suspend function can resume on another: the marker
+               # stays open on the first, the end closes someone else's
+               # section, and on Main the wait is counted as its own time.
+               or ("a suspend function: after it resumes, the end may run on "
+                   "another thread — mark a stretch with no suspension point "
+                   "by hand" if path.suffix == ".kt" and _suspends(text, decl_line)
+                   else "")
+               or _why_not(open_at, has_return and composable, flat, close_at, text))
+        proposal = Proposal(
             "anr_frame", rel, decl_line,
             f"{name} — on the stack when it froze, at line {line}",
             marker, "anr", gradle_module(path, root),
             applicable=not why, reason=why,
-            open_at=open_at, close_at=close_at))
+            open_at=open_at, close_at=close_at, composable=composable)
+        _refuse_unfit(proposal)
+        out.proposals.append(proposal)
 
     # A frame outside `instrumentation.allowed` was dropped here without a
     # row, while `plan` shows such a site and refuses it. It is still on the
@@ -1164,9 +1480,12 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
     # from another build. Refusing each one on its own merits and saying
     # nothing about the pattern reads as a tool that cannot do its job, when
     # what happened is that the checkout is not the version that froze.
+    # Only what another build explains: a line in no function, or a frame
+    # naming a function this file does not have. A lambda refused on purpose
+    # and a line R8 moved into a neighbour happen on the build that froze.
     astray = sum(1 for p in out.proposals if not p.applicable
                  and (p.reason.startswith("no function")
-                      or p.reason.startswith("the line falls")))
+                      or p.reason.startswith("the frame names")))
     total = len(out.proposals) + unplaced
     if total and (astray + unplaced) * 2 > total:
         out.notes.append(
@@ -1230,6 +1549,44 @@ def _with_trailing_lambda(clean: str, end: int) -> int:
     return end
 
 
+def what_is_a_type(clean: str, m: re.Match) -> bool:
+    """Whether a `Thread {` is a return type — `fun worker(): Thread {` — not a call."""
+    if not m.group(0).endswith("{"):
+        return False
+    before = clean[:m.start()].rstrip()
+    return before.endswith(":")
+
+
+# Where each `Executors.new*` takes a ThreadFactory: the second argument of
+# the two that take a size first, any argument of the three that take
+# nothing else. `newWorkStealingPool` takes none.
+_FACTORY_AT = {"FixedThreadPool": 2, "ScheduledThreadPool": 2, "CachedThreadPool": 1,
+               "SingleThreadExecutor": 1, "SingleThreadScheduledExecutor": 1}
+
+
+def _top_args(clean: str, open_paren: int, end: int) -> int:
+    """How many arguments a call's top level holds."""
+    depth, args, current = 0, 0, False
+    for c in clean[open_paren + 1:end - 1]:
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            args += 1
+            current = False
+            continue
+        if not c.isspace():
+            current = True
+    return args + (1 if current else 0)
+
+
+def _factory_given(clean: str, m: re.Match, end: int) -> bool:
+    """Whether an `Executors.new*` call is handed a ThreadFactory, by position."""
+    at = _FACTORY_AT.get(m.group(1))
+    return at is not None and _top_args(clean, m.end() - 1, end) >= at
+
+
 def _names_its_thread(clean: str, quoted: str, open_paren: int, end: int) -> bool:
     """Whether a `Thread(…)` call is handed a name among its own arguments.
 
@@ -1291,20 +1648,31 @@ def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
         quoted: str | None = None   # made the first time a `Thread(` needs it
         for rx, name_of in ((_EXECUTORS, lambda m: f"Executors.new{m.group(1)}"),
                             (_POOL_CTOR, lambda m: m.group(1)),
-                            (_BARE_THREAD, lambda m: "Thread")):
+                            (_BARE_THREAD, lambda m: "Thread"),
+                            (_THREAD_LAMBDA, lambda m: "Thread { }")):
           for m in rx.finditer(clean):
+            if what_is_a_type(clean, m):
+                continue
             # The argument list, not the line. A naming factory is routinely
             # passed on a continuation line — `newFixedThreadPool(\n  2,
             # ThreadFactoryBuilder()…)` — and a per-line check called that an
             # unnamed pool.
-            end = _call_end(clean, m.end() - 1)
             what = name_of(m)
+            if what == "Thread { }":
+                # The trailing lambda is the Runnable, and nothing names it.
+                end = _call_end(clean, m.end() - 1, pair="{}")
+            else:
+                end = _call_end(clean, m.end() - 1)
+            if what.startswith("Executors.new") and _factory_given(clean, m, end):
+                # A ThreadFactory handed over: the JDK's default name is not
+                # what its threads get, whatever the factory does.
+                continue
             if what == "Thread":
                 if quoted is None:
                     quoted = strip_noise(text, strings=False)
                 if _names_its_thread(clean, quoted, m.end() - 1, end):
                     continue
-            else:
+            elif what != "Thread { }":
                 # A factory that builds its threads with `Thread(` is judged
                 # by that call, which this loop reaches on its own: named, the
                 # pool's threads are named; not, the `Thread(` is the row, and
@@ -1316,8 +1684,12 @@ def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
             if _NAMED_ALREADY.search(clean[m.start():end]):
                 continue
             line_no = clean.count("\n", 0, m.start()) + 1
-            kind = "thread_name" if what == "Thread" else "pool_name"
-            born = "Thread-N" if kind == "thread_name" else "pool-N-thread-M"
+            kind = "thread_name" if what.startswith("Thread") else "pool_name"
+            # ForkJoin's worker factory names its own: `ForkJoinPool-1-worker-1`.
+            born = ("Thread-N" if kind == "thread_name"
+                    else "ForkJoinPool-N-worker-M" if what in ("ForkJoinPool",
+                                                                 "Executors.newWorkStealingPool")
+                    else "pool-N-thread-M")
             p = Proposal(
                 kind, rel, line_no,
                 f"{what} — its threads reach the trace as `{born}`, and the "
@@ -1382,10 +1754,46 @@ def _ending_before(text: str, at: int) -> str:
     return "\r\n" if text[max(0, at - 2):at] == "\r\n" else "\n"
 
 
-def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]:
+class Applied(tuple):
+    """What `apply` did: (edited files with their markers, files that could
+    not be read), unpacked as a pair, and two more lists beside it —
+    `unwritable`, the files a write failed on, and `already`, the markers of
+    blocks found marked and left as they were."""
+
+    unwritable: list[str]
+    already: list[tuple[str, str]]
+
+    def __new__(cls, done, unreadable, unwritable=(), already=()):
+        self = super().__new__(cls, (done, unreadable))
+        self.unwritable = list(unwritable)
+        self.already = list(already)
+        return self
+
+
+def _marked(text: str, begin_at: int, end_at: int) -> bool:
+    """Whether this block carries an applied begin under its `{` and an end over its `}`.
+
+    The block itself, not anything inside it: a nested block's marker used
+    to make an outer block count as marked, and a second `--apply` after the
+    outer one was fixed skipped it without a word.
+    """
+    stop = text.find("\n", begin_at)
+    first = text[begin_at:stop if stop >= 0 else len(text)]
+    start = text.rfind("\n", 0, max(end_at - 1, 0)) + 1
+    return is_applied_line(first) and is_applied_line(text[start:end_at])
+
+
+def apply(root: Path, pl: Plan) -> Applied:
     """Insert begin/end pairs for the applicable proposals.
 
-    Returns (edited files with their markers, files that could not be read).
+    Returns (edited files with their markers, files that could not be read),
+    with the files a write failed on and the blocks already marked beside
+    them — see `Applied`.
+
+    A function body gets its end in a `finally`, with `try {` under the begin
+    line, so the section closes however the body is left. A lambda's and a
+    composable's go in bare: the Compose compiler refuses a `try` around
+    composable calls, and the plan refuses such a body when it returns.
 
     A begin line under the line holding the block's `{`, an end line over
     the line holding its `}`, both tagged so `remove` can find them without
@@ -1412,6 +1820,8 @@ def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]
             by_file.setdefault(p.file, []).append(p)
     done: list[tuple[str, list[str]]] = []
     unreadable: list[str] = []
+    unwritable: list[str] = []
+    already: list[tuple[str, str]] = []
     for rel in sorted(by_file):
         path = root / rel
         try:
@@ -1426,19 +1836,29 @@ def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]
         marked = []
         blocks: set[tuple[int, int]] = set()
         for p in by_file[rel]:
-            if TAG in text[p.open_at:p.close_at + 1] or (p.open_at, p.close_at) in blocks:
-                continue   # already marked here
+            if (p.open_at, p.close_at) in blocks:
+                continue
             room = brace_lines(text, p.open_at, p.close_at)
             if isinstance(room, str):
                 continue   # refused, and the plan printed why — see brace_lines
             begin_at, end_at = room
+            if _marked(text, begin_at, end_at):
+                already.append((rel, p.marker))
+                continue
             blocks.add((p.open_at, p.close_at))
             marked.append(p.marker)
             ind = _inner_indent(text, p.open_at)
+            begin_end = _ending_before(text, begin_at)
+            end_end = _ending_before(text, end_at)
             edits.append((begin_at, 0, f"{ind}android.os.Trace.beginSection(\"{p.marker}\")"
-                                       f"{semi} {TAG}{_ending_before(text, begin_at)}"))
-            edits.append((end_at, 1, f"{ind}android.os.Trace.endSection(){semi} {TAG}"
-                                     f"{_ending_before(text, end_at)}"))
+                                       f"{semi} {TAG}{begin_end}"))
+            if p.composable or p.lambda_body:
+                edits.append((end_at, 2, f"{ind}android.os.Trace.endSection(){semi} {TAG}"
+                                         f"{end_end}"))
+            else:
+                edits.append((begin_at, 1, f"{ind}try {{ {TAG}{begin_end}"))
+                edits.append((end_at, 2, f"{ind}}} finally {{ android.os.Trace.endSection()"
+                                         f"{semi} }} {TAG}{end_end}"))
         if not edits:
             continue
         pieces, last = [], 0
@@ -1446,12 +1866,20 @@ def apply(root: Path, pl: Plan) -> tuple[list[tuple[str, list[str]]], list[str]]
             pieces += [text[last:offset], line]
             last = offset
         pieces.append(text[last:])
-        path.write_bytes("".join(pieces).encode("utf-8"))
+        # A file that will not take the write is named and the rest go on:
+        # a read-only file used to stop the run with a traceback, the files
+        # before it already edited and nothing said about them.
+        try:
+            path.write_bytes("".join(pieces).encode("utf-8"))
+        except OSError:
+            unwritable.append(rel)
+            continue
         done.append((rel, marked))
-    return done, unreadable
+    return Applied(done, unreadable, unwritable, already)
 
 
-def remove(root: Path) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]]]:
+def remove(root: Path, unwritable: list[str] | None = None
+           ) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]]]:
     """Delete every line `apply` wrote, under root.
 
     Returns (files edited, with the number of lines taken out of each; lines
@@ -1468,11 +1896,16 @@ def remove(root: Path) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]
     take that code along. It is handed back instead of passed over: kept in
     silence, it let the command say "no `echolot:mark` lines found" about a
     tree that still had them.
+
+    Every source file under root, not only those under a `src/`: `--from-anr`
+    marks whatever file `anr.locate` placed a frame in, custom `sourceSets`
+    included, and a file `--remove` never opened kept its lines. A file a
+    write fails on is added to `unwritable` and the rest go on.
     """
     root = root.resolve()
     touched: list[tuple[str, int]] = []
     kept: list[tuple[str, int, str]] = []
-    for p in source_files(root):
+    for p in domains_source_files(root):
         try:
             text = read_source(p, strict=True)
         except (OSError, UnicodeDecodeError):
@@ -1484,7 +1917,12 @@ def remove(root: Path) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]
         rel = _rel(p, root)
         kept += [(rel, n, ln.strip()) for n, ln in enumerate(rest, 1) if TAG in ln]
         if len(rest) < len(lines):
-            p.write_bytes("\n".join(rest).encode("utf-8"))
+            try:
+                p.write_bytes("\n".join(rest).encode("utf-8"))
+            except OSError:
+                if unwritable is not None:
+                    unwritable.append(rel)
+                continue
             touched.append((rel, len(lines) - len(rest)))
     return touched, kept
 

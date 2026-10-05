@@ -46,8 +46,11 @@ _CONTENTION = re.compile(
 # last parentheses is the file and line when the runtime had them, `:-1` or
 # `:-2` when it did not — a release build, a native method — and a
 # dependency's coordinate for code that came out of a dynamite module.
+#
+# Kotlin writes a hyphen into a method's name: `load$lambda-0` before 1.8,
+# `update-Wv2hJ0w` for a function that takes an inline class.
 _FRAME = re.compile(
-    r"^(?:\S+\s+)?(?P<symbol>[\w$.<>]+)\((?P<args>[^()]*)\)\((?P<where>[^()]*)\)$")
+    r"^(?:\S+\s+)?(?P<symbol>[\w$.<>-]+)\((?P<args>[^()]*)\)\((?P<where>[^()]*)\)$")
 _WHERE = re.compile(r"^(?P<file>[\w$]+\.(?:kt|java)):(?P<line>-?\d+)$")
 
 # A location that is a class rather than a slice: two or more lowercase
@@ -114,10 +117,14 @@ def _choose(candidates: list[Path], symbol: str) -> tuple[Path, bool]:
             break
         package.append(part)
     wanted = "/".join(package)
-    if wanted:
-        for path in candidates:
-            if f"/{wanted}/" in path.as_posix():
-                return path, True
+    # The directory has to end in the package, as `anr.place` reads it. As a
+    # plain substring `com/example` is inside `com/example/feature`, and
+    # `com.example.Mapper` was placed, as certain, in a subpackage's file
+    # that sorted first. Several that end in it are a guess like any other.
+    agree = [path for path in candidates
+             if wanted and ("/" + path.parent.as_posix()).endswith("/" + wanted)]
+    if agree:
+        return agree[0], len(agree) == 1
     return candidates[0], len(candidates) == 1
 
 
@@ -134,7 +141,7 @@ def declared_at(path: Path, method: str) -> int | None:
     what was written — `store_delegate$lambda$0` is the initialiser
     of `val store by lazy`.
     """
-    name = method.split("$", 1)[0]
+    name = re.split(r"[$-]", method, maxsplit=1)[0]
     if not name or name.startswith("<"):
         return None
     patterns = [_KOTLIN_FUN.format(name=re.escape(name)),
@@ -142,7 +149,9 @@ def declared_at(path: Path, method: str) -> int | None:
     if name.endswith("_delegate"):
         patterns.append(rf"\bva[lr]\s+{re.escape(name[:-len('_delegate')])}\b")
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        # On `\n` alone, as a compiler counts: `splitlines` breaks at a form
+        # feed too, and the declaration came out a line late.
+        lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
     except OSError:
         return None
     for pattern in patterns:

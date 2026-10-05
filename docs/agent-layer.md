@@ -249,7 +249,11 @@ does not yet cover everyone. On a terminal `init` shows a set and lets you
 change it — the choice saved last time, or on a first run the detected set,
 with whatever the tree shows evidence of marked `(found)` either way.
 `--for claude,cursor` (or `--for all`) skips the question and replaces the
-choice, and `--no-input` keeps it as it is.
+choice, and `--no-input` keeps it as it is. `all` is every client but one of
+a pair: the plugin, or Claude Code where the plugin is chosen already. The
+`.claude/` layer and the plugin bring the same skills and Claude Code would
+load both, so `--for` that names the two together is refused, and a layer
+kept current beside a chosen plugin says so on its line.
 
 The question is asked only when the CLI parser turned it on **and** there is a
 terminal at both ends, and never under `CI`. `init` is run by agents, and by
@@ -448,15 +452,28 @@ Three things decide whether the rule works, and `doctor` and `status` say
 each of them on a `codex` line, shown wherever Codex is chosen, has a
 `.codex/` folder, or is what runs the command:
 
-- **The file**: there, as echolot wrote it, edited, or gone.
+- **The file**: there, as echolot wrote it, edited, or gone. A rule counts
+  when it is a `prefix_rule` with the pattern `["echolot"]` and
+  `decision = "allow"`, not commented out, in either quote and laid out any
+  way Starlark allows. It is looked for from the directory the command ran
+  in up to the project's root, the first directory with a `.git` in it, as
+  Codex bounds a project, and under `~/.codex/rules/`. A worktree under the
+  main checkout is a project of its own, and the main checkout's rule is not
+  its rule.
 - **Trust.** Codex reads a project's `.codex/` only once the person has said
   they trust the project, and records that in `~/.codex/config.toml`
   (`[projects."<path>"]`, `trust_level = "trusted"`). echolot reads that the
   way Codex does: the folder, then the repository it is in, then the main
   checkout of a linked worktree. An untrusted project is told both ways out:
-  trust it when Codex asks, or put the same file in `~/.codex/rules/`.
-- **The moment.** Codex reads rules when a session starts. A session open
-  when the rule was written keeps echolot in the sandbox until it restarts.
+  trust it when Codex asks, or put the same file in `~/.codex/rules/`. A rule
+  there is read in every project, so with one in place an untrusted
+  project's own rule hides nothing: the line says `in every project`.
+- **The moment.** Codex reads rules when a session starts, a rule under
+  `~/.codex/rules/` as much as a project's. A session open when the rule was
+  written keeps echolot in the sandbox until it restarts.
+
+The rule lets out a command line that starts with the word `echolot`.
+`python -m echolot` is not one, and a refusal under it says so.
 
 One thing `init` cannot do from inside: Codex keeps `.codex/` read-only for
 the commands it sandboxes (`.agents/` and `.git/` too), so that no command

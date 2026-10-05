@@ -6,7 +6,8 @@ project's repository.
 
 Machine-local things go into `local.yml` next to it: `runner.device`, the
 serial of the phone on this desk, and `toolchain.tp_binary`, a path to your
-own `trace_processor_shell`. It belongs in `.gitignore`, and `echolot init`
+own `trace_processor_shell` — `~` is expanded, and a relative path is taken
+from the config's directory, as for `project.mapping`. It belongs in `.gitignore`, and `echolot init`
 adds it there when the project is the root of a git checkout. The merge is
 recursive and local wins, key by key inside a section — but a list is a value
 like any other and is replaced whole: a `runner.gradle_args` in local.yml
@@ -36,7 +37,7 @@ runner:
   mode: launch                 # launch | command | gradle
   iterations: 5
   duration_ms: 12000
-  reset_policy: force-stop     # force-stop (cold) | none (warm)
+  reset_policy: force-stop     # force-stop (cold) | none (nothing between repeats)
   environment: true            # record CPU clock, thermal, memory
   sampling: false              # callstack samples, in Hz; true is 100
 
@@ -87,8 +88,14 @@ screen was first drawn. Such a section belongs to no thread; `probe` and
 `names` list it under the thread name `(async)`, the anchors match it, and
 the detectors never see it.
 
-Both are optional: without them the window is the whole trace. For a trace from
-a macrobenchmark that is fine — it has already cut out the measured block.
+Both are optional: without them the window runs from the process's first slice
+to where its last one ends, or to the end of the recording when one of them
+never closed. For a trace from a macrobenchmark that is fine — it has already
+cut out the measured block.
+
+An end anchor that never closed — the scenario had not reached its end when
+the recording stopped — runs the window to the end of the trace as well, and
+the report says so: `window.end_anchor.unfinished` is `true`.
 
 Names like `Choreographer#doFrame 55112` carry a vsync number that changes from
 run to run. Such an anchor needs a wildcard.
@@ -188,8 +195,10 @@ for weeks because a calibrated section had been tidied.
 
 The values override the `@param` defaults in the `.sql` files, and each has to
 be the kind its default is — a number for a threshold, a string for a mask.
-A value of the wrong kind, or a parameter the detector does not have, stops
-`analyze` with exit 2 before any trace is read. Besides numbers they include
+A value of the wrong kind, a parameter the detector does not have, or a name
+under `detectors:` that is no detector stops `analyze` and `calibrate` with
+exit 2 before any trace is read. An entry with nothing under it, such as one
+`calibrate` printed with only comments, tunes nothing. Besides numbers they include
 name masks: a parameter with `name_glob` in its name masks the slice name
 (`name_glob_alt` too), one with `skip_glob` is an exclusion. They live in the
 config because ART names things differently across Android versions, and
@@ -201,7 +210,9 @@ back as a near miss, and it does not follow the other. A project that changes
 its prefix changes both.
 
 Thresholds are not picked by hand: `echolot calibrate` derives them from
-healthy runs and prints a ready section with the reasoning attached.
+healthy runs and prints a ready section with the reasoning attached, which
+can replace this one whole: it carries over every `false` and every value it
+did not measure.
 
 ### `instrumentation`
 
@@ -232,7 +243,9 @@ opens, and `analyze` inside it says when one no longer holds.
 **The rule:** every field is justified by a finding. A slice name only if it
 was found in the code or in the trace, with a `file:line` or a table row.
 Nothing found — write `null` and say so out loud, do not invent something
-plausible.
+plausible. For an anchor that is `end: null`, or `name: null` in its block
+beside `_source` and `_evidence`: either means no anchor, and the window runs
+to the end of the trace.
 
 ## What the agent reads, and the code reads in two places
 

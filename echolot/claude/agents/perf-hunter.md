@@ -124,11 +124,13 @@ waiting for one.
    prints, do not discover it by hand
    report.markers.rows is every AGENTTMP_ name and every `domains` name,
    medians per run with self time: the table for your own markers. Do not
-   rebuild it from `names` in a loop.
+   rebuild it from `names` in a loop. A row with `unfinished: true` never
+   closed: its numbers are a floor, so pass them on as "at least".
 
 2. check the config before concluding anything:
    window.start_anchor.matches == 0     → anchor missed, window is not the scenario
-     (window.end_anchor the same)
+     (window.end_anchor the same; with `before_start` it is there, but only
+     before the start: the anchors are swapped)
    window.process_alternatives present  → possibly the wrong process
    config / params_source say calibrated on these very runs
                                         → analyze --defaults before believing silence
@@ -152,9 +154,10 @@ waiting for one.
    than it moved — record another round before concluding, as many runs
    a side as the cell says. Hundreds means another round will not settle
    it: say the move is below what these runs resolve.
-   "nothing to compare" means no investigation is open, and nothing kept
-   the previous round's report. Analyze the set `collect` put aside again
-   with -o .echolot/out/previous, compare the two by path —
+   "nothing to compare" means no investigation is open in the project the
+   config names, and nothing kept the previous round's report. Analyze the
+   set `collect` put aside again with -o .echolot/out/previous, then, from
+   the directory echolot.yml is in, compare the two by path —
    echolot compare .echolot/out/previous/report.json .echolot/out/report.json
    — and say in your conclusion that no investigation was open
 

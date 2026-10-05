@@ -49,7 +49,7 @@ def test_the_report_tells_the_story_it_was_built_for(demo_report) -> None:
           [(r["location"], r["runs"]) for r in outlier] == [("inflate", "2/5")], outlier)
     lock = _rows(demo_report, "monitor_contention")[0]
     check("the lock's two sides are placed in the checkout",
-          lock["code"] == "owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:66",
+          lock["code"] == "owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:61",
           lock)
     blind = _rows(demo_report, "uninstrumented_cpu")
     check("the worker holding it runs with nothing traced",

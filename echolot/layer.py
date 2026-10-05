@@ -137,8 +137,15 @@ def version_key(version: object) -> tuple | None:
 
 
 def sha(path: Path) -> str:
-    """Enough of a hash to say: this is not the file we installed."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    """Enough of a hash to say: this is not the file we installed.
+
+    Of the text with its line endings made LF. A Windows checkout with
+    `core.autocrlf=true` has the committed layer in CRLF, and every file then
+    matched neither the template nor the manifest: an untouched one read as
+    edited, and an update asked for `init --all` and a question about edits
+    nobody made.
+    """
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:16]
 
 
 def _fold(template, existing):
@@ -198,7 +205,8 @@ def template_files() -> list[Path]:
 
 
 def install_pointers(project: Path, chosen: list, force: bool = False,
-                     tracked: frozenset[Path] | set[Path] = frozenset()) -> list[Path]:
+                     tracked: frozenset[Path] | set[Path] = frozenset()
+                     ) -> tuple[list[Path], str | None]:
     """Tell the other clients this tool exists.
 
     `.claude/` is a Claude Code mechanism, and in Cursor or Codex it is an
@@ -212,9 +220,11 @@ def install_pointers(project: Path, chosen: list, force: bool = False,
     out of its sandbox. `force` is `--all`, which puts echolot's rule back
     over an edited one the way it does for the files of the layer.
 
-    Returns the files echolot wrote whole: a pointer file it created, or one
-    that holds nothing but its section, and Codex's rule. A private install
-    keeps those from git. `tracked` names the files git tracks, which a
+    Returns the files echolot wrote whole — a pointer file it created, or one
+    that holds nothing but its section, and Codex's rule — and what became of
+    that rule, None when Codex was not chosen. A private install keeps the
+    files from git; `init` fails on a rule that was not written, since
+    inside Codex's sandbox `.codex/` is read-only and the run said success. `tracked` names the files git tracks, which a
     private install does not write at all: the section is printed to paste,
     as for a file that is the project's own.
     """
@@ -222,11 +232,12 @@ def install_pointers(project: Path, chosen: list, force: bool = False,
     # The plugin has no file here: its skills arrive with it.
     stubs = [h for h in chosen if h.key != "claude" and h.path]
     if not stubs:
-        return []
+        return [], None
 
     print()
     manual = []
     whole: list[Path] = []
+    rule: str | None = None
     for host in stubs:
         if project / host.path in tracked:
             print(f"  ≠ {host.path} is tracked by git — a private install leaves it "
@@ -235,7 +246,7 @@ def install_pointers(project: Path, chosen: list, force: bool = False,
                 manual.append((Path(host.path), host))
             continue
         if not host.pointer:
-            codex.install(project, [h.key for h in chosen], force)
+            rule = codex.install(project, [h.key for h in chosen], force)
             if (project / codex.RULE_PATH).exists():
                 whole.append(project / codex.RULE_PATH)
             continue
@@ -276,7 +287,7 @@ def install_pointers(project: Path, chosen: list, force: bool = False,
               f"finds the tool — as it is,\nboth marker lines included; `init` "
               f"keeps what is between them current from then on:\n")
         print(text.rstrip("\n"))
-    return whole
+    return whole, rule
 
 
 def _read_manifest(root: Path) -> dict:
@@ -287,7 +298,13 @@ def _read_manifest(root: Path) -> dict:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    # Keys with `/` whatever system wrote them. One written on Windows has
+    # `skills\echolot\SKILL.md`, which a Mac never found, and the reverse.
+    if isinstance(data.get("files"), dict):
+        data["files"] = {str(k).replace("\\", "/"): v for k, v in data["files"].items()}
+    return data
 
 
 def write_manifest(root: Path, files: dict[str, str]) -> None:
@@ -332,7 +349,7 @@ def audit(project: Path) -> dict | None:
     private = hosts.load_private(project)
     rows = []
     for src in template_files():
-        rel = str(src.relative_to(CLAUDE_DIR))
+        rel = src.relative_to(CLAUDE_DIR).as_posix()
         dst = root / merged_into(rel, private)
         rows.append({"file": rel, "state": _state(rel, src, dst, installed)})
     return {
@@ -552,7 +569,14 @@ def _one_line(project: Path) -> tuple[str, str]:
     if verdict == "opted-out":
         return verdict, f"layer: {a['says']}"
     if verdict == "current":
-        return verdict, f"layer: current ({len(a['status']['rows'])} files)"
+        line = f"layer: current ({len(a['status']['rows'])} files)"
+        # Kept current, and the plugin chosen beside it: Claude Code loads
+        # the skills of both, which nothing else on the line would say.
+        if "plugin" in (hosts.load_choice(project) or []):
+            line += (" · the echolot plugin is chosen too, and Claude Code "
+                     "loads both copies of the skills → `echolot init --for "
+                     "plugin` drops the layer's upkeep, or uninstall the plugin")
+        return verdict, line
     what = _counts(files)
     if verdict == "stale":
         kept = ("; the files edited here are kept"

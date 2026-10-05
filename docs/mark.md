@@ -5,7 +5,7 @@
 ```bash
 echolot mark                     # where the first markers go, and why there
 echolot mark --apply             # put the applicable ones in
-echolot collect -c echolot.yml -n 3 && echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml
+echolot collect -c echolot.yml -n 3 && echolot analyze .echolot/traces/coldStart_iter*.perfetto-trace -c echolot.yml
 echolot mark --remove            # take every one of them out, byte for byte
 ```
 
@@ -62,8 +62,10 @@ for source.
 - the launcher Activity does not override `onCreate` — said, with the base
   class it inherits from (`: Base()` in Kotlin, `extends Base` in Java),
   because the override may live there
-- the Application class is not in the manifest — said; `bindApplication` is
-  the framework's alone
+- the Application class is not in the manifest, or does not override
+  `onCreate` — said, with what runs at `bindApplication` all the same: the
+  Application's constructor, the ContentProviders and the libraries'
+  initializers, which `app_init` lists
 - a block that cannot take a begin/end pair of whole lines — proposed but not
   applicable, with the reason; the cases are under `--apply` below
 - a composable, a Room builder, a Koin block — proposed with the reason it
@@ -79,18 +81,24 @@ the count beyond it is printed.
 
 `--apply` inserts, at each applicable site, a begin line under the line that
 holds the block's `{` and an end line over the line that holds its `}`,
-indented like the body:
+indented like the body. In a function body the end goes in a `finally`, so the
+section closes however the body is left — a `return`, a `throw`, an exception
+from a callee, or no end at all after a `while (true)`, which in Java would
+make a bare end line unreachable and the file stop compiling. A lambda's and a
+composable's end go in bare: the Compose compiler refuses a `try` around
+composable calls.
 
 ```kotlin
 override fun onCreate(savedInstanceState: Bundle?) {
     android.os.Trace.beginSection("AGENTTMP_activity_oncreate") // echolot:mark
+    try { // echolot:mark
     super.onCreate(savedInstanceState)
     setContent {
         android.os.Trace.beginSection("AGENTTMP_set_content") // echolot:mark
         AppTheme { AppNavHost() }
         android.os.Trace.endSection() // echolot:mark
     }
-    android.os.Trace.endSection() // echolot:mark
+    } finally { android.os.Trace.endSection() } // echolot:mark
 }
 ```
 
@@ -104,7 +112,11 @@ the self-check applies, removes and compares, and `tests/test_mark_edits.py`
 does the same over generated Kotlin and Java sources, CRLF files among them.
 A line that carries the tag in any other shape has more on it than a marker,
 so it stays where it is and `--remove` lists it with its file and line, to be
-cleaned by hand. Applying twice adds nothing. Braces are matched on a view of
+cleaned by hand. Applying twice adds nothing: a block whose begin and end are
+already there is named as marked, and a block around one that is marked still
+gets its own pair. `--remove` walks every source file under `--root`, the ones
+outside a `src/` too, since `--from-anr` marks wherever a frame was placed. A
+file that will not take the write is named and the run goes on. Braces are matched on a view of
 the file with strings and comments blanked out, so a `}` inside a literal
 does not count.
 
@@ -112,7 +124,13 @@ That promise decides what is refused. A block is proposed but not applied,
 with the reason on its row, when a pair of whole lines cannot go in without
 changing a line of the project's:
 
-- **a `return` in the body** — the end line would be skipped on that path;
+- **a `return` in a lambda or a composable's body** — its end goes in bare
+  and would be skipped on that path;
+- **a file in shared Kotlin source**, `src/commonMain` and the other source
+  sets but `androidMain` — `android.os.Trace` does not resolve there;
+- **a marker longer than 127 characters**, which `Trace.beginSection` throws
+  on while recording — a name from a generated class is cut to fit, and a
+  prefix that leaves no room is refused;
 - **the whole body on one line**, `setContent { AppRoot() }` — there is no
   line between the braces to put anything on;
 - **code after the `{`, or before the `}`, on the brace's own line** —
@@ -151,6 +169,14 @@ around them:
   function and measure another;
 - **a `return` in the body**, **a body on one line**, and **code sharing a
   line with the `{` or the `}`** — the refusals of `--apply` above;
+- **a frame entered through a lambda** — `onCreate$lambda$0`,
+  `Repo$refresh$1.invokeSuspend`, javac's `lambda$flush$0`. The lambda often
+  runs later than the function that made it, a click listener or a `launch`,
+  so a pair around that function would time making it; mark inside the
+  lambda by hand;
+- **a `suspend fun`** — `beginSection` and `endSection` act on the calling
+  thread, and the function can resume on another after a `withContext` or a
+  `delay`; mark a stretch with no suspension point by hand;
 - **a frame outside `instrumentation.allowed`** — shown and not applied,
   like any site outside; the frame under it may be the allowed caller;
 - **most frames landing nowhere** — one sentence naming the build the report
@@ -169,8 +195,10 @@ uninstrumented_cpu   pool-7-thread-1   3184 ms   98% of CPU outside slices
 ```
 
 Nothing in the repository is called `pool-7-thread-1`. The JDK named it, from
-the default factory that `Executors.new*` and a bare `Thread(` hand their
-threads to. Grepping for the name finds nothing, and that is where a hunt
+the default factory that `Executors.new*` and a bare `Thread(` — or Kotlin's
+`Thread { … }`, whose trailing lambda is the Runnable — hand their threads
+to. A `ForkJoinPool` and `Executors.newWorkStealingPool()` name theirs
+`ForkJoinPool-N-worker-M`, and the row says so. Grepping for the name finds nothing, and that is where a hunt
 stalls.
 
 Marking the work is the wrong first move there — you do not know what the work
@@ -215,6 +243,10 @@ factory names its threads. What counts as given:
   `Executors.newFixedThreadPool(2) { r -> Thread(r, "io") }` passes it
   outside the parentheses. That `Thread(` decides: named, there is no row;
   not, it is the row, since it is where the name goes;
+- a `ThreadFactory` handed to `Executors.new*` where it takes one — the
+  second argument of `newFixedThreadPool` and `newScheduledThreadPool`, any
+  argument of the others — whatever it is: a variable, the project's own
+  class. The JDK's default name is then not what the threads get;
 - `HandlerThread`, which takes a name as its first argument.
 
 Counting those found fifteen sites on a codebase where four were real.
@@ -262,4 +294,6 @@ there the trace leads, one hop at a time.
 `--pools` reads the call and nothing after it. A name set once the thread
 exists — `Thread(r).apply { name = "io" }`, `t.setName("io")` — is not seen,
 and that thread is listed anyway; a `Thread(group, runnable)` has two
-arguments and is taken for named when it is not.
+arguments and is taken for named when it is not. A factory handed to a pool
+constructor (`ThreadPoolExecutor(…)`) is not looked for, and that pool is
+listed as `pool-N-thread-M`.

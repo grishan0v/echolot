@@ -190,7 +190,31 @@
 -- Named work only, so on a project with no instrumentation this is silent
 -- until `mark` has been round once. That is the ordinary second lap of the
 -- loop rather than a limitation of the query.
+--
+-- ## An occurrence inside one of its own name
+--
+-- is part of that one's work rather than a second entry into it: a marker in
+-- a recursive function, or two markers of one name nested in each other.
+-- Counted as its own, the outer occurrence became the inner one's caller —
+-- "entered from 2: load_screen,AGENTTMP_parse" — and `total_ms` counted the
+-- inner time a second time inside the outer. Only the outermost occurrence
+-- counts. A slice can have an ancestor of its own name only where that name
+-- also sits shallower on its thread, so the ancestors are walked for those
+-- slices alone.
 
+WITH shallowest AS (
+    SELECT name, utid, MIN(depth) AS depth
+    FROM _slice_win
+    GROUP BY name, utid
+),
+nested AS (
+    SELECT s.slice_id
+    FROM _slice_win s
+    JOIN shallowest m ON m.name = s.name AND m.utid = s.utid
+    WHERE s.depth > m.depth
+      AND EXISTS (SELECT 1 FROM ancestor_slice(s.slice_id) a
+                  WHERE a.name = s.name)
+)
 SELECT
     s.name                                                   AS location,
     COUNT(*)                                                 AS count,
@@ -225,6 +249,7 @@ LEFT JOIN slice p ON p.id = raw.parent_id
 -- is work.
 WHERE s.name NOT IN (SELECT name FROM _claimed_name)
   AND COALESCE(p.name, '') NOT IN (SELECT name FROM _claimed_name)
+  AND s.slice_id NOT IN (SELECT slice_id FROM nested)
 GROUP BY s.name, s.thread_name
 HAVING COUNT(DISTINCT COALESCE(p.name, '(top level)')) >= 2
    AND COUNT(DISTINCT COALESCE(p.name, '(top level)')) <= {{max_callers}}

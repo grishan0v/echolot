@@ -36,7 +36,9 @@ import re
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
@@ -256,9 +258,11 @@ def _note_detectors(cfg: Config) -> None:
     sections nobody configured. It also answers the question the change
     raises: how do I turn one off now.
     """
-    tuned = set(cfg.detector_overrides)
     shipped = {d.id for d in load_detectors(DETECTOR_DIR)}
-    off = cfg.disabled_detectors
+    # Shipped ids only: a misspelled one is refused by `plan_detectors`, and
+    # counted here it made a sum that did not add up.
+    tuned = set(cfg.detector_overrides) & shipped
+    off = cfg.disabled_detectors & shipped
     rest = shipped - tuned - off
     if tuned and rest:
         print(f"[i] the config tunes {len(tuned)} of {len(shipped)} detectors; "
@@ -376,6 +380,8 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
     `parse_set` already gives a `--set` typo, before a trace is opened.
     """
     detectors = load_detectors(DETECTOR_DIR)
+    if not use_defaults:
+        cfg.unknown_detectors({d.id for d in detectors})
     cli_overrides = cli_overrides or {}
     cfg_overrides = {} if use_defaults else cfg.detector_overrides
     # Only what the config turned off, and only what it turned off on purpose.
@@ -469,7 +475,11 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 rows = tp.query(sql)
                 err = None
             except Exception as e:  # SQL is version-fragile — never fail the run
-                rows, params, err = [], d.params, str(e)
+                # The values it was asked to run with, as `render` resolves
+                # them. The shipped ones in their place made a calibrated
+                # detector that failed read as one whose thresholds moved,
+                # to `compare` and to anyone reading the report.
+                rows, params, err = [], {**d.params, **(overrides or {})}, str(e)
                 print(f"[!] {d.id}: {e}", file=sys.stderr)
             if rows:
                 try:
@@ -536,7 +546,9 @@ def _markers_info(tp, cfg: Config) -> dict:
     are usually async — see `_aslice` in context.sql. Self time comes from
     the same child sum the detectors use, so a marker wrapping another
     reads as the difference: the hunt above needed `store_update` minus
-    `store_update_locked` to say how long the lock was waited for.
+    `store_update_locked` to say how long the lock was waited for. The
+    total counts an occurrence inside one of the same name once, as part of
+    the outer one: a marker in a recursive function doubled it otherwise.
 
     Grouped by name in the end, with the threads listed: a marker that ran
     on two threads is one marker, and the reader wants one row and the
@@ -551,31 +563,32 @@ def _markers_info(tp, cfg: Config) -> dict:
             globs.append(str(name))
     wanted = " OR ".join(f"name GLOB '{sql_value(g)}'" for g in globs)
     rows = tp.query(f"""
-        WITH child_sum AS (
-            SELECT parent_id, SUM(MAX(dur, 0)) AS ns
-            FROM slice WHERE parent_id IS NOT NULL GROUP BY parent_id
-        ),
-        seen AS (
-            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur
+        WITH seen AS (
+            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur, s.unfinished
             FROM _slice_win s WHERE {wanted}
             UNION ALL
-            SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur
+            SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur, a.unfinished
             FROM _aslice_win a WHERE {wanted}
         )
         SELECT seen.name AS location, seen.thread AS thread,
                COUNT(*) AS count,
-               SUM(MAX(seen.dur, 0)) AS total_ns,
-               SUM(MAX(seen.dur, 0) - COALESCE(c.ns, 0)) AS self_ns,
+               MAX(seen.unfinished) AS unfinished,
+               SUM(CASE WHEN EXISTS (SELECT 1 FROM ancestor_slice(seen.slice_id) a
+                                     WHERE a.name = seen.name)
+                        THEN 0 ELSE MAX(seen.dur, 0) END) AS total_ns,
+               SUM(MAX(seen.dur, 0) - COALESCE(CASE WHEN seen.unfinished = 1
+                                                    THEN c.ns_win ELSE c.ns END, 0)) AS self_ns,
                MAX(MAX(seen.dur, 0)) AS max_ns
-        FROM seen LEFT JOIN child_sum c ON c.parent_id = seen.slice_id
+        FROM seen LEFT JOIN _child_sum c ON c.parent_id = seen.slice_id
         GROUP BY seen.name, seen.thread
     """)
     by_name: dict[str, dict] = {}
     for r in rows:
         row = by_name.setdefault(r["location"], {
             "location": r["location"], "count": 0, "self_ns": 0,
-            "total_ns": 0, "max_ns": 0, "threads": set()})
+            "total_ns": 0, "max_ns": 0, "threads": set(), "unfinished": False})
         row["count"] += r["count"]
+        row["unfinished"] = row["unfinished"] or bool(r["unfinished"])
         row["self_ns"] += r["self_ns"] or 0
         row["total_ns"] += r["total_ns"] or 0
         row["max_ns"] = max(row["max_ns"], r["max_ns"] or 0)
@@ -591,6 +604,12 @@ def _markers_info(tp, cfg: Config) -> dict:
             "max_ms": round(row["max_ns"] / 1e6, 2),
             "detail": ", ".join(threads[:3]) + (f" +{len(threads) - 3}" if len(threads) > 3 else ""),
         })
+        # One that never closed runs to the end of the window: its end did
+        # not run — an exception, a suspended coroutine, an end on another
+        # thread — or the recording stopped first. Its number is a floor,
+        # and without the flag it read as a measurement.
+        if row["unfinished"]:
+            out[-1]["unfinished"] = True
     out.sort(key=lambda r: (-r["total_ms"], r["location"]))
     # A name the config lists that the window never held is worth a line:
     # the map points at something this scenario does not run, or the name
@@ -650,6 +669,7 @@ def cmd_analyze(args) -> int:
         fired=rep["summary"]["fired_ids"],
         window_ms=w.get("duration_ms"),
         start_anchor_matches=(w.get("start_anchor") or {}).get("matches"),
+        end_anchor_matches=(w.get("end_anchor") or {}).get("matches"),
         process_alternatives=len(w.get("process_alternatives") or []),
     )
     if args.defaults or cli_overrides:
@@ -737,7 +757,10 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
     if len(paths) == 2:
         return paths[0], paths[1]
 
-    latest = _out_dir(args.out or ".echolot/out", args.cfg) / "report.json" if args.cfg else \
+    # Where `analyze` writes by default, whatever `-o` says: `-o` is where the
+    # comparison goes, and reading the newer side from it compared against
+    # whatever report.json sat there, or against nothing.
+    latest = _out_dir(".echolot/out", args.cfg) / "report.json" if args.cfg else \
         Path(".echolot/out/report.json")
     if len(paths) == 1:
         # One path is "against what I just measured": the named report is the
@@ -762,36 +785,87 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
 
 
 def _load_report(path: Path) -> dict:
+    """A Marker Report, or a sentence saying what the file is instead.
+
+    `compare` and `report` both read through here, so every sentence is
+    worded for both: neither command is always comparing.
+    """
     if not path.exists():
         raise ConfigError(f"report not found: {path}")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise ConfigError(f"{path}: not valid JSON ({e})") from e
+    except UnicodeDecodeError as e:
+        # A trace handed over where its report belongs.
+        raise ConfigError(
+            f"{path}: not a Marker Report — it is not text. Give a report.json "
+            f"written by `echolot analyze`.") from e
+    except OSError as e:
+        raise ConfigError(f"{path}: cannot be read: {e.strerror or e}") from e
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"{path}: not a Marker Report — JSON {type(data).__name__}, not an "
+            f"object. Give a report.json written by `echolot analyze`.")
     if data.get("kind") == "comparison":
         raise ConfigError(
-            f"{path} is a comparison, not a Marker Report. Compare two reports "
+            f"{path} is a comparison, not a Marker Report: give a report.json "
             f"written by `echolot analyze`.")
     if "detectors" not in data:
         raise ConfigError(f"{path}: not a Marker Report — no `detectors` section")
     return data
 
 
+def _nearest_config(args) -> None:
+    """`echolot.yml` up the tree, when no `-c` names one and none is here.
+
+    The agent runs `analyze` inside a macrobenchmark's output directory with
+    `-c` naming the project's config, and its report and the investigation's
+    copy land in the project. `compare` and `report` run from that same
+    directory read the build directory as the project: "nothing to compare"
+    with an investigation open and two reports in it. The walk stops at the
+    root of the checkout.
+    """
+    if args.config != "echolot.yml" or Path(args.config).exists():
+        return
+    here = Path.cwd().resolve()
+    for folder in (here, *here.parents):
+        found = folder / "echolot.yml"
+        if found.is_file():
+            args.config = str(found)
+            print(f"[i] config: {found}, the nearest up the tree", file=sys.stderr)
+            return
+        if (folder / ".git").exists():
+            return
+
+
 def cmd_compare(args) -> int:
     """The delta between two Marker Reports."""
+    from .mark import DEFAULT_PREFIX
+    _nearest_config(args)
+    unloaded = None
     try:
         args.cfg = None
-        with contextlib.suppress(ConfigError):
+        try:
             args.cfg = Config.load(args.config, args.local)
+        except ConfigError as e:
+            # Not a reason to stop: the comparison prints all the same. It is
+            # a reason to say why nothing is written, which "no config found"
+            # did not, for a config that was there.
+            unloaded = e
         project = _project_root(args.cfg) if args.cfg else Path.cwd()
 
         before_path, after_path = _compare_pair(args, project)
+        # The same fallback `analyze`, `names`, `mark` and `reflect` use: a
+        # config without the key, or none, still has markers planted under
+        # the default prefix.
+        prefix = (args.cfg.get("instrumentation.temp_prefix") if args.cfg else None) \
+            or DEFAULT_PREFIX
         cmp = compare_mod.build(
             _load_report(before_path), _load_report(after_path),
             before_path=str(before_path), after_path=str(after_path),
             floor_ms=args.floor_ms, floor_ratio=args.floor_pct / 100.0,
-            temp_prefix=(args.cfg.get("instrumentation.temp_prefix")
-                         if args.cfg else None))
+            temp_prefix=str(prefix))
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
@@ -819,6 +893,10 @@ def cmd_compare(args) -> int:
             report_mod.to_json(cmp), encoding="utf-8")
         (out_dir / "comparison.md").write_text(text, encoding="utf-8")
         print(f"\n\u2192 {out_dir/'comparison.md'}\n\u2192 {out_dir/'comparison.json'}",
+              file=sys.stderr)
+    elif unloaded is not None and Path(args.config).exists():
+        print(f"\n[!] {args.config} does not load, so nothing was written to "
+              f"disk — the comparison above is the whole output: {unloaded}",
               file=sys.stderr)
     else:
         print("\n[i] no config found, so nothing was written to disk — "
@@ -1001,13 +1079,31 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
         # `_anchor` rather than `_slice`: the same set the window was built
         # from, async sections included. Counting the one and building from
         # the other is how `matches` would say 0 for a window that closed.
+        #
+        # The end anchor by the rule the window is closed by: an occurrence at
+        # or after the start. One only before it — the anchors swapped — left
+        # the window running to the end of the trace while `matches: 1` said
+        # it had closed. Those are counted apart, so the report can say the
+        # name exists, just not where it would end anything.
         hits = tp.query(
-            f"SELECT COUNT(*) AS n FROM _anchor WHERE name GLOB '{sql_value(glob)}'"
+            f"SELECT COUNT(*) AS n, COALESCE(SUM(ts >= {window.get('ts_start') or 0}), 0) AS after "
+            f"FROM _anchor WHERE name GLOB '{sql_value(glob)}'"
         )
-        window[f"{key}_anchor"] = {
-            "glob": glob,
-            "matches": hits[0]["n"] if hits else 0,
-        }
+        n, after = (hits[0]["n"], hits[0]["after"]) if hits else (0, 0)
+        matches = after if key == "end" else n
+        window[f"{key}_anchor"] = {"glob": glob, "matches": matches}
+        if n - matches:
+            window[f"{key}_anchor"]["before_start"] = n - matches
+        # The end anchor the window closed on, still open when the recording
+        # stopped: the window ran on to the end of the trace, and the
+        # scenario never reached its end inside it.
+        if key == "end" and matches:
+            first = tp.query(
+                f"SELECT a.dur < 0 AS open FROM _anchor a "
+                f"WHERE a.name GLOB '{sql_value(glob)}' "
+                f"AND a.ts >= (SELECT ts_start FROM _window) ORDER BY a.ts LIMIT 1")
+            if first and first[0]["open"]:
+                window[f"{key}_anchor"]["unfinished"] = True
     window["opened_inside"] = _opened_inside(tp, window)
     window["startup"] = _startup_info(tp, window, procs[0]["name"])
     return window
@@ -1054,38 +1150,46 @@ def _opened_inside(tp, window: dict) -> dict | None:
     blocked" and sent someone looking for a stall that was the app behaving
     correctly.
     """
-    start = window.get("ts_start")
-    if start is None:
+    start, end = window.get("ts_start"), window.get("ts_end")
+    if start is None or end is None:
         return None
+    # A state the thread was still in when the recording stopped runs to the
+    # end of the window, as in window.sql; dropped, the freeze that never let
+    # go was the one block this could not see. The part inside the window
+    # stops at its end: a block running past a short window counted its tail
+    # as inside, and outweighed what came before the anchor.
+    until = f"CASE WHEN ts.dur < 0 THEN {end} ELSE ts.ts + ts.dur END"
     rows = tp.query(f"""
-        SELECT ts.state                              AS state,
-               th.name                               AS thread_name,
-               ROUND(({start} - ts.ts) / 1e6, 2)     AS before_ms,
-               ROUND(ts.dur / 1e6, 2)                AS total_ms
+        SELECT ts.state                                          AS state,
+               th.name                                           AS thread_name,
+               ROUND(({start} - ts.ts) / 1e6, 2)                 AS before_ms,
+               ROUND(({until} - ts.ts) / 1e6, 2)                 AS total_ms,
+               ROUND((MIN({until}, {end}) - {start}) / 1e6, 2)   AS inside_ms
         FROM thread_state ts
         JOIN thread th ON ts.utid = th.utid
         JOIN _proc p   ON th.upid = p.upid
         WHERE th.tid = p.pid
-          AND ts.dur > 0
+          AND ts.dur != 0
           AND ts.ts < {start}
-          AND ts.ts + ts.dur > {start}
+          AND {until} > {start}
     """)
     if not rows or rows[0]["state"] == "Running":
         return None
     if rows[0]["state"] not in ("R", "R+", "D", "DK"):
         # Sleeping. Only a block if a message was open at the time — otherwise
         # the looper had reached the queue, which is the app working properly.
+        # From `_slice_win`, where a message that never closed runs to the
+        # end of the window rather than being no message at all.
         inside_message = tp.query(f"""
             SELECT COUNT(*) AS n
-            FROM _slice s
-            WHERE s.is_main_thread = 1 AND s.depth >= 1 AND s.dur > 0
+            FROM _slice_win s
+            WHERE s.is_main_thread = 1 AND s.depth >= 1
               AND s.ts < {start} AND s.ts + s.dur > {start}
         """)
         if not inside_message or not inside_message[0]["n"]:
             return None
     found = dict(rows[0])
-    inside = found["total_ms"] - found["before_ms"]
-    found["inside_ms"] = round(inside, 2)
+    inside = found["inside_ms"]
     found["material"] = bool(found["before_ms"] >= inside
                              and found["before_ms"] >= compare_mod.FLOOR_MS)
     return found
@@ -1419,10 +1523,12 @@ def _main_thread_budget(tp, window: dict) -> dict | None:
     accounted = round(sum(out.values()), 2)
     out["accounted_ms"] = accounted
     out["window_ms"] = duration
-    # Short of the window means the thread was not there for all of it — the
-    # process started inside the window, or the trace has a hole. Worth a
-    # number rather than a silent shortfall: it is the difference between "the
-    # scenario is explained" and "most of it was not looked at".
+    # Short of the window means the thread had no state for part of it — the
+    # process started inside the window, or the trace has a hole. A state the
+    # thread was still in when the recording stopped is not that: it runs to
+    # the end of the window (`_tstate_win`). Worth a number rather than a
+    # silent shortfall: it is the difference between "the scenario is
+    # explained" and "most of it was not looked at".
     out["accounted_pct"] = round(accounted / duration * 100, 1) if duration else None
     return out
 
@@ -1874,9 +1980,9 @@ def _clip(text: str, width: int = 58) -> str:
 
 
 def _hunt_config(project: Path, config: str
-                 ) -> tuple[str | None, str | None, dict[str, Any]]:
+                 ) -> tuple[str | None, str | None, dict[str, Any], str | None]:
     """Scenario name, config hash and the confirmed values — what an
-    investigation is opened against.
+    investigation is opened against — and the project's marker prefix.
 
     An investigation records what it was opened against so that `drift` can
     later say "the scenario changed" instead of the human having to remember,
@@ -1888,11 +1994,28 @@ def _hunt_config(project: Path, config: str
     `Config.load` checks `detectors:`, one malformed entry under it is enough
     to get there.
     """
-    path = project / config
+    path = project / config     # an absolute config stays itself
     if not path.exists():
-        return None, None, {}
+        return None, None, {}, None
     cfg = Config.load(path)
-    return cfg.scenario_name, cfg.sha, cfg.confirmed()
+    return (cfg.scenario_name, cfg.sha, cfg.confirmed(),
+            cfg.get("instrumentation.temp_prefix"))
+
+
+def _project_and_config(args) -> tuple[Path, str]:
+    """The project `-c` names and the config's own path, for `hunt` and `status`.
+
+    The config's directory when `-c` names a file that is there, as for
+    `collect`, `analyze` and the run log; the working directory otherwise.
+    Read from the working directory, `hunt -c ../echolot.yml` opened a second
+    investigation in a subdirectory and `status -c` showed the project's
+    config beside a build directory's empty state.
+    """
+    config = getattr(args, "config", "echolot.yml")
+    if Path(config).is_file():
+        path = Path(config).resolve()
+        return path.parent, str(path)
+    return Path.cwd(), config
 
 
 def cmd_hunt(args) -> int:
@@ -1907,10 +2030,9 @@ def cmd_hunt(args) -> int:
     of traces aside, says what the last one left behind — and names the half
     it cannot: the loop needs an agent. `/echolot hunt <q>` does both.
     """
-    project = Path.cwd()
+    project, config = _project_and_config(args)
     question = " ".join(args.question) if args.question else None
     conclusion = args.done
-    config = getattr(args, "config", "echolot.yml")
 
     if args.list:
         for line in hunt_mod.list_rows(project):
@@ -1940,7 +2062,7 @@ def cmd_hunt(args) -> int:
         # stops `/echolot` at the door. Refused before anything is touched,
         # so asking again once the config loads loses nothing.
         try:
-            scenario, sha, confirmed = _hunt_config(project, config)
+            scenario, sha, confirmed, prefix = _hunt_config(project, config)
         except (ConfigError, OSError) as e:
             print(f"error: {config} does not load: {e}", file=sys.stderr)
             print("Nothing was opened and no traces were moved aside. Fix the "
@@ -1968,8 +2090,10 @@ def cmd_hunt(args) -> int:
         if h.get("since"):
             print(f'  after: {h["since"]}')
         # Instrumentation the previous investigation never took out would
-        # otherwise become this one's starting conditions.
-        left = hunt_mod.leftovers(project)
+        # otherwise become this one's starting conditions. By the config's
+        # prefix, the one `mark` wrote them with: under the default, a
+        # project's `PERF_` markers were never found.
+        left = hunt_mod.leftovers(project, prefix)
         if left["markers"]:
             print(f'\n[!] {left["markers"]} {left["prefix"]} marker(s) left in '
                   f'{len(left["files"])} file(s) by the previous investigation.',
@@ -1986,16 +2110,21 @@ def cmd_hunt(args) -> int:
         # first, and it is where the two surfaces have to line up out loud.
         # Through the door this project chose: a project that declined Claude
         # Code was being sent to a command it does not have.
-        from . import hosts as hosts_mod
-        door = ("`/echolot` in Claude Code, or any agent after `echolot guide hunt`"
-                if hosts_mod.wants_claude(project)
-                else "any agent, after `echolot guide hunt`")
+        door = state.hunt_door(state.project_state(project, config))
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
-        print("By hand: echolot collect -c echolot.yml -n 5, then echolot analyze "
-              ".echolot/traces/*.perfetto-trace", file=sys.stderr)
+        print("By hand: echolot collect -c echolot.yml -n 5, then "
+              + state.analyze_line(state.repeats(scenario, 5) if scenario else None),
+              file=sys.stderr)
         return 0
 
     if conclusion:
+        last = hunt_mod.load(project)
+        if last and last.get("status", "open") != "open":
+            # Written over, the first conclusion was lost without a word.
+            print(f"#{last.get('n')} is already concluded — `echolot hunt --show "
+                  f"{last.get('n')}` prints its conclusion; a new question opens "
+                  f"the next one", file=sys.stderr)
+            return 1
         h = hunt_mod.conclude(project, conclusion)
         if not h:
             print("no investigation is open", file=sys.stderr)
@@ -2005,11 +2134,14 @@ def cmd_hunt(args) -> int:
         return 0
 
     if args.resume:
-        if not hunt_mod.load(project):
+        last = hunt_mod.load(project)
+        if not last:
             print("no investigation is open", file=sys.stderr)
             return 1
-        hunt_mod.touch(project)
-        recorder.note(hunt="resumed")
+        # A concluded one is reported below as it is, and nothing resumed.
+        if last.get("status", "open") == "open":
+            hunt_mod.touch(project)
+            recorder.note(hunt="resumed")
 
     # Bare `echolot hunt`, and the tail of --resume: what is open, in full.
     st = state.project_state(project, config)
@@ -2031,15 +2163,23 @@ def cmd_status(args) -> int:
     branch that applies. Two commands are all a person needs to know —
     `echolot init` and `echolot` — and the agent knows the rest.
     """
-    project = Path.cwd()
-    st = state.project_state(project, getattr(args, "config", "echolot.yml"))
+    project, config = _project_and_config(args)
+    st = state.project_state(project, config)
     if getattr(args, "next", False):
         # One word for the skill to switch on; the prose is for people.
         print(state.next_kind(st))
         return 0
-    info = toolchain_info(getattr(args, "tp_binary", None))
+    # The binary `analyze` would run here, chosen the way `doctor` chooses
+    # it: the pin alone named a version the reports were not built with when
+    # local.yml set `toolchain.tp_binary`.
+    # The config line below says when it does not load.
+    loaded = None
+    if (project / config).is_file():
+        with contextlib.suppress(ConfigError):
+            loaded = Config.load(project / config)
+    info = toolchain_info(*_tp_binary_source(args, loaded))
     print(f"echolot {recorder.version()} · trace_processor "
-          f"{info.get('trace_processor') or 'unknown'} · {Path.cwd()}")
+          f"{info.get('trace_processor') or 'unknown'} · {project}")
 
     lines: list[tuple[str, str]] = []
     lines.append(("layer", st["layer_line"].split(": ", 1)[1]))
@@ -2077,6 +2217,10 @@ def cmd_status(args) -> int:
         elif cfg and cfg.get("sha") and rep.get("config_sha") and rep["config_sha"] != cfg["sha"]:
             note = " · made with an older config"
         lines.append(("report", f".echolot/out/report.json, {made} · {rep['runs']} run(s) · {what}{note}"))
+    elif rep:
+        # There, and cut short or garbled: "none yet" said no analysis ever
+        # ran here.
+        lines.append(("report", ".echolot/out/report.json does not read — run analyze again"))
     else:
         lines.append(("report", "none yet"))
     d = st["last_doctor"]
@@ -2181,7 +2325,12 @@ def cmd_anr(args) -> int:
     code = None
     root = Path(args.root).resolve()
     if root.is_dir():
-        code = anr_mod.locate(report, root)
+        # A directory with no sources in it is no checkout, and costs the
+        # report nothing: every frame "missing from it" sent the reader off
+        # to look for another build.
+        index = anr_mod.source_index(root)
+        if index:
+            code = anr_mod.locate(report, root, index)
 
     found = anr_mod.chains(report)
     recorder.note(anr=source.name, threads=len(report.threads),
@@ -2242,9 +2391,13 @@ def cmd_mark(args) -> int:
             print(f"config ignored: {e}", file=sys.stderr)
 
     if args.remove:
-        touched, kept = mark_mod.remove(root)
+        refused: list[str] = []
+        touched, kept = mark_mod.remove(root, refused)
         for rel, n in touched:
             print(f"  - {rel}: {n} line(s)")
+        for rel in refused:
+            print(f"  ! {rel}: could not be written — its lines are still there",
+                  file=sys.stderr)
         # A tagged line in any other shape than --apply's is left where it
         # is, and named: it carries more than a marker, which deleting it
         # would take along, and "nothing found" over a tree that still has
@@ -2283,10 +2436,19 @@ def cmd_mark(args) -> int:
             return 2
         report = anr_mod.parse(text)
         placed, missing = anr_mod.locate(report, root)
+        # A frame placed in one of several files of its name is a guess, and
+        # a marker in the wrong one measures a file the build never ran —
+        # `src/debug` beside `src/release`. Those are named, not marked.
         pl = mark_mod.plan_from_anr(
-            root, [(f.symbol, f.file, f.line) for f in placed],
+            root, [(f.symbol, f.file, f.line) for f in placed if f.exact],
             prefix=prefix, allowed=allowed, unplaced=len(missing),
             version=report.head.get("Version") or report.head.get("Package"))
+        for f in placed:
+            if not f.exact:
+                pl.notes.append(
+                    f"{f.symbol} — {len(f.others) + 1} files of that name could "
+                    f"be it: {', '.join([f.file, *f.others])}. Nothing in the "
+                    f"frame says which one was built, so it is left to mark by hand")
     else:
         pl = mark_mod.plan(root, package=package, allowed=allowed, prefix=prefix,
                            module=args.module)
@@ -2302,19 +2464,25 @@ def cmd_mark(args) -> int:
         return 2
 
     if args.apply:
-        done, unreadable = mark_mod.apply(root, pl)
+        applied = mark_mod.apply(root, pl)
+        done, unreadable = applied
         print()
         for rel, markers in done:
             print(f"  + {rel}: {', '.join(markers)}")
+        # Named, so the count in the plan above adds up.
+        for rel, marker in applied.already:
+            print(f"  = {rel}: {marker} (already marked)")
         for rel in unreadable:
             print(f"  ! {rel}: not valid UTF-8 — skipped. Marking it "
                   f"mechanically would put the lines at the wrong offsets.",
                   file=sys.stderr)
+        for rel in applied.unwritable:
+            print(f"  ! {rel}: could not be written — skipped", file=sys.stderr)
         print(f"applied {sum(len(m) for _, m in done)} marker(s) in {len(done)} file(s); "
               f"every inserted line ends with `{mark_mod.TAG}` — `echolot mark --remove` "
               f"takes them out" if done else "nothing applicable to apply")
         recorder.note(applied=sum(len(m) for _, m in done),
-                      unreadable=len(unreadable))
+                      unreadable=len(unreadable), unwritable=len(applied.unwritable))
     return 0
 
 
@@ -2457,7 +2625,7 @@ def _private_repo(args, target: Path):
 def _private_targets(target: Path, chosen: list) -> list[Path]:
     """Every file a private `init` may write, to ask git which of them it tracks."""
     root = target / ".claude"
-    files = [root / layer.merged_into(str(src.relative_to(layer.CLAUDE_DIR)), True)
+    files = [root / layer.merged_into(src.relative_to(layer.CLAUDE_DIR).as_posix(), True)
              for src in layer.template_files()]
     files.append(root / layer.LAYER_MANIFEST)
     files += [target / h.path for h in chosen if h.path and h.key != "claude"]
@@ -2514,11 +2682,16 @@ def cmd_init(args) -> int:
     from . import hosts as hosts_mod
 
     spec = getattr(args, "for_hosts", None)
-    chosen = hosts_mod.parse(spec) if spec else None
+    chosen = hosts_mod.parse(spec, hosts_mod.load_choice(target)) if spec else None
     if spec and chosen is None:
         print(f"unknown client in --for {spec!r}. There is: "
               f"{', '.join(h.key for h in hosts_mod.HOSTS)}, or `all`",
               file=sys.stderr)
+        return 2
+    if chosen is not None and hosts_mod.both_layers(chosen):
+        print("--for names both `claude` and `plugin`: the .claude/ layer and "
+              "the plugin bring the same skills, and Claude Code would load "
+              "them twice. Choose one.", file=sys.stderr)
         return 2
 
     # Before the first write, and whatever the flags say: `--all` is about
@@ -2579,15 +2752,19 @@ def cmd_init(args) -> int:
                   "out of this project.")
         else:
             print("\nClaude Code not selected — .claude/ stays out of this project.")
-        whole = layer.install_pointers(target, chosen, force=getattr(args, "force", False),
-                                       tracked=tracked)
+        whole, rule = layer.install_pointers(target, chosen,
+                                             force=getattr(args, "force", False),
+                                             tracked=tracked)
         if private:
             _keep_from_git(repo, hidden + [repo.pattern(f) for f in whole])
+        # `--for all` beside the plugin used to mean `.claude/` too; the rest
+        # is named instead, so following the line keeps the plugin alone.
+        rest = ",".join(h.key for h in hosts_mod.every([h.key for h in chosen]))
         print("\nAny agent: `echolot guide`. The choice is kept — a plain "
               "`echolot init` points at\nthe same agents again; `--for` "
-              "changes it, and `echolot init --for all` adds the rest.")
+              f"changes it, and `echolot init --for {rest}` adds the rest.")
         recorder.note(hosts=[h.key for h in chosen], layer="skipped")
-        return 0
+        return _init_finish(args, target, chosen, rule)
 
     root = target / ".claude"
     before = layer.audit(target)
@@ -2597,7 +2774,7 @@ def cmd_init(args) -> int:
     folded, unmergeable, left = [], [], []
     installed: dict[str, str] = {}
     for src in layer.template_files():
-        rel = str(src.relative_to(layer.CLAUDE_DIR))
+        rel = src.relative_to(layer.CLAUDE_DIR).as_posix()
         # The file it lands in: settings.json is merged into
         # settings.local.json when private. Named that way in what is printed.
         dst = root / layer.merged_into(rel, private)
@@ -2622,6 +2799,14 @@ def cmd_init(args) -> int:
                     folded.append(shown)
                 continue
             if was == "current":
+                same.append(rel)
+                installed[rel] = layer.sha(src)
+                continue
+            if was is None and layer.sha(dst) == layer.sha(src):
+                # No manifest entry to judge by — `audit` knows no file's
+                # state when SKILL.md is gone — and the file is the
+                # template's byte for byte. Called `differs`, it was kept and
+                # offered to `--all` for nothing.
                 same.append(rel)
                 installed[rel] = layer.sha(src)
                 continue
@@ -2693,12 +2878,12 @@ def cmd_init(args) -> int:
               "git after.", width=80, break_on_hyphens=False,
             break_long_words=False))
 
-    whole = layer.install_pointers(target, chosen, force=getattr(args, "force", False),
-                                   tracked=tracked)
+    whole, rule = layer.install_pointers(target, chosen, force=getattr(args, "force", False),
+                                         tracked=tracked)
     if private:
         # Every file of the layer that is here and not the team's, the
         # manifest, and what the pointers wrote whole.
-        ours = [root / layer.merged_into(str(src.relative_to(layer.CLAUDE_DIR)), True)
+        ours = [root / layer.merged_into(src.relative_to(layer.CLAUDE_DIR).as_posix(), True)
                 for src in layer.template_files()] + [manifest]
         _keep_from_git(repo, [repo.pattern(f) for f in ours
                               if f.exists() and f not in tracked]
@@ -2717,7 +2902,17 @@ def cmd_init(args) -> int:
     recorder.note(written=len(written), updated=len(updated), kept=len(kept),
                   overwritten=len(overwritten), merged=len(folded),
                   unmergeable=[rel for rel, _ in unmergeable])
+    return _init_finish(args, target, chosen, rule)
 
+
+def _init_finish(args, target: Path, chosen: list, rule: str | None) -> int:
+    """How every `init` ends, whichever clients it chose.
+
+    The self-check and the `next` line used to close only the run that
+    installed `.claude/`: `--for plugin`, `codex` or `cursor` checked
+    nothing, printed no next step, and `--no-doctor` had nothing to skip,
+    while the help promised all three for every run.
+    """
     # The environment, briefly, and where to go from here. The doctor lines
     # are the same three `doctor -q` prints; a failure is said and the exit
     # code carries it, but the layer is installed regardless — a broken
@@ -2741,6 +2936,14 @@ def cmd_init(args) -> int:
                                   project=target, origin=_binary_origin(source, cfg))
     else:
         code, ran = 0, False
+    if rule == "not-written":
+        # Inside Codex's sandbox `.codex/` is read-only. The run said success,
+        # `status --next` moved on to setup, and the `codex` line said NO RULE.
+        again = codex.init_command([h.key for h in chosen])
+        print(f"\nnext  `{again}` outside Codex's sandbox — the rule that lets "
+              f"echolot out of it was not written (see above)")
+        recorder.failed(f"{codex.RULE_SHOWN} not written")
+        return 1
     if code:
         # In the words `echolot` uses for a doctor that did the same. A
         # self-check that never started — trace_processor not downloaded,
@@ -2751,7 +2954,15 @@ def cmd_init(args) -> int:
         print(f"\nnext  echolot doctor — the self-check {what} (see above); until "
               f"it passes, no report from this environment can be trusted")
     else:
-        print(f"\nnext  {state.next_step(state.project_state(target))}")
+        st = state.project_state(target)
+        if ran:
+            # The check just run is the last one, though its line reaches the
+            # log only after `init` returns: read off the log alone, a doctor
+            # that did not run before it kept `next` pointing at `doctor`.
+            st["last_doctor"] = {"cmd": "init", "facts": recorder.facts(),
+                                 "ts": datetime.now(timezone.utc).isoformat(
+                                     timespec="seconds")}
+        print(f"\nnext  {state.next_step(st)}")
     return code
 
 
@@ -2776,8 +2987,13 @@ def cmd_calibrate(args) -> int:
 
     tp_binary = _tp_binary(args, cfg)
     _note_local(cfg)
-    detectors = [d for d in load_detectors(DETECTOR_DIR) if d.calibrations]
-    if not detectors:
+    shipped = load_detectors(DETECTOR_DIR)
+    # A detector the config turned off is not measured, and its `false` goes
+    # back into the section as it stands. Measured and printed with a number,
+    # or with only a comment under it, the pasted section turned it on again.
+    disabled = cfg.disabled_detectors
+    detectors = [d for d in shipped if d.calibrations and d.id not in disabled]
+    if not any(d.calibrations for d in shipped):
         print("no detector declared @calibrate", file=sys.stderr)
         return 2
 
@@ -2787,6 +3003,7 @@ def cmd_calibrate(args) -> int:
     # section's own shape is refused here too: `detectors:` written as a
     # list was read outside this handler and came out as a traceback.
     try:
+        cfg.unknown_detectors({d.id for d in load_detectors(DETECTOR_DIR)})
         overrides = cfg.detector_overrides
         for d in detectors:
             d.check(overrides.get(d.id), "from the config")
@@ -2794,7 +3011,15 @@ def cmd_calibrate(args) -> int:
         print(f"config error: {e}", file=sys.stderr)
         return 2
 
-    pooled: dict[str, list[dict]] = {d.id: [] for d in detectors}
+    # Each trace's rows apart. The statistic is taken per run and the median
+    # across runs: `topN` reads as N rows on a healthy run, and a report is
+    # the size of one run, since `analyze` folds the repeats. Over the rows
+    # of every trace pooled, each value came k times, `top10` landed near the
+    # (10/k)-th of one run, and the threshold grew with the number of
+    # repeats: on five of the demo's cold starts it was 170.3 against 4.7
+    # from one.
+    per_run: dict[str, list[list[dict]]] = {d.id: [] for d in detectors}
+    failed: dict[str, int] = {d.id: 0 for d in detectors}
     windows: list[float] = []
 
     for trace in args.traces:
@@ -2806,15 +3031,18 @@ def cmd_calibrate(args) -> int:
         with session as tp:
             try:
                 procs = _resolve_process(tp, cfg.process)
+                # The anchors are read here, and one the config cannot mean
+                # came out of calibrate as a traceback.
+                bounds = _setup_context(tp, cfg, procs[0]["upid"])
             except ConfigError as e:
                 print(f"{trace}: {e}", file=sys.stderr)
                 return 2
-            bounds = _setup_context(tp, cfg, procs[0]["upid"])
             windows.append((bounds["ts_end"] - bounds["ts_start"]) / 1e6)
             for d in detectors:
                 try:
-                    pooled[d.id] += tp.query(d.render_open(overrides.get(d.id)))
+                    per_run[d.id].append(tp.query(d.render_open(overrides.get(d.id))))
                 except Exception as e:
+                    failed[d.id] += 1
                     print(f"[!] {d.id} on {trace}: {e}", file=sys.stderr)
 
     spread = ""
@@ -2823,7 +3051,8 @@ def cmd_calibrate(args) -> int:
                   "calibrate on\n# repeats of ONE scenario; mixing a cold start "
                   "with a minute of\n# scrolling yields thresholds for nothing.")
 
-    print(f"# The detectors section, derived from {len(args.traces)} "
+    total = len(args.traces)
+    print(f"# The detectors section, derived from {total} "
           f"known-healthy runs.")
     print("# Scenario window: " + ", ".join(f"{w:.0f} ms" for w in windows)
           + spread)
@@ -2831,47 +3060,103 @@ def cmd_calibrate(args) -> int:
     print("# The numbers are a statistic over a healthy run plus a margin.")
     print("# This is not a finished config but a proposal: thresholds define")
     print("# what counts as normal, and that is not a script's decision.")
+    print("# Everything else the config's section holds is carried over, so")
+    print("# this section can replace it whole.")
     print("detectors:")
 
     skipped = 0
-    for d in detectors:
-        rows = pooled[d.id]
-        print(f"  {d.id}:")
-        for c in d.calibrations:
-            values = [r[c.column] for r in rows if r.get(c.column) is not None]
-            need = max(args.min_sample, c.needs())
-            if len(values) < need:
-                # A statistic over a handful of values is not a statistic but a
-                # random number wearing the look of a justified one. Staying
-                # quiet is more honest.
-                skipped += 1
-                print(f"    # {c.param}: kept the default "
-                      f"({d.params[c.param]}) — sample {len(values)}, "
-                      f"needs at least {need}")
-                continue
-            raw = c.value(values)
-            value = raw * c.factor
-            value = int(round(value)) if c.column == "count" \
-                else round(value, 1)
-            # A degenerate tail: the sample is large enough, but the Nth value
-            # is already near zero. Such a "threshold" means "report
-            # everything" — that is, not a threshold. There is nowhere for a
-            # number to come from when a healthy run barely feeds this detector.
-            if value < 1:
-                skipped += 1
-                print(f"    # {c.param}: kept the default "
-                      f"({d.params[c.param]}) — {c.expr}={raw:.2f}, the tail "
-                      f"of the distribution is degenerate")
-                continue
-            print(f"    {c.param}: {value}"
-                  f"    # {c.expr}={raw:.1f} × {c.factor}, "
-                  f"sample {len(values)}")
+    measured = {d.id: d for d in detectors}
+    for d in shipped:
+        if d.id in disabled:
+            print(f"  {d.id}: false")
+            continue
+        given = overrides.get(d.id) or {}
+        lines: list[str] = []
+        if d.id in measured:
+            for c in d.calibrations:
+                line, rare = _calibrated(c, d, given, per_run[d.id], failed[d.id],
+                                         total, args.min_sample)
+                lines.append(line)
+                skipped += rare
+        # What the config sets and nothing here measured: masks, ratios, a
+        # detector with no `@calibrate`. The numbers above were measured with
+        # them, and dropped from the section, pasting it reset them all.
+        calibrated = {c.param for c in d.calibrations} if d.id in measured else set()
+        lines += [f"    {k}: {_yaml_scalar(v)}    # from the config"
+                  for k, v in given.items() if k not in calibrated]
+        if lines:
+            print(f"  {d.id}:")
+            for line in lines:
+                print(line)
 
+    broken = [d.id for d in detectors if failed[d.id] == total]
     if skipped:
         print(f"\n# Thresholds left uncalibrated: {skipped}. Not a failure — on"
               f"\n# a healthy run these phenomena are simply rare. Either keep"
               f"\n# the defaults or add more traces and repeat.")
-    return 0
+    if any(failed.values()):
+        print("\n# Failed on some of the traces, so measured on the rest or not at"
+              "\n# all — the error is on stderr: "
+              + ", ".join(f"{i} ({failed[i]} of {total})" for i in failed if failed[i]))
+    return 1 if broken else 0
+
+
+def _calibrated(c, d, given: dict, runs: list[list[dict]], failed: int,
+                total: int, min_sample: int) -> tuple[str, int]:
+    """One threshold's line in the section, and whether it was left for rarity.
+
+    The statistic is taken over each run that has enough values and the
+    median of those stands for the set; `--min-sample` applies per run, as the
+    statistic does. A threshold no run could feed keeps the value in effect:
+    the config's, as a setting line, or the shipped one, as a comment.
+    """
+    def keep(why: str) -> str:
+        if c.param in given:
+            return (f"    {c.param}: {_yaml_scalar(given[c.param])}    "
+                    f"# kept the config's value — {why}")
+        return f"    # {c.param}: kept the default ({d.params[c.param]}) — {why}"
+
+    if failed == total:
+        return keep("the detector failed on every trace, see stderr"), 0
+    need = max(min_sample, c.needs())
+    values = [[r[c.column] for r in rows if r.get(c.column) is not None]
+              for rows in runs]
+    enough = [v for v in values if len(v) >= need]
+    failed_note = f"; failed on {failed} of {total} traces" if failed else ""
+    if not enough:
+        # A statistic over a handful of values is not a statistic but a
+        # random number wearing the look of a justified one. Staying quiet
+        # is more honest.
+        most = max((len(v) for v in values), default=0)
+        return keep(f"sample {most} per run at most, needs at least "
+                    f"{need}{failed_note}"), 1
+    raw = median([c.value(v) for v in enough])
+    value = raw * c.factor
+    value = int(round(value)) if c.column == "count" else round(value, 1)
+    sizes = sorted(len(v) for v in enough)
+    sample = (f"sample {sizes[0]}" if sizes[0] == sizes[-1]
+              else f"sample {sizes[0]}–{sizes[-1]}") + " per run"
+    of = (f"median of {len(enough)} run(s)" if len(enough) == len(values)
+          else f"median of the {len(enough)} of {len(values)} runs with enough")
+    # A degenerate tail: the sample is large enough, but the Nth value is
+    # already near zero. Such a "threshold" means "report everything" — that
+    # is, not a threshold. There is nowhere for a number to come from when a
+    # healthy run barely feeds this detector.
+    if value < 1:
+        return keep(f"{c.expr}={raw:.2f}, the tail of the distribution is "
+                    f"degenerate{failed_note}"), 1
+    return (f"    {c.param}: {value}    # {c.expr}={raw:.1f} × {c.factor}, "
+            f"{of}, {sample}{failed_note}"), 0
+
+
+def _yaml_scalar(value: Any) -> str:
+    """A config value as YAML writes it back: a string quoted, since a mask
+    starts with `*` more often than not, and YAML reads that as an alias."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 # What `failed` holds for a self-check that never ran. Every reader of the
@@ -3204,6 +3489,7 @@ def cmd_report(args) -> int:
     written is its line in .echolot/log/runs.jsonl — the line `main` appends
     for every command unless ECHOLOT_NO_RECORD is set.
     """
+    _nearest_config(args)
     project = project_of(args)
     path = Path(args.report) if args.report else project / ".echolot" / "out" / "report.json"
     try:
@@ -3529,7 +3815,9 @@ def build_parser() -> argparse.ArgumentParser:
     ini.add_argument("--for", dest="for_hosts", metavar="CLIENTS",
                      help="which agents to point at the tool: "
                           + ", ".join(h.key for h in layer.hosts.HOSTS)
-                          + " — comma-separated, or `all`. Default: the choice "
+                          + " — comma-separated, or `all`: every one but the "
+                            "plugin, or but claude where the plugin is chosen, "
+                            "since the two bring the same skills. Default: the choice "
                             "this project saved last time, else whichever it "
                             "shows evidence of")
     # Only the parser turns prompting on: cmd_init is also called directly,
@@ -3688,7 +3976,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "~/.claude/projects/<slug>; Codex sessions are then "
                          "left out")
     rf.add_argument("-c", "--config", default="echolot.yml",
-                    help="the project config, for the protocol checks")
+                    help="the project config, for the protocol checks: a path "
+                         "from here, as everywhere else; without it, "
+                         "echolot.yml in --project")
     rf.add_argument("--local", help="path to local.yml (defaults to alongside)")
     rf.add_argument("-o", "--out", default=".echolot/reflect")
     rf.set_defaults(func=cmd_reflect)

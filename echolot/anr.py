@@ -41,6 +41,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from .domains import source_files
 
@@ -59,8 +60,11 @@ _HEADER = re.compile(r"^#?\s*(?P<key>[A-Za-z][A-Za-z _-]*):\s?(?P<value>.*)$")
 # starting with the one that hung, and every block names itself.
 _PROCESS = re.compile(r"^-{2,}\s*pid (?P<pid>\d+) at .*-{2,}\s*$")
 _CMDLINE = re.compile(r"^Cmd line: (?P<cmd>\S+)")
-# `dumpsys dropbox --print <tag>` concatenates every entry it holds.
+# `dumpsys dropbox --print <tag>` concatenates every entry it holds, each
+# opened by a rule and then its time and tag: `2026-08-20 21:22:45
+# data_app_anr (compressed text, 46727 bytes)`.
 _ENTRY = re.compile(r"^={20,}\s*$")
+_ENTRY_HEAD = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\s+\S+\s+\(")
 # The record's own furniture: block rules, the thread count above a block, and
 # the runtime's note about how long suspending everything took. Skipped by
 # name so that a line which is genuinely new still reaches the unread count.
@@ -75,6 +79,12 @@ _LOAD = re.compile(
     # the same row.
     r"^\s*(?P<share>[\d.]+)% (?P<pid>\d+)/(?P<name>.+?):\s(?P<split>.*)$"
 )
+# How many threads ART is about to print for the process, above its block;
+# against the threads read, it is what shows a dump that was cut short.
+_LISTED = re.compile(r"^DALVIK THREADS \((?P<n>\d+)\):")
+# What the drop box writes where it cut an entry to its size limit. A dump of
+# hundreds of threads reaches that limit.
+_TRUNCATED = re.compile(r"^\[\[TRUNCATED\]\]\s*$")
 _SCAFFOLD = re.compile(
     r"^(?:"
     r"-{2,}.*-{2,}\s*"                       # the rule around a process block
@@ -128,9 +138,11 @@ CRASHLYTICS = Source(
     ),
     frame=re.compile(r"^\s+at (?P<frame>.+)$"),
     native=re.compile(r"^\s*(?:native:\s*)?#\d+ pc 0x[0-9a-f]+ (?P<lib>\S+)"),
+    # The tail naming the owner is ART's to give, when it could read the owner
+    # at dump time; a note without it still says which monitor.
     lock=re.compile(
         r"waiting to lock <(?P<addr>0x[0-9a-f]+)> "
-        r"\((?P<cls>[^)]*)\) held by thread (?P<owner>-?\d+)"
+        r"\((?P<cls>[^)]*)\)(?: held by thread (?P<owner>-?\d+))?"
     ),
     lock_on_signature=True,
 )
@@ -162,13 +174,17 @@ DUMPSYS = Source(
     frame=re.compile(r"^\s+at (?P<frame>.+)$"),
     native=re.compile(r"^\s*(?:native:\s*)?#\d+ pc [0-9a-fx]+\s+(?P<lib>\S+)"),
     # On its own line under the frame that could not enter, and the class comes
-    # with an article ART puts there: `(a java.lang.Object)`.
+    # with an article ART puts there: `(a java.lang.Object)`. ART appends
+    # `held by thread N` only when it could read the owner at dump time; a
+    # note without it was not read at all, and the holder that printed
+    # `- locked` for that address went unnamed.
     lock=re.compile(
         r"^\s*- waiting to lock <(?P<addr>0x[0-9a-f]+)>"
-        r"\s+\(a (?P<cls>[^)]*)\) held by thread (?P<owner>-?\d+)"
+        r"\s+\(a (?P<cls>[^)]*)\)(?: held by thread (?P<owner>-?\d+))?"
     ),
-    # What a thread already holds. Crashlytics prints nothing of the kind, and
-    # it is what lets the holder be found when `held by thread` is absent.
+    # What a thread already holds. Crashlytics prints nothing of the kind. It
+    # is the second way to the holder: when the note names no tid, and when
+    # the tid it names is not in the dump.
     held=re.compile(r"^\s*- locked <(?P<addr>0x[0-9a-f]+)>"),
     sys_tid=re.compile(r"^\s*\|\s*sysTid=(?P<systid>\d+)"),
     # `waiting on` and `sleeping on` name a monitor the thread is waiting
@@ -313,10 +329,17 @@ class Ownership:
 
 @dataclass
 class Lock:
-    """The monitor a blocked thread wants, and who is holding it."""
+    """The monitor a blocked thread wants, and who is holding it.
+
+    `owner` is the tid the note names, and empty when it names none.
+    """
     addr: str
     cls: str
-    owner: str
+    owner: str = ""
+
+    def __post_init__(self) -> None:
+        # The pattern gives None when the note names no tid.
+        self.owner = self.owner or ""
 
 
 @dataclass
@@ -376,12 +399,19 @@ class Report:
     # a second process is not this app, and a second entry is a second ANR.
     elsewhere: int = 0
     entries: int = 1
+    # Lines inside a process block before its first thread: an older ART
+    # prints its runtime statistics there rather than after the threads.
+    preamble: int = 0
     # (share of a CPU, process name) from the record's own table, biggest
     # first. Empty for a source that does not print one.
     load: list[tuple[float, str]] = field(default_factory=list)
     # Lines after the threads that were passed over by position rather than by
     # name: the runtime's statistics and the record's own furniture.
     skipped: int = 0
+    # The drop box cut the entry at its size limit, and how many threads ART
+    # said it would print for each process, by `Cmd line:` name.
+    truncated: bool = False
+    listed: dict[str, int] = field(default_factory=dict)
     # What `chains()` worked out, kept once. Not part of the report's content
     # and not compared with anything: see `chains`.
     _chains: "list[Chain] | None" = field(default=None, repr=False, compare=False)
@@ -423,6 +453,18 @@ class Report:
     def ownership(self) -> Ownership:
         """What counts as this project's own code in this report."""
         return Ownership(self.package, self.declared)
+
+    @property
+    def cut(self) -> int | None:
+        """How many of the process's threads the dump is missing, when it
+        was cut short: ART's own count for the block, less the threads read.
+        None when the entry was not cut and the count adds up."""
+        process = next((t.process for t in self.threads if t.process), "")
+        listed = self.listed.get(process)
+        short = max(listed - len(self.threads), 0) if listed is not None else 0
+        if not self.truncated and not short:
+            return None
+        return short
 
     def by_tid(self) -> dict[str, Thread]:
         """Threads by tid — the id `held by thread N` refers to.
@@ -474,9 +516,14 @@ def parse(text: str, source: Source | None = None) -> Report:
     process = ""
     entries = 1
     skipped = 0
+    preamble = 0
+    in_block = False
     load: list[tuple[float, str]] = []
+    truncated = False
+    listed: dict[str, int] = {}
 
-    for number, raw in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    for number, raw in enumerate(lines, 1):
         line = raw.rstrip()
         if not line.strip():
             continue
@@ -491,6 +538,7 @@ def parse(text: str, source: Source | None = None) -> Report:
             fields.pop("detached", None)
             current = Thread(state=_state(state), process=process, **fields)
             threads.append(current)
+            in_block = False
             if source.lock_on_signature:
                 held = source.lock.search(note)
                 if held:
@@ -512,6 +560,7 @@ def parse(text: str, source: Source | None = None) -> Report:
         block = _PROCESS.match(line)
         if block:
             current, process = None, ""
+            in_block = True
             continue
         named = _CMDLINE.match(line)
         if named:
@@ -521,7 +570,10 @@ def parse(text: str, source: Source | None = None) -> Report:
             # A second entry is a second ANR. Reading it into the same report
             # would merge two freezes into one set of threads.
             if threads:
-                entries += 1
+                # Every entry left is counted, by the time and tag that open
+                # it; a rule with no such line after it is still one more.
+                entries = max(2, 1 + sum(1 for later in lines[number:]
+                                         if _ENTRY_HEAD.match(later)))
                 break
             # Everything before the first separator is what `dumpsys` says
             # about the drop box itself — how many entries it holds, what it
@@ -533,6 +585,13 @@ def parse(text: str, source: Source | None = None) -> Report:
         if busy:
             load.append((float(busy.group("share")),
                          busy.group("name").strip()))
+            continue
+        if _TRUNCATED.match(line):
+            truncated = True
+            continue
+        count = _LISTED.match(line)
+        if count:
+            listed[process] = int(count.group("n"))
             continue
         if _SCAFFOLD.match(line):
             continue
@@ -549,6 +608,12 @@ def parse(text: str, source: Source | None = None) -> Report:
                 # every vendor's build, and none of it about this freeze.
                 skipped += 1
                 continue
+            if in_block:
+                # The same statistics before the first thread, where an older
+                # ART prints them: `Build fingerprint:`, `Heap:`, `JNI:` are
+                # the runtime's, not fields of this report.
+                preamble += 1
+                continue
             field_line = _HEADER.match(line)
             if field_line:
                 head[field_line.group("key").strip()] = field_line.group("value").strip()
@@ -563,8 +628,9 @@ def parse(text: str, source: Source | None = None) -> Report:
             current.unread.append(line)
 
     report = Report(head=head, threads=threads, source=source.name,
-                    unread=unread, entries=entries, skipped=skipped,
-                    load=sorted(load, reverse=True))
+                    unread=unread, entries=entries, skipped=skipped, preamble=preamble,
+                    load=sorted(load, reverse=True), truncated=truncated,
+                    listed=listed)
     return _scoped(report)
 
 
@@ -693,24 +759,49 @@ IDLE: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 
-def idle_reason(thread: Thread) -> str | None:
+def idle_reason(thread: Thread, ours: Ownership | None = None) -> str | None:
     """Why this thread was doing nothing, or None if it was working.
 
     A blocked thread is never idle whatever its stack says: it was denied a
-    monitor, which is the thing this module exists to find.
+    monitor, which is the thing this module exists to find. Nor is a
+    runnable one: it was running. The main thread is idle only at its
+    looper; a queue's `take` under `onCreate` is the app waiting for
+    something, on the one thread that must not.
+
+    A mask says idle only for what sits under it. Work above it — a frame of
+    the project's, or `Binder.execTransact` serving a call — means the loop
+    was running something: the app's task above `TimerThread.mainLoop`, its
+    `finalize()` above the finalizer daemon, a provider's `query` on a
+    binder thread. Struck out, each of those was missing from the working
+    threads the reader is sent to for a holder. A native mask has every
+    managed frame above it, since managed code runs called from native.
     """
-    if thread.state == "blocked":
+    if thread.state in ("blocked", "runnable"):
         return None
-    stack = "\n".join(thread.frames + thread.native)
+    ours = ours or Ownership()
+
+    def busy(frames: list[str]) -> bool:
+        return any(ours.claims(f) or "Binder.execTransact" in f for f in frames)
+
     for reason, masks in IDLE:
-        if any(mask in stack for mask in masks):
-            return reason
+        if thread.name == "main" and reason != "looper idle":
+            continue
+        for i, frame in enumerate(thread.frames):
+            if any(mask in frame for mask in masks):
+                if not busy(thread.frames[:i]):
+                    return reason
+                break
+        else:
+            if any(mask in line for line in thread.native for mask in masks) \
+                    and not busy(thread.frames):
+                return reason
     return None
 
 
 def working(report: Report) -> list[Thread]:
     """The threads left after the idle ones are struck out."""
-    return [t for t in report.threads if idle_reason(t) is None]
+    ours = report.ownership
+    return [t for t in report.threads if idle_reason(t, ours) is None]
 
 
 # --- the lock chain ---------------------------------------------------------
@@ -725,9 +816,17 @@ class Chain:
     # Usually one long. When it is longer, the last is the only one worth
     # reading — the others are queued exactly like the waiters are.
     holders: list[Thread] = field(default_factory=list)
-    cycle: bool = False          # a holder waits, directly or not, on a waiter
-    # The monitor was worked out from the waiters rather than read off a note.
-    # True only for a source that records no ownership at all.
+    # The holders that wait on one another, when the walk down them came back
+    # to a thread it had passed: a deadlock. None of them is standing on
+    # anything of its own, so a chain with one has no root.
+    loop: list[Thread] = field(default_factory=list)
+    # One of the waiters is in that loop: the holder waits, directly or not,
+    # on a thread queued for this very monitor. Without it, the holders block
+    # each other and the waiters queue behind them.
+    cycle: bool = False
+    # The monitor was worked out from the waiters rather than read off a note:
+    # no thread in the dump carried one. A source that records no ownership
+    # never does, and others can come without any.
     inferred: bool = False
 
     @property
@@ -741,13 +840,20 @@ class Chain:
 
         This is the one standing on the actual blocking call. Reporting the
         direct holder as the cause when it is itself queued behind someone
-        else names a victim.
+        else names a victim. A deadlock has none: the last holder walked is
+        waiting on one passed already, and naming it called a blocked
+        thread — once the chain's own waiter — the one standing on its own.
         """
-        return self.holders[-1] if self.holders else None
+        return self.holders[-1] if self.holders and not self.loop else None
 
     @property
     def blocks_main(self) -> bool:
         return any(t.name == "main" for t in self.waiters)
+
+
+# What R8 makes of a class name: a letter or three, lower case, with a digit
+# now and then. A class that kept its name starts with a capital.
+_R8_NAME = re.compile(r"^[a-z][a-z0-9]{0,2}$")
 
 
 def monitor_class(monitor: str, waiters: list[Thread]) -> str | None:
@@ -763,10 +869,18 @@ def monitor_class(monitor: str, waiters: list[Thread]) -> str | None:
     The inference holds only while the two agree on the package, and that is
     what decides it. A waiter blocked inside a library on a monitor belonging
     to the app would otherwise rename the finding after the library.
+
+    And only for a name R8 wrote: a few lower-case letters where a class name
+    would be. `synchronized(cache)` inside `Repository.get` locks a `Cache`
+    that kept its name, and the waiter's top frame, `Repository`, shares its
+    package; renamed after it, the lock section and the main thread section
+    named one lock two ways.
     """
-    where = monitor.rsplit(".", 1)[0] if "." in monitor else ""
+    where, _, simple = monitor.rpartition(".")
     if not where:
         return None
+    if not _R8_NAME.match(simple):
+        return monitor
     for thread in waiters:
         if not thread.frames:
             continue
@@ -796,28 +910,39 @@ def chains(report: Report) -> list[Chain]:
     return report._chains
 
 
-def _find_chains(report: Report) -> list[Chain]:
+def _holder_of(report: Report) -> Callable[[Lock], Thread | None]:
+    """Who holds a lock: by the tid its note named, and when the note named
+    none, or a tid the dump does not carry, by whoever says it holds that
+    address. ART prints what a thread has locked; that is the second way to
+    the same answer, and it survives an owner outside the process block that
+    was read and a note ART could not finish."""
     by_tid = report.by_tid()
+    by_addr: dict[str, Thread] = {}
+    for t in report.threads:
+        for addr in t.held:
+            by_addr.setdefault(addr, t)
+    return lambda lock: by_tid.get(lock.owner) or by_addr.get(lock.addr)
+
+
+def _find_chains(report: Report) -> list[Chain]:
+    holder = _holder_of(report)
     grouped: dict[tuple[str, str], list[Thread]] = {}
     for thread in report.threads:
         if thread.lock:
             grouped.setdefault((thread.lock.addr, thread.lock.owner), []).append(thread)
 
     found = []
-    for (addr, owner_tid), waiters in grouped.items():
-        # By the tid the source named, and when that tid is not in the dump, by
-        # whoever says it holds this monitor. ART prints what a thread has
-        # locked; that is the second way to the same answer, and it survives an
-        # owner outside the process block that was read.
-        owner = by_tid.get(owner_tid) or next(
-            (t for t in report.threads if addr in t.held), None)
-        monitor = waiters[0].lock.cls if waiters[0].lock else ""
+    for waiters in grouped.values():
+        lock = waiters[0].lock
+        holders = _down_to_the_root(holder(lock), holder)
+        loop = _loop(holders, holder)
         found.append(Chain(
-            monitor=monitor,
-            named=monitor_class(monitor, waiters),
+            monitor=lock.cls,
+            named=monitor_class(lock.cls, waiters),
             waiters=waiters,
-            holders=_down_to_the_root(owner, by_tid),
-            cycle=_waits_back(owner, {t.tid for t in waiters}, by_tid),
+            holders=holders,
+            loop=loop,
+            cycle=any(t is w for t in loop for w in waiters),
         ))
     if not found:
         found = _queues_without_a_note(report)
@@ -859,8 +984,24 @@ def _queues_without_a_note(report: Report) -> list[Chain]:
     ]
 
 
+def _no_owner(report: Report) -> str:
+    """Why a queue read off the waiters has no holder, in this source's terms.
+
+    Only Play Console strips ownership. A Crashlytics export or an ART dump
+    records it, and one that carried no lock note at all was told the source
+    does not, which sent the reader to export the same freeze from elsewhere.
+    """
+    if report.source == PLAY.name:
+        return ("This source does not record who holds a monitor, so the "
+                "holder is not in this file at all. It is one of the threads "
+                "below that were working.")
+    return ("No thread in this dump carries a note on the monitor it wants, so "
+            "who holds it is not in this file. It is one of the threads below "
+            "that were working.")
+
+
 def _down_to_the_root(owner: Thread | None,
-                      by_tid: dict[str, Thread]) -> list[Thread]:
+                      holder: Callable[[Lock], Thread | None]) -> list[Thread]:
     """The holder, then whoever is holding what the holder wants, to the end.
 
     A holder that is itself blocked is a link, not a cause. Naming it as the
@@ -873,33 +1014,31 @@ def _down_to_the_root(owner: Thread | None,
     walk forever.
     """
     walked: list[Thread] = []
-    seen: set[str] = set()
     current = owner
-    while current is not None and current.tid not in seen:
-        seen.add(current.tid)
+    while current is not None and not any(current is t for t in walked):
         walked.append(current)
         if current.lock is None:
             break
-        current = by_tid.get(current.lock.owner)
+        current = holder(current.lock)
     return walked
 
 
-def _waits_back(owner: Thread | None, waiters: set[str], by_tid: dict[str, Thread]) -> bool:
-    """Does the owner wait, directly or through others, on one of its waiters?
+def _loop(holders: list[Thread],
+          holder: Callable[[Lock], Thread | None]) -> list[Thread]:
+    """The holders that wait on one another, when the walk ended on a repeat.
 
-    That is a deadlock, and it is also the only way the walk below could run
-    forever. Both reasons to answer it before printing anything.
+    From the thread the last one waits on to the end of the walk. A loop the
+    waiters are not in is still a deadlock: the holders block each other, and
+    the waiters queue behind them.
     """
-    seen: set[str] = set()
-    current = owner
-    while current is not None and current.lock is not None:
-        if current.tid in seen:
-            return True
-        seen.add(current.tid)
-        if current.lock.owner in waiters:
-            return True
-        current = by_tid.get(current.lock.owner)
-    return False
+    last = holders[-1] if holders else None
+    if last is None or last.lock is None:
+        return []
+    nxt = holder(last.lock)
+    for i, t in enumerate(holders):
+        if t is nxt:
+            return holders[i:]
+    return []
 
 
 # --- from a frame to a file -------------------------------------------------
@@ -929,6 +1068,9 @@ class Located:
     file: str        # relative to the root
     line: int | None
     exact: bool      # not a guess: one candidate, or the package agreed
+    # The other files it could be, when it is a guess: the same name, and as
+    # far as the package says, the same place.
+    others: tuple[str, ...] = ()
 
 
 def source_index(root: Path) -> dict[str, list[Path]]:
@@ -1003,15 +1145,21 @@ def place(frame: str, index: dict[str, list[Path]], root: Path) -> Located | Non
     # one `/` to the file. As a plain substring `com/example/a` is inside
     # `com/example/app`, and `com.example.a.Mapper` was placed, as certain, in
     # the other package's `Mapper.kt` with its own sitting in the next module.
-    chosen, exact = candidates[0], len(candidates) == 1
-    for path in candidates:
-        if wanted and ("/" + path.relative_to(root).parent.as_posix()).endswith(wanted):
-            chosen, exact = path, True
-            break
+    #
+    # Several can end in it: a class kept in both `src/debug` and
+    # `src/release` of one module. The first of them in sorted order is a
+    # guess like any other, and it was marked exact, so a release frame was
+    # placed in the debug file without a word.
+    agree = [path for path in candidates if wanted and
+             ("/" + path.relative_to(root).parent.as_posix()).endswith(wanted)]
+    pool = agree or candidates
+    chosen, exact = pool[0], len(pool) == 1
     line = where.group("line")
     return Located(frame=frame, symbol=symbol,
                    file=chosen.relative_to(root).as_posix(),
-                   line=int(line) if line else None, exact=exact)
+                   line=int(line) if line else None, exact=exact,
+                   others=() if exact else tuple(
+                       p.relative_to(root).as_posix() for p in pool[1:]))
 
 
 def of_interest(report: Report) -> list[Thread]:
@@ -1022,7 +1170,7 @@ def of_interest(report: Report) -> list[Thread]:
     """
     seen: dict[str, Thread] = {}
     for chain in chains(report):
-        for thread in [*chain.waiters, chain.owner]:
+        for thread in [*chain.waiters, chain.owner, *chain.loop]:
             if thread is not None:
                 seen[f"{thread.name}/{thread.tid}"] = thread
     for thread in [report.main, *working(report)]:
@@ -1031,7 +1179,8 @@ def of_interest(report: Report) -> list[Thread]:
     return list(seen.values())
 
 
-def locate(report: Report, root: Path) -> tuple[list[Located], list[str]]:
+def locate(report: Report, root: Path,
+           index: dict[str, list[Path]] | None = None) -> tuple[list[Located], list[str]]:
     """Frames of this project placed in the repository, and those left over.
 
     The leftovers are the point of returning two lists. A frame this project
@@ -1046,8 +1195,11 @@ def locate(report: Report, root: Path) -> tuple[list[Located], list[str]]:
     stack that showed `DoubleCheck.get` as the app's own, next to a placement
     that had set it aside, would be two readings of one file.
     """
-    index = source_index(root)
+    index = source_index(root) if index is None else index
     report.declared = declared_packages(index) or None
+    if not index:
+        # No sources: no frame of the report is missing from them.
+        return [], []
     ours = report.ownership
     placed: list[Located] = []
     missing: list[str] = []
@@ -1110,7 +1262,29 @@ def _stack(thread: Thread, ours: Ownership, limit: int = 8) -> list[str]:
     near = thread.nearest(ours)
     if near != thread.top and near not in lines:
         lines.append(near)
+    elif near == thread.top and not near.startswith(CORE):
+        # The thread stands inside a library. The frame where the library was
+        # entered, the last of its frames before the platform's resume, says
+        # what it was asked to do: `Gson.fromJson` under the adapter's `read`.
+        entered = 0
+        while entered + 1 < len(thread.frames) and \
+                not thread.frames[entered + 1].startswith(CORE):
+            entered += 1
+        if entered:
+            lines.append(thread.frames[entered])
     return lines + thread.native[1:3] if len(lines) == 1 else lines
+
+
+def doing(report: Report, busy: list[Thread], found: list[Chain]) -> list[Thread]:
+    """The working threads that are neither the main thread nor queued on a lock.
+
+    A waiter is left out whether or not it carries a lock note: the waiters of
+    a chain inferred from a Play Console export carry none, and listed here
+    they stood where the report says the holder is.
+    """
+    queued = {id(t) for c in found for t in c.waiters}
+    return [t for t in busy
+            if t is not report.main and not t.lock and id(t) not in queued]
 
 
 def _nearest_libraries(report: Report) -> list[tuple[str, str]]:
@@ -1131,7 +1305,10 @@ def _nearest_libraries(report: Report) -> list[tuple[str, str]]:
     out = []
     for t in of_interest(report):
         near = t.nearest(ours)
-        if near != t.top:
+        # Skipped only when the stack is the platform's all the way down. A
+        # thread standing inside a library has that library as its top, and
+        # skipping it for that dropped the one lead the file had.
+        if t.frames and not near.startswith(CORE):
             out.append((t.name, near))
     return out
 
@@ -1187,17 +1364,28 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 who += f" and {len(chain.waiters) - 4} more"
             verb = "blocked inside" if chain.inferred else "denied"
             out.append(f"**{len(chain.waiters)} {verb} `{name}`**{also} — {who}")
-            if chain.cycle:
-                out.append("")
-                out.append("> The holder is itself waiting on one of them: "
-                           "this is a deadlock.")
             if chain.inferred:
-                out += ["", "This source does not record who holds a monitor, "
-                            "so the holder is not in this file at all. It is "
-                            "one of the threads below that were working.", ""]
+                out += ["", _no_owner(report), ""]
                 continue
             if not chain.holders:
                 out += ["", "Held by a thread that is not in this dump.", ""]
+                continue
+            if chain.loop:
+                # A deadlock has no thread standing on anything of its own,
+                # so it is the threads of the loop that are shown, each on
+                # what it was waiting in.
+                ring = " → ".join(f"`{t.name}`" for t in [*chain.loop, chain.loop[0]])
+                if chain.cycle:
+                    out += ["", f"> The holder is itself waiting on one of them: "
+                                f"this is a deadlock. {ring}, each waiting on "
+                                f"the next.", ""]
+                else:
+                    out += ["", f"> The holders block each other, a deadlock: "
+                                f"{ring}, each waiting on the next. The threads "
+                                f"above queue behind it.", ""]
+                for t in chain.loop:
+                    out += [f"**{t.name}** (tid {t.tid}, {t.state}) was on:",
+                            "", "```"] + _stack(t, ours) + ["```", ""]
                 continue
             links, root = chain.holders, chain.root
             if len(links) == 1:
@@ -1217,7 +1405,7 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
     main = report.main
     if main is not None:
         out += ["## The main thread", ""]
-        reason = idle_reason(main)
+        reason = idle_reason(main, ours)
         if reason == "looper idle":
             out += ["It was **idle**, waiting for a message. Whatever caused "
                     "this ANR had already let go by the time the dump was "
@@ -1255,7 +1443,7 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                         "its network client, its coroutine scopes — and that "
                         "setup is where to read next.", ""]
 
-    others = [t for t in busy if t is not main and not t.lock]
+    others = doing(report, busy, found)
     if others:
         out += ["## Threads that were doing something", ""]
         # Threads running the app's own code first. The idle vocabulary will
@@ -1282,7 +1470,10 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 "_the compiler wrote the file and the line into the frame; "
                 "nothing here was searched for_", ""]
         for found in placed:
-            mark = "" if found.exact else "  ← one of several of that name"
+            mark = "" if found.exact else (
+                f"  ← one of {len(found.others) + 1} of that name, also "
+                + ", ".join(found.others[:3])
+                + (" …" if len(found.others) > 3 else ""))
             where = found.file + (f":{found.line}" if found.line else "")
             out.append(f"- `{_short(found.symbol)}` — {where}{mark}")
         out.append("")
@@ -1293,8 +1484,11 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 "freeze — a machine that was busy is a different story from "
                 "an app that blocked itself_", ""]
         for share, name in report.load[:6]:
-            mine = "  ← this app" if report.package and name.startswith(
-                report.package) else ""
+            # Up to the colon, as `Ownership.claims` stops at the dot:
+            # `com.example.app:remote` is the app, `com.example.application`
+            # is not.
+            mine = "  ← this app" if report.package and (
+                name == report.package or name.startswith(report.package + ":")) else ""
             out.append(f"- {share}% `{name}`{mine}")
         out.append("")
 
@@ -1327,6 +1521,16 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
     skipped, or silence reads as a clean bill.
     """
     gaps = []
+    # Cut at the drop box's size limit, the dump reads as complete and a
+    # holder past the cut as a thread that was not in it.
+    if report.cut is not None:
+        gaps.append(
+            "- The threads past the cut. The drop box cut this entry at its "
+            "size limit" + (f", {report.cut} of the threads ART listed are not "
+                            f"in it" if report.cut else "")
+            + ", so a holder named as not in this dump may be one of them. "
+              "`/data/anr/` keeps the whole trace when the device lets you "
+              "read it.")
     if not report.reason:
         why = _NO_REASON.get(report.source, "This file carries no reason, "
                              "component or intent; the device's own record does")
@@ -1353,12 +1557,14 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
         gaps.append(f"- {stray} line(s) inside thread blocks that are neither "
                     f"frames nor a lock note.")
     if missing:
-        gaps.append(f"- where {len(missing)} of this project's frames are: they "
+        gaps.append(f"- Where {len(missing)} of this project's frames are: they "
                     f"name a source file this checkout does not have. Either "
                     f"the module is elsewhere or the report is from another "
                     f"version — first is `{missing[0]}`.")
-    if report.skipped:
-        gaps.append(f"- {report.skipped} line(s) after the threads — the "
+    if report.skipped or report.preamble:
+        where = ("before and after the threads" if report.skipped and report.preamble
+                 else "after the threads" if report.skipped else "before the threads")
+        gaps.append(f"- {report.skipped + report.preamble} line(s) {where} — the "
                     f"runtime's own statistics and the record's furniture — "
                     f"passed over by position rather than by name.")
     return gaps
@@ -1388,13 +1594,19 @@ def summary(report: Report,
             "other_processes": report.elsewhere,
         },
         "entries": report.entries,
+        # Threads the drop box cut off: ART's count less the ones read, 0
+        # when the cut fell after the last of them; null when not cut.
+        "cut": report.cut,
         "chains": [
             {
                 "monitor": chain.monitor,
                 "named": chain.named,
                 "blocks_main": chain.blocks_main,
                 "inferred": chain.inferred,
-                "deadlock": chain.cycle,
+                # The threads that wait on one another, when there is a loop;
+                # `cycle` says a waiter is one of them.
+                "deadlock": [t.name for t in chain.loop],
+                "cycle": chain.cycle,
                 "waiters": [t.name for t in chain.waiters],
                 "holders": [t.name for t in chain.holders],
                 "root": None if chain.root is None else {
@@ -1408,7 +1620,7 @@ def summary(report: Report,
         ],
         "main": None if main_thread is None else {
             "state": main_thread.state,
-            "idle": idle_reason(main_thread),
+            "idle": idle_reason(main_thread, ours),
             "denied": None if not main_thread.lock else main_thread.lock.cls,
             "stack": _stack(main_thread, ours),
         },
@@ -1421,7 +1633,7 @@ def summary(report: Report,
              "where": t.nearest(ours),
              "top": t.top,
              "stack": _stack(t, ours)}
-            for t in busy if t is not main_thread and not t.lock
+            for t in doing(report, busy, chains(report))
         ],
         # Whether this file can name a lock chain at all — see `lock_notes`.
         "lock_notes": report.lock_notes,
@@ -1432,7 +1644,7 @@ def summary(report: Report,
         "code": None if code is None else {
             "placed": [
                 {"symbol": f.symbol, "file": f.file, "line": f.line,
-                 "exact": f.exact}
+                 "exact": f.exact, "others": list(f.others)}
                 for f in code[0]
             ],
             "unplaced": code[1],
@@ -1443,6 +1655,7 @@ def summary(report: Report,
             "outside": len(report.unread),
             "inside": sum(len(t.unread) for t in report.threads),
             "after_the_threads": report.skipped,
+            "before_the_threads": report.preamble,
         },
     }
 

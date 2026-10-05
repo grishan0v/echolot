@@ -7,8 +7,8 @@
 -- that turned a run into tens of minutes.
 --
 -- Deliberately restricted to the ancient, stable Perfetto tables (process,
--- thread, slice, thread_track, process_track, thread_state), no stdlib
--- modules.
+-- thread, slice, thread_track, process_track, thread_state, trace_bounds), no
+-- stdlib modules.
 --
 -- {{upid}} is substituted by the CLI: the process is picked in Python before
 -- rendering, so we neither pay for a join over every slice in each view nor
@@ -92,16 +92,28 @@ SELECT COALESCE(
 -- Scenario boundaries. Start is the first occurrence of the start anchor.
 -- End is where the FIRST anchor starting after that ends — first by ts, not
 -- smallest by ts+dur: a short but later slice must not cut the window early.
--- With no anchors configured or none matching, the whole trace is the window.
+-- With no anchors configured or none matching, the window runs from the
+-- process's first slice to where its last one ends.
+--
+-- A slice still open when the recording stopped (dur = -1) ends with the
+-- trace, here as in window.sql. Read as zero long, an end anchor that never
+-- closed cut the window off where the scenario got stuck, with the stall
+-- itself outside it; and with no end anchor, a main thread that went into a
+-- lock wait as the rest of the process fell quiet got a window that closed
+-- as the wait began.
 DROP VIEW IF EXISTS _window;
 CREATE VIEW _window AS
 SELECT
     (SELECT ts FROM _win_start) AS ts_start,
     COALESCE(
-        (SELECT a.ts + MAX(a.dur, 0) FROM _anchor a
+        (SELECT CASE WHEN a.dur < 0 THEN (SELECT end_ts FROM trace_bounds)
+                     ELSE a.ts + a.dur END
+           FROM _anchor a
           WHERE a.name GLOB '{{scenario_end}}'
             AND a.ts >= (SELECT ts FROM _win_start)
           ORDER BY a.ts
           LIMIT 1),
-        (SELECT MAX(ts + MAX(dur, 0)) FROM _slice)
+        (SELECT MAX(CASE WHEN dur < 0 THEN (SELECT end_ts FROM trace_bounds)
+                         ELSE ts + dur END)
+           FROM _slice)
     ) AS ts_end;

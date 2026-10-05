@@ -791,6 +791,10 @@ def test_a_root_with_no_sources_costs_the_report_nothing(tmp_path):
     check("the findings are still there", "## What was holding the lock" in out, out)
     check("and no empty section is printed",
           "Where these frames are" not in out, out)
+    check("nor a frame said to be missing from it",
+          "this checkout does not have" not in out, out)
+    code, out, _ = run("anr", str(report_file), "--root", str(empty), "--json")
+    check("and the json has no checkout to report on", json.loads(out)["code"] is None, out)
 
 
 # --- markers from a stack ---------------------------------------------------
@@ -875,12 +879,12 @@ def test_a_function_without_a_return_can_take_a_pair_mechanically(store):
           proposal.line == line_of("fun flush"), proposal.line)
 
 
-def test_a_return_in_the_body_is_refused_and_said(store):
+def test_a_return_in_the_body_is_closed_by_the_finally(store):
+    """A function body takes its end in a `finally`, so a return in it skips
+    nothing; it used to be refused."""
     proposal = plan_for(store, "com.example.app.data.StateStore.read",
                         "val value = compute")
-    check("refused", not proposal.applicable)
-    check("with the reason", "return in its body" in proposal.reason,
-          proposal.reason)
+    check("applicable", proposal.applicable, proposal.reason)
 
 
 def test_a_one_line_body_is_refused_the_way_it_already_was(store):
