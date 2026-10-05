@@ -536,7 +536,9 @@ def _markers_info(tp, cfg: Config) -> dict:
     are usually async — see `_aslice` in context.sql. Self time comes from
     the same child sum the detectors use, so a marker wrapping another
     reads as the difference: the hunt above needed `store_update` minus
-    `store_update_locked` to say how long the lock was waited for.
+    `store_update_locked` to say how long the lock was waited for. The
+    total counts an occurrence inside one of the same name once, as part of
+    the outer one: a marker in a recursive function doubled it otherwise.
 
     Grouped by name in the end, with the threads listed: a marker that ran
     on two threads is one marker, and the reader wants one row and the
@@ -551,23 +553,22 @@ def _markers_info(tp, cfg: Config) -> dict:
             globs.append(str(name))
     wanted = " OR ".join(f"name GLOB '{sql_value(g)}'" for g in globs)
     rows = tp.query(f"""
-        WITH child_sum AS (
-            SELECT parent_id, SUM(MAX(dur, 0)) AS ns
-            FROM slice WHERE parent_id IS NOT NULL GROUP BY parent_id
-        ),
-        seen AS (
-            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur
+        WITH seen AS (
+            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur, s.unfinished
             FROM _slice_win s WHERE {wanted}
             UNION ALL
-            SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur
+            SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur, a.unfinished
             FROM _aslice_win a WHERE {wanted}
         )
         SELECT seen.name AS location, seen.thread AS thread,
                COUNT(*) AS count,
-               SUM(MAX(seen.dur, 0)) AS total_ns,
-               SUM(MAX(seen.dur, 0) - COALESCE(c.ns, 0)) AS self_ns,
+               SUM(CASE WHEN EXISTS (SELECT 1 FROM ancestor_slice(seen.slice_id) a
+                                     WHERE a.name = seen.name)
+                        THEN 0 ELSE MAX(seen.dur, 0) END) AS total_ns,
+               SUM(MAX(seen.dur, 0) - COALESCE(CASE WHEN seen.unfinished = 1
+                                                    THEN c.ns_win ELSE c.ns END, 0)) AS self_ns,
                MAX(MAX(seen.dur, 0)) AS max_ns
-        FROM seen LEFT JOIN child_sum c ON c.parent_id = seen.slice_id
+        FROM seen LEFT JOIN _child_sum c ON c.parent_id = seen.slice_id
         GROUP BY seen.name, seen.thread
     """)
     by_name: dict[str, dict] = {}
@@ -650,6 +651,7 @@ def cmd_analyze(args) -> int:
         fired=rep["summary"]["fired_ids"],
         window_ms=w.get("duration_ms"),
         start_anchor_matches=(w.get("start_anchor") or {}).get("matches"),
+        end_anchor_matches=(w.get("end_anchor") or {}).get("matches"),
         process_alternatives=len(w.get("process_alternatives") or []),
     )
     if args.defaults or cli_overrides:
@@ -1004,6 +1006,16 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
             "glob": glob,
             "matches": hits[0]["n"] if hits else 0,
         }
+        # The end anchor the window closed on, still open when the recording
+        # stopped: the window ran on to the end of the trace, and the
+        # scenario never reached its end inside it.
+        if key == "end" and window[f"{key}_anchor"]["matches"]:
+            first = tp.query(
+                f"SELECT a.dur < 0 AS open FROM _anchor a "
+                f"WHERE a.name GLOB '{sql_value(glob)}' "
+                f"AND a.ts >= (SELECT ts_start FROM _window) ORDER BY a.ts LIMIT 1")
+            if first and first[0]["open"]:
+                window[f"{key}_anchor"]["unfinished"] = True
     window["opened_inside"] = _opened_inside(tp, window)
     window["startup"] = _startup_info(tp, window, procs[0]["name"])
     return window
@@ -1415,10 +1427,12 @@ def _main_thread_budget(tp, window: dict) -> dict | None:
     accounted = round(sum(out.values()), 2)
     out["accounted_ms"] = accounted
     out["window_ms"] = duration
-    # Short of the window means the thread was not there for all of it — the
-    # process started inside the window, or the trace has a hole. Worth a
-    # number rather than a silent shortfall: it is the difference between "the
-    # scenario is explained" and "most of it was not looked at".
+    # Short of the window means the thread had no state for part of it — the
+    # process started inside the window, or the trace has a hole. A state the
+    # thread was still in when the recording stopped is not that: it runs to
+    # the end of the window (`_tstate_win`). Worth a number rather than a
+    # silent shortfall: it is the difference between "the scenario is
+    # explained" and "most of it was not looked at".
     out["accounted_pct"] = round(accounted / duration * 100, 1) if duration else None
     return out
 
@@ -1987,8 +2001,9 @@ def cmd_hunt(args) -> int:
                 if hosts_mod.wants_claude(project)
                 else "any agent, after `echolot guide hunt`")
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
-        print("By hand: echolot collect -c echolot.yml -n 5, then echolot analyze "
-              ".echolot/traces/*.perfetto-trace", file=sys.stderr)
+        print("By hand: echolot collect -c echolot.yml -n 5, then "
+              + state.analyze_line(state.repeats(scenario, 5) if scenario else None),
+              file=sys.stderr)
         return 0
 
     if conclusion:
@@ -2279,10 +2294,19 @@ def cmd_mark(args) -> int:
             return 2
         report = anr_mod.parse(text)
         placed, missing = anr_mod.locate(report, root)
+        # A frame placed in one of several files of its name is a guess, and
+        # a marker in the wrong one measures a file the build never ran —
+        # `src/debug` beside `src/release`. Those are named, not marked.
         pl = mark_mod.plan_from_anr(
-            root, [(f.symbol, f.file, f.line) for f in placed],
+            root, [(f.symbol, f.file, f.line) for f in placed if f.exact],
             prefix=prefix, allowed=allowed, unplaced=len(missing),
             version=report.head.get("Version") or report.head.get("Package"))
+        for f in placed:
+            if not f.exact:
+                pl.notes.append(
+                    f"{f.symbol} — {len(f.others) + 1} files of that name could "
+                    f"be it: {', '.join([f.file, *f.others])}. Nothing in the "
+                    f"frame says which one was built, so it is left to mark by hand")
     else:
         pl = mark_mod.plan(root, package=package, allowed=allowed, prefix=prefix,
                            module=args.module)

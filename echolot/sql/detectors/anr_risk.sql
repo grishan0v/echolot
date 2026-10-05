@@ -132,7 +132,7 @@ described AS (
             SELECT COUNT(*) FROM _slice_win sl
             WHERE sl.is_main_thread = 1 AND sl.depth >= 1
               AND sl.ts_win < s.ts_to AND sl.ts_win + sl.dur_win > s.ts_from
-        ) AS messages,
+        ) AS slices,
         (
             SELECT COALESCE(SUM(MIN(t.ts + t.dur, s.ts_to)
                                 - MAX(t.ts, s.ts_from)), 0)
@@ -162,7 +162,7 @@ SELECT
     ROUND(on_cpu_ns / 1e6, 1) || ' ms on CPU · '
         || ROUND(runnable_ns / 1e6, 1) || ' ms waiting for one · '
         || ROUND((stall_ns - on_cpu_ns - runnable_ns) / 1e6, 1) || ' ms neither · '
-        || messages || ' messages'                        AS detail
+        || slices || ' slices'                            AS detail
 FROM described
 GROUP BY what
 ORDER BY total_ms DESC

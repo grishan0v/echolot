@@ -19,26 +19,26 @@
 -- the thread's own time. Total duration stays alongside — the "self / total"
 -- pair shows at a glance whether a slice works or waits on its children.
 
-WITH child_sum AS (
-    -- One pass over the whole trace: the sum of children per parent.
-    -- A correlated subquery per row would cost an order of magnitude more.
-    SELECT parent_id, SUM(MAX(dur, 0)) AS ns
-    FROM slice
-    WHERE parent_id IS NOT NULL
-    GROUP BY parent_id
+-- The children come from `_child_sum` (window.sql), which reads an open child
+-- the way `_slice_win` reads an open slice.
+WITH self AS (
+    SELECT s.name, s.thread_name, MAX(s.dur, 0) AS dur,
+           MAX(s.dur, 0) - COALESCE(CASE WHEN s.unfinished = 1 THEN c.ns_win
+                                         ELSE c.ns END, 0) AS self_ns
+    FROM _slice_win s
+    LEFT JOIN _child_sum c ON c.parent_id = s.slice_id
+    WHERE s.is_main_thread = 1
 )
 SELECT
-    s.name                                                   AS location,
+    name                                                     AS location,
     COUNT(*)                                                 AS count,
-    ROUND(SUM(MAX(s.dur, 0)) / 1e6, 2)                       AS total_ms,
-    ROUND(SUM(MAX(s.dur, 0) - COALESCE(c.ns, 0)) / 1e6, 2)   AS self_ms,
-    ROUND(MAX(MAX(s.dur, 0)) / 1e6, 2)                       AS max_ms,
-    s.thread_name                                            AS detail
-FROM _slice_win s
-LEFT JOIN child_sum c ON c.parent_id = s.slice_id
-WHERE s.is_main_thread = 1
-GROUP BY s.name, s.thread_name
-HAVING SUM(MAX(s.dur, 0) - COALESCE(c.ns, 0)) >= {{min_slice_ms}} * 1000000
+    ROUND(SUM(dur) / 1e6, 2)                                 AS total_ms,
+    ROUND(SUM(self_ns) / 1e6, 2)                             AS self_ms,
+    ROUND(MAX(dur) / 1e6, 2)                                 AS max_ms,
+    thread_name                                              AS detail
+FROM self
+GROUP BY name, thread_name
+HAVING SUM(self_ns) >= {{min_slice_ms}} * 1000000
 ORDER BY self_ms DESC
 LIMIT 20;
 
@@ -47,7 +47,8 @@ LIMIT 20;
 -- A row is self time, so that is what it stands for: the stretches of each
 -- slice it names during which none of the slice's children was open. The
 -- gaps before, between and after the children, found by ordering them. A
--- child that never closed is taken as zero long, as the sum above takes it.
+-- child that never closed runs to the end of its parent, which never closed
+-- either, and a child is cut at its parent's end, as the sum above cuts it.
 --
 -- Except a slice that spans the whole window. That is the scenario's anchor,
 -- most often — `AppStart` around a cold start, the shape `echolot mark`
@@ -66,11 +67,12 @@ WITH named AS MATERIALIZED (
 kids AS MATERIALIZED (
     SELECT c.parent_id AS slice_id,
            c.ts AS cs,
-           c.ts + MAX(c.dur, 0) AS ce,
-           LAG(c.ts + MAX(c.dur, 0))
+           MIN(CASE WHEN c.dur < 0 THEN n.te ELSE c.ts + c.dur END, n.te) AS ce,
+           LAG(MIN(CASE WHEN c.dur < 0 THEN n.te ELSE c.ts + c.dur END, n.te))
                OVER (PARTITION BY c.parent_id ORDER BY c.ts) AS prev_end
     FROM slice c
-    WHERE c.parent_id IN (SELECT slice_id FROM named)
+    JOIN named n ON n.slice_id = c.parent_id
+    WHERE c.ts < n.te
 )
 SELECT COALESCE(k.prev_end, n.ts) AS ts,
        k.cs - COALESCE(k.prev_end, n.ts) AS dur

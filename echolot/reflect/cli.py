@@ -141,7 +141,7 @@ def cmd_reflect(args) -> int:
               f"{'echolot':>7} {'hunt':>4}  first prompt")
         for reader, ref, s in picked:
             subs = reader.echolot_subcommands(s)
-            hunts = sum(1 for a in s.subagents if a.type == "perf-hunter")
+            hunts = len(facts_mod.hunt_agents(s))
             first = next((t.text for t in s.turns if t.role == "user" and t.kind == "text"), "")
             dur = s.duration_s()
             print(f"{ref.id[:8]:10} {s.agent:11} "

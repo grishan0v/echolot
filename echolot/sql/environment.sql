@@ -73,13 +73,24 @@ JOIN counter_track t ON c.track_id = t.id
 WHERE t.type = 'thermal_temperature'
   AND c.ts >= {{ts_start}} AND c.ts <= {{ts_end}};
 
+-- A cooling level holds until the device's next sample, as a clock does, and
+-- is read the same way: intervals first, the window after. Filtered by ts
+-- first, a level raised before the window opened was dropped though it held
+-- over the whole scenario, and the report said the round was not throttled.
 DROP VIEW IF EXISTS _throttle_win;
 CREATE VIEW _throttle_win AS
-SELECT REPLACE(t.name, ' Cooling Device', '') AS device, c.value AS level
-FROM counter c
-JOIN counter_track t ON c.track_id = t.id
-WHERE t.type = 'cooling_device_counter'
-  AND c.ts >= {{ts_start}} AND c.ts <= {{ts_end}};
+SELECT device, level FROM (
+    SELECT
+        REPLACE(t.name, ' Cooling Device', '')                    AS device,
+        c.value                                                   AS level,
+        MIN(LEAD(c.ts, 1, {{ts_end}})
+                OVER (PARTITION BY t.id ORDER BY c.ts),
+            {{ts_end}}) - MAX(c.ts, {{ts_start}})                 AS dur
+    FROM counter c
+    JOIN counter_track t ON c.track_id = t.id
+    WHERE t.type = 'cooling_device_counter'
+)
+WHERE dur > 0;
 
 -- --- memory ----------------------------------------------------------------
 --

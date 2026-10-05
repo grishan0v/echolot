@@ -5,7 +5,7 @@
 ```bash
 echolot mark                     # where the first markers go, and why there
 echolot mark --apply             # put the applicable ones in
-echolot collect -c echolot.yml -n 3 && echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml
+echolot collect -c echolot.yml -n 3 && echolot analyze .echolot/traces/coldStart_iter*.perfetto-trace -c echolot.yml
 echolot mark --remove            # take every one of them out, byte for byte
 ```
 

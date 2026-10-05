@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .facts import subcommands
+from .facts import hunt_agents, reflection_slash, subcommands, work
 from .model import MAIN, Ask, Call, Session, SubAgent, Turn, Usage, clip, ts_to_epoch
 
 AGENT_NAME = "claude-code"
@@ -115,16 +115,16 @@ def echolot_subcommands(session: Session) -> list[str]:
 def involves_echolot(session: Session) -> bool:
     """A session worth reflecting on: it used the tool for real work.
 
-    `reflect` itself does not count — otherwise the session that runs the
-    reflection is always the newest candidate.
+    A reflection does not count — otherwise the session that runs it is
+    always the newest candidate. Its signs are `reflect`, `guide reflect`,
+    `/echolot reflect` and `/echolot-reflect` under any prefix.
     """
-    subs = [s for s in echolot_subcommands(session) if s != "reflect"]
-    if subs:
+    if any(work(c.command or "") for c in session.bash()):
         return True
     if any(t.kind == "slash" and (t.command or "").startswith("/echolot")
-           and t.command != "/echolot-reflect" for t in session.turns):
+           and not reflection_slash(t.command, t.args) for t in session.turns):
         return True
-    return any(s.type == "perf-hunter" for s in session.subagents)
+    return bool(hunt_agents(session))
 
 
 # ------------------------------------------------------------------ reading
