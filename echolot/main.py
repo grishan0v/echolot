@@ -2294,10 +2294,19 @@ def cmd_mark(args) -> int:
             return 2
         report = anr_mod.parse(text)
         placed, missing = anr_mod.locate(report, root)
+        # A frame placed in one of several files of its name is a guess, and
+        # a marker in the wrong one measures a file the build never ran —
+        # `src/debug` beside `src/release`. Those are named, not marked.
         pl = mark_mod.plan_from_anr(
-            root, [(f.symbol, f.file, f.line) for f in placed],
+            root, [(f.symbol, f.file, f.line) for f in placed if f.exact],
             prefix=prefix, allowed=allowed, unplaced=len(missing),
             version=report.head.get("Version") or report.head.get("Package"))
+        for f in placed:
+            if not f.exact:
+                pl.notes.append(
+                    f"{f.symbol} — {len(f.others) + 1} files of that name could "
+                    f"be it: {', '.join([f.file, *f.others])}. Nothing in the "
+                    f"frame says which one was built, so it is left to mark by hand")
     else:
         pl = mark_mod.plan(root, package=package, allowed=allowed, prefix=prefix,
                            module=args.module)
