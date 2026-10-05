@@ -124,11 +124,13 @@ waiting for one.
    prints, do not discover it by hand
    report.markers.rows is every AGENTTMP_ name and every `domains` name,
    medians per run with self time: the table for your own markers. Do not
-   rebuild it from `names` in a loop.
+   rebuild it from `names` in a loop. A row with `unfinished: true` never
+   closed: its numbers are a floor, so pass them on as "at least".
 
 2. check the config before concluding anything:
    window.start_anchor.matches == 0     → anchor missed, window is not the scenario
-     (window.end_anchor the same)
+     (window.end_anchor the same; with `before_start` it is there, but only
+     before the start: the anchors are swapped)
    window.process_alternatives present  → possibly the wrong process
    config / params_source say calibrated on these very runs
                                         → analyze --defaults before believing silence

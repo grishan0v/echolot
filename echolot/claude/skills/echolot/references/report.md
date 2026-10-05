@@ -220,6 +220,12 @@ is what most of a project's own markers are.
 This is the table for the markers you planted. Read it from the report;
 do not rebuild it by running `names` once per trace.
 
+`unfinished: true` is a marker that never closed in at least one repeat: its
+end did not run — an exception, a suspended coroutine, an end on another
+thread — or the recording stopped first. Its numbers run to the end of the
+window and are a floor; the markdown prints them as `≥ 955.0`. Say "at least"
+when you pass such a number on.
+
 `absent` lists the `domains` names the window never held in any repeat: a
 map pointing at something this scenario does not run, or a name that
 changed under it. The markdown says the same under "Not in the window".
@@ -244,6 +250,11 @@ echolot report path/to/report.json --window    # an older report, a round's own 
 Without a path it reads `.echolot/out/report.json` next to the config.
 
 ## Check these before drawing conclusions
+
+**`window.end_anchor.before_start`** with `matches == 0` — the end anchor's
+name is in the trace, but only before the start anchor, so nothing closed the
+window and it ran to the end of the trace. The anchors are most likely
+swapped.
 
 **`window.start_anchor.matches == 0` or `window.end_anchor.matches == 0`** —
 the anchor never matched and the window ran to that edge of the trace: from
