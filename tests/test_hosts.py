@@ -54,9 +54,15 @@ def test_empty_answer_keeps_the_default() -> None:
     check("Enter keeps whatever was detected", result == detected)
 
 
-def test_all_selects_every_host() -> None:
+def test_all_selects_every_host_but_one_of_the_pair() -> None:
+    """Every client, but never the `.claude/` layer and the plugin together:
+    they bring the same skills, and Claude Code would load both."""
     result, _ = _pick("all", detected=[hosts.BY_KEY["claude"]])
-    check("\"all\" ignores what was detected", result == list(hosts.HOSTS))
+    check("\"all\" is every host but the plugin",
+          result == [h for h in hosts.HOSTS if h.key != "plugin"], result)
+    result, _ = _pick("all", detected=[hosts.BY_KEY["plugin"]])
+    check("and beside a chosen plugin, every host but Claude Code",
+          result == [h for h in hosts.HOSTS if h.key != "claude"], result)
 
 
 def test_none_word_clears_the_selection() -> None:

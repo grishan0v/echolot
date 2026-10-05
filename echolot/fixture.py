@@ -105,8 +105,12 @@ FT = pb.FrameTimelineEvent
 LAYER = "com.example.app/com.example.app.MainActivity#0"
 
 APP_FRAMES = [
-    # The finding: 5 frames the app itself was late for, 44 ms over each.
-    *[(1 + i, 200 + i * 50, 16, 60, FT.JANK_APP_DEADLINE_MISSED) for i in range(5)],
+    # The finding: 5 frames the app itself was late for, 44 ms over each. Each
+    # starts 4 ms after its expected start and lasts 56 ms: the deadline is the
+    # expected frame's end, so the late start is part of the overrun. Actual
+    # minus expected duration would say 40, and on a real cold start every
+    # frame of the app started late, by up to 212 ms.
+    *[(1 + i, 200 + i * 50, 16, 56, FT.JANK_APP_DEADLINE_MISSED, 4) for i in range(5)],
     # Negative control: the same jank type, 2 ms over — below min_overrun_ms.
     # They must not swell the count of the row above, which is why the floor
     # is applied per frame and before the grouping.
@@ -795,13 +799,15 @@ def _frames(builder) -> None:
 
     for frames, pid, layer in ((APP_FRAMES, APP_PID, LAYER),
                                (OTHER_FRAMES, OTHER_PID, OTHER_LAYER)):
-        for token, start, expected_ms, actual_ms, jank in frames:
+        # An optional sixth field: how late the actual frame started after
+        # the expected one.
+        for token, start, expected_ms, actual_ms, jank, *late in frames:
             surface = dict(token=token, display_frame_token=token + 1000,
                            pid=pid, layer_name=layer)
             _span(builder, cookies, "expected_surface_frame_start",
                   start, expected_ms, **surface)
             _span(builder, cookies, "actual_surface_frame_start",
-                  start, actual_ms, **surface, jank_type=jank,
+                  start + sum(late), actual_ms, **surface, jank_type=jank,
                   present_type=(FT.PRESENT_ON_TIME if jank == FT.JANK_NONE
                                 else FT.PRESENT_LATE),
                   on_time_finish=(jank == FT.JANK_NONE),

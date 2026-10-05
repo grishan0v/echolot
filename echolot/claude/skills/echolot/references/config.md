@@ -36,7 +36,7 @@ runner:
   mode: launch                 # launch | command | gradle
   iterations: 5
   duration_ms: 12000
-  reset_policy: force-stop     # force-stop (cold) | none (warm)
+  reset_policy: force-stop     # force-stop (cold) | none (nothing between repeats)
   environment: true            # record CPU clock, thermal, memory
   sampling: false              # callstack samples, in Hz; true is 100
 
@@ -87,8 +87,14 @@ screen was first drawn. Such a section belongs to no thread; `probe` and
 `names` list it under the thread name `(async)`, the anchors match it, and
 the detectors never see it.
 
-Both are optional: without them the window is the whole trace. For a trace from
-a macrobenchmark that is fine — it has already cut out the measured block.
+Both are optional: without them the window runs from the process's first slice
+to where its last one ends, or to the end of the recording when one of them
+never closed. For a trace from a macrobenchmark that is fine — it has already
+cut out the measured block.
+
+An end anchor that never closed — the scenario had not reached its end when
+the recording stopped — runs the window to the end of the trace as well, and
+the report says so: `window.end_anchor.unfinished` is `true`.
 
 Names like `Choreographer#doFrame 55112` carry a vsync number that changes from
 run to run. Such an anchor needs a wildcard.
@@ -201,7 +207,9 @@ back as a near miss, and it does not follow the other. A project that changes
 its prefix changes both.
 
 Thresholds are not picked by hand: `echolot calibrate` derives them from
-healthy runs and prints a ready section with the reasoning attached.
+healthy runs and prints a ready section with the reasoning attached, which
+can replace this one whole: it carries over every `false` and every value it
+did not measure.
 
 ### `instrumentation`
 

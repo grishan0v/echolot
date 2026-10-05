@@ -122,8 +122,12 @@ def test_a_lambda_frame_is_no_sign_of_another_build(tmp_path: Path) -> None:
                          "}\n")
     pl = mark.plan_from_anr(tmp_path, [("com.example.app.Repo$updateLocality$fresh$1.invokeSuspend",
                                         rel, 4)])
+    # Refused all the same, as a lambda that runs after its function set it up;
+    # what changed is whose name the row carries, and no word of another build.
+    reason = pl.proposals[0].reason
     check("a local variable's name is passed over for the function",
-          pl.proposals[0].applicable, pl.proposals[0].reason)
+          "`updateLocality`" in reason and "`fresh`" not in reason and not pl.notes,
+          (reason, pl.notes))
 
 
 def test_a_pool_given_a_factory_is_not_listed(tmp_path: Path) -> None:
