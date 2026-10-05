@@ -185,7 +185,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `few` | too few repeats to be 95% sure of any move, so the Holds column is empty throughout. How many are enough is under [the Holds column](#the-holds-column) |
 | `detectors` | the two runs did not use the same set of detectors |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. Only with that key in the config — without it they are ordinary appeared rows |
-| `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock at all. Two rounds that recorded no platform state get no warning — see below |
+| `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock at all, or a side read its clock or thermal state in only some of its repeats. Two rounds that recorded no platform state get no warning — see below |
 | `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
 

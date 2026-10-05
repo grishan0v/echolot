@@ -44,7 +44,7 @@ produce. The keys only a merged report has are named under the block.
                             "measured_ms": 1902.4, "runs": "5/5" },
                    "thermal": { "max_celsius": 61.5, "hottest_zone": "cpu-therm",
                                 "throttled": false, "throttle_device": null,
-                                "throttled_runs": "0/5" },
+                                "throttled_runs": "0/5", "runs": "5/5" },
                    "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
                    "sampling": null,
                    "missing": [] },
@@ -292,7 +292,21 @@ they would have said.
 
 **`detectors[].error != null`** — that detector failed while the rest ran. SQL
 is version-fragile; report the error, but do not treat the absence of findings
-as an answer.
+as an answer. report.md lists it under `Failed`, never under `Silent`. In a
+merged report, `failed_runs` says in how many repeats it failed; its rows come
+from the others, and their `runs` counts those.
+
+**A merged report's window checks cover every repeat.** `start_anchor` and
+`end_anchor` carry the fewest `matches` any repeat had, and `missed: "1/3"`
+when the anchor found nothing in some of them: those repeats' windows were the
+whole trace, and their rows are in the medians. `opened_inside` comes from a
+repeat where it is material, with `runs` saying in how many. `processes` lists
+the process names when the repeats measured more than one.
+
+**`environment.cpu.runs` or `environment.thermal.runs` short of the repeats**
+— the clock or the temperature comes from those repeats alone, and so does
+what `compare` says about the device. `throttled_runs` counts out of the
+repeats that recorded thermal state.
 
 **`environment.cpu` is `null`, or `environment.thermal.throttled` is true** —
 in the first case nobody measured the machine, so a duration cannot be read as
@@ -408,7 +422,7 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 | `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |
 | `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
 | `repeated_work` | the same named work entered from more than one caller | `detail` names the callers; a `near miss` row means the occurrences are too unlike to be one work |
-| `io_wait` | threads the kernel parked waiting for a block device | `detail` says `main` or `background`; there is no code to look at, only I/O to remove or move |
+| `io_wait` | threads the kernel parked waiting for a block device | `thread` says `main` or `background`, and so does `detail`; there is no code to look at, only I/O to remove or move |
 
 ### What matters about individual ones
 
@@ -658,7 +672,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `id` | what it means |
 |---|---|
 | `thresholds` | detector parameters differ. **appeared** and **gone** mean the bar moved, not that the app changed. Re-run both with `--defaults` |
-| `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
+| `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock, or read its clock or thermal state in only some of its repeats. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
 | `environment-thermal` | the kernel throttled the device during one round and not the other: that side is slower for a reason outside the code. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
