@@ -136,7 +136,9 @@ scenario:
 confirmed it (untouchable), `default` — an engine default.
 
 Nothing found? Write `null` and say so out loud. A plausible invented name is
-worse than an honest gap: it will break the window silently.
+worse than an honest gap: it will break the window silently. For an anchor,
+`end: null`, or `name: null` in the block above, means no anchor: the window
+runs to the end of the trace.
 
 ## Verification instead of trust
 
