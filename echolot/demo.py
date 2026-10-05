@@ -66,7 +66,7 @@ OWNER = "DefaultDispatcher-worker-3"
 UPDATE = ("void com.example.app.data.StoreRepository.update(com.example.app.data.Item)"
           "(StoreRepository.kt:30)")
 FIND = ("com.example.app.data.Item com.example.app.data.StoreRepository.find(long)"
-        "(StoreRepository.kt:66)")
+        "(StoreRepository.kt:61)")
 
 CONFIG = """\
 project:

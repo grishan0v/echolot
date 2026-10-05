@@ -113,24 +113,47 @@ def cmd_reflect(args) -> int:
                       f"project has.", file=sys.stderr)
             return 2
 
-    picked = []
-    for reader, ref in found:
-        session = (from_log.read_session(ref) if reader is from_log
-                   else reader.read_session(ref.path))
-        # An explicit id is taken as is; otherwise only sessions that used the
-        # tool for real work count — a session that merely ran `reflect` is
-        # not worth reflecting on.
-        if not args.session and not reader.involves_echolot(session):
-            continue
-        picked.append((reader, ref, session))
-        if not (args.all or args.list or args.session or since is not None):
-            break   # --last: the newest one is enough
+    def pick(found):
+        picked = []
+        for reader, ref in found:
+            session = (from_log.read_session(ref) if reader is from_log
+                       else reader.read_session(ref.path))
+            # An explicit id is taken as is; otherwise only sessions that used
+            # the tool for real work count — a session that merely ran
+            # `reflect` is not worth reflecting on.
+            if not args.session and not reader.involves_echolot(session):
+                continue
+            picked.append((reader, ref, session))
+            if not (args.all or args.list or args.session or since is not None):
+                break   # --last: the newest one is enough
+        return picked
+
+    picked = pick(found)
+    # Transcripts here, and none of them used echolot: an old session that
+    # edited the README while the hunt ran from Cursor. The log is the rest
+    # of what happened here, and the docs promise the fall-back; it used to
+    # come only when there were no transcripts at all.
+    if not picked and not args.session and not only_log \
+            and from_log.log_path(project).exists():
+        logged = [(from_log, r) for r in from_log.list_sessions(project)
+                  if since is None or r.mtime >= since]
+        picked = pick(logged)
+        if picked:
+            print(f"[i] no agent session here used echolot — reading "
+                  f"{recorder.LOG_FILE} instead. Fewer checks; the report "
+                  f"lists which.", file=sys.stderr)
+            where, only_log = str(from_log.log_path(project)), True
 
     if not picked:
         print(f"nothing to reflect on: nothing in {where} used echolot"
               + (f" since {args.since}" if args.since else ""), file=sys.stderr)
         return 1
 
+    # Named by the shortest prefix, eight at least, that no other session here
+    # shares. Codex thread ids are UUIDv7, and their first eight characters
+    # are a timestamp that holds for a minute: two threads started within it
+    # wrote one report file, and the second replaced the first.
+    short = _short_ids([r.id for _, r in found])
     if args.list:
         # The log has no sessions in it, so the column that names its rows
         # must not say "session" — this listing is where somebody comes after
@@ -141,20 +164,23 @@ def cmd_reflect(args) -> int:
               f"{'echolot':>7} {'hunt':>4}  first prompt")
         for reader, ref, s in picked:
             subs = reader.echolot_subcommands(s)
-            hunts = sum(1 for a in s.subagents if a.type == "perf-hunter")
+            hunts = len(facts_mod.hunt_agents(s))
             first = next((t.text for t in s.turns if t.role == "user" and t.kind == "text"), "")
             dur = s.duration_s()
-            print(f"{ref.id[:8]:10} {s.agent:11} "
+            print(f"{short[ref.id]:10} {s.agent:11} "
                   f"{(s.started or '')[:16].replace('T', ' '):17} "
                   f"{_fmt_dur(dur):>7} {len(subs):>7} {hunts:>4}  "
                   f"{' '.join(first.split())[:60]}")
         return 0
 
+    # An explicit -c from here, as every other command and `--local` read it;
+    # only the default is the project's. Joined to --project, `-c
+    # app/echolot.yml` looked for app/app/echolot.yml, and a path that was
+    # not there was dropped without a word.
     cfg = None
-    cfg_path = Path(args.config)
-    if not cfg_path.is_absolute() and project != Path.cwd():
-        cfg_path = project / cfg_path
-    if cfg_path.exists():
+    given = args.config != "echolot.yml"
+    cfg_path = Path(args.config) if given else project / "echolot.yml"
+    if cfg_path.exists() or given:
         try:
             cfg = Config.load(cfg_path, args.local)
         except ConfigError as e:
@@ -172,7 +198,7 @@ def cmd_reflect(args) -> int:
         facts = facts_mod.gather(session, cfg, runs, project)
         sigs = signals_mod.run(session, facts, cfg)
         rep = reflect_render.build(session, facts, sigs)
-        stem = ref.id[:8]
+        stem = short[ref.id]
         (out_dir / f"{stem}.json").write_text(
             reflect_render.to_json(rep), encoding="utf-8")
         (out_dir / f"{stem}.md").write_text(
@@ -186,7 +212,7 @@ def cmd_reflect(args) -> int:
     if len(reports) == 1:
         print(reflect_render.to_markdown(reports[0]))
     else:
-        summary = _reflect_summary(reports)
+        summary = _reflect_summary(reports, short)
         (out_dir / "summary.md").write_text(summary, encoding="utf-8")
         (out_dir / "summary.json").write_text(json.dumps({
             "schema": 1,
@@ -226,17 +252,29 @@ def _fmt_dur(seconds) -> str:
     return f"{s // 60}m" if s < 3600 else f"{s // 3600}h{(s % 3600) // 60:02d}"
 
 
-def _reflect_summary(reports: list[dict]) -> str:
+def _short_ids(ids: list[str], least: int = 8) -> dict[str, str]:
+    """Each id by the shortest prefix, `least` long at least, unique among them."""
+    out = {}
+    for i in ids:
+        n = least
+        while n < len(i) and any(o != i and o.startswith(i[:n]) for o in ids):
+            n += 1
+        out[i] = i[:n]
+    return out
+
+
+def _reflect_summary(reports: list[dict], short: dict[str, str] | None = None) -> str:
     """Several sessions on one page: a row each, then how often each signal fires."""
     out = ["# Reflect Summary", "",
            f"{len(reports)} session(s), newest first.", ""]
+    short = short or {}
     rows = []
     freq: dict[str, list[int]] = {}
     for r in reports:
         s = r["summary"]
         hunts = r.get("hunts") or []
         rows.append({
-            "session": r["source"]["session"][:8],
+            "session": short.get(r["source"]["session"], r["source"]["session"][:8]),
             "started": (r["context"].get("started") or "")[:16].replace("T", " "),
             "dur": _fmt_dur(r["context"].get("duration_s")),
             "echolot": s["echolot_calls"],

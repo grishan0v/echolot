@@ -166,10 +166,27 @@ def detect(project: Path) -> list[Host]:
     return found
 
 
-def parse(spec: str) -> list[Host] | None:
+def every(saved: list[str] | None = None) -> list[Host]:
+    """Every client but one of a pair that must not come together.
+
+    The `.claude/` layer and the plugin bring the same skills, and Claude
+    Code loads both: so the plugin is left out, or Claude Code when the
+    choice already holds the plugin. `all` used to mean both.
+    """
+    drop = "claude" if saved and "plugin" in saved else "plugin"
+    return [h for h in HOSTS if h.key != drop]
+
+
+def both_layers(chosen: list[Host]) -> bool:
+    """Whether a choice holds the `.claude/` layer and the plugin together."""
+    keys = {h.key for h in chosen}
+    return {"claude", "plugin"} <= keys
+
+
+def parse(spec: str, saved: list[str] | None = None) -> list[Host] | None:
     """`--for claude,cursor`, `--for all`. None when a word names no client."""
     if spec == "all":
-        return list(HOSTS)
+        return every(saved)
     keys = [k.strip() for k in spec.split(",") if k.strip()]
     if any(k not in BY_KEY for k in keys):
         return None
@@ -201,6 +218,41 @@ def _without_an_end(text: str) -> str:
     return text.replace("\n" + END_MARKER, "")
 
 
+# What 0.4.0, the last release without the end marker, wrote: the body, and
+# Cursor's frontmatter above it. A file still equal to it is untouched and
+# is migrated. Compared with today's text alone, it read as edited once the
+# body changed (#195), and `init` asked for the end marker by hand.
+_BODY_0_4_0 = """<!-- echolot -->
+## Performance work: echolot
+
+This project uses [echolot](https://github.com/grishan0v/echolot) to find where
+Android startup time goes, from a Perfetto trace down to a place in the code.
+
+**Never open a `.perfetto-trace` yourself** — it is tens of megabytes and
+hundreds of thousands of slices. The tool turns it into about twenty rows.
+
+```bash
+echolot          # where this project stands, and what to do next
+echolot guide    # how to work with it — read this before performance work
+```
+
+`echolot guide` is printed by the installed package, so it always matches the
+version in use. `echolot guide hunt` is the loop; `echolot guide setup` builds
+the config.
+"""
+_CURSOR_0_4_0 = ("---\n"
+                 "description: echolot — Android performance, trace to code\n"
+                 "alwaysApply: true\n"
+                 "---\n\n" + _BODY_0_4_0)
+
+
+def _untouched_without_an_end(current: str, host: Host) -> bool:
+    """Whether a file with no end marker is exactly what an echolot wrote."""
+    seen = current.replace("\r\n", "\n").strip()
+    earlier = _CURSOR_0_4_0 if isinstance(host, Cursor) else _BODY_0_4_0
+    return seen in (_without_an_end(host.render()).strip(), earlier.strip())
+
+
 def write_stub(project: Path, host: Host) -> tuple[str, Path]:
     """Put the pointer in place. Returns (what happened, path).
 
@@ -228,21 +280,28 @@ def write_stub(project: Path, host: Host) -> tuple[str, Path]:
         dest.write_text(text, encoding="utf-8")
         return "written", dest
 
-    current = dest.read_text(encoding="utf-8", errors="replace")
+    # The bytes as they are: line endings kept, and a byte that is not UTF-8
+    # carried through untouched. Read with universal newlines and replaced
+    # characters, an update turned a CRLF file LF throughout and such a byte
+    # into U+FFFD for good, outside the section it promised to leave alone.
+    current = dest.read_bytes().decode("utf-8", "surrogateescape")
     if MARKER not in current:
         return "exists-without-ours", dest
+    ours = section(text)
+    if "\r\n" in current:
+        ours, text = ours.replace("\n", "\r\n"), text.replace("\n", "\r\n")
 
     span = _ours(current)
     if span is None:
-        if current.strip() != _without_an_end(text).strip():
+        if not _untouched_without_an_end(current, host):
             return "ours-without-an-end", dest
         updated = text
     else:
-        updated = current[:span[0]] + section(text) + current[span[1]:]
+        updated = current[:span[0]] + ours + current[span[1]:]
 
     if updated == current:
         return "current", dest
-    dest.write_text(updated, encoding="utf-8")
+    dest.write_bytes(updated.encode("utf-8", "surrogateescape"))
     return "updated", dest
 
 
@@ -297,7 +356,10 @@ def load_choice(project: Path) -> list[str] | None:
     except (OSError, ValueError):
         return None
     keys = data.get("hosts") if isinstance(data, dict) else None
-    return [k for k in keys if k in BY_KEY] if isinstance(keys, list) else None
+    # By type first: a list or an object among the keys cannot be looked up,
+    # and the TypeError ended `echolot` after a hand edit.
+    return ([k for k in keys if isinstance(k, str) and k in BY_KEY]
+            if isinstance(keys, list) else None)
 
 
 def wants_claude(project: Path) -> bool:
@@ -447,7 +509,7 @@ def pick(detected: list[Host], stream=sys.stdout,
     if not raw:
         return detected
     if raw == "all":
-        return list(HOSTS)
+        return every([h.key for h in detected])
     if raw == "none":
         return []
     picked, bad = _parse(raw)

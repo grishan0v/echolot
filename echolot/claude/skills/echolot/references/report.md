@@ -44,7 +44,7 @@ produce. The keys only a merged report has are named under the block.
                             "measured_ms": 1902.4, "runs": "5/5" },
                    "thermal": { "max_celsius": 61.5, "hottest_zone": "cpu-therm",
                                 "throttled": false, "throttle_device": null,
-                                "throttled_runs": "0/5" },
+                                "throttled_runs": "0/5", "runs": "5/5" },
                    "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
                    "sampling": null,
                    "missing": [] },
@@ -220,6 +220,12 @@ is what most of a project's own markers are.
 This is the table for the markers you planted. Read it from the report;
 do not rebuild it by running `names` once per trace.
 
+`unfinished: true` is a marker that never closed in at least one repeat: its
+end did not run — an exception, a suspended coroutine, an end on another
+thread — or the recording stopped first. Its numbers run to the end of the
+window and are a floor; the markdown prints them as `≥ 955.0`. Say "at least"
+when you pass such a number on.
+
 `absent` lists the `domains` names the window never held in any repeat: a
 map pointing at something this scenario does not run, or a name that
 changed under it. The markdown says the same under "Not in the window".
@@ -245,10 +251,21 @@ Without a path it reads `.echolot/out/report.json` next to the config.
 
 ## Check these before drawing conclusions
 
-**`window.start_anchor.matches == 0`** — the anchor never matched and the
-window expanded to the whole trace. None of the numbers are about your
-scenario. Do not investigate, fix the config: look at the real names via
-`echolot probe` and correct `scenario.start`.
+**`window.end_anchor.before_start`** with `matches == 0` — the end anchor's
+name is in the trace, but only before the start anchor, so nothing closed the
+window and it ran to the end of the trace. The anchors are most likely
+swapped.
+
+**`window.start_anchor.matches == 0` or `window.end_anchor.matches == 0`** —
+the anchor never matched and the window ran to that edge of the trace: from
+the process's first slice, or to the end of the recording. None of the numbers
+are about your scenario. Do not investigate, fix the config: look at the real
+names via `echolot probe` and correct `scenario.start` or `scenario.end`.
+
+**`window.end_anchor.unfinished`** — the end anchor opened and never closed:
+the scenario had not reached its end when the recording stopped, and the
+window runs to the end of the trace. What the scenario got stuck on is inside
+the window; that it never finished is a finding of its own.
 
 **`window.opened_inside` with `material: true`** — the scenario window opened
 while the main thread was already blocked, and more of that block happened
@@ -276,7 +293,21 @@ they would have said.
 
 **`detectors[].error != null`** — that detector failed while the rest ran. SQL
 is version-fragile; report the error, but do not treat the absence of findings
-as an answer.
+as an answer. report.md lists it under `Failed`, never under `Silent`. In a
+merged report, `failed_runs` says in how many repeats it failed; its rows come
+from the others, and their `runs` counts those.
+
+**A merged report's window checks cover every repeat.** `start_anchor` and
+`end_anchor` carry the fewest `matches` any repeat had, and `missed: "1/3"`
+when the anchor found nothing in some of them: those repeats' windows were the
+whole trace, and their rows are in the medians. `opened_inside` comes from a
+repeat where it is material, with `runs` saying in how many. `processes` lists
+the process names when the repeats measured more than one.
+
+**`environment.cpu.runs` or `environment.thermal.runs` short of the repeats**
+— the clock or the temperature comes from those repeats alone, and so does
+what `compare` says about the device. `throttled_runs` counts out of the
+repeats that recorded thermal state.
 
 **`environment.cpu` is `null`, or `environment.thermal.throttled` is true** —
 in the first case nobody measured the machine, so a duration cannot be read as
@@ -319,7 +350,7 @@ method the samples fell under most, as `sampled`. `analyze` looks those up
 in the checkout the config sits in and writes what it found:
 
 ```json
-"code": "owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:66",
+"code": "owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:61",
 "places": [
   { "role": "owner",   "symbol": "com.example.app.data.StoreRepository.update",
     "file": "data/src/main/java/com/example/app/data/StoreRepository.kt",
@@ -392,7 +423,7 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 | `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |
 | `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
 | `repeated_work` | the same named work entered from more than one caller | `detail` names the callers; a `near miss` row means the occurrences are too unlike to be one work |
-| `io_wait` | threads the kernel parked waiting for a block device | `detail` says `main` or `background`; there is no code to look at, only I/O to remove or move |
+| `io_wait` | threads the kernel parked waiting for a block device | `thread` says `main` or `background`, and so does `detail`; there is no code to look at, only I/O to remove or move |
 
 ### What matters about individual ones
 
@@ -642,17 +673,21 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `id` | what it means |
 |---|---|
 | `thresholds` | detector parameters differ. **appeared** and **gone** mean the bar moved, not that the app changed. Re-run both with `--defaults` |
-| `environment` | the clock the two rounds ran at differs by 10% or more, either way, or a side carries no clock. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
+| `environment` | the clock the two rounds ran at differs by the relative floor or more (10% unless `--floor-pct` says otherwise), either way, or a side carries no clock, or read its clock or thermal state in only some of its repeats. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
 | `environment-thermal` | the kernel throttled the device during one round and not the other: that side is slower for a reason outside the code. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
 | `process` | two different apps. `comparable: false` |
 | `defaults` / `config` | one side used `--defaults`, or the config's hash changed |
-| `anchor-before` / `anchor-after` | that side's window is the whole trace |
+| `anchor-before` / `anchor-after` | that side's start or end anchor never matched: its window runs to the edge of the trace |
 | `runs` / `single` | different repeat counts, or a single trace with no spread to test against |
 | `few` | too few repeats to be 95% sure of any move — four a side is always enough — so every `holds` is `null`. Record another round rather than read the moves as settled |
 | `detectors` | the two runs did not use the same set of detectors |
+| `detector-failed` | a detector failed on that side. Its rows on the other side are left out rather than called gone or new; the failure is no answer about the app |
 
 A row is listed as moved when it changes by more than 5 ms or 10 %, whichever
-is larger — `--floor-ms` and `--floor-pct` change that. The exit code is 0
+is larger — `--floor-ms` and `--floor-pct` change that. A row whose share of
+repeats differs between the sides — `120.0 (1/5)` before, `(5/5)` after —
+counts each repeat without it as zero, so work that now happens on every run
+is listed as grew. The exit code is 0
 whatever the comparison finds.

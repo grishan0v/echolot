@@ -147,13 +147,12 @@ def _(report):
     threads', and `matches` counts the same set the window was built from.
     """
     from .config import Config
-    from .main import analyze_trace
     cfg = {**FIXTURE_CONFIG,
            "scenario": {**FIXTURE_CONFIG["scenario"], "end": {"name": "Screen.loaded"}}}
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "async.perfetto-trace"
         path.write_bytes(fixture.build())
-        w = analyze_trace(path, Config(cfg))["window"]
+        w = _analyze(path, Config(cfg))["window"]
     assert w["end_anchor"]["matches"] == 1, w["end_anchor"]
     assert w["duration_ms"] == 900.0, (
         f"AppStart opens at 100 and Screen.loaded closes at 1000: {w}")
@@ -387,11 +386,10 @@ def _(report):
     # the three facts named as missing rather than as zeroes, because
     # `compare` decides whether it may trust its own table on this.
     from .config import Config
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "bare.perfetto-trace"
         path.write_bytes(fixture.build(environment=False))
-        bare = analyze_trace(path, Config(FIXTURE_CONFIG))
+        bare = _analyze(path, Config(FIXTURE_CONFIG))
     env = bare["environment"]
     assert env["missing"] == ["cpu", "memory", "thermal"], env
     assert env["cpu"] is None and env["thermal"] is None, env
@@ -772,11 +770,10 @@ def _(report):
     Costs a second session over the fixture, which is what it takes to run the
     pipeline with one mask moved.
     """
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build())
-        freed = analyze_trace(trace, Config(FIXTURE_CONFIG), cli_overrides={
+        freed = _analyze(trace, Config(FIXTURE_CONFIG), cli_overrides={
             "monitor_contention": {"name_glob": "no-such-name*",
                                    "name_glob_alt": "no-such-name*"}})
     names = {r["location"] for r in rows(freed, "repeated_work")}
@@ -1055,12 +1052,17 @@ def _(report):
         root = Path(tmp)
         recorder.at(root)
         recorder.failed("collection error: no device")
-        os.environ.pop("ECHOLOT_NO_RECORD", None)
+        # Put back as it was, and only if it was there. Set to "1"
+        # unconditionally, it stayed set in the `doctor` process after this
+        # check, and no doctor run — nor the `init` that runs the self-check
+        # — reached the run log again.
+        quiet = os.environ.pop("ECHOLOT_NO_RECORD", None)
         try:
             recorder.record(type("A", (), {"cmd": "collect", "config": None})(),
                             ["collect"], _time.time(), exit_code=2)
         finally:
-            os.environ["ECHOLOT_NO_RECORD"] = "1"
+            if quiet is not None:
+                os.environ["ECHOLOT_NO_RECORD"] = quiet
         runs = recorder.read(root / recorder.LOG_FILE)
     assert runs and runs[0].get("error") == "collection error: no device", runs
 
@@ -1440,11 +1442,10 @@ def _(report):
     # trace_processor and are simply empty — but "still exist" is an
     # assumption, and if it ever stops holding, every such trace comes back
     # with an error in detectors[].error instead of a clean silent detector.
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "no-frames.perfetto-trace"
         trace.write_bytes(fixture.build(frames=False))
-        plain = analyze_trace(trace, Config(FIXTURE_CONFIG))
+        plain = _analyze(trace, Config(FIXTURE_CONFIG))
     det = next(d for d in plain["detectors"] if d["id"] == "frame_jank")
     assert det["error"] is None, f"empty tables must not be an error: {det['error']}"
     assert det["rows"] == [], det["rows"]
@@ -1463,11 +1464,10 @@ def _anchored_at(anchor: str):
     else is the shipped behaviour: this is a config a project could
     legitimately have, not a special mode.
     """
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "late.perfetto-trace"
         trace.write_bytes(fixture.build())
-        return analyze_trace(trace, Config({
+        return _analyze(trace, Config({
             **FIXTURE_CONFIG,
             "scenario": {**FIXTURE_CONFIG["scenario"],
                          "start": {"name": anchor}},
@@ -1523,11 +1523,10 @@ def _lowered_bar():
     known exactly. Costs one more pass over the fixture, which is the price of
     testing a five-second rule on a one-second scenario.
     """
-    from .main import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "lowered.perfetto-trace"
         trace.write_bytes(fixture.build())
-        return analyze_trace(trace, Config({
+        return _analyze(trace, Config({
             **FIXTURE_CONFIG,
             "detectors": {"anr_risk": {"min_stall_ms": 100}},
         }))
@@ -2156,14 +2155,23 @@ def _(report):
         root = Path(tmp)
         _android_repo(root)
         facts = scan.describe(root, devices=False)
+        script = root / "app/build.gradle"
+        script.write_text(script.read_text(encoding="utf-8").replace("; profileable = true", ""),
+                          encoding="utf-8")
+        bare = scan.describe(root, devices=False)
     assert facts.app and facts.app["application_id"] == "com.example.app", facts.app
     assert facts.app["module"] == ":app", facts.app
     names = {v["name"]: v for v in facts.variants}
     assert names["betaBenchmark"]["application_id"] == "com.example.app.beta", names
     assert names["betaDebug"]["measure"].startswith("no"), names["betaDebug"]
     assert scan.preferred(facts.variants)["name"] == "betaBenchmark", facts.variants
-    # No <profileable> in the manifest is the first thing setup must say.
-    assert any("profileable" in n for n in facts.notes), facts.notes
+    # The benchmark build type sets `profileable`, so the build it recommends
+    # traces with the app's slices whatever the manifest says.
+    assert facts.app.get("profileable_by") == ["benchmark"], facts.app
+    assert not any("profileable" in n for n in facts.notes), facts.notes
+    # With neither, no <profileable> in the manifest is the first thing setup
+    # must say.
+    assert any("profileable" in n for n in bare.notes), bare.notes
 
 
 @check("scan: the benchmark, what it measures, and the task that runs it")
@@ -2217,7 +2225,6 @@ def _(report):
 @check("markers: a domains entry is measured, async or not, and an unseen one is named")
 def _(report):
     from .config import Config
-    from .main import analyze_trace
     from .report import to_markdown
     cfg = {**FIXTURE_CONFIG, "domains": [
         {"slice": "Screen.loaded", "module": ":app"},
@@ -2227,7 +2234,7 @@ def _(report):
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "markers.perfetto-trace"
         path.write_bytes(fixture.build())
-        rep = analyze_trace(path, Config(cfg))
+        rep = _analyze(path, Config(cfg))
     rows = {r["location"]: r for r in rep["markers"]["rows"]}
     # The async section: 700 ms on no thread, and the table says so.
     assert rows["Screen.loaded"]["total_ms"] == 700.0, rows["Screen.loaded"]
@@ -2277,10 +2284,12 @@ def _sample_repo(root: Path) -> None:
         "    }\n"
         "}\n", encoding="utf-8")
 
-    # The trap: a logging function with the same name but no tracing import.
+    # The trap: a logging function with the same name but no tracing import,
+    # and a logger's own `trace` handed a variable.
     (java / "Noise.kt").write_text(
         "package app\n"
-        "fun handle() { trace(\"this is a log line, not instrumentation\") }\n",
+        "fun handle() { trace(\"this is a log line, not instrumentation\") }\n"
+        "fun report(message: String) { log.trace(message) }\n",
         encoding="utf-8")
 
     # Names held in constants and passed through a wrapper of the project's
@@ -2306,6 +2315,8 @@ def _sample_repo(root: Path) -> None:
         "        TimeProfiler.start(Marks.LOAD)\n"
         "        trace.putAttribute(Marks.RESULT, \"x\")\n"
         "        AppTraces.start(NOT_A_CONSTANT)\n"
+        "        log.trace(Marks.RESULT)\n"
+        "        AppTraces.stop(LOAD)\n"
         "        return traces.trace<Items>(Marks.SPLIT) { fetch() }\n"
         "    }\n"
         "}\n", encoding="utf-8")
@@ -2375,10 +2386,11 @@ def _(report):
     split = by_name["collection_split"]
     assert len(split) == 1 and split[0].via == "Marks.SPLIT", split
     # What must not be a site: a profiler handed the same constant, an
-    # attribute the trace was given, an identifier no constant declares, a
-    # benchmark reading the marker, a test faking it.
+    # attribute the trace was given, a logger handed a constant, an
+    # identifier no constant declares, the end of the section, a benchmark
+    # reading the marker, a test faking it.
     assert "result_error" not in by_name, sorted(by_name)
-    assert len(loading) == 1, "the profiler, the benchmark or the test got in"
+    assert len(loading) == 1, "the profiler, the end, the benchmark or the test got in"
     # And the reader is told at the line what to grep for, since the literal
     # is not there.
     assert "Loader.kt:6 — fun load, via LOAD" in text, text
@@ -2391,10 +2403,15 @@ def _(report):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _sample_repo(root)
-        names = {s.name for s in dm.scan(root)[0]}
+        sites, stats = dm.scan(root)
+        names = {s.name for s in sites}
+        noise = [s for s in stats.values() if s.module == ":app"]
     # Without an androidx.tracing import, a bare trace(...) is someone else's
     # function.
     assert "this is a log line, not instrumentation" not in names, names
+    # And `log.trace(message)` is no name built at runtime: the one counted in
+    # :app is `Trace.beginSection(tag)`.
+    assert sum(s.dynamic for s in noise) == 1, noise
     # And generated code is no place for hypotheses.
     assert "generated_noise" not in names, names
 
@@ -2916,11 +2933,19 @@ def _(report):
     assert sig_mod.config_bypassed(session(local, shell), sig_mod.Facts(), None) is None, \
         "the project's own local overlay was reported as a config of the agent's own"
 
+    # A YAML of the agent's own is one a command was then given: written and
+    # never passed with -c, it is no config at all — a GitHub workflow.
+    from .reflect import facts as facts_mod
     mine = Call(id="3", ts=ts, tool="Write", input={"content": "project:\n  process: x\n"},
                 path="/tmp/mine.yml")
-    got = sig_mod.config_bypassed(session(local, mine), sig_mod.Facts(), None)
-    assert got and got.severity == "warn" and len(got.rows) == 1, got
-    assert got.rows[0]["config"].endswith("mine.yml"), got.rows
+    assert sig_mod.config_bypassed(session(local, mine), sig_mod.Facts(), None) is None, \
+        "a YAML file nobody passed to echolot was reported as a config"
+    used = Call(id="4", ts="2026-01-01T10:01:00.000Z", tool="Bash", input={},
+                command="echolot analyze t.perfetto-trace -c /tmp/mine.yml")
+    s = session(local, mine, used)
+    got = sig_mod.config_bypassed(s, facts_mod.gather(s, None, []), None)
+    assert got and got.severity == "warn", got
+    assert all(r["config"].endswith("mine.yml") for r in got.rows), got.rows
 
 
 @check("reflect: a config rewrite that leaves the numbers alone is not a threshold edit")
@@ -3533,11 +3558,23 @@ def _(report):
         st = project_state(project)
         assert st["config"]["scenario"] == "checkout" and st["config"]["thresholds"] == "built-in defaults", st["config"]
         assert next_kind(st) == "hunt" and "collect" in next_step(st), next_step(st)
-        # traces present: hunt or analyze
+        # another scenario's traces only: this one still has to be recorded
         (project / ".echolot" / "traces").mkdir(parents=True)
+        (project / ".echolot" / "traces" / "scroll_iter000.perfetto-trace").write_bytes(b"x")
+        st = project_state(project)
+        assert st["traces"]["count"] == 1 and "collect" in next_step(st), next_step(st)
+        # traces present: hunt or analyze, over this scenario's repeats alone
         (project / ".echolot" / "traces" / "checkout_iter000.perfetto-trace").write_bytes(b"x")
         st = project_state(project)
-        assert st["traces"]["count"] == 1 and "analyze" in next_step(st), next_step(st)
+        assert st["traces"]["scenario"] == 1 and \
+            "analyze .echolot/traces/checkout_iter000.perfetto-trace -c" in next_step(st), next_step(st)
+        # named, not globbed: Codex keeps a line with a glob in its sandbox
+        assert "*" not in next_step(st), next_step(st)
+        # a dangling symlink among them is left out, not a traceback
+        (project / ".echolot" / "traces" / "checkout_iter001.perfetto-trace").symlink_to(
+            project / "nowhere.perfetto-trace")
+        st = project_state(project)
+        assert st["traces"]["scenario"] == 1, st["traces"]
         # a config that does not load is said, not swallowed
         (project / "echolot.yml").write_text("project: [\n", encoding="utf-8")
         st = project_state(project)
@@ -4149,51 +4186,81 @@ def _(report):
 
 # --- the run ---------------------------------------------------------------
 
+# The trace_processor this self-check is checking: what `doctor
+# --tp-binary` or `toolchain.tp_binary` named, set by `run` for the length of
+# the run, and None for the pinned build. Only the main report was given it,
+# so seventeen of the eighteen trace sessions ran the pin: vouching for a
+# binary they never started, or failing where the pin has no build for the
+# machine — which is when a person is told to name a binary in the first
+# place.
+_binary: str | None = None
+
+
+def _analyze(trace, cfg: Config, **kwargs) -> dict:
+    """`analyze_trace` on the binary this run is checking. Every trace a check
+    opens goes through here."""
+    from .main import analyze_trace  # late import: main imports us
+    return analyze_trace(trace, cfg, _binary, **kwargs)
+
+
 def build_report(tp_binary: str | None = None, sampling: str | None = None) -> dict:
     """Builds the fixture into a temp file and runs the detectors over it.
 
     `sampling` is `fixture.build`'s: the same trace with a callstack sampler
     behind it, for the checks that are about one.
     """
-    from .main import analyze_trace# late import: main imports us
+    from .main import analyze_trace  # late import: main imports us
 
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build(sampling=sampling))
-        return analyze_trace(trace, Config(FIXTURE_CONFIG), tp_binary)
+        return analyze_trace(trace, Config(FIXTURE_CONFIG), tp_binary or _binary)
 
 
-@functools.lru_cache(maxsize=1)
 def sampled_report() -> dict:
-    """The fixture with a callstack sampler behind it, analysed once a process.
+    """The fixture with a callstack sampler behind it, analysed once a process
+    for each binary.
 
     Several checks read it, and building it for each would run trace_processor
     again in every `doctor`. None of them writes to it.
     """
-    return build_report(sampling="arrived")
+    return _sampled(_binary)
+
+
+@functools.lru_cache(maxsize=2)
+def _sampled(binary: str | None) -> dict:
+    return build_report(binary, sampling="arrived")
 
 
 def minified_report(mapping: str) -> dict:
     """The sampled fixture from a minified build, analysed with `mapping` as its mapping.txt."""
-    from .main import analyze_trace  # late import: main imports us
-
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build(sampling="minified"))
         path = Path(tmp) / "mapping.txt"
         path.write_text(mapping, encoding="utf-8")
         project = {**FIXTURE_CONFIG["project"], "mapping": str(path)}
-        return analyze_trace(trace, Config({**FIXTURE_CONFIG, "project": project}))
+        return _analyze(trace, Config({**FIXTURE_CONFIG, "project": project}))
 
 
 def _where(e: BaseException) -> str:
-    """`at selftest.py:412` — the line the check gave up on."""
+    """`at selftest.py:412` — the line the check gave up on.
+
+    The check's own line, and where it was raised beside it when that is
+    somewhere else. The deepest frame alone named a library file —
+    `decoder.py:361` — and the check's line was nowhere in the message.
+    """
     import traceback
     frames = traceback.extract_tb(e.__traceback__)
     if not frames:
         return ""
-    last = frames[-1]
-    return f" at {Path(last.filename).name}:{last.lineno}"
+    here = Path(__file__).name
+    deepest = frames[-1]
+    ours = next((f for f in reversed(frames) if Path(f.filename).name == here), deepest)
+    where = f" at {Path(ours.filename).name}:{ours.lineno}"
+    if ours is not deepest:
+        where += f" (raised in {Path(deepest.filename).name}:{deepest.lineno})"
+    return where
 
 
 def _why(e: BaseException) -> str:
@@ -4266,4 +4333,9 @@ def run_checks(report: dict, checks) -> list[tuple[str, str | None]]:
 
 def run(tp_binary: str | None = None) -> list[tuple[str, str | None]]:
     """[(check name, None if it passed else the mismatch text)]."""
-    return run_checks(build_report(tp_binary), CHECKS)
+    global _binary
+    _binary, before = tp_binary, _binary
+    try:
+        return run_checks(build_report(tp_binary), CHECKS)
+    finally:
+        _binary = before

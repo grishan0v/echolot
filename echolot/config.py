@@ -37,6 +37,11 @@ def _load_yaml(p: Path) -> Any:
         where = f" (line {mark.line + 1}, column {mark.column + 1})" if mark else ""
         problem = getattr(e, "problem", None) or str(e).splitlines()[0]
         raise ConfigError(f"{p}: does not parse{where}: {problem}") from e
+    except UnicodeDecodeError as e:
+        # A config saved in another encoding, with one non-ASCII comment.
+        raise ConfigError(f"{p}: is not UTF-8 (byte {e.start}): save it as UTF-8") from e
+    except OSError as e:
+        raise ConfigError(f"{p}: cannot be read: {e.strerror or e}") from e
 
 
 def merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
@@ -69,6 +74,8 @@ class Config:
         p = Path(path)
         if not p.exists():
             raise ConfigError(f"config not found: {p}")
+        if not p.is_file():
+            raise ConfigError(f"{p}: is not a file — -c takes the path to echolot.yml")
         raw = _load_yaml(p)
         if not isinstance(raw, dict):
             raise ConfigError(f"{p}: expected a mapping at the top level")
@@ -76,6 +83,8 @@ class Config:
         local_path = Path(local) if local else p.parent / "local.yml"
         used_local = None
         if local_path.exists():
+            if not local_path.is_file():
+                raise ConfigError(f"{local_path}: is not a file")
             overlay = _load_yaml(local_path)
             if not isinstance(overlay, dict):
                 raise ConfigError(f"{local_path}: expected a mapping")
@@ -109,9 +118,25 @@ class Config:
 
     @property
     def tp_binary(self) -> str | None:
-        """Your own trace_processor_shell. Usually arrives from local.yml."""
+        """Your own trace_processor_shell. Usually arrives from local.yml.
+
+        `~` is expanded and a relative path is taken from the config's
+        directory, as `project.mapping` is: `analyze` is often run from the
+        directory that holds the traces, and `tools/trace_processor_shell`
+        resolved there was no file. A bare name is a command on PATH unless
+        the config's directory holds a file of that name.
+        """
         value = self.get("toolchain.tp_binary") or self.get("tp_binary")
-        return str(value) if value else None
+        if not value:
+            return None
+        text = str(value)
+        path = Path(text).expanduser()
+        if path.is_absolute() or self.path is None:
+            return str(path)
+        beside = Path(self.path).parent / path
+        if len(path.parts) == 1 and not text.startswith(".") and not beside.is_file():
+            return text
+        return str(beside)
 
     def get(self, dotted: str, default: Any = None) -> Any:
         node: Any = self.raw
@@ -197,9 +222,15 @@ class Config:
         if node is None:
             return NO_ANCHOR
         if isinstance(node, dict):
-            name = node.get("name")
-            if not name:
-                raise ConfigError(f"{dotted}: field 'name' is missing")
+            if "name" not in node:
+                raise ConfigError(
+                    f"{dotted}: the block has no `name`. Write the slice name "
+                    f"there, or `name: null` when nothing was found")
+            name = node["name"]
+            # `name: null` beside `_source` and `_evidence` is how setup
+            # writes "nothing found", and it means no anchor.
+            if name is None or str(name).strip() == "":
+                return NO_ANCHOR
             return str(name)
         return str(node)
 
@@ -233,8 +264,28 @@ class Config:
 
     @property
     def detector_overrides(self) -> dict[str, dict[str, Any]]:
-        """Thresholds, per detector. `false` is not a threshold — see below."""
-        return {k: (v or {}) for k, v in self._detectors().items() if v is not False}
+        """Thresholds, per detector. `false` is not a threshold — see below.
+
+        An entry with nothing under it tunes nothing: `calibrate` prints the
+        name with only comments beneath for a threshold it could not derive,
+        and pasted as it was, it made `status` and `analyze` say the config
+        tuned a detector that ran on its defaults.
+        """
+        return {k: v for k, v in self._detectors().items() if v}
+
+    def unknown_detectors(self, known: set[str]) -> None:
+        """Refuse a name under `detectors:` that is no detector.
+
+        `frame_jnk: false` left `frame_jank` running, and the thresholds under
+        a misspelled name were dropped, both without a word — while `--set`
+        refuses the same typo, because a silently ignored one is worse than
+        none.
+        """
+        unknown = sorted(str(k) for k in self._detectors() if k not in known)
+        if unknown:
+            names = ", ".join(f"'{u}'" for u in unknown)
+            raise ConfigError(
+                f"detectors: no detector {names}. Known: {', '.join(sorted(known))}")
 
     @property
     def disabled_detectors(self) -> set[str]:

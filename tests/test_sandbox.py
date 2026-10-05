@@ -119,9 +119,10 @@ def test_with_no_agent_named_the_refusal_is_said_and_both_ways_out(
     assert code == 2, err
     assert "an agent's sandbox is the likely cause" in err, err
     assert "Codex's sandbox, which" not in err, err
-    # The command that writes the rule, with the agents a plain init keeps:
-    # `--for codex` alone would drop Claude Code from the saved choice.
-    assert "`echolot init --for claude,codex`" in err, err
+    # The command that writes the rule. The project never chose, so it does
+    # not name Claude Code, which detection adds whatever is there: that
+    # installed `.claude/` beside a plugin that brings the same skills.
+    assert "`echolot init --for agents,codex`" in err, err
     assert "sandbox.excludedCommands" in err, err
 
 
@@ -350,10 +351,10 @@ def test_with_the_rule_in_place_the_refusal_names_the_command_line(
     assert "lets echolot out of it" in err, err
     assert "A glob such as `*.perfetto-trace`" in err, err
     assert "put prefix_rule" not in err and "let it out for good" not in err, err
-    # A session that started before the rule was there has not read it; a
-    # rule for every project is read by every session there is.
-    unread = "the session started before the rule was there" in err
-    assert unread is (where == "project"), err
+    # A session that started before the rule was there has not read it,
+    # whichever folder the rule is in: Codex reads rules when a session
+    # starts, and one added under CODEX_HOME mid-session is not read either.
+    assert "the session started before the rule was there" in err, err
 
 
 def _trusted(home: Path, project: Path, level: str = "trusted") -> None:

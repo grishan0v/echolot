@@ -124,7 +124,13 @@ def _config_stamp(path: str | None) -> dict[str, Any] | None:
     p = Path(path)
     if not p.exists():
         return {"path": str(p), "sha": None}
-    digest = hashlib.sha256(p.read_bytes()).hexdigest()[:12]
+    # A directory, or a file it may not read: the stamp goes without its
+    # hash. Raised, it took the whole line with it, past the `except` that
+    # keeps recording from ever failing a command.
+    try:
+        digest = hashlib.sha256(p.read_bytes()).hexdigest()[:12]
+    except OSError:
+        return {"path": str(p), "sha": None}
     return {"path": str(p), "sha": digest}
 
 
@@ -163,12 +169,21 @@ def record(args: Any, argv: list[str] | None, started: float,
             "ms": int((time.time() - started) * 1000),
             "version": _version(),
         }
-        stamp = _config_stamp(getattr(args, "config", None))
+        try:
+            stamp = _config_stamp(getattr(args, "config", None))
+        except Exception:
+            stamp = None
         if stamp:
             entry["config"] = stamp
         if _facts:
             entry["facts"] = dict(_facts)
-        if error is not None:
+        if isinstance(error, KeyboardInterrupt):
+            # Ctrl-C is an interruption, not a crash: the shell reports 130,
+            # and a traceback without the word in its last 160 characters
+            # read as echolot failing.
+            entry["exit"] = 130
+            entry["error"] = "interrupted"
+        elif error is not None:
             tb = "".join(traceback.format_exception(
                 type(error), error, error.__traceback__))
             # The tail is what matters; the head is argparse and main().
