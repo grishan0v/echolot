@@ -41,6 +41,12 @@ column named there is part of the row's name rather than evidence, which is
 also why `compare` shows `detail` in its Evidence column only for detectors
 that list it.
 
+So a column in the identity carries nothing that can change from one repeat
+to the next. `io_wait` is named by `location, thread`: `thread` says `main` or
+`background`, and the kernel functions a thread stopped in stay in `detail`.
+Which functions those are, and in what order, changes between repeats, and
+with them in the name one thread became a row per variant, each seen once.
+
 ## The context views
 
 They are already narrowed to our process and the scenario window, so nothing

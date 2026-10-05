@@ -17,23 +17,36 @@
 -- parent, so summing them counts the same time twice. Depth = 0 slices do not
 -- overlap each other, so there is no double counting among them.
 
+--
+-- One row per thread name, not per thread. The kernel cuts a name to fifteen
+-- characters, so a pool's threads arrive under one name — every
+-- `DefaultDispatcher-worker-N` is `DefaultDispatch` — and a row per thread
+-- gave a report three rows of one name. Merging repeats tells rows apart by
+-- name, so it took a median over a mix of threads; `compare` paired them by
+-- report order, and each got the samples of all of them. The pool is the
+-- unit a reader can act on, and `@intervals` and `@samples` already pick
+-- threads by name.
+
 WITH running AS (
-    SELECT utid, thread_name, SUM(dur) AS running_ns
+    SELECT thread_name, SUM(dur) AS running_ns
     FROM _tstate_win
     WHERE state = 'Running'
-    GROUP BY utid, thread_name
+    GROUP BY thread_name
 ),
 covered AS (
     -- _cpu_in_slice is prepared by the context: a SPAN_JOIN of on-CPU time
     -- with top-level slices. Doing that interval-overlap join by hand makes
     -- SQLite run a nested loop that does not finish within ten minutes on a
     -- live trace.
-    SELECT utid, SUM(dur) AS sliced_ns
-    FROM _cpu_in_slice
-    GROUP BY utid
+    SELECT t.name AS thread_name, SUM(c.dur) AS sliced_ns
+    FROM _cpu_in_slice c
+    JOIN thread t ON t.utid = c.utid
+    GROUP BY t.name
 ),
 counted AS (
-    SELECT utid, COUNT(*) AS slice_count FROM _slice_win GROUP BY utid
+    SELECT thread_name, COUNT(*) AS slice_count
+    FROM _slice_win
+    GROUP BY thread_name
 )
 SELECT
     r.thread_name                                          AS location,
@@ -45,8 +58,8 @@ SELECT
         100.0 * (r.running_ns - COALESCE(c.sliced_ns, 0)) / r.running_ns
     ) || '% of CPU outside slices'                         AS detail
 FROM running r
-LEFT JOIN covered c ON r.utid = c.utid
-LEFT JOIN counted n ON r.utid = n.utid
+LEFT JOIN covered c ON c.thread_name IS r.thread_name
+LEFT JOIN counted n ON n.thread_name IS r.thread_name
 WHERE r.running_ns >= {{min_running_ms}} * 1000000
   AND COALESCE(c.sliced_ns, 0) < r.running_ns * {{max_covered_pct}} / 100.0
 ORDER BY r.running_ns DESC
