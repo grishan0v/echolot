@@ -185,15 +185,49 @@ def app_module(root: Path, facts: Facts) -> dict[str, Any] | None:
         "launcher": launchers[0],
         "application_id": _value(block(stripped, "defaultConfig") or stripped, "applicationId"),
         "namespace": _value(stripped, "namespace"),
-        "process": (re.search(r'android:process\s*=\s*"([^"]+)"', text) or [None, None])[1],
+        "process": _application_process(text),
         "profileable": bool(re.search(r"<profileable\b[^>]*android:shell\s*=\s*\"true\"", text)),
         "application_class": mark.application_class(text),
     }
-    if not app["profileable"]:
-        facts.notes.append(f"{app['manifest']} has no <profileable android:shell=\"true\" />: "
-                           f"a release-like build will show no application slices in the "
-                           f"trace. A debuggable build traces without it, and skews everything")
     return app
+
+
+def _application_process(manifest: str) -> str | None:
+    """`android:process` of the `<application>` tag, and of nothing else.
+
+    Over the whole manifest the first one anywhere won — a `<service>`'s
+    `:sync` — and was handed to the agent as the app's process.
+    """
+    tag = mark._APPLICATION_TAG.search(mark._XML_COMMENT.sub("", manifest))
+    m = re.search(r'android:process\s*=\s*"([^"]+)"', tag.group(1)) if tag else None
+    return m.group(1) if m else None
+
+
+def _profileable_note(facts: Facts) -> None:
+    """Whether a release-like build will trace with the app's slices, said once.
+
+    Decided with the build types in hand: one that is not debuggable and sets
+    `isProfileable = true` is profileable without the manifest's tag, and the
+    note used to say no application slices about the very build the scan
+    recommended.
+    """
+    app = facts.app
+    if not app or app["profileable"]:
+        return
+    by_type = [b["name"] for b in facts.build_types
+               if b.get("profileable") and not b.get("debuggable")]
+    if by_type:
+        app["profileable_by"] = by_type
+        return
+    facts.notes.append(f"{app['manifest']} has no <profileable android:shell=\"true\" />: "
+                       f"a release-like build will show no application slices in the "
+                       f"trace. A debuggable build traces without it, and skews everything")
+
+
+def flavor_dimensions(stext: str) -> list[str]:
+    """`flavorDimensions` in order, however the script writes it, or []."""
+    m = re.search(r"\bflavorDimensions\b[^\n]*", stext)
+    return re.findall(r"[\"']([\w-]+)[\"']", m.group(0)) if m else []
 
 
 def flavors_of(stext: str) -> list[dict[str, Any]]:
@@ -220,7 +254,7 @@ def build_types_of(stext: str) -> list[dict[str, Any]]:
                 "debuggable": _flag(inner, "debuggable"),
                 "profileable": _flag(inner, "profileable"),
                 "minify": _flag(inner, "minifyEnabled"),
-                "init_with": (re.search(r"initWith\s*\(?\s*(\w+)", inner) or [None, None])[1],
+                "init_with": _init_with(inner),
             }
     # `debug` and `release` exist whether or not the script names them.
     for name in ("debug", "release"):
@@ -230,6 +264,15 @@ def build_types_of(stext: str) -> list[dict[str, Any]]:
     return list(found.values())
 
 
+def _init_with(body: str) -> str | None:
+    """The build type `initWith` starts from: `initWith release`, and the
+    Kotlin DSL's `initWith(getByName("release"))`, whose first word is a
+    function and was read as the build type."""
+    m = re.search(r"initWith\s*\(\s*(?:\w+\.)?(?:getByName|named)\s*\(\s*[\"']([\w-]+)[\"']", body) \
+        or re.search(r"initWith\s*\(?\s*(\w+)", body)
+    return m.group(1) if m else None
+
+
 def _flag(body: str, key: str) -> bool | None:
     """`debuggable true`, `debuggable = false`, and Kotlin's `isDebuggable = …`."""
     kotlin = "is" + key[:1].upper() + key[1:]
@@ -237,17 +280,49 @@ def _flag(body: str, key: str) -> bool | None:
     return None if not m else m.group(1) == "true"
 
 
-def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: list[dict]) -> list[dict]:
-    """flavour × build type, with the applicationId each one installs as."""
+def flavor_combinations(flavors: list[dict], dimensions: list[str]) -> list[list[dict]] | None:
+    """The flavour sets a variant is built from: one flavour of each dimension.
+
+    In the order of `flavorDimensions`. With one dimension, or none named,
+    each flavour on its own. None when the flavours span several dimensions
+    and their order cannot be read: a variant's name depends on it, and a
+    guessed name is a task no variant has.
+    """
+    if not flavors:
+        return [[]]
+    used = list(dict.fromkeys(f.get("dimension") for f in flavors if f.get("dimension")))
+    if len(used) <= 1:
+        return [[f] for f in flavors]
+    if not dimensions or set(used) - set(dimensions):
+        return None
+    combos: list[list[dict]] = [[]]
+    for dim in (d for d in dimensions if d in used):
+        combos = [c + [f] for c in combos for f in flavors if f.get("dimension") == dim]
+    return combos
+
+
+def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: list[dict],
+                dimensions: list[str] | None = None) -> list[dict]:
+    """flavours × build type, with the applicationId each one installs as.
+
+    Across dimensions, one flavour of each, as the Android Gradle plugin
+    builds them: `freeStagingBenchmark`, never `freeBenchmark` beside
+    `stagingBenchmark`. None at all when that cannot be read.
+    """
     base = (app or {}).get("application_id")
+    combos = flavor_combinations(flavors, dimensions or [])
     out = []
     for bt in build_types:
-        for fl in flavors or [None]:
-            app_id = (fl or {}).get("application_id") or base
+        for combo in combos or []:
+            app_id = next((f["application_id"] for f in combo if f.get("application_id")), None) or base
             if app_id:
-                app_id += ((fl or {}).get("application_id_suffix") or "") + (bt.get("application_id_suffix") or "")
-            name = (fl["name"] + bt["name"][:1].upper() + bt["name"][1:]) if fl else bt["name"]
-            out.append({"name": name, "flavor": fl["name"] if fl else None,
+                app_id += "".join(f.get("application_id_suffix") or "" for f in combo) \
+                    + (bt.get("application_id_suffix") or "")
+            words = [f["name"] for f in combo] + [bt["name"]]
+            name = words[0] + "".join(w[:1].upper() + w[1:] for w in words[1:])
+            out.append({"name": name,
+                        "flavor": "".join(_cap(f["name"]) if i else f["name"]
+                                          for i, f in enumerate(combo)) or None,
                         "build_type": bt["name"], "application_id": app_id,
                         "debuggable": bt.get("debuggable"),
                         "measure": _measures(bt)})
@@ -283,6 +358,17 @@ _RUNNER_ARG = re.compile(
     r'testInstrumentationRunnerArguments\s*(?:\[\s*|\.put\s*\(\s*)["\']([\w.]+)["\']\s*(?:\]\s*=|,)\s*["\']([^"\']*)["\']')
 
 
+def _as_glob(section: str) -> str:
+    """A `TraceSectionMetric` name as the GLOB echolot matches anchors with.
+
+    `%` is that metric's wildcard, and in a GLOB an ordinary character: an
+    anchor copied over unchanged matched nothing, and the window ran to the
+    end of the trace.
+    """
+    escaped = re.sub(r"([*?\[])", r"[\1]", section)
+    return escaped.replace("%", "*")
+
+
 def benchmarks_of(root: Path) -> list[dict[str, Any]]:
     """Every source with a MacrobenchmarkRule: the tests, what they measure, who they drive."""
     out = []
@@ -300,15 +386,26 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
                                               "startup": False, "runner_args": {}})
         consts = constants({path: text})
         pkg = _PACKAGE.search(text)
-        cls = _CLASS.search(text)
+        # In the code, not in a comment: the KDoc Android Studio's template
+        # puts above its benchmark says "This test class benchmarks…", and
+        # `benchmarks` went into the skeleton's class filter.
+        cls = _CLASS.search(_strip(text))
+        metrics = []
+        for lit, ident in _METRIC.findall(text):
+            name = lit or consts.get(ident.rsplit(".", 1)[-1])
+            if name and name not in metrics:
+                metrics.append(_as_glob(name))
+        # Each class keeps its own metrics, so the skeleton takes the class,
+        # its test and its end anchor from one file.
         entry["classes"].append({
             "file": mark._rel(path, root),
             "name": (pkg.group(1) + "." if pkg else "") + (cls.group(1) if cls else path.stem),
             "tests": _TEST.findall(text),
+            "metrics": metrics,
+            "startup": "StartupTimingMetric" in text or "StartupMode" in text,
         })
-        for lit, ident in _METRIC.findall(text):
-            name = lit or consts.get(ident.rsplit(".", 1)[-1])
-            if name and name not in entry["metrics"]:
+        for name in metrics:
+            if name not in entry["metrics"]:
                 entry["metrics"].append(name)
         target = (re.search(r'packageName\s*=\s*"([^"]+)"', text)
                   or re.search(r'packageName\s*=\s*([\w.]+)', text))
@@ -325,13 +422,24 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
         _, stext = _build_script(root / entry["dir"]) if entry["dir"] else (None, "")
         s = android_block(_strip(stext))
         entry["runner_args"] = dict(_RUNNER_ARG.findall(s))
-        entry["flavors"] = [f["name"] for f in flavors_of(s)]
+        combos = flavor_combinations(flavors_of(s), flavor_dimensions(s)) or []
+        entry["flavors"] = ["".join(_cap(f["name"]) if i else f["name"] for i, f in enumerate(c))
+                            for c in combos if c]
         entry["build_types"] = [b["name"] for b in build_types_of(s) if not b.get("implicit")]
         out.append(entry)
     return out
 
 
-_TEST_PLUGIN = re.compile(r"\b(?:com\.android\.test|android[.-]test)\b")
+# The plugin applied, in every way a build script applies one. `android.test`
+# anywhere was taken for it: `useLibrary("android.test.runner")` made the app
+# module a test module, and `mark` then refused every site in it.
+_TEST_PLUGIN = re.compile(
+    r"""\bid\s*\(?\s*["']com\.android\.test["']"""
+    r"""|\bapply\s+plugin\s*:\s*["']com\.android\.test["']"""
+    r"""|\balias\s*\(?\s*[\w.]*?\bandroid[.-]test\b(?![.\w-])""")
+# Gradle's own code: a convention plugin or buildSrc, which never runs on
+# the device and is no place for a marker.
+_BUILD_LOGIC = re.compile(r"""kotlin-dsl|\bjava-gradle-plugin\b|`kotlin-dsl`""")
 
 
 def test_modules(root: Path) -> set[str]:
@@ -406,6 +514,7 @@ def allowed_paths(root: Path) -> list[str]:
     """
     seen = set()
     tests = test_modules(root)
+    logic: dict[tuple[str, ...], bool] = {}
     for path in source_files(root):
         parts = path.relative_to(root).parts
         if "src" not in parts or "main" not in parts:
@@ -414,7 +523,12 @@ def allowed_paths(root: Path) -> list[str]:
         if i == 0 or parts[i + 1:i + 2] != ("main",):
             continue
         module = parts[:i]
-        if "/".join(module) in tests:
+        if "/".join(module) in tests or module[0] == "buildSrc":
+            continue
+        if module not in logic:
+            _, script = _build_script(root.joinpath(*module))
+            logic[module] = bool(_BUILD_LOGIC.search(_strip(script)))
+        if logic[module]:
             continue
         pattern = "/".join([module[0]] + ["*"] * (len(module) - 1) + ["src", "main"])
         seen.add(pattern)
@@ -430,7 +544,13 @@ def describe(root: Path, *, devices: bool = True) -> Facts:
             (root / facts.app["build_script"]).read_text(encoding="utf-8", errors="replace")))
     facts.flavors = flavors_of(stext)
     facts.build_types = build_types_of(stext)
-    facts.variants = variants_of(facts.app, facts.flavors, facts.build_types)
+    dims = flavor_dimensions(stext)
+    facts.variants = variants_of(facts.app, facts.flavors, facts.build_types, dims)
+    if facts.flavors and flavor_combinations(facts.flavors, dims) is None:
+        facts.notes.append("the flavours span several dimensions and flavorDimensions could "
+                           "not be read, so no variant is named: `./gradlew :app:tasks --all` "
+                           "lists them")
+    _profileable_note(facts)
     facts.benchmarks = benchmarks_of(root)
     facts.allowed = allowed_paths(root)
     if devices:
@@ -455,25 +575,47 @@ def skeleton(facts: Facts) -> list[str]:
     """An echolot.yml to start from, every value with where it came from."""
     app = facts.app or {}
     chosen = preferred(facts.variants)
-    app_id = (chosen or {}).get("application_id") or app.get("application_id") or "com.example.app"
+    read_id = (chosen or {}).get("application_id") or app.get("application_id")
     where = app.get("build_script") or "build.gradle"
     others = [v["name"] for v in facts.variants if chosen and v["name"] != chosen["name"]]
     bench = facts.benchmarks[0] if facts.benchmarks else None
-    out = ["project:",
-           f"  package: {app_id}",
-           f'  process: "{app_id}*"',
-           "  _source: derived",
-           f'  _evidence: "applicationId in {where}'
-           + (f', variant {chosen["name"]}' if chosen else "")
-           + (f' — the others: {", ".join(others[:6])}' if others else "") + '"',
-           "",
-           "scenario:",
-           f"  name: {bench['classes'][0]['tests'][0] if bench and bench['classes'] and bench['classes'][0]['tests'] else 'coldStart'}",
-           '  start: {name: "bindApplication", _source: default}',
-           ]
-    if bench and bench["metrics"]:
-        out.append(f'  end: {{name: "{bench["metrics"][0]}", _source: derived, '
-                   f'_evidence: "TraceSectionMetric in {bench["classes"][0]["file"]}; '
+    # One class for everything below: its test, its filter and its end
+    # anchor. A cold start's first, for a window that opens at
+    # bindApplication; then one that measures a section. The pieces used to
+    # come from different classes of one module.
+    pick = None
+    if bench and bench["classes"]:
+        pick = sorted(bench["classes"], key=lambda c: (not c.get("startup"),
+                                                       not c.get("metrics")))[0]
+    if read_id:
+        out = ["project:",
+               f"  package: {read_id}",
+               f'  process: "{read_id}*"',
+               "  _source: derived",
+               f'  _evidence: "applicationId in {where}'
+               + (f', variant {chosen["name"]}' if chosen else "")
+               + (f' — the others: {", ".join(others[:6])}' if others else "") + '"']
+    else:
+        # Not read is not derived: a constant or a convention plugin sets it,
+        # and a placeholder written as `derived` was taken on trust.
+        facts.notes.append(f"the applicationId could not be read from {where}: it is set "
+                           f"through a constant or a convention plugin. The skeleton holds a "
+                           f"placeholder")
+        out = ["project:",
+               "  package: com.example.app",
+               '  process: "com.example.app*"',
+               "  _source: default",
+               f'  _evidence: "applicationId not read from {where} — set through a constant '
+               f'or a convention plugin; find it there, or in `adb shell pm list packages`"']
+    out += ["",
+            "scenario:",
+            f"  name: {pick['tests'][0] if pick and pick['tests'] else 'coldStart'}",
+            '  start: {name: "bindApplication", _source: default}',
+            ]
+    if pick and pick.get("metrics"):
+        pattern = "; a pattern, `%` read as `*`" if "*" in pick["metrics"][0] else ""
+        out.append(f'  end: {{name: "{pick["metrics"][0]}", _source: derived, '
+                   f'_evidence: "TraceSectionMetric in {pick["file"]}{pattern}; '
                    f'confirm against a probe"}}')
     else:
         out.append('  end: {name: "?", _source: default, _evidence: "pick from `echolot probe` — '
@@ -482,7 +624,7 @@ def skeleton(facts: Facts) -> list[str]:
     if bench:
         tasks = gradle_tasks(bench, facts.variants)
         task = next((t for t in tasks if chosen and chosen["name"].lower() in t.lower()), tasks[0] if tasks else None)
-        cls = bench["classes"][0]["name"] if bench["classes"] else None
+        cls = pick["name"] if pick else None
         out += ["runner:",
                 "  mode: gradle",
                 f'  gradle_task: "{task}"' if task else '  gradle_task: "?"',
@@ -490,15 +632,18 @@ def skeleton(facts: Facts) -> list[str]:
         if cls:
             out.append("  gradle_args:")
             out.append(f'    - "-Pandroid.testInstrumentationRunnerArguments.class={cls}"')
-        out += ["  iterations: 5",
-                f'  _evidence: "MacrobenchmarkRule in {bench["classes"][0]["file"] if bench["classes"] else bench["module"]}'
+        # No `iterations`: the benchmark's measureRepeated sets the count, and
+        # collect warns that the key does not reach it.
+        out += [f'  _evidence: "MacrobenchmarkRule in {pick["file"] if pick else bench["module"]}'
                 + ('; the module declares its own variants' if bench.get("flavors") or bench.get("build_types") else "")
                 + '"']
     else:
         out += ["runner:", "  mode: launch", "  iterations: 5", "  duration_ms: 20000",
                 '  _evidence: "no MacrobenchmarkRule in the tree; force-stop + am start"']
     out += ["", "instrumentation:", "  allowed:"]
-    out += [f'    - "{p}"' for p in facts.allowed[:12]]
+    # Every one: cut to twelve, the rest dropped out of the list a person
+    # confirms, and `mark` refused every site in them.
+    out += [f'    - "{p}"' for p in facts.allowed]
     out += ["  temp_prefix: AGENTTMP_", "  cleanup: always"]
     return out
 
@@ -511,9 +656,14 @@ def render(facts: Facts) -> str:
                    + (f" · namespace `{app['namespace']}`" if app.get("namespace") else "")
                    + (f" · process `{app['process']}`" if app.get("process") else "")
                    + f" · launcher `{app['launcher']}`")
-        out.append("profileable: " + ("yes — `<profileable android:shell=\"true\"/>` in " + app["manifest"]
-                                      if app["profileable"] else
-                                      "**no** — release-like builds will trace without application slices"))
+        if app["profileable"]:
+            line = "yes — `<profileable android:shell=\"true\"/>` in " + app["manifest"]
+        elif app.get("profileable_by"):
+            line = ("yes for " + ", ".join(f"`{b}`" for b in app["profileable_by"])
+                    + f", which sets `isProfileable`; {app['manifest']} has no tag")
+        else:
+            line = "**no** — release-like builds will trace without application slices"
+        out.append("profileable: " + line)
     if facts.variants:
         out += ["", "## Variants", ""]
         out.append("| variant | installs as | debuggable | measure on it |")
@@ -556,9 +706,11 @@ def render(facts: Facts) -> str:
                        + (" · emulator" if d.get("emulator") else ""))
     if facts.notes:
         out += ["", "## Notes", ""] + [f"- {n}" for n in facts.notes]
+    probe = ("echolot collect -c echolot.yml" if facts.benchmarks
+             else "echolot collect -c echolot.yml -n 1")
     out += ["", "## A config to start from", "",
             "Every value says where it came from; confirm the anchors against a probe "
-            "trace (`echolot collect -c echolot.yml -n 1`, then `echolot probe`).", "",
+            f"trace (`{probe}`, then `echolot probe`).", "",
             "```yaml", *skeleton(facts), "```"]
     return "\n".join(out)
 
