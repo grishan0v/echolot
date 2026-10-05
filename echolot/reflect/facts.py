@@ -470,7 +470,8 @@ def _mark(ts: str, label: str, agent: str, detail: str = "") -> dict[str, Any]:
     return {"ts": ts, "label": label, "agent": agent, "detail": detail}
 
 
-def milestones(session: Session, calls: list[EcholotCall]) -> list[dict[str, Any]]:
+def milestones(session: Session, calls: list[EcholotCall],
+               prefix: str = "AGENTTMP_") -> list[dict[str, Any]]:
     marks: list[dict[str, Any]] = []
     for t in session.turns:
         if t.kind == "slash":
@@ -492,19 +493,18 @@ def milestones(session: Session, calls: list[EcholotCall]) -> list[dict[str, Any
                            MAIN, s.description or ""))
         if s.ended:
             marks.append(_mark(s.ended, f"agent {s.type or '?'} finished", MAIN))
-    first_added = None
-    for c in session.calls:
-        if c.tool in ("Edit", "Write") and _has_prefix_added(c):
-            first_added = _mark(c.ts, "temporary instrumentation added", c.agent,
-                                _short(c.path))
-            break
-    for e in shell_edits(session, "AGENTTMP_"):
-        if first_added is None or ts_to_epoch(e["ts"]) < ts_to_epoch(first_added["ts"]):
-            first_added = _mark(e["ts"], "temporary instrumentation added (shell)",
-                                e["agent"], ", ".join(_short(f) for f in e["files"][:2]))
-        break
-    if first_added:
-        marks.append(first_added)
+    # The first marker by time, under the config's prefix. Calls are stored
+    # main context first, so the first in storage order was a later
+    # main-context marker before an earlier subagent one; and `AGENTTMP_`
+    # alone missed every project with a prefix of its own.
+    added = [_mark(c.ts, "temporary instrumentation added", c.agent, _short(c.path))
+             for c in session.calls
+             if c.tool in ("Edit", "Write") and _has_prefix_added(c, prefix)]
+    added += [_mark(e["ts"], "temporary instrumentation added (shell)", e["agent"],
+                    ", ".join(_short(f) for f in e["files"][:2]))
+              for e in shell_edits(session, prefix)]
+    if added:
+        marks.append(min(added, key=lambda m: ts_to_epoch(m["ts"])))
     marks.sort(key=lambda m: ts_to_epoch(m["ts"]))
     return marks
 
@@ -642,7 +642,7 @@ _BUILD = re.compile(r"gradlew|\badb\s|\bsleep\s+\d|emulator\b")
 _REPORT = re.compile(r"report\.(?:json|md)|\.echolot/out/")
 
 ACTIVITIES = ("echolot", "report reading", "source reading",
-              "instrumentation edit", "build/device", "other")
+              "instrumentation edit", "source edit", "build/device", "other")
 
 
 def activity_of(c: Call, prefix: str = "AGENTTMP_") -> str:
@@ -659,7 +659,13 @@ def activity_of(c: Call, prefix: str = "AGENTTMP_") -> str:
             return "report reading"
         return "source reading" if _SOURCE_FILE.search(p) else "other"
     if c.tool in ("Edit", "Write", "MultiEdit"):
-        return "instrumentation edit" if c.path and _SOURCE_FILE.search(c.path) else "other"
+        # Instrumentation is what carries the prefix. Any source edit used to
+        # count — a saved note, a build.gradle, the fix itself — and ended
+        # the reads counted before the first marker early.
+        inp = c.input or {}
+        if any(prefix in str(inp.get(k) or "") for k in ("new_string", "old_string", "content")):
+            return "instrumentation edit"
+        return "source edit" if c.path and _SOURCE_FILE.search(c.path) else "other"
     cmd = c.command
     if cmd is None:
         return "other"
@@ -728,7 +734,10 @@ def cost(session: Session) -> dict[str, Any]:
         "tools_subagents": dict(sorted(tools_sub.items(), key=lambda kv: -kv[1])),
         "thinking_blocks_main": session.thinking_blocks,
         "tool_output_chars": total_output_chars,
-        "user_turns": sum(1 for t in session.turns if t.role == "user" and t.kind == "text"),
+        # The human's turns: a subagent's brief is a user row in its own
+        # transcript, and counted, every subagent added one.
+        "user_turns": sum(1 for t in session.turns
+                          if t.role == "user" and t.kind == "text" and t.agent == MAIN),
         "asks": len(session.asks),
     }
 
@@ -762,7 +771,9 @@ def _has_prefix_removed(c: Call, prefix: str = "AGENTTMP_") -> bool:
     return prefix in old and prefix not in new
 
 
-_SRC_PATH = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:kt|java|kts))\b")
+# A path may start with `/`: an absolute one is made relative to the
+# session's directory below. Refused after a `/`, it gave no file at all.
+_SRC_PATH = re.compile(r"(?<![\w.-])(/?(?:[\w.-]+/)*[\w.-]+\.(?:kt|java|kts))\b")
 _CD_INTO = re.compile(r"(?:^|[\s;&|])cd\s+([\"']?)([^\s;&|\"']+)\1")
 _EDIT_VERB = re.compile(r"(?:^|[\s;&|(])(?:sed\s+-[a-zA-Z]*i|perl\s+-[a-zA-Z]*i)\b")
 
@@ -803,9 +814,12 @@ def shell_edits(session: Session, prefix: str) -> list[dict[str, Any]]:
 _LABEL = re.compile(r"^\s*(?:[=\-#*]{2,}|\[.*\]\s*$)")
 _HIT = re.compile(r"^[^\s:]+\.\w+(?::\d+)?:")
 _CLEAN = re.compile(r"exit=1\b|\(1 = clean\)|\bclean\b|no matches|nothing found", re.IGNORECASE)
+# The exit code a command printed after a label: `exit: 1`, `exit code=0`.
+_EXIT_LABEL = re.compile(r"\bexit(?:\s+code)?\s*[:=]\s*(\d+)\s*$", re.IGNORECASE)
+_PATH_LINE = re.compile(r"^[^\s:]+\.\w+$")
 
 
-def _grep_verdict(output: str, prefix: str) -> bool | None:
+def _grep_verdict(output: str, prefix: str, command: str = "") -> bool | None:
     """What the cleanup grep found: True = nothing, False = still there.
 
     `grep -rn PREFIX … | wc -l` → "0"; an `echo "label: $(… | wc -l)"` →
@@ -824,6 +838,16 @@ def _grep_verdict(output: str, prefix: str) -> bool | None:
     lines = [ln for ln in lines if not _LABEL.match(ln)]
     if not lines:
         return True
+    # `$?` printed after a label is grep's exit code: 1 is nothing found,
+    # 0 a match. Read as a count, `exit: 1` said the marker was still there.
+    code = next((m for ln in reversed(lines) if (m := _EXIT_LABEL.search(ln))), None)
+    if code is not None:
+        return code.group(1) == "1"
+    # `grep -l` prints the files that still hold it, and a bare path is
+    # neither a `path:line:` hit nor a line with the prefix in it.
+    if re.search(r"\bgrep\s+(?:-\w*l\w*\b|.*\s-\w*l\w*\b)", command) \
+            and any(_PATH_LINE.match(ln.strip()) for ln in lines):
+        return False
     first = lines[0].strip()
     m = re.search(r"(?:^|[\s:])(\d+)\s*$", first)
     if m and not _HIT.match(first):
@@ -922,14 +946,26 @@ def instrumentation(session: Session, cfg: Config | None,
             return False
         # `echolot names … | grep AGENTTMP_` reads the trace, not the tree:
         # it was counted as the cleanup grep on a real hunt, and its rows
-        # of marker names read as markers left in the sources.
-        return not ("echolot" in cmd and cmd.index("echolot") < cmd.index("grep"))
+        # of marker names read as markers left in the sources. Judged per
+        # pipeline, and only an echolot invocation piped into the grep: the
+        # word anywhere before it dropped `cat echolot.yml; grep -rn …` and
+        # `echolot mark --remove; grep -rn …`, the cleanup itself.
+        known = verbs()
+        for pipeline in re.split(r"\n|;|&&|\|\|", c.shell):
+            stages = pipeline.split("|")
+            for i, stage in enumerate(stages):
+                if "grep" in stage and prefix in stage and not any(
+                        is_invocation(m.group(1), known)
+                        for before in stages[:i] for m in RE_ECHOLOT.finditer(before)):
+                    return True
+        return False
     # Calls are stored main-first, then subagents: sort by time, the verdict
     # is the latest grep's.
     final_grep = sorted((c for c in session.bash()
                          if is_grep(c) and ts_to_epoch(c.ts) >= last_edit),
                         key=lambda c: ts_to_epoch(c.ts))
-    verdict = _grep_verdict(final_grep[-1].output_head or "", prefix) if final_grep else None
+    verdict = (_grep_verdict(final_grep[-1].output_head or "", prefix,
+                             final_grep[-1].shell) if final_grep else None)
     # Read off the tree only when the session touched instrumentation: a
     # walk over a checkout is not free, and a session with no marker in it
     # has nothing to be checked for.
@@ -1138,7 +1174,9 @@ def gather(session: Session, cfg: Config | None,
     inside = match_runs(calls, runs, window)
     return Facts(
         echolot_calls=calls,
-        milestones=milestones(session, calls),
+        milestones=milestones(session, calls,
+                              (cfg.get("instrumentation.temp_prefix") if cfg else None)
+                              or "AGENTTMP_"),
         hunts=hunts(session, cfg),
         cost=cost(session),
         top_outputs=top_outputs(session),

@@ -36,7 +36,7 @@ runner:
   mode: launch                 # launch | command | gradle
   iterations: 5
   duration_ms: 12000
-  reset_policy: force-stop     # force-stop (cold) | none (warm)
+  reset_policy: force-stop     # force-stop (cold) | none (nothing between repeats)
   environment: true            # record CPU clock, thermal, memory
   sampling: false              # callstack samples, in Hz; true is 100
 
@@ -207,7 +207,9 @@ back as a near miss, and it does not follow the other. A project that changes
 its prefix changes both.
 
 Thresholds are not picked by hand: `echolot calibrate` derives them from
-healthy runs and prints a ready section with the reasoning attached.
+healthy runs and prints a ready section with the reasoning attached, which
+can replace this one whole: it carries over every `false` and every value it
+did not measure.
 
 ### `instrumentation`
 

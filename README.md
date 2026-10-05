@@ -53,7 +53,8 @@ pipx install echolot
 
 `echolot --version` names what you got. Installed with `pip` into an
 environment whose scripts are not on `PATH`, `python -m echolot` is the same
-command.
+command — except to Codex's sandbox rule, which lets out only a line that
+starts with `echolot`.
 
 ### 2. Add the plugin to your agent
 
