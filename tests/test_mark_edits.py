@@ -402,8 +402,9 @@ def test_a_crlf_file_comes_back_crlf(tmp_path):
     done, _ = mark.apply(tmp_path, mark.plan(tmp_path))
     check("marked", done, done)
     applied = path.read_bytes()
+    # onCreate's begin, `try {` and `} finally { … }`, and setContent's pair.
     check("the inserted lines end in CRLF like the rest",
-          applied.count(b"\r\n") == applied.count(b"\n") == before.count(b"\n") + 4, applied)
+          applied.count(b"\r\n") == applied.count(b"\n") == before.count(b"\n") + 5, applied)
     mark.remove(tmp_path)
     check("byte for byte", path.read_bytes() == before, path.read_bytes())
 
@@ -420,9 +421,10 @@ def test_java_gets_its_semicolons_and_its_bytes_back(tmp_path):
     before = path.read_bytes()
     mark.apply(tmp_path, mark.plan(tmp_path))
     tagged = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if mark.TAG in ln]
-    check("a pair, each a statement", tagged == [
+    check("a pair, each a statement, the end in a finally", tagged == [
         'android.os.Trace.beginSection("AGENTTMP_activity_oncreate"); // echolot:mark',
-        "android.os.Trace.endSection(); // echolot:mark"], tagged)
+        "try { // echolot:mark",
+        "} finally { android.os.Trace.endSection(); } // echolot:mark"], tagged)
     mark.remove(tmp_path)
     check("byte for byte", path.read_bytes() == before)
 

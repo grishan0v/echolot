@@ -99,9 +99,12 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     # every project predates its first investigation.
     st["hunt"] = hunt_mod.load(project)
 
+    # The last self-check, whichever command ran it: `init` runs one too and
+    # its facts carry `checks` like a doctor's. Read off `doctor` alone, a
+    # passing check inside `init` left `next` pointing at the doctor before it.
     st["last_doctor"] = st["last_analyze"] = None
     for run in recorder.read(project / recorder.LOG_FILE):
-        if run.get("cmd") == "doctor":
+        if run.get("cmd") == "doctor" or "checks" in (run.get("facts") or {}):
             st["last_doctor"] = run
         elif run.get("cmd") == "analyze":
             st["last_analyze"] = run
@@ -254,17 +257,33 @@ def whose_sandbox(host: str) -> str:
     return "Codex's sandbox" if host == "codex" else "the agent's sandbox"
 
 
+def door(st: dict) -> str:
+    """Which way in this project chose: `claude`, `plugin` or `any`.
+
+    One decision for every line that names it — `status`, `init` and `hunt`
+    — so a project set up for the plugin is not told about any agent in one
+    place and the plugin's skill in another.
+    """
+    if st.get("layer_verdict") == "opted-out":
+        return "plugin" if "plugin" in (st.get("hosts") or []) else "any"
+    return "claude"
+
+
 def _door(st: dict) -> str:
     """How this project's agent is reached, in its own words.
 
     Leading with "/echolot in Claude Code" on a project that has just declined
     the layer names a command its human does not have.
     """
-    if st.get("layer_verdict") == "opted-out":
-        if "plugin" in (st.get("hosts") or []):
-            return "the plugin's echolot skill, or `echolot guide"
-        return "`echolot guide"
-    return "/echolot in Claude Code, or `echolot guide"
+    return {"plugin": "the plugin's echolot skill, or `echolot guide",
+            "any": "`echolot guide"}.get(door(st), "/echolot in Claude Code, or `echolot guide")
+
+
+def hunt_door(st: dict) -> str:
+    """The way to the loop, for the line `echolot hunt` closes with."""
+    return {"plugin": "the plugin's echolot skill, or any agent after `echolot guide hunt`",
+            "any": "any agent, after `echolot guide hunt`"}.get(
+        door(st), "`/echolot` in Claude Code, or any agent after `echolot guide hunt`")
 
 
 def next_step(st: dict) -> str:

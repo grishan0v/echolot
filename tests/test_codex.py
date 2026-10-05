@@ -77,10 +77,10 @@ def run(project: Path, *argv: str) -> tuple[int, str]:
     return code, out.getvalue() + err.getvalue()
 
 
-def init(project: Path, *flags: str) -> str:
+def init(project: Path, *flags: str, exits: int = 0) -> str:
     """`init`'s output with its wrapped lines joined, so a sentence reads whole."""
     code, text = run(project, "init", "--no-doctor", "--no-input", *flags)
-    check("init exits 0", code == 0, text)
+    check(f"init exits {exits}", code == exits, text)
     return flat(text)
 
 
@@ -212,18 +212,20 @@ def test_in_codexs_sandbox_init_says_the_rule_has_to_come_from_outside(
     """Tried on a live `codex sandbox` (#191): `.codex/`, `.agents/` and
     `.git/` are read-only inside it, so that no command can let itself out."""
     monkeypatch.setenv("CODEX_SANDBOX", "seatbelt")
-    said = init(project, "--for", "claude,codex")
+    said = init(project, "--for", "claude,codex", exits=1)
     check("nothing half-written", not (project / ".codex").exists())
     check("the sandbox is named as the reason",
           "Codex's sandbox keeps .codex/ read-only" in said, said)
     check("and the way out keeps both agents",
           "Run `echolot init --for claude,codex` outside the sandbox" in said, said)
     check("the rest of init went on", (project / ".claude").is_dir())
+    check("and the next step is the same command, outside",
+          "next `echolot init --for claude,codex` outside Codex's sandbox" in said, said)
 
 
 def test_outside_a_sandbox_a_refused_write_is_said_as_it_is(
         project, home, codex_dir_read_only):
-    said = init(project, "--for", "codex")
+    said = init(project, "--for", "codex", exits=1)
     check("the error itself, without a sandbox story",
           "not written: [Errno 1]" in said and "sandbox keeps" not in said, said)
 

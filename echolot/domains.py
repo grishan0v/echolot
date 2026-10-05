@@ -99,7 +99,9 @@ def _walk(root: Path, wanted, *, under_src: bool = False) -> list[Path]:
         here = Path(base)
         dirs[:] = [d for d in dirs
                    if d not in SKIP_DIRS and not _is_worktree(here / d)]
-        if under_src and "src" not in here.parts:
+        # Relative to the root: a checkout inside a directory named `src`
+        # counted that one.
+        if under_src and "src" not in here.relative_to(root).parts:
             continue
         found += [here / n for n in names if wanted(n)]
     return sorted(found)

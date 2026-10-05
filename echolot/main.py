@@ -37,6 +37,7 @@ import re
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -774,7 +775,10 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
     if len(paths) == 2:
         return paths[0], paths[1]
 
-    latest = _out_dir(args.out, args.cfg) / "report.json" if args.cfg else \
+    # Where `analyze` writes by default, whatever `-o` says: `-o` is where the
+    # comparison goes, and reading the newer side from it compared against
+    # whatever report.json sat there, or against nothing.
+    latest = _out_dir(".echolot/out", args.cfg) / "report.json" if args.cfg else \
         Path(".echolot/out/report.json")
     if len(paths) == 1:
         # One path is "against what I just measured": the named report is the
@@ -799,36 +803,87 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
 
 
 def _load_report(path: Path) -> dict:
+    """A Marker Report, or a sentence saying what the file is instead.
+
+    `compare` and `report` both read through here, so every sentence is
+    worded for both: neither command is always comparing.
+    """
     if not path.exists():
         raise ConfigError(f"report not found: {path}")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise ConfigError(f"{path}: not valid JSON ({e})") from e
+    except UnicodeDecodeError as e:
+        # A trace handed over where its report belongs.
+        raise ConfigError(
+            f"{path}: not a Marker Report — it is not text. Give a report.json "
+            f"written by `echolot analyze`.") from e
+    except OSError as e:
+        raise ConfigError(f"{path}: cannot be read: {e.strerror or e}") from e
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"{path}: not a Marker Report — JSON {type(data).__name__}, not an "
+            f"object. Give a report.json written by `echolot analyze`.")
     if data.get("kind") == "comparison":
         raise ConfigError(
-            f"{path} is a comparison, not a Marker Report. Compare two reports "
+            f"{path} is a comparison, not a Marker Report: give a report.json "
             f"written by `echolot analyze`.")
     if "detectors" not in data:
         raise ConfigError(f"{path}: not a Marker Report — no `detectors` section")
     return data
 
 
+def _nearest_config(args) -> None:
+    """`echolot.yml` up the tree, when no `-c` names one and none is here.
+
+    The agent runs `analyze` inside a macrobenchmark's output directory with
+    `-c` naming the project's config, and its report and the investigation's
+    copy land in the project. `compare` and `report` run from that same
+    directory read the build directory as the project: "nothing to compare"
+    with an investigation open and two reports in it. The walk stops at the
+    root of the checkout.
+    """
+    if args.config != "echolot.yml" or Path(args.config).exists():
+        return
+    here = Path.cwd().resolve()
+    for folder in (here, *here.parents):
+        found = folder / "echolot.yml"
+        if found.is_file():
+            args.config = str(found)
+            print(f"[i] config: {found}, the nearest up the tree", file=sys.stderr)
+            return
+        if (folder / ".git").exists():
+            return
+
+
 def cmd_compare(args) -> int:
     """The delta between two Marker Reports."""
+    from .mark import DEFAULT_PREFIX
+    _nearest_config(args)
+    unloaded = None
     try:
         args.cfg = None
-        with contextlib.suppress(ConfigError):
+        try:
             args.cfg = Config.load(args.config, args.local)
+        except ConfigError as e:
+            # Not a reason to stop: the comparison prints all the same. It is
+            # a reason to say why nothing is written, which "no config found"
+            # did not, for a config that was there.
+            unloaded = e
         project = _project_root(args.cfg) if args.cfg else Path.cwd()
 
         before_path, after_path = _compare_pair(args, project)
+        # The same fallback `analyze`, `names`, `mark` and `reflect` use: a
+        # config without the key, or none, still has markers planted under
+        # the default prefix.
+        prefix = (args.cfg.get("instrumentation.temp_prefix") if args.cfg else None) \
+            or DEFAULT_PREFIX
         cmp = compare_mod.build(
             _load_report(before_path), _load_report(after_path),
             before_path=str(before_path), after_path=str(after_path),
             floor_ms=args.floor_ms, floor_ratio=args.floor_pct / 100.0,
-            temp_prefix=(args.cfg.get("instrumentation.temp_prefix")
-                         if args.cfg else None))
+            temp_prefix=str(prefix))
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
@@ -852,6 +907,10 @@ def cmd_compare(args) -> int:
             report_mod.to_json(cmp), encoding="utf-8")
         (out_dir / "comparison.md").write_text(text, encoding="utf-8")
         print(f"\n\u2192 {out_dir/'comparison.md'}\n\u2192 {out_dir/'comparison.json'}",
+              file=sys.stderr)
+    elif unloaded is not None and Path(args.config).exists():
+        print(f"\n[!] {args.config} does not load, so nothing was written to "
+              f"disk — the comparison above is the whole output: {unloaded}",
               file=sys.stderr)
     else:
         print("\n[i] no config found, so nothing was written to disk — "
@@ -1949,12 +2008,28 @@ def _hunt_config(project: Path, config: str
     `Config.load` checks `detectors:`, one malformed entry under it is enough
     to get there.
     """
-    path = project / config
+    path = project / config     # an absolute config stays itself
     if not path.exists():
         return None, None, {}, None
     cfg = Config.load(path)
     return (cfg.scenario_name, cfg.sha, cfg.confirmed(),
             cfg.get("instrumentation.temp_prefix"))
+
+
+def _project_and_config(args) -> tuple[Path, str]:
+    """The project `-c` names and the config's own path, for `hunt` and `status`.
+
+    The config's directory when `-c` names a file that is there, as for
+    `collect`, `analyze` and the run log; the working directory otherwise.
+    Read from the working directory, `hunt -c ../echolot.yml` opened a second
+    investigation in a subdirectory and `status -c` showed the project's
+    config beside a build directory's empty state.
+    """
+    config = getattr(args, "config", "echolot.yml")
+    if Path(config).is_file():
+        path = Path(config).resolve()
+        return path.parent, str(path)
+    return Path.cwd(), config
 
 
 def cmd_hunt(args) -> int:
@@ -1969,10 +2044,9 @@ def cmd_hunt(args) -> int:
     of traces aside, says what the last one left behind — and names the half
     it cannot: the loop needs an agent. `/echolot hunt <q>` does both.
     """
-    project = Path.cwd()
+    project, config = _project_and_config(args)
     question = " ".join(args.question) if args.question else None
     conclusion = args.done
-    config = getattr(args, "config", "echolot.yml")
 
     if args.list:
         for line in hunt_mod.list_rows(project):
@@ -2050,10 +2124,7 @@ def cmd_hunt(args) -> int:
         # first, and it is where the two surfaces have to line up out loud.
         # Through the door this project chose: a project that declined Claude
         # Code was being sent to a command it does not have.
-        from . import hosts as hosts_mod
-        door = ("`/echolot` in Claude Code, or any agent after `echolot guide hunt`"
-                if hosts_mod.wants_claude(project)
-                else "any agent, after `echolot guide hunt`")
+        door = state.hunt_door(state.project_state(project, config))
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
         print("By hand: echolot collect -c echolot.yml -n 5, then "
               + state.analyze_line(state.repeats(scenario, 5) if scenario else None),
@@ -2061,6 +2132,13 @@ def cmd_hunt(args) -> int:
         return 0
 
     if conclusion:
+        last = hunt_mod.load(project)
+        if last and last.get("status", "open") != "open":
+            # Written over, the first conclusion was lost without a word.
+            print(f"#{last.get('n')} is already concluded — `echolot hunt --show "
+                  f"{last.get('n')}` prints its conclusion; a new question opens "
+                  f"the next one", file=sys.stderr)
+            return 1
         h = hunt_mod.conclude(project, conclusion)
         if not h:
             print("no investigation is open", file=sys.stderr)
@@ -2070,11 +2148,14 @@ def cmd_hunt(args) -> int:
         return 0
 
     if args.resume:
-        if not hunt_mod.load(project):
+        last = hunt_mod.load(project)
+        if not last:
             print("no investigation is open", file=sys.stderr)
             return 1
-        hunt_mod.touch(project)
-        recorder.note(hunt="resumed")
+        # A concluded one is reported below as it is, and nothing resumed.
+        if last.get("status", "open") == "open":
+            hunt_mod.touch(project)
+            recorder.note(hunt="resumed")
 
     # Bare `echolot hunt`, and the tail of --resume: what is open, in full.
     st = state.project_state(project, config)
@@ -2096,15 +2177,23 @@ def cmd_status(args) -> int:
     branch that applies. Two commands are all a person needs to know —
     `echolot init` and `echolot` — and the agent knows the rest.
     """
-    project = Path.cwd()
-    st = state.project_state(project, getattr(args, "config", "echolot.yml"))
+    project, config = _project_and_config(args)
+    st = state.project_state(project, config)
     if getattr(args, "next", False):
         # One word for the skill to switch on; the prose is for people.
         print(state.next_kind(st))
         return 0
-    info = toolchain_info(getattr(args, "tp_binary", None))
+    # The binary `analyze` would run here, chosen the way `doctor` chooses
+    # it: the pin alone named a version the reports were not built with when
+    # local.yml set `toolchain.tp_binary`.
+    # The config line below says when it does not load.
+    loaded = None
+    if (project / config).is_file():
+        with contextlib.suppress(ConfigError):
+            loaded = Config.load(project / config)
+    info = toolchain_info(*_tp_binary_source(args, loaded))
     print(f"echolot {recorder.version()} · trace_processor "
-          f"{info.get('trace_processor') or 'unknown'} · {Path.cwd()}")
+          f"{info.get('trace_processor') or 'unknown'} · {project}")
 
     lines: list[tuple[str, str]] = []
     lines.append(("layer", st["layer_line"].split(": ", 1)[1]))
@@ -2142,6 +2231,10 @@ def cmd_status(args) -> int:
         elif cfg and cfg.get("sha") and rep.get("config_sha") and rep["config_sha"] != cfg["sha"]:
             note = " · made with an older config"
         lines.append(("report", f".echolot/out/report.json, {made} · {rep['runs']} run(s) · {what}{note}"))
+    elif rep:
+        # There, and cut short or garbled: "none yet" said no analysis ever
+        # ran here.
+        lines.append(("report", ".echolot/out/report.json does not read — run analyze again"))
     else:
         lines.append(("report", "none yet"))
     d = st["last_doctor"]
@@ -2333,9 +2426,13 @@ def cmd_mark(args) -> int:
               "is not applied: every place counts as allowed", file=sys.stderr)
 
     if args.remove:
-        touched, kept = mark_mod.remove(root)
+        refused: list[str] = []
+        touched, kept = mark_mod.remove(root, refused)
         for rel, n in touched:
             print(f"  - {rel}: {n} line(s)")
+        for rel in refused:
+            print(f"  ! {rel}: could not be written — its lines are still there",
+                  file=sys.stderr)
         # A tagged line in any other shape than --apply's is left where it
         # is, and named: it carries more than a marker, which deleting it
         # would take along, and "nothing found" over a tree that still has
@@ -2402,6 +2499,9 @@ def cmd_mark(args) -> int:
             data["applied"] = [{"file": rel, "markers": list(markers)}
                                for rel, markers in applied[0]]
             data["unreadable"] = list(applied[1])
+            data["unwritable"] = list(applied.unwritable)
+            data["already"] = [{"file": rel, "marker": marker}
+                               for rel, marker in applied.already]
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
         for line in mark_mod.render(pl):
@@ -2418,15 +2518,20 @@ def cmd_mark(args) -> int:
             print(f"  ! {rel}: not valid UTF-8 — skipped. Marking it "
                   f"mechanically would put the lines at the wrong offsets.",
                   file=sys.stderr)
+        for rel in applied.unwritable:
+            print(f"  ! {rel}: could not be written — skipped", file=sys.stderr)
         if not args.json:
             print()
             for rel, markers in done:
                 print(f"  + {rel}: {', '.join(markers)}")
+            # Named, so the count in the plan above adds up.
+            for rel, marker in applied.already:
+                print(f"  = {rel}: {marker} (already marked)")
             print(f"applied {sum(len(m) for _, m in done)} marker(s) in {len(done)} file(s); "
                   f"every inserted line ends with `{mark_mod.TAG}` — `echolot mark --remove` "
                   f"takes them out" if done else "nothing applicable to apply")
         recorder.note(applied=sum(len(m) for _, m in done),
-                      unreadable=len(unreadable))
+                      unreadable=len(unreadable), unwritable=len(applied.unwritable))
     return 0
 
 
@@ -2706,8 +2811,9 @@ def cmd_init(args) -> int:
                   "out of this project.")
         else:
             print("\nClaude Code not selected — .claude/ stays out of this project.")
-        whole = layer.install_pointers(target, chosen, force=getattr(args, "force", False),
-                                       tracked=tracked)
+        whole, rule = layer.install_pointers(target, chosen,
+                                             force=getattr(args, "force", False),
+                                             tracked=tracked)
         if private:
             _keep_from_git(repo, hidden + [repo.pattern(f) for f in whole])
         # `--for all` beside the plugin used to mean `.claude/` too; the rest
@@ -2717,7 +2823,7 @@ def cmd_init(args) -> int:
               "`echolot init` points at\nthe same agents again; `--for` "
               f"changes it, and `echolot init --for {rest}` adds the rest.")
         recorder.note(hosts=[h.key for h in chosen], layer="skipped")
-        return 0
+        return _init_finish(args, target, chosen, rule)
 
     root = target / ".claude"
     before = layer.audit(target)
@@ -2752,6 +2858,14 @@ def cmd_init(args) -> int:
                     folded.append(shown)
                 continue
             if was == "current":
+                same.append(rel)
+                installed[rel] = layer.sha(src)
+                continue
+            if was is None and layer.sha(dst) == layer.sha(src):
+                # No manifest entry to judge by — `audit` knows no file's
+                # state when SKILL.md is gone — and the file is the
+                # template's byte for byte. Called `differs`, it was kept and
+                # offered to `--all` for nothing.
                 same.append(rel)
                 installed[rel] = layer.sha(src)
                 continue
@@ -2823,8 +2937,8 @@ def cmd_init(args) -> int:
               "git after.", width=80, break_on_hyphens=False,
             break_long_words=False))
 
-    whole = layer.install_pointers(target, chosen, force=getattr(args, "force", False),
-                                   tracked=tracked)
+    whole, rule = layer.install_pointers(target, chosen, force=getattr(args, "force", False),
+                                         tracked=tracked)
     if private:
         # Every file of the layer that is here and not the team's, the
         # manifest, and what the pointers wrote whole.
@@ -2847,7 +2961,17 @@ def cmd_init(args) -> int:
     recorder.note(written=len(written), updated=len(updated), kept=len(kept),
                   overwritten=len(overwritten), merged=len(folded),
                   unmergeable=[rel for rel, _ in unmergeable])
+    return _init_finish(args, target, chosen, rule)
 
+
+def _init_finish(args, target: Path, chosen: list, rule: str | None) -> int:
+    """How every `init` ends, whichever clients it chose.
+
+    The self-check and the `next` line used to close only the run that
+    installed `.claude/`: `--for plugin`, `codex` or `cursor` checked
+    nothing, printed no next step, and `--no-doctor` had nothing to skip,
+    while the help promised all three for every run.
+    """
     # The environment, briefly, and where to go from here. The doctor lines
     # are the same three `doctor -q` prints; a failure is said and the exit
     # code carries it, but the layer is installed regardless — a broken
@@ -2871,6 +2995,14 @@ def cmd_init(args) -> int:
                                   project=target, origin=_binary_origin(source, cfg))
     else:
         code, ran = 0, False
+    if rule == "not-written":
+        # Inside Codex's sandbox `.codex/` is read-only. The run said success,
+        # `status --next` moved on to setup, and the `codex` line said NO RULE.
+        again = codex.init_command([h.key for h in chosen])
+        print(f"\nnext  `{again}` outside Codex's sandbox — the rule that lets "
+              f"echolot out of it was not written (see above)")
+        recorder.failed(f"{codex.RULE_SHOWN} not written")
+        return 1
     if code:
         # In the words `echolot` uses for a doctor that did the same. A
         # self-check that never started — trace_processor not downloaded,
@@ -2881,7 +3013,15 @@ def cmd_init(args) -> int:
         print(f"\nnext  echolot doctor — the self-check {what} (see above); until "
               f"it passes, no report from this environment can be trusted")
     else:
-        print(f"\nnext  {state.next_step(state.project_state(target))}")
+        st = state.project_state(target)
+        if ran:
+            # The check just run is the last one, though its line reaches the
+            # log only after `init` returns: read off the log alone, a doctor
+            # that did not run before it kept `next` pointing at `doctor`.
+            st["last_doctor"] = {"cmd": "init", "facts": recorder.facts(),
+                                 "ts": datetime.now(timezone.utc).isoformat(
+                                     timespec="seconds")}
+        print(f"\nnext  {state.next_step(st)}")
     return code
 
 
@@ -3408,6 +3548,7 @@ def cmd_report(args) -> int:
     written is its line in .echolot/log/runs.jsonl — the line `main` appends
     for every command unless ECHOLOT_NO_RECORD is set.
     """
+    _nearest_config(args)
     project = project_of(args)
     path = Path(args.report) if args.report else project / ".echolot" / "out" / "report.json"
     try:
