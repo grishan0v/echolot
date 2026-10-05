@@ -398,10 +398,14 @@ It does five things:
 
 1. It installs the echolot of the ref it was called at, in a virtualenv of its
    own, and caches `trace_processor`. A release tag pins the action and the
-   tool together; `@main` runs both as they are on `main`.
-2. It runs `echolot doctor -q`. A runner that fails it fails the job: nothing
-   it computes can be trusted, and that is a fact about the runner, never
-   about the app.
+   tool together; `@main` runs both as they are on `main`. The virtualenv is
+   named after the ref and the Python, so a second call in one job at another
+   ref installs its own echolot.
+2. It runs `echolot doctor -q` with the `config` input, so it checks the
+   `trace_processor` the report is computed with. A runner that fails it fails
+   the job: nothing it computes can be trusted, and that is a fact about the
+   runner, never about the app. A `trace_processor` that could not be
+   downloaded fails it too, and the annotation says so.
 3. It runs `echolot analyze` over the traces. Name the repeats of one test.
    The benchmark's output directory holds every test it ran, and `analyze`
    merges whatever it is given as repeats of one scenario. A line that names
@@ -416,7 +420,9 @@ It does five things:
 
 The job fails when the runner cannot compute or the traces are missing,
 never over what moved. The first run on a branch has nothing to compare
-against and says so; the next run compares against it. The action runs on
+against and says so; the next run compares against it. A baseline the token
+cannot read, or a lookup that names a workflow with no runs, is a warning
+annotation as well as a line in the summary. The action runs on
 Linux and macOS runners.
 
 | input | default | what it is |
@@ -436,9 +442,11 @@ Its outputs are:
 - `report`: this run's `report.json`;
 - `baseline`: the report it was compared with;
 - `comparison`: `comparison.json`;
-- `moved`: how many rows moved past the noise floor.
+- `moved`: how many rows grew or shrank past the noise floor;
+- `appeared` and `vanished`: how many rows appeared or vanished, counted
+  apart from `moved` — a new block of the main thread is one that appeared.
 
-The last three are empty when there was nothing to compare against.
+All but the first are empty when there was nothing to compare against.
 `.github/workflows/action.yml` runs the action this way on the demo app's
 traces for every pull request here, and on the demo's planted change,
 where exactly the lock's two rows have to move.
