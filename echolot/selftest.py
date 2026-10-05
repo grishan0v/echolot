@@ -2911,11 +2911,19 @@ def _(report):
     assert sig_mod.config_bypassed(session(local, shell), sig_mod.Facts(), None) is None, \
         "the project's own local overlay was reported as a config of the agent's own"
 
+    # A YAML of the agent's own is one a command was then given: written and
+    # never passed with -c, it is no config at all — a GitHub workflow.
+    from .reflect import facts as facts_mod
     mine = Call(id="3", ts=ts, tool="Write", input={"content": "project:\n  process: x\n"},
                 path="/tmp/mine.yml")
-    got = sig_mod.config_bypassed(session(local, mine), sig_mod.Facts(), None)
-    assert got and got.severity == "warn" and len(got.rows) == 1, got
-    assert got.rows[0]["config"].endswith("mine.yml"), got.rows
+    assert sig_mod.config_bypassed(session(local, mine), sig_mod.Facts(), None) is None, \
+        "a YAML file nobody passed to echolot was reported as a config"
+    used = Call(id="4", ts="2026-01-01T10:01:00.000Z", tool="Bash", input={},
+                command="echolot analyze t.perfetto-trace -c /tmp/mine.yml")
+    s = session(local, mine, used)
+    got = sig_mod.config_bypassed(s, facts_mod.gather(s, None, []), None)
+    assert got and got.severity == "warn", got
+    assert all(r["config"].endswith("mine.yml") for r in got.rows), got.rows
 
 
 @check("reflect: a config rewrite that leaves the numbers alone is not a threshold edit")

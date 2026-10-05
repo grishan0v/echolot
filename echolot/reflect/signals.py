@@ -24,6 +24,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+import yaml
+
 from ..config import Config
 from .facts import (
     RE_ECHOLOT,
@@ -34,6 +36,7 @@ from .facts import (
     Facts,
     config_writes,
     hunt_agents,
+    shell_edits,
 )
 from .facts import SEGMENT as _SEGMENT
 from .facts import expand_vars as _expand_vars
@@ -198,19 +201,26 @@ def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | N
     if not hunters and not f.instrumentation.get("files"):
         return None
     prefix = f.instrumentation.get("prefix", "AGENTTMP_")
+    # A marker written with Write is in `content`, and one placed through the
+    # shell is in no tool edit at all; both are the loop in the main
+    # context, as `instrumentation()` counts them.
     main_edits = [c for c in s.edits(MAIN)
-                  if prefix in str((c.input or {}).get("new_string", "")) or
-                  prefix in str((c.input or {}).get("old_string", ""))]
-    first_edit = min((ts_to_epoch(c.ts) for c in main_edits), default=None)
+                  if any(prefix in str((c.input or {}).get(k, ""))
+                         for k in ("new_string", "old_string", "content"))]
+    main_shell = [e for e in shell_edits(s, prefix) if e["agent"] == MAIN]
+    first_edit = min([ts_to_epoch(c.ts) for c in main_edits]
+                     + [ts_to_epoch(e["ts"]) for e in main_shell], default=None)
     main_rerecords = [c for c in s.bash(MAIN) if RE_RE_RECORD.search(c.shell)
                       and first_edit is not None and ts_to_epoch(c.ts) > first_edit]
-    if not main_edits:
+    if not main_edits and not main_shell:
         if hunters:
             return Signal("loop_in_main_context", "ok",
                           "the hunt loop stayed inside the subagent",
                           "The main context only saw the conclusion.")
         return None
     rows = [{"ts": _t(c.ts), "what": f"{c.tool} {_short(c.path)}"} for c in main_edits]
+    rows += [{"ts": _t(e["ts"]), "what": "shell edit " + ", ".join(_short(p) for p in e["files"])}
+             for e in main_shell]
     rows += [{"ts": _t(c.ts), "what": f"re-record: {c.shell[:80]}"}
              for c in main_rerecords]
     return Signal("loop_in_main_context", "warn",
@@ -446,10 +456,22 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                 continue
             seen.add(key)
             rows.append({"ts": c.ts, "agent": c.agent, "sub": c.sub, "config": p[-80:]})
+    # A YAML file written in the session is a config of the agent's own only
+    # if a command was then given it with -c. A GitHub workflow for a
+    # nightly benchmark, written and never passed to echolot, was listed as
+    # analysis run on another config.
+    given = [(ts_to_epoch(c.ts), c.config.strip("\"'")) for c in f.echolot_calls
+             if c.config and c.sub in ("analyze", "calibrate", "collect", "names")]
+
+    def passed_later(ts: str, path: str) -> bool:
+        return any(when >= ts_to_epoch(ts)
+                   and (cfg == path or Path(cfg).name == Path(path).name)
+                   for when, cfg in given)
+
     written = []
     for c in s.calls:
         if c.tool == "Write" and c.path and c.path.endswith((".yml", ".yaml")) \
-                and Path(c.path).name not in ours:
+                and Path(c.path).name not in ours and passed_later(c.ts, c.path):
             written.append({"ts": c.ts, "agent": c.agent, "sub": "Write",
                             "config": c.path[-80:]})
     for c in s.bash():
@@ -458,7 +480,7 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         # heredocs, `sed … > /tmp/x.yml`, `>>` appends.
         for m in _YAML_REDIRECT.finditer(cmd):
             p = m.group(1)
-            if Path(p).name in ours or (c.ts, "w", p) in seen:
+            if Path(p).name in ours or (c.ts, "w", p) in seen or not passed_later(c.ts, p):
                 continue
             seen.add((c.ts, "w", p))
             written.append({"ts": c.ts, "agent": c.agent, "sub": "Bash redirect",
@@ -500,9 +522,38 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                   "calibrate problem, not a discipline problem.")
 
 
+# The config's sections that hold no detector threshold: `loop.max_rounds`
+# is the one number a human sets to bound a hunt, and was read as one.
+_NOT_DETECTORS = {"project", "scenario", "runner", "loop", "instrumentation",
+                  "domains", "toolchain", "names"}
+
+
 def _threshold_values(text: str) -> dict[str, str]:
-    """The `min_*` / `max_*` keys a piece of config text carries, with values."""
-    return {m.group(1): m.group(2) for m in _DETECTOR_VALUE.finditer(text or "")}
+    """The detector parameters a piece of config text carries, with values.
+
+    A whole file is read as YAML, and each numeric parameter under
+    `detectors:` is keyed `detector.parameter`: by the bare key, the three
+    detectors that have a `max_total_ms` overwrote each other, and a change
+    to one of them read as no change. A fragment, what an Edit carries, is
+    read for its `min_*` / `max_*` keys, unless it is plainly another
+    section's.
+    """
+    try:
+        data = yaml.safe_load(text or "")
+    except yaml.YAMLError:
+        data = None
+    if isinstance(data, dict) and "detectors" in data:
+        out = {}
+        dets = data.get("detectors")
+        for det, params in (dets.items() if isinstance(dets, dict) else ()):
+            for k, v in (params.items() if isinstance(params, dict) else ()):
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    out[f"{det}.{k}"] = str(v)
+        return out
+    if isinstance(data, dict) and data and set(data) <= _NOT_DETECTORS:
+        return {}
+    return {m.group(1): m.group(2) for m in _DETECTOR_VALUE.finditer(text or "")
+            if m.group(1) != "max_rounds"}
 
 
 def thresholds_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
