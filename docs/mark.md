@@ -62,8 +62,10 @@ for source.
 - the launcher Activity does not override `onCreate` — said, with the base
   class it inherits from (`: Base()` in Kotlin, `extends Base` in Java),
   because the override may live there
-- the Application class is not in the manifest — said; `bindApplication` is
-  the framework's alone
+- the Application class is not in the manifest, or does not override
+  `onCreate` — said, with what runs at `bindApplication` all the same: the
+  Application's constructor, the ContentProviders and the libraries'
+  initializers, which `app_init` lists
 - a block that cannot take a begin/end pair of whole lines — proposed but not
   applicable, with the reason; the cases are under `--apply` below
 - a composable, a Room builder, a Koin block — proposed with the reason it
@@ -193,8 +195,10 @@ uninstrumented_cpu   pool-7-thread-1   3184 ms   98% of CPU outside slices
 ```
 
 Nothing in the repository is called `pool-7-thread-1`. The JDK named it, from
-the default factory that `Executors.new*` and a bare `Thread(` hand their
-threads to. Grepping for the name finds nothing, and that is where a hunt
+the default factory that `Executors.new*` and a bare `Thread(` — or Kotlin's
+`Thread { … }`, whose trailing lambda is the Runnable — hand their threads
+to. A `ForkJoinPool` and `Executors.newWorkStealingPool()` name theirs
+`ForkJoinPool-N-worker-M`, and the row says so. Grepping for the name finds nothing, and that is where a hunt
 stalls.
 
 Marking the work is the wrong first move there — you do not know what the work
@@ -239,6 +243,10 @@ factory names its threads. What counts as given:
   `Executors.newFixedThreadPool(2) { r -> Thread(r, "io") }` passes it
   outside the parentheses. That `Thread(` decides: named, there is no row;
   not, it is the row, since it is where the name goes;
+- a `ThreadFactory` handed to `Executors.new*` where it takes one — the
+  second argument of `newFixedThreadPool` and `newScheduledThreadPool`, any
+  argument of the others — whatever it is: a variable, the project's own
+  class. The JDK's default name is then not what the threads get;
 - `HandlerThread`, which takes a name as its first argument.
 
 Counting those found fifteen sites on a codebase where four were real.
@@ -286,4 +294,6 @@ there the trace leads, one hop at a time.
 `--pools` reads the call and nothing after it. A name set once the thread
 exists — `Thread(r).apply { name = "io" }`, `t.setName("io")` — is not seen,
 and that thread is listed anyway; a `Thread(group, runnable)` has two
-arguments and is taken for named when it is not.
+arguments and is taken for named when it is not. A factory handed to a pool
+constructor (`ThreadPoolExecutor(…)`) is not looked for, and that pool is
+listed as `pool-N-thread-M`.
