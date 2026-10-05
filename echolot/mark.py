@@ -1106,6 +1106,7 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
     """
     out = Plan(root=str(root), module=None, package=None)
     seen: set[str] = set()
+    recurs: set[str] = set()
     for symbol, rel, line in frames:
         if line is None:
             out.notes.append(f"{symbol} — the frame carries no line, so there "
@@ -1113,6 +1114,15 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
             continue
         marker = marker_for(symbol, prefix)
         if marker in seen:
+            # A function on the stack twice calls itself, and its one marker
+            # will open inside itself. Said once, so the nesting in the trace
+            # is not read as a second caller.
+            if marker not in recurs:
+                recurs.add(marker)
+                out.notes.append(
+                    f"{symbol} is on the stack more than once: it calls itself, "
+                    f"so `{marker}` will open inside itself. The report counts "
+                    f"the outermost one")
             continue
         seen.add(marker)
 

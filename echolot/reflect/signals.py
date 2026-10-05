@@ -35,8 +35,11 @@ from .facts import (
     RE_TRACE_OPEN,
     Facts,
     config_writes,
+    hunt_agents,
     shell_edits,
 )
+from .facts import SEGMENT as _SEGMENT
+from .facts import expand_vars as _expand_vars
 from .model import BRIEFS, MAIN, TOOLS, Session, ts_to_epoch
 
 
@@ -59,7 +62,8 @@ _BYPASS = [
     # A gradle *run* of instrumented tests captures traces; `assembleBenchmark`
     # only builds the APK and is not a capture.
     ("gradle", re.compile(r"gradlew\b[^\n]*(?:\bconnected\w*|AndroidTest\b)")),
-    ("adb", re.compile(r"\badb\s+(?:-s\s+\S+\s+)?shell\s+(?:perfetto|am\s+start|cmd\s+activity)")),
+    # A launch, `am start` or `cmd activity start-activity`, records nothing.
+    ("adb", re.compile(r"\badb\s+(?:-s\s+\S+\s+)?shell\s+perfetto\b")),
     ("perfetto", re.compile(r"(?:^|\s)perfetto\s+(?:-c|--txt|-o)")),
 ]
 # What the agent's harness says when it, not the command, stopped the call:
@@ -193,7 +197,8 @@ def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | 
 
 
 def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    if not s.subagents and not f.instrumentation.get("files"):
+    hunters = hunt_agents(s)
+    if not hunters and not f.instrumentation.get("files"):
         return None
     prefix = f.instrumentation.get("prefix", "AGENTTMP_")
     # A marker written with Write is in `content`, and one placed through the
@@ -208,7 +213,7 @@ def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | N
     main_rerecords = [c for c in s.bash(MAIN) if RE_RE_RECORD.search(c.shell)
                       and first_edit is not None and ts_to_epoch(c.ts) > first_edit]
     if not main_edits and not main_shell:
-        if s.subagents:
+        if hunters:
             return Signal("loop_in_main_context", "ok",
                           "the hunt loop stayed inside the subagent",
                           "The main context only saw the conclusion.")
@@ -243,7 +248,7 @@ def guides_in_main(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     it again (#202). The overview is left out: it is every host's door to
     the tool, and `context_hogs` counts it anyway.
     """
-    loops = [a for a in s.subagents if a.type == "perf-hunter"]
+    loops = hunt_agents(s)
     if not loops:
         return None
     handed = min((ts_to_epoch(a.started) for a in loops if a.started), default=None)
@@ -744,19 +749,6 @@ _MOVE = re.compile(r"(?:^|[\s;&|(])mv\s+(?:-\S+\s+)*(\"[^\"]*\"|'[^']*'|\S+)\s+(
 _TRACE_ARG = re.compile(r"(\"[^\"]*\"|'[^']*'|\S+)?[^\s\"']*\.(?:perfetto-trace|pftrace)\b")
 
 
-_ASSIGN = re.compile(r"(?m)^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\"[^\"]*\"|'[^']*'|\S+)")
-
-
-def _expand_vars(cmd: str, token: str) -> str:
-    """`$OUT` and `${OUT}` from assignments in the same command, one level.
-
-    Enough for the shape agents write — `OUT="…/SM-A515F - 13"` two lines
-    above `mv "$OUT" "${OUT}_before"` — without pretending to be a shell.
-    """
-    env = {m.group(1): m.group(2).strip("\"'") for m in _ASSIGN.finditer(cmd)}
-    for name, value in env.items():
-        token = token.replace("${" + name + "}", value).replace("$" + name, value)
-    return token
 
 
 def _trace_dir(argv: str) -> str | None:
@@ -773,9 +765,6 @@ def _trace_dir(argv: str) -> str | None:
         return None
     d = token.rsplit("/", 1)[0] if "/" in token else ""
     return d or None
-
-
-_SEGMENT = re.compile(r"\n|;|&&|\|\||\|")
 
 
 def _touches_traces(segment: str, dirs: list[str]) -> bool:
@@ -827,21 +816,25 @@ def baseline_lost(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = []
     for c in calls:
         cmd = c.shell
-        if RE_ECHOLOT.search(cmd) and re.search(r"echolot\s+analyze\b", cmd):
-            for m in RE_ECHOLOT.finditer(cmd):
-                if m.group(1) == "analyze":
-                    d = _trace_dir(m.group(2) or "")
-                    if d and d not in analyzed_dirs:
-                        analyzed_dirs.append(d)
-            last_analyze_ts = c.ts
-            preserved_since_analyze = False
-            moved_in_build = touched = None
-            continue
-        if last_analyze_ts is None:
-            continue
-        # One shell line at a time: `cp metrics.json /tmp && mv "$OUT" …`
-        # is a copy of something else and a move of the traces.
+        # One command of the line at a time, in the order they run:
+        # `cp metrics.json /tmp && mv "$OUT" …` is a copy of something else
+        # and a move of the traces, and in `./gradlew connected… && echolot
+        # analyze …` the re-record comes first. Taken whole, a line with an
+        # analyze in it was an analyze and nothing else, and the re-record
+        # before it was never checked.
         for raw_seg in _SEGMENT.split(cmd):
+            if RE_ECHOLOT.search(raw_seg) and re.search(r"echolot\s+analyze\b", raw_seg):
+                for m in RE_ECHOLOT.finditer(raw_seg):
+                    if m.group(1) == "analyze":
+                        d = _trace_dir(m.group(2) or "")
+                        if d and d not in analyzed_dirs:
+                            analyzed_dirs.append(d)
+                last_analyze_ts = c.ts
+                preserved_since_analyze = False
+                moved_in_build = touched = None
+                continue
+            if last_analyze_ts is None:
+                continue
             seg = _expand_vars(cmd, raw_seg.strip())
             if not seg:
                 continue
@@ -858,24 +851,20 @@ def baseline_lost(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                     moved_in_build = f"mv → {dst[-70:]} (inside the build tree)"
                 else:
                     preserved_since_analyze = True
-        if RE_RE_RECORD.search(cmd):
-            if re.search(r"echolot\s+collect\b", cmd):
-                # collect sets the previous set aside itself
+            if RE_RE_RECORD.search(seg):
+                if not re.search(r"echolot\s+collect\b", seg) \
+                        and not preserved_since_analyze:
+                    # collect sets the previous set aside itself
+                    before = touched or (analyzed_dirs[-1] if analyzed_dirs else "?")
+                    rows.append({
+                        "ts": _t(c.ts), "agent": c.agent,
+                        "re_record": cmd.replace("\n", " ")[:90],
+                        "traces_before": before[-60:],
+                        "note": moved_in_build or "no copy of the previous traces first",
+                    })
                 preserved_since_analyze = False
                 moved_in_build = touched = None
                 last_analyze_ts = None
-                continue
-            if not preserved_since_analyze:
-                before = touched or (analyzed_dirs[-1] if analyzed_dirs else "?")
-                rows.append({
-                    "ts": _t(c.ts), "agent": c.agent,
-                    "re_record": cmd.replace("\n", " ")[:90],
-                    "traces_before": before[-60:],
-                    "note": moved_in_build or "no copy of the previous traces first",
-                })
-            preserved_since_analyze = False
-            moved_in_build = touched = None
-            last_analyze_ts = None
     if not rows:
         return None
     return Signal("baseline_lost", "warn",

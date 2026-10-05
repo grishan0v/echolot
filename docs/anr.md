@@ -67,6 +67,11 @@ contains a word passed after the tag, which narrows it to the freeze you made:
 adb shell 'dumpsys dropbox --print data_app_anr 21:22' > record.txt
 ```
 
+An entry over the drop box's size limit is cut and ends in `[[TRUNCATED]]`,
+and a dump of hundreds of threads reaches it. The report then says, under what
+it does not say, how many of the threads ART listed are missing, and that a
+holder named as not in the dump may be one of them; `--json` has it as `cut`.
+
 ## What it prints
 
 **The lock chain first**, because it is the strongest thing in the file. A
@@ -79,13 +84,26 @@ recording anything.
 A holder that is itself blocked is a link, not a cause: it is queued exactly
 like the threads behind it. The chain is walked to the bottom, and the stack
 shown is the one thread standing on something of its own — naming the direct
-holder as the answer names a victim.
+holder as the answer names a victim. A walk that comes back to a thread it
+passed is a deadlock, and a deadlock has no such thread: the report shows each
+thread of the loop with its stack and names no root, and says whether the
+holder waits on one of the waiters or the holders block each other while the
+waiters queue behind them. `--json` lists the loop as `deadlock` and the
+first case as `cycle`.
+
+The holder is the thread the note names (`held by thread N`). ART adds that
+tail only when it can read the owner as it dumps; without it, or when the
+named tid is not in the dump, the holder is the thread that printed
+`- locked` for the same address.
 
 R8 leaves the monitor's class obfuscated while the frames come back
 unminified, and no mapping file is needed to bridge them: a blocked thread is
 standing in the method it could not enter, so its own top frame names the class
 whose monitor it wants. Where the two names differ, the raw one stays in the
-output beside the resolved one.
+output beside the resolved one. Only a name R8 wrote is resolved — a few
+lower-case letters where a class name would be. A monitor that kept its name
+stays as printed: `synchronized(cache)` inside `Repository.get` locks a
+`Cache`, not a `Repository`.
 
 When the file carries no lock note at all — Play Console strips them, and so
 do some Crashlytics exports — no chain can be read off it, and the report says
@@ -118,7 +136,11 @@ runtime's own housekeeping, binder pools, a `Timer`, OkHttp's `TaskRunner` and
 the GMS dynamite loop idling, threads waiting on a descriptor in `epoll`,
 `ppoll` or a `Selector`, and threads asleep — `Thread.sleep`, a futex, a
 pthread condition. A blocked thread is never struck out, whatever its stack
-says. The rest are listed by the frame nearest the app — its own where there
+says, and neither is a runnable one. Nor is a thread with work above the idle
+frame: a frame of the app's, or `Binder.execTransact` serving a call — a
+`Timer` running the app's task, the finalizer daemon in an app's
+`finalize()`, a binder thread inside a provider's `query`. The main thread is
+idle only at its looper. The rest are listed by the frame nearest the app — its own where there
 is one, a library's where there is not — with the top frame beside it. The top
 is almost always `BinderProxy.transactNative` or `Unsafe.park`, true and
 useless alone; `SystemJobScheduler.cancel` four frames down is what the thread
@@ -159,7 +181,10 @@ Two modules holding a `Mapper.kt` is ordinary, so the package from the frame's
 own symbol decides between them — the directory has to end in it, so a frame of
 `com.example.a` is not placed in `com/example/app`. One file of that name in
 the whole checkout is not a guess whatever the package says. Several
-candidates and nothing to choose by is the only case that prints a caveat.
+candidates and nothing to choose by is the only case that prints a caveat,
+and it names the others; that includes several whose directories all end in
+the package, such as one class in `src/debug` and `src/release`.
+`mark --from-anr` marks only frames placed for certain and names the rest.
 
 The checkout also decides which frames are the project's at all. Without one
 that is a list — the platform's packages and those of the libraries every app

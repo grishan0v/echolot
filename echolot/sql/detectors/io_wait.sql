@@ -7,7 +7,7 @@
 --       hundreds of milliseconds here with every other detector silent.
 -- @param: min_io_wait_ms = 20
 -- @calibrate: min_io_wait_ms = top10(total_ms) * 1.5
--- @identity: location, detail
+-- @identity: location, thread
 --
 -- The state is `D` — uninterruptible sleep — and `io_wait` is the kernel
 -- saying that this particular sleep was block I/O rather than one of the
@@ -42,11 +42,21 @@
 -- is worth acting on either way, because the thread and the milliseconds are
 -- the finding.
 
+--
+-- A row is named by its thread and by whether that is the main one, which
+-- has a column of its own: a worker can carry the process's name. The kernel
+-- functions stay in `detail` and out of the name. Which of them a thread
+-- stopped in, and in what order they come, changes from one repeat to the
+-- next, and a name built from them made one thread a different row in each
+-- repeat: merged, a row per variant, each seen once; compared, one row gone
+-- and another new.
 SELECT
     t.thread_name                                   AS location,
     COUNT(*)                                        AS count,
     ROUND(SUM(t.dur) / 1e6, 2)                      AS total_ms,
     ROUND(MAX(t.dur) / 1e6, 2)                      AS max_ms,
+    CASE WHEN t.tid = p.pid THEN 'main' ELSE 'background' END
+                                                    AS thread,
     CASE WHEN t.tid = p.pid THEN 'main' ELSE 'background' END
         || COALESCE(' · ' || GROUP_CONCAT(DISTINCT t.blocked_function), '')
                                                     AS detail

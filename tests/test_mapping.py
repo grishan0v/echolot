@@ -187,5 +187,8 @@ def test_repeats_keep_the_most_minified_methods_any_of_them_saw() -> None:
         return {"hz": 100, "started": True, "samples": 30, "with_stack": 28,
                 "names": {"methods": 8, "minified": minified, "renamed": 8 - minified}}
     merged = report_mod._merge_sampling([one(0), one(3), one(0)])
+    # The whole block from that repeat: its own `renamed` beside its own
+    # `minified`, never one key's maximum from one repeat and the next key's
+    # from another.
     check("the worst repeat speaks for the names", merged["names"]
-          == {"methods": 8, "minified": 3, "renamed": 8}, merged)
+          == {"methods": 8, "minified": 3, "renamed": 5}, merged)
