@@ -13,8 +13,10 @@ step needs through $GITHUB_OUTPUT:
     ci.py comment   the same on the pull request, one comment kept up to date
 
 Nothing here fails a job over what `compare` found. A step fails when the input
-names no trace or `analyze` cannot run; a missing or unreadable baseline is a
-warning, and the run's own report is kept either way.
+names no trace or `analyze` cannot run. A baseline the token cannot read, or an
+artifact that is no archive, is a warning; one that does not exist yet, because
+no run on the branch has kept a report, is a line in the summary. The run's own
+report is kept either way.
 """
 
 from __future__ import annotations
@@ -192,14 +194,19 @@ def find_baseline(gh: GitHub, *, repo: str, workflow: str, branch: str,
                       f"?branch={quoted}&status=success&per_page={RECENT_RUNS}"
                       f"&exclude_pull_requests=true")["workflow_runs"]
     except HTTPFailure as e:
+        # A setup error, or a server's: each is worth an annotation, which a
+        # line in the summary is not.
         if e.code == 404:
-            return None, (f"no workflow `{workflow}` with runs this token can see "
-                          f"({e}): `baseline-workflow` is a file name such as "
-                          f"`nightly.yml`, and the token needs `actions: read`")
-        if e.code in (401, 403):
-            return None, (f"the token may not read this repository's runs ({e}); "
-                          f"it needs `actions: read`")
-        return None, f"the runs of `{workflow}` could not be read ({e})"
+            note = (f"no workflow `{workflow}` with runs this token can see "
+                    f"({e}): `baseline-workflow` is a file name such as "
+                    f"`nightly.yml`, and the token needs `actions: read`")
+        elif e.code in (401, 403):
+            note = (f"the token may not read this repository's runs ({e}); "
+                    f"it needs `actions: read`")
+        else:
+            note = f"the runs of `{workflow}` could not be read ({e})"
+        warn(note)
+        return None, note
     runs = [r for r in runs if r.get("id") != current_run
             and not str(r.get("event", "")).startswith("pull_request")]
     if not runs:
@@ -213,7 +220,8 @@ def find_baseline(gh: GitHub, *, repo: str, workflow: str, branch: str,
                          if a.get("name") == artifact and not a.get("expired")), None)
             if kept is None:
                 continue
-            report = _report_in(gh.download(kept["archive_download_url"]))
+            report = _report_in(gh.download(kept["archive_download_url"]),
+                                f"run {run.get('id')}: its `{artifact}`")
         except HTTPFailure as e:
             warn(f"run {run.get('id')}: its `{artifact}` could not be fetched ({e})")
             continue
@@ -224,11 +232,12 @@ def find_baseline(gh: GitHub, *, repo: str, workflow: str, branch: str,
                   f"and the name has to match")
 
 
-def _report_in(archive: bytes) -> bytes | None:
+def _report_in(archive: bytes, what: str = "an artifact") -> bytes | None:
     try:
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             return z.read("report.json") if "report.json" in z.namelist() else None
     except zipfile.BadZipFile:
+        warn(f"{what} is not a zip archive; passed over")
         return None
 
 
@@ -267,7 +276,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     if baseline is None or not baseline.is_file():
         if baseline is not None:
             warn(f"the baseline `{baseline}` is not a file; nothing to compare against")
-        output(baseline="", comparison="", moved="")
+        output(baseline="", comparison="", moved="", appeared="", vanished="", failed="")
         return 0
     # Beside the report, under a name that reads well in the comparison's
     # header, and kept in the artifact: the comparison can be made again from
@@ -283,18 +292,28 @@ def cmd_compare(args: argparse.Namespace) -> int:
     if done.returncode != 0 or not comparison.is_file():
         warn(f"`echolot compare` exited {done.returncode}; the report is kept, "
              f"without a comparison")
-        output(baseline="", comparison="", moved="")
+        output(baseline="", comparison="", moved="", appeared="", vanished="",
+               failed=f"`echolot compare` exited {done.returncode}")
         return 0
-    moved = json.loads(comparison.read_text(encoding="utf-8"))["summary"]["moved"]
-    output(baseline=str(kept), comparison=str(comparison), moved=str(moved))
+    # `moved` is the rows that grew or shrank. One that appeared, a new block
+    # of the main thread, is counted apart, and a workflow reading `moved`
+    # alone would see no change.
+    summary = json.loads(comparison.read_text(encoding="utf-8"))["summary"]
+    output(baseline=str(kept), comparison=str(comparison), moved=str(summary["moved"]),
+           appeared=str(summary.get("appeared", 0)), vanished=str(summary.get("vanished", 0)),
+           failed="")
     return 0
 
 
 # --- what a person reads ----------------------------------------------------
 
 def page(out: Path, *, artifact: str, branch: str, note: str, run: str,
-         url: str, whole: bool) -> str:
-    """The job summary when `whole`, else the shorter pull request comment."""
+         url: str, whole: bool, failed: str = "") -> str:
+    """The job summary when `whole`, else the shorter pull request comment.
+
+    `failed` is why a comparison with a baseline that was found did not come
+    out: without it the page said no baseline was found.
+    """
     report = out / "report.md"
     comparison = out / "comparison.md"
     head = [f"## echolot · `{artifact}`", ""]
@@ -308,10 +327,17 @@ def page(out: Path, *, artifact: str, branch: str, note: str, run: str,
             head += ["<details>", "<summary>The report</summary>", "",
                      report.read_text(encoding="utf-8").strip(), "", "</details>", ""]
         return "\n".join(head)
-    reason = f"{note}." if note else "no baseline was found."
-    head += [f"Nothing to compare against: {reason} This run's report is kept as "
-             f"`{artifact}`, and a later run compares against it once a run on "
-             f"`{branch}` has kept one.", ""]
+    if failed:
+        source = f"the report run [{run}]({url}) kept" if url else "the baseline"
+        head += [f"The comparison with {source} failed: {failed}, and the log of "
+                 f"the compare step says why. This run's report is kept as "
+                 f"`{artifact}`.", ""]
+    else:
+        reason = f"{note}." if note else "no baseline was found."
+        head += [f"Nothing to compare against: {reason} This run's report is kept "
+                 f"as `{artifact}`. A run compares against the report the last good "
+                 f"run on `{branch}` kept, so a run on `{branch}` has to keep one "
+                 f"first.", ""]
     if whole and report.is_file():
         head += [report.read_text(encoding="utf-8").strip(), ""]
     return "\n".join(head)
@@ -319,7 +345,8 @@ def page(out: Path, *, artifact: str, branch: str, note: str, run: str,
 
 def cmd_summary(args: argparse.Namespace) -> int:
     text = page(Path(args.out), artifact=args.artifact, branch=args.branch,
-                note=args.note, run=args.run, url=args.url, whole=True)
+                note=args.note, run=args.run, url=args.url, whole=True,
+                failed=args.failed)
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
         with open(path, "a", encoding="utf-8") as f:
@@ -357,7 +384,8 @@ def cmd_comment(args: argparse.Namespace) -> int:
         warn("`comment` is on, and this run is not on a pull request; nothing posted")
         return 0
     body = page(Path(args.out), artifact=args.artifact, branch=args.branch,
-                note=args.note, run=args.run, url=args.url, whole=False)
+                note=args.note, run=args.run, url=args.url, whole=False,
+                failed=args.failed)
     gh = GitHub(os.environ.get("GITHUB_API_URL", "https://api.github.com"),
                 os.environ.get("GITHUB_TOKEN", ""))
     try:
@@ -405,6 +433,7 @@ def parser() -> argparse.ArgumentParser:
         p.add_argument("--note", default="")
         p.add_argument("--run", default="")
         p.add_argument("--url", default="")
+        p.add_argument("--failed", default="")
         if name == "comment":
             p.add_argument("--pr", default="")
         p.set_defaults(func=func)
