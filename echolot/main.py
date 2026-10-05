@@ -2387,9 +2387,13 @@ def cmd_mark(args) -> int:
             print(f"config ignored: {e}", file=sys.stderr)
 
     if args.remove:
-        touched, kept = mark_mod.remove(root)
+        refused: list[str] = []
+        touched, kept = mark_mod.remove(root, refused)
         for rel, n in touched:
             print(f"  - {rel}: {n} line(s)")
+        for rel in refused:
+            print(f"  ! {rel}: could not be written — its lines are still there",
+                  file=sys.stderr)
         # A tagged line in any other shape than --apply's is left where it
         # is, and named: it carries more than a marker, which deleting it
         # would take along, and "nothing found" over a tree that still has
@@ -2456,19 +2460,25 @@ def cmd_mark(args) -> int:
         return 2
 
     if args.apply:
-        done, unreadable = mark_mod.apply(root, pl)
+        applied = mark_mod.apply(root, pl)
+        done, unreadable = applied
         print()
         for rel, markers in done:
             print(f"  + {rel}: {', '.join(markers)}")
+        # Named, so the count in the plan above adds up.
+        for rel, marker in applied.already:
+            print(f"  = {rel}: {marker} (already marked)")
         for rel in unreadable:
             print(f"  ! {rel}: not valid UTF-8 — skipped. Marking it "
                   f"mechanically would put the lines at the wrong offsets.",
                   file=sys.stderr)
+        for rel in applied.unwritable:
+            print(f"  ! {rel}: could not be written — skipped", file=sys.stderr)
         print(f"applied {sum(len(m) for _, m in done)} marker(s) in {len(done)} file(s); "
               f"every inserted line ends with `{mark_mod.TAG}` — `echolot mark --remove` "
               f"takes them out" if done else "nothing applicable to apply")
         recorder.note(applied=sum(len(m) for _, m in done),
-                      unreadable=len(unreadable))
+                      unreadable=len(unreadable), unwritable=len(applied.unwritable))
     return 0
 
 
