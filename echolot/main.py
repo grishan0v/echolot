@@ -37,6 +37,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
@@ -2824,8 +2825,13 @@ def cmd_calibrate(args) -> int:
 
     tp_binary = _tp_binary(args, cfg)
     _note_local(cfg)
-    detectors = [d for d in load_detectors(DETECTOR_DIR) if d.calibrations]
-    if not detectors:
+    shipped = load_detectors(DETECTOR_DIR)
+    # A detector the config turned off is not measured, and its `false` goes
+    # back into the section as it stands. Measured and printed with a number,
+    # or with only a comment under it, the pasted section turned it on again.
+    disabled = cfg.disabled_detectors
+    detectors = [d for d in shipped if d.calibrations and d.id not in disabled]
+    if not any(d.calibrations for d in shipped):
         print("no detector declared @calibrate", file=sys.stderr)
         return 2
 
@@ -2842,7 +2848,15 @@ def cmd_calibrate(args) -> int:
         print(f"config error: {e}", file=sys.stderr)
         return 2
 
-    pooled: dict[str, list[dict]] = {d.id: [] for d in detectors}
+    # Each trace's rows apart. The statistic is taken per run and the median
+    # across runs: `topN` reads as N rows on a healthy run, and a report is
+    # the size of one run, since `analyze` folds the repeats. Over the rows
+    # of every trace pooled, each value came k times, `top10` landed near the
+    # (10/k)-th of one run, and the threshold grew with the number of
+    # repeats: on five of the demo's cold starts it was 170.3 against 4.7
+    # from one.
+    per_run: dict[str, list[list[dict]]] = {d.id: [] for d in detectors}
+    failed: dict[str, int] = {d.id: 0 for d in detectors}
     windows: list[float] = []
 
     for trace in args.traces:
@@ -2861,8 +2875,9 @@ def cmd_calibrate(args) -> int:
             windows.append((bounds["ts_end"] - bounds["ts_start"]) / 1e6)
             for d in detectors:
                 try:
-                    pooled[d.id] += tp.query(d.render_open(overrides.get(d.id)))
+                    per_run[d.id].append(tp.query(d.render_open(overrides.get(d.id))))
                 except Exception as e:
+                    failed[d.id] += 1
                     print(f"[!] {d.id} on {trace}: {e}", file=sys.stderr)
 
     spread = ""
@@ -2871,7 +2886,8 @@ def cmd_calibrate(args) -> int:
                   "calibrate on\n# repeats of ONE scenario; mixing a cold start "
                   "with a minute of\n# scrolling yields thresholds for nothing.")
 
-    print(f"# The detectors section, derived from {len(args.traces)} "
+    total = len(args.traces)
+    print(f"# The detectors section, derived from {total} "
           f"known-healthy runs.")
     print("# Scenario window: " + ", ".join(f"{w:.0f} ms" for w in windows)
           + spread)
@@ -2879,47 +2895,103 @@ def cmd_calibrate(args) -> int:
     print("# The numbers are a statistic over a healthy run plus a margin.")
     print("# This is not a finished config but a proposal: thresholds define")
     print("# what counts as normal, and that is not a script's decision.")
+    print("# Everything else the config's section holds is carried over, so")
+    print("# this section can replace it whole.")
     print("detectors:")
 
     skipped = 0
-    for d in detectors:
-        rows = pooled[d.id]
-        print(f"  {d.id}:")
-        for c in d.calibrations:
-            values = [r[c.column] for r in rows if r.get(c.column) is not None]
-            need = max(args.min_sample, c.needs())
-            if len(values) < need:
-                # A statistic over a handful of values is not a statistic but a
-                # random number wearing the look of a justified one. Staying
-                # quiet is more honest.
-                skipped += 1
-                print(f"    # {c.param}: kept the default "
-                      f"({d.params[c.param]}) — sample {len(values)}, "
-                      f"needs at least {need}")
-                continue
-            raw = c.value(values)
-            value = raw * c.factor
-            value = int(round(value)) if c.column == "count" \
-                else round(value, 1)
-            # A degenerate tail: the sample is large enough, but the Nth value
-            # is already near zero. Such a "threshold" means "report
-            # everything" — that is, not a threshold. There is nowhere for a
-            # number to come from when a healthy run barely feeds this detector.
-            if value < 1:
-                skipped += 1
-                print(f"    # {c.param}: kept the default "
-                      f"({d.params[c.param]}) — {c.expr}={raw:.2f}, the tail "
-                      f"of the distribution is degenerate")
-                continue
-            print(f"    {c.param}: {value}"
-                  f"    # {c.expr}={raw:.1f} × {c.factor}, "
-                  f"sample {len(values)}")
+    measured = {d.id: d for d in detectors}
+    for d in shipped:
+        if d.id in disabled:
+            print(f"  {d.id}: false")
+            continue
+        given = overrides.get(d.id) or {}
+        lines: list[str] = []
+        if d.id in measured:
+            for c in d.calibrations:
+                line, rare = _calibrated(c, d, given, per_run[d.id], failed[d.id],
+                                         total, args.min_sample)
+                lines.append(line)
+                skipped += rare
+        # What the config sets and nothing here measured: masks, ratios, a
+        # detector with no `@calibrate`. The numbers above were measured with
+        # them, and dropped from the section, pasting it reset them all.
+        calibrated = {c.param for c in d.calibrations} if d.id in measured else set()
+        lines += [f"    {k}: {_yaml_scalar(v)}    # from the config"
+                  for k, v in given.items() if k not in calibrated]
+        if lines:
+            print(f"  {d.id}:")
+            for line in lines:
+                print(line)
 
+    broken = [d.id for d in detectors if failed[d.id] == total]
     if skipped:
         print(f"\n# Thresholds left uncalibrated: {skipped}. Not a failure — on"
               f"\n# a healthy run these phenomena are simply rare. Either keep"
               f"\n# the defaults or add more traces and repeat.")
-    return 0
+    if any(failed.values()):
+        print("\n# Failed on some of the traces, so measured on the rest or not at"
+              "\n# all — the error is on stderr: "
+              + ", ".join(f"{i} ({failed[i]} of {total})" for i in failed if failed[i]))
+    return 1 if broken else 0
+
+
+def _calibrated(c, d, given: dict, runs: list[list[dict]], failed: int,
+                total: int, min_sample: int) -> tuple[str, int]:
+    """One threshold's line in the section, and whether it was left for rarity.
+
+    The statistic is taken over each run that has enough values and the
+    median of those stands for the set; `--min-sample` applies per run, as the
+    statistic does. A threshold no run could feed keeps the value in effect:
+    the config's, as a setting line, or the shipped one, as a comment.
+    """
+    def keep(why: str) -> str:
+        if c.param in given:
+            return (f"    {c.param}: {_yaml_scalar(given[c.param])}    "
+                    f"# kept the config's value — {why}")
+        return f"    # {c.param}: kept the default ({d.params[c.param]}) — {why}"
+
+    if failed == total:
+        return keep("the detector failed on every trace, see stderr"), 0
+    need = max(min_sample, c.needs())
+    values = [[r[c.column] for r in rows if r.get(c.column) is not None]
+              for rows in runs]
+    enough = [v for v in values if len(v) >= need]
+    failed_note = f"; failed on {failed} of {total} traces" if failed else ""
+    if not enough:
+        # A statistic over a handful of values is not a statistic but a
+        # random number wearing the look of a justified one. Staying quiet
+        # is more honest.
+        most = max((len(v) for v in values), default=0)
+        return keep(f"sample {most} per run at most, needs at least "
+                    f"{need}{failed_note}"), 1
+    raw = median([c.value(v) for v in enough])
+    value = raw * c.factor
+    value = int(round(value)) if c.column == "count" else round(value, 1)
+    sizes = sorted(len(v) for v in enough)
+    sample = (f"sample {sizes[0]}" if sizes[0] == sizes[-1]
+              else f"sample {sizes[0]}–{sizes[-1]}") + " per run"
+    of = (f"median of {len(enough)} run(s)" if len(enough) == len(values)
+          else f"median of the {len(enough)} of {len(values)} runs with enough")
+    # A degenerate tail: the sample is large enough, but the Nth value is
+    # already near zero. Such a "threshold" means "report everything" — that
+    # is, not a threshold. There is nowhere for a number to come from when a
+    # healthy run barely feeds this detector.
+    if value < 1:
+        return keep(f"{c.expr}={raw:.2f}, the tail of the distribution is "
+                    f"degenerate{failed_note}"), 1
+    return (f"    {c.param}: {value}    # {c.expr}={raw:.1f} × {c.factor}, "
+            f"{of}, {sample}{failed_note}"), 0
+
+
+def _yaml_scalar(value: Any) -> str:
+    """A config value as YAML writes it back: a string quoted, since a mask
+    starts with `*` more often than not, and YAML reads that as an alias."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 # What `failed` holds for a self-check that never ran. Every reader of the
