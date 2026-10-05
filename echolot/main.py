@@ -1913,9 +1913,9 @@ def _clip(text: str, width: int = 58) -> str:
 
 
 def _hunt_config(project: Path, config: str
-                 ) -> tuple[str | None, str | None, dict[str, Any]]:
+                 ) -> tuple[str | None, str | None, dict[str, Any], str | None]:
     """Scenario name, config hash and the confirmed values — what an
-    investigation is opened against.
+    investigation is opened against — and the project's marker prefix.
 
     An investigation records what it was opened against so that `drift` can
     later say "the scenario changed" instead of the human having to remember,
@@ -1929,9 +1929,10 @@ def _hunt_config(project: Path, config: str
     """
     path = project / config
     if not path.exists():
-        return None, None, {}
+        return None, None, {}, None
     cfg = Config.load(path)
-    return cfg.scenario_name, cfg.sha, cfg.confirmed()
+    return (cfg.scenario_name, cfg.sha, cfg.confirmed(),
+            cfg.get("instrumentation.temp_prefix"))
 
 
 def cmd_hunt(args) -> int:
@@ -1979,7 +1980,7 @@ def cmd_hunt(args) -> int:
         # stops `/echolot` at the door. Refused before anything is touched,
         # so asking again once the config loads loses nothing.
         try:
-            scenario, sha, confirmed = _hunt_config(project, config)
+            scenario, sha, confirmed, prefix = _hunt_config(project, config)
         except (ConfigError, OSError) as e:
             print(f"error: {config} does not load: {e}", file=sys.stderr)
             print("Nothing was opened and no traces were moved aside. Fix the "
@@ -2007,8 +2008,10 @@ def cmd_hunt(args) -> int:
         if h.get("since"):
             print(f'  after: {h["since"]}')
         # Instrumentation the previous investigation never took out would
-        # otherwise become this one's starting conditions.
-        left = hunt_mod.leftovers(project)
+        # otherwise become this one's starting conditions. By the config's
+        # prefix, the one `mark` wrote them with: under the default, a
+        # project's `PERF_` markers were never found.
+        left = hunt_mod.leftovers(project, prefix)
         if left["markers"]:
             print(f'\n[!] {left["markers"]} {left["prefix"]} marker(s) left in '
                   f'{len(left["files"])} file(s) by the previous investigation.',
