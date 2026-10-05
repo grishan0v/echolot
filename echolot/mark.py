@@ -20,8 +20,9 @@ project: it binds to the platform's vocabulary and never to the project's.
                 — one hop, resolved by an exact `fun Name(` search, kept
                 only when the definition is in this project.
     jdk         `--pools`: `Executors.new*`, `ThreadPoolExecutor(`, a bare
-                `Thread(` — the places that hand the JDK's default factory a
-                thread to name, so the report ends up saying
+                `Thread(` or Kotlin's `Thread { … }` — the places that hand
+                the JDK's default factory a thread to name, so the report
+                ends up saying
                 `pool-7-thread-1`. A different question from the rest, and
                 the only one that starts from the report; see `plan_pools`.
 
@@ -94,9 +95,12 @@ _MANIFEST_PACKAGE = re.compile(r"<manifest\b[^>]*\bpackage\s*=\s*\"([^\"]+)\"", 
 _NAMESPACE = re.compile(r"\b(?:namespace|applicationId)\s*(?:=|\s)\s*[\"']([^\"']+)[\"']")
 
 # Kotlin `override fun onCreate(` / Java `protected void onCreate(`.
+# An annotation on the same line (`@Override protected void onCreate(`) and
+# `final` count: missing them, the launcher was said not to override onCreate.
 _ON_CREATE = re.compile(
-    r"^[ \t]*(?:override\s+)?(?:public\s+|protected\s+|private\s+)?(?:override\s+)?"
-    r"(?:fun|void)\s+onCreate\s*\(", re.M)
+    r"^[ \t]*(?:@[\w.]+(?:\([^)]*\))?[ \t]+)*"
+    r"(?:(?:override|open|final|public|protected|private)[ \t]+)*"
+    r"(?:fun|void)[ \t]+onCreate[ \t]*\(", re.M)
 _SET_CONTENT = re.compile(r"\bsetContent\s*(?:\([^)]*\)\s*)?\{")
 _SET_CONTENT_VIEW = re.compile(r"\bsetContentView\s*\(")
 _COMPOSABLE = re.compile(r"@Composable\b")
@@ -117,6 +121,10 @@ _HILT_APP = re.compile(r"@HiltAndroidApp\b")
 _EXECUTORS = re.compile(r"\bExecutors\s*\.\s*new([A-Za-z]+)\s*\(")
 _POOL_CTOR = re.compile(r"\b(ThreadPoolExecutor|ScheduledThreadPoolExecutor|ForkJoinPool)\s*\(")
 _BARE_THREAD = re.compile(r"(?<![A-Za-z0-9_])Thread\s*\(")
+# Kotlin's `Thread { work() }`: the Runnable as a trailing lambda, and no
+# parentheses to find. Its thread is `Thread-N` like any other; a return type,
+# `fun worker(): Thread {`, is told apart by the colon before it.
+_THREAD_LAMBDA = re.compile(r"(?<![A-Za-z0-9_.])Thread\s*\{")
 # Already named, and the reason each is not a finding.
 _NAMED_ALREADY = re.compile(
     r"\bThreadFactoryBuilder\b|\bsetNameFormat\b|"
@@ -394,8 +402,10 @@ def manifests(root: Path) -> list[Path]:
     the app module appeared twice and `plan` asked for `--module` to tell two
     copies of the same manifest apart.
     """
+    # Relative to the root: a checkout inside a directory named `main` let
+    # every `src/debug` manifest through.
     return [p for p in files_named(root, "AndroidManifest.xml")
-            if "main" in p.parts]
+            if "main" in p.relative_to(root).parts]
 
 
 def launcher_activities(text: str) -> list[str]:
@@ -463,6 +473,33 @@ def module_package(module_dir: Path, manifest_text: str) -> str | None:
     return None
 
 
+def module_ids(module_dir: Path, manifest_text: str) -> set[str]:
+    """Every id a module is known by: the manifest's package, its namespace
+    and its applicationId — what `project.package` can be one of, with a
+    suffix after it."""
+    ids = set(_MANIFEST_PACKAGE.findall(manifest_text))
+    for name in ("build.gradle.kts", "build.gradle"):
+        f = module_dir / name
+        if f.exists():
+            ids.update(_NAMESPACE.findall(f.read_text(encoding="utf-8", errors="replace")))
+    return ids
+
+
+def _installs_as(package: str, ids: set[str], exact: bool) -> bool:
+    """Whether a module known by `ids` installs as `package`.
+
+    `project.package` is the package as installed — for a benchmark build
+    often `com.example.app.benchmark` — and a module's namespace equalled it
+    only without a suffix. A glob, what `project.process` holds, is matched as
+    one.
+    """
+    if any(c in package for c in "*?["):
+        return any(fnmatch.fnmatchcase(i, package) for i in ids)
+    if exact:
+        return package in ids
+    return any(package.startswith(i + ".") for i in ids)
+
+
 def simple_name(class_ref: str) -> str:
     return class_ref.rsplit(".", 1)[-1]
 
@@ -516,6 +553,29 @@ def base_class(text: str, name: str) -> str | None:
     return m.group(1) if m else None
 
 
+_RETURN = re.compile(r"\breturn\b(?:@(\w+))?")
+_JAVA_NESTED = re.compile(r"->\s*\{|\bnew\s+[\w.<>]+\s*\([^()]*\)\s*\{")
+
+
+def leaves(body: str, name: str, java: bool = False) -> bool:
+    """Whether a `return` in this (noise-stripped) body leaves the function `name`.
+
+    Kotlin: a bare `return`, which in an inline lambda leaves the function
+    too, and `return@name`; any other label leaves only its lambda —
+    `return@setOnClickListener` skipped no end line, and refused a whole
+    onCreate. Java: a `return` inside a lambda body or an anonymous class
+    leaves only that, so those bodies are blanked out first.
+    """
+    if java:
+        out = list(body)
+        for m in _JAVA_NESTED.finditer(body):
+            close = match_brace(body, m.end() - 1)
+            if close is not None:
+                _blank(out, m.end(), close)
+        return re.search(r"\breturn\b", "".join(out)) is not None
+    return any(m.group(1) in (None, name) for m in _RETURN.finditer(body))
+
+
 def find_on_create(text: str) -> tuple[int, int | None, int | None, bool] | None:
     """(line, open_at, close_at, has_return) of the first onCreate override."""
     m = _ON_CREATE.search(text)
@@ -542,8 +602,8 @@ def find_on_create(text: str) -> tuple[int, int | None, int | None, bool] | None
     k = match_brace(clean, j)
     if k is None:
         return (line_of(text, m.start()), None, None, False)
-    body = clean[j + 1:k]
-    has_return = re.search(r"\breturn\b", body) is not None
+    java = "void" in m.group(0)
+    has_return = leaves(clean[j + 1:k], "onCreate", java)
     return (line_of(text, m.start()), j, k, has_return)
 
 
@@ -733,19 +793,29 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
     out = Plan(root=str(root), module=None, package=package)
 
     # 1. the app module: the manifest with a launcher activity
-    candidates = _app_candidates(root, package, module)
+    candidates, found = _app_candidates(root, package, module)
+    if not candidates and found:
+        # A mistyped --module: the launchers are there.
+        out.ambiguity.append(
+            f"--module {module} matches none of: "
+            + ", ".join(f"{gradle_module(c[0], root)} ({c[4] or 'package unknown'})" for c in found))
+        return out
     if not candidates:
         out.notes.append("no launcher Activity in any AndroidManifest.xml under src/main — "
                          "this tree has no app entry point to mark (a library, or the app "
                          "module lives elsewhere: pass --root)")
         return out
     if len(candidates) > 1:
+        # project.package can settle it only when the modules are known by
+        # different ids; two copies of one module are not.
+        distinct = len({frozenset(c[5]) for c in candidates}) == len(candidates)
         out.ambiguity.append(
             "several modules declare a launcher Activity: "
             + ", ".join(f"{gradle_module(c[0], root)} ({c[4] or 'package unknown'})" for c in candidates)
-            + " — pass --module, or set project.package so one matches")
+            + (" — pass --module, or set project.package so one matches" if distinct
+               else " — pass --module"))
         return out
-    mf, mdir, mtext, launchers, pkg = candidates[0]
+    mf, mdir, mtext, launchers, pkg, _ = candidates[0]
     out.module = gradle_module(mf, root)
     out.package = out.package or pkg
     if len(launchers) > 1:
@@ -778,25 +848,33 @@ def plan(root: Path, package: str | None = None, allowed: list[str] | None = Non
     return out
 
 
-def _app_candidates(root: Path, package: str | None, module: str | None) -> list[tuple]:
+def _app_candidates(root: Path, package: str | None, module: str | None
+                    ) -> tuple[list[tuple], list[tuple]]:
     """The modules whose manifest has a launcher activity, narrowed by
-    `--module`, and by the package when that leaves exactly one."""
-    candidates = []
+    `--module`, and by the package when that leaves exactly one; and every
+    launcher module before `--module`, for saying what it matched none of."""
+    found = []
     for mf in manifests(root):
         text = mf.read_text(encoding="utf-8", errors="replace")
         launchers = launcher_activities(text)
         if not launchers:
             continue
         mdir = module_dir_of(mf)
-        candidates.append((mf, mdir, text, launchers, module_package(mdir, text)))
+        found.append((mf, mdir, text, launchers, module_package(mdir, text),
+                      module_ids(mdir, text)))
+    candidates = found
     if module:
         candidates = [c for c in candidates
                       if gradle_module(c[0], root) == module or _rel(c[1], root) == module.strip(":").replace(":", "/")]
     if len(candidates) > 1 and package:
-        narrowed = [c for c in candidates if c[4] == package]
-        if len(narrowed) == 1:
-            candidates = narrowed
-    return candidates
+        # Exact first: an installed id that is a module's own beats one that
+        # merely starts with it.
+        for exact in (True, False):
+            narrowed = [c for c in candidates if _installs_as(package, c[5], exact)]
+            if len(narrowed) == 1:
+                candidates = narrowed
+                break
+    return candidates, found
 
 
 @dataclass
@@ -819,8 +897,9 @@ class _Planner:
         root, out = self.root, self.out
         app_cls = application_class(mtext)
         if not app_cls:
-            out.notes.append("no custom Application class in the manifest — bindApplication is "
-                             "the framework's alone")
+            out.notes.append("no custom Application class in the manifest — what runs at "
+                             "bindApplication is the ContentProviders and library initializers; "
+                             "see app_init")
             return
         f = find_class_file(root, mdir, simple_name(app_cls), self.sources)
         if f is None:
@@ -831,7 +910,8 @@ class _Planner:
         oc = find_on_create(t)
         if oc is None:
             out.notes.append(f"{_rel(f, root)}: {simple_name(app_cls)} does not override "
-                             f"onCreate — nothing of yours runs at bindApplication")
+                             f"onCreate — what runs at bindApplication is its constructor, the "
+                             f"ContentProviders and library initializers; see app_init")
             return
         line, o, c, ret = oc
         why = _why_not(o, ret, one_line_body(t, o, c), c, t)
@@ -973,7 +1053,9 @@ def _body_of(clean: str, paren_at: int) -> tuple[int | None, int | None]:
                 break
         i += 1
     j = clean.find("{", i)
-    if j < 0 or "=" in clean[i:j] or ";" in clean[i:j]:
+    # A `fun` before the brace is the next declaration: an `abstract fun` or
+    # an interface's ends with neither `{` nor `;`, and took the next one's body.
+    if j < 0 or "=" in clean[i:j] or ";" in clean[i:j] or re.search(r"\bfun\b", clean[i:j]):
         return (None, None)
     k = match_brace(clean, j)
     return (j, k) if k is not None else (None, None)
@@ -991,7 +1073,10 @@ def enclosing_block(text: str, suffix: str, line: int):
     function containing both would put the marker around far too much.
     """
     clean = strip_noise(text)
-    lines = text.splitlines(keepends=True)
+    # Split on `\n` alone, as `line_of` counts and as a compiler does:
+    # `splitlines` also breaks at a form feed, and every declaration after
+    # one came out a line late.
+    lines = re.findall(r"[^\n]*\n|[^\n]+$", text)
     if not 1 <= line <= len(lines):
         return None
     pattern = _KOTLIN_FUN if suffix == ".kt" else _JAVA_DECL
@@ -1004,13 +1089,17 @@ def enclosing_block(text: str, suffix: str, line: int):
     for number, raw in enumerate(lines, 1):
         found = pattern.match(raw)
         if found:
-            paren = clean.find("(", offset)
-            open_at, close_at = _body_of(clean, paren) if paren >= 0 else (None, None)
+            # The parameter list's own `(`, where the match ends: the line's
+            # first one can be an annotation's.
+            paren = offset + found.end() - 1
+            open_at, close_at = _body_of(clean, paren)
             if open_at is not None and number <= line <= line_of(text, close_at):
-                if best is None or open_at > best[2]:
-                    body = clean[open_at + 1:close_at]
-                    best = (found.group("name").strip("`"), number, open_at,
-                            close_at, re.search(r"\breturn\b", body) is not None)
+                # On a tie the later declaration: the earlier one is a
+                # declaration that found nobody's body but this one's.
+                if best is None or open_at >= best[2]:
+                    name = found.group("name").strip("`")
+                    best = (name, number, open_at, close_at,
+                            leaves(clean[open_at + 1:close_at], name, suffix != ".kt"))
         offset += len(raw)
     return best
 
@@ -1040,7 +1129,20 @@ def _as_written(member: str) -> str:
     return written or member
 
 
-def frame_function(symbol: str) -> str:
+def declared_functions(text: str, suffix: str) -> set[str]:
+    """The functions a source file declares, by name."""
+    pattern = _KOTLIN_FUN if suffix == ".kt" else _JAVA_DECL
+    return {m.group("name").strip("`") for m in re.finditer(pattern.pattern, text, re.M)}
+
+
+def lambda_frame(symbol: str) -> bool:
+    """A frame of a class the compiler numbered: a lambda's, or an anonymous object's."""
+    owner = symbol.rpartition(".")[0].partition("$$")[0]
+    nested = owner.split("$")[1:]
+    return bool(nested) and nested[-1].isdigit()
+
+
+def frame_function(symbol: str, declared: set[str] | None = None) -> str:
     """The source function a frame belongs to, seen through the compiler.
 
     A plain frame names it directly, and so does a frame of a class nested in
@@ -1073,6 +1175,12 @@ def frame_function(symbol: str) -> str:
     nested = written.split("$")[1:]
     if made or (member in _LAMBDA_ENTRY and nested and nested[-1].isdigit()):
         named = [s for s in nested if s.isidentifier() and s not in _LAMBDA_ENTRY]
+        # A lambda in a local variable's initializer is named after the
+        # variable: `Repo$updateLocality$fresh$1`. With the file's functions
+        # at hand, a segment it does not declare is passed over for the one
+        # above it.
+        if declared is not None:
+            named = [s for s in named if s in declared] or named
         if named:
             return named[-1]
     return _as_written(member)
@@ -1139,10 +1247,21 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
         # Bracketing the block the line landed in would have put a marker
         # named after one function around the body of another, and the trace
         # would then say that function took the time.
-        wanted = frame_function(symbol)
-        disagree = "" if name == wanted else (
-            f"the line falls inside `{name}` while the frame names "
-            f"`{wanted}` — the compiler moved it; mark by hand")
+        declared = declared_functions(text, path.suffix)
+        wanted = frame_function(symbol, declared)
+        if name == wanted:
+            disagree = ""
+        elif lambda_frame(symbol) and wanted not in declared:
+            # On purpose, and on the right build: see `frame_function`.
+            disagree = (f"a lambda the compiler made into a class of its own "
+                        f"(`{wanted}`), inside `{name}` — a pair around `{name}` "
+                        f"would time the call that set it up; mark inside it by hand")
+        elif wanted not in declared:
+            disagree = (f"the frame names `{wanted}`, which this file does not "
+                        f"declare — mark by hand")
+        else:
+            disagree = (f"the line falls inside `{name}` while the frame names "
+                        f"`{wanted}` — the compiler moved it; mark by hand")
         flat = one_line_body(text, open_at, close_at)
         why = disagree or _why_not(open_at, has_return, flat, close_at, text)
         out.proposals.append(Proposal(
@@ -1164,9 +1283,12 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
     # from another build. Refusing each one on its own merits and saying
     # nothing about the pattern reads as a tool that cannot do its job, when
     # what happened is that the checkout is not the version that froze.
+    # Only what another build explains: a line in no function, or a frame
+    # naming a function this file does not have. A lambda refused on purpose
+    # and a line R8 moved into a neighbour happen on the build that froze.
     astray = sum(1 for p in out.proposals if not p.applicable
                  and (p.reason.startswith("no function")
-                      or p.reason.startswith("the line falls")))
+                      or p.reason.startswith("the frame names")))
     total = len(out.proposals) + unplaced
     if total and (astray + unplaced) * 2 > total:
         out.notes.append(
@@ -1230,6 +1352,44 @@ def _with_trailing_lambda(clean: str, end: int) -> int:
     return end
 
 
+def what_is_a_type(clean: str, m: re.Match) -> bool:
+    """Whether a `Thread {` is a return type — `fun worker(): Thread {` — not a call."""
+    if not m.group(0).endswith("{"):
+        return False
+    before = clean[:m.start()].rstrip()
+    return before.endswith(":")
+
+
+# Where each `Executors.new*` takes a ThreadFactory: the second argument of
+# the two that take a size first, any argument of the three that take
+# nothing else. `newWorkStealingPool` takes none.
+_FACTORY_AT = {"FixedThreadPool": 2, "ScheduledThreadPool": 2, "CachedThreadPool": 1,
+               "SingleThreadExecutor": 1, "SingleThreadScheduledExecutor": 1}
+
+
+def _top_args(clean: str, open_paren: int, end: int) -> int:
+    """How many arguments a call's top level holds."""
+    depth, args, current = 0, 0, False
+    for c in clean[open_paren + 1:end - 1]:
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            args += 1
+            current = False
+            continue
+        if not c.isspace():
+            current = True
+    return args + (1 if current else 0)
+
+
+def _factory_given(clean: str, m: re.Match, end: int) -> bool:
+    """Whether an `Executors.new*` call is handed a ThreadFactory, by position."""
+    at = _FACTORY_AT.get(m.group(1))
+    return at is not None and _top_args(clean, m.end() - 1, end) >= at
+
+
 def _names_its_thread(clean: str, quoted: str, open_paren: int, end: int) -> bool:
     """Whether a `Thread(…)` call is handed a name among its own arguments.
 
@@ -1291,20 +1451,31 @@ def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
         quoted: str | None = None   # made the first time a `Thread(` needs it
         for rx, name_of in ((_EXECUTORS, lambda m: f"Executors.new{m.group(1)}"),
                             (_POOL_CTOR, lambda m: m.group(1)),
-                            (_BARE_THREAD, lambda m: "Thread")):
+                            (_BARE_THREAD, lambda m: "Thread"),
+                            (_THREAD_LAMBDA, lambda m: "Thread { }")):
           for m in rx.finditer(clean):
+            if what_is_a_type(clean, m):
+                continue
             # The argument list, not the line. A naming factory is routinely
             # passed on a continuation line — `newFixedThreadPool(\n  2,
             # ThreadFactoryBuilder()…)` — and a per-line check called that an
             # unnamed pool.
-            end = _call_end(clean, m.end() - 1)
             what = name_of(m)
+            if what == "Thread { }":
+                # The trailing lambda is the Runnable, and nothing names it.
+                end = _call_end(clean, m.end() - 1, pair="{}")
+            else:
+                end = _call_end(clean, m.end() - 1)
+            if what.startswith("Executors.new") and _factory_given(clean, m, end):
+                # A ThreadFactory handed over: the JDK's default name is not
+                # what its threads get, whatever the factory does.
+                continue
             if what == "Thread":
                 if quoted is None:
                     quoted = strip_noise(text, strings=False)
                 if _names_its_thread(clean, quoted, m.end() - 1, end):
                     continue
-            else:
+            elif what != "Thread { }":
                 # A factory that builds its threads with `Thread(` is judged
                 # by that call, which this loop reaches on its own: named, the
                 # pool's threads are named; not, the `Thread(` is the row, and
@@ -1316,8 +1487,12 @@ def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
             if _NAMED_ALREADY.search(clean[m.start():end]):
                 continue
             line_no = clean.count("\n", 0, m.start()) + 1
-            kind = "thread_name" if what == "Thread" else "pool_name"
-            born = "Thread-N" if kind == "thread_name" else "pool-N-thread-M"
+            kind = "thread_name" if what.startswith("Thread") else "pool_name"
+            # ForkJoin's worker factory names its own: `ForkJoinPool-1-worker-1`.
+            born = ("Thread-N" if kind == "thread_name"
+                    else "ForkJoinPool-N-worker-M" if what in ("ForkJoinPool",
+                                                                 "Executors.newWorkStealingPool")
+                    else "pool-N-thread-M")
             p = Proposal(
                 kind, rel, line_no,
                 f"{what} — its threads reach the trace as `{born}`, and the "
