@@ -42,6 +42,17 @@ from echolot.reflect import facts  # noqa: E402
 from tests.support import check  # noqa: E402
 
 
+
+def _no_config(root):
+    """A config with nothing in it: no guard, no package, the default prefix.
+
+    Named rather than left out, so that an echolot.yml in the directory the
+    suite runs from is not read; a `-c` that names no file is refused.
+    """
+    path = root / "empty.yml"
+    path.write_text("", encoding="utf-8")
+    return str(path)
+
 def run(*argv: str) -> tuple[int, str, str]:
     """A command, with what it printed on each stream."""
     out, err = io.StringIO(), io.StringIO()
@@ -437,7 +448,7 @@ def test_remove_names_the_tagged_lines_it_leaves(tmp_path):
           [(r, n) for r, n, _ in kept] == [(rel, 3), (rel, 4)], kept)
     check("and left in place", path.read_bytes() == before)
 
-    code, out, _ = run("mark", "--root", str(tmp_path), "-c", str(tmp_path / "none.yml"),
+    code, out, _ = run("mark", "--root", str(tmp_path), "-c", _no_config(tmp_path),
                        "--remove")
     check("exit 0", code == 0, code)
     check("each one is printed as file:line", f"{rel}:3:" in out and f"{rel}:4:" in out, out)
@@ -464,7 +475,7 @@ def test_a_self_closing_activity_before_the_launcher_is_not_the_launcher(tmp_pat
             "    }\n"
             "}\n"))
     settings = (tmp_path / "app/src/main/kotlin/SettingsActivity.kt").read_bytes()
-    code, out, _ = run("mark", "--root", str(tmp_path), "-c", str(tmp_path / "none.yml"),
+    code, out, _ = run("mark", "--root", str(tmp_path), "-c", _no_config(tmp_path),
                        "--apply")
     check("exit 0", code == 0, out)
     check("the launcher's onCreate is marked", "AGENTTMP_activity_oncreate" in
@@ -495,7 +506,7 @@ def test_aliases_of_one_activity_are_one_launcher(tmp_path):
         "}\n"))
     pl = mark.plan(tmp_path)
     check("no ambiguity", pl.ambiguity == [], pl.ambiguity)
-    code, _, _ = run("mark", "--root", str(tmp_path), "-c", str(tmp_path / "none.yml"))
+    code, _, _ = run("mark", "--root", str(tmp_path), "-c", _no_config(tmp_path))
     check("and the command exits 0", code == 0, code)
 
 

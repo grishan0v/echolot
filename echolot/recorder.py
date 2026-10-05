@@ -43,6 +43,11 @@ def note(**facts: Any) -> None:
     _facts.update(facts)
 
 
+def reason() -> str | None:
+    """The reason the current run gave for failing, if it gave one."""
+    return _reason
+
+
 def facts() -> dict[str, Any]:
     """The facts attached to the current run so far, as a copy."""
     return dict(_facts)
