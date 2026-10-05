@@ -352,10 +352,15 @@ def _hunt(h: dict[str, Any], out: list[str]) -> None:
         facts.append(mix)
     for line in facts:
         out.append(f"- {line}")
-    pm = h.get("prompt_mentions") or {}
-    out.append("- prompt ({} chars) mentions: {}".format(
-        h.get("prompt_chars", 0),
-        ", ".join(f"{k} {'✓' if v else '✗'}" for k, v in pm.items())))
+    pm = h.get("prompt_mentions")
+    if pm is None:
+        # Codex keeps the brief encrypted: no marks for what the source
+        # never had, which three crosses would have claimed it left out.
+        out.append("- prompt: not carried by this source")
+    else:
+        out.append("- prompt ({} chars) mentions: {}".format(
+            h.get("prompt_chars", 0),
+            ", ".join(f"{k} {'✓' if v else '✗'}" for k, v in pm.items())))
     cf = h.get("conclusion_fields") or {}
     out.append("- conclusion fields: " + ", ".join(
         f"{k} {'✓' if v else '✗'}" for k, v in cf.items()) +
@@ -455,16 +460,6 @@ def _recorder(report: dict[str, Any], out: list[str]) -> None:
     out.append("")
 
 
-def _notes(report: dict[str, Any], out: list[str]) -> None:
-    if not report.get("notes"):
-        return
-    out.append("## Reader notes")
-    out.append("")
-    for n in report["notes"]:
-        out.append(f"- {n}")
-    out.append("")
-
-
 def _sources(report: dict[str, Any], out: list[str]) -> None:
     out.append("<sub>sources: " + ", ".join(f"`{f}`" for f in report["source"].get("files", []))
                + "</sub>")
@@ -472,15 +467,15 @@ def _sources(report: dict[str, Any], out: list[str]) -> None:
 
 _SECTIONS = (_head, _tally, _signals, _passed, _not_checked, _entry, _timeline,
              _echolot_calls, _questions, _conclusion, _hunts, _instrumentation,
-             _cost, _recorder, _notes, _sources)
+             _cost, _recorder, _sources)
 
 
 # ------------------------------------------------------------------ helpers
 
 def _table(rows: list[dict[str, Any]]) -> str:
-    # A reflect row carries a command line, and a command line carries pipes.
-    # This used to render them raw, which broke the table exactly where the
-    # evidence was.
+    # A reflect row carries a command line, and a command line carries pipes;
+    # `table.render` escapes them, once. `_fmt` escaped them as well, and each
+    # came out as `\\|`, which some renderers read as a cell border.
     return table.render(rows, cell=_fmt)
 
 
@@ -491,7 +486,7 @@ def _fmt(v: Any) -> str:
         return "yes" if v else "no"
     if isinstance(v, float):
         return f"{v:g}"
-    return str(v).replace("|", "\\|").replace("\n", " ")
+    return str(v).replace("\n", " ")
 
 
 def _oneline(text: Any, limit: int) -> str:

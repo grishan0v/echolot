@@ -114,10 +114,14 @@ def _choose(candidates: list[Path], symbol: str) -> tuple[Path, bool]:
             break
         package.append(part)
     wanted = "/".join(package)
-    if wanted:
-        for path in candidates:
-            if f"/{wanted}/" in path.as_posix():
-                return path, True
+    # The directory has to end in the package, as `anr.place` reads it. As a
+    # plain substring `com/example` is inside `com/example/feature`, and
+    # `com.example.Mapper` was placed, as certain, in a subpackage's file
+    # that sorted first. Several that end in it are a guess like any other.
+    agree = [path for path in candidates
+             if wanted and ("/" + path.parent.as_posix()).endswith("/" + wanted)]
+    if agree:
+        return agree[0], len(agree) == 1
     return candidates[0], len(candidates) == 1
 
 

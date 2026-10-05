@@ -157,19 +157,14 @@ def sources(tmp_path) -> Path:
 @pytest.mark.parametrize("symbol, file, needle, function", [
     ("com.example.app.data.Repo$Companion.warm", "Repo.kt", "prime()", "warm"),
     ("com.example.app.data.Repo$ViewHolder.bind", "Repo.kt", "draw()", "bind"),
-    ("com.example.app.data.Repo$load$1.invokeSuspend", "Repo.kt", "fetch()", "load"),
-    ("com.example.app.data.Repo.load$lambda$0", "Repo.kt", "render()", "load"),
     ("com.example.app.data.Store.flush", "Store.java", "log();", "flush"),
-    ("com.example.app.data.Store.lambda$flush$0", "Store.java", "write();", "flush"),
 ])
 def test_a_frame_from_the_build_that_froze_can_take_a_pair(
         sources, symbol, file, needle, function):
     """The line and the name agree, so the pair goes in.
 
-    Only the lambda compiled into a class of its own went in before. The rest
-    were refused: the name came out as `Companion`, `ViewHolder`,
-    `load$lambda$0` or `lambda$flush$0`, and a Java method with no modifier
-    had no function around it at all.
+    These were refused once: the name came out as `Companion` or `ViewHolder`,
+    and a Java method with no modifier had no function around it at all.
     """
     rel = f"app/src/main/java/com/example/app/data/{file}"
     text = (sources / rel).read_text(encoding="utf-8")
@@ -180,6 +175,24 @@ def test_a_frame_from_the_build_that_froze_can_take_a_pair(
           proposal.line == line_in(text, f"{function}()"), proposal)
     check("and nothing says the checkout is another build", not plan.notes,
           plan.notes)
+
+
+@pytest.mark.parametrize("symbol, file, needle, function", [
+    ("com.example.app.data.Repo$load$1.invokeSuspend", "Repo.kt", "fetch()", "load"),
+    ("com.example.app.data.Repo.load$lambda$0", "Repo.kt", "render()", "load"),
+    ("com.example.app.data.Store.lambda$flush$0", "Store.java", "write();", "flush"),
+])
+def test_a_frame_inside_a_lambda_is_not_bracketed_around_its_function(
+        sources, symbol, file, needle, function):
+    """A lambda with a frame of its own runs later than the function that
+    made it, and a pair around `load` or `flush` would time making it. The
+    name is still read through the compiler, and the frame is refused."""
+    rel = f"app/src/main/java/com/example/app/data/{file}"
+    text = (sources / rel).read_text(encoding="utf-8")
+    proposal = mark.plan_from_anr(sources, [(symbol, rel, line_in(text, needle))]).proposals[0]
+    check("refused as a lambda", not proposal.applicable
+          and proposal.reason.startswith(f"a lambda: a pair around `{function}`"),
+          proposal)
 
 
 def test_a_java_method_without_a_modifier_is_a_function():

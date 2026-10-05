@@ -24,6 +24,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+import yaml
+
 from ..config import Config
 from .facts import (
     RE_ECHOLOT,
@@ -33,7 +35,14 @@ from .facts import (
     RE_TRACE_OPEN,
     Facts,
     config_writes,
+    gaps,
+    hunt_agents,
+    is_invocation,
+    shell_edits,
+    verbs,
 )
+from .facts import SEGMENT as _SEGMENT
+from .facts import expand_vars as _expand_vars
 from .model import BRIEFS, MAIN, TOOLS, Session, ts_to_epoch
 
 
@@ -55,8 +64,12 @@ Detector = Callable[[Session, Facts, "Config | None"], "Signal | None"]
 _BYPASS = [
     # A gradle *run* of instrumented tests captures traces; `assembleBenchmark`
     # only builds the APK and is not a capture.
-    ("gradle", re.compile(r"gradlew\b[^\n]*(?:\bconnected\w*|AndroidTest\b)")),
-    ("adb", re.compile(r"\badb\s+(?:-s\s+\S+\s+)?shell\s+(?:perfetto|am\s+start|cmd\s+activity)")),
+    # `assemble…AndroidTest`, `bundle…`, `compile…` build the test APK and
+    # capture nothing, whatever the task's name ends in.
+    ("gradle", re.compile(r"gradlew\b[^\n]*(?:\bconnected\w*|"
+                          r"(?<![\w:])(?!assemble|bundle|compile)\w*AndroidTest\b)")),
+    # A launch, `am start` or `cmd activity start-activity`, records nothing.
+    ("adb", re.compile(r"\badb\s+(?:-s\s+\S+\s+)?shell\s+perfetto\b")),
     ("perfetto", re.compile(r"(?:^|\s)perfetto\s+(?:-c|--txt|-o)")),
 ]
 # What the agent's harness says when it, not the command, stopped the call:
@@ -142,14 +155,22 @@ def agent_prompt_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None
 # --------------------------------------------------------------- protocol
 
 def doctor_first(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    analyzes = [c for c in f.echolot_calls if c.sub == "analyze"]
+    # Calls that ran, and not `--help`: an `analyze --help` read first was
+    # the first analyze, a `doctor --help` passed for the check, and an
+    # analyze the shell skipped on a glob counted as one.
+    real = [c for c in f.echolot_calls if not c.is_help and c.ran]
+    analyzes = [c for c in real if c.sub == "analyze"]
     if not analyzes:
         return None
-    doctors = [c for c in f.echolot_calls if c.sub == "doctor"]
+    doctors = [c for c in real if c.sub == "doctor"]
     first_an = ts_to_epoch(analyzes[0].ts)
     before = [d for d in doctors if ts_to_epoch(d.ts) <= first_an]
     if before:
-        failed = [d for d in before if d.exit not in (0, None)]
+        # The last doctor before the analyze speaks: one that failed, a fix,
+        # one that passed, then the analyze, is the path the protocol asks
+        # for, and it was reported as going on past a failure.
+        last = max(before, key=lambda d: ts_to_epoch(d.ts))
+        failed = [last] if last.exit not in (0, None) else []
         if failed:
             return Signal("doctor_first", "warn",
                           "doctor failed and the run went on anyway",
@@ -169,9 +190,17 @@ def doctor_first(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 
 def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = []
+    known = verbs()
     for c in s.bash():
         cmd = c.shell
-        if RE_TRACE_OPEN.search(cmd):
+        # Without echolot's own invocations: `--tp-binary` names a
+        # trace_processor_shell, and a call that went through echolot was
+        # reported as the agent opening the trace itself.
+        outside = cmd
+        for m in RE_ECHOLOT.finditer(cmd):
+            if is_invocation(m.group(1), known):
+                outside = outside.replace(m.group(0), " ")
+        if RE_TRACE_OPEN.search(outside):
             rows.append({"ts": _t(c.ts), "agent": c.agent, "how": c.tool,
                          "command": cmd[:120]})
     for c in s.calls:
@@ -190,22 +219,30 @@ def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | 
 
 
 def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    if not s.subagents and not f.instrumentation.get("files"):
+    hunters = hunt_agents(s)
+    if not hunters and not f.instrumentation.get("files"):
         return None
     prefix = f.instrumentation.get("prefix", "AGENTTMP_")
+    # A marker written with Write is in `content`, and one placed through the
+    # shell is in no tool edit at all; both are the loop in the main
+    # context, as `instrumentation()` counts them.
     main_edits = [c for c in s.edits(MAIN)
-                  if prefix in str((c.input or {}).get("new_string", "")) or
-                  prefix in str((c.input or {}).get("old_string", ""))]
-    first_edit = min((ts_to_epoch(c.ts) for c in main_edits), default=None)
+                  if any(prefix in str((c.input or {}).get(k, ""))
+                         for k in ("new_string", "old_string", "content"))]
+    main_shell = [e for e in shell_edits(s, prefix) if e["agent"] == MAIN]
+    first_edit = min([ts_to_epoch(c.ts) for c in main_edits]
+                     + [ts_to_epoch(e["ts"]) for e in main_shell], default=None)
     main_rerecords = [c for c in s.bash(MAIN) if RE_RE_RECORD.search(c.shell)
                       and first_edit is not None and ts_to_epoch(c.ts) > first_edit]
-    if not main_edits:
-        if s.subagents:
+    if not main_edits and not main_shell:
+        if hunters:
             return Signal("loop_in_main_context", "ok",
                           "the hunt loop stayed inside the subagent",
                           "The main context only saw the conclusion.")
         return None
     rows = [{"ts": _t(c.ts), "what": f"{c.tool} {_short(c.path)}"} for c in main_edits]
+    rows += [{"ts": _t(e["ts"]), "what": "shell edit " + ", ".join(_short(p) for p in e["files"])}
+             for e in main_shell]
     rows += [{"ts": _t(c.ts), "what": f"re-record: {c.shell[:80]}"}
              for c in main_rerecords]
     return Signal("loop_in_main_context", "warn",
@@ -233,7 +270,7 @@ def guides_in_main(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     it again (#202). The overview is left out: it is every host's door to
     the tool, and `context_hogs` counts it anyway.
     """
-    loops = [a for a in s.subagents if a.type == "perf-hunter"]
+    loops = hunt_agents(s)
     if not loops:
         return None
     handed = min((ts_to_epoch(a.started) for a in loops if a.started), default=None)
@@ -441,10 +478,22 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                 continue
             seen.add(key)
             rows.append({"ts": c.ts, "agent": c.agent, "sub": c.sub, "config": p[-80:]})
+    # A YAML file written in the session is a config of the agent's own only
+    # if a command was then given it with -c. A GitHub workflow for a
+    # nightly benchmark, written and never passed to echolot, was listed as
+    # analysis run on another config.
+    given = [(ts_to_epoch(c.ts), c.config.strip("\"'")) for c in f.echolot_calls
+             if c.config and c.sub in ("analyze", "calibrate", "collect", "names")]
+
+    def passed_later(ts: str, path: str) -> bool:
+        return any(when >= ts_to_epoch(ts)
+                   and (cfg == path or Path(cfg).name == Path(path).name)
+                   for when, cfg in given)
+
     written = []
     for c in s.calls:
         if c.tool == "Write" and c.path and c.path.endswith((".yml", ".yaml")) \
-                and Path(c.path).name not in ours:
+                and Path(c.path).name not in ours and passed_later(c.ts, c.path):
             written.append({"ts": c.ts, "agent": c.agent, "sub": "Write",
                             "config": c.path[-80:]})
     for c in s.bash():
@@ -453,7 +502,7 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         # heredocs, `sed … > /tmp/x.yml`, `>>` appends.
         for m in _YAML_REDIRECT.finditer(cmd):
             p = m.group(1)
-            if Path(p).name in ours or (c.ts, "w", p) in seen:
+            if Path(p).name in ours or (c.ts, "w", p) in seen or not passed_later(c.ts, p):
                 continue
             seen.add((c.ts, "w", p))
             written.append({"ts": c.ts, "agent": c.agent, "sub": "Bash redirect",
@@ -495,9 +544,38 @@ def config_bypassed(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                   "calibrate problem, not a discipline problem.")
 
 
+# The config's sections that hold no detector threshold: `loop.max_rounds`
+# is the one number a human sets to bound a hunt, and was read as one.
+_NOT_DETECTORS = {"project", "scenario", "runner", "loop", "instrumentation",
+                  "domains", "toolchain", "names"}
+
+
 def _threshold_values(text: str) -> dict[str, str]:
-    """The `min_*` / `max_*` keys a piece of config text carries, with values."""
-    return {m.group(1): m.group(2) for m in _DETECTOR_VALUE.finditer(text or "")}
+    """The detector parameters a piece of config text carries, with values.
+
+    A whole file is read as YAML, and each numeric parameter under
+    `detectors:` is keyed `detector.parameter`: by the bare key, the three
+    detectors that have a `max_total_ms` overwrote each other, and a change
+    to one of them read as no change. A fragment, what an Edit carries, is
+    read for its `min_*` / `max_*` keys, unless it is plainly another
+    section's.
+    """
+    try:
+        data = yaml.safe_load(text or "")
+    except yaml.YAMLError:
+        data = None
+    if isinstance(data, dict) and "detectors" in data:
+        out = {}
+        dets = data.get("detectors")
+        for det, params in (dets.items() if isinstance(dets, dict) else ()):
+            for k, v in (params.items() if isinstance(params, dict) else ()):
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    out[f"{det}.{k}"] = str(v)
+        return out
+    if isinstance(data, dict) and data and set(data) <= _NOT_DETECTORS:
+        return {}
+    return {m.group(1): m.group(2) for m in _DETECTOR_VALUE.finditer(text or "")
+            if m.group(1) != "max_rounds"}
 
 
 def thresholds_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
@@ -693,19 +771,6 @@ _MOVE = re.compile(r"(?:^|[\s;&|(])mv\s+(?:-\S+\s+)*(\"[^\"]*\"|'[^']*'|\S+)\s+(
 _TRACE_ARG = re.compile(r"(\"[^\"]*\"|'[^']*'|\S+)?[^\s\"']*\.(?:perfetto-trace|pftrace)\b")
 
 
-_ASSIGN = re.compile(r"(?m)^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\"[^\"]*\"|'[^']*'|\S+)")
-
-
-def _expand_vars(cmd: str, token: str) -> str:
-    """`$OUT` and `${OUT}` from assignments in the same command, one level.
-
-    Enough for the shape agents write — `OUT="…/SM-A515F - 13"` two lines
-    above `mv "$OUT" "${OUT}_before"` — without pretending to be a shell.
-    """
-    env = {m.group(1): m.group(2).strip("\"'") for m in _ASSIGN.finditer(cmd)}
-    for name, value in env.items():
-        token = token.replace("${" + name + "}", value).replace("$" + name, value)
-    return token
 
 
 def _trace_dir(argv: str) -> str | None:
@@ -722,9 +787,6 @@ def _trace_dir(argv: str) -> str | None:
         return None
     d = token.rsplit("/", 1)[0] if "/" in token else ""
     return d or None
-
-
-_SEGMENT = re.compile(r"\n|;|&&|\|\||\|")
 
 
 def _touches_traces(segment: str, dirs: list[str]) -> bool:
@@ -776,21 +838,25 @@ def baseline_lost(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = []
     for c in calls:
         cmd = c.shell
-        if RE_ECHOLOT.search(cmd) and re.search(r"echolot\s+analyze\b", cmd):
-            for m in RE_ECHOLOT.finditer(cmd):
-                if m.group(1) == "analyze":
-                    d = _trace_dir(m.group(2) or "")
-                    if d and d not in analyzed_dirs:
-                        analyzed_dirs.append(d)
-            last_analyze_ts = c.ts
-            preserved_since_analyze = False
-            moved_in_build = touched = None
-            continue
-        if last_analyze_ts is None:
-            continue
-        # One shell line at a time: `cp metrics.json /tmp && mv "$OUT" …`
-        # is a copy of something else and a move of the traces.
+        # One command of the line at a time, in the order they run:
+        # `cp metrics.json /tmp && mv "$OUT" …` is a copy of something else
+        # and a move of the traces, and in `./gradlew connected… && echolot
+        # analyze …` the re-record comes first. Taken whole, a line with an
+        # analyze in it was an analyze and nothing else, and the re-record
+        # before it was never checked.
         for raw_seg in _SEGMENT.split(cmd):
+            if RE_ECHOLOT.search(raw_seg) and re.search(r"echolot\s+analyze\b", raw_seg):
+                for m in RE_ECHOLOT.finditer(raw_seg):
+                    if m.group(1) == "analyze":
+                        d = _trace_dir(m.group(2) or "")
+                        if d and d not in analyzed_dirs:
+                            analyzed_dirs.append(d)
+                last_analyze_ts = c.ts
+                preserved_since_analyze = False
+                moved_in_build = touched = None
+                continue
+            if last_analyze_ts is None:
+                continue
             seg = _expand_vars(cmd, raw_seg.strip())
             if not seg:
                 continue
@@ -807,24 +873,24 @@ def baseline_lost(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                     moved_in_build = f"mv → {dst[-70:]} (inside the build tree)"
                 else:
                     preserved_since_analyze = True
-        if RE_RE_RECORD.search(cmd):
-            if re.search(r"echolot\s+collect\b", cmd):
-                # collect sets the previous set aside itself
+            if RE_RE_RECORD.search(seg):
+                before = touched or (analyzed_dirs[-1] if analyzed_dirs else "?")
+                # A set under .echolot/ is where `hunt` files the evidence and
+                # where this signal's own hint says to copy it: a re-record
+                # writes into the build tree and leaves it alone.
+                kept = ".echolot/" in before or before.startswith(".echolot")
+                if not re.search(r"echolot\s+collect\b", seg) \
+                        and not preserved_since_analyze and not kept:
+                    # collect sets the previous set aside itself
+                    rows.append({
+                        "ts": _t(c.ts), "agent": c.agent,
+                        "re_record": cmd.replace("\n", " ")[:90],
+                        "traces_before": before[-60:],
+                        "note": moved_in_build or "no copy of the previous traces first",
+                    })
                 preserved_since_analyze = False
                 moved_in_build = touched = None
                 last_analyze_ts = None
-                continue
-            if not preserved_since_analyze:
-                before = touched or (analyzed_dirs[-1] if analyzed_dirs else "?")
-                rows.append({
-                    "ts": _t(c.ts), "agent": c.agent,
-                    "re_record": cmd.replace("\n", " ")[:90],
-                    "traces_before": before[-60:],
-                    "note": moved_in_build or "no copy of the previous traces first",
-                })
-            preserved_since_analyze = False
-            moved_in_build = touched = None
-            last_analyze_ts = None
     if not rows:
         return None
     return Signal("baseline_lost", "warn",
@@ -898,6 +964,10 @@ def retries(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
             continue
         a_failed = a.traceback or a.is_error or (a.exit not in (0, None))
         if a.recorded and a.recorded.get("exit") == 0:
+            a_failed = False
+        # Stopped by the agent's harness — a permission screen, a declined
+        # prompt — is not a failure, as `echolot_failures` already reads it.
+        if _HOST.search(a.output_head or ""):
             a_failed = False
         if a_failed and ts_to_epoch(b.ts) - ts_to_epoch(a.ts) <= 180:
             # The same argv twice says nothing; what moved between the two
@@ -1007,8 +1077,12 @@ def long_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = [g for g in f.gaps if g["seconds"] >= 120]
     if not rows:
         return None
+    # The facts keep the longest few; the title counts them all, or it never
+    # said more than eight.
+    total = len(gaps(s, keep=None))
     return Signal("long_gaps", "info",
-                  f"{len(rows)} silence(s) of two minutes or more",
+                  f"{total} silence(s) of two minutes or more"
+                  + (f", the {len(rows)} longest listed" if total > len(rows) else ""),
                   "A subagent running, the human answering, a build in the "
                   "background, a device — the cause is read off the call before "
                   "the silence. Listed so the wall time reads honestly.",
@@ -1022,8 +1096,10 @@ def context_hogs(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     if not big:
         return None
     from_echolot = [o for o in big if o["echolot"]]
+    total = sum(1 for c in s.calls if c.output_chars >= 8000)
     return Signal("context_hogs", "info",
-                  f"{len(big)} tool output(s) over 8k characters",
+                  f"{total} tool output(s) over 8k characters"
+                  + (f", the {len(big)} largest listed" if total > len(big) else ""),
                   "Every character comes out of the window the loop runs in.",
                   big,
                   ("echolot's own output is among them — a shorter default or a "
