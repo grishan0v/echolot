@@ -39,7 +39,7 @@ from statistics import median
 from typing import Any
 
 from . import stats, table
-from .report import family, identity_of, metric_of
+from .report import family, identity_of, metric_of, short_runs
 
 # What counts as movement worth a row. Absolute floor first, so a 4 ms wobble
 # on a 6 ms slice is not "×1.7 slower"; relative floor second, so a 40 ms move
@@ -363,6 +363,24 @@ def _environment_moved(before: dict, after: dict,
                         f"table below cannot separate the app from the machine. "
                         f"The {slower} round ran slower than the {faster} one "
                         f"on the same code. Re-run both on a settled device.",
+            })
+
+    # A merged side whose clock or temperature came from some of its repeats
+    # alone. The checks here compared those repeats with the other side, and
+    # silence would say the whole set was checked and steady.
+    for side, env in (("before", eb), ("after", ea)):
+        partial = [f"its {what} in {short[0]} of {short[1]} repeats"
+                   for what, block in (("clock", env.get("cpu")),
+                                       ("thermal state", env.get("thermal")))
+                   if (short := short_runs((block or {}).get("runs")))]
+        if partial:
+            out.append({
+                "id": "environment",
+                "text": f"The {side} side recorded " + " and ".join(partial)
+                        + ". What this comparison says about the device stands "
+                        "for those repeats alone; the others may have run on a "
+                        "different machine speed. Record every repeat with "
+                        "`runner.environment` on to have the whole set checked.",
             })
 
     # Both sides, or neither. A side that recorded no thermal at all has not
