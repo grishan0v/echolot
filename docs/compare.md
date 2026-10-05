@@ -21,8 +21,9 @@ rule `analyze` uses: a relative `-o` is taken from the config's directory, so
 running it from a build folder full of traces still lands the output in the
 project. The config is `echolot.yml` in the working directory; `-c` names
 another, although `--help` does not list the flag. Run from a folder without
-one — or with a `-c` that does not load — it prints the comparison and writes
-nothing, and says so on stderr.
+one — or with a `-c` that does not load — it writes to `-o` when one is given,
+taken from the working directory; with neither it prints the comparison,
+writes nothing, and says so on stderr.
 
 ## What the table says
 

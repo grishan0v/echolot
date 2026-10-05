@@ -737,7 +737,7 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
     if len(paths) == 2:
         return paths[0], paths[1]
 
-    latest = _out_dir(args.out, args.cfg) / "report.json" if args.cfg else \
+    latest = _out_dir(args.out or ".echolot/out", args.cfg) / "report.json" if args.cfg else \
         Path(".echolot/out/report.json")
     if len(paths) == 1:
         # One path is "against what I just measured": the named report is the
@@ -807,9 +807,13 @@ def cmd_compare(args) -> int:
 
     # Next to the report it is about, by the same rule: a relative path is
     # taken from the config's directory, so running this from wherever the
-    # traces are does not scatter output across build directories.
-    if args.cfg is not None:
-        out_dir = _out_dir(args.out, args.cfg)
+    # traces are does not scatter output across build directories. With no
+    # config, an -o given is taken from the working directory: it used to be
+    # accepted and ignored, and a CI script comparing two downloaded reports
+    # got nothing on disk.
+    if args.cfg is not None or args.out is not None:
+        out_dir = (_out_dir(args.out or ".echolot/out", args.cfg) if args.cfg is not None
+                   else Path(args.out))
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "comparison.json").write_text(
             report_mod.to_json(cmp), encoding="utf-8")
@@ -3597,8 +3601,9 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--local", help=argparse.SUPPRESS)
     cp.add_argument("--hunt", metavar="N|WORDS",
                     help="an investigation's first report against its last")
-    cp.add_argument("-o", "--out", default=".echolot/out",
-                    help="where comparison.md and comparison.json go")
+    cp.add_argument("-o", "--out", default=None,
+                    help="where comparison.md and comparison.json go (default "
+                         ".echolot/out next to the config)")
     cp.add_argument("--floor-ms", type=float, default=compare_mod.FLOOR_MS,
                     metavar="MS",
                     help="movement below this many ms is not a row "
