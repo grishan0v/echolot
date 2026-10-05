@@ -139,6 +139,7 @@ def cmd_reflect(args) -> int:
                   if since is None or r.mtime >= since]
         picked = pick(logged)
         if picked:
+            found = logged
             print(f"[i] no agent session here used echolot — reading "
                   f"{recorder.LOG_FILE} instead. Fewer checks; the report "
                   f"lists which.", file=sys.stderr)
@@ -150,7 +151,8 @@ def cmd_reflect(args) -> int:
         return 1
 
     # Named by the shortest prefix, eight at least, that no other session here
-    # shares. Codex thread ids are UUIDv7, and their first eight characters
+    # shares — among the ones the picked came from, which are the log's
+    # sittings when the transcripts had nothing to say. Codex thread ids are UUIDv7, and their first eight characters
     # are a timestamp that holds for a minute: two threads started within it
     # wrote one report file, and the second replaced the first.
     short = _short_ids([r.id for _, r in found])
