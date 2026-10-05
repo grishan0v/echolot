@@ -87,8 +87,14 @@ screen was first drawn. Such a section belongs to no thread; `probe` and
 `names` list it under the thread name `(async)`, the anchors match it, and
 the detectors never see it.
 
-Both are optional: without them the window is the whole trace. For a trace from
-a macrobenchmark that is fine — it has already cut out the measured block.
+Both are optional: without them the window runs from the process's first slice
+to where its last one ends, or to the end of the recording when one of them
+never closed. For a trace from a macrobenchmark that is fine — it has already
+cut out the measured block.
+
+An end anchor that never closed — the scenario had not reached its end when
+the recording stopped — runs the window to the end of the trace as well, and
+the report says so: `window.end_anchor.unfinished` is `true`.
 
 Names like `Choreographer#doFrame 55112` carry a vsync number that changes from
 run to run. Such an anchor needs a wildcard.

@@ -99,6 +99,18 @@ def test_an_anchor_that_missed_in_one_repeat_is_shouted() -> None:
           "anchor-before" in warned, warned)
 
 
+def test_an_end_that_never_closed_in_one_repeat_is_said() -> None:
+    """The merged anchor is the repeat with the fewest matches; an end left
+    open in another repeat ran that window to the end of its trace."""
+    reps = [_windowed(1000.0), _windowed(1050.0), _windowed(1900.0)]
+    reps[2]["window"]["end_anchor"] = {**reps[2]["window"]["end_anchor"], "unfinished": True,
+                                       "matches": 5}
+    merged = report_mod.aggregate(reps)
+    check("kept", merged["window"]["end_anchor"].get("unfinished") is True,
+          merged["window"]["end_anchor"])
+    check("and said", "never closed" in report_mod.to_markdown(merged))
+
+
 def test_a_material_opened_inside_and_another_process_survive_the_merge() -> None:
     inside = {"state": "S", "total_ms": 300.0, "before_ms": 200.0, "material": True}
     merged = report_mod.aggregate([
