@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import recorder
+from .facts import work
 from .model import MAIN, Call, Session, epoch_to_ts, ts_to_epoch
 
 AGENT_NAME = "recorder"
@@ -103,12 +104,13 @@ def echolot_subcommands(session: Session) -> list[str]:
 
 
 def involves_echolot(session: Session) -> bool:
-    """Anything but reflect on its own.
+    """Anything but a reflection on its own.
 
-    A sitting whose only entry is the `reflect` that produced this report is
-    not worth a report, and it is always the newest candidate.
+    A sitting whose only entries are the `reflect` that produced this report,
+    and the `guide reflect` before it, is not worth a report, and it is
+    always the newest candidate.
     """
-    return any(sub != "reflect" for sub in echolot_subcommands(session))
+    return any(work(c.command or "") for c in session.calls if "sub" in (c.input or {}))
 
 
 def read_session(ref: SessionRef) -> Session:
