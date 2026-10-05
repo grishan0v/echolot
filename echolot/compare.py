@@ -122,6 +122,7 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
             "fired_before": (before.get("summary") or {}).get("fired_ids") or [],
             "fired_after": (after.get("summary") or {}).get("fired_ids") or [],
             "state_changed": state_changed,
+            "silent_both": _silent_both(before, after),
         },
         "rows": rows,
     }
@@ -303,10 +304,11 @@ def _environment_moved(before: dict, after: dict) -> list[dict[str, str]]:
         # or the other. Thermal is still worth checking below — a missing
         # clock is not a missing device.
         blank = [side for side, mhz in (("before", mb), ("after", ma)) if not mhz]
+        sides = ("the before and after sides carry" if len(blank) == 2
+                 else f"the {blank[0]} side carries")
         out.append({
             "id": "environment",
-            "text": "The clock could not be checked: the "
-                    + " and ".join(blank) + " side carries no CPU frequency. "
+            "text": f"The clock could not be checked: {sides} no CPU frequency. "
                     "Whether the two rounds ran on the same machine speed is "
                     "unknown, so a grown row below may be the app or may be "
                     "the device. Record both sides with `runner.environment` "
@@ -587,7 +589,9 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
         delta = round((va or 0.0) - (vb or 0.0), 2)
         ratio = round((va or 0.0) / vb, 2) if vb else None
         floor = max(floor_ms, floor_ratio * (vb or 0.0))
-        if abs(delta) < floor:
+        # Listed when it moves by more than the floor, as the legend and the
+        # docs say: a move of exactly the floor is steady.
+        if abs(delta) <= floor:
             change = STEADY
         else:
             change = GREW if delta > 0 else SHRANK
@@ -741,7 +745,7 @@ def to_markdown(cmp: dict[str, Any]) -> str:
         out.append(
             f"Every row is within the floor "
             f"({cmp['noise_floor']['abs_ms']} ms or "
-            f"{int(cmp['noise_floor']['ratio'] * 100)}%). Either the change did "
+            f"{_pct(cmp['noise_floor']['ratio'])}). Either the change did "
             f"not land where these detectors look, or the two sets are the "
             f"same scenario in the same state."
         )
@@ -751,7 +755,7 @@ def to_markdown(cmp: dict[str, Any]) -> str:
         out.append(
             f"_by each detector's own measure; a row is listed when it moves by "
             f"more than {cmp['noise_floor']['abs_ms']} ms or "
-            f"{int(cmp['noise_floor']['ratio'] * 100)}%, whichever is larger. "
+            f"{_pct(cmp['noise_floor']['ratio'])}, whichever is larger. "
             f"± is the furthest a repeat got from the median. Holds gives the "
             f"range the move lies in, {stats.CONFIDENCE_PCT}% sure: yes when it "
             f"stays on one side of zero._"
@@ -788,17 +792,29 @@ def to_markdown(cmp: dict[str, Any]) -> str:
         out.append(" · ".join(bits) + tail)
         out.append("")
 
-    quiet = sorted(set(_all_ids(cmp)) - set(s["fired_before"]) - set(s["fired_after"]))
+    quiet = s.get("silent_both") or []
     if quiet:
         out.append(f"**Silent in both:** {', '.join(quiet)}")
     return "\n".join(out).rstrip() + "\n"
 
 
-def _all_ids(cmp: dict[str, Any]) -> list[str]:
-    ids = list(cmp["summary"]["fired_before"]) + list(cmp["summary"]["fired_after"])
-    ids += [r["detector"] for r in cmp["rows"]]
-    ids += [r["id"] for r in cmp["summary"]["state_changed"]]
-    return ids
+def _pct(ratio: float) -> str:
+    """A ratio as a percentage, rounded: `int()` printed 0.29 as 28%."""
+    return f"{round(ratio * 100, 4):g}%"
+
+
+def _silent_both(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """The detectors present on both sides, run on both, and silent on both.
+
+    Built from the ids that fired, the line could never name one that fired
+    on neither side, and it was never printed.
+    """
+    def quiet(rep: dict[str, Any]) -> set[str]:
+        return {d["id"] for d in rep.get("detectors") or []
+                if not d.get("rows") and not d.get("error")}
+    fired = set((before.get("summary") or {}).get("fired_ids") or []) \
+        | set((after.get("summary") or {}).get("fired_ids") or [])
+    return sorted((quiet(before) & quiet(after)) - fired)
 
 
 def _table(rows: list[dict[str, Any]]) -> str:

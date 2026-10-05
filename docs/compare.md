@@ -290,7 +290,8 @@ goes away. Absent below four runs.
   "summary": { "moved": 4, "appeared": 2, "vanished": 1, "steady": 17,
                "fired_before": [ … ], "fired_after": [ … ],
                "state_changed": [ { "id": "binder_txn",
-                                    "before": "silent", "after": "1 row(s)" } ] },
+                                    "before": "silent", "after": "1 row(s)" } ],
+               "silent_both": [ "gc_pressure", … ] },
   "rows": [
     { "location": "TeamRepository.loadAll", "detector": "main_thread_block",
       "metric": "self_ms", "change": "grew", "matched_by": "exact",

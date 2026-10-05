@@ -55,8 +55,7 @@ SPREAD = ["self_ms", "total_ms", "max_ms"]
 # Names that differ only by numbers are one phenomenon: 'Lock contention (owner
 # tid: 1234)' and the same with tid 5678, `Choreographer#doFrame 55112` in one
 # run and `55120` in the next, worker-2 and worker-5 of one pool.
-_DIGITS = re.compile(r"\d+")
-_HEX = re.compile(r"0x[0-9a-fA-F]+")
+_NUMBER = re.compile(r"0x[0-9a-fA-F]+|\d+")
 
 
 def family(name: str, keep: str | None = None) -> str:
@@ -81,7 +80,8 @@ def family(name: str, keep: str | None = None) -> str:
     """
     if keep and name.startswith(keep):
         return name
-    return _DIGITS.sub("#", _HEX.sub("0x#", name))
+    # One pass: the digits pass after the hex one rewrote its `0x#` as `#x#`.
+    return _NUMBER.sub(lambda m: "0x#" if m.group(0).startswith("0x") else "#", name)
 
 
 def metric_of(row: dict[str, Any]) -> str:

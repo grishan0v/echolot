@@ -3319,6 +3319,21 @@ class _Versions(argparse.Action):
         parser.exit()
 
 
+def _at_least_one(text: str) -> int:
+    """`--top`: a count of rows, one or more.
+
+    `--top 0` gave the default in Markdown and no rows in `--json`, and a
+    negative one cut rows off the end.
+    """
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{value} rows: give one or more")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     # rich-argparse title-cases the section headings — "Usage:", "Options:",
     # "Positional Arguments:". Every other Python program on the same machine
@@ -3601,7 +3616,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="where comparison.md and comparison.json go")
     cp.add_argument("--floor-ms", type=float, default=compare_mod.FLOOR_MS,
                     metavar="MS",
-                    help="movement below this many ms is not a row "
+                    help="movement at or below this many ms is not a row "
                          f"(default: {compare_mod.FLOOR_MS:g})")
     cp.add_argument("--floor-pct", type=float,
                     default=compare_mod.FLOOR_RATIO * 100, metavar="PCT",
@@ -3648,7 +3663,7 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
     rp.add_argument("--detector", "-d", action="append", metavar="ID",
                     help="this detector's rows, longest first; repeatable")
-    rp.add_argument("--top", type=int, metavar="N",
+    rp.add_argument("--top", type=_at_least_one, metavar="N",
                     help="how many rows (default: 5 for a detector, 15 for markers)")
     rp.add_argument("--window", action="store_true",
                     help="the window, the anchors, the main thread and the device")
