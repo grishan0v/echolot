@@ -111,6 +111,21 @@ slice never closed — and folding that to zero made the worst thing in the trac
 the one thing invisible in it. Two detectors missed it and neither had a bug of
 its own.
 
+The rest of the pipeline reads an open interval the same way:
+
+- **the window's end.** An end anchor that never closed ends the window at the
+  end of the trace, and the report marks it `end_anchor.unfinished`. Read as
+  zero long, it cut the window off where the scenario got stuck. With no end
+  anchor, the window ends where the process's last slice does, and an open one
+  runs to the end of the trace.
+- **thread states.** `_tstate_win` reads a thread's last state, still open when
+  the recording stopped, as running to the end of the window. Dropped, it took
+  each thread's last stretch out of the budget, `io_wait`,
+  `uninstrumented_cpu` and `anr_risk`.
+- **children.** `_child_sum` reads an open child as running to the end of the
+  window, and stops each child of an open slice there, so self times still add
+  up to no more than the window.
+
 ### A stretch is a third shape, and the window is not always right
 
 `anr_risk` asks neither "how much went into this name" nor "was this one
