@@ -98,7 +98,10 @@ def path(project: Path) -> Path:
 
 
 def load(project: Path) -> dict[str, Any] | None:
-    """The open investigation, or None. A corrupt file reads as None.
+    """The last investigation, open or concluded, or None. A corrupt file reads as None.
+
+    Whether it is open is its `status`: a concluded one stays in place,
+    readable, until the next question opens another.
 
     A hunt file is a convenience, never a precondition: if it cannot be read,
     the tool must behave exactly as it did before this module existed.
@@ -309,9 +312,13 @@ def touch(project: Path, *, collect: bool = False, analyze: bool = False) -> Non
 
 
 def conclude(project: Path, conclusion: str) -> dict[str, Any] | None:
-    """Mark the open investigation answered. It stays in place, readable."""
+    """Mark the open investigation answered. It stays in place, readable.
+
+    None when none is open: a concluded one keeps the conclusion it has, and
+    a second one written over it was lost without a word.
+    """
     hunt = load(project)
-    if not hunt:
+    if not hunt or hunt.get("status", "open") != "open":
         return None
     hunt["status"] = "concluded"
     hunt["conclusion"] = conclusion

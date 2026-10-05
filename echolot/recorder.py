@@ -43,6 +43,11 @@ def note(**facts: Any) -> None:
     _facts.update(facts)
 
 
+def facts() -> dict[str, Any]:
+    """The facts attached to the current run so far, as a copy."""
+    return dict(_facts)
+
+
 def failed(reason: str) -> None:
     """Why the command is about to exit non-zero, in the words it printed.
 
