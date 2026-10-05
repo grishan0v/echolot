@@ -241,7 +241,23 @@ _BOILERPLATE = re.compile(
 # build rather than by anything in the scenario, each with the one thing that
 # fixes it. Every entry came off a real run, and each cost an agent a
 # round of reading gradle output to arrive at the same sentence.
-KNOWN_FAILURES: list[tuple[re.Pattern, str]] = [
+def _suppress(text: str) -> str:
+    """The suppressErrors hint, with the names the benchmark refused.
+
+    A fixed list suppressed nothing that failed for `DEBUGGABLE`, and the
+    next run failed the same way after a full gradle build.
+    """
+    m = re.search(r"ERRORS \(not suppressed\):\s*([A-Z][A-Z0-9_,\- ]*)", text or "")
+    names = ",".join(n.strip() for n in m.group(1).split(",") if n.strip()) if m else ""
+    return ("the benchmark refuses this device or its state (EMULATOR, LOW-BATTERY, "
+            "UNLOCKED, DEBUGGABLE …). Fix the state it names, or add "
+            "-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark."
+            f"suppressErrors={names or '<the names it lists>'} to runner.gradle_args")
+
+
+# Each hint is a sentence, or a function of the failure's text for one that
+# has to quote it.
+KNOWN_FAILURES: list[tuple[re.Pattern, str | Callable[[str], str]]] = [
     (re.compile(r"perfetto ?sdk|libtracing_perfetto|binary (verification|version|missing)",
                 re.IGNORECASE),
      "the Perfetto SDK half of the benchmark's tracing could not be set up in the "
@@ -252,12 +268,12 @@ KNOWN_FAILURES: list[tuple[re.Pattern, str]] = [
      "-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark."
      "perfettoSdkTracing.enable=false to runner.gradle_args"),
     (re.compile(r"ERRORS \(not suppressed\)|suppressErrors", re.IGNORECASE),
-     "the benchmark refuses this device or its state (EMULATOR, LOW-BATTERY, "
-     "UNLOCKED, DEBUGGABLE …). Fix the state it names, or add "
-     "-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark."
-     "suppressErrors=EMULATOR,LOW-BATTERY,UNLOCKED to runner.gradle_args"),
+     _suppress),
+    # The phrases that say there is no device. A bare `DeviceException` is
+    # not one: AGP wraps a failed install in it, and that failure was sent
+    # to `adb devices` before it was told to uninstall the app.
     (re.compile(r"No online devices|no devices/emulators found|device offline|"
-                r"DeviceException|No connected devices", re.IGNORECASE),
+                r"No connected devices", re.IGNORECASE),
      "gradle found no device it could use: `adb devices` should list one as "
      "`device`, and a serial named with --device or runner.device — which "
      "reaches gradle as ANDROID_SERIAL — has to be one of those listed"),
@@ -287,14 +303,17 @@ def failure_lines(out: str, err: str, limit: int = 20) -> list[str]:
                 seen.add(text)
                 picked.append(text[:300])
     if not picked:
-        tail = (err or out or "").strip().splitlines()
+        # The first stream with anything in it: a stderr of one newline is
+        # truthy, and the cause on stdout was reported as nothing printed.
+        tail = ((err or "").strip() or (out or "").strip()).splitlines()
         picked = [ln.strip()[:300] for ln in tail[-limit:] if ln.strip()]
     return picked[-limit:]
 
 
 def hints(text: str) -> list[str]:
     """What to do, for every known failure the text names."""
-    return [hint for pattern, hint in KNOWN_FAILURES if pattern.search(text or "")]
+    return [hint(text) if callable(hint) else hint
+            for pattern, hint in KNOWN_FAILURES if pattern.search(text or "")]
 
 
 def _fixes(lines: list[str], out: str, err: str) -> list[str]:
@@ -497,6 +516,14 @@ def _state_hint(serial: str, state: str, detail: str = "") -> str:
     return f"{serial}: state is {state}, expected device"
 
 
+def _join(parts: list[str]) -> str:
+    """A command line the shell hands over word for word."""
+    if os.name == "posix":
+        import shlex
+        return shlex.join(parts)
+    return subprocess.list2cmdline(parts)
+
+
 def resolve_activity(device: str, package: str) -> str:
     out = _run(["adb", "-s", device, "shell", "cmd", "package",
                 "resolve-activity", "--brief", package], timeout=60)
@@ -505,6 +532,15 @@ def resolve_activity(device: str, package: str) -> str:
         raise RunnerError(
             f"could not determine the launcher activity for {package}. "
             f"Is the app installed? Otherwise set runner.activity explicitly.")
+    # A package with more than one launcher activity has no single match,
+    # and the platform answers with its own chooser,
+    # `android/com.android.internal.app.ResolverActivity`. Taken as the app's,
+    # every repeat started the chooser and measured nothing of the app.
+    if activity.split("/", 1)[0] != package:
+        raise RunnerError(
+            f"{package} has more than one launcher activity, and the device "
+            f"answered with {activity} instead of one of them. Set "
+            f"runner.activity to the one the scenario starts.")
     return activity
 
 
@@ -618,6 +654,12 @@ def run_command(command: str, timeout: float, knob: str = "runner.timeout_s",
         env={**os.environ, **env} if env else None,
         # POSIX only, and the reason the kill below can reach the whole tree.
         start_new_session=(os.name == "posix"))
+    # In a group of its own, the command is out of reach of the Ctrl-C a
+    # terminal sends to the foreground group, and of nothing at all when an
+    # agent's harness sends echolot SIGTERM. Either way it ran on: a gradle
+    # run kept driving the device under the next `collect`. Both now reach
+    # the same cleanup as a timeout.
+    previous = _terminate_as_exit()
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -630,10 +672,36 @@ def run_command(command: str, timeout: float, knob: str = "runner.timeout_s",
             gist=f"the scenario command was still running after {timeout:g}s "
                  f"and was stopped → raise {knob} if it honestly takes that long"
         ) from None
+    except BaseException:
+        _kill_tree(proc)
+        proc.communicate()
+        raise
+    finally:
+        _restore(previous)
     if proc.returncode != 0:
         raise RunnerError(failure_message(command, proc.returncode, out, err),
                           gist=failure_gist(proc.returncode, out, err))
     return time.monotonic() - started
+
+
+def _terminate_as_exit():
+    """SIGTERM raised as `SystemExit` while a command runs, so that it unwinds
+    through the cleanup rather than ending the process where it stands.
+    Returns what to put back; None where a handler cannot be set."""
+    def exit_(signum, _frame):
+        raise SystemExit(128 + signum)
+    try:
+        return signal.signal(signal.SIGTERM, exit_)
+    except (ValueError, OSError):   # not the main thread, or no SIGTERM here
+        return None
+
+
+def _restore(previous) -> None:
+    if previous is not None:
+        try:
+            signal.signal(signal.SIGTERM, previous)
+        except (ValueError, OSError):
+            pass
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -677,11 +745,17 @@ def harvest(search_root: Path, since: float, out_dir: Path,
 
     out_dir.mkdir(parents=True, exist_ok=True)
     results = []
-    for i, (_when, src) in enumerate(found):
-        dst = out_dir / f"{name}_iter{i:03d}.perfetto-trace"
-        dst.write_bytes(src.read_bytes())
-        results.append({"path": dst, "size": dst.stat().st_size,
-                        "source": src})
+    for _when, src in found:
+        # The same race as above, after the previous set was moved aside: a
+        # trace gradle removed in between is skipped, and the numbering
+        # counts the ones copied, so the set has no hole in it.
+        try:
+            data = src.read_bytes()
+        except OSError:
+            continue
+        dst = out_dir / f"{name}_iter{len(results):03d}.perfetto-trace"
+        dst.write_bytes(data)
+        results.append({"path": dst, "size": len(data), "source": src})
     return results
 
 
@@ -752,12 +826,14 @@ RESET_POLICIES = ("force-stop", "none")
 def reset_policy(section: dict, log: Callable[[str], None] = print) -> str:
     """What happens to the app between iterations — the value collect uses.
 
-    `force-stop` (cold, the default) or `none` (warm). Anything else used to
-    be announced as force-stop and run as none: `cmd_collect` printed "Using
-    force-stop." while the loop here stopped the app on the exact string
-    only, so a typo — `force_stop`, or an empty value — measured warm starts
-    under a cold start's name. Decided once, here, and what is announced is
-    what runs.
+    `force-stop` (cold, the default) or `none`, which resets nothing. That is
+    not a warm start: in launch mode the app is still in front from the
+    repeat before, `am start -W` has nothing to start, and only the first
+    repeat measures one. Anything else used to be announced as force-stop and
+    run as none: `cmd_collect` printed "Using force-stop." while the loop here
+    stopped the app on the exact string only, so a typo — `force_stop`, or an
+    empty value — measured no start under a cold start's name. Decided once,
+    here, and what is announced is what runs.
 
     `pm clear` is not on the list on purpose: it changes the scenario rather
     than repeating it. A cold start with an empty database and a user's cold
@@ -768,7 +844,7 @@ def reset_policy(section: dict, log: Callable[[str], None] = print) -> str:
         return value
     shown = "(empty)" if value in (None, "") else value
     log(f"[!] runner.reset_policy: {shown} is not supported. Available: "
-        f"force-stop (cold) and none (warm). Using force-stop.")
+        f"force-stop (cold) and none (nothing between repeats). Using force-stop.")
     return "force-stop"
 
 
@@ -856,8 +932,13 @@ def collect(package: str, out_dir: Path, iterations: int,
             raise RunnerError("runner.mode: gradle needs runner.gradle_task")
         root = Path(section.get("project_root", "."))
         timeout = _positive(section, "timeout_s", 3600)
-        command = " ".join([str(section.get("gradle", "./gradlew")), str(task),
-                            *_listed(section, "gradle_args")])
+        # Every part quoted, so each element of the list reaches gradle as one
+        # argument with nothing expanded. Joined with spaces, the shell read
+        # `$Startup` in a nested test class's name as a variable and ran the
+        # benchmark under another filter, and split `-Dorg.gradle.jvmargs=…`
+        # at its space. The line logged is the line run.
+        command = _join([str(section.get("gradle", "./gradlew")), str(task),
+                         *_listed(section, "gradle_args")])
         log(f"gradle: {command}")
         log(f"  in {root.resolve()}")
         env = None

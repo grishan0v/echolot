@@ -113,18 +113,36 @@ def cmd_reflect(args) -> int:
                       f"project has.", file=sys.stderr)
             return 2
 
-    picked = []
-    for reader, ref in found:
-        session = (from_log.read_session(ref) if reader is from_log
-                   else reader.read_session(ref.path))
-        # An explicit id is taken as is; otherwise only sessions that used the
-        # tool for real work count — a session that merely ran `reflect` is
-        # not worth reflecting on.
-        if not args.session and not reader.involves_echolot(session):
-            continue
-        picked.append((reader, ref, session))
-        if not (args.all or args.list or args.session or since is not None):
-            break   # --last: the newest one is enough
+    def pick(found):
+        picked = []
+        for reader, ref in found:
+            session = (from_log.read_session(ref) if reader is from_log
+                       else reader.read_session(ref.path))
+            # An explicit id is taken as is; otherwise only sessions that used
+            # the tool for real work count — a session that merely ran
+            # `reflect` is not worth reflecting on.
+            if not args.session and not reader.involves_echolot(session):
+                continue
+            picked.append((reader, ref, session))
+            if not (args.all or args.list or args.session or since is not None):
+                break   # --last: the newest one is enough
+        return picked
+
+    picked = pick(found)
+    # Transcripts here, and none of them used echolot: an old session that
+    # edited the README while the hunt ran from Cursor. The log is the rest
+    # of what happened here, and the docs promise the fall-back; it used to
+    # come only when there were no transcripts at all.
+    if not picked and not args.session and not only_log \
+            and from_log.log_path(project).exists():
+        logged = [(from_log, r) for r in from_log.list_sessions(project)
+                  if since is None or r.mtime >= since]
+        picked = pick(logged)
+        if picked:
+            print(f"[i] no agent session here used echolot — reading "
+                  f"{recorder.LOG_FILE} instead. Fewer checks; the report "
+                  f"lists which.", file=sys.stderr)
+            where, only_log = str(from_log.log_path(project)), True
 
     if not picked:
         print(f"nothing to reflect on: nothing in {where} used echolot"
@@ -141,7 +159,7 @@ def cmd_reflect(args) -> int:
               f"{'echolot':>7} {'hunt':>4}  first prompt")
         for reader, ref, s in picked:
             subs = reader.echolot_subcommands(s)
-            hunts = sum(1 for a in s.subagents if a.type == "perf-hunter")
+            hunts = len(facts_mod.hunt_agents(s))
             first = next((t.text for t in s.turns if t.role == "user" and t.kind == "text"), "")
             dur = s.duration_s()
             print(f"{ref.id[:8]:10} {s.agent:11} "

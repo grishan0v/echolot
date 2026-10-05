@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .facts import subcommands
+from .facts import hunt_agents, reflection_slash, subcommands, work
 from .model import MAIN, Ask, Call, Session, SubAgent, Turn, Usage, clip, ts_to_epoch
 
 AGENT_NAME = "claude-code"
@@ -115,16 +115,16 @@ def echolot_subcommands(session: Session) -> list[str]:
 def involves_echolot(session: Session) -> bool:
     """A session worth reflecting on: it used the tool for real work.
 
-    `reflect` itself does not count — otherwise the session that runs the
-    reflection is always the newest candidate.
+    A reflection does not count — otherwise the session that runs it is
+    always the newest candidate. Its signs are `reflect`, `guide reflect`,
+    `/echolot reflect` and `/echolot-reflect` under any prefix.
     """
-    subs = [s for s in echolot_subcommands(session) if s != "reflect"]
-    if subs:
+    if any(work(c.command or "") for c in session.bash()):
         return True
     if any(t.kind == "slash" and (t.command or "").startswith("/echolot")
-           and t.command != "/echolot-reflect" for t in session.turns):
+           and not reflection_slash(t.command, t.args) for t in session.turns):
         return True
-    return any(s.type == "perf-hunter" for s in session.subagents)
+    return bool(hunt_agents(session))
 
 
 # ------------------------------------------------------------------ reading
@@ -260,6 +260,11 @@ class _Pass:
         # of each counter and add them up once at the end.
         self.per_msg: dict[str, Usage] = {}
         self.last_assistant_text = ""
+        # The older layout's inline subagent rows, kept apart: their tokens,
+        # thinking and last words went into the main context's, and the
+        # report quoted a subagent as what the main context concluded.
+        self.inline: SubAgent | None = None
+        self.inline_msg: dict[str, Usage] = {}
 
     def row(self, row: dict[str, Any]) -> None:
         if row.get("isSidechain") and self.agent == MAIN:
@@ -271,10 +276,18 @@ class _Pass:
         self._where(row)
         ts = row.get("timestamp") or ""
         msg = row.get("message") or {}
+        if row_agent == "sub:inline":
+            if self.inline is None:
+                self.inline = SubAgent(id="inline", started=ts or None,
+                                       description="subagent rows inline in the main file")
+                self.session.subagents.append(self.inline)
+            self.inline.ended = ts or self.inline.ended
         if row.get("type") == "assistant":
             self._assistant(msg, row, ts, row_agent)
         elif row.get("type") == "user":
             self._user(msg.get("content"), row, ts, row_agent)
+        elif row.get("type") == "attachment":
+            self._attachment(row.get("attachment") or {}, row, ts, row_agent)
 
     def _where(self, row: dict[str, Any]) -> None:
         """The directory, the agent's version and the branch: each from the first row that has it."""
@@ -298,30 +311,34 @@ class _Pass:
         # for its own bookkeeping; the real model is on the others.
         if self.session.model is None and model and not str(model).startswith("<"):
             self.session.model = model
-        self._usage(msg, row)
+        self._usage(msg, row, row_agent)
         for block in _blocks(msg.get("content")):
             kind = block.get("type")
             if kind == "thinking":
-                self._thinking()
+                self._thinking(row_agent)
             elif kind == "text":
                 self._said(str(block.get("text") or ""), ts, row_agent)
             elif kind == "tool_use":
                 self._tool_use(block, ts, row_agent)
 
-    def _usage(self, msg: dict[str, Any], row: dict[str, Any]) -> None:
+    def _usage(self, msg: dict[str, Any], row: dict[str, Any],
+               row_agent: str = "") -> None:
         mid = msg.get("id") or row.get("requestId") or row.get("uuid")
         if not mid:
             return
         u = _usage_of(msg)
-        prev = self.per_msg.setdefault(mid, u)
+        per_msg = self.inline_msg if row_agent == "sub:inline" else self.per_msg
+        prev = per_msg.setdefault(mid, u)
         if prev is not u:
             prev.input = max(prev.input, u.input)
             prev.cache_read = max(prev.cache_read, u.cache_read)
             prev.cache_create = max(prev.cache_create, u.cache_create)
             prev.output = max(prev.output, u.output)
 
-    def _thinking(self) -> None:
-        if self.sub:
+    def _thinking(self, row_agent: str = "") -> None:
+        if row_agent == "sub:inline" and self.inline is not None:
+            self.inline.thinking_blocks += 1
+        elif self.sub:
             self.sub.thinking_blocks += 1
         else:
             self.session.thinking_blocks += 1
@@ -329,7 +346,10 @@ class _Pass:
     def _said(self, text: str, ts: str, row_agent: str) -> None:
         if not text.strip():
             return
-        self.last_assistant_text = text
+        if row_agent == "sub:inline" and self.inline is not None:
+            self.inline.final_text = clip(text, FINAL_TEXT_LIMIT)
+        else:
+            self.last_assistant_text = text
         self.session.turns.append(Turn(ts=ts, role="assistant", text=clip(text, 600),
                                        agent=row_agent))
 
@@ -375,6 +395,25 @@ class _Pass:
             elif kind == "tool_result":
                 self._tool_result(block, row, ts, row_agent)
 
+    def _attachment(self, att: dict[str, Any], row: dict[str, Any], ts: str,
+                    row_agent: str) -> None:
+        """A message that arrived while the agent was busy.
+
+        Claude Code writes what the human types mid-turn, and a task's
+        notification, as an attachment of type `queued_command`, and nearly
+        always in that form alone. Read as nothing, the human's messages
+        were missing from the prompts and the turn count, and a notification
+        took its subagent's only return text with it.
+        """
+        if att.get("type") != "queued_command" or row.get("isMeta"):
+            return
+        if att.get("commandMode") not in ("prompt", "task-notification"):
+            return
+        prompt = att.get("prompt")
+        text = prompt if isinstance(prompt, str) else "\n".join(
+            str(b.get("text") or "") for b in _blocks(prompt) if b.get("type") == "text")
+        _user_text(text, ts, row, self.session, row_agent, self.pending_agents)
+
     def _tool_result(self, block: dict[str, Any], row: dict[str, Any], ts: str,
                      row_agent: str) -> None:
         use_id = block.get("tool_use_id")
@@ -399,6 +438,9 @@ class _Pass:
         target = self.sub.usage if self.sub else self.session.usage
         for u in self.per_msg.values():
             target.add(u)
+        if self.inline is not None:
+            for u in self.inline_msg.values():
+                self.inline.usage.add(u)
         if self.sub is not None and self.last_assistant_text:
             self.sub.final_text = clip(self.last_assistant_text, FINAL_TEXT_LIMIT)
         elif self.sub is None and self.agent == MAIN and self.last_assistant_text:
@@ -445,7 +487,9 @@ def _result_text(content: Any) -> str:
 
 def _user_text(text: str, ts: str, row: dict[str, Any], session: Session,
                agent: str, pending_agents: dict[str, SubAgent]) -> None:
-    if not text.strip():
+    # The summary Claude Code writes when it compacts the context: no human
+    # typed it, and it can quote a slash command from before the compaction.
+    if not text.strip() or row.get("isCompactSummary"):
         return
     m = _SLASH.search(text)
     if m:

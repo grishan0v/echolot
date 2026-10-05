@@ -37,6 +37,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
@@ -469,7 +470,11 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 rows = tp.query(sql)
                 err = None
             except Exception as e:  # SQL is version-fragile — never fail the run
-                rows, params, err = [], d.params, str(e)
+                # The values it was asked to run with, as `render` resolves
+                # them. The shipped ones in their place made a calibrated
+                # detector that failed read as one whose thresholds moved,
+                # to `compare` and to anyone reading the report.
+                rows, params, err = [], {**d.params, **(overrides or {})}, str(e)
                 print(f"[!] {d.id}: {e}", file=sys.stderr)
             if rows:
                 try:
@@ -536,7 +541,9 @@ def _markers_info(tp, cfg: Config) -> dict:
     are usually async — see `_aslice` in context.sql. Self time comes from
     the same child sum the detectors use, so a marker wrapping another
     reads as the difference: the hunt above needed `store_update` minus
-    `store_update_locked` to say how long the lock was waited for.
+    `store_update_locked` to say how long the lock was waited for. The
+    total counts an occurrence inside one of the same name once, as part of
+    the outer one: a marker in a recursive function doubled it otherwise.
 
     Grouped by name in the end, with the threads listed: a marker that ran
     on two threads is one marker, and the reader wants one row and the
@@ -551,31 +558,32 @@ def _markers_info(tp, cfg: Config) -> dict:
             globs.append(str(name))
     wanted = " OR ".join(f"name GLOB '{sql_value(g)}'" for g in globs)
     rows = tp.query(f"""
-        WITH child_sum AS (
-            SELECT parent_id, SUM(MAX(dur, 0)) AS ns
-            FROM slice WHERE parent_id IS NOT NULL GROUP BY parent_id
-        ),
-        seen AS (
-            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur
+        WITH seen AS (
+            SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur, s.unfinished
             FROM _slice_win s WHERE {wanted}
             UNION ALL
-            SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur
+            SELECT a.slice_id, a.name, '{ASYNC_THREAD}', a.dur, a.unfinished
             FROM _aslice_win a WHERE {wanted}
         )
         SELECT seen.name AS location, seen.thread AS thread,
                COUNT(*) AS count,
-               SUM(MAX(seen.dur, 0)) AS total_ns,
-               SUM(MAX(seen.dur, 0) - COALESCE(c.ns, 0)) AS self_ns,
+               MAX(seen.unfinished) AS unfinished,
+               SUM(CASE WHEN EXISTS (SELECT 1 FROM ancestor_slice(seen.slice_id) a
+                                     WHERE a.name = seen.name)
+                        THEN 0 ELSE MAX(seen.dur, 0) END) AS total_ns,
+               SUM(MAX(seen.dur, 0) - COALESCE(CASE WHEN seen.unfinished = 1
+                                                    THEN c.ns_win ELSE c.ns END, 0)) AS self_ns,
                MAX(MAX(seen.dur, 0)) AS max_ns
-        FROM seen LEFT JOIN child_sum c ON c.parent_id = seen.slice_id
+        FROM seen LEFT JOIN _child_sum c ON c.parent_id = seen.slice_id
         GROUP BY seen.name, seen.thread
     """)
     by_name: dict[str, dict] = {}
     for r in rows:
         row = by_name.setdefault(r["location"], {
             "location": r["location"], "count": 0, "self_ns": 0,
-            "total_ns": 0, "max_ns": 0, "threads": set()})
+            "total_ns": 0, "max_ns": 0, "threads": set(), "unfinished": False})
         row["count"] += r["count"]
+        row["unfinished"] = row["unfinished"] or bool(r["unfinished"])
         row["self_ns"] += r["self_ns"] or 0
         row["total_ns"] += r["total_ns"] or 0
         row["max_ns"] = max(row["max_ns"], r["max_ns"] or 0)
@@ -591,6 +599,12 @@ def _markers_info(tp, cfg: Config) -> dict:
             "max_ms": round(row["max_ns"] / 1e6, 2),
             "detail": ", ".join(threads[:3]) + (f" +{len(threads) - 3}" if len(threads) > 3 else ""),
         })
+        # One that never closed runs to the end of the window: its end did
+        # not run — an exception, a suspended coroutine, an end on another
+        # thread — or the recording stopped first. Its number is a floor,
+        # and without the flag it read as a measurement.
+        if row["unfinished"]:
+            out[-1]["unfinished"] = True
     out.sort(key=lambda r: (-r["total_ms"], r["location"]))
     # A name the config lists that the window never held is worth a line:
     # the map points at something this scenario does not run, or the name
@@ -650,6 +664,7 @@ def cmd_analyze(args) -> int:
         fired=rep["summary"]["fired_ids"],
         window_ms=w.get("duration_ms"),
         start_anchor_matches=(w.get("start_anchor") or {}).get("matches"),
+        end_anchor_matches=(w.get("end_anchor") or {}).get("matches"),
         process_alternatives=len(w.get("process_alternatives") or []),
     )
     if args.defaults or cli_overrides:
@@ -997,13 +1012,31 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
         # `_anchor` rather than `_slice`: the same set the window was built
         # from, async sections included. Counting the one and building from
         # the other is how `matches` would say 0 for a window that closed.
+        #
+        # The end anchor by the rule the window is closed by: an occurrence at
+        # or after the start. One only before it — the anchors swapped — left
+        # the window running to the end of the trace while `matches: 1` said
+        # it had closed. Those are counted apart, so the report can say the
+        # name exists, just not where it would end anything.
         hits = tp.query(
-            f"SELECT COUNT(*) AS n FROM _anchor WHERE name GLOB '{sql_value(glob)}'"
+            f"SELECT COUNT(*) AS n, COALESCE(SUM(ts >= {window.get('ts_start') or 0}), 0) AS after "
+            f"FROM _anchor WHERE name GLOB '{sql_value(glob)}'"
         )
-        window[f"{key}_anchor"] = {
-            "glob": glob,
-            "matches": hits[0]["n"] if hits else 0,
-        }
+        n, after = (hits[0]["n"], hits[0]["after"]) if hits else (0, 0)
+        matches = after if key == "end" else n
+        window[f"{key}_anchor"] = {"glob": glob, "matches": matches}
+        if n - matches:
+            window[f"{key}_anchor"]["before_start"] = n - matches
+        # The end anchor the window closed on, still open when the recording
+        # stopped: the window ran on to the end of the trace, and the
+        # scenario never reached its end inside it.
+        if key == "end" and matches:
+            first = tp.query(
+                f"SELECT a.dur < 0 AS open FROM _anchor a "
+                f"WHERE a.name GLOB '{sql_value(glob)}' "
+                f"AND a.ts >= (SELECT ts_start FROM _window) ORDER BY a.ts LIMIT 1")
+            if first and first[0]["open"]:
+                window[f"{key}_anchor"]["unfinished"] = True
     window["opened_inside"] = _opened_inside(tp, window)
     window["startup"] = _startup_info(tp, window, procs[0]["name"])
     return window
@@ -1050,38 +1083,46 @@ def _opened_inside(tp, window: dict) -> dict | None:
     blocked" and sent someone looking for a stall that was the app behaving
     correctly.
     """
-    start = window.get("ts_start")
-    if start is None:
+    start, end = window.get("ts_start"), window.get("ts_end")
+    if start is None or end is None:
         return None
+    # A state the thread was still in when the recording stopped runs to the
+    # end of the window, as in window.sql; dropped, the freeze that never let
+    # go was the one block this could not see. The part inside the window
+    # stops at its end: a block running past a short window counted its tail
+    # as inside, and outweighed what came before the anchor.
+    until = f"CASE WHEN ts.dur < 0 THEN {end} ELSE ts.ts + ts.dur END"
     rows = tp.query(f"""
-        SELECT ts.state                              AS state,
-               th.name                               AS thread_name,
-               ROUND(({start} - ts.ts) / 1e6, 2)     AS before_ms,
-               ROUND(ts.dur / 1e6, 2)                AS total_ms
+        SELECT ts.state                                          AS state,
+               th.name                                           AS thread_name,
+               ROUND(({start} - ts.ts) / 1e6, 2)                 AS before_ms,
+               ROUND(({until} - ts.ts) / 1e6, 2)                 AS total_ms,
+               ROUND((MIN({until}, {end}) - {start}) / 1e6, 2)   AS inside_ms
         FROM thread_state ts
         JOIN thread th ON ts.utid = th.utid
         JOIN _proc p   ON th.upid = p.upid
         WHERE th.tid = p.pid
-          AND ts.dur > 0
+          AND ts.dur != 0
           AND ts.ts < {start}
-          AND ts.ts + ts.dur > {start}
+          AND {until} > {start}
     """)
     if not rows or rows[0]["state"] == "Running":
         return None
     if rows[0]["state"] not in ("R", "R+", "D", "DK"):
         # Sleeping. Only a block if a message was open at the time — otherwise
         # the looper had reached the queue, which is the app working properly.
+        # From `_slice_win`, where a message that never closed runs to the
+        # end of the window rather than being no message at all.
         inside_message = tp.query(f"""
             SELECT COUNT(*) AS n
-            FROM _slice s
-            WHERE s.is_main_thread = 1 AND s.depth >= 1 AND s.dur > 0
+            FROM _slice_win s
+            WHERE s.is_main_thread = 1 AND s.depth >= 1
               AND s.ts < {start} AND s.ts + s.dur > {start}
         """)
         if not inside_message or not inside_message[0]["n"]:
             return None
     found = dict(rows[0])
-    inside = found["total_ms"] - found["before_ms"]
-    found["inside_ms"] = round(inside, 2)
+    inside = found["inside_ms"]
     found["material"] = bool(found["before_ms"] >= inside
                              and found["before_ms"] >= compare_mod.FLOOR_MS)
     return found
@@ -1415,10 +1456,12 @@ def _main_thread_budget(tp, window: dict) -> dict | None:
     accounted = round(sum(out.values()), 2)
     out["accounted_ms"] = accounted
     out["window_ms"] = duration
-    # Short of the window means the thread was not there for all of it — the
-    # process started inside the window, or the trace has a hole. Worth a
-    # number rather than a silent shortfall: it is the difference between "the
-    # scenario is explained" and "most of it was not looked at".
+    # Short of the window means the thread had no state for part of it — the
+    # process started inside the window, or the trace has a hole. A state the
+    # thread was still in when the recording stopped is not that: it runs to
+    # the end of the window (`_tstate_win`). Worth a number rather than a
+    # silent shortfall: it is the difference between "the scenario is
+    # explained" and "most of it was not looked at".
     out["accounted_pct"] = round(accounted / duration * 100, 1) if duration else None
     return out
 
@@ -1870,9 +1913,9 @@ def _clip(text: str, width: int = 58) -> str:
 
 
 def _hunt_config(project: Path, config: str
-                 ) -> tuple[str | None, str | None, dict[str, Any]]:
+                 ) -> tuple[str | None, str | None, dict[str, Any], str | None]:
     """Scenario name, config hash and the confirmed values — what an
-    investigation is opened against.
+    investigation is opened against — and the project's marker prefix.
 
     An investigation records what it was opened against so that `drift` can
     later say "the scenario changed" instead of the human having to remember,
@@ -1886,9 +1929,10 @@ def _hunt_config(project: Path, config: str
     """
     path = project / config
     if not path.exists():
-        return None, None, {}
+        return None, None, {}, None
     cfg = Config.load(path)
-    return cfg.scenario_name, cfg.sha, cfg.confirmed()
+    return (cfg.scenario_name, cfg.sha, cfg.confirmed(),
+            cfg.get("instrumentation.temp_prefix"))
 
 
 def cmd_hunt(args) -> int:
@@ -1936,7 +1980,7 @@ def cmd_hunt(args) -> int:
         # stops `/echolot` at the door. Refused before anything is touched,
         # so asking again once the config loads loses nothing.
         try:
-            scenario, sha, confirmed = _hunt_config(project, config)
+            scenario, sha, confirmed, prefix = _hunt_config(project, config)
         except (ConfigError, OSError) as e:
             print(f"error: {config} does not load: {e}", file=sys.stderr)
             print("Nothing was opened and no traces were moved aside. Fix the "
@@ -1964,8 +2008,10 @@ def cmd_hunt(args) -> int:
         if h.get("since"):
             print(f'  after: {h["since"]}')
         # Instrumentation the previous investigation never took out would
-        # otherwise become this one's starting conditions.
-        left = hunt_mod.leftovers(project)
+        # otherwise become this one's starting conditions. By the config's
+        # prefix, the one `mark` wrote them with: under the default, a
+        # project's `PERF_` markers were never found.
+        left = hunt_mod.leftovers(project, prefix)
         if left["markers"]:
             print(f'\n[!] {left["markers"]} {left["prefix"]} marker(s) left in '
                   f'{len(left["files"])} file(s) by the previous investigation.',
@@ -1987,8 +2033,9 @@ def cmd_hunt(args) -> int:
                 if hosts_mod.wants_claude(project)
                 else "any agent, after `echolot guide hunt`")
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
-        print("By hand: echolot collect -c echolot.yml -n 5, then echolot analyze "
-              ".echolot/traces/*.perfetto-trace", file=sys.stderr)
+        print("By hand: echolot collect -c echolot.yml -n 5, then "
+              + state.analyze_line(state.repeats(scenario, 5) if scenario else None),
+              file=sys.stderr)
         return 0
 
     if conclusion:
@@ -2283,10 +2330,19 @@ def cmd_mark(args) -> int:
             return 2
         report = anr_mod.parse(text)
         placed, missing = anr_mod.locate(report, root)
+        # A frame placed in one of several files of its name is a guess, and
+        # a marker in the wrong one measures a file the build never ran —
+        # `src/debug` beside `src/release`. Those are named, not marked.
         pl = mark_mod.plan_from_anr(
-            root, [(f.symbol, f.file, f.line) for f in placed],
+            root, [(f.symbol, f.file, f.line) for f in placed if f.exact],
             prefix=prefix, allowed=allowed, unplaced=len(missing),
             version=report.head.get("Version") or report.head.get("Package"))
+        for f in placed:
+            if not f.exact:
+                pl.notes.append(
+                    f"{f.symbol} — {len(f.others) + 1} files of that name could "
+                    f"be it: {', '.join([f.file, *f.others])}. Nothing in the "
+                    f"frame says which one was built, so it is left to mark by hand")
     else:
         pl = mark_mod.plan(root, package=package, allowed=allowed, prefix=prefix,
                            module=args.module)
@@ -2463,7 +2519,7 @@ def _private_repo(args, target: Path):
 def _private_targets(target: Path, chosen: list) -> list[Path]:
     """Every file a private `init` may write, to ask git which of them it tracks."""
     root = target / ".claude"
-    files = [root / layer.merged_into(str(src.relative_to(layer.CLAUDE_DIR)), True)
+    files = [root / layer.merged_into(src.relative_to(layer.CLAUDE_DIR).as_posix(), True)
              for src in layer.template_files()]
     files.append(root / layer.LAYER_MANIFEST)
     files += [target / h.path for h in chosen if h.path and h.key != "claude"]
@@ -2520,11 +2576,16 @@ def cmd_init(args) -> int:
     from . import hosts as hosts_mod
 
     spec = getattr(args, "for_hosts", None)
-    chosen = hosts_mod.parse(spec) if spec else None
+    chosen = hosts_mod.parse(spec, hosts_mod.load_choice(target)) if spec else None
     if spec and chosen is None:
         print(f"unknown client in --for {spec!r}. There is: "
               f"{', '.join(h.key for h in hosts_mod.HOSTS)}, or `all`",
               file=sys.stderr)
+        return 2
+    if chosen is not None and hosts_mod.both_layers(chosen):
+        print("--for names both `claude` and `plugin`: the .claude/ layer and "
+              "the plugin bring the same skills, and Claude Code would load "
+              "them twice. Choose one.", file=sys.stderr)
         return 2
 
     # Before the first write, and whatever the flags say: `--all` is about
@@ -2589,9 +2650,12 @@ def cmd_init(args) -> int:
                                        tracked=tracked)
         if private:
             _keep_from_git(repo, hidden + [repo.pattern(f) for f in whole])
+        # `--for all` beside the plugin used to mean `.claude/` too; the rest
+        # is named instead, so following the line keeps the plugin alone.
+        rest = ",".join(h.key for h in hosts_mod.every([h.key for h in chosen]))
         print("\nAny agent: `echolot guide`. The choice is kept — a plain "
               "`echolot init` points at\nthe same agents again; `--for` "
-              "changes it, and `echolot init --for all` adds the rest.")
+              f"changes it, and `echolot init --for {rest}` adds the rest.")
         recorder.note(hosts=[h.key for h in chosen], layer="skipped")
         return 0
 
@@ -2603,7 +2667,7 @@ def cmd_init(args) -> int:
     folded, unmergeable, left = [], [], []
     installed: dict[str, str] = {}
     for src in layer.template_files():
-        rel = str(src.relative_to(layer.CLAUDE_DIR))
+        rel = src.relative_to(layer.CLAUDE_DIR).as_posix()
         # The file it lands in: settings.json is merged into
         # settings.local.json when private. Named that way in what is printed.
         dst = root / layer.merged_into(rel, private)
@@ -2704,7 +2768,7 @@ def cmd_init(args) -> int:
     if private:
         # Every file of the layer that is here and not the team's, the
         # manifest, and what the pointers wrote whole.
-        ours = [root / layer.merged_into(str(src.relative_to(layer.CLAUDE_DIR)), True)
+        ours = [root / layer.merged_into(src.relative_to(layer.CLAUDE_DIR).as_posix(), True)
                 for src in layer.template_files()] + [manifest]
         _keep_from_git(repo, [repo.pattern(f) for f in ours
                               if f.exists() and f not in tracked]
@@ -2782,8 +2846,13 @@ def cmd_calibrate(args) -> int:
 
     tp_binary = _tp_binary(args, cfg)
     _note_local(cfg)
-    detectors = [d for d in load_detectors(DETECTOR_DIR) if d.calibrations]
-    if not detectors:
+    shipped = load_detectors(DETECTOR_DIR)
+    # A detector the config turned off is not measured, and its `false` goes
+    # back into the section as it stands. Measured and printed with a number,
+    # or with only a comment under it, the pasted section turned it on again.
+    disabled = cfg.disabled_detectors
+    detectors = [d for d in shipped if d.calibrations and d.id not in disabled]
+    if not any(d.calibrations for d in shipped):
         print("no detector declared @calibrate", file=sys.stderr)
         return 2
 
@@ -2800,7 +2869,15 @@ def cmd_calibrate(args) -> int:
         print(f"config error: {e}", file=sys.stderr)
         return 2
 
-    pooled: dict[str, list[dict]] = {d.id: [] for d in detectors}
+    # Each trace's rows apart. The statistic is taken per run and the median
+    # across runs: `topN` reads as N rows on a healthy run, and a report is
+    # the size of one run, since `analyze` folds the repeats. Over the rows
+    # of every trace pooled, each value came k times, `top10` landed near the
+    # (10/k)-th of one run, and the threshold grew with the number of
+    # repeats: on five of the demo's cold starts it was 170.3 against 4.7
+    # from one.
+    per_run: dict[str, list[list[dict]]] = {d.id: [] for d in detectors}
+    failed: dict[str, int] = {d.id: 0 for d in detectors}
     windows: list[float] = []
 
     for trace in args.traces:
@@ -2819,8 +2896,9 @@ def cmd_calibrate(args) -> int:
             windows.append((bounds["ts_end"] - bounds["ts_start"]) / 1e6)
             for d in detectors:
                 try:
-                    pooled[d.id] += tp.query(d.render_open(overrides.get(d.id)))
+                    per_run[d.id].append(tp.query(d.render_open(overrides.get(d.id))))
                 except Exception as e:
+                    failed[d.id] += 1
                     print(f"[!] {d.id} on {trace}: {e}", file=sys.stderr)
 
     spread = ""
@@ -2829,7 +2907,8 @@ def cmd_calibrate(args) -> int:
                   "calibrate on\n# repeats of ONE scenario; mixing a cold start "
                   "with a minute of\n# scrolling yields thresholds for nothing.")
 
-    print(f"# The detectors section, derived from {len(args.traces)} "
+    total = len(args.traces)
+    print(f"# The detectors section, derived from {total} "
           f"known-healthy runs.")
     print("# Scenario window: " + ", ".join(f"{w:.0f} ms" for w in windows)
           + spread)
@@ -2837,47 +2916,103 @@ def cmd_calibrate(args) -> int:
     print("# The numbers are a statistic over a healthy run plus a margin.")
     print("# This is not a finished config but a proposal: thresholds define")
     print("# what counts as normal, and that is not a script's decision.")
+    print("# Everything else the config's section holds is carried over, so")
+    print("# this section can replace it whole.")
     print("detectors:")
 
     skipped = 0
-    for d in detectors:
-        rows = pooled[d.id]
-        print(f"  {d.id}:")
-        for c in d.calibrations:
-            values = [r[c.column] for r in rows if r.get(c.column) is not None]
-            need = max(args.min_sample, c.needs())
-            if len(values) < need:
-                # A statistic over a handful of values is not a statistic but a
-                # random number wearing the look of a justified one. Staying
-                # quiet is more honest.
-                skipped += 1
-                print(f"    # {c.param}: kept the default "
-                      f"({d.params[c.param]}) — sample {len(values)}, "
-                      f"needs at least {need}")
-                continue
-            raw = c.value(values)
-            value = raw * c.factor
-            value = int(round(value)) if c.column == "count" \
-                else round(value, 1)
-            # A degenerate tail: the sample is large enough, but the Nth value
-            # is already near zero. Such a "threshold" means "report
-            # everything" — that is, not a threshold. There is nowhere for a
-            # number to come from when a healthy run barely feeds this detector.
-            if value < 1:
-                skipped += 1
-                print(f"    # {c.param}: kept the default "
-                      f"({d.params[c.param]}) — {c.expr}={raw:.2f}, the tail "
-                      f"of the distribution is degenerate")
-                continue
-            print(f"    {c.param}: {value}"
-                  f"    # {c.expr}={raw:.1f} × {c.factor}, "
-                  f"sample {len(values)}")
+    measured = {d.id: d for d in detectors}
+    for d in shipped:
+        if d.id in disabled:
+            print(f"  {d.id}: false")
+            continue
+        given = overrides.get(d.id) or {}
+        lines: list[str] = []
+        if d.id in measured:
+            for c in d.calibrations:
+                line, rare = _calibrated(c, d, given, per_run[d.id], failed[d.id],
+                                         total, args.min_sample)
+                lines.append(line)
+                skipped += rare
+        # What the config sets and nothing here measured: masks, ratios, a
+        # detector with no `@calibrate`. The numbers above were measured with
+        # them, and dropped from the section, pasting it reset them all.
+        calibrated = {c.param for c in d.calibrations} if d.id in measured else set()
+        lines += [f"    {k}: {_yaml_scalar(v)}    # from the config"
+                  for k, v in given.items() if k not in calibrated]
+        if lines:
+            print(f"  {d.id}:")
+            for line in lines:
+                print(line)
 
+    broken = [d.id for d in detectors if failed[d.id] == total]
     if skipped:
         print(f"\n# Thresholds left uncalibrated: {skipped}. Not a failure — on"
               f"\n# a healthy run these phenomena are simply rare. Either keep"
               f"\n# the defaults or add more traces and repeat.")
-    return 0
+    if any(failed.values()):
+        print("\n# Failed on some of the traces, so measured on the rest or not at"
+              "\n# all — the error is on stderr: "
+              + ", ".join(f"{i} ({failed[i]} of {total})" for i in failed if failed[i]))
+    return 1 if broken else 0
+
+
+def _calibrated(c, d, given: dict, runs: list[list[dict]], failed: int,
+                total: int, min_sample: int) -> tuple[str, int]:
+    """One threshold's line in the section, and whether it was left for rarity.
+
+    The statistic is taken over each run that has enough values and the
+    median of those stands for the set; `--min-sample` applies per run, as the
+    statistic does. A threshold no run could feed keeps the value in effect:
+    the config's, as a setting line, or the shipped one, as a comment.
+    """
+    def keep(why: str) -> str:
+        if c.param in given:
+            return (f"    {c.param}: {_yaml_scalar(given[c.param])}    "
+                    f"# kept the config's value — {why}")
+        return f"    # {c.param}: kept the default ({d.params[c.param]}) — {why}"
+
+    if failed == total:
+        return keep("the detector failed on every trace, see stderr"), 0
+    need = max(min_sample, c.needs())
+    values = [[r[c.column] for r in rows if r.get(c.column) is not None]
+              for rows in runs]
+    enough = [v for v in values if len(v) >= need]
+    failed_note = f"; failed on {failed} of {total} traces" if failed else ""
+    if not enough:
+        # A statistic over a handful of values is not a statistic but a
+        # random number wearing the look of a justified one. Staying quiet
+        # is more honest.
+        most = max((len(v) for v in values), default=0)
+        return keep(f"sample {most} per run at most, needs at least "
+                    f"{need}{failed_note}"), 1
+    raw = median([c.value(v) for v in enough])
+    value = raw * c.factor
+    value = int(round(value)) if c.column == "count" else round(value, 1)
+    sizes = sorted(len(v) for v in enough)
+    sample = (f"sample {sizes[0]}" if sizes[0] == sizes[-1]
+              else f"sample {sizes[0]}–{sizes[-1]}") + " per run"
+    of = (f"median of {len(enough)} run(s)" if len(enough) == len(values)
+          else f"median of the {len(enough)} of {len(values)} runs with enough")
+    # A degenerate tail: the sample is large enough, but the Nth value is
+    # already near zero. Such a "threshold" means "report everything" — that
+    # is, not a threshold. There is nowhere for a number to come from when a
+    # healthy run barely feeds this detector.
+    if value < 1:
+        return keep(f"{c.expr}={raw:.2f}, the tail of the distribution is "
+                    f"degenerate{failed_note}"), 1
+    return (f"    {c.param}: {value}    # {c.expr}={raw:.1f} × {c.factor}, "
+            f"{of}, {sample}{failed_note}"), 0
+
+
+def _yaml_scalar(value: Any) -> str:
+    """A config value as YAML writes it back: a string quoted, since a mask
+    starts with `*` more often than not, and YAML reads that as an alias."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 # What `failed` holds for a self-check that never ran. Every reader of the
@@ -3535,7 +3670,9 @@ def build_parser() -> argparse.ArgumentParser:
     ini.add_argument("--for", dest="for_hosts", metavar="CLIENTS",
                      help="which agents to point at the tool: "
                           + ", ".join(h.key for h in layer.hosts.HOSTS)
-                          + " — comma-separated, or `all`. Default: the choice "
+                          + " — comma-separated, or `all`: every one but the "
+                            "plugin, or but claude where the plugin is chosen, "
+                            "since the two bring the same skills. Default: the choice "
                             "this project saved last time, else whichever it "
                             "shows evidence of")
     # Only the parser turns prompting on: cmd_init is also called directly,

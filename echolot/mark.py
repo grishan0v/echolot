@@ -542,12 +542,48 @@ def base_class(text: str, name: str) -> str | None:
     return m.group(1) if m else None
 
 
-def find_on_create(text: str) -> tuple[int, int | None, int | None, bool] | None:
-    """(line, open_at, close_at, has_return) of the first onCreate override."""
-    m = _ON_CREATE.search(text)
+def class_body(clean: str, name: str) -> tuple[int, int] | None:
+    """The `{` and `}` of class `name`'s body, in text with the noise blanked.
+
+    Past a primary constructor and the supertypes, to the first `{` outside
+    parentheses. None when the class is not declared here or has no body.
+    """
+    m = re.search(r"\b(?:class|object)\s+" + re.escape(name) + r"\b", clean)
     if not m:
         return None
+    depth = 0
+    for i in range(m.end(), len(clean)):
+        if clean[i] == "(":
+            depth += 1
+        elif clean[i] == ")":
+            depth -= 1
+        elif clean[i] == "{" and depth == 0:
+            k = match_brace(clean, i)
+            return (i, k) if k is not None else None
+    return None
+
+
+def find_on_create(text: str, cls: str | None = None
+                   ) -> tuple[int, int | None, int | None, bool] | None:
+    """(line, open_at, close_at, has_return) of `cls`'s own onCreate override.
+
+    The one directly in that class's body, one level deep. The first in the
+    file was taken whoever it belonged to: a `RoomDatabase.Callback`'s
+    `onCreate(db)` in a property above `App.onCreate`, or the Application's
+    where the Activity shares its file, got the marker. And it is looked for
+    in the code alone: an old `onCreate` kept in a comment made the next `{`
+    in code the block, inside another function. Without a class, or with one
+    this file does not declare, the first in the file.
+    """
     clean = strip_noise(text)
+    body = class_body(clean, cls) if cls else None
+    lo, hi = (body[0] + 1, body[1]) if body else (0, len(clean))
+    for m in _ON_CREATE.finditer(clean, lo, hi):
+        before = clean[lo:m.start()]
+        if body is None or before.count("{") == before.count("}"):
+            break
+    else:
+        return None
     # the `{` after the signature's closing paren, allowing an annotation-free
     # single-line signature and a multi-line parameter list
     depth = 0
@@ -577,14 +613,17 @@ def find_lambda(text: str, rx: re.Pattern
                 ) -> tuple[int, int | None, int | None, bool] | None:
     """(line, open_at, close_at, has_return) of the first `name { … }` matched by rx.
 
+    In the code, not in a comment about it: a KDoc that said "Compose starts
+    in setContent { } below" put the pair on the class body.
+
     A lambda's end goes in bare (see `Proposal.composable`), so a
     `return@setContent` in it would skip the end and leave the section open:
     the plan refuses that block, and says why.
     """
-    m = rx.search(text)
+    clean = strip_noise(text)
+    m = rx.search(clean)
     if not m:
         return None
-    clean = strip_noise(text)
     j = clean.find("{", m.start())
     if j < 0:
         return (line_of(text, m.start()), None, None, False)
@@ -893,7 +932,7 @@ class _Planner:
                              f"source declares it under src/ (generated, or in a dependency)")
             return
         t = self.sources[f]
-        oc = find_on_create(t)
+        oc = find_on_create(t, simple_name(app_cls))
         if oc is None:
             out.notes.append(f"{_rel(f, root)}: {simple_name(app_cls)} does not override "
                              f"onCreate — nothing of yours runs at bindApplication")
@@ -918,7 +957,7 @@ class _Planner:
                                   f"source declares it under src/ (generated, or in a dependency)")
             return
         t = self.sources[f]
-        oc = find_on_create(t)
+        oc = find_on_create(t, simple_name(act))
         if oc is None:
             base = base_class(t, simple_name(act))
             self.out.notes.append(
@@ -945,7 +984,7 @@ class _Planner:
             if o is not None and c is not None:
                 self.compose_roots(t, o, c)
             return
-        m = _SET_CONTENT_VIEW.search(t)
+        m = _SET_CONTENT_VIEW.search(strip_noise(t))
         if m:
             self.add(Proposal("set_content_view", _rel(f, root), line_of(t, m.start()),
                               "setContentView(…) — the View hierarchy is inflated here",
@@ -975,18 +1014,20 @@ class _Planner:
         """4. Room, Koin, Hilt — API strings anywhere in the sources"""
         for p, t in self.sources.items():
             rel = _rel(p, self.root)
-            for m in _ROOM_BUILDER.finditer(t):
+            # The code only: a commented-out call is not where anything opens.
+            code = strip_noise(t)
+            for m in _ROOM_BUILDER.finditer(code):
                 self.add(Proposal("room_open", rel, line_of(t, m.start()),
                                   "Room.databaseBuilder — the database is opened here",
                                   self.prefix + "room_open", "api", gradle_module(p, self.root),
                                   applicable=False,
                                   reason="a builder chain — wrap the enclosing function by hand"))
-            for m in _KOIN_START.finditer(t):
+            for m in _KOIN_START.finditer(code):
                 self.add(Proposal("di_koin", rel, line_of(t, m.start()),
                                   "startKoin { } — the DI graph is built here",
                                   self.prefix + "di_koin", "api", gradle_module(p, self.root),
                                   applicable=False, reason="mark the enclosing function by hand"))
-            if _HILT_APP.search(t) and not any("Hilt" in n for n in self.out.notes):
+            if _HILT_APP.search(code) and not any("Hilt" in n for n in self.out.notes):
                 self.out.notes.append(f"{rel}: @HiltAndroidApp — the graph is generated; its cost sits "
                                       f"inside Application.onCreate (super.onCreate), nothing separate to mark")
 
@@ -1165,6 +1206,30 @@ def frame_function(symbol: str) -> str:
 _COMPILER_PART = re.compile(r"^(?:\d+|invoke|invokeSuspend|inlined|lambda)$")
 
 
+def through_lambda(symbol: str) -> bool:
+    """Whether a frame was entered through a lambda rather than the function
+    it was written in.
+
+    `onCreate$lambda$0`, `$lambda-0`, javac's `lambda$flush$0`, or `invoke`
+    and `invokeSuspend` on a class numbered last. A lambda with a frame of its
+    own was not inlined, and it often runs later — a click listener, `post`,
+    `launch` — so the function around it only registers it, and a pair there
+    times the registering while the code that froze runs outside it.
+    """
+    owner, _, member = symbol.rpartition(".")
+    nested = owner.partition("$$")[0].split("$")[1:]
+    return (member.startswith("lambda$")
+            or re.search(r"\$lambda[$-]\d+", member) is not None
+            or (member in _LAMBDA_ENTRY and bool(nested) and nested[-1].isdigit()))
+
+
+def _suspends(text: str, decl_line: int) -> bool:
+    """Whether the declaration on this line is a `suspend fun`."""
+    lines = text.splitlines()
+    head = lines[decl_line - 1] if 0 < decl_line <= len(lines) else ""
+    return re.search(r"\bsuspend\b[^(]*\bfun\b", head) is not None
+
+
 def marker_for(symbol: str, prefix: str) -> str:
     """`pkg.Class$1.method` as `AGENTTMP_Class_1_method`.
 
@@ -1211,6 +1276,7 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
     """
     out = Plan(root=str(root), module=None, package=None)
     seen: set[str] = set()
+    recurs: set[str] = set()
     for symbol, rel, line in frames:
         if line is None:
             out.notes.append(f"{symbol} — the frame carries no line, so there "
@@ -1218,6 +1284,15 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
             continue
         marker = marker_for(symbol, prefix)
         if marker in seen:
+            # A function on the stack twice calls itself, and its one marker
+            # will open inside itself. Said once, so the nesting in the trace
+            # is not read as a second caller.
+            if marker not in recurs:
+                recurs.add(marker)
+                out.notes.append(
+                    f"{symbol} is on the stack more than once: it calls itself, "
+                    f"so `{marker}` will open inside itself. The report counts "
+                    f"the outermost one")
             continue
         seen.add(marker)
 
@@ -1252,7 +1327,19 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
         # A function body takes its end in a `finally`, and a return then
         # skips nothing. A composable's cannot: the end goes in bare.
         composable = _annotated_composable(text, decl_line)
-        why = disagree or _why_not(open_at, has_return and composable, flat, close_at, text)
+        why = (disagree
+               or (f"a lambda: a pair around `{name}` would time setting it up, "
+                   f"and it runs later — mark inside the lambda by hand"
+                   if through_lambda(symbol) else "")
+               # `beginSection` and `endSection` act on the calling thread,
+               # and a suspend function can resume on another: the marker
+               # stays open on the first, the end closes someone else's
+               # section, and on Main the wait is counted as its own time.
+               or ("a suspend function: after it resumes, the end may run on "
+                   "another thread — mark a stretch with no suspension point "
+                   "by hand" if path.suffix == ".kt" and _suspends(text, decl_line)
+                   else "")
+               or _why_not(open_at, has_return and composable, flat, close_at, text))
         proposal = Proposal(
             "anr_frame", rel, decl_line,
             f"{name} — on the stack when it froze, at line {line}",

@@ -10,19 +10,24 @@ number appears the same way in both.
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..config import Config
 from ..mark import under_allowed
-from .model import Call, MAIN, Session, strip_heredocs, ts_to_epoch
+from .model import MAIN, Call, Session, SubAgent, strip_heredocs, ts_to_epoch
 
 # Shared with signals.py — the vocabulary of what an agent does around the tool.
 RE_ECHOLOT = re.compile(r"(?:^|[\s;&|(`$/])echolot\s+([a-z-]+)((?:\s+[^;&|\n]*)?)")
+# A launch is not a recording: `adb shell am start -W` reads TotalTime, or
+# opens a screen to look at, and no trace file is touched. Counted, it warned
+# that the baseline was lost and opened hunt rounds that never happened. A
+# capture made by hand still matches through its perfetto part.
 RE_RE_RECORD = re.compile(
     r"gradlew\b(?![^\n]*\btasks\b)[^\n]*\bconnected\w+|echolot\s+collect|"
-    r"adb\s+shell\s+perfetto|adb\s+shell\s+am\s+start|record_android_trace",
+    r"adb\s+shell\s+perfetto|record_android_trace",
     re.I | re.S)
 RE_TRACE_LITERAL = re.compile(r"\.(perfetto-trace|pftrace)\b")
 RE_TRACE_OPEN = re.compile(
@@ -40,6 +45,11 @@ _SHELL_ERROR = re.compile(r"\(eval\):|\bcd:\d*:|no matches found|command not fou
 _GLOB_MISS = re.compile(r"no matches found: ([^\n]+)")
 _REDIRECT = re.compile(r"(?:^|\s+)\d?[<>]\S*.*$")
 _CONFIG_ARG = re.compile(r"(?:^|\s)(?:-c|--config)\s+(\S+)")
+# A variable assigned in the command: at the start of a line or after `;`,
+# `&&` or `|`, and up to the next of those when it is not quoted.
+_ASSIGN = re.compile(
+    r"(?:^|[;&|]\s*)(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\"[^\"]*\"|'[^']*'|[^\s;&|]+)",
+    re.M)
 _TRACE_CALL = re.compile(
     r"\btrace\s*\(\s*\"|Trace\.beginSection\s*\(|beginAsyncSection\s*\(|"
     r"androidx\.tracing", re.S)
@@ -204,6 +214,78 @@ def is_invocation(word: str, known: frozenset[str] | None = None) -> bool:
     return word.startswith("-") or word in (known if known is not None else verbs())
 
 
+def expand_vars(cmd: str, token: str) -> str:
+    """`$OUT` and `${OUT}` from assignments in the same command, one level.
+
+    Enough for the shape agents write — `OUT="…/SM-A515F - 13"` two lines
+    above `mv "$OUT" "${OUT}_before"` — without pretending to be a shell.
+    """
+    env = {m.group(1): m.group(2).strip("\"'") for m in _ASSIGN.finditer(cmd)}
+    for name, value in env.items():
+        token = token.replace("${" + name + "}", value).replace("$" + name, value)
+    return token
+
+
+def config_arg(argv: str, command: str = "") -> str | None:
+    """The config path one invocation was given, as the shell passes it.
+
+    Split the way a shell splits, so a quoted path keeps its spaces, and read
+    in every form argparse takes: `-c path`, `--config path`, `--config=path`
+    and `-cpath`. A regex over the line cut `"../Android Projects/…"` at the
+    space and missed the last two forms, so an analyze on the project's own
+    config was reported as a bypass and a real one written as
+    `--config=draft.yml` was not. A variable assigned in the same command is
+    expanded; one that is not stays unknown, and unknown is not a bypass.
+    """
+    try:
+        words = shlex.split(argv)
+    except ValueError:
+        m = _CONFIG_ARG.search(argv)
+        return m.group(1) if m else None
+    for i, w in enumerate(words):
+        if w in ("-c", "--config"):
+            value = words[i + 1] if i + 1 < len(words) else None
+        elif w.startswith("--config="):
+            value = w[len("--config="):]
+        elif w.startswith("-c") and not w.startswith("--") and len(w) > 2:
+            value = w[2:]
+        else:
+            continue
+        if value is not None:
+            value = expand_vars(command, value)
+        return None if value is None or "$" in value else value
+    return None
+
+
+def reflecting(sub: str, argv: str) -> bool:
+    """Whether one echolot invocation is part of a reflection rather than work:
+    `reflect` itself, or `guide reflect`, which the reflect skill runs first."""
+    return sub == "reflect" or (sub == "guide" and argv.split()[:1] == ["reflect"])
+
+
+def work(command: str) -> list[str]:
+    """The subcommands one shell command invokes, leaving out a reflection's.
+
+    What tells a session that used the tool from the one reflecting on it.
+    Only `reflect` used to be left out, so the `guide reflect` the reflect
+    skill runs first counted as work, and `reflect --last` picked the
+    session that was running it.
+    """
+    known = verbs()
+    return [("help" if m.group(1).startswith("-") else m.group(1))
+            for m in RE_ECHOLOT.finditer(strip_heredocs(command))
+            if is_invocation(m.group(1), known)
+            and not reflecting(m.group(1), m.group(2) or "")]
+
+
+def reflection_slash(command: str | None, args: str | None) -> bool:
+    """A slash command that runs a reflection: `/echolot-reflect` under any
+    prefix the host adds (`/echolot:echolot-reflect`), or `/echolot reflect`."""
+    name = (command or "").lstrip("/").rsplit(":", 1)[-1]
+    return name == "echolot-reflect" or (
+        name == "echolot" and (args or "").split()[:1] == ["reflect"])
+
+
 def subcommands(command: str) -> list[str]:
     """The subcommands one shell command really invokes, in order.
 
@@ -232,7 +314,7 @@ def echolot_calls(session: Session) -> list[EcholotCall]:
         skipped = _skipped_by_glob(argvs, glob_miss.group(1)) if glob_miss else None
         for i, m in enumerate(matches):
             argv = argvs[i]
-            cfg = _CONFIG_ARG.search(argv)
+            cfg = config_arg(argv, cmd)
             sub = m.group(1)
             if sub.startswith("-"):
                 sub = "help"
@@ -263,7 +345,7 @@ def echolot_calls(session: Session) -> list[EcholotCall]:
                 duration_s=c.duration_s if ran else None,
                 output_chars=c.output_chars,
                 output_head=head,
-                config=cfg.group(1) if cfg else None,
+                config=cfg,
                 traceback=_is_echolot_traceback(head),
                 is_help=is_help,
                 shell_error=this_shell_err,
@@ -349,7 +431,8 @@ def _mark(ts: str, label: str, agent: str, detail: str = "") -> dict[str, Any]:
     return {"ts": ts, "label": label, "agent": agent, "detail": detail}
 
 
-def milestones(session: Session, calls: list[EcholotCall]) -> list[dict[str, Any]]:
+def milestones(session: Session, calls: list[EcholotCall],
+               prefix: str = "AGENTTMP_") -> list[dict[str, Any]]:
     marks: list[dict[str, Any]] = []
     for t in session.turns:
         if t.kind == "slash":
@@ -371,19 +454,18 @@ def milestones(session: Session, calls: list[EcholotCall]) -> list[dict[str, Any
                            MAIN, s.description or ""))
         if s.ended:
             marks.append(_mark(s.ended, f"agent {s.type or '?'} finished", MAIN))
-    first_added = None
-    for c in session.calls:
-        if c.tool in ("Edit", "Write") and _has_prefix_added(c):
-            first_added = _mark(c.ts, "temporary instrumentation added", c.agent,
-                                _short(c.path))
-            break
-    for e in shell_edits(session, "AGENTTMP_"):
-        if first_added is None or ts_to_epoch(e["ts"]) < ts_to_epoch(first_added["ts"]):
-            first_added = _mark(e["ts"], "temporary instrumentation added (shell)",
-                                e["agent"], ", ".join(_short(f) for f in e["files"][:2]))
-        break
-    if first_added:
-        marks.append(first_added)
+    # The first marker by time, under the config's prefix. Calls are stored
+    # main context first, so the first in storage order was a later
+    # main-context marker before an earlier subagent one; and `AGENTTMP_`
+    # alone missed every project with a prefix of its own.
+    added = [_mark(c.ts, "temporary instrumentation added", c.agent, _short(c.path))
+             for c in session.calls
+             if c.tool in ("Edit", "Write") and _has_prefix_added(c, prefix)]
+    added += [_mark(e["ts"], "temporary instrumentation added (shell)", e["agent"],
+                    ", ".join(_short(f) for f in e["files"][:2]))
+              for e in shell_edits(session, prefix)]
+    if added:
+        marks.append(min(added, key=lambda m: ts_to_epoch(m["ts"])))
     marks.sort(key=lambda m: ts_to_epoch(m["ts"]))
     return marks
 
@@ -410,24 +492,49 @@ def describe(c: Call, limit: int = 80) -> str:
 
 # --------------------------------------------------------------------- hunt
 
+_GUIDE_LOOP = re.compile(r"echolot\s+guide\s+loop\b")
+# The commands of one shell line, in the order they run.
+SEGMENT = re.compile(r"\n|;|&&|\|\||\|")
+_ANALYZE = re.compile(r"echolot\s+analyze\b")
+
+
+def hunt_agents(session: Session) -> list[SubAgent]:
+    """The subagents that ran the hunt's loop, and none of the others.
+
+    Every Agent call is a subagent, and an Explore helper that read twelve
+    sources was taken for a hunt: told its conclusion lacked all eight
+    fields and its brief the traces, and warned for reading code, which was
+    its job. The type alone does not tell: the plugin ships no
+    `perf-hunter`, and its hunt skill hands the loop to a subagent of
+    whatever type the host picks. That subagent runs `echolot guide loop`
+    first, which is how the Codex reader already knew it.
+    """
+    return [s for s in session.subagents
+            if s.type == "perf-hunter"
+            or any(_GUIDE_LOOP.search(c.shell) for c in session.bash(f"sub:{s.id}"))]
+
+
 def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
-    """One entry per perf-hunter run: rounds, tools, tokens, conclusion."""
+    """One entry per run of the hunt's loop: rounds, tools, tokens, conclusion."""
     out = []
-    for s in session.subagents:
+    for s in hunt_agents(session):
         label = f"sub:{s.id}"
         calls = session.calls_of(label)
         bash = session.bash(label)
         analyzes = [c for c in bash if re.search(r"echolot\s+analyze\b", c.command or "")]
         rerecords = [c for c in bash if RE_RE_RECORD.search(c.command or "")]
         # A round is an analyze that follows a re-record; the first analyze
-        # opens round one. Ordering by time, per protocol.
+        # opens round one. Ordering by time, per protocol, and within a line
+        # by the order its commands run: `echolot collect … && echolot
+        # analyze …` is a whole round, and taking the line as a re-record
+        # alone counted a hunt written that way as no rounds at all.
         rounds = 0
         seen_record = False
         for c in sorted(bash, key=lambda x: ts_to_epoch(x.ts)):
-            if RE_RE_RECORD.search(c.command or ""):
-                seen_record = True
-            elif re.search(r"echolot\s+analyze\b", c.command or ""):
-                if rounds == 0 or seen_record:
+            for seg in SEGMENT.split(c.shell):
+                if RE_RE_RECORD.search(seg):
+                    seen_record = True
+                elif _ANALYZE.search(seg) and (rounds == 0 or seen_record):
                     rounds += 1
                     seen_record = False
         tools: dict[str, int] = {}
@@ -489,7 +596,7 @@ _BUILD = re.compile(r"gradlew|\badb\s|\bsleep\s+\d|emulator\b")
 _REPORT = re.compile(r"report\.(?:json|md)|\.echolot/out/")
 
 ACTIVITIES = ("echolot", "report reading", "source reading",
-              "instrumentation edit", "build/device", "other")
+              "instrumentation edit", "source edit", "build/device", "other")
 
 
 def activity_of(c: Call, prefix: str = "AGENTTMP_") -> str:
@@ -506,7 +613,13 @@ def activity_of(c: Call, prefix: str = "AGENTTMP_") -> str:
             return "report reading"
         return "source reading" if _SOURCE_FILE.search(p) else "other"
     if c.tool in ("Edit", "Write", "MultiEdit"):
-        return "instrumentation edit" if c.path and _SOURCE_FILE.search(c.path) else "other"
+        # Instrumentation is what carries the prefix. Any source edit used to
+        # count — a saved note, a build.gradle, the fix itself — and ended
+        # the reads counted before the first marker early.
+        inp = c.input or {}
+        if any(prefix in str(inp.get(k) or "") for k in ("new_string", "old_string", "content")):
+            return "instrumentation edit"
+        return "source edit" if c.path and _SOURCE_FILE.search(c.path) else "other"
     cmd = c.command
     if cmd is None:
         return "other"
@@ -575,7 +688,10 @@ def cost(session: Session) -> dict[str, Any]:
         "tools_subagents": dict(sorted(tools_sub.items(), key=lambda kv: -kv[1])),
         "thinking_blocks_main": session.thinking_blocks,
         "tool_output_chars": total_output_chars,
-        "user_turns": sum(1 for t in session.turns if t.role == "user" and t.kind == "text"),
+        # The human's turns: a subagent's brief is a user row in its own
+        # transcript, and counted, every subagent added one.
+        "user_turns": sum(1 for t in session.turns
+                          if t.role == "user" and t.kind == "text" and t.agent == MAIN),
         "asks": len(session.asks),
     }
 
@@ -605,7 +721,9 @@ def _has_prefix_removed(c: Call, prefix: str = "AGENTTMP_") -> bool:
     return prefix in old and prefix not in new
 
 
-_SRC_PATH = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:kt|java|kts))\b")
+# A path may start with `/`: an absolute one is made relative to the
+# session's directory below. Refused after a `/`, it gave no file at all.
+_SRC_PATH = re.compile(r"(?<![\w.-])(/?(?:[\w.-]+/)*[\w.-]+\.(?:kt|java|kts))\b")
 _CD_INTO = re.compile(r"(?:^|[\s;&|])cd\s+([\"']?)([^\s;&|\"']+)\1")
 _EDIT_VERB = re.compile(r"(?:^|[\s;&|(])(?:sed\s+-[a-zA-Z]*i|perl\s+-[a-zA-Z]*i)\b")
 
@@ -646,9 +764,12 @@ def shell_edits(session: Session, prefix: str) -> list[dict[str, Any]]:
 _LABEL = re.compile(r"^\s*(?:[=\-#*]{2,}|\[.*\]\s*$)")
 _HIT = re.compile(r"^[^\s:]+\.\w+(?::\d+)?:")
 _CLEAN = re.compile(r"exit=1\b|\(1 = clean\)|\bclean\b|no matches|nothing found", re.IGNORECASE)
+# The exit code a command printed after a label: `exit: 1`, `exit code=0`.
+_EXIT_LABEL = re.compile(r"\bexit(?:\s+code)?\s*[:=]\s*(\d+)\s*$", re.IGNORECASE)
+_PATH_LINE = re.compile(r"^[^\s:]+\.\w+$")
 
 
-def _grep_verdict(output: str, prefix: str) -> bool | None:
+def _grep_verdict(output: str, prefix: str, command: str = "") -> bool | None:
     """What the cleanup grep found: True = nothing, False = still there.
 
     `grep -rn PREFIX … | wc -l` → "0"; an `echo "label: $(… | wc -l)"` →
@@ -667,6 +788,16 @@ def _grep_verdict(output: str, prefix: str) -> bool | None:
     lines = [ln for ln in lines if not _LABEL.match(ln)]
     if not lines:
         return True
+    # `$?` printed after a label is grep's exit code: 1 is nothing found,
+    # 0 a match. Read as a count, `exit: 1` said the marker was still there.
+    code = next((m for ln in reversed(lines) if (m := _EXIT_LABEL.search(ln))), None)
+    if code is not None:
+        return code.group(1) == "1"
+    # `grep -l` prints the files that still hold it, and a bare path is
+    # neither a `path:line:` hit nor a line with the prefix in it.
+    if re.search(r"\bgrep\s+(?:-\w*l\w*\b|.*\s-\w*l\w*\b)", command) \
+            and any(_PATH_LINE.match(ln.strip()) for ln in lines):
+        return False
     first = lines[0].strip()
     m = re.search(r"(?:^|[\s:])(\d+)\s*$", first)
     if m and not _HIT.match(first):
@@ -765,14 +896,26 @@ def instrumentation(session: Session, cfg: Config | None,
             return False
         # `echolot names … | grep AGENTTMP_` reads the trace, not the tree:
         # it was counted as the cleanup grep on a real hunt, and its rows
-        # of marker names read as markers left in the sources.
-        return not ("echolot" in cmd and cmd.index("echolot") < cmd.index("grep"))
+        # of marker names read as markers left in the sources. Judged per
+        # pipeline, and only an echolot invocation piped into the grep: the
+        # word anywhere before it dropped `cat echolot.yml; grep -rn …` and
+        # `echolot mark --remove; grep -rn …`, the cleanup itself.
+        known = verbs()
+        for pipeline in re.split(r"\n|;|&&|\|\|", c.shell):
+            stages = pipeline.split("|")
+            for i, stage in enumerate(stages):
+                if "grep" in stage and prefix in stage and not any(
+                        is_invocation(m.group(1), known)
+                        for before in stages[:i] for m in RE_ECHOLOT.finditer(before)):
+                    return True
+        return False
     # Calls are stored main-first, then subagents: sort by time, the verdict
     # is the latest grep's.
     final_grep = sorted((c for c in session.bash()
                          if is_grep(c) and ts_to_epoch(c.ts) >= last_edit),
                         key=lambda c: ts_to_epoch(c.ts))
-    verdict = _grep_verdict(final_grep[-1].output_head or "", prefix) if final_grep else None
+    verdict = (_grep_verdict(final_grep[-1].output_head or "", prefix,
+                             final_grep[-1].shell) if final_grep else None)
     # Read off the tree only when the session touched instrumentation: a
     # walk over a checkout is not free, and a session with no marker in it
     # has nothing to be checked for.
@@ -980,7 +1123,9 @@ def gather(session: Session, cfg: Config | None,
     inside = match_runs(calls, runs, window)
     return Facts(
         echolot_calls=calls,
-        milestones=milestones(session, calls),
+        milestones=milestones(session, calls,
+                              (cfg.get("instrumentation.temp_prefix") if cfg else None)
+                              or "AGENTTMP_"),
         hunts=hunts(session, cfg),
         cost=cost(session),
         top_outputs=top_outputs(session),

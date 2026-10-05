@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import shutil
 import time
@@ -68,8 +69,17 @@ def next_n(project: Path) -> int:
     than a timestamp. Derived from what is on disk rather than kept in a
     counter file: one fewer thing to go stale, and a hand-deleted archive
     just frees its number.
+
+    The numbered directories count as well. An open investigation's reports
+    are filed in `.echolot/hunts/<n>/` before its record is archived, and
+    with `hunt.json` deleted or unreadable the next one took the same number
+    and inherited the reports. A number is free once its directory is gone.
     """
-    return max((int(h.get("n") or 0) for h in history(project)), default=0) + 1
+    root = project / ARCHIVE_DIR
+    dirs = [int(d.name) for d in root.iterdir()
+            if d.is_dir() and d.name.isdigit()] if root.is_dir() else []
+    return max([*(int(h.get("n") or 0) for h in history(project)), *dirs],
+               default=0) + 1
 
 
 def find(project: Path, ident: str) -> dict[str, Any] | None:
@@ -106,8 +116,20 @@ def load(project: Path) -> dict[str, Any] | None:
 def save(project: Path, hunt: dict[str, Any]) -> None:
     p = path(project)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(hunt, ensure_ascii=False, indent=2) + "\n",
-                 encoding="utf-8")
+    _write(p, hunt)
+
+
+def _write(p: Path, hunt: dict[str, Any]) -> None:
+    """Written whole or not at all: to a file beside it, then moved into place.
+
+    Written in place, a write cut short by Ctrl-C or a killed harness left
+    half a file, which `load` reads as no investigation: its question,
+    rounds and conclusion were lost, and the next one took its number.
+    """
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(hunt, ensure_ascii=False, indent=2) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, p)
 
 
 def home(project: Path, hunt: dict[str, Any] | None) -> Path | None:
@@ -212,8 +234,7 @@ def archive(project: Path, hunt: dict[str, Any]) -> Path | None:
         while dest.exists():
             n += 1
             dest = dest.with_name(f"{dest.stem}-{n}.json")
-    dest.write_text(json.dumps(hunt, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8")
+    _write(dest, hunt)
     return dest
 
 
@@ -355,6 +376,12 @@ def needs_choice(hunt: dict[str, Any] | None, st: dict[str, Any]) -> bool:
     if not hunt or hunt.get("status") != "open":
         return False
     if not has_history(st):
+        return False
+    # A collect in flight is the investigation working. A gradle run takes
+    # up to an hour and touches the investigation only when it ends, and the
+    # agent calls `echolot` while it runs: past thirty minutes it was told
+    # to ask the human whether to carry on with the work it was doing.
+    if (st.get("collect") or {}).get("status") == "running":
         return False
     return not is_fresh(hunt)
 
@@ -525,7 +552,7 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
         out.append(f"  ! {d}")
 
     if root is not None:
-        left = leftovers(root)
+        left = leftovers(root, (st.get("config") or {}).get("temp_prefix"))
         if left["markers"]:
             hand = left["markers"] - left["removable"]
             how = f"`echolot mark --remove` takes out {left['removable']}"
@@ -537,7 +564,13 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
 
 
 def _when(ts: str | None) -> str:
-    return (ts or "")[:16].replace("T", " ") or "—"
+    """In local time, the clock the set-aside trace directories are named by
+    a few lines below. The stored UTC with its zone cut off read as local and
+    was off by the offset."""
+    try:
+        return datetime.fromisoformat(ts or "").astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return (ts or "")[:16].replace("T", " ") or "—"
 
 
 def _ran_for(hunt: dict[str, Any]) -> str | None:

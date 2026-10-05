@@ -53,7 +53,8 @@ pipx install echolot
 
 `echolot --version` names what you got. Installed with `pip` into an
 environment whose scripts are not on `PATH`, `python -m echolot` is the same
-command.
+command — except to Codex's sandbox rule, which lets out only a line that
+starts with `echolot`.
 
 ### 2. Add the plugin to your agent
 
@@ -142,11 +143,15 @@ edited alone.
 The same work, by hand or in CI:
 
 ```bash
-echolot collect -c echolot.yml -n 5                              # 5 repeats of the scenario
-echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml  # build the report
-echolot compare before.json .echolot/out/report.json             # what changed since
-echolot doctor -q                                                # is this environment sane? exit 0 yes, 1 no or not checked, 2 trace_processor not downloaded
+echolot collect -c echolot.yml -n 5                                       # 5 repeats of the scenario
+echolot analyze .echolot/traces/coldStart_iter*.perfetto-trace -c echolot.yml  # build the report from them
+echolot compare before.json .echolot/out/report.json                      # what changed since
+echolot doctor -q                                                         # is this environment sane? exit 0 yes, 1 no or not checked, 2 trace_processor not downloaded
 ```
+
+`coldStart` is the config's `scenario.name`. `.echolot/traces/` keeps the
+repeats of every scenario you have recorded, so the report is built from one
+scenario's: a glob over the whole directory would take medians across two.
 
 Results land in `.echolot/out/` — `report.md` for you, `report.json` for the
 agent.
@@ -179,8 +184,8 @@ rounds run out.
 ### The investigation
 
 Each question you bring gets an investigation. `echolot hunt "cold start was
-3s, now 7s" --since "the tab redesign"` opens one, sets the previous traces
-aside without deleting them, and files every round of traces and every report
+3s, now 7s" --since "the tab redesign"` opens one, sets the previous traces of the
+config's scenario aside without deleting them, and files every round of traces and every report
 under it, so a question asked weeks ago still knows what was measured to
 answer it. `/echolot` opens and closes them for you. The commands, and what
 each one keeps, are in [The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md).

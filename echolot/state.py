@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from pathlib import Path
 
-from . import codex, hosts, layer, recorder
+from . import codex, hosts, layer, recorder, runner
 from . import hunt as hunt_mod
 from .config import Config, ConfigError
 
@@ -49,15 +50,33 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                 "runner": str(cfg.runner.get("mode", "launch")) if cfg.runner else None,
                 "sha": cfg.sha,
                 "confirmed": cfg.confirmed(),
+                "temp_prefix": cfg.get("instrumentation.temp_prefix"),
             }
         except ConfigError as e:
             st["config"] = {"path": cfg_path, "error": str(e)}
 
     traces_dir = project / ".echolot" / "traces"
-    traces = [p for pat in ("*.perfetto-trace", "*.pftrace")
-              for p in traces_dir.glob(pat)] if traces_dir.is_dir() else []
-    st["traces"] = {"dir": traces_dir, "count": len(traces),
-                    "newest": max((p.stat().st_mtime for p in traces), default=None)}
+    # Each modification time read once, and a file that will not stat left
+    # out: a dangling symlink matched the glob and ended `echolot` with a
+    # traceback, and so could a trace `collect` moved aside in between.
+    stamps: dict[Path, float] = {}
+    for pat in ("*.perfetto-trace", "*.pftrace"):
+        for p in (traces_dir.glob(pat) if traces_dir.is_dir() else []):
+            try:
+                stamps[p] = p.stat().st_mtime
+            except OSError:
+                continue
+    # The repeats of the config's scenario, named apart: the directory keeps
+    # every scenario's set side by side, and the next step names this one's
+    # alone.
+    scenario = (st.get("config") or {}).get("scenario")
+    mine = sorted(f".echolot/traces/{p.name}" for p in stamps
+                  if (m := runner._ITERATION.match(p.name))
+                  and m.group("scenario") == scenario) if scenario else None
+    st["traces"] = {"dir": traces_dir, "count": len(stamps),
+                    "scenario": None if mine is None else len(mine),
+                    "files": mine,
+                    "newest": max(stamps.values(), default=None)}
     st["collect"] = collect_state(project)
 
     st["report"] = None
@@ -110,18 +129,38 @@ def collect_state(project: Path) -> dict | None:
     if not isinstance(p, dict) or "started" not in p:
         return None
     if p.get("finished") is None:
-        alive = False
         pid = p.get("pid")
-        if isinstance(pid, int):
-            try:
-                os.kill(pid, 0)
-                alive = True
-            except OSError:
-                alive = False
+        alive = isinstance(pid, int) and _alive(pid)
         p["status"] = "running" if alive else "interrupted"
     else:
         p["status"] = "failed" if p.get("exit") else "done"
     return p
+
+
+def _alive(pid: int) -> bool:
+    """Whether a process with this pid is still running.
+
+    Signal 0 asks that on POSIX. On Windows 0 is `CTRL_C_EVENT`, and
+    `os.kill` sends it to the console's processes instead of asking
+    anything, so there the process is opened and its exit code read.
+    """
+    if os.name == "nt":
+        import ctypes
+        kernel = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) \
+                and code.value == 259                    # STILL_ACTIVE
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def collect_line(st: dict) -> str | None:
@@ -273,9 +312,33 @@ def next_step(st: dict) -> str:
 
 
 def _hunt_step(st: dict) -> str:
-    if not st["traces"]["count"]:
+    traces = st["traces"]
+    if not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
         return (f"{_door(st)} hunt` — or by hand: "
                 f"echolot collect -c echolot.yml -n 5")
     return (f"{_door(st)} hunt` — or by hand: "
-            f"echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml")
+            f"{analyze_line(traces.get('files'))}")
+
+
+def analyze_line(files: list[str] | None) -> str:
+    """`echolot analyze` over the repeats of one scenario, each file named.
+
+    `.echolot/traces/` keeps every scenario's set, since re-recording one
+    leaves the others where they are. `*.perfetto-trace` took `scroll`'s
+    repeats along with `coldStart`'s after the config switched, and every
+    median in the report mixed the two. And named rather than globbed, as
+    the guides tell an agent to: Codex keeps a line with a glob inside its
+    sandbox, where trace_processor cannot start. With no scenario to name
+    the files by, the line says what to put there.
+    """
+    if not files:
+        return ("echolot analyze <each trace of the scenario in "
+                ".echolot/traces, named> -c echolot.yml")
+    return ("echolot analyze " + " ".join(shlex.quote(f) for f in files)
+            + " -c echolot.yml")
+
+
+def repeats(scenario: str, n: int) -> list[str]:
+    """The files `collect -n <n>` writes for a scenario, by name."""
+    return [f".echolot/traces/{scenario}_iter{i:03d}.perfetto-trace" for i in range(n)]
 
