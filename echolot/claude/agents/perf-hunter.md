@@ -154,9 +154,10 @@ waiting for one.
    than it moved — record another round before concluding, as many runs
    a side as the cell says. Hundreds means another round will not settle
    it: say the move is below what these runs resolve.
-   "nothing to compare" means no investigation is open, and nothing kept
-   the previous round's report. Analyze the set `collect` put aside again
-   with -o .echolot/out/previous, compare the two by path —
+   "nothing to compare" means no investigation is open in the project the
+   config names, and nothing kept the previous round's report. Analyze the
+   set `collect` put aside again with -o .echolot/out/previous, then, from
+   the directory echolot.yml is in, compare the two by path —
    echolot compare .echolot/out/previous/report.json .echolot/out/report.json
    — and say in your conclusion that no investigation was open
 

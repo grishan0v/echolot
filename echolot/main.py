@@ -756,7 +756,10 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
     if len(paths) == 2:
         return paths[0], paths[1]
 
-    latest = _out_dir(args.out, args.cfg) / "report.json" if args.cfg else \
+    # Where `analyze` writes by default, whatever `-o` says: `-o` is where the
+    # comparison goes, and reading the newer side from it compared against
+    # whatever report.json sat there, or against nothing.
+    latest = _out_dir(".echolot/out", args.cfg) / "report.json" if args.cfg else \
         Path(".echolot/out/report.json")
     if len(paths) == 1:
         # One path is "against what I just measured": the named report is the
@@ -781,36 +784,87 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
 
 
 def _load_report(path: Path) -> dict:
+    """A Marker Report, or a sentence saying what the file is instead.
+
+    `compare` and `report` both read through here, so every sentence is
+    worded for both: neither command is always comparing.
+    """
     if not path.exists():
         raise ConfigError(f"report not found: {path}")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise ConfigError(f"{path}: not valid JSON ({e})") from e
+    except UnicodeDecodeError as e:
+        # A trace handed over where its report belongs.
+        raise ConfigError(
+            f"{path}: not a Marker Report — it is not text. Give a report.json "
+            f"written by `echolot analyze`.") from e
+    except OSError as e:
+        raise ConfigError(f"{path}: cannot be read: {e.strerror or e}") from e
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"{path}: not a Marker Report — JSON {type(data).__name__}, not an "
+            f"object. Give a report.json written by `echolot analyze`.")
     if data.get("kind") == "comparison":
         raise ConfigError(
-            f"{path} is a comparison, not a Marker Report. Compare two reports "
+            f"{path} is a comparison, not a Marker Report: give a report.json "
             f"written by `echolot analyze`.")
     if "detectors" not in data:
         raise ConfigError(f"{path}: not a Marker Report — no `detectors` section")
     return data
 
 
+def _nearest_config(args) -> None:
+    """`echolot.yml` up the tree, when no `-c` names one and none is here.
+
+    The agent runs `analyze` inside a macrobenchmark's output directory with
+    `-c` naming the project's config, and its report and the investigation's
+    copy land in the project. `compare` and `report` run from that same
+    directory read the build directory as the project: "nothing to compare"
+    with an investigation open and two reports in it. The walk stops at the
+    root of the checkout.
+    """
+    if args.config != "echolot.yml" or Path(args.config).exists():
+        return
+    here = Path.cwd().resolve()
+    for folder in (here, *here.parents):
+        found = folder / "echolot.yml"
+        if found.is_file():
+            args.config = str(found)
+            print(f"[i] config: {found}, the nearest up the tree", file=sys.stderr)
+            return
+        if (folder / ".git").exists():
+            return
+
+
 def cmd_compare(args) -> int:
     """The delta between two Marker Reports."""
+    from .mark import DEFAULT_PREFIX
+    _nearest_config(args)
+    unloaded = None
     try:
         args.cfg = None
-        with contextlib.suppress(ConfigError):
+        try:
             args.cfg = Config.load(args.config, args.local)
+        except ConfigError as e:
+            # Not a reason to stop: the comparison prints all the same. It is
+            # a reason to say why nothing is written, which "no config found"
+            # did not, for a config that was there.
+            unloaded = e
         project = _project_root(args.cfg) if args.cfg else Path.cwd()
 
         before_path, after_path = _compare_pair(args, project)
+        # The same fallback `analyze`, `names`, `mark` and `reflect` use: a
+        # config without the key, or none, still has markers planted under
+        # the default prefix.
+        prefix = (args.cfg.get("instrumentation.temp_prefix") if args.cfg else None) \
+            or DEFAULT_PREFIX
         cmp = compare_mod.build(
             _load_report(before_path), _load_report(after_path),
             before_path=str(before_path), after_path=str(after_path),
             floor_ms=args.floor_ms, floor_ratio=args.floor_pct / 100.0,
-            temp_prefix=(args.cfg.get("instrumentation.temp_prefix")
-                         if args.cfg else None))
+            temp_prefix=str(prefix))
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
@@ -834,6 +888,10 @@ def cmd_compare(args) -> int:
             report_mod.to_json(cmp), encoding="utf-8")
         (out_dir / "comparison.md").write_text(text, encoding="utf-8")
         print(f"\n\u2192 {out_dir/'comparison.md'}\n\u2192 {out_dir/'comparison.json'}",
+              file=sys.stderr)
+    elif unloaded is not None and Path(args.config).exists():
+        print(f"\n[!] {args.config} does not load, so nothing was written to "
+              f"disk — the comparison above is the whole output: {unloaded}",
               file=sys.stderr)
     else:
         print("\n[i] no config found, so nothing was written to disk — "
@@ -3347,6 +3405,7 @@ def cmd_report(args) -> int:
     written is its line in .echolot/log/runs.jsonl — the line `main` appends
     for every command unless ECHOLOT_NO_RECORD is set.
     """
+    _nearest_config(args)
     project = project_of(args)
     path = Path(args.report) if args.report else project / ".echolot" / "out" / "report.json"
     try:

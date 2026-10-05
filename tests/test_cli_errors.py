@@ -174,3 +174,13 @@ def test_what_set_hands_the_detectors():
     check("numbers as numbers", got["main_thread_block"]["min_slice_ms"] == 16, got)
     check("and a glob where a number goes is kept for `check` to refuse",
           got["binder_txn"]["min_txn_ms"] == "*10*", got)
+
+
+@pytest.mark.parametrize("verb", ["compare", "report"])
+def test_a_file_that_is_no_report_is_a_sentence(tmp_path, verb):
+    """A trace where its report belongs, and JSON that is not an object."""
+    (tmp_path / "trace.perfetto-trace").write_bytes(bytes([0x0a, 0xae, 0xff, 0x01]) * 64)
+    (tmp_path / "arr.json").write_text("[]", encoding="utf-8")
+    for name in ("trace.perfetto-trace", "arr.json"):
+        argv = [verb, name] + (["arr.json"] if verb == "compare" else [])
+        refused(cli(tmp_path, *argv), name, "not a Marker Report")
