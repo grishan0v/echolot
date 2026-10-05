@@ -3820,7 +3820,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "~/.claude/projects/<slug>; Codex sessions are then "
                          "left out")
     rf.add_argument("-c", "--config", default="echolot.yml",
-                    help="the project config, for the protocol checks")
+                    help="the project config, for the protocol checks: a path "
+                         "from here, as everywhere else; without it, "
+                         "echolot.yml in --project")
     rf.add_argument("--local", help="path to local.yml (defaults to alongside)")
     rf.add_argument("-o", "--out", default=".echolot/reflect")
     rf.set_defaults(func=cmd_reflect)
