@@ -555,11 +555,7 @@ def _markers_info(tp, cfg: Config) -> dict:
             globs.append(str(name))
     wanted = " OR ".join(f"name GLOB '{sql_value(g)}'" for g in globs)
     rows = tp.query(f"""
-        WITH child_sum AS (
-            SELECT parent_id, SUM(MAX(dur, 0)) AS ns
-            FROM slice WHERE parent_id IS NOT NULL GROUP BY parent_id
-        ),
-        seen AS (
+        WITH seen AS (
             SELECT s.slice_id, s.name, s.thread_name AS thread, s.dur, s.unfinished
             FROM _slice_win s WHERE {wanted}
             UNION ALL
@@ -570,9 +566,10 @@ def _markers_info(tp, cfg: Config) -> dict:
                COUNT(*) AS count,
                MAX(seen.unfinished) AS unfinished,
                SUM(MAX(seen.dur, 0)) AS total_ns,
-               SUM(MAX(seen.dur, 0) - COALESCE(c.ns, 0)) AS self_ns,
+               SUM(MAX(seen.dur, 0) - COALESCE(CASE WHEN seen.unfinished = 1
+                                                    THEN c.ns_win ELSE c.ns END, 0)) AS self_ns,
                MAX(MAX(seen.dur, 0)) AS max_ns
-        FROM seen LEFT JOIN child_sum c ON c.parent_id = seen.slice_id
+        FROM seen LEFT JOIN _child_sum c ON c.parent_id = seen.slice_id
         GROUP BY seen.name, seen.thread
     """)
     by_name: dict[str, dict] = {}
@@ -1024,6 +1021,16 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
         window[f"{key}_anchor"] = {"glob": glob, "matches": matches}
         if n - matches:
             window[f"{key}_anchor"]["before_start"] = n - matches
+        # The end anchor the window closed on, still open when the recording
+        # stopped: the window ran on to the end of the trace, and the
+        # scenario never reached its end inside it.
+        if key == "end" and matches:
+            first = tp.query(
+                f"SELECT a.dur < 0 AS open FROM _anchor a "
+                f"WHERE a.name GLOB '{sql_value(glob)}' "
+                f"AND a.ts >= (SELECT ts_start FROM _window) ORDER BY a.ts LIMIT 1")
+            if first and first[0]["open"]:
+                window[f"{key}_anchor"]["unfinished"] = True
     window["opened_inside"] = _opened_inside(tp, window)
     window["startup"] = _startup_info(tp, window, procs[0]["name"])
     return window
@@ -1443,10 +1450,12 @@ def _main_thread_budget(tp, window: dict) -> dict | None:
     accounted = round(sum(out.values()), 2)
     out["accounted_ms"] = accounted
     out["window_ms"] = duration
-    # Short of the window means the thread was not there for all of it — the
-    # process started inside the window, or the trace has a hole. Worth a
-    # number rather than a silent shortfall: it is the difference between "the
-    # scenario is explained" and "most of it was not looked at".
+    # Short of the window means the thread had no state for part of it — the
+    # process started inside the window, or the trace has a hole. A state the
+    # thread was still in when the recording stopped is not that: it runs to
+    # the end of the window (`_tstate_win`). Worth a number rather than a
+    # silent shortfall: it is the difference between "the scenario is
+    # explained" and "most of it was not looked at".
     out["accounted_pct"] = round(accounted / duration * 100, 1) if duration else None
     return out
 
@@ -2015,8 +2024,9 @@ def cmd_hunt(args) -> int:
                 if hosts_mod.wants_claude(project)
                 else "any agent, after `echolot guide hunt`")
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
-        print("By hand: echolot collect -c echolot.yml -n 5, then echolot analyze "
-              ".echolot/traces/*.perfetto-trace", file=sys.stderr)
+        print("By hand: echolot collect -c echolot.yml -n 5, then "
+              + state.analyze_line(state.repeats(scenario, 5) if scenario else None),
+              file=sys.stderr)
         return 0
 
     if conclusion:

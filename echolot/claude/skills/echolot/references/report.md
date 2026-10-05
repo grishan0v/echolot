@@ -261,6 +261,11 @@ window expanded to the whole trace. None of the numbers are about your
 scenario. Do not investigate, fix the config: look at the real names via
 `echolot probe` and correct `scenario.start`.
 
+**`window.end_anchor.unfinished`** — the end anchor opened and never closed:
+the scenario had not reached its end when the recording stopped, and the
+window runs to the end of the trace. What the scenario got stuck on is inside
+the window; that it never finished is a finding of its own.
+
 **`window.opened_inside` with `material: true`** — the scenario window opened
 while the main thread was already blocked, and more of that block happened
 before the anchor matched than inside the window. Thread states are clipped to
