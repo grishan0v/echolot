@@ -4,11 +4,15 @@
 
 ```bash
 echolot collect -c echolot.yml -n 5
-echolot analyze .echolot/traces/*.perfetto-trace -c echolot.yml
+echolot analyze .echolot/traces/coldStart_iter*.perfetto-trace -c echolot.yml
 ```
 
 The first command captures N repeats of a scenario into `.echolot/traces/`
-beside the config, the second merges them into one report. That directory is
+beside the config, as `<scenario>_iter000.perfetto-trace` and on; the second
+merges them into one report. `coldStart` stands for the config's
+`scenario.name`. The directory keeps the traces of every scenario recorded
+into it, so the glob names one: `*.perfetto-trace` would merge two scenarios
+into one report, and every median in it would mix them. That directory is
 the one `echolot`, `hunt` and `compare` read, so the default is the place to
 keep them; `-o` exists for the rare trace that belongs elsewhere.
 

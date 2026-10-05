@@ -74,8 +74,15 @@ the hunt skill tells it to read first (#193).
 `reflect` runs from the application project because that is where all of
 them live. Claude Code's sessions and Codex's are read side by side, newest
 first, and `--list` says which agent each came from. Only sessions that used
-echolot for real work are candidates — one that merely ran `reflect` does not
-count, or the newest session would always be the one doing the reflecting.
+echolot for real work are candidates — one that merely reflected does not
+count, or the newest session would always be the one doing the reflecting. A
+reflection is `reflect`, the `guide reflect` its skill runs first, and
+`/echolot reflect` or `/echolot-reflect` under any prefix the host adds.
+
+A subagent is a hunt when it is the loop: of type `perf-hunter`, or one that
+ran `echolot guide loop`, which both readers can see. An Explore or
+general-purpose helper is none, and gets none of the hunt's signals: reading
+sources is its job.
 
 ## What is in the report
 
@@ -166,8 +173,11 @@ asked for in the main context is a different matter, so only subagent edits
 and prefixed edits are held against the list.
 
 Rounds are counted from the transcript: an `analyze` that follows a re-record
-opens a new round. If a project records traces some other way, the pattern in
-`RE_RE_RECORD` needs that way, or the count is low.
+opens a new round, and the commands of one shell line count in the order they
+run, so `echolot collect … && echolot analyze …` is a round of its own. A
+launch, `adb shell am start`, records nothing and is not a re-record. If a
+project records traces some other way, the pattern in `RE_RE_RECORD` needs
+that way, or the count is low.
 
 The exit code in a transcript is the Bash tool's, not echolot's: a `cd` into
 a path with spaces fails before the tool runs. Where the recorder has a line

@@ -55,7 +55,12 @@ frames AS (
         -- A frame whose expected slice is missing cannot be measured against
         -- a deadline it does not have. It still counts in the denominator
         -- below; it just cannot be the evidence for anything.
-        a.dur - e.dur   AS over_ns
+        --
+        -- The deadline is where the expected frame ends, so a frame that
+        -- started late carries its late start into the overrun. Actual minus
+        -- expected duration lost it: totals came out low, and a frame the
+        -- platform called late could fall under min_overrun_ms.
+        (a.ts + a.dur) - (e.ts + e.dur)   AS over_ns
     FROM actual_frame_timeline_slice a
     JOIN _proc p ON p.upid = a.upid
     LEFT JOIN expected_frame_timeline_slice e
