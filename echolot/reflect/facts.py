@@ -20,7 +20,7 @@ from ..mark import under_allowed
 from .model import MAIN, Call, Session, SubAgent, strip_heredocs, ts_to_epoch
 
 # Shared with signals.py — the vocabulary of what an agent does around the tool.
-RE_ECHOLOT = re.compile(r"(?:^|[\s;&|(`$/])echolot\s+([a-z-]+)((?:\s+[^;&|\n]*)?)")
+RE_ECHOLOT = re.compile(r"(?:^|[\s;&|(`$/])echolot\s+([a-zA-Z-]+)((?:\s+[^;&|\n]*)?)")
 # A launch is not a recording: `adb shell am start -W` reads TotalTime, or
 # opens a screen to look at, and no trace file is touched. Counted, it warned
 # that the baseline was lost and opened hunt rounds that never happened. A
@@ -214,6 +214,40 @@ def is_invocation(word: str, known: frozenset[str] | None = None) -> bool:
     return word.startswith("-") or word in (known if known is not None else verbs())
 
 
+def resolve(word: str, rest: str, known: frozenset[str]) -> tuple[str | None, str]:
+    """The subcommand an invocation runs, and the rest of its line.
+
+    A global option may come first. `--help` and `-h` are `help`, `-V` and
+    `--version` are `version`, and `--tp-binary` with its value is stepped
+    over to the subcommand behind it — kept in the rest, where the checks
+    that read the line look for it. Every leading `-` used to be `help`, so
+    `echolot --tp-binary bin/tp analyze …` was a help lookup and the analyze
+    was gone from every check that reads one.
+    """
+    if not word.startswith("-"):
+        return (word if word in known else None), rest
+    tokens = (word + rest).split()
+    kept: list[str] = []
+    i = 0
+    while i < len(tokens) and tokens[i].startswith("-"):
+        t = tokens[i]
+        if t in ("-h", "--help"):
+            return "help", " ".join(tokens[i + 1:])
+        if t in ("-V", "--version"):
+            return "version", " ".join(tokens[i + 1:])
+        if t == "--tp-binary":
+            kept += tokens[i:i + 2]
+            i += 2
+        elif t.startswith("--tp-binary="):
+            kept.append(t)
+            i += 1
+        else:
+            return "help", " ".join(tokens[i + 1:])
+    if i < len(tokens) and tokens[i] in known:
+        return tokens[i], " ".join([*tokens[i + 1:], *kept])
+    return "help", " ".join(tokens[i:])
+
+
 def expand_vars(cmd: str, token: str) -> str:
     """`$OUT` and `${OUT}` from assignments in the same command, one level.
 
@@ -272,10 +306,15 @@ def work(command: str) -> list[str]:
     session that was running it.
     """
     known = verbs()
-    return [("help" if m.group(1).startswith("-") else m.group(1))
-            for m in RE_ECHOLOT.finditer(strip_heredocs(command))
-            if is_invocation(m.group(1), known)
-            and not reflecting(m.group(1), m.group(2) or "")]
+    out = []
+    for m in RE_ECHOLOT.finditer(strip_heredocs(command)):
+        if not is_invocation(m.group(1), known):
+            continue
+        # The way `subcommands` reads one: a global option first is not help.
+        sub, rest = resolve(m.group(1), m.group(2) or "", known)
+        if sub and not reflecting(sub, rest):
+            out.append(sub)
+    return out
 
 
 def reflection_slash(command: str | None, args: str | None) -> bool:
@@ -294,9 +333,10 @@ def subcommands(command: str) -> list[str]:
     config being written.
     """
     known = verbs()
-    return ["help" if m.group(1).startswith("-") else m.group(1)
-            for m in RE_ECHOLOT.finditer(strip_heredocs(command))
-            if is_invocation(m.group(1), known)]
+    found = (resolve(m.group(1), m.group(2) or "", known)[0]
+             for m in RE_ECHOLOT.finditer(strip_heredocs(command))
+             if is_invocation(m.group(1), known))
+    return [s for s in found if s]
 
 
 def echolot_calls(session: Session) -> list[EcholotCall]:
@@ -310,14 +350,13 @@ def echolot_calls(session: Session) -> list[EcholotCall]:
         exit_m = _EXIT.search(head)
         shell_err = bool(_SHELL_ERROR.search(head))
         glob_miss = _GLOB_MISS.search(head)
-        argvs = [_REDIRECT.sub("", m.group(2) or "").strip() for m in matches]
+        resolved = [resolve(m.group(1), m.group(2) or "", known) for m in matches]
+        argvs = [_REDIRECT.sub("", rest).strip() for _, rest in resolved]
         skipped = _skipped_by_glob(argvs, glob_miss.group(1)) if glob_miss else None
-        for i, m in enumerate(matches):
+        for i in range(len(matches)):
             argv = argvs[i]
             cfg = config_arg(argv, cmd)
-            sub = m.group(1)
-            if sub.startswith("-"):
-                sub = "help"
+            sub = resolved[i][0] or "help"
             # Per invocation, not per Bash line: `echolot doctor; echolot
             # names --help` is one lookup, not two.
             is_help = sub in ("help", "explain") or bool(RE_HELP_FLAG.search(argv))
@@ -517,12 +556,18 @@ def hunt_agents(session: Session) -> list[SubAgent]:
 def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
     """One entry per run of the hunt's loop: rounds, tools, tokens, conclusion."""
     out = []
+    # From the commands without their heredoc bodies, and the analyzes from
+    # the calls themselves: a note whose body mentioned `echolot collect`
+    # and `echolot analyze` counted as both and opened rounds, and so did
+    # `echolot analyze --help`.
+    real = {(c.ts, c.agent) for c in echolot_calls(session)
+            if c.sub == "analyze" and not c.is_help and c.ran}
     for s in hunt_agents(session):
         label = f"sub:{s.id}"
         calls = session.calls_of(label)
         bash = session.bash(label)
-        analyzes = [c for c in bash if re.search(r"echolot\s+analyze\b", c.command or "")]
-        rerecords = [c for c in bash if RE_RE_RECORD.search(c.command or "")]
+        analyzes = [c for c in bash if (c.ts, c.agent) in real]
+        rerecords = [c for c in bash if RE_RE_RECORD.search(c.shell)]
         # A round is an analyze that follows a re-record; the first analyze
         # opens round one. Ordering by time, per protocol, and within a line
         # by the order its commands run: `echolot collect … && echolot
@@ -534,7 +579,8 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
             for seg in SEGMENT.split(c.shell):
                 if RE_RE_RECORD.search(seg):
                     seen_record = True
-                elif _ANALYZE.search(seg) and (rounds == 0 or seen_record):
+                elif (_ANALYZE.search(seg) and not RE_HELP_FLAG.search(seg)
+                      and (c.ts, c.agent) in real and (rounds == 0 or seen_record)):
                     rounds += 1
                     seen_record = False
         tools: dict[str, int] = {}
@@ -698,10 +744,14 @@ def cost(session: Session) -> dict[str, Any]:
 
 def top_outputs(session: Session, n: int = 5) -> list[dict[str, Any]]:
     ranked = sorted(session.calls, key=lambda c: -c.output_chars)[:n]
+    known = verbs()
+    # Whose output it was, from the command without its heredoc bodies:
+    # echolot named in a note being written is not echolot running.
     return [{
         "chars": c.output_chars, "tool": c.tool, "agent": c.agent,
-        "what": (c.command or c.path or "")[:120],
-        "echolot": bool(c.command and re.search(r"\becholot\s", c.command)),
+        "what": (c.shell if c.command is not None else (c.path or ""))[:120],
+        "echolot": c.command is not None and any(
+            is_invocation(m.group(1), known) for m in RE_ECHOLOT.finditer(c.shell)),
     } for c in ranked if c.output_chars]
 
 
@@ -969,7 +1019,8 @@ def _under_any(rel: str, roots: list[str]) -> bool:
 
 # --------------------------------------------------------------------- gaps
 
-def gaps(session: Session, min_s: float = 120.0) -> list[dict[str, Any]]:
+def gaps(session: Session, min_s: float = 120.0,
+         keep: int | None = 8) -> list[dict[str, Any]]:
     """Silences between consecutive events, per agent, above the floor.
 
     Long ones are usually the agent waiting for gradle or a device — worth
@@ -986,7 +1037,7 @@ def gaps(session: Session, min_s: float = 120.0) -> list[dict[str, Any]]:
                 out.append({"agent": agent, "seconds": round(t1 - t0),
                             "after": what, "why": _gap_reason(what)})
     out.sort(key=lambda g: -g["seconds"])
-    return out[:8]
+    return out[:keep] if keep else out
 
 
 def _gap_reason(after: str) -> str:

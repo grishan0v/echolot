@@ -35,8 +35,11 @@ from .facts import (
     RE_TRACE_OPEN,
     Facts,
     config_writes,
+    gaps,
     hunt_agents,
+    is_invocation,
     shell_edits,
+    verbs,
 )
 from .facts import SEGMENT as _SEGMENT
 from .facts import expand_vars as _expand_vars
@@ -61,7 +64,10 @@ Detector = Callable[[Session, Facts, "Config | None"], "Signal | None"]
 _BYPASS = [
     # A gradle *run* of instrumented tests captures traces; `assembleBenchmark`
     # only builds the APK and is not a capture.
-    ("gradle", re.compile(r"gradlew\b[^\n]*(?:\bconnected\w*|AndroidTest\b)")),
+    # `assemble…AndroidTest`, `bundle…`, `compile…` build the test APK and
+    # capture nothing, whatever the task's name ends in.
+    ("gradle", re.compile(r"gradlew\b[^\n]*(?:\bconnected\w*|"
+                          r"(?<![\w:])(?!assemble|bundle|compile)\w*AndroidTest\b)")),
     # A launch, `am start` or `cmd activity start-activity`, records nothing.
     ("adb", re.compile(r"\badb\s+(?:-s\s+\S+\s+)?shell\s+perfetto\b")),
     ("perfetto", re.compile(r"(?:^|\s)perfetto\s+(?:-c|--txt|-o)")),
@@ -149,14 +155,22 @@ def agent_prompt_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None
 # --------------------------------------------------------------- protocol
 
 def doctor_first(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    analyzes = [c for c in f.echolot_calls if c.sub == "analyze"]
+    # Calls that ran, and not `--help`: an `analyze --help` read first was
+    # the first analyze, a `doctor --help` passed for the check, and an
+    # analyze the shell skipped on a glob counted as one.
+    real = [c for c in f.echolot_calls if not c.is_help and c.ran]
+    analyzes = [c for c in real if c.sub == "analyze"]
     if not analyzes:
         return None
-    doctors = [c for c in f.echolot_calls if c.sub == "doctor"]
+    doctors = [c for c in real if c.sub == "doctor"]
     first_an = ts_to_epoch(analyzes[0].ts)
     before = [d for d in doctors if ts_to_epoch(d.ts) <= first_an]
     if before:
-        failed = [d for d in before if d.exit not in (0, None)]
+        # The last doctor before the analyze speaks: one that failed, a fix,
+        # one that passed, then the analyze, is the path the protocol asks
+        # for, and it was reported as going on past a failure.
+        last = max(before, key=lambda d: ts_to_epoch(d.ts))
+        failed = [last] if last.exit not in (0, None) else []
         if failed:
             return Signal("doctor_first", "warn",
                           "doctor failed and the run went on anyway",
@@ -176,9 +190,17 @@ def doctor_first(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 
 def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = []
+    known = verbs()
     for c in s.bash():
         cmd = c.shell
-        if RE_TRACE_OPEN.search(cmd):
+        # Without echolot's own invocations: `--tp-binary` names a
+        # trace_processor_shell, and a call that went through echolot was
+        # reported as the agent opening the trace itself.
+        outside = cmd
+        for m in RE_ECHOLOT.finditer(cmd):
+            if is_invocation(m.group(1), known):
+                outside = outside.replace(m.group(0), " ")
+        if RE_TRACE_OPEN.search(outside):
             rows.append({"ts": _t(c.ts), "agent": c.agent, "how": c.tool,
                          "command": cmd[:120]})
     for c in s.calls:
@@ -852,10 +874,14 @@ def baseline_lost(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                 else:
                     preserved_since_analyze = True
             if RE_RE_RECORD.search(seg):
+                before = touched or (analyzed_dirs[-1] if analyzed_dirs else "?")
+                # A set under .echolot/ is where `hunt` files the evidence and
+                # where this signal's own hint says to copy it: a re-record
+                # writes into the build tree and leaves it alone.
+                kept = ".echolot/" in before or before.startswith(".echolot")
                 if not re.search(r"echolot\s+collect\b", seg) \
-                        and not preserved_since_analyze:
+                        and not preserved_since_analyze and not kept:
                     # collect sets the previous set aside itself
-                    before = touched or (analyzed_dirs[-1] if analyzed_dirs else "?")
                     rows.append({
                         "ts": _t(c.ts), "agent": c.agent,
                         "re_record": cmd.replace("\n", " ")[:90],
@@ -938,6 +964,10 @@ def retries(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
             continue
         a_failed = a.traceback or a.is_error or (a.exit not in (0, None))
         if a.recorded and a.recorded.get("exit") == 0:
+            a_failed = False
+        # Stopped by the agent's harness — a permission screen, a declined
+        # prompt — is not a failure, as `echolot_failures` already reads it.
+        if _HOST.search(a.output_head or ""):
             a_failed = False
         if a_failed and ts_to_epoch(b.ts) - ts_to_epoch(a.ts) <= 180:
             # The same argv twice says nothing; what moved between the two
@@ -1047,8 +1077,12 @@ def long_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = [g for g in f.gaps if g["seconds"] >= 120]
     if not rows:
         return None
+    # The facts keep the longest few; the title counts them all, or it never
+    # said more than eight.
+    total = len(gaps(s, keep=None))
     return Signal("long_gaps", "info",
-                  f"{len(rows)} silence(s) of two minutes or more",
+                  f"{total} silence(s) of two minutes or more"
+                  + (f", the {len(rows)} longest listed" if total > len(rows) else ""),
                   "A subagent running, the human answering, a build in the "
                   "background, a device — the cause is read off the call before "
                   "the silence. Listed so the wall time reads honestly.",
@@ -1062,8 +1096,10 @@ def context_hogs(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     if not big:
         return None
     from_echolot = [o for o in big if o["echolot"]]
+    total = sum(1 for c in s.calls if c.output_chars >= 8000)
     return Signal("context_hogs", "info",
-                  f"{len(big)} tool output(s) over 8k characters",
+                  f"{total} tool output(s) over 8k characters"
+                  + (f", the {len(big)} largest listed" if total > len(big) else ""),
                   "Every character comes out of the window the loop runs in.",
                   big,
                   ("echolot's own output is among them — a shorter default or a "
