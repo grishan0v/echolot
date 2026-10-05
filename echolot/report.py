@@ -554,8 +554,9 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
     out = ["Main thread: " + " · ".join(parts)]
     out.extend(_in_rows_line(budget))
     accounted = budget.get("accounted_pct")
-    # Anything much short of the whole window means the thread was not there
-    # for all of it. Silence would read as "the rest was nothing".
+    # Anything much short of the whole window means the thread had no state
+    # for part of it; a state still open when the recording stopped is counted
+    # to the window's end. Silence would read as "the rest was nothing".
     if accounted is not None and accounted < 95:
         out.append(
             f"> ⚠️ Only {accounted:.0f}% of the window is accounted for on the "
@@ -899,6 +900,12 @@ def to_markdown(report: dict[str, Any]) -> str:
                 f"trace — the window expanded to the whole trace. Check against "
                 f"`probe`; the numbers below are not about your scenario."
             )
+        elif anchor and anchor.get("unfinished"):
+            out.append(
+                f"> ⚠️ {label} anchor `{anchor['glob']}` never closed: the "
+                f"scenario had not reached its end when the recording stopped, "
+                f"so the window runs to the end of the trace."
+            )
 
     # A partial account looks exactly like a complete one, which is the only
     # reason this is worth a line. Slices keep their real length across the
@@ -1044,7 +1051,8 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
         if a:
             hit = a.get("matches")
             anchors.append(f"{label} `{a.get('glob')}` "
-                           + ("⚠️ 0 matches" if hit == 0 else f"{hit} match(es)"))
+                           + ("⚠️ 0 matches" if hit == 0 else f"{hit} match(es)")
+                           + (", ⚠️ never closed" if a.get("unfinished") else ""))
     if anchors:
         out.append("Anchors: " + " · ".join(anchors))
     alts = w.get("process_alternatives")
