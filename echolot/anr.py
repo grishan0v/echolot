@@ -60,8 +60,11 @@ _HEADER = re.compile(r"^#?\s*(?P<key>[A-Za-z][A-Za-z _-]*):\s?(?P<value>.*)$")
 # starting with the one that hung, and every block names itself.
 _PROCESS = re.compile(r"^-{2,}\s*pid (?P<pid>\d+) at .*-{2,}\s*$")
 _CMDLINE = re.compile(r"^Cmd line: (?P<cmd>\S+)")
-# `dumpsys dropbox --print <tag>` concatenates every entry it holds.
+# `dumpsys dropbox --print <tag>` concatenates every entry it holds, each
+# opened by a rule and then its time and tag: `2026-08-20 21:22:45
+# data_app_anr (compressed text, 46727 bytes)`.
 _ENTRY = re.compile(r"^={20,}\s*$")
+_ENTRY_HEAD = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\s+\S+\s+\(")
 # The record's own furniture: block rules, the thread count above a block, and
 # the runtime's note about how long suspending everything took. Skipped by
 # name so that a line which is genuinely new still reaches the unread count.
@@ -396,6 +399,9 @@ class Report:
     # a second process is not this app, and a second entry is a second ANR.
     elsewhere: int = 0
     entries: int = 1
+    # Lines inside a process block before its first thread: an older ART
+    # prints its runtime statistics there rather than after the threads.
+    preamble: int = 0
     # (share of a CPU, process name) from the record's own table, biggest
     # first. Empty for a source that does not print one.
     load: list[tuple[float, str]] = field(default_factory=list)
@@ -510,11 +516,14 @@ def parse(text: str, source: Source | None = None) -> Report:
     process = ""
     entries = 1
     skipped = 0
+    preamble = 0
+    in_block = False
     load: list[tuple[float, str]] = []
     truncated = False
     listed: dict[str, int] = {}
 
-    for number, raw in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    for number, raw in enumerate(lines, 1):
         line = raw.rstrip()
         if not line.strip():
             continue
@@ -529,6 +538,7 @@ def parse(text: str, source: Source | None = None) -> Report:
             fields.pop("detached", None)
             current = Thread(state=_state(state), process=process, **fields)
             threads.append(current)
+            in_block = False
             if source.lock_on_signature:
                 held = source.lock.search(note)
                 if held:
@@ -550,6 +560,7 @@ def parse(text: str, source: Source | None = None) -> Report:
         block = _PROCESS.match(line)
         if block:
             current, process = None, ""
+            in_block = True
             continue
         named = _CMDLINE.match(line)
         if named:
@@ -559,7 +570,10 @@ def parse(text: str, source: Source | None = None) -> Report:
             # A second entry is a second ANR. Reading it into the same report
             # would merge two freezes into one set of threads.
             if threads:
-                entries += 1
+                # Every entry left is counted, by the time and tag that open
+                # it; a rule with no such line after it is still one more.
+                entries = max(2, 1 + sum(1 for later in lines[number:]
+                                         if _ENTRY_HEAD.match(later)))
                 break
             # Everything before the first separator is what `dumpsys` says
             # about the drop box itself — how many entries it holds, what it
@@ -594,6 +608,12 @@ def parse(text: str, source: Source | None = None) -> Report:
                 # every vendor's build, and none of it about this freeze.
                 skipped += 1
                 continue
+            if in_block:
+                # The same statistics before the first thread, where an older
+                # ART prints them: `Build fingerprint:`, `Heap:`, `JNI:` are
+                # the runtime's, not fields of this report.
+                preamble += 1
+                continue
             field_line = _HEADER.match(line)
             if field_line:
                 head[field_line.group("key").strip()] = field_line.group("value").strip()
@@ -608,7 +628,7 @@ def parse(text: str, source: Source | None = None) -> Report:
             current.unread.append(line)
 
     report = Report(head=head, threads=threads, source=source.name,
-                    unread=unread, entries=entries, skipped=skipped,
+                    unread=unread, entries=entries, skipped=skipped, preamble=preamble,
                     load=sorted(load, reverse=True), truncated=truncated,
                     listed=listed)
     return _scoped(report)
@@ -1159,7 +1179,8 @@ def of_interest(report: Report) -> list[Thread]:
     return list(seen.values())
 
 
-def locate(report: Report, root: Path) -> tuple[list[Located], list[str]]:
+def locate(report: Report, root: Path,
+           index: dict[str, list[Path]] | None = None) -> tuple[list[Located], list[str]]:
     """Frames of this project placed in the repository, and those left over.
 
     The leftovers are the point of returning two lists. A frame this project
@@ -1174,8 +1195,11 @@ def locate(report: Report, root: Path) -> tuple[list[Located], list[str]]:
     stack that showed `DoubleCheck.get` as the app's own, next to a placement
     that had set it aside, would be two readings of one file.
     """
-    index = source_index(root)
+    index = source_index(root) if index is None else index
     report.declared = declared_packages(index) or None
+    if not index:
+        # No sources: no frame of the report is missing from them.
+        return [], []
     ours = report.ownership
     placed: list[Located] = []
     missing: list[str] = []
@@ -1238,7 +1262,29 @@ def _stack(thread: Thread, ours: Ownership, limit: int = 8) -> list[str]:
     near = thread.nearest(ours)
     if near != thread.top and near not in lines:
         lines.append(near)
+    elif near == thread.top and not near.startswith(CORE):
+        # The thread stands inside a library. The frame where the library was
+        # entered, the last of its frames before the platform's resume, says
+        # what it was asked to do: `Gson.fromJson` under the adapter's `read`.
+        entered = 0
+        while entered + 1 < len(thread.frames) and \
+                not thread.frames[entered + 1].startswith(CORE):
+            entered += 1
+        if entered:
+            lines.append(thread.frames[entered])
     return lines + thread.native[1:3] if len(lines) == 1 else lines
+
+
+def doing(report: Report, busy: list[Thread], found: list[Chain]) -> list[Thread]:
+    """The working threads that are neither the main thread nor queued on a lock.
+
+    A waiter is left out whether or not it carries a lock note: the waiters of
+    a chain inferred from a Play Console export carry none, and listed here
+    they stood where the report says the holder is.
+    """
+    queued = {id(t) for c in found for t in c.waiters}
+    return [t for t in busy
+            if t is not report.main and not t.lock and id(t) not in queued]
 
 
 def _nearest_libraries(report: Report) -> list[tuple[str, str]]:
@@ -1259,7 +1305,10 @@ def _nearest_libraries(report: Report) -> list[tuple[str, str]]:
     out = []
     for t in of_interest(report):
         near = t.nearest(ours)
-        if near != t.top:
+        # Skipped only when the stack is the platform's all the way down. A
+        # thread standing inside a library has that library as its top, and
+        # skipping it for that dropped the one lead the file had.
+        if t.frames and not near.startswith(CORE):
             out.append((t.name, near))
     return out
 
@@ -1394,7 +1443,7 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                         "its network client, its coroutine scopes — and that "
                         "setup is where to read next.", ""]
 
-    others = [t for t in busy if t is not main and not t.lock]
+    others = doing(report, busy, found)
     if others:
         out += ["## Threads that were doing something", ""]
         # Threads running the app's own code first. The idle vocabulary will
@@ -1435,8 +1484,11 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 "freeze — a machine that was busy is a different story from "
                 "an app that blocked itself_", ""]
         for share, name in report.load[:6]:
-            mine = "  ← this app" if report.package and name.startswith(
-                report.package) else ""
+            # Up to the colon, as `Ownership.claims` stops at the dot:
+            # `com.example.app:remote` is the app, `com.example.application`
+            # is not.
+            mine = "  ← this app" if report.package and (
+                name == report.package or name.startswith(report.package + ":")) else ""
             out.append(f"- {share}% `{name}`{mine}")
         out.append("")
 
@@ -1505,12 +1557,14 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
         gaps.append(f"- {stray} line(s) inside thread blocks that are neither "
                     f"frames nor a lock note.")
     if missing:
-        gaps.append(f"- where {len(missing)} of this project's frames are: they "
+        gaps.append(f"- Where {len(missing)} of this project's frames are: they "
                     f"name a source file this checkout does not have. Either "
                     f"the module is elsewhere or the report is from another "
                     f"version — first is `{missing[0]}`.")
-    if report.skipped:
-        gaps.append(f"- {report.skipped} line(s) after the threads — the "
+    if report.skipped or report.preamble:
+        where = ("before and after the threads" if report.skipped and report.preamble
+                 else "after the threads" if report.skipped else "before the threads")
+        gaps.append(f"- {report.skipped + report.preamble} line(s) {where} — the "
                     f"runtime's own statistics and the record's furniture — "
                     f"passed over by position rather than by name.")
     return gaps
@@ -1579,7 +1633,7 @@ def summary(report: Report,
              "where": t.nearest(ours),
              "top": t.top,
              "stack": _stack(t, ours)}
-            for t in busy if t is not main_thread and not t.lock
+            for t in doing(report, busy, chains(report))
         ],
         # Whether this file can name a lock chain at all — see `lock_notes`.
         "lock_notes": report.lock_notes,
@@ -1601,6 +1655,7 @@ def summary(report: Report,
             "outside": len(report.unread),
             "inside": sum(len(t.unread) for t in report.threads),
             "after_the_threads": report.skipped,
+            "before_the_threads": report.preamble,
         },
     }
 

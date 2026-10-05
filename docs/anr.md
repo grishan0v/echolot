@@ -127,6 +127,9 @@ in any of its fifty-three threads — every busy one was inside `androidx.work`.
 That is a finding, and it reads differently from a report with thin sections.
 The library frames nearest to the app are then listed as leads: the platform is
 a dead end, and a library the app drives points at the app's own setup of it.
+A thread standing inside a library is one of them, and its stack shows the
+frame where the library was entered: `Gson.fromJson` under the adapter's
+`read`.
 
 **Then the threads that were doing something.** A dump holds fifty threads on a
 quiet app and three hundred on a busy one, nearly all asleep, and striking out
@@ -140,7 +143,8 @@ says, and neither is a runnable one. Nor is a thread with work above the idle
 frame: a frame of the app's, or `Binder.execTransact` serving a call — a
 `Timer` running the app's task, the finalizer daemon in an app's
 `finalize()`, a binder thread inside a provider's `query`. The main thread is
-idle only at its looper. The rest are listed by the frame nearest the app — its own where there
+idle only at its looper. A thread queued on a lock is listed once, under its
+chain. The rest are listed by the frame nearest the app — its own where there
 is one, a library's where there is not — with the top frame beside it. The top
 is almost always `BinderProxy.transactNative` or `Unsafe.park`, true and
 useless alone; `SystemJobScheduler.cancel` four frames down is what the thread
