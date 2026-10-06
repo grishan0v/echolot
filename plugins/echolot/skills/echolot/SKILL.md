@@ -41,7 +41,7 @@ Show the output to the human as it is, then act on its `next` line
 | `setup` | the `echolot-setup` skill, or `echolot guide setup` where the host does not list it |
 | `fix-config` | show the error, ask the human to fix `echolot.yml`, stop |
 | `resume-or-new` | show the recap `echolot` printed and ask: carry on (`echolot hunt --resume`, then the `echolot-hunt` skill), something new (the `echolot-hunt` skill with their question), or the report alone (`echolot report`) |
-| `init-force` | files in `.claude/` differ from the package: ask before `echolot init --all`, then go on as for `hunt` |
+| `init-force` | files in `.claude/` differ from the package: ask, then `echolot init --for plugin` (`--for plugin,codex` in Codex); `.claude/` is the human's to remove; go on as for `hunt` |
 | `fix-settings` | show the `layer` line; the human fixes the file; go on as for `hunt` |
 | `hunt` | the `echolot-hunt` skill, or `echolot guide hunt` where the host does not list it |
 

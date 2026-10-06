@@ -42,7 +42,8 @@ as the app's.
 | the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working |
 | frames placed in the checkout | open those lines |
 | frames landing nowhere | check out the build the report names. Line numbers are the first thing to go stale |
-| every frame in the platform or a library | say so, in those words. It is a finding, not an empty report |
+| "every frame belongs to the platform or a library", then "the frames nearest to the app" | the platform is a dead end, a library the app drives is not: `SystemJobScheduler.cancel` points at the app's WorkManager setup. Read that setup |
+| "Who was holding what" under what it does not say | this file carries no lock notes; an empty chain list is the file's limit, not the freeze's. Get the device's own record |
 | a CPU table with the device busy | a machine under load is a different story from an app that blocked itself |
 
 An idle main thread is the case that wastes a day if you miss it. The dump is a

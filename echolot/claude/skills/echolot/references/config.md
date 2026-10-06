@@ -20,7 +20,7 @@ applied, the CLI says so on stderr.
 project:
   package: com.example.app
   process: com.example.app     # GLOB over process.name
-  source_root: app/src/main/kotlin
+  source_root: app/src/main/kotlin   # read by no command: the whole checkout is walked
   mapping: app/build/outputs/mapping/benchmark/mapping.txt   # a minified build's R8 map
 
 scenario:

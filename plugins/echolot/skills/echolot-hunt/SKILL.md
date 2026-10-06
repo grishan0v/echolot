@@ -5,9 +5,8 @@ description: Find the cause of one Android performance regression with echolot. 
 
 # The hunt
 
-This is the main thread's part, whole: `echolot guide hunt` prints the same
-for a host that does not list this skill, and the loop's guide is the
-subagent's.
+This is the main thread's part. `echolot guide hunt` prints it at length for
+a host that does not list this skill, and the loop's guide is the subagent's.
 
 1. `echolot doctor -q`, on its own. A non-zero exit: show what failed, and
    stop. If it says a sandbox refused a port, ask to run it outside the
@@ -28,8 +27,11 @@ subagent's.
    directory. Those traces are this question's evidence only if the human
    recorded them for it before asking; most often they are an earlier
    question's last round or setup's probe capture. Exit 2 means
-   `echolot.yml` does not load: show the error and stop. No traces recorded
-   for this question: `echolot collect -c echolot.yml -n 5`.
+   `echolot.yml` does not load: show the error and stop. Markers the previous
+   investigation left go before anything is recorded: `echolot mark --remove`,
+   and by hand the lines it lists. No traces recorded for this question:
+   `echolot collect -c echolot.yml -n 5`, or `-n 1` first after a change to
+   the runner config, as `echolot guide hunt` says.
 4. **Hand the loop to a subagent that starts with none of this conversation**,
    with this brief as its first message, filled in:
 
@@ -56,4 +58,7 @@ subagent's.
    echolot hunt --done "<place> — <what happens there>; confidence <high|medium|low>"
    ```
 
-   Then show the conclusion as it is.
+   Then show the conclusion as it is. If it does not say the markers are
+   gone, check, with the command `echolot guide hunt` gives. Say a low
+   confidence out loud, and a finding about the device is worth a run on
+   real hardware.

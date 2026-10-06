@@ -21,6 +21,9 @@ project:
   # (:pushservice and friends), narrow this down — otherwise the largest one
   # by slice count is taken and the choice is only reported, not decided.
   process: com.example.app
+  # Read by no command, and kept as a note for a reader: placing a row, the
+  # leftover check and `mark --remove` walk the whole checkout, since markers
+  # may go into every path in instrumentation.allowed.
   source_root: app/src/main/kotlin
 
 # Scenario window bounds: a GLOB over the slice name.

@@ -151,8 +151,12 @@ bar" — not necessarily "nothing above the default one".
 **`window.main_thread`** — where the window went, in milliseconds, for the
 main thread only. `summary` counts detectors; this counts time, and it is the
 number that decides whether a quiet report means a clean run. Four buckets and
-a remainder, summed from thread states clipped to the window, so the parts
-cannot exceed the whole.
+a remainder, summed from thread states clipped to the window, so in a report
+of one trace the parts add up to the whole. In a merged report each bucket is
+the median of its own runs and `window_ms` is a median of its own, so the
+buckets need not add up to it, above or below, with nothing missing or
+counted twice; `accounted_pct`, the median of each run's own share, is the
+coverage to read.
 
 Read it before the tables. A compound stall — 40% waiting for a CPU beside 35%
 blocked in the kernel — is one line here and two unrelated rows in different
@@ -645,9 +649,11 @@ zero: the move survives a re-record, and the end nearer zero is the least it
 moved. `false` means the range runs through zero, so the runs disagree among
 themselves by more than the row moved: record another round before
 concluding. `null` in both means there was nothing to test: the row is on one
-side only — every `appeared` and `vanished` row — or there were too few runs
-to be 95% sure (four a side is always enough); the `single` or `few` warning
-says so.
+side only — every `appeared` and `vanished` row — or the row has too few runs
+to be 95% sure. The count is the row's own: a row found in `2/5` runs has two
+values, and gets `null` with no warning above it, while `before.runs` and
+`after.runs` say why. For the report as a whole four repeats a side are always
+enough, and below that the `single` or `few` warning says so.
 
 `shift.resolves_ms` is the smallest move of the medians these two sets could
 call real, in the direction this one went: `holds` is `true` exactly when the

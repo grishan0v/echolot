@@ -147,7 +147,12 @@ waiting for one.
 
 4. from round 2 on, before anything else:
    echolot compare
-   the previous round against the one just recorded, sorted by what moved.
+   the investigation's last two `analyze` runs, sorted by what moved. That
+   is the previous round against this one while every round gets one
+   `analyze`, with the same flags. An extra one (a `-o` copy, a look with
+   `--defaults`) shifts the pair, and a round held against itself says
+   nothing moved: then compare the two rounds by path, and
+   `echolot hunt --show <n>` lists the copies.
    New rows with the AGENTTMP_ prefix are your own markers breaking down a
    blind spot; the warning at the top names them. A row that grew with
    Holds `yes` is a real move, `no` means the repeats disagree by more
@@ -178,9 +183,10 @@ waiting for one.
      Application.onCreate: AGENTTMP_ markers there; what stays unnamed is
      libraries, listed as <provider> in the merged manifest
    a named place → a few AGENTTMP_ markers around it, by hand
+   round == loop.max_rounds → exit with an interim conclusion, and do not
+     re-record: a recording nobody analyses costs minutes on the device
    copy the current traces aside, re-record, round += 1
    (cleanup: echolot mark --remove takes out what --apply put in)
-   round > loop.max_rounds → exit with an interim conclusion
 
 6. cleanup: remove every AGENTTMP_ marker — always
 ```
@@ -190,11 +196,13 @@ The commands you will reach for, so that `--help` is not a round trip:
 ```
 echolot doctor -q                                  three lines; the full run is about 10 KB
 echolot analyze <traces> -c echolot.yml            report → .echolot/out/ next to the config
-echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere (a round's own copy)
+echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere; it files a copy for
+                                                   compare too, so a round runs one or the other
 echolot analyze … --defaults                       every detector, built-in thresholds
 echolot analyze … --set main_thread_block.min_slice_ms=4
                                                    one threshold, this run only
-echolot compare                                    the previous round against the latest;
+echolot compare                                    the last two analyze runs: the previous
+                                                   round against this one, one analyze a round;
                                                    --hunt <n> for first against last
 echolot report                                     what fired, one line per detector
 echolot report -d monitor_contention --top 5       one detector's rows, evidence cut short;
@@ -233,14 +241,31 @@ you will spin for days and burn context.
 Write only into paths listed in `instrumentation.allowed`. Never into
 `generated`, `build`, or third-party modules.
 
-Every temporary slice carries the `AGENTTMP_` prefix:
+Every temporary slice carries the `AGENTTMP_` prefix, and every line you add
+ends in `// echolot:mark`, in the shape `echolot mark --apply` writes:
 
 ```kotlin
-androidx.tracing.trace("AGENTTMP_collection_mapping") { … }
+android.os.Trace.beginSection("AGENTTMP_collection_mapping") // echolot:mark
+try { // echolot:mark
+    …
+} finally { android.os.Trace.endSection() } // echolot:mark
 ```
 
-The prefix makes cleanup deterministic: `grep -rl AGENTTMP_` and delete, rather
-than "remember what you added".
+Java is the same with a `;` after each call. `android.os.Trace` is the
+framework's, so no dependency is needed; `androidx.tracing.trace { }` needs
+`androidx.tracing:tracing-ktx` in the module, and without it the build inside
+`collect` fails and the round is lost. The tag makes cleanup deterministic:
+`echolot mark --remove` deletes every line in this shape, yours and the ones
+`--apply` wrote, rather than "remember what you added". A line in any other
+shape stays, and `--remove` lists it: take that one out by hand, keeping the
+code it wrapped.
+
+**Never put a suspension point inside a section.** A section must end on the
+thread that began it, and a coroutine may resume on another thread of its pool;
+on the main thread the section stays open across everything the thread runs
+while the coroutine waits. `androidx.tracing.trace { }` does not compile
+around a suspend call, and a `beginSection` pair compiles and is wrong. Inside
+a suspend function, mark only the stretches between suspension points.
 
 **Name a marker after the work it wraps, never after where you put it.** Two
 markers around the same work must end up with the same name.
@@ -260,9 +285,11 @@ unrelated rows, and the detector built for it stayed silent.
 When you genuinely need to say where a call came from, put it in a second
 marker around the caller. Keep the work's own name the same in both places.
 
-**Cleanup is mandatory on success and on running out of rounds alike.** Before
-exiting, confirm that `grep -rn AGENTTMP_ <source_root>` is empty and say so in
-your report.
+**Cleanup is mandatory on success and on running out of rounds alike.** Run
+`echolot mark --remove`, then confirm from the checkout's root that
+`grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' .`
+prints nothing — the files `echolot hunt` checks, every path in
+`instrumentation.allowed` among them — and say so in your report.
 
 Instrumentation costs time: do not scatter it everywhere. One round, one blind
 spot, five to seven slices around the boundaries of the suspicious stretch.
