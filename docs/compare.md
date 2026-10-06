@@ -298,7 +298,7 @@ goes away. Absent below four runs.
   "comparable": true,
   "warnings": [ { "id": "thresholds", "text": "…" } ],
   "before": { "path": "…", "runs": 5, "generated_at": "…",
-              "config_sha": "a3f9c21b", "defaults": false },
+              "config_sha": "a3f9c21b07de", "defaults": false },
   "after":  { "…": "the same shape" },
   "window": { "before_ms": 1184.0, "after_ms": 2960.4,
               "delta_ms": 1776.4, "ratio": 2.5 },
@@ -313,13 +313,15 @@ goes away. Absent below four runs.
     { "location": "TeamRepository.loadAll", "detector": "main_thread_block",
       "metric": "self_ms", "change": "grew", "matched_by": "exact",
       "before": { "self_ms": 12.1, "min": 10.4, "max": 14.0,
-                  "values": [ … ], "count": 1, "runs": "5/5" },
+                  "values": [ … ], "count": 1, "runs": "5/5",
+                  "detail": "com.example.app" },
       "after":  { "self_ms": 883.4, "min": 843.4, "max": 923.4,
-                  "values": [ … ], "count": 1, "runs": "5/5" },
+                  "values": [ … ], "count": 1, "runs": "5/5",
+                  "detail": "com.example.app" },
       "delta_ms": 871.3, "ratio": 73.01,
       "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3,
                  "resolves_ms": 40.0, "runs_needed": null },
-      "holds": true }
+      "holds": true, "detail": "com.example.app" }
   ]
 }
 ```

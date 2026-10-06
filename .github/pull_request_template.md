@@ -8,7 +8,7 @@
 - [ ] Tests were added or updated, or the reason no tests are needed is explained below.
 - [ ] Documentation was added or updated where user-facing behavior changed.
 - [ ] `pytest -q` passes locally.
-- [ ] `ruff check echolot tests` passes locally.
+- [ ] `ruff check echolot tests action` passes locally.
 
 ## Compatibility
 

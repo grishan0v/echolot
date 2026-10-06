@@ -133,6 +133,16 @@ def test_documented_detector_count_is_current(document, pattern):
     )
 
 
+def test_the_fixture_s_findings_are_the_detectors_that_fire_on_it():
+    """determinism.md says how many findings a report on the fixture would
+    show: every shipped detector but the ones `SILENT_ON_FIXTURE` names. It
+    said eleven while twelve fired (#248)."""
+    shipped = len(list((ROOT / "echolot/sql/detectors").glob("*.sql")))
+    stated = _numbers("docs/determinism.md", r"show the reader " + NUMBER + r" findings")
+    assert stated, "docs/determinism.md: the fixture's findings are no longer counted"
+    assert set(stated) == {shipped - len(selftest.SILENT_ON_FIXTURE)}, stated
+
+
 # --- the sample output, which is a claim like any other ---------------------
 
 # The comparison table is printed in two documents, and it is the one sample

@@ -367,7 +367,7 @@ row gets `stacks` in the json and the gist at the end of its `detail`:
 100.0% of CPU outside slices · 28 stacks: GzipSink.write 54%, ReadBarrier::Mark 21% · ours: Store.save 36%, cut 29%
 ```
 
-Why those rules, from a phone's stacks, is in [Analysing](analysing.md#three-detectors-that-need-no-instrumentation).
+Why those rules, from a phone's stacks, is in [Analysing](analysing.md#detectors-for-code-nobody-traced).
 
 What decides the query:
 

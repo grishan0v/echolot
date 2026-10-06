@@ -118,7 +118,7 @@ main_thread_block          26.6         36.5
 binder_txn total           84.3         30.5
 ```
 
-Thresholds moved threefold in both directions. One config with absolute
+Two thresholds fell about threefold and one rose by about a third. One config with absolute
 numbers would have meant something completely different on those two machines —
 which is the entire argument for this command.
 
