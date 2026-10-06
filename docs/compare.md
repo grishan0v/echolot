@@ -325,11 +325,15 @@ goes away. Absent below four runs.
 ```
 
 `change` is one of `appeared`, `grew`, `shrank`, `vanished`, `steady`, so an
-agent can take the rows worth looking at without parsing any numbers:
+agent can take the rows worth looking at without parsing any numbers. As a
+JMESPath filter:
 
 ```
-rows[?change == 'appeared' || (change == 'grew' && holds == true)]
+rows[?change == 'appeared' || (change == 'grew' && holds)]
 ```
+
+A bare `true` in JMESPath is a field name, so `holds == true` would keep the
+rows with no verdict and drop the ones that hold; the literal is `` `true` ``.
 
 `holds: true` means the range in `shift` — `low_ms` to `high_ms` — is on one
 side of zero. `shift.ms` is the move it was read from: the median of every
