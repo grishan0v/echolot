@@ -24,9 +24,10 @@ nearest one up the tree within the checkout, so `compare` run from a build
 folder finds the project and its open investigation; `-c` names another,
 although `--help` does not list the flag. With one report named, the newer
 side is `.echolot/out/report.json` next to the config, whatever `-o` says: `-o`
-is where the comparison goes. Run from a folder with no config it prints the
-comparison and writes nothing, and says so on stderr; with a config that does
-not load it says that, and why.
+is where the comparison goes. Run from a folder with no config, or with one
+that does not load, it writes to `-o` when one is given, taken from the working
+directory; with neither it prints the comparison, writes nothing, and says so
+on stderr, with the reason when the config is there and does not load.
 
 ## What the table says
 
