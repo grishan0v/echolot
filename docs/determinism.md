@@ -41,10 +41,12 @@ All 154 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
-self-check tally — plus every failure, with the same exit code. It is for a
-subagent that has to confirm the environment before it starts, a CI step, or
-anyone piping into `head`; the full output is about ten kilobytes of "ok" that
-a second reader in the same session would pay for again.
+self-check tally — plus every failure, with the same exit code. Where Codex is
+used, a fourth line before the tally says whether its sandbox lets echolot
+out. It is for a subagent that has to confirm the environment before it
+starts, a CI step, or anyone piping into `head`; the full output is about ten
+kilobytes of "ok" that a second reader in the same session would pay for
+again.
 
 ```
 echolot 0.10.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
