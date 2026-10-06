@@ -157,6 +157,20 @@ def test_the_brief_is_handed_down_whole_and_the_loops_guide_stays_below():
           "A hunt skips it" in " ".join(door.split()), door)
 
 
+def test_the_hunt_takes_traces_set_aside_only_when_they_were_recorded_for_it():
+    """`echolot hunt` moves every loose trace aside: most often the last round
+    of an earlier question, or the one trace setup's probe captured. The skill
+    took them all as evidence and recorded nothing new (#273). `echolot guide
+    hunt` keeps the condition; so does the skill."""
+    _, body = _skill("echolot-hunt")
+    flat = " ".join(body.split())
+    check("traces set aside count only if recorded for this question",
+          "evidence only if the human recorded them for it before asking" in flat,
+          body)
+    check("and otherwise the hunt records its own",
+          "No traces recorded for this question: `echolot collect" in flat, body)
+
+
 @pytest.mark.parametrize("name", SKILLS)
 def test_each_skill_has_the_metadata_codex_reads(name):
     """`agents/openai.yaml`: shown in Codex's skill list, and who may trigger it.
