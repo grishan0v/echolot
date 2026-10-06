@@ -24,9 +24,12 @@ subagent's.
    ```
 
    Every later `collect` and `analyze` is filed under it, and `echolot compare`
-   reads from it. Traces it moved aside are this question's evidence; stderr
-   names the directory. Exit 2 means `echolot.yml` does not load: show the
-   error and stop. No traces at all: `echolot collect -c echolot.yml -n 5`.
+   reads from it. It moves every loose trace aside, and stderr names the
+   directory. Those traces are this question's evidence only if the human
+   recorded them for it before asking; most often they are an earlier
+   question's last round or setup's probe capture. Exit 2 means
+   `echolot.yml` does not load: show the error and stop. No traces recorded
+   for this question: `echolot collect -c echolot.yml -n 5`.
 4. **Hand the loop to a subagent that starts with none of this conversation**,
    with this brief as its first message, filled in:
 
