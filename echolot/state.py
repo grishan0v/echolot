@@ -111,8 +111,6 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     return st
 
 
-# The next step as one word — what `/echolot` in Claude Code switches on —
-# and as the line a person reads. Both from the same decision.
 def collect_state(project: Path) -> dict | None:
     """Where the last `collect` stands, from the file it writes as it runs.
 
@@ -199,7 +197,9 @@ def collect_line(st: dict) -> str | None:
     return None
 
 
-# The vocabulary, not the routing order — `next_kind` below is that. The
+# The next step as one word — what `/echolot` in Claude Code switches on —
+# and as the line a person reads, both from the same decision. This is the
+# vocabulary, not the routing order — `next_kind` below is that. The
 # order here is the one `status --help` lists, and it is also what keeps that
 # help the same under Rich and under argparse at 80 columns: argparse breaks a
 # line at a hyphen and Rich does not, so a hyphenated word that lands at a
