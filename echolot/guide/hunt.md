@@ -81,7 +81,12 @@ is given, from the same file.
 window with raw output within two rounds: reports, repository searches, marker
 diffs. A subagent keeps that out of yours and returns the conclusion alone.
 Start it with none of this conversation, and with this brief as its first
-message, filled in:
+message, filled in. Two of its values are looked up: `#<n>` is the number
+`echolot hunt` printed as `opened #<n>`, or the `→` row of
+`echolot hunt --list` when you carry one on; for `Thresholds:`, the
+`thresholds` column of `echolot report` says which detectors run on
+calibrated numbers (`config`), and calibrated on the very runs that hold the
+regression means `--defaults`.
 
 ```text
 Run `echolot guide loop` first and follow it: it is your guide to the loop.

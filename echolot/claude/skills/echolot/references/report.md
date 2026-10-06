@@ -48,7 +48,7 @@ produce. The keys only a merged report has are named under the block.
                    "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
                    "sampling": null,
                    "missing": [] },
-  "summary": { "detectors_run": 12, "detectors_fired": 4,
+  "summary": { "detectors_run": 13, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
               "local": null, "defaults": false, "set": null },
@@ -92,9 +92,11 @@ different `detail` are two findings, not a duplicate. Where `detail` is part
 of the identity it is the same in every repeat; elsewhere it is evidence,
 taken from the repeat where the row cost most.
 
-**`config`** — which file made this report, and its content hash. Two
-reports with different `sha` were not made against the same thresholds;
-`defaults: true` means `--defaults` ran every detector with its built-in
+**`config`** — which file made this report, and its content hash. A different
+`sha` means `echolot.yml` changed — anchors, process mask, thresholds, or a
+comment — and says nothing about `local.yml`, which is not hashed. The
+thresholds each detector ran with are its `params`, and `compare` lists the
+ones that differ in its `thresholds` warning. `defaults: true` means `--defaults` ran every detector with its built-in
 numbers, `set` lists what `--set` overrode for that run.
 
 **`environment`** — what the device was doing to the app while the scenario
@@ -171,8 +173,8 @@ finding.
 
 `accounted_pct` short of 100 means the main thread was not there for the whole
 window — the process started inside it, or the recording has a hole. The
-shares are then of what was seen rather than of the scenario, and the report
-says so.
+shares are then of what was seen rather than of the scenario. The report
+warns below 95%; a smaller shortfall passes without a word.
 
 **`in_rows_pct`** — how much of the main thread's window the findings cover,
 each moment counted once however many rows describe it; `in_rows_ms` is the
@@ -515,7 +517,7 @@ Two readings that come with it. If the same scenario is clean on the second
 run, the first one was populating the page cache, and that is a first-launch
 problem rather than a code one. And a thread in `D` that this detector does
 *not* claim was parked for something other than the disk — look for other
-threads holding a memory lock, `jit-thread-pool` and file-mapping work being
+threads holding a memory lock, `Jit thread pool` and file-mapping work being
 the usual pair.
 
 **`frame_jank`** is the only detector that answers "which frames stuttered"
@@ -627,9 +629,11 @@ echolot compare old.json new.json    # or name them
   "rows": [
     { "location": "TeamRepository.loadAll", "detector": "main_thread_block",
       "metric": "self_ms", "change": "grew", "matched_by": "exact",
-      "before": { "self_ms": 12.1, "min": 10.4, "max": 14.0, "count": 1 },
-      "after":  { "self_ms": 883.4, "min": 843.4, "max": 923.4, "count": 1 },
-      "delta_ms": 871.3, "ratio": 73.0,
+      "before": { "self_ms": 12.1, "min": 10.4, "max": 14.0,
+                  "values": [ … ], "count": 1, "runs": "5/5" },
+      "after":  { "self_ms": 883.4, "min": 843.4, "max": 923.4,
+                  "values": [ … ], "count": 1, "runs": "5/5" },
+      "delta_ms": 871.3, "ratio": 73.01,
       "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3,
                  "resolves_ms": 40.0, "runs_needed": null },
       "holds": true }

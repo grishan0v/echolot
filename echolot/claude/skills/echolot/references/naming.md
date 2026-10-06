@@ -174,7 +174,7 @@ What to make of what it reports:
   That is a first-launch problem rather than a code one, and comparing a cold
   first launch against a warm one says nothing about either;
 - **a thread in `D` that `io_wait` does not claim** was parked for some other
-  reason. Look for threads holding a memory lock — `jit-thread-pool` and
+  reason. Look for threads holding a memory lock — `Jit thread pool` and
   work that maps files are the usual pair;
 - **the kernel function is normally absent.** Turning the blocking address
   into a name needs `/proc/kallsyms`, which a production build does not let

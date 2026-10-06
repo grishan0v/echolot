@@ -1059,7 +1059,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     # not run is named. It used to be named as an oversight — the config's
     # `detectors:` section was an allowlist, and every detector it happened
     # not to mention was off. This warning was written for that, and on a real
-    # project it printed at the top of three reports in a row while six of ten
+    # project it printed at the top of three reports in a row while four of ten
     # detectors sat out; being told is not the same as having chosen. Now the
     # only way to be here is to have written `false`, so it says so.
     absent = s.get("absent_ids") or []

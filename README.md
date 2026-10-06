@@ -392,7 +392,7 @@ only the agent has. The pipeline — `collect`, `analyze`, `compare` — is unde
 
 | command | what it does |
 |---|---|
-| `reflect` | the same kind of report, over an agent session — how the tool was used, where it got in the way. Full detail for Claude Code; from anywhere else, built from the run log and honest about what it could not see |
+| `reflect` | the same kind of report, over an agent session — how the tool was used, where it got in the way. Full detail for Claude Code and Codex; from any other client, built from the run log and honest about what it could not see |
 
 </details>
 

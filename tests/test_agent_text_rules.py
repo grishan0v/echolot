@@ -115,3 +115,82 @@ def test_the_anr_guide_reads_the_lead_anr_prints():
     flat = _flat(ROOT / "echolot" / "guide" / "anr.md")
     check("the frames nearest to the app", "the frames nearest to the app" in flat, flat)
     check("the missing lock notes", "Who was holding what" in flat, flat)
+
+
+# --- stale counts and keys (#275) -----------------------------------------------
+
+REFS = ROOT / "echolot" / "claude" / "skills" / "echolot" / "references"
+
+
+def test_the_loop_reads_calibration_with_cli_overrides_too():
+    flat = _flat(LOOP)
+    check("config+cli counts as calibrated", "`config` or `config+cli`" in flat, flat)
+
+
+def test_the_hunt_texts_let_collect_set_the_last_round_aside():
+    for path in (LOOP, HUNT_COMMAND):
+        flat = _flat(path)
+        check(f"{path.name}: collect sets the round aside",
+              ".echolot/traces/<scenario>-<stamp>/" in flat, flat)
+        check(f"{path.name}: no hand copy into a directory of your own",
+              ".echolot/traces/<round>/" not in flat and ".echolot/traces/<label>/" not in flat,
+              flat)
+
+
+def test_the_report_example_runs_every_shipped_detector():
+    from echolot.main import DETECTOR_DIR
+    from echolot.tp import load_detectors
+    shipped = len(load_detectors(DETECTOR_DIR))
+    text = _read(REFS / "report.md")
+    check("detectors_run is the shipped count",
+          f'"detectors_run": {shipped},' in text, shipped)
+
+
+def test_the_comparison_examples_carry_what_compare_writes():
+    report_md, compare_md = _read(REFS / "report.md"), _read(ROOT / "docs" / "compare.md")
+    for name, text in (("report.md", report_md), ("compare.md", compare_md)):
+        check(f"{name}: the ratio as compare rounds it", '"ratio": 73.01' in text, name)
+    check("report.md: values and runs on both sides",
+          report_md.count('"values": [ … ], "count": 1, "runs": "5/5"') == 2, report_md)
+
+
+def test_the_report_reference_warns_where_the_report_does():
+    from echolot import report
+    key = report.BUDGET_LABELS[0][0]
+    quiet = report._budget_lines({"window_ms": 100.0, "accounted_pct": 97.0, key: 97.0})
+    loud = report._budget_lines({"window_ms": 100.0, "accounted_pct": 94.0, key: 94.0})
+    check("97% passes in silence and 94% does not", len(loud) > len(quiet), (quiet, loud))
+    flat = _flat(REFS / "report.md")
+    check("the reference says 95%", "The report warns below 95%" in flat, flat)
+
+
+def test_the_jit_thread_is_named_the_way_art_names_it():
+    for path in [*(ROOT / "echolot").rglob("*.md"), *(ROOT / "echolot").rglob("*.sql")]:
+        check(f"{path.relative_to(ROOT)}: no hyphenated JIT thread",
+              "jit-thread-pool" not in _read(path), path)
+
+
+def test_the_door_names_both_upgrades_the_tool_names():
+    from echolot import layer
+    flat = _flat(PLUGIN / "echolot" / "SKILL.md")
+    for command in re.findall(r"`([^`]+)`", layer.UPGRADE):
+        check(f"the door names {command}", command in flat, flat)
+
+
+def test_the_guide_counts_its_warnings_and_names_both_readers():
+    text = _read(ROOT / "echolot" / "guide" / "overview.md")
+    check("no count that went stale", "Three things" not in text, text)
+    finding = text.split("## From a finding to the code", 1)[1].split("\n## ", 1)[0]
+    check("the outlier paragraphs sit under From a finding to the code",
+          "`main_thread_outlier` is not `main_thread_block` again" in finding, finding)
+    check("reflect reads Codex too",
+          "Claude Code and Codex have a reader" in " ".join(text.split()), text)
+
+
+def test_the_manual_recording_stops_instead_of_pulling_a_stale_trace():
+    text = _read(REFS / "collect.md")
+    check("the old trace is deleted first",
+          "adb shell rm -f /data/misc/perfetto-traces/t.pftrace" in text, text)
+    check("a perfetto that fails stops the script", "< /tmp/trace.cfg || exit 1" in text, text)
+    check("the package reaches atrace_apps", 'atrace_apps: "$PKG"' in text
+          and "<<'EOF'" not in text, text)

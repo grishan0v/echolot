@@ -16,10 +16,11 @@ installed: it is a Python tool this plugin does not bring. Tell the human to
 install it, `pipx install echolot` or `uv tool install echolot`, and stop: the
 install needs the network and writes outside the project. If a command below
 says a verb, flag or topic does not exist, the installed echolot is older than
-this plugin, and the human upgrades it: `pipx upgrade echolot`.
+this plugin: the human upgrades it, `pipx upgrade echolot` or
+`uv tool upgrade echolot`.
 
-Run every `echolot` command on its own: never chained to another program with
-`&&` or `;`, and with the trace files named rather than globbed
+Run every `echolot` command on its own: never chained with `&&` or `;`, and
+with the trace files named rather than globbed
 (`ls .echolot/traces` lists them). A host's rule that lets echolot out of its
 sandbox covers a command line that is echolot alone; `git status && echolot
 doctor -q`, or a `*.perfetto-trace`, keeps the whole line inside.

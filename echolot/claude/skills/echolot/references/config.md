@@ -160,7 +160,7 @@ Every key the runner reads, and where it applies:
 | `sampling` | launch, command | off; `true` is 100 Hz |
 | `atrace_categories` | launch, command | `am wm gfx view dalvik binder_driver res database` |
 | `buffer_kb` | launch, command | 131072 |
-| `device` | launch, command | the one device attached; `collect --device` overrides it. Belongs in local.yml |
+| `device` | launch, command, gradle | the one device attached; `collect --device` overrides it. In gradle mode it reaches gradle as `ANDROID_SERIAL`, and without it the connected tests run on every device adb lists. Belongs in local.yml |
 | `activity` | launch | the launcher activity of `project.package`, asked of the device |
 | `command` | command | none — the mode needs it |
 | `gradle_task` | gradle | none — the mode needs it |
@@ -191,7 +191,7 @@ detectors:
 
 `false` is the only way out. Before 0.6.0 the section doubled as an allowlist,
 so a config naming six detectors ran six — and on a real project four sat out
-for weeks because a calibrated section had been tidied.
+three runs in a row because a calibrated section had been tidied.
 
 The values override the `@param` defaults in the `.sql` files, and each has to
 be the kind its default is — a number for a threshold, a string for a mask.

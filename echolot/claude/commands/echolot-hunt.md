@@ -148,9 +148,11 @@ place, the report says which reads it did not replace.
 
 Do not re-record in the main context, and do not move the traces the agent
 is about to compare against. If a re-record is needed, it happens inside the
-loop, and the agent copies the current set into `.echolot/traces/<label>/`
-first — a benchmark's output directory is cleaned by gradle on the next run,
-and a rename inside it goes with the cleaning.
+loop, and `echolot collect` sets the previous set aside itself, into
+`.echolot/traces/<scenario>-<stamp>/`, and records it under the investigation.
+Only traces analysed outside `.echolot/traces` need a copy first — a
+benchmark's output directory is cleaned by gradle on the next run, and a
+rename inside it goes with the cleaning.
 
 ## What to show the human
 

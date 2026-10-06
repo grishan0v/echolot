@@ -94,7 +94,7 @@ workspace.
 
 ## Reading the report
 
-Three things you will get wrong without being told.
+A few things you will get wrong without being told.
 
 **Silent detectors matter as much as firing ones.** They stay in the report
 with empty `rows`. Silence means that ground was checked and is clean — do not
@@ -160,6 +160,17 @@ project's own under it, and `code` gives that method's file. `ours: none` is
 work a pool ran with its caller off the stack; `ours: cut` is a stack that
 ended in the framework before anything of ours.
 
+**`main_thread_outlier` is not `main_thread_block` again.** One gates on the
+sum for a name and answers "where did the time go"; the other gates on a
+single occurrence against the median for that same name and answers "which one
+was out of line". A name in both is telling you two things.
+
+They lead to different places in the code. Expensive every time means the fix
+is in that work. Usually fine and once not means the cause is the state it hit
+that once — a cold cache, a lock, a first-run path. `detail` carries the median
+and how many occurrences it came from, which is what to hold a benchmark's
+percentiles against.
+
 ## Watch your context
 
 The loop generates a lot of raw output — reports, repository searches,
@@ -174,25 +185,14 @@ work in short passes and keep raw output out of the conversation: read
 window filled with raw output is where the instability this tool exists to
 remove comes back.
 
-**`main_thread_outlier` is not `main_thread_block` again.** One gates on the
-sum for a name and answers "where did the time go"; the other gates on a
-single occurrence against the median for that same name and answers "which one
-was out of line". A name in both is telling you two things.
-
-They lead to different places in the code. Expensive every time means the fix
-is in that work. Usually fine and once not means the cause is the state it hit
-that once — a cold cache, a lock, a first-run path. `detail` carries the median
-and how many occurrences it came from, which is what to hold a benchmark's
-percentiles against.
-
 ## Reporting back on the tool itself
 
 When the question is about echolot rather than the app — how a session went,
 where the tool got in the way — that is `echolot reflect --last`, run from the
 project you worked in.
 
-Only Claude Code has a reader for its transcripts. From anywhere else the
-report is built from the tool's own run log, `.echolot/log/runs.jsonl`: which
+Claude Code and Codex have a reader for their transcripts. From any other
+client the report is built from the tool's own run log, `.echolot/log/runs.jsonl`: which
 commands ran, when, for how long, with what exit code. It is smaller, and it
 names under **Not checked** every check it could not make. Read that section —
 a check listed there found nothing because it had nothing to look at, which is

@@ -53,7 +53,7 @@ instrumentation:
 **Do not nudge thresholds until something fires.** An empty report is an
 answer. Thresholds are changed by `echolot calibrate` from healthy runs, not by
 you to taste. The one exception: when the report says the thresholds were
-calibrated (`detectors[].params_source == "config"`) and the runs they were
+calibrated (`detectors[].params_source` is `config` or `config+cli`) and the runs they were
 calibrated on are the runs you are hunting in, the bar sits above the problem.
 Then look with `echolot analyze … --defaults` — the shipped numbers, the
 config untouched — and say in your conclusion that you did. Never write a
@@ -74,12 +74,15 @@ It is open while you work, and that is what the loop stands on: every
 arguments reads the last two copies.
 
 **Do not re-record over the traces you analysed.** They are the baseline.
-Before a re-record, copy the current set into `.echolot/traces/<round>/`
-(a macrobenchmark's output directory is cleaned by gradle on the next run; a
-rename inside it goes with the cleaning). `echolot collect` does this on its
-own, and records where the round went against the open investigation — so you
-do not have to keep a list of your own. `echolot hunt --show <n>` reads it
-back: every round, and a copy of every report you produced.
+`echolot collect` keeps them for you: it moves the previous set out of
+`.echolot/traces` into `.echolot/traces/<scenario>-<stamp>/` and records that
+directory against the open investigation, so you keep no list of your own and
+make no copy — a copy only doubles the traces, and a set you moved yourself
+leaves `collect` nothing to record. `echolot hunt --show <n>` reads it back:
+every round, and a copy of every report you produced. Copy by hand only traces
+analysed outside `.echolot/traces`: a macrobenchmark's output directory is
+cleaned by gradle on the next run, and a rename inside it goes with the
+cleaning.
 
 ## When the hunt started from an ANR report
 
