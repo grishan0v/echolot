@@ -61,11 +61,12 @@
 --
 -- ## The threshold is the platform's, and is not calibrated
 --
--- Five seconds is the input dispatch timeout, ten and twenty are broadcasts,
--- twenty is a service. There is deliberately no `@calibrate` line: a bar
--- derived from healthy runs of this app would say what this app usually does,
--- and what matters is what the system will not tolerate. Lower it in the
--- config to hunt for stretches that are merely close.
+-- Five seconds is the input dispatch timeout; a broadcast gets ten in the
+-- foreground and sixty in the background, a service twenty and two hundred.
+-- There is deliberately no `@calibrate` line: a bar derived from healthy runs
+-- of this app would say what this app usually does, and what matters is what
+-- the system will not tolerate. Lower it in the config to hunt for stretches
+-- that are merely close.
 --
 -- On a cold-start scenario the window is a second or two, so nothing can be
 -- five seconds long inside it and this stays silent by construction. It is
