@@ -83,9 +83,16 @@ cd ~/my-app && echolot init
 ```
 
 In Claude Code this installs the `.claude/` layer into the project: a skill,
-the `perf-hunter` agent and three commands. Cursor, Codex and other agents get
-a pointer to the tool instead, and `echolot guide` tells them how to work with
-it. There the loop runs in your main context, so keep the passes short.
+the `perf-hunter` agent and three commands. Other agents get a pointer to the
+tool instead, and `echolot guide` tells them how to work with it. A plain
+`init` points only at agents whose files the project already has: for Codex
+without the plugin that is a `.codex/` folder or an `AGENTS.md`, and
+elsewhere `echolot init --for agents,codex` (with `claude` and any other agent
+the project uses) writes the pointer and the rule that lets echolot out of
+Codex's sandbox — run it outside the sandbox, as the `codex` line of
+`echolot` says. The guide hands the loop to a subagent where the host can
+start one; where it cannot, the loop runs in your main context, so keep the
+passes short.
 
 On a repository that is not yours to change, `echolot init --private` installs
 the same files and keeps every one of them out of `git status`, for this clone
@@ -178,7 +185,7 @@ rounds run out.
 |---|---|
 | Claude Code or Codex, with the plugin | the full loop, in a subagent in both: the agent records, reads the report and walks down to the code. The plugin sets the project up itself; installing it is under [Quick start](#quick-start) |
 | Claude Code, with the `.claude/` layer | the same loop: `echolot init`, then `/echolot` |
-| Cursor, other agents, Codex without the plugin | `echolot init` points them at the tool, and `echolot guide` tells them how to work with it. For Codex it also writes the rule that lets echolot out of the sandbox. The loop runs in your main context, so keep the passes short |
+| Cursor, other agents, Codex without the plugin | `echolot init` points them at the tool, and `echolot guide` tells them how to work with it. A plain `init` finds only agents whose files the project already has; `echolot init --for agents,codex` sets up Codex anywhere else, with the rule that lets echolot out of its sandbox. The guide hands the loop to a subagent where the host can start one; where it cannot, the loop runs in your main context, so keep the passes short |
 | a shell or CI | the pipeline commands under [Without an agent](#without-an-agent) |
 
 ### The investigation

@@ -194,3 +194,56 @@ def test_the_manual_recording_stops_instead_of_pulling_a_stale_trace():
     check("a perfetto that fails stops the script", "< /tmp/trace.cfg || exit 1" in text, text)
     check("the package reaches atrace_apps", 'atrace_apps: "$PKG"' in text
           and "<<'EOF'" not in text, text)
+
+
+# --- who init sets up, who runs the loop, what detectors need (#247) ------------
+
+DETECTORS_MD = ROOT / "docs" / "detectors.md"
+
+
+def test_the_sample_detector_would_pass_the_check_on_shipped_ones():
+    from tests.test_in_rows import _LIMIT_TAIL
+    sample = re.search(r"```sql\n(-- @id: my_detector.*?)```", _read(DETECTORS_MD), re.S)
+    check("the page opens with a sample detector", sample, DETECTORS_MD)
+    check("which ends in its LIMIT", _LIMIT_TAIL.search(sample.group(1)), sample.group(1))
+
+
+def test_the_intervals_sample_stands_for_what_its_rows_count():
+    """Whole slices for a row that counts whole slices, as gc_pressure does."""
+    text = _read(DETECTORS_MD)
+    block = re.search(r"```sql\n(ORDER BY .*?)```", text, re.S).group(1)
+    gc = _read(ROOT / "echolot" / "sql" / "detectors" / "gc_pressure.sql")
+    check("the sample's tail is gc_pressure's", "ORDER BY total_ms DESC" in block
+          and "ORDER BY total_ms DESC" in gc, block)
+
+
+def test_detectors_md_names_both_readers_of_claimed_name():
+    flat = _flat(DETECTORS_MD)
+    check("app_init reads _claimed_name too", "`repeated_work` and `app_init`" in flat, flat)
+    check("no 'one detector with no mask'", "the one detector with no mask" not in flat, flat)
+    check("the intervals item fails the build",
+          "The first three things below fail the build" in flat, flat)
+
+
+def test_the_main_thread_leaves_markers_to_the_loop():
+    flat = _flat(GUIDE_HUNT)
+    check("no mark --apply before the hand-off",
+          "then `echolot mark --apply`, then one re-record" not in flat, flat)
+    check("the brief carries it instead", "`Instrumentation: none`" in flat, flat)
+
+
+def test_the_readme_hands_the_loop_to_a_subagent_where_the_host_can():
+    flat = _flat(ROOT / "README.md")
+    check("a plain init finds only agents the project has",
+          "points only at agents whose files the project already has" in flat, flat)
+    check("Codex without the plugin is set up by name", "echolot init --for agents,codex" in flat,
+          flat)
+    check("the main context only where no subagent can start",
+          "where it cannot, the loop runs in your main context" in flat, flat)
+
+
+def test_every_text_lists_what_stands_on_thread_state():
+    for path in (ROOT / "docs" / "collecting.md", REFS / "collect.md",
+                 ROOT / "echolot" / "runner.py"):
+        flat = _flat(path)
+        check(f"{path.name}: io_wait goes silent too", "io_wait" in flat, path)

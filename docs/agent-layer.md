@@ -440,8 +440,9 @@ subagent.
 
 `codex` is an agent of its own in `init`'s list, apart from `AGENTS.md`:
 Codex reads `AGENTS.md` like many clients do, and the rule is Codex's alone.
-A project with a `.codex/` folder gets it by default; `--for` names it
-anywhere else. `init` writes `.codex/rules/echolot.rules`:
+A project with a `.codex/` folder gets it by default on its first `init`;
+after that the saved choice decides, and `--for …,codex` adds it, as the
+`codex` line of `echolot` says. `init` writes `.codex/rules/echolot.rules`:
 `prefix_rule(pattern = ["echolot"], decision = "allow")`, with a few
 `echolot` commands as examples that Codex checks when it loads the file, so
 a rule that stopped matching says so as a session starts. The file is

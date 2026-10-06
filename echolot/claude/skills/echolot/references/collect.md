@@ -69,8 +69,9 @@ report is plausible.
 ## What the config must contain
 
 **`sched/sched_switch`** — without it there is no `thread_state`, which means
-`runnable_starvation` and `uninstrumented_cpu` both go silent. Those are the
-two structural detectors.
+`runnable_starvation`, `uninstrumented_cpu` and `io_wait` go silent, and
+`anr_risk` keeps only its slice source: a stall in code nobody traced drops
+out.
 
 **`linux.process_stats` with `scan_all_processes_on_start`** — the only source
 of process names. Without it `process.name` is empty and the config matches

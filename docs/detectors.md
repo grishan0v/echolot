@@ -18,7 +18,9 @@ SELECT name AS location, COUNT(*) AS count,
        thread_name AS detail
 FROM _slice_win
 WHERE dur >= {{threshold_ms}} * 1000000
-GROUP BY name, thread_name;
+GROUP BY name, thread_name
+ORDER BY total_ms DESC
+LIMIT 20;
 ```
 
 Drop the file into `echolot/sql/detectors/` and it runs. There is no
@@ -74,10 +76,12 @@ every report does: the project's own names are usually async, and it measures
 them by name rather than by thread.
 
 `_claimed_name` is the set's own vocabulary, collected from every shipped
-detector's masks with the project's overrides applied. It is there for
-`repeated_work`, the one detector with no mask of its own: it asks a question
-about shape, so it looks at every name there is, and `NOT IN (SELECT name FROM
-_claimed_name)` is how it stays off names that belong to another question.
+detector's masks with the project's overrides applied. It is read by
+`repeated_work` and `app_init`, the two detectors that look at every slice
+name in their stretch: they ask about shape, not about a family of names, and
+`NOT IN (SELECT name FROM _claimed_name)` is how they stay off names that
+belong to another question. Widening a `*name_glob*` mask in `echolot.yml`
+takes those names out of both.
 Twice it reported a finding that was already in the report under its own
 heading — an ART lock wait, then a GC phase — and this is the rule that
 replaced naming those families one at a time.
@@ -292,7 +296,7 @@ once. A line reading `-- @intervals` after the query starts a second query
 that says so:
 
 ```sql
-ORDER BY self_ms DESC
+ORDER BY total_ms DESC
 LIMIT 20;
 
 -- @intervals
@@ -455,11 +459,11 @@ sends you reading the query instead of the session.
 ## Adding a detector
 
 A file in `echolot/sql/detectors/` runs on the next `analyze`. Shipping it
-takes more. The first two things below fail the build until they are done.
-The other four decide what the tool does with the detector once it runs —
+takes more. The first three things below fail the build until they are done.
+The other three decide what the tool does with the detector once it runs —
 what survives a merge, which overrides it accepts, which masks `names` can
-see, how much of the window its rows cover — and a mistake there fails nothing
-until somebody reads the report or writes a config.
+see — and a mistake there fails nothing until somebody reads the report or
+writes a config.
 
 - **A problem planted for it in the fixture.** `doctor`'s self-check counts
   the detector files, and "every shipped detector ran, and every one fired"
@@ -479,6 +483,14 @@ until somebody reads the report or writes a config.
   until `python docs/assets/render.py` writes the sample and draws the
   pictures again. The detector tables in the
   README and in `references/report.md` are lists kept by hand.
+- **The time its rows stand for.** A shipped detector needs an
+  `-- @intervals` query, and a first query that ends in `LIMIT n`:
+  `test_every_shipped_detector_has_one` in `tests/test_in_rows.py` fails
+  without either, and once the detector fires on the fixture, `doctor`'s
+  check that the findings' share of the window counts every detector fails
+  too. A file only dropped in still runs without one, and the coverage line
+  names it as not counted whenever it fires. See
+  [What time the rows stand for](#what-time-the-rows-stand-for).
 - **Only part of a row survives a merge.** Repeats are folded row by row, and
   a merged row keeps its `@identity` columns, `runs`, the numeric contract
   columns — `count`, `self_ms`, `total_ms`, `max_ms` and `covered_ms`, as
@@ -495,12 +507,9 @@ until somebody reads the report or writes a config.
   the parameter, `*GC` a string.
 - **A mask says so in its name.** A parameter with `name_glob` in its name is
   read as a mask over slice names — by `names`, and by `_claimed_name`, which
-  keeps `repeated_work` off what another detector speaks for — and `names`
-  reads one with `skip_glob` as an exclusion. A mask named anything else still
-  works in the query and is invisible to both.
-- **The time its rows stand for.** Without an `-- @intervals` query the
-  report still runs, and its coverage line names the detector as not counted
-  whenever it fires. See [What time the rows stand for](#what-time-the-rows-stand-for).
+  keeps `repeated_work` and `app_init` off what another detector speaks for —
+  and `names` reads one with `skip_glob` as an exclusion. A mask named
+  anything else still works in the query and is invisible to both.
 
 ## Robustness
 

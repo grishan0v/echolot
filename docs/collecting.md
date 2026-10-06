@@ -219,10 +219,12 @@ The runner builds the perfetto config itself, but if you capture by hand
 are mandatory and a fifth decides whether the report can tell a slower machine
 from a slower app:
 
-**`sched/sched_switch`** — without it there is no `thread_state`, and the two
-detectors built on it, `runnable_starvation` and `uninstrumented_cpu`, both go
-silent. They are also the two that need no instrumentation in the app, so on a
-project with none they are the whole report.
+**`sched/sched_switch`** — without it there is no `thread_state`, and what
+stands on it goes: `runnable_starvation`, `uninstrumented_cpu` and `io_wait`
+go silent, `anr_risk` keeps only its slice source and loses a stall in code
+nobody traced, and the CPU clock weighting under **Device** loses its input.
+What a project with no instrumentation still gets is under
+[Three detectors that need no instrumentation](analysing.md#three-detectors-that-need-no-instrumentation).
 
 **`linux.process_stats` with `scan_all_processes_on_start`** — the only source
 of process names. Without it `process.name` is empty and the config matches

@@ -67,8 +67,9 @@ fails after the whole build either way. While it runs, `echolot` has a
 `collect` line saying how far it got, and a failure's sentence is on it.
 
 **No instrumentation at all?** `echolot domains --root .` says. If there is
-none, the report will name system slices and threads, and your first move is
-`echolot mark`, then `echolot mark --apply`, then one re-record.
+none, the report will name system slices and threads. Put that in the brief
+below as `Instrumentation: none`, and the loop starts with `echolot mark`:
+markers and re-records are the loop's work, never this thread's.
 
 ## The loop
 
