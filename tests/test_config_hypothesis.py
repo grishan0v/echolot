@@ -14,7 +14,7 @@ import copy
 import sys
 from pathlib import Path
 
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -34,16 +34,23 @@ nested_dict = st.recursive(
 
 
 @given(nested_dict)
+@example({"scenario": {"start": {"name": "Activity.onCreate"}}})
 def test_merge_with_empty_overlay_is_identity(base):
     assert merge(base, {}) == base
 
 
 @given(nested_dict)
+@example({"toolchain": {"tp_binary": "/opt/tp"}})
 def test_merge_empty_base_is_the_overlay(over):
     assert merge({}, over) == over
 
 
 @given(nested_dict, nested_dict)
+# Both sides hold a dict under the same key: the case merge recurses for.
+@example({"scenario": {"name": "a", "start": {"x": 1}}}, {"scenario": {"start": {"y": 2}}})
+# A leaf over a dict, and a dict over a leaf.
+@example({"scenario": {"start": {"x": 1}}}, {"scenario": None})
+@example({"scenario": "cold"}, {"scenario": {"start": {"y": 2}}})
 def test_merge_is_idempotent_under_the_same_overlay(base, over):
     """Applying the same overlay twice is the same as applying it once.
 
@@ -57,6 +64,7 @@ def test_merge_is_idempotent_under_the_same_overlay(base, over):
 
 
 @given(nested_dict, nested_dict)
+@example({"scenario": {"name": "a", "start": {"x": 1}}}, {"scenario": {"start": {"y": 2}}})
 def test_merge_does_not_mutate_its_arguments(base, over):
     base_copy, over_copy = copy.deepcopy(base), copy.deepcopy(over)
     merge(base, over)
@@ -86,6 +94,8 @@ def test_merge_shares_sub_trees_with_the_overlay_it_was_given():
 
 @settings(max_examples=50)
 @given(st.lists(key, min_size=1, max_size=4, unique=True), leaf)
+@example(["toolchain", "tp_binary"], "/opt/tp")
+@example(["detectors", "main_thread_block", "min_ms"], 0)
 def test_config_get_reads_back_a_dotted_path_it_was_given(path_parts, value):
     """Building `{"a": {"b": {"c": value}}}` and asking for "a.b.c" back."""
     node: dict = value
@@ -97,6 +107,8 @@ def test_config_get_reads_back_a_dotted_path_it_was_given(path_parts, value):
 
 @given(st.text(alphabet=st.characters(exclude_characters="."), min_size=1,
                max_size=20))
+@example("scenario")
+@example(" ")
 def test_config_get_of_missing_key_is_the_default(missing_key):
     cfg = Config({})
     sentinel = object()
@@ -105,6 +117,7 @@ def test_config_get_of_missing_key_is_the_default(missing_key):
 
 
 @given(st.lists(key, min_size=2, max_size=4, unique=True), leaf)
+@example(["scenario", "start", "name"], None)
 def test_config_get_stops_at_a_leaf_instead_of_walking_into_it(path_parts, value):
     """A dotted path that runs past the end of the tree is a miss, not a
     crash: `get("scenario.start.name")` on a `scenario.start` that is a

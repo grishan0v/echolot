@@ -13,6 +13,8 @@ import importlib.util
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "docs" / "assets"
 RAW = "https://raw.githubusercontent.com/grishan0v/echolot/main/"
@@ -93,3 +95,57 @@ def test_the_numbers_come_from_the_readme():
     assert moved != _readme(), "the sentence this check edits has moved"
     hero = render.pictures(moved)["hero-light.svg"]
     assert "93 MB" in hero and "81 MB" not in hero
+
+
+def test_the_session_counts_the_traces_the_readme_records():
+    """The session picture and the loop picture both say how many times a round
+    records the scenario. Both read it from the README's `collect -n` (#249)."""
+    render = _render()
+    moved = _readme().replace("echolot collect -c echolot.yml -n 5",
+                              "echolot collect -c echolot.yml -n 7")
+    assert moved != _readme(), "the command this check edits has moved"
+    drawn = render.pictures(moved)
+    assert "hunt #1 opened · 7 traces recorded" in drawn["session.svg"]
+    assert "records the scenario 7 times" in drawn["loop-light.svg"]
+
+
+def test_a_gone_row_is_drawn_the_way_a_new_one_is(tmp_path, monkeypatch):
+    """`compare` prints two rows without a range, **new** and **gone**. The
+    sample in docs/compare.md has no gone row yet, and adding one crashed the
+    script (#249)."""
+    render = _render()
+    sample = render.COMPARE_DOC.read_text(encoding="utf-8")
+    last = "| 12 → 31 | no, -13.4 … +162.6 · ~7 runs a side |\n"
+    assert last in sample, "the sample row this check adds after has moved"
+    gone = ("| Old.load | com.example.app | main_thread_block | 30.0 ±2 | — | **gone** "
+            "| 3 → — | — |\n")
+    doc = tmp_path / "compare.md"
+    doc.write_text(sample.replace(last, last + gone, 1), encoding="utf-8")
+    monkeypatch.setattr(render, "COMPARE_DOC", doc)
+    drawn = render.compare(render.THEMES["light"], render.readme_facts())
+    for words in ("Old.load", ">gone<", "3 → —", "gone, no range"):
+        assert words in drawn, words
+
+
+def test_the_preview_page_opens_the_way_the_readme_does(tmp_path):
+    """`--preview` rebuilds the top of the README around the pictures; since
+    #216 the README offers the plugin first and `echolot init` without it."""
+    page = _render().preview_page("light", tmp_path)
+    bullet = re.search(r"^- \*\*Works with your agent\.\*\* (.+?)\n\n", _readme(),
+                       re.S | re.M)
+    assert bullet, "the README's agent bullet has moved"
+    words = re.sub(r"`([^`]+)`", r"<code>\1</code>", " ".join(bullet.group(1).split()))
+    assert words in page, words
+    assert "claude plugin install echolot@echolot" in page
+    assert "echolot init" not in page
+
+
+@pytest.mark.parametrize("argv", [["--preview"], ["--preveiw", "out"],
+                                  ["--preview", "out", "extra"]])
+def test_an_argument_the_script_cannot_use_is_refused(argv, capsys):
+    """Every argv but `--preview DIR` used to fall through: the pictures were
+    drawn again, no preview was written, and nothing said why (#249)."""
+    with pytest.raises(SystemExit) as stopped:
+        _render().main(argv)
+    assert stopped.value.code == 2
+    assert "usage: render.py" in capsys.readouterr().err
