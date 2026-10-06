@@ -37,9 +37,10 @@ from echolot import recorder, selftest  # noqa: E402
 # examples is a fixed set of blind spots: a property that is false for one
 # input in a thousand passes, quietly and repeatably, until a hypothesis
 # upgrade reshuffles the choice and turns CI red on a commit that changed
-# nothing. That is not a reason to unpin it — it is the reason each test in
-# test_*_hypothesis.py carries `@example` cases for the inputs it actually
-# exists to check, so the case that matters is never left to the seed.
+# nothing. That is not a reason to unpin it — it is the reason a test in
+# test_*_hypothesis.py either carries `@example` cases for the inputs it
+# exists to check or builds that input into every example it draws, so the
+# case that matters is never left to the seed.
 settings.register_profile("echolot", derandomize=True, database=None,
                            deadline=None, print_blob=True)
 settings.load_profile("echolot")

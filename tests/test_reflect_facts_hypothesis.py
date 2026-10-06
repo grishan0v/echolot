@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -40,6 +40,8 @@ glob_path = st.lists(path_segment, min_size=1, max_size=5).map("/".join)
 
 
 @given(glob_path, st.text(min_size=0, max_size=60))
+@example("traces/cold start", "echolot collect --out 'traces/cold start'")
+@example("traces/run", "")
 def test_glob_score_is_bounded_by_the_number_of_path_segments(missing, argv):
     parts = missing.strip().split("/")
     score = _glob_score(argv, missing)
@@ -47,6 +49,7 @@ def test_glob_score_is_bounded_by_the_number_of_path_segments(missing, argv):
 
 
 @given(glob_path)
+@example(".echolot/traces/run")
 def test_glob_score_is_maximal_when_argv_contains_the_full_glob(missing):
     """An argv holding the whole (unquoted) missing path scores every segment."""
     parts = missing.strip().split("/")
@@ -55,6 +58,7 @@ def test_glob_score_is_maximal_when_argv_contains_the_full_glob(missing):
 
 
 @given(glob_path, glob_path)
+@example("traces", "run")
 def test_glob_score_prefers_the_argv_that_matches_more_of_the_path(head, tail):
     """The tie-break `_skipped_by_glob` routes on: more trailing segments in
     common with the missing glob is a better match than fewer.
@@ -70,6 +74,10 @@ def test_glob_score_prefers_the_argv_that_matches_more_of_the_path(head, tail):
 
 @given(st.one_of(prose, st.sampled_from(sorted(REAL)),
                  st.text(min_size=0, max_size=15)))
+@example("--help")
+@example("analyze")
+@example("ran")
+@example("")
 def test_is_invocation_admits_flags_and_known_verbs_and_nothing_else(word):
     """A flag is `echolot --help`, a known verb is a call, and everything
     else after `echolot` is English.
@@ -89,6 +97,9 @@ def test_is_invocation_admits_flags_and_known_verbs_and_nothing_else(word):
 
 @given(st.text(min_size=0, max_size=400))
 @settings(max_examples=200)
+@example("echolot")
+@example("echolot 'analyze")                       # a quote left open
+@example('echolot analyze "traces/cold start.pftrace" && echolot compare')
 def test_subcommands_never_raises_on_arbitrary_shell_text(command):
     """Whatever a transcript contains, reading it for `echolot <verb>` must
     not itself be the thing that crashes the reader."""
@@ -98,6 +109,8 @@ def test_subcommands_never_raises_on_arbitrary_shell_text(command):
 
 
 @given(st.sampled_from(sorted(REAL)), path_segment)
+@example("analyze", "'traces/cold start.pftrace'")  # a quoted path with a space
+@example("collect", "--out=traces")
 def test_subcommands_finds_a_real_invocation_verbatim(verb, arg):
     """A plain `echolot <verb> <arg>` line is read back as that verb.
 
@@ -109,6 +122,7 @@ def test_subcommands_finds_a_real_invocation_verbatim(verb, arg):
 
 
 @given(prose, path_segment)
+@example("ran", "analyze")
 def test_subcommands_does_not_read_prose_as_an_invocation(word, arg):
     """The failure this function was written for: a report whose "By
     subcommand" line read like a sentence, because `echolot ran`, `echolot
