@@ -105,8 +105,8 @@ def _head(report: dict[str, Any], out: list[str]) -> None:
         out.append(f"cwd `{src['cwd']}`" + (f" · branch `{src['git_branch']}`"
                                             if src.get("git_branch") else ""))
     out.append(_config_line(ctx.get("config") or {}))
-    # Said here rather than left to the Not-checked section. Sixteen checks
-    # held back is the loudest number in the tally below, and a reader who
+    # Said here rather than left to the Not-checked section. The checks held
+    # back are the loudest number in the tally below, and a reader who
     # does not know why reads it as a report that failed to do its job.
     if (report.get("context") or {}).get("building"):
         out.append("_This session was building echolot rather than using it — "
