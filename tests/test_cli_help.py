@@ -146,8 +146,8 @@ def test_subcommand_help_is_no_wider_than_argparse_makes_it(name, monkeypatch):
 
     This is the failure that handing every subparser the Raw formatter causes,
     and the reason it is worth a test of its own: Raw does not wrap at all, so
-    `echolot anr --help` goes out as one 290-character line and the terminal
-    breaks it in the middle of a word. Nothing raises.
+    `echolot anr --help` goes out as one line several hundred characters
+    long and the terminal breaks it in the middle of a word. Nothing raises.
 
     Measured against argparse at the same width rather than against the width
     itself, because argparse overruns it too and always has: a mutually
