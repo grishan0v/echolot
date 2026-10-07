@@ -976,11 +976,11 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
         message = (f"no process in trace{where} matches {said}. Look at the "
                    f"real names: echolot probe <trace>.")
         # The name a trace carries is not always the one the package has.
-        # Linux truncates comm to 15 characters and keeps the TAIL, so
-        # `com.example.myapp` can arrive as `m.example.myapp` — which a
-        # trailing-wildcard glob does not match either. Seen on one trace out
-        # of fifteen from a single macrobenchmark round, where the other
-        # fourteen carried the full name.
+        # Android names an app's main thread after the last 15 characters of
+        # a dotted process name, so `com.example.myapp` can arrive as
+        # `m.example.myapp` — which a trailing-wildcard glob does not match
+        # either. Seen on one trace out of fifteen from a single
+        # macrobenchmark round, where the other fourteen carried the full name.
         tail = glob.rstrip("*")[-15:]
         if tail and source != "default":
             again = (f"--process '*{tail}'" if source == "--process"
@@ -2072,7 +2072,7 @@ def _hunt_config(project: Path, config: str
     later say "the scenario changed" instead of the human having to remember,
     and `analyze` can say which value a person confirmed has changed since.
 
-    No config at all is `(None, None)`: nothing names a scenario yet. A config
+    No config at all is `(None, None, {})`: nothing names a scenario yet. A config
     that is there and does not load raises, for `cmd_hunt` to refuse on. It
     used to come back as `(None, None)` too, in silence — and since
     `Config.load` checks `detectors:`, one malformed entry under it is enough
@@ -3684,7 +3684,7 @@ def _dump(tp, sql: str) -> None:
 # reconnaissance meant for an agent.
 # The order verbs are read in, which is neither registration order nor
 # alphabetical. A verb missing from here is caught by the self-check.
-# The agent's half is ordered by the working flow. `anr` sits at its head
+# The agent's half is ordered by the working flow. `anr` comes before `probe`
 # because a report from the field arrives before there is a trace to probe.
 ORDER = ("status", "init", "hunt", "doctor", "collect", "analyze", "compare",
          "guide", "report", "scan", "anr", "probe", "names", "domains", "mark",
@@ -3795,7 +3795,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Deliberately NOT the Raw variant here. The header above is a table built
     # by hand and its line breaks are the layout; a subcommand's description is
     # an English paragraph written as a wrapped Python string, and Raw would
-    # print it as one 290-character line for `anr` to hard-wrap mid-word.
+    # print it as one line several hundred characters long, for `anr` to
+    # hard-wrap mid-word.
     sub = p.add_subparsers(dest="cmd", required=False, metavar="<command>",
                            help="one of the above", parser_class=(
         lambda **kw: argparse.ArgumentParser(
