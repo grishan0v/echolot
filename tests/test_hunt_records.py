@@ -61,6 +61,27 @@ def test_leftover_markers_are_found_by_the_config_s_prefix(tmp_path: Path) -> No
           any("PERF_ marker(s) still in" in line for line in lines), lines)
 
 
+def test_an_end_left_without_its_begin_is_still_a_leftover(tmp_path: Path) -> None:
+    """A `beginSection` deleted by hand takes the prefix with it, and its
+    tagged `endSection()` stays behind, ending whatever section the app has
+    open on that thread. `mark --remove` still finds it; the count by prefix
+    said the tree was clean (#274)."""
+    src = tmp_path / "app/src/main/java/com/example/app/Store.kt"
+    src.parent.mkdir(parents=True)
+    src.write_text("fun load() {\n    work()\n"
+                   "    android.os.Trace.endSection() // echolot:mark\n}\n", encoding="utf-8")
+    left = hunt_mod.leftovers(tmp_path)
+    check("no marker by the prefix", left["markers"] == 0, left)
+    check("but the tagged line is counted", left["lines"] == 1, left)
+    check("and its file named", left["files"] == ["app/src/main/java/com/example/app/Store.kt"],
+          left)
+    hunt = {"n": 1, "status": "open", "question": "q", "opened_at": _old(5),
+            "touched_at": _old(5)}
+    lines = hunt_mod.recap(hunt, state.project_state(tmp_path), tmp_path)
+    check("the recap says so",
+          any("tagged `// echolot:mark` still in 1 file(s)" in line for line in lines), lines)
+
+
 def test_a_record_is_written_whole_or_not_at_all(tmp_path: Path, monkeypatch) -> None:
     hunt_mod.save(tmp_path, {"n": 1, "status": "open", "question": "kept"})
 

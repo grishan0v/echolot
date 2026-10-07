@@ -621,8 +621,10 @@ while round <= loop.max_rounds:
     if everything is silent    → exit: "clean"
     hypotheses = firing detectors → domains → files
     if localised to a place in the code → exit
+    if round == loop.max_rounds → exit, before recording what nobody
+                                  would analyse
     otherwise: pick a blind spot (usually uninstrumented_cpu)
-               add AGENTTMP_ trace{} inside instrumentation.allowed
+               add AGENTTMP_ markers inside instrumentation.allowed
                re-record
     round += 1
 

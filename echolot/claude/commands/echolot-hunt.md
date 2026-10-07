@@ -91,8 +91,8 @@ either way. While it runs, `echolot` has a `collect` line saying how far it
 got; a failure's sentence is on that line and in the run log.
 
 **Leftover instrumentation.** `echolot hunt "<question>"` says on stderr when
-the previous investigation left markers in the sources; otherwise
-`grep -rn AGENTTMP_ <source_root>`. Markers from an investigation that ran out
+the previous investigation left markers in the sources; otherwise, from the
+checkout's root, `grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' .`. Markers from an investigation that ran out
 of context are still compiled in, still in the trace, and still in the
 report — and they are attributed to code nobody touched this time.
 `echolot mark --remove` takes out what `mark --apply` wrote; anything added by
@@ -160,7 +160,8 @@ your own words and do not pad it with guesses.
 Check two things separately:
 
 **Cleanup.** The answer must state whether the temporary instrumentation was
-removed. If it is unclear, check yourself: `grep -rn AGENTTMP_ <source_root>`.
+removed. If it is unclear, check yourself from the checkout's root:
+`grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' .`.
 
 **Confidence.** If it is low, say so to the human rather than smoothing it
 over. An interim conclusion with an honest assessment is more useful than a

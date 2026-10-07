@@ -170,8 +170,10 @@ report. Three things decide how to read it:
   through zero — the runs disagree among themselves by more than the row
   moved, so record another round before concluding — `shift.runs_needed` says
   about how many runs a side, and hundreds means more rounds will not settle
-  it; `null` means the row is on one side only, or there were too few runs,
-  which a `single` or `few` warning says.
+  it; `null` means the row is on one side only, or it has too few runs of its
+  own: a row found in `2/5` runs gets `null` with no warning, and its
+  `before.runs` and `after.runs` say why. For the report as a whole, too few
+  repeats is the `single` or `few` warning.
 - **`warnings`** — reasons the two may not be comparable. `thresholds` is the
   one to read first: against a moved bar, appeared and gone mean "the bar
   moved", not "the app changed". `instrumentation` names rows that appeared
@@ -267,8 +269,9 @@ that did not ask for it. Check before calling a scenario smooth.
 
 1. A firing detector gives you a `location` — a slice or thread name.
    A row with `code` has already been placed: `places[].file` and `.line`
-   name the method that waited for a lock and the one holding it, or the
-   class a View slice is. Open that; skip the grep.
+   name the method that waited for a lock and the one holding it, the class
+   a View slice is, or, in a sampled recording, the app's own method the
+   samples found (role `sampled`). Open that; skip the grep.
 2. The `domains` section of `echolot.yml` maps that name to a module and file.
 3. Not in `domains`? Run `echolot domains --root .` — it maps literals inside
    `trace("...")` and names kept in a `const val` and passed through the
@@ -278,9 +281,14 @@ that did not ask for it. Check before calling a scenario smooth.
 4. Nothing found? The slice is most likely a system one (`bindApplication`,
    `Choreographer#doFrame`, `binder transaction`). See `references/naming.md`.
 
-When `uninstrumented_cpu` fires there is no code behind the finding by
-definition: the thread burned CPU with no instrumentation. That is an address
-for adding `trace{}`, not the location of a bug.
+When `uninstrumented_cpu` fires in a recording without `runner.sampling`,
+there is no code behind the finding by definition: the thread burned CPU with
+no instrumentation. That is an address for adding `trace{}`, not the location
+of a bug. In a sampled recording, `detail` names what ran on the stacks, then
+`ours:` and the app's own method under it, and `code` and `places[]` (role
+`sampled`) give its file: open that first. `ours: none` is work a pool ran
+with its caller off the stack; `ours: cut` is a stack that ended in the
+framework before anything of ours.
 
 **`main_thread_outlier` is not `main_thread_block` again.** One gates on the
 sum for a name and answers "where did the time go"; the other gates on a

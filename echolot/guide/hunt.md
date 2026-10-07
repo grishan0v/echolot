@@ -35,6 +35,12 @@ round and every report from here on is filed under it — which is what
 `echolot compare` reads from the second round on; with nothing open it has
 nothing to compare.
 
+If `echolot hunt` reported markers left by the previous investigation,
+remove them before recording: `echolot mark --remove` takes out what
+`mark --apply` wrote and every line in its shape, and it lists the rest,
+which go by hand. Left in, they are compiled into the new traces and read as
+part of code nobody touched this time.
+
 Open nothing when you are carrying on the one already open: the human chose
 to (`echolot hunt --resume` has run), or `echolot hunt` shows an open
 investigation that the human's words continue. When you cannot tell, ask.
@@ -115,7 +121,8 @@ Then show the conclusion as it is: do not retell it, and do not pad it with
 guesses.
 
 - **Cleanup.** It says whether the temporary markers were removed. If that is
-  unclear, check: `grep -rn AGENTTMP_ <source_root>` must come back empty.
+  unclear, check from the checkout's root:
+  `grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' .` must come back empty.
 - **Confidence.** If it is low, say so rather than smoothing it over.
 - **The device.** A finding about the device rather than the code —
   `runnable_starvation` on an emulator or a loaded machine — is worth a run

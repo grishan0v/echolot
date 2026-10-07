@@ -100,12 +100,16 @@ Each one a choice among options pulled from a real trace. Each with a default,
 so it can be answered by pressing Enter.
 
 ```
-Ran a cold start. Last slices before the first frame:
-  1) Choreographer#doFrame*        @ 772 ms
-  2) activityResume                @ 731 ms
-  3) Compose:recompose             @ 690 ms
+Ran a cold start. The longest slices `echolot probe` lists:
+  1) collection_load   (async)           n 1   max 867.65 ms
+  2) traversal         com.example.app   n 7   max 116.5 ms
+  3) activityStart     com.example.app   n 1   max 48.0 ms
 What counts as "the app is ready to use" for you?  [1]
 ```
+
+The options are rows of probe's "Longest slices" table, with the thread and
+`max_ms` it prints; an `(async)` section is the usual end. Probe gives no
+start times, so the question names none.
 
 1. **Which scenario** are we analysing (from the benchmarks found, or cold start)
 2. **What counts as the end** of the scenario — the only genuinely semantic
@@ -127,9 +131,9 @@ Every field justified by a finding:
 ```yaml
 scenario:
   end:
-    name: "Choreographer#doFrame*"
+    name: "collection_load"
     _source: confirmed_by_user
-    _evidence: "probe: first frame after bindApplication, 772 ms"
+    _evidence: "probe: the longest slice, async, n 1, max 867.65 ms"
 ```
 
 `_source`: `derived` — you worked it out, `confirmed_by_user` — a human
@@ -164,8 +168,11 @@ Do not invent numbers. The detector defaults work, and once there are three to
 five healthy runs of one scenario:
 
 ```bash
-echolot calibrate run*.perfetto-trace -c echolot.yml
+echolot calibrate .echolot/traces/<scenario>_iter*.perfetto-trace -c echolot.yml
 ```
+
+`collect` writes `<scenario>_iterNNN.perfetto-trace` into `.echolot/traces`; a
+set already put aside is under `.echolot/traces/<scenario>-<stamp>/`.
 
 The command prints a `detectors:` section with the reasoning attached. Show it
 to the human and explain what changed relative to the defaults.

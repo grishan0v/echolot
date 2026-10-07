@@ -2187,6 +2187,14 @@ def cmd_hunt(args) -> int:
             if by_hand:
                 how += f', the other {by_hand} were added by hand and go by hand'
             print(f'    {how}.', file=sys.stderr)
+        elif left["lines"]:
+            # Half a pair: its `beginSection` went by hand and took the
+            # prefix with it, and the `endSection()` left ends whatever
+            # section the app has open on that thread.
+            print(f'\n[!] {left["lines"]} line(s) tagged `// echolot:mark` left in '
+                  f'{len(left["files"])} file(s) by the previous investigation, '
+                  f'with no {left["prefix"]} marker beside them.', file=sys.stderr)
+            print('    `echolot mark --remove` takes them out.', file=sys.stderr)
         recorder.note(hunt="opened", scenario=scenario,
                       leftover_markers=left["markers"])
         # The half a shell cannot do. Said every time rather than only when

@@ -360,6 +360,15 @@ def edits_outside_allowed(s: Session, f: Facts, cfg: Config | None) -> Signal | 
                   ", ".join(inst["allowed"]))
 
 
+def _cleanup_grep(prefix: str) -> str:
+    """The check the agent texts give, from the checkout's root: every Kotlin
+    and Java file, where markers may go under any `instrumentation.allowed`
+    path, and the tag that the `endSection()` half of a pair carries without
+    the prefix (#274)."""
+    return (f"grep -rn --include='*.kt' --include='*.java' -e {prefix} "
+            f"-e 'echolot:mark' .")
+
+
 def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     inst = f.instrumentation
     files = inst.get("files") or {}
@@ -384,7 +393,7 @@ def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                           "off the transcript: these files hold the temporary "
                           "prefix now.",
                           [{"file": p} for p in left],
-                          f"Run: grep -rn {inst['prefix']} <source_root>; "
+                          f"Run: {_cleanup_grep(inst['prefix'])}; "
                           f"`echolot mark --remove` takes out what `mark --apply` wrote.")
         return Signal("cleanup_balance", "ok",
                       "the source tree carries no temporary marker",
@@ -398,7 +407,7 @@ def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                       "Per file, additions of the prefix do not match removals. "
                       "Editing counts are a proxy — check the tree with grep.",
                       rows,
-                      f"Run: grep -rn {inst['prefix']} <source_root>")
+                      f"Run: {_cleanup_grep(inst['prefix'])}")
     if grep_after == 0:
         return Signal("cleanup_balance", "warn",
                       "edits balance out, but no grep confirmed the cleanup"
@@ -417,7 +426,7 @@ def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                       "The agent checked and the marker was still there — or the "
                       "check ran before the last removal.",
                       [{"files": len(files), "shell_edits": shell}],
-                      f"Run: grep -rn {inst['prefix']} <source_root>")
+                      f"Run: {_cleanup_grep(inst['prefix'])}")
     how = (f"{len(files)} file(s), {shell} edit(s) through the shell"
            if shell else f"{len(files)} file(s)")
     what = ("found nothing" if clean else "ran")

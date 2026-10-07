@@ -267,7 +267,7 @@ collect, analyze → the report now says AGENTTMP_set_content 1200 ms self
                    and domains points at MainActivity.kt:69
 read one place   → the file the report named — and, if needed, a second,
                    pointed layer of markers inside it by hand
-mark --remove    → cleanup, and grep -rn AGENTTMP_ to confirm
+mark --remove    → cleanup, and grep -rn -e AGENTTMP_ -e 'echolot:mark' to confirm
 ```
 
 The command finds the entry and the first hop; the trace says where the

@@ -454,31 +454,40 @@ def leftovers(root: Path, prefix: str | None = None) -> dict[str, Any]:
     have to go by hand. The same predicate decides both here and there, so the
     number is what `--remove` will actually do. One number for both would send
     the human away believing the tree was clean.
+
+    `lines` counts every line `--remove` would delete, prefix or not. A tagged
+    `endSection()` left after its `beginSection` went by hand has no prefix to
+    be found by, and ends whatever section the app has open on that thread
+    (#274); its file is listed with the rest.
     """
     from . import mark as mark_mod
 
     prefix = prefix or mark_mod.DEFAULT_PREFIX
     files: list[str] = []
-    total = tagged = 0
+    total = tagged = lines = 0
     # The walk `mark --remove` takes, so the count is of what it removes.
     try:
         sources = mark_mod.domains_source_files(root)
     except OSError:
-        return {"files": [], "markers": 0, "removable": 0, "prefix": prefix}
+        return {"files": [], "markers": 0, "removable": 0, "lines": 0, "prefix": prefix}
     for p in sources:
         try:
             text = p.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if prefix not in text:
+        if prefix not in text and mark_mod.TAG not in text:
             continue
-        hits = [ln for ln in text.split("\n") if prefix in ln]
-        if not hits:
+        rows = text.split("\n")
+        hits = [ln for ln in rows if prefix in ln]
+        applied = sum(1 for ln in rows if mark_mod.is_applied_line(ln))
+        if not hits and not applied:
             continue
         files.append(str(p.relative_to(root)) if p.is_relative_to(root) else str(p))
         total += len(hits)
         tagged += sum(1 for ln in hits if mark_mod.is_applied_line(ln))
-    return {"files": files, "markers": total, "removable": tagged, "prefix": prefix}
+        lines += applied
+    return {"files": files, "markers": total, "removable": tagged, "lines": lines,
+            "prefix": prefix}
 
 
 # --- rendering --------------------------------------------------------------
@@ -567,6 +576,10 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
                 how += f", {hand} were added by hand and need removing by hand"
             out.append(f"  ! {left['markers']} {left['prefix']} marker(s) still in "
                        f"{len(left['files'])} file(s) — {how}")
+        elif left["lines"]:
+            out.append(f"  ! {left['lines']} line(s) tagged `// echolot:mark` still in "
+                       f"{len(left['files'])} file(s), with no {left['prefix']} marker "
+                       f"beside them — `echolot mark --remove` takes them out")
     return out
 
 
