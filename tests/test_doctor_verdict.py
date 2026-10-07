@@ -126,6 +126,10 @@ def test_a_self_check_that_could_not_run_is_recorded_as_failed(
         raise RuntimeError("could not download trace_processor: offline")
 
     monkeypatch.setattr(selftest, "run", offline)
+    # The full `doctor` resolves the binary itself before the self-check, to
+    # print its path; offline with an empty cache that alone exits 2 (#277).
+    monkeypatch.setattr("echolot.main.resolve_binary_path",
+                        lambda tp_binary=None: tp_binary or "trace_processor_shell")
     assert main(argv) == 1
     assert "could not run" in capsys.readouterr().out
 

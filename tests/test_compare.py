@@ -147,6 +147,17 @@ def test_floor_has_two_halves() -> None:
     check("6 ms on 20 clears the absolute floor",
           changes(cmp)["small"] == "grew", str(changes(cmp)))
 
+    # And the absolute floor holding back what the relative one lets through:
+    # +3 ms on 10 is +30%, past the 10% floor and under the 5 ms one (#277).
+    before = report([det("d", [row("tiny", 10.0)])])
+    after = report([det("d", [row("tiny", 13.0)])])
+    check("3 ms on 10 is within the absolute floor",
+          changes(compare(before, after))["tiny"] == "steady",
+          str(changes(compare(before, after))))
+    check("and only the absolute floor holds it",
+          changes(compare(before, after, floor_ms=0))["tiny"] == "grew",
+          str(changes(compare(before, after, floor_ms=0))))
+
 
 def test_floor_is_configurable() -> None:
     before = report([det("d", [row("A", 100.0)])])

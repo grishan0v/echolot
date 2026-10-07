@@ -351,8 +351,12 @@ def reflected(tmp_path_factory):
     os.chdir(project)
     try:
         # The report itself goes to stdout; here only the verdict matters.
-        with contextlib.redirect_stdout(io.StringIO()), \
+        # The run log has to be written — a check below reads reflect's own
+        # line — whatever the shell running pytest exported (#277).
+        with pytest.MonkeyPatch.context() as mp, \
+                contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()):
+            mp.delenv("ECHOLOT_NO_RECORD", raising=False)
             code = main(["reflect", "--last", "--transcripts", str(transcripts),
                          "--project", str(project)])
     finally:
