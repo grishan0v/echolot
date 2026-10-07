@@ -436,9 +436,9 @@ def test_every_planted_signal_fired(reflected):
     expect(sig.get("doctor_first", {}).get("severity") == "ok", "doctor_first ok")
     expect(sig.get("trace_opened_directly", {}).get("severity") == "ok",
            "a document about trace_processor is not an opened trace")
-    # The transcript plants one genuine slicing — an inline python that loads
-    # report.json — and one document that merely mentions it. Only the first
-    # is a row.
+    # The transcript plants three genuine slicings — an inline python that
+    # loads report.json in the main context, and two in the subagent — and one
+    # document that merely mentions it. Only the three are rows.
     sliced = sig.get("report_sliced_by_hand", {}).get("rows", [])
     expect(len(sliced) == 3, f"the three real slicings, and not the document: {sliced}")
     expect(all("notes.md" not in str(r.get("command", "")) for r in sliced),

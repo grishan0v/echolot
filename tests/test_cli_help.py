@@ -76,12 +76,12 @@ def test_help_is_what_argparse_would_have_printed(name, monkeypatch):
     reader that is not a terminal gets — a pipe, a CI log, an agent running
     `echolot --help` — so it is the rendering that has to stay reproducible.
 
-    One difference does exist above that width and it is deliberate. argparse
-    breaks a word at its hyphens when the line runs out, so at 110 columns
-    `resume-or-new` comes out as `resume-` and `or-new` on the next row; Rich
-    keeps the word whole. Since the hyphenated words here are literal values a
-    person types, keeping them whole is the better of the two, and 80 columns
-    is below the widths where the two disagree at all.
+    At other widths the two do disagree, and deliberately. argparse breaks a
+    word at its hyphens when the line runs out, so at 76 to 78 columns
+    `status --help` splits `init-force` and `fix-settings` across two rows;
+    Rich keeps the word whole. Since the hyphenated words here are literal
+    values a person types, keeping them whole is the better of the two, and
+    80 columns is a width where every subcommand renders the same both ways.
     """
     monkeypatch.setenv("COLUMNS", "80")
     parser = _parsers()[name]
@@ -150,13 +150,12 @@ def test_subcommand_help_is_no_wider_than_argparse_makes_it(name, monkeypatch):
     long and the terminal breaks it in the middle of a word. Nothing raises.
 
     Measured against argparse at the same width rather than against the width
-    itself, because argparse overruns it too and always has: a mutually
-    exclusive group cannot be broken across rows, so `echolot reflect --help`
-    at 60 columns has a 67-character usage line on main and on 3.14. The claim
-    that holds is the relative one — Rich is never the wider of the two.
+    itself, because argparse can overrun it too: a mutually exclusive group
+    cannot be broken across rows, so a usage line can run past the width. The
+    claim that holds is the relative one — Rich is never the wider of the two.
 
-    The main parser is left out. Its header is a table 107 columns wide built
-    by hand, and both formatters print it untouched.
+    The main parser is left out. Its header is a table built by hand, wider
+    than 80 columns, and both formatters print it untouched.
     """
     for width in (60, 80, 100, 140):
         monkeypatch.setenv("COLUMNS", str(width))

@@ -14,7 +14,7 @@ Three ways it said something that was not true of the machine it ran on:
   `doctor` self-checked the pinned binary.
 
 The self-check is stubbed wherever the question is which binary it was
-handed, or what was recorded when it failed: 143 checks over a
+handed, or what was recorded when it failed: every check over a
 trace_processor that does not exist would answer neither.
 """
 

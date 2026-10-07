@@ -159,10 +159,11 @@ def test_importing_the_cli_pulls_in_two_distributions() -> None:
     # rather than avoided. `build_parser()` runs on every invocation and needs
     # the formatter class to construct the parsers, so moving the import inside
     # a function would relocate the cost, not remove it. What keeps it cheap is
-    # that rich-argparse imports rich lazily: `import echolot.main` costs 4 ms
-    # more, and no command that does not print help ever loads rich, pygments,
-    # markdown-it-py or mdurl at all. Measured, and the reason it is one name
-    # here rather than five.
+    # that rich-argparse imports rich lazily: `import echolot.main` loads no
+    # rich, and every command loads about 43 `rich.*` modules when it builds
+    # the parser, as pyproject.toml says; none ever loads pygments,
+    # markdown-it-py or mdurl. Measured, and the reason it is one name here
+    # rather than five.
     allowed = {"PyYAML", "rich-argparse"}
     probe = (
         "import sys\n"

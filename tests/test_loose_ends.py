@@ -253,7 +253,7 @@ def test_a_report_where_nothing_fired_keeps_silent_and_the_footer(toolchain, foo
 
 
 def test_the_fixture_with_every_row_emptied_names_each_detector_silent(marker_report):
-    """The same, on the pipeline's own report: twelve names and a version."""
+    """The same, on the pipeline's own report: every detector's name and a version."""
     quiet = copy.deepcopy(marker_report)
     for d in quiet["detectors"]:
         d["rows"] = []
