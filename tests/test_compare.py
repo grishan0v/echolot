@@ -7,11 +7,12 @@ difference is called real, when it is called noise, when two reports may not be
 compared at all, and when a pair of rows is the same thing under a new name.
 
 Most cases build reports by hand — compare reads the report structure and never
-touches a trace, so the fast checks need no trace_processor. The last case runs
-the real pipeline, because the one failure none of the others would catch is
-`analyze` writing a shape `compare` no longer reads.
+touches a trace, so the fast checks need no trace_processor. `test_end_to_end`
+runs the real pipeline, because the one failure none of the others would catch
+is `analyze` writing a shape `compare` no longer reads; a few after it reuse
+the reports it built.
 
-    python tests/check_compare.py
+    python -m pytest tests/test_compare.py
 """
 
 from __future__ import annotations
@@ -207,7 +208,7 @@ def test_family_refuses_to_guess() -> None:
 
 # --- one location, several rows ---------------------------------------------
 #
-# Five of the ten shipped detectors declare a second column in `@identity`, so
+# Most of the shipped detectors declare a second column in `@identity`, so
 # a location carrying more than one row is ordinary. Paired on the name alone
 # they collapsed onto whichever came last and the leftovers paired with it —
 # which subtracts one phenomenon from another and prints the difference as a

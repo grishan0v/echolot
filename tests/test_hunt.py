@@ -7,7 +7,7 @@ the loop: `perf-hunter` re-records traces and adds markers on purpose, and a
 prompt in the middle of that would break it. So the checks below pin both
 halves — when the choice is offered, and when it must not be.
 
-    python tests/check_hunt.py
+    python -m pytest tests/test_hunt.py
 """
 
 from __future__ import annotations

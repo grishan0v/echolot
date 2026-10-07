@@ -150,10 +150,10 @@ def _on_a_terminal(keys: bytes, timeout: float = 15.0) -> str:
     them, `TraceSession.close()` has nothing it could join, and every test
     that reads a trace leaves them behind for the rest of the session.
 
-    Today the copy happens with one thread anyway, and only because
-    `test_hosts` sorts before `test_selftest`. That is not a property of
-    anything — the first test file that reads a trace and sorts before this
-    one takes it away — and what it is protecting against is not a red test.
+    Earlier test files already leave those threads here: in a run of the
+    whole suite, every test in this file starts with trace_processor's
+    threads in the process. What `subprocess` protects against is not a red
+    test.
     A child wedged between the fork and the exec prints nothing, so the loop
     below waits out its full timeout and then reports that the prompt never
     answered: fifteen seconds of silence and a message about the prompt, for

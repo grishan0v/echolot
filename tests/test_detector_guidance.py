@@ -26,11 +26,11 @@ from echolot.tp import TraceSession  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 
 
-# Function-scoped on purpose, at the cost of a trace_processor start per test.
-# A session held across the module leaves its thread alive, and the next file
-# along calls `forkpty()` — which warns, correctly, that doing so from a
-# multi-threaded process can deadlock the child. Paying a second here keeps
-# that hazard out of a suite that had none.
+# Function-scoped, at the cost of a trace_processor start per test: each test
+# gets a session of its own and closes it. Closing does not take the
+# perfetto library's threads with it — opening a session takes the process
+# from one OS thread to three, and they stay — which is why test_hosts runs
+# its prompt through `subprocess` rather than forking this process.
 @pytest.fixture
 def tp(tmp_path):
     trace = tmp_path / "t.perfetto-trace"

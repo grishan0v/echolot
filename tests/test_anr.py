@@ -403,10 +403,11 @@ def test_a_form_no_source_here_announces_threads_in_is_refused(tmp_path):
 
 # --- the record the device keeps itself -------------------------------------
 #
-# The header below was read off a live device. The thread body is ART's own
-# format and is written from it rather than sampled: the files under
-# `/data/anr/` are mode 600 owned by `system`, and a device without root parts
-# with them only inside a bugreport.
+# The header below was read off a live device, and the thread body is
+# synthetic, rebuilt from a real drop-box record that `dumpsys dropbox --print
+# data_app_anr` printed on an Android 13 phone. The drop box is the source
+# because the files under `/data/anr/` are mode 600 owned by `system`, and a
+# device without root parts with them only inside a bugreport.
 
 DROPBOX = """\
 Drop box contents: 50 entries

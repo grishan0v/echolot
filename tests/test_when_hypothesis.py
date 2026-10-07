@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Property-based tests for echolot/when.py.
 
-`state.py` writes every timestamp echolot itself produces with
-`datetime.now(timezone.utc).isoformat()`; `iso_epoch` reads timestamps back
-out of files a person may have hand-edited. The property that matters is the
+echolot writes its own timestamps — in report.py, compare.py, hunt.py,
+main.py, recorder.py and the reflect package — with
+`datetime.now(timezone.utc).isoformat(timespec="seconds")`; `iso_epoch` reads
+them back out of files a person may have hand-edited. The property that matters is the
 round trip for the format echolot writes, plus "never raises" for the
 garbage a person might have typed instead.
 
@@ -62,8 +63,8 @@ iso_shaped = st.one_of(
 
 
 @given(aware_datetime)
-def test_iso_epoch_round_trips_what_state_py_writes(dt):
-    """isoformat() → iso_epoch() is the exact round trip state.py relies on."""
+def test_iso_epoch_round_trips_what_echolot_writes(dt):
+    """isoformat() → iso_epoch() is the exact round trip echolot's own stamps rely on."""
     stamp = dt.isoformat()
     got = iso_epoch(stamp)
     assert got is not None
@@ -83,14 +84,16 @@ def test_iso_epoch_accepts_the_trailing_z_spelling(dt):
 @example("not a timestamp")
 @example("2024-13-40T99:99:99")
 @example("0001-01-01T00:00:00")      # parses; .timestamp() is what fails
-@example("9999-12-31T23:59:59")      # and again, at the other end
+@example("9999-12-31T23:59:59")      # the same, but only east of UTC
 def test_iso_epoch_never_raises_on_a_stamp_it_did_not_write(text):
     """A hand-edited file gets an absent timestamp, never a crash.
 
     The two calendar-edge examples are the ones worth having. They parse —
-    `fromisoformat` is happy with either — and then raise inside
+    `fromisoformat` is happy with either — and then may raise inside
     `.timestamp()`, because converting a naive datetime at the very start or
-    end of the calendar walks off the end of it. `iso_epoch` catches
+    end of the calendar walks off the end of it. The year-1 stamp does in
+    every zone; the year-9999 one only where local time is ahead of UTC, and
+    in UTC or west of it comes back as a number. `iso_epoch` catches
     `ValueError`, which is what CPython raises for that here; a platform
     where the same conversion raises `OSError` or `OverflowError` instead
     would crash, and this test is where that would surface.
