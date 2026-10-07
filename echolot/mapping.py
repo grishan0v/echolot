@@ -47,8 +47,10 @@ _METHOD = re.compile(
     r"^\s+(?:\d+:\d+:)?\S+\s+(?P<real>[^\s(]+)\([^)]*\)(?::\d+(?::\d+)?)?"
     r"\s+->\s+(?P<min>\S+)\s*$")
 # What R8 makes of a class it renames: one to three lower-case letters and
-# digits, and the same after each `$` of a nested class. A class a person named
-# starts with a capital, in Kotlin and in Java.
+# digits. After each `$` of a nested class, one to three letters or digits of
+# either case: the outer name already says the class was renamed, so `a$Tab`
+# reads as minified too. A class a person named starts with a capital, in
+# Kotlin and in Java.
 _MINIFIED = re.compile(r"[a-z][a-z0-9]{0,2}(?:\$[A-Za-z0-9]{1,3})*")
 
 # Minified class name → (real class name, minified method name → real names).

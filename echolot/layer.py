@@ -89,7 +89,8 @@ UPGRADE = "`pipx upgrade echolot` (or `uv tool upgrade echolot`)"
 # 440 allows between them. Anything else — `0.8.0-1`, a `-SNAPSHOT` — does
 # not read as a version. `packaging` reads the whole standard and is not a
 # dependency of echolot; for these forms, the order `version_key` gives is
-# the one `packaging` gives.
+# the one `packaging` gives, except the local label: `version_key` ignores it
+# on purpose, where `packaging` puts `0.8.0+mine` after `0.8.0`.
 _VERSION = re.compile(r"""
     v?(?P<release>\d+(?:\.\d+)*)
     (?:[-_.]?(?P<pre>alpha|a|beta|b|preview|pre|rc|c)[-_.]?(?P<pre_n>\d+)?)?
