@@ -65,9 +65,6 @@ _CMDLINE = re.compile(r"^Cmd line: (?P<cmd>\S+)")
 # data_app_anr (compressed text, 46727 bytes)`.
 _ENTRY = re.compile(r"^={20,}\s*$")
 _ENTRY_HEAD = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\s+\S+\s+\(")
-# The record's own furniture: block rules, the thread count above a block, and
-# the runtime's note about how long suspending everything took. Skipped by
-# name so that a line which is genuinely new still reaches the unread count.
 # One line of the record's own CPU table, which sits above the thread dump:
 #   57% 5662/system_server: 31% user + 25% kernel / faults: 22124 minor
 # It is the only thing in an ANR report that says what the rest of the device
@@ -85,6 +82,9 @@ _LISTED = re.compile(r"^DALVIK THREADS \((?P<n>\d+)\):")
 # What the drop box writes where it cut an entry to its size limit. A dump of
 # hundreds of threads reaches that limit.
 _TRUNCATED = re.compile(r"^\[\[TRUNCATED\]\]\s*$")
+# The record's own furniture: block rules, the thread count above a block, and
+# the runtime's note about how long suspending everything took. Skipped by
+# name so that a line which is genuinely new still reaches the unread count.
 _SCAFFOLD = re.compile(
     r"^(?:"
     r"-{2,}.*-{2,}\s*"                       # the rule around a process block
@@ -494,12 +494,13 @@ def detect(text: str) -> Source | None:
 
 
 def _state(word: str) -> str:
-    """One vocabulary for states two sources spell differently.
+    """One vocabulary for states three sources spell differently.
 
-    Crashlytics writes them in the words a person would (`timed waiting`), ART
-    writes them as its enum (`TimedWaiting`). Splitting on the inner capitals
-    turns the second into the first and leaves anything unforeseen readable
-    rather than dropped.
+    Crashlytics writes them in the words a person would (`timed waiting`),
+    Play Console capitalises those words (`Timed Waiting`), and ART writes
+    them as its enum (`TimedWaiting`). Lower-casing, after splitting on the
+    inner capitals, turns the last two into the first and leaves anything
+    unforeseen readable rather than dropped.
     """
     if not word or word.islower():
         return word
@@ -808,7 +809,7 @@ def working(report: Report) -> list[Thread]:
 
 @dataclass
 class Chain:
-    monitor: str                 # the class as printed in the signature
+    monitor: str                 # the class the source printed; the waiters' when inferred
     named: str | None            # the same class, unobfuscated, when derivable
     waiters: list[Thread]
     # Every thread between the waiters and the bottom: the one holding this
@@ -898,11 +899,10 @@ def chains(report: Report) -> list[Chain]:
     would bury the one that matters — whether `main` is among them.
 
     Worked out once and kept on the report. It is a pure function of the
-    threads, and one `echolot anr` asked for it six times: `locate` through
-    `of_interest`, `render` for its own section and again through
-    `of_interest`, `summary` twice the same way, and the command itself. On a
-    three-hundred-thread dump each pass walks every thread and then walks the
-    holders down to the root.
+    threads, and one `echolot anr` asks for it several times: `locate` and
+    the text or the JSON view each reach it, some more than once, and so does
+    the command itself. On a three-hundred-thread dump each pass walks every
+    thread and then walks the holders down to the root.
     """
     if report._chains is not None:
         return report._chains

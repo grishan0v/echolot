@@ -429,7 +429,9 @@ def write(root: Path, changed: bool = False) -> list[Path]:
 
 def report(changed: bool = False, tp_binary: str | None = None) -> dict:
     """The repeats analysed and merged the way `analyze` does, places included."""
-    from . import place  # late imports: main imports the fixture, and this imports both
+    # Late imports: `python -m echolot.demo <dir>` only writes traces, which
+    # needs the fixture alone, and need not load the CLI to do it.
+    from . import place
     from . import report as report_mod
     from .config import Config
     from .main import analyze_trace

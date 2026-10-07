@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Property-based tests for echolot/anr.py's `_state`.
 
-`_state` maps two sources' spellings of a thread state onto one
-vocabulary: Crashlytics writes `timed waiting`, ART writes `TimedWaiting`,
-and the manual fixtures in test_anr.py only ever exercise the handful of
+`_state` maps three sources' spellings of a thread state onto one
+vocabulary: Crashlytics writes `timed waiting`, Play Console `Timed Waiting`
+and ART `TimedWaiting`, and the manual fixtures in test_anr.py only ever exercise the handful of
 states that appear in the two sample dumps. Hypothesis instead throws
 arbitrary "word-shaped" text at it and checks the properties the function
 relies on: it never leaves an uppercase letter behind, and it never drops
@@ -74,9 +74,9 @@ def test_state_is_idempotent_once_split(w):
 
 @given(enum_name)
 def test_state_agrees_with_the_spelling_the_other_source_uses(name):
-    """The whole job: ART's `TimedWaiting` and Crashlytics' `timed waiting`
-    have to arrive at the same string, or the two sources disagree about a
-    thread state for no reason a reader could see.
+    """The whole job: ART's `TimedWaiting`, Play Console's `Timed Waiting`
+    and Crashlytics' `timed waiting` have to arrive at the same string, or the
+    sources disagree about a thread state for no reason a reader could see.
 
     Built from the same words in both spellings, so the assertion is that
     the two routes meet — not that either one produces a particular string.
@@ -97,11 +97,11 @@ def test_state_does_not_split_a_name_written_in_capitals(w):
 
     `IOWait` becomes `iowait`, not `io wait`; a source that shouted
     `TIMEDWAITING` would get `timedwaiting` and its own entry in a
-    vocabulary meant to have one. Neither source emits a state in either
-    shape today — the ART enum names are all `TimedWaiting`-shaped, and
-    Crashlytics writes the words out with the space already in them — which
-    is why this is written down rather than changed. It is the thing that
-    would surprise whoever adds a third source.
+    vocabulary meant to have one. No source emits a state in either shape
+    today — the ART enum names are all `TimedWaiting`-shaped, and Crashlytics
+    and Play Console write the words out with the space already in them —
+    which is why this is written down rather than changed. It is the thing
+    that would surprise whoever adds a fourth source.
     """
     result = _state(w)
     assert " " not in result
@@ -110,8 +110,8 @@ def test_state_does_not_split_a_name_written_in_capitals(w):
 
 @given(st.text(alphabet=string.ascii_letters + " ", min_size=0, max_size=30))
 def test_state_of_a_word_that_already_has_spaces(w):
-    """A state that already contains a space — not a shape ART or
-    Crashlytics produces, but not one the type signature rules out either.
+    """A state that already contains a space — the shape Crashlytics and
+    Play Console write, and one the type signature does not rule out either.
 
     Both properties the rest of this file rests on survive it: no upper-case
     is left behind, and nothing is dropped or reordered. What does *not*
