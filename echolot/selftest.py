@@ -577,7 +577,7 @@ def _(report):
 
 @check("main_thread_outlier: one occurrence far outside its own history")
 def _(report):
-    # Six inflates of 4 ms and one of 44. The sum, 68 ms, is unremarkable and
+    # Five inflates of 4 ms and one of 44. The sum, 64 ms, is unremarkable and
     # main_thread_block reports it without comment; the single occurrence is
     # the finding, and it is the one a benchmark's P99 was made of.
     row = only_row(report, "main_thread_outlier")
@@ -928,7 +928,7 @@ def _(report):
 
 @check("uninstrumented_cpu: coverage counts nested slices only once")
 def _(report):
-    # main: 995 ms of Running inside the window, with the AppStart slice
+    # main: 875 ms of Running inside the window, with the AppStart slice
     # covering the whole window on top. Adding parent to children would exceed
     # everything the thread ever did. The thread is not blind either way, but
     # the arithmetic has to be honest or on a real trace it will mask a genuine
@@ -1489,7 +1489,7 @@ def _(report):
 
 @check("a main thread idle at the message queue is not a block")
 def _(report):
-    # Twelve milliseconds later in the same sleep, and the opposite answer:
+    # Seven milliseconds later in the same sleep, and the opposite answer:
     # `Steady_heavy` has ended, nothing is open below the anchor, and the
     # looper had reached the queue. The state alone cannot tell these apart —
     # on a real command-driven scenario the main thread sat in this exact
@@ -1665,9 +1665,9 @@ def _(report):
 
 @check("anr_risk: an idle moment ends the stretch, and the anchor does not span it")
 def _(report):
-    # The fixture's main thread sleeps for 60 ms with no slice open below
-    # `AppStart`. The looper reached the queue there: a pending event would
-    # have been served, and no ANR would have fired.
+    # The fixture's main thread sleeps 800..860, and 845..850 of that has no
+    # slice open below `AppStart`. The looper reached the queue there: a
+    # pending event would have been served, and no ANR would have fired.
     #
     # `AppStart` runs straight across that moment at depth 0. Counting depth 0
     # would join the two halves into one 1005 ms stretch — the whole scenario,
@@ -2488,8 +2488,9 @@ def _mark_repo(root: Path, *, app="ExampleApp", act="MainActivity", theme="AppTh
         f"        init()\n    }}\n}}\n", encoding="utf-8")
     if unclosed:
         # A `setContent {` whose brace is never closed — what a file caught
-        # mid-edit looks like. Deliberately one `{` short of balancing to the
-        # end of the file, so `match_brace` walks off it and returns None.
+        # mid-edit looks like. Deliberately three `}` short of balancing to the
+        # end of the file — the theme's, `setContent`'s and `onCreate`'s — so
+        # `match_brace` walks off it and returns None.
         body = (
             f"    override fun onCreate(savedInstanceState: Bundle?) {{\n"
             f"        super.onCreate(savedInstanceState)\n"
@@ -2547,7 +2548,8 @@ def _mark_repo(root: Path, *, app="ExampleApp", act="MainActivity", theme="AppTh
             '</activity></application>\n</manifest>\n', encoding="utf-8")
         # A block body over several lines: this tree is about which module
         # `--module` picks, and a one-line body is refused for its own
-        # reasons two checks below.
+        # reasons in "mark: a block written on one line is refused, never
+        # mangled".
         (wear / "kotlin/WearActivity.kt").write_text(
             f"package {pkg}.wear\nclass WearActivity : ComponentActivity() {{\n"
             f"    override fun onCreate(b: Bundle?) {{\n"
@@ -2573,8 +2575,9 @@ def _(report):
             ("app_oncreate", "manifest+lifecycle", True),
             ("activity_oncreate", "manifest+lifecycle", True),
             ("set_content", "api", True),
-            # composables in call order: theme first, nav host inside it —
-            # the theme sits in core/ui, outside allowed
+            # composables one hop from setContent, ordered by file: never
+            # applicable, since a composable is wrapped at its call site; the
+            # theme, in core/ui, is outside allowed as well
             ("compose_root", "call-from-setContent", False),
             ("compose_root", "call-from-setContent", False),
             ("room_open", "api", False),
@@ -2997,13 +3000,14 @@ def _(report):
 
 @check("CLI: what the user typed wrong is a sentence and an exit code, never a traceback")
 def _(report):
-    """Four ways the tool used to end in a Python traceback.
+    """Three ways the tool used to end in a Python traceback.
 
     A traceback out of the CLI is a bug in echolot, and it is not a private
     matter: `reflect` reads the run log, sees one, and files it as exactly
-    that. Three of these were not bugs in echolot at all — a path that is not
-    there, a `--since` nobody spelled right, a source file that is not UTF-8 —
-    and the fourth is a race with gradle tidying up its own output directory.
+    that. None of these were bugs in echolot at all — a path that is not
+    there, a `--since` nobody spelled right, a source file that is not UTF-8.
+    A fourth, a race with gradle tidying up its own output directory, is
+    handled in `runner.harvest` and not exercised here.
     """
     from . import mark as mk
     from .main import main
@@ -3379,7 +3383,7 @@ def _(report):
 
     "`.echolot/` ← traces, reports, run log; in .gitignore", says the project
     layout, and `local.yml` beside it — "device serials, binary path; in
-    .gitignore". Nothing ever put them there. A trace is tens of megabytes and
+    .gitignore". Nothing ever put them there. A trace is several megabytes and
     a collect writes five, so the first `git add -A` after a run staged
     thirty-five megabytes of binary, and the person found out from git.
 
@@ -3776,7 +3780,7 @@ def _(report):
 def _(report):
     """The one way this feature could be worse than not having it.
 
-    `echolot init` is run by agents, and by this very self-check five times
+    `echolot init` is run by agents, and by this very self-check many times
     over. A prompt that appears there is a hang, not a question. Two gates
     have to hold: only the CLI parser turns prompting on, so a direct call
     with a bare Namespace is silent whatever the terminal is doing; and even
