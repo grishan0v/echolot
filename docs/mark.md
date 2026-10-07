@@ -34,7 +34,7 @@ the project. Each row it prints carries one of these tags:
 | tag | what it is | example |
 |---|---|---|
 | `manifest+lifecycle` | the manifest names the class — the launcher Activity is the one whose `<intent-filter>` has `MAIN` and `LAUNCHER`, the Application class is `android:name` on `<application>` — and `onCreate`, the SDK's method name, is the place in it, whatever the class is called | `override fun onCreate(`, `protected void onCreate(` |
-| `api` | exact strings from someone else's library | `setContent {`, `setContentView(`, `Room.databaseBuilder(`, `startKoin {`, `@HiltAndroidApp` |
+| `api` | exact strings from someone else's library | `setContent {`, `setContentView(`, `Room.databaseBuilder(`, `startKoin {` |
 | `call-from-setContent` | the composables invoked inside `setContent { }`, kept only when `@Composable fun Name(` is in this project's sources | `AppTheme { AppNavHost() }` → both, if defined here |
 | `anr` | a frame of a stack from a freeze, with `--from-anr`: the function around the line the compiler wrote into it | see `--from-anr` below |
 | `jdk` | a thread or a pool the JDK's default factory will name, with `--pools` | `Executors.newSingleThreadExecutor()`, `Thread(task)` |
@@ -66,6 +66,9 @@ for source.
   `onCreate` — said, with what runs at `bindApplication` all the same: the
   Application's constructor, the ContentProviders and the libraries'
   initializers, which `app_init` lists
+- an Application class with `@HiltAndroidApp` — a note, no row: the graph is
+  generated, its cost sits inside `Application.onCreate`, and there is nothing
+  separate to mark
 - a block that cannot take a begin/end pair of whole lines — proposed but not
   applicable, with the reason; the cases are under `--apply` below
 - a composable, a Room builder, a Koin block — proposed with the reason it
@@ -262,7 +265,8 @@ Counting those found fifteen sites on a codebase where four were real.
 
 ```
 analyze          → the report names system slices and threads; domains is empty
-mark --apply     → 3–5 markers at the entry points, one command, ~1 KB
+mark --apply     → up to 3 markers at the entry points (Application.onCreate,
+                   the launcher's onCreate, setContent), one command, ~1 KB
 collect, analyze → the report now says AGENTTMP_set_content 1200 ms self
                    and domains points at MainActivity.kt:69
 read one place   → the file the report named — and, if needed, a second,

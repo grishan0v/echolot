@@ -13,8 +13,8 @@ merges them into one report. `coldStart` stands for the config's
 `scenario.name`. The directory keeps the traces of every scenario recorded
 into it, so the glob names one: `*.perfetto-trace` would merge two scenarios
 into one report, and every median in it would mix them. That directory is
-the one `echolot`, `hunt` and `compare` read, so the default is the place to
-keep them; `-o` exists for the rare trace that belongs elsewhere.
+the one `echolot` counts and `hunt` sets aside, and `compare` compares the
+reports `analyze` builds from it, so the default is the place to keep them; `-o` exists for the rare trace that belongs elsewhere.
 
 Repeating is not belt-and-braces. A single run cannot tell a regression from a
 random spike — on a live cold start the spread between iterations reaches tens
@@ -224,7 +224,7 @@ stands on it goes: `runnable_starvation`, `uninstrumented_cpu` and `io_wait`
 go silent, `anr_risk` keeps only its slice source and loses a stall in code
 nobody traced, and the CPU clock weighting under **Device** loses its input.
 What a project with no instrumentation still gets is under
-[Three detectors that need no instrumentation](analysing.md#three-detectors-that-need-no-instrumentation).
+[Detectors for code nobody traced](analysing.md#detectors-for-code-nobody-traced).
 
 **`linux.process_stats` with `scan_all_processes_on_start`** — the only source
 of process names. Without it `process.name` is empty and the config matches
@@ -311,7 +311,7 @@ samples go into the same trace, on the same clock as everything else. The
 report reads them in the round that finds the blind spot: the row names what
 ran in the samples that fell there, and the nearest frame of the project's
 own code under it
-([Analysing](analysing.md#three-detectors-that-need-no-instrumentation)). The
+([Analysing](analysing.md#detectors-for-code-nobody-traced)). The
 Perfetto UI shows the same samples as a flame graph for any stretch of time
 you select.
 

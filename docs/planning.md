@@ -152,7 +152,7 @@ gh project item-add 1 --owner grishan0v --url <issue URL>
 
 # the ids item-edit asks for
 gh project view 1 --owner grishan0v --format json --jq .id    # the board
-gh project item-list 1 --owner grishan0v --format json         # the cards
+gh project item-list 1 --owner grishan0v --format json --limit 1000   # the cards
 gh project field-list 1 --owner grishan0v --format json        # fields and options
 gh project item-edit --project-id <board id> --id <card id> \
   --field-id <field id> --single-select-option-id <option id>

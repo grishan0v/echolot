@@ -128,17 +128,18 @@ The ones that ship, by what they watch:
   interrupting, before real work started; `agent_prompt_gaps`: the prompt
   handed to the subagent left out the traces, the regression or the change
 - **protocol** — doctor before analyze; the trace never opened directly; the
-  loop stayed in the subagent; rounds within the limit; every inserted tracing
+  loop stayed in the subagent; the loop's own guides left to the subagent;
+  rounds within the limit; every inserted tracing
   call carries the prefix; edits inside `instrumentation.allowed`; the
   temporary markers are gone (see below); the conclusion has its eight
   fields; analysis ran on the project's config and not one the agent wrote;
   thresholds edited only after `calibrate`; the traces analysed before a
   re-record were copied out first (a `mv` inside the build tree does not
-  count — gradle cleans it)
+  count — gradle cleans it); values a person confirmed still hold
 - **workarounds** — `report.json` cut up by hand; `--help` / `explain` mid-work;
   gradle / adb / perfetto driven directly instead of `collect`;
-  `agent_reported_bugs`: the agent saying in its own words, in any language,
-  that something in echolot was wrong — quoted rather than classified, since
+  `agent_reported_bugs`: the agent saying in its own words, in English or
+  Russian, that something in echolot was wrong — quoted rather than classified, since
   a sentence that names the defect is worth more than any rule
 - **failures** — echolot calls that failed, tracebacks apart from clean exits,
   shell failures apart from the tool's own; retries, with what moved between
@@ -269,6 +270,8 @@ Everything above the reader — facts, signals, report — works on the normalis
 session in `echolot/reflect/model.py`: turns, tool calls, questions, usage,
 subagents. Another client means another reader producing that shape, declaring
 what it carries, and nothing else changes. Codex's reader is the second one:
-`codex.py`, beside `claude_code.py`. What degrades is what that client
-does not record: questions to the human become a heuristic over text, subagents
-may not exist, tokens may be missing.
+`codex.py`, beside `claude_code.py`. It reads questions to the human,
+subagents and tokens as Claude Code's does. What degrades is what Codex does
+not record in the clear: the brief the main thread hands a subagent is stored
+encrypted, so `agent_prompt_gaps` is listed as not checked, and a question
+carries no recommended option and no record of which one the person chose.

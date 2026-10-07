@@ -152,7 +152,8 @@ would be one more command for an agent to try on a route whose whole point
 is that it stops.
 
 The same line is also the only news of a newer release echolot can give: the
-tool makes no network calls, and a teammate's commit is what brings it. Two
+tool never checks for one, and its only download is the pinned
+trace_processor, once. A teammate's commit is what brings the news. Two
 limits. Releases up to 0.7.0 do not read the name, so they still put their
 files back; the rule holds once the whole team is on a later one. And
 between releases a checkout carries the number of the last one, so two
@@ -522,7 +523,7 @@ of the same CLI a human types.
     │  │
     │  └─ agents/perf-hunter.md      doctor · analyze · report · compare · names
     │     its own window             probe · domains · mark · anr · explain · collect
-    │                                hunt --show                 + Read Edit Grep
+    │                                hunt --show            + Read Edit Grep Glob
     │
     └─ commands/echolot-reflect.md   reflect          → .echolot/reflect/<id>.json
 
@@ -543,15 +544,18 @@ plugins/echolot/skills/              the plugin: four skills, each a door to a t
  ├─ echolot/SKILL.md                 --version · echolot · status --next
  │                                   init --for plugin[,codex] · doctor · hunt --resume
  │                                   guide
- ├─ echolot-setup/SKILL.md           guide setup
- ├─ echolot-hunt/SKILL.md            doctor -q · hunt · guide hunt · guide loop
+ ├─ echolot-setup/SKILL.md           scan · probe · names · domains · analyze
+ │                                   guide setup
+ ├─ echolot-hunt/SKILL.md            doctor -q · hunt · collect · mark --remove
+ │                                   report · hunt --done · guide hunt · guide loop
  └─ echolot-reflect/SKILL.md         guide reflect
 ```
 
 `report` (views of a report already on disk) sits beside `analyze` wherever a
 report is read row by row — the skill, its report reference, the hunter and
 the guide's overview; `scan` (the facts setup starts from) is in the setup
-command, which `guide setup` prints, and nowhere else. Every invocation in
+command, which `guide setup` prints, and in the plugin's setup skill, and
+nowhere else. Every invocation in
 these files and in the plugin's skills, inline or fenced, is run past the
 CLI's own parser by a test: the verb has to exist and every flag has to be one
 that verb takes.

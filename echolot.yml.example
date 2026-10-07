@@ -13,8 +13,9 @@
 # be mistaken for one that changes a run.
 
 # --- read by the code ------------------------------------------------------
-# One key in this part is the exception: nothing reads
-# instrumentation.cleanup — the hunt takes its markers out whatever it says.
+# Three keys in this part are the exception, read by no command:
+# project.source_root, scenario.budget_ms, and instrumentation.cleanup — the
+# hunt takes its markers out whatever that one says.
 project:
   package: com.example.app
   # A GLOB over process.name. If the app lives in several processes
@@ -25,6 +26,10 @@ project:
   # leftover check and `mark --remove` walk the whole checkout, since markers
   # may go into every path in instrumentation.allowed.
   source_root: app/src/main/kotlin
+  # The R8 or ProGuard mapping.txt of the build that was recorded, for a
+  # minified build: analyze names its sampled frames back with it. It needs
+  # project.package, the package as installed, and it has to be this build's.
+  # mapping: app/build/outputs/mapping/<variant>/mapping.txt
 
 # Scenario window bounds: a GLOB over the slice name.
 # Both are optional — without them the whole trace is the window.
@@ -41,10 +46,10 @@ scenario:
     _source: confirmed_by_user
     _evidence: "probe: first frame after bindApplication"
   # Not read by the code, and deliberately so — there is no performance gate.
-  # Why is in the README under "There is no performance gate, on purpose": the
-  # question a budget answers is already answered by the benchmark that
-  # produced the trace. The field records what the team considers acceptable,
-  # which is worth writing down on its own.
+  # Why is in docs/compare.md under "There is no performance gate, on
+  # purpose": the question a budget answers is already answered by the
+  # benchmark that produced the trace. The field records what the team
+  # considers acceptable, which is worth writing down on its own.
   budget_ms: 2500
 
 runner:
@@ -86,6 +91,9 @@ runner:
   # buffer_kb: 131072
   # activity: com.example.app/.MainActivity   # resolved automatically if absent
   # device: emulator-5554   # with several attached; belongs in local.yml
+  # Callstack samples, in Hz; true is 100. Off by default because it slows the
+  # app, so a sampled round compares only with one sampled at the same rate.
+  # sampling: false
   #
   # mode: command
   # command: >
@@ -94,7 +102,8 @@ runner:
   #
   # mode: gradle
   # The macrobenchmark makes the recording in this mode, so environment,
-  # atrace_categories, buffer_kb, duration_ms and reset_policy do not apply.
+  # atrace_categories, buffer_kb, duration_ms, reset_policy and sampling do
+  # not apply.
   # gradle_task: ":benchmark:connectedBenchmarkBenchmarkAndroidTest"
   # Where ./gradlew lives, and where the traces are looked for afterwards. A
   # relative path is taken from this file's directory, the way -o is, and

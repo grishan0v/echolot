@@ -247,3 +247,36 @@ def test_every_text_lists_what_stands_on_thread_state():
                  ROOT / "echolot" / "runner.py"):
         flat = _flat(path)
         check(f"{path.name}: io_wait goes silent too", "io_wait" in flat, path)
+
+
+# --- stale counts, commands and keys in README, docs/ and the example (#248) ---
+
+def test_every_lint_command_lints_what_ci_lints():
+    ci = _read(ROOT / ".github" / "workflows" / "checks.yml")
+    check("CI lints action/", "ruff check --output-format=github echolot tests action" in ci, ci)
+    for path in ("CONTRIBUTING.md", ".github/pull_request_template.md", "docs/publishing.md"):
+        text = _read(ROOT / path)
+        check(f"{path}: the same three directories",
+              "ruff check echolot tests action" in text
+              and not re.search(r"ruff check echolot tests(?! action)", text), path)
+
+
+def test_the_example_config_lists_every_runner_and_project_key_the_code_reads():
+    from echolot import runner
+    text = _read(ROOT / "echolot.yml.example")
+    check("project.mapping is there", "# mapping: " in text, text)
+    for knob in runner.RECORDING_KNOBS:
+        check(f"{knob} is among the knobs gradle mode ignores",
+              knob in text.split("# mode: gradle", 1)[1].split("gradle_task", 1)[0], knob)
+    check("the budget points at compare.md", 'docs/compare.md under "There is no performance gate'
+          in " ".join(line.lstrip("# ") for line in text.splitlines()), text)
+
+
+def test_the_comparison_example_has_the_sha_and_detail_compare_writes(tmp_path):
+    from echolot.config import Config
+    config = tmp_path / "echolot.yml"
+    config.write_text("project:\n  process: app\n", encoding="utf-8")
+    text = _read(ROOT / "docs" / "compare.md")
+    sha = re.search(r'"config_sha": "([0-9a-f]+)"', text).group(1)
+    check("as long as Config.sha", len(sha) == len(Config.load(config).sha), sha)
+    check("detail on the row and both sides", text.count('"detail": "com.example.app"') == 3, text)

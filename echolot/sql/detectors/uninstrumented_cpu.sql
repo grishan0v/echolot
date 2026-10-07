@@ -1,6 +1,6 @@
 -- @id: uninstrumented_cpu
 -- @title: Blind spots: threads burning CPU with no instrumentation
--- @why: the ONLY detector that finds a problem inside uninstrumented code.
+-- @why: names a thread that burns CPU with no slice around it.
 --       The agent does not guess — it is handed the fact "thread T ran for
 --       340 ms, zero slices". That is exactly where adding trace{} pays off.
 -- @param: min_running_ms = 50

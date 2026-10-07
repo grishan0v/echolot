@@ -7,7 +7,7 @@ next to it. Change the script or the README, then draw them again:
 
 ```bash
 python docs/assets/render.py                     # writes the sample report and the .svg files here
-python docs/assets/render.py --preview /tmp/pv   # plus two README-like pages, light and dark
+python docs/assets/render.py --preview /tmp/pv   # plus four README-like pages: light and dark, desktop and phone
 ```
 
 The script first writes the README's sample report: what `analyze` prints
