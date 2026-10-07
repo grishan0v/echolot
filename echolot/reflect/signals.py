@@ -49,7 +49,7 @@ from .model import BRIEFS, MAIN, TOOLS, Session, ts_to_epoch
 @dataclass
 class Signal:
     id: str
-    severity: str                 # warn | info | ok
+    severity: str                 # warn | info | ok | skip
     title: str
     why: str
     rows: list[dict[str, Any]] = field(default_factory=list)

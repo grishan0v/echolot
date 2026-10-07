@@ -13,6 +13,8 @@ Layout:
     claude_code.py  the reader for Claude Code transcripts (~/.claude/projects)
     codex.py        the reader for Codex sessions (~/.codex/sessions)
     from_log.py     the reader that needs no transcript: .echolot/log/runs.jsonl
+    facts.py        the derived facts over a session — what the signals and the
+                    report read
     signals.py      the detectors over a normalised session
     render.py       report.json / report.md
     cli.py          `echolot reflect`: which session, and the across-runs summary

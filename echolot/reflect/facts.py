@@ -1,7 +1,9 @@
 """Derived facts over a normalised session.
 
-Everything here is a pure function of the `Session` (plus the config and the
-recorder log): the echolot invocations as a table, the milestones of the
+Almost everything here is a pure function of the `Session` (plus the config
+and the recorder log). Three are not: `tree_check` and `building_the_tool`
+read the checkout, and `match_runs` writes each run's outcome onto the calls
+it matches. What comes out: the echolot invocations as a table, the milestones of the
 protocol, the number of hunt rounds, the cost, the balance of temporary
 instrumentation per file. Signals and the report both read from here, so a
 number appears the same way in both.
@@ -75,8 +77,6 @@ _CONCLUSION_FIELDS = {
 # emphasis, a bracket or a full stop close it.
 _CONFIDENCE = re.compile(
     r"(?:Confidence|Уверенность)\s*[:*]*\s*\**\s*([^\n.*(]{0,60})", re.I)
-# A heredoc body is data, not commands: `cat > x.yml <<EOF … echolot calibrate …`
-# is a config being written, not calibrate being run.
 # A traceback whose first frame is the shell's inline python belongs to the
 # agent's one-liner, not to echolot.
 _TB_FIRST_FRAME = re.compile(r"Traceback \(most recent call last\):\s*File \"([^\"]*)\"")
@@ -1136,9 +1136,10 @@ def config_snapshot(cfg: Config | None) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ gather
 
-# The tool's own package name, as its own build declares it. Read from
-# pyproject rather than hardcoded twice: a rename that misses this line would
-# quietly turn the check below off, and nothing would say so.
+# The tool's own package name, as its own build declares it, matched against
+# the checkout's pyproject. The name is written here, not read from the
+# package: a rename that misses this line would quietly turn the check below
+# off, and nothing would say so.
 _OWN_NAME = re.compile(r"^\s*name\s*=\s*[\"']echolot[\"']", re.M)
 
 
@@ -1206,8 +1207,8 @@ def conclusion(session: Session) -> dict[str, Any] | None:
 
     A subagent's final text was kept and a hunt was judged by it; the main
     context's was not, and for a session that reads an ANR or a report
-    without a hunt that text is the whole result. A `text` that is None
-    means the transcript carried no assistant text at all.
+    without a hunt that text is the whole result. None when the transcript
+    carried no assistant text at all.
     """
     if not session.final_text:
         return None

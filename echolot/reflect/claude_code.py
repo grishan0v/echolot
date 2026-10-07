@@ -39,8 +39,8 @@ from .model import MAIN, Ask, Call, Session, SubAgent, Turn, Usage, clip, ts_to_
 
 AGENT_NAME = "claude-code"
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
-# The subagent's conclusion is kept nearly whole: the six fields are checked
-# against it, and Cleanup and Confidence come last. A 4000-character clip
+# The subagent's conclusion is kept nearly whole: the eight fields are checked
+# against it, and Ruled out, Also measured and Cleanup come last. A 4000-character clip
 # once cut them off and reported them missing. Rendering clips it again.
 FINAL_TEXT_LIMIT = 12000
 # A shell command is kept long enough to see what a python heredoc does at
