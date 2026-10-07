@@ -94,7 +94,7 @@
 --
 -- ## This detector works what the others left
 --
--- Three of the twelve detectors know the names of what they are looking for
+-- Three of the thirteen detectors know the names of what they are looking for
 -- and say so in a `*name_glob*` param. This one knows no name in advance: it
 -- asks a question about shape, so it has to look at every name there is —
 -- which means it also looks at names that belong to somebody else. Twice that

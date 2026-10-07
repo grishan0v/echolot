@@ -23,8 +23,9 @@ from typing import Callable
 from . import sandbox
 
 # Default atrace categories. sched in ftrace_events is mandatory: without it
-# there is no thread_state, and both runnable_starvation and uninstrumented_cpu
-# go silent.
+# there is no thread_state, so runnable_starvation, uninstrumented_cpu and
+# io_wait go silent, anr_risk keeps only its slice source, and the clock
+# weighting in environment.sql loses its input.
 DEFAULT_CATEGORIES = [
     "am", "wm", "gfx", "view", "dalvik", "binder_driver", "res", "database",
 ]
