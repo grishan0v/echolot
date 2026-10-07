@@ -1979,11 +1979,12 @@ def _names_text(args, async_rows: list, pattern, families: int, sections: list,
               f"{len(async_rows)} name(s), shown as thread `{ASYNC_THREAD}`: "
               f"an anchor may name them and this inventory lists them; "
               f"the detectors read thread slices and never see them.\n")
+    by_name = sorted({det for det, kind, _ in _detector_masks() if kind == "name"})
     print(
-        "The 'mask' column covers only detectors that search by slice "
-        "NAME. `main_thread_block`, `runnable_starvation` and "
-        "`uninstrumented_cpu` are structural, names mean nothing to them, "
-        "and a dash here does not mean nobody will find the slice."
+        "The 'mask' column covers only the detectors that search by slice "
+        f"NAME: {', '.join(f'`{d}`' for d in by_name)}. Every other detector "
+        "is structural, names mean nothing to it, and a dash here does not "
+        "mean nobody will find the slice."
     )
     if pattern is not None:
         shown = sum(len(items) for _, items in sections)
@@ -3042,9 +3043,10 @@ def _init_finish(args, target: Path, chosen: list, rule: str | None) -> int:
     while the help promised all three for every run.
     """
     # The environment, briefly, and where to go from here. The doctor lines
-    # are the same three `doctor -q` prints; a failure is said and the exit
-    # code carries it, but the layer is installed regardless — a broken
-    # trace_processor is not a reason to leave the project without the skill.
+    # are the ones `doctor -q` prints, three or four where Codex is used; a
+    # failure is said and the exit code carries it, but the layer is installed
+    # regardless — a broken trace_processor is not a reason to leave the
+    # project without the skill.
     #
     # The trace_processor checked is the one `analyze` would run in the
     # project just installed into, chosen the way `doctor` chooses it: the
@@ -3511,7 +3513,8 @@ def cmd_doctor(args) -> int:
 
 def _doctor_quiet(args, info: dict, project: Path | None = None,
                   origin: str | None = None) -> tuple[int, bool]:
-    """`doctor -q`: three lines, and every failure. Same exit code.
+    """`doctor -q`: three lines (four where Codex is used), and every failure.
+    Same exit code.
 
     For a subagent, a CI step, a `| head`: the full report is ten kilobytes
     of "ok" that a second reader in the same session pays for again. Here
@@ -3836,8 +3839,8 @@ def build_parser() -> argparse.ArgumentParser:
              "environment + self-check on a synthetic trace; exit 0 passed, "
              "1 failed or could not run, 2 trace_processor not downloaded")
     dr.add_argument("-q", "--quiet", action="store_true",
-                    help="three lines and the failures, same exit code — for "
-                         "subagents and CI")
+                    help="three lines (four where Codex is used) and the "
+                         "failures, same exit code — for subagents and CI")
     # Hidden, like status's: read only for `toolchain.tp_binary`, so that the
     # binary doctor vouches for is the one `analyze` runs from here.
     dr.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
@@ -4038,11 +4041,12 @@ def build_parser() -> argparse.ArgumentParser:
                          ".echolot/out next to the config)")
     cp.add_argument("--floor-ms", type=float, default=compare_mod.FLOOR_MS,
                     metavar="MS",
-                    help="movement at or below this many ms is not a row "
+                    help="a move at or below this many ms is steady "
                          f"(default: {compare_mod.FLOOR_MS:g})")
     cp.add_argument("--floor-pct", type=float,
                     default=compare_mod.FLOOR_RATIO * 100, metavar="PCT",
-                    help="and below this share of the earlier value "
+                    help="or at or below this share of the earlier value; "
+                         "the larger floor applies "
                          f"(default: {compare_mod.FLOOR_RATIO * 100:g})")
     cp.set_defaults(func=cmd_compare)
 
@@ -4092,7 +4096,7 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--markers", action="store_true",
                     help="the project's own names, measured")
     rp.add_argument("--wide", action="store_true",
-                    help="do not cut the evidence column")
+                    help="do not cut the location and evidence columns")
     rp.add_argument("--json", action="store_true",
                     help="the same selection as json, rows cut to --top")
     rp.set_defaults(func=cmd_report)
