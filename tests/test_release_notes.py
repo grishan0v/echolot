@@ -148,6 +148,21 @@ def test_detector_is_never_taken_off(tmp_path):
                   files=["docs/detectors.md"]) == []
 
 
+def test_the_merge_reads_the_files_a_pull_request_ended_with():
+    """`detector` comes from the list of files, and a push can change that list.
+
+    The workflow no longer runs on every push — each run waited for one of the
+    account's runners (#331) — so the run at the merge is the one that sees a
+    detector added after the pull request was opened. A pull request closed
+    without merging ships in no release, and its run is skipped.
+    """
+    workflow = _workflow()
+    types = set(workflow[True]["pull_request_target"]["types"])
+    assert {"opened", "edited", "reopened", "closed"} <= types
+    assert "synchronize" not in types
+    assert "merged" in workflow["jobs"]["kind"]["if"]
+
+
 def test_every_label_has_a_section():
     """A label no section names would land under Other, which is no grouping."""
     sections = yaml.safe_load(RELEASE.read_text(encoding="utf-8"))["changelog"]["categories"]

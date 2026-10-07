@@ -14,6 +14,7 @@ sorts it, and which decisions an idea is checked against first.
 ```bash
 pip install -e '.[dev]'
 pytest                       # every check, including the ones doctor runs
+pytest -n auto               # the same on every core, the way CI runs it
 pytest -k uninstrumented     # one detector's claims, by name
 ruff check echolot tests action   # the linter, which CI runs beside pytest
 ```

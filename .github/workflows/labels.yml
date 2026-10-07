@@ -13,6 +13,14 @@ name: labels
 # by hand stays. `detector` goes on when the pull request changes a file in
 # echolot/sql/detectors/, and nothing here takes it off.
 #
+# It runs when a pull request is opened or reopened, when its title is edited,
+# and once more when it is merged. A push in between changes no title, and the
+# merge reads the list of files the pull request ended with, which is the list
+# `detector` is about. A run on every push used to wait for one of the
+# account's twenty runners for five seconds of work, up to a quarter of an
+# hour when a stack of pull requests was pushed at once (#331). A pull request
+# closed without merging ships in no release and is left alone.
+#
 # `pull_request_target` rather than `pull_request`: a pull request from a fork,
 # or from dependabot, runs `pull_request` with a read-only token, and labelling
 # needs write. `pull_request_target` runs this file as it is on main, with a
@@ -23,7 +31,7 @@ name: labels
 
 on:
   pull_request_target:
-    types: [opened, edited, reopened, synchronize]
+    types: [opened, edited, reopened, closed]
 
 permissions: {}
 
@@ -34,6 +42,7 @@ concurrency:
 
 jobs:
   kind:
+    if: github.event.action != 'closed' || github.event.pull_request.merged
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write   # to read the files and set the labels

@@ -49,6 +49,12 @@ jobs:
       # One language failing must not hide what the other found.
       fail-fast: false
       matrix:
+        # No branch rule requires these. A rule that someday does can name
+        # `codeql python` and `codeql actions` directly: the list changes only
+        # when the repository's own languages do. A job that summed the two up
+        # under one name used to sit here for that day, and on every push it
+        # waited up to thirteen minutes for a runner to do three seconds of
+        # work (#331).
         language: ["python", "actions"]
 
     steps:
@@ -65,21 +71,3 @@ jobs:
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
         with:
           category: "/language:${{ matrix.language }}"
-
-  # One context for both languages, for the reason checks.yml gives at length:
-  # a branch rule matches required checks by name, so a rule naming
-  # `codeql python` would have to be edited before a change to the matrix could
-  # merge. Nothing requires this yet — it is here so that requiring it later is
-  # a setting rather than a refactor.
-  #
-  # `if: always()`, because a skipped job is not a passed one.
-  codeql:
-    name: codeql
-    runs-on: ubuntu-latest
-    needs: [analyse]
-    if: always()
-    steps:
-      - name: Every language passed
-        run: |
-          echo "analyse: ${{ needs.analyse.result }}"
-          [ "${{ needs.analyse.result }}" = "success" ] || exit 1

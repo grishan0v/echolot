@@ -10,6 +10,12 @@ name: checks
 # version tag, which is far too late: a tag is irreversible and a PyPI version
 # number can never be reused. The `package` job below moves that check to
 # where it can still stop something.
+#
+# Every job waits for a runner, and the account runs at most twenty at once
+# for all of its workflows together. A stack of pull requests pushed in one go
+# queues behind that limit, and a job that does three seconds of work waits as
+# long as one that does five minutes (#331). So a check that takes seconds is a
+# step in a job that is already running, and a job of its own has to earn it.
 
 on:
   pull_request:
@@ -35,8 +41,15 @@ jobs:
       fail-fast: false
       matrix:
         # The range pyproject.toml claims in its classifiers. Claiming it
-        # without running it is how the claim goes stale.
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        # without running it is how the claim goes stale, so main runs all
+        # five after every merge, before any tag can be cut from it.
+        #
+        # A pull request runs the two ends. The oldest is where new syntax
+        # breaks and the newest is where deprecations land, and five legs on
+        # every push were most of what filled the queue when a stack of pull
+        # requests arrived at once. A break that only 3.11, 3.12 or 3.13 has
+        # shows up on main instead of on the pull request.
+        python: ${{ fromJSON(github.event_name == 'pull_request' && '["3.10", "3.14"]' || '["3.10", "3.11", "3.12", "3.13", "3.14"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -54,6 +67,7 @@ jobs:
           key: tp-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
 
       - name: Install
+        id: install
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e '.[dev]'
@@ -71,13 +85,39 @@ jobs:
       # (`[tool.coverage.report] fail_under`) is a gate, not a report: a drop
       # below the measured baseline should fail the same version it dropped
       # on, not just whichever leg happens to render the summary.
+      #
+      # `-n auto` (pytest-xdist, in the dev extra) runs one worker per core,
+      # four on a hosted runner. Most tests wait on a child process — the CLI,
+      # trace_processor_shell — so the workers overlap well: on a laptop, on
+      # 2026-10-07, the suite took 9:04 on one worker and 2:30 on four, with
+      # the same 1299 tests passing and the same total coverage. pytest-cov
+      # folds what the workers measured into one total before the gate reads
+      # it.
       - name: pytest
-        run: pytest -q --cov=echolot --cov-report=term-missing
+        run: pytest -q -n auto --cov=echolot --cov-report=term-missing
+
+      # Static analysis over the Python. codeql reads the same files for a
+      # different thing — shapes known to be exploitable — and has no opinion
+      # on a name nobody uses. One leg, not every one: an unused import is not
+      # a question about 3.10 versus 3.14. 3.14 because every push runs it.
+      #
+      # ruff comes from the dev extra this leg has just installed, so
+      # `pip install -e '.[dev]'` on a laptop gets it under the same floor
+      # (`ruff>=0.14`) and the rules are the ones in pyproject.toml. A floor
+      # rather than a pin: CI takes the newest ruff above it, so a laptop that
+      # installed a while ago can run an older one.
+      #
+      # It used to be a job of its own, and waited up to thirteen minutes for a
+      # runner to do under a second of work. Here it runs after pytest even
+      # when pytest failed, as long as the install went through: one push
+      # answers both questions.
+      - name: ruff
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.python == '3.14' }}
+        run: ruff check --output-format=github echolot tests action
 
       # The summary and the XML are only worth producing once — the percentage
-      # barely moves between supported Python versions, and five copies of the
-      # same file would be noise. 3.12 is the version `lint` and `package`
-      # already use elsewhere in this file.
+      # barely moves between supported Python versions, and a copy per leg
+      # would be noise. 3.14, the leg every push runs.
       #
       # It runs after a failing pytest too, and that is the point: the run that
       # trips the gate is the one where the missing lines are worth reading.
@@ -85,7 +125,7 @@ jobs:
       # above, and coverage would otherwise apply the threshold from
       # pyproject.toml a second time and paint this step red as well.
       - name: Coverage summary
-        if: always() && matrix.python == '3.12'
+        if: always() && matrix.python == '3.14'
         run: |
           if [ ! -f .coverage ]; then
             echo "no coverage data — pytest did not get that far"
@@ -101,44 +141,20 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage report
-        if: always() && matrix.python == '3.12'
+        if: always() && matrix.python == '3.14'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: ignore
 
-  # Static analysis over the Python. codeql reads the same files for a
-  # different thing — shapes known to be exploitable — and has no opinion on a
-  # name nobody uses. One version, not the matrix: an unused import is not a
-  # question about 3.10 versus 3.14.
-  lint:
-    name: lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: "3.12"
-
-      # From the dev extra, so `pip install -e '.[dev]'` on a laptop gets ruff
-      # under the same floor (`ruff>=0.14`) and the rules are the ones in
-      # pyproject.toml. A floor rather than a pin: CI takes the newest ruff
-      # above it, so a laptop that installed a while ago can run an older one.
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e '.[dev]'
-
-      - name: ruff
-        run: ruff check --output-format=github echolot tests action
-
-  # One context for the matrix and the linter, so the branch rule does not name
-  # Python versions. Required checks are matched by context name: with the matrix
+  # One context for the matrix, so the branch rule does not name Python
+  # versions. Required checks are matched by context name: with the matrix
   # reported directly, a pull request that drops 3.10 would wait forever for a
   # `python 3.10` that is never coming, and the rule would have to be edited
-  # before the change that needs it could merge.
+  # before the change that needs it could merge. The same name is what lets a
+  # pull request run two versions while main runs five: the rule asks for
+  # `checks` either way.
   #
   # `if: always()` is what makes this a gate rather than decoration. Without
   # it the job is skipped when the matrix fails, and a skipped check is not a
@@ -146,23 +162,21 @@ jobs:
   checks:
     name: checks
     runs-on: ubuntu-latest
-    needs: [selfchecks, lint]
+    needs: [selfchecks]
     if: always()
     steps:
-      - name: Every Python version passed, and the linter is happy
+      - name: Every Python version passed, the linter with them
         # `result` on a matrix job is the aggregate: success only when every
         # leg succeeded. Anything else — failure, cancelled, skipped — is not
         # a pass and must not read as one.
         #
-        # lint joins this context rather than getting its own, so it gates
-        # without a branch rule having to be edited — a linter nothing waits
-        # for is decoration. `package` keeps the separate context it already
-        # had; moving that one is a different decision.
+        # ruff is a step of the 3.14 leg, so the linter gates through this
+        # context without a branch rule having to be edited — a linter nothing
+        # waits for is decoration. `package` keeps the separate context it
+        # already had; moving that one is a different decision.
         run: |
           echo "selfchecks: ${{ needs.selfchecks.result }}"
-          echo "lint:       ${{ needs.lint.result }}"
           [ "${{ needs.selfchecks.result }}" = "success" ] || exit 1
-          [ "${{ needs.lint.result }}" = "success" ] || exit 1
 
   package:
     name: package
