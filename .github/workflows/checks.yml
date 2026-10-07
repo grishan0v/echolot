@@ -57,7 +57,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      # trace_processor is ~40 MB, fetched on first use and verified against a
+      # trace_processor is about 14 MB, fetched on first use and verified against a
       # SHA-256 pinned by the perfetto package. Keyed on pyproject.toml because
       # that is where the pin lives: change the pin, get a different binary.
       - name: Cache trace_processor
@@ -318,7 +318,7 @@ jobs:
       # cannot catch a name dropped from it.
       #
       # Cached under the same key `selfchecks` uses: `doctor` below downloads
-      # the same pinned trace_processor_shell, and a second unrelated 40 MB
+      # the same pinned trace_processor_shell, and a second unrelated 14 MB
       # fetch would prove nothing this key doesn't already cover.
       - name: Cache trace_processor
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0

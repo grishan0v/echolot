@@ -37,10 +37,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# How far back the lookup goes. A nightly that has failed twenty nights running
-# has a bigger problem than a missing comparison.
+# How far back the lookup goes: the branch's latest twenty successful runs.
+# Twenty in a row without a kept report mean the artifact's name or its
+# retention is wrong, and looking further would not find one.
 RECENT_RUNS = 20
-# GitHub cuts a comment at 65,536 characters; the job summary holds the rest.
+# GitHub refuses a comment over 65,536 characters, so the body is cut here,
+# with room left for the marker; the job summary holds the rest.
 COMMENT_LIMIT = 60_000
 
 

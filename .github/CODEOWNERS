@@ -1,7 +1,6 @@
-# Мейнтейнеры echolot.
-# Любой PR в main требует одобрения от кого-то из этого списка.
-# Чтобы добавить мейнтейнера: допишите @логин в строку ниже.
-# Человек считается мейнтейнером только если у него есть доступ на запись
-# в репозиторий — иначе GitHub его здесь игнорирует.
+# echolot maintainers.
+# A pull request into main needs approval from someone listed here.
+# To add a maintainer, append their @login to the line below; GitHub ignores
+# anyone without write access to the repository.
 
 * @grishan0v

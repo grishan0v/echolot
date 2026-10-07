@@ -2,8 +2,8 @@ name: codeql
 
 # Static analysis over the Python and over the workflows themselves.
 #
-# What this is worth, stated plainly so the badge is not read as more than it
-# is: CodeQL looks for shapes known to be exploitable — a path built from
+# What this is worth, stated plainly so a green run is not read as more than
+# it is: CodeQL looks for shapes known to be exploitable — a path built from
 # unvalidated input, a subprocess assembled by string, a workflow expression
 # interpolated into a shell. It finds patterns. It does not find intent, and
 # code written to look ordinary will pass it. A green run means the known

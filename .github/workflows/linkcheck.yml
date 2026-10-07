@@ -1,8 +1,8 @@
 name: linkcheck
 
-# README.md, SECURITY.md and docs/**/*.md are the documentation this
-# repository ships to people; everything else is code the other workflows
-# already cover. Apart from the anchors README.md and docs/ point at among
+# README.md, SECURITY.md, CONTRIBUTING.md and docs/**/*.md are the
+# documentation this repository ships to people; everything else is code the
+# other workflows already cover. Apart from the anchors README.md and docs/ point at among
 # themselves, which tests/test_docs.py checks, a link inside them going dead
 # is not caught by `pytest` or `ruff` — nothing exercises a URL until
 # something tries to follow it — so this workflow is that: pull requests and
@@ -48,9 +48,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      # lychee.toml carries the exclude list — the shields.io badges, the two
-      # workflow-status images, and PyPI's account pages behind a login — and
-      # the reasoning for each entry; nothing here overrides it. `args` only
+      # lychee.toml carries the exclude list — the shields.io badges, the
+      # workflow-status badge, PyPI's account pages behind a login, and the
+      # README's pictures on raw.githubusercontent.com — and the reasoning
+      # for each entry; nothing here overrides it. `args` only
       # narrows which files get read. Left out, the action reads every
       # Markdown, HTML and reStructuredText file in the checkout; this
       # workflow's job is the Markdown a reader is pointed at, not what the
