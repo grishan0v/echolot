@@ -38,7 +38,7 @@ exclude = [
   # load. A 429 here is about shared traffic, not a broken link.
   '^https://img\.shields\.io/',
 
-  # The two workflow-status badges: `badge.svg?branch=main` is regenerated
+  # The workflow-status badge: `badge.svg?branch=main` is regenerated
   # from whatever the latest run on that branch happens to be, not a fixed
   # asset. There is no "broken" for this checker to find here, only today's
   # colour.

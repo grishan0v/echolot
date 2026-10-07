@@ -24,7 +24,9 @@ name: workflowlint
 # that binary — a run over unchanged files repeats the previous one exactly.
 # Those tables move when the pin moves, and the pin moves in a dependabot pull
 # request that edits a file under .github/workflows, which the filter below
-# already catches.
+# already catches. The root action.yml is in the filter too: the workflow that
+# calls the action with `uses: ./` is checked against that file's inputs, so a
+# pull request that changes only the inputs has to start a run.
 
 on:
   pull_request:
@@ -32,11 +34,13 @@ on:
     paths:
       - ".github/workflows/*.yml"
       - ".github/workflows/*.yaml"
+      - "action.yml"
   push:
     branches: [main]
     paths:
       - ".github/workflows/*.yml"
       - ".github/workflows/*.yaml"
+      - "action.yml"
 
 permissions:
   contents: read
