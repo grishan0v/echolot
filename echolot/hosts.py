@@ -399,7 +399,7 @@ def _colour(stream) -> tuple[str, str, str]:
 def interactive(stream) -> bool:
     """Ask only when there is certainly somebody there to answer.
 
-    `echolot init` is run by agents, and by `doctor`'s own self-check five
+    `echolot init` is run by agents, and by `doctor`'s own self-check many
     times over into temporary directories. A prompt appearing there is a hang,
     not a question — so this errs heavily towards silence: a real terminal on
     both ends, and not a CI runner.

@@ -258,7 +258,7 @@ kept current beside a chosen plugin says so on its line.
 
 The question is asked only when the CLI parser turned it on **and** there is a
 terminal at both ends, and never under `CI`. `init` is run by agents, and by
-`doctor`'s own self-check five times over into temporary directories: a prompt
+`doctor`'s own self-check many times over into temporary directories: a prompt
 appearing there is a hang rather than a question, so both gates are pinned by
 checks.
 

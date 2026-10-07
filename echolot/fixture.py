@@ -148,16 +148,6 @@ SF_FRAMES = [
 # Screen.firstFrame (end), i.e. [100, 1105].
 
 SLICES = {
-    # A block that outlives the recording: opened 60 ms before the window
-    # closes and never ended, which is what ART's contention slice looks like
-    # when the lock is still held when tracing stops. Read as a slice of no
-    # length — which is what a raw `dur = -1` becomes under MAX(dur, 0) — the
-    # longest block in the trace disappears from every detector at once. On a
-    # real freeze this was twenty seconds of it.
-    #
-    # On its own thread rather than on main: the point is how the pipeline
-    # reads an open slice, and a window-long block on the main thread would
-    # rewrite half the other findings to prove it.
     # --- work reached from two places, and three shapes that only look like it -
     #
     # The planted finding is `fill_presets`: the same named work entered once
@@ -223,6 +213,16 @@ SLICES = {
             ("AGENTTMP_parse_json", 1054, 20, []),
         ]),
     ],
+    # A block that outlives the recording: opened 60 ms before the window
+    # closes and never ended, which is what ART's contention slice looks like
+    # when the lock is still held when tracing stops. Read as a slice of no
+    # length — which is what a raw `dur = -1` becomes under MAX(dur, 0) — the
+    # longest block in the trace disappears from every detector at once. On a
+    # real freeze this was twenty seconds of it.
+    #
+    # On its own thread rather than on main: the point is how the pipeline
+    # reads an open slice, and a window-long block on the main thread would
+    # rewrite half the other findings to prove it.
     TID_STUCK: [
         ("Lock contention on a monitor lock (owner tid: 4444)", 1045, None, []),
     ],
@@ -349,9 +349,9 @@ SLICES = {
             ("activityResume", 866, 3, []),
 
             # --- main_thread_outlier -----------------------------------
-            # A group with a history and one occurrence far outside it. Six
-            # inflates of 4 ms and one of 44: 11x the median, and past the
-            # 40 ms floor. Nothing about the group's SUM is remarkable, which
+            # A group with a history and one occurrence far outside it. Five
+            # inflates of 4 ms and one of 44, six in all: 11x the median, and
+            # past the 40 ms floor. Nothing about the group's SUM is remarkable, which
             # is the point — main_thread_block sees 64 ms and shrugs.
             *[("inflate", 322 + i * 6, 4, []) for i in range(5)],
             ("inflate", 352, 44, []),
@@ -463,22 +463,25 @@ ASYNC_SLICES = [
 R, S, D = 0, 1, 2
 
 SCHED = [
-    # main: two chunks, both deliberately crossing the window bounds
-    # [100, 1105]. The first starts BEFORE the window opens, the second ends
-    # AFTER it closes. This checks whether context.sql clips intervals to the
-    # window or merely filters them by their start point.
+    # main: four stretches on CPU 0, the first and the last deliberately
+    # crossing the window bounds [100, 1105]. The first starts BEFORE the
+    # window opens, the last ends AFTER it closes. This checks whether
+    # context.sql clips intervals to the window or merely filters them by
+    # their start point.
     #
-    # The first chunk is cut in two by 60 ms of io_wait at 200: the main
-    # thread waits for a block device, which is the headline case of the
-    # `io_wait` detector and the one that costs a user a visibly frozen start.
-    # It stays a single busy stretch for `anr_risk`, which counts D as busy —
+    # The first two are 60 ms of io_wait apart, at 200: the main thread waits
+    # for a block device, which is the headline case of the `io_wait`
+    # detector and the one that costs a user a visibly frozen start. It stays
+    # a single busy stretch for `anr_risk`, which counts D as busy —
     # correctly, since a thread parked in the kernel is not serving the looper
     # either.
     (0, TID_MAIN, 50, 200, D),
     (0, TID_MAIN, 260, 600, S),
     (0, TID_MAIN, 610, 800, S),
-    # An idle moment inside the scenario: 60 ms asleep with no slice open
-    # below the anchor. anr_risk must break its stretch here — the looper
+    # An idle moment inside the scenario: the main thread sleeps 800..860,
+    # and only 845..850 of it has nothing open below the anchor — the rest is
+    # covered by AppStart's children (the GC lock contention, Steady_heavy,
+    # the binder reply). anr_risk must break its stretch there — the looper
     # reached the queue, and a pending event would have been served. The
     # anchor `AppStart` spans right across it at depth 0, which is why that
     # depth is not evidence of anything.
@@ -526,10 +529,13 @@ SCHED = [
     # in state D. Nothing else in the fixture can see this: there is no slice,
     # no CPU time, and `uninstrumented_cpu` is silent by construction because
     # a thread waiting on the disk burns nothing.
-    (1, TID_DISK, 150, 160, D),
-    (1, TID_DISK, 310, 320, D),
-    (1, TID_DISK, 410, 420, D),
-    (1, TID_DISK, 480, 490, S),
+    #
+    # On CPU 8, at the same 1 GHz as CPU 1: the worker holds CPU 1 over
+    # 200..350 and 400..550, and one core runs one thread at a time.
+    (8, TID_DISK, 150, 160, D),
+    (8, TID_DISK, 310, 320, D),
+    (8, TID_DISK, 410, 420, D),
+    (8, TID_DISK, 480, 490, S),
 
     # Negative control: OtherBlocked spends 400 ms in the same D state, and
     # the kernel does NOT call it io_wait. Uninterruptible sleep is not the
@@ -569,7 +575,7 @@ BLOCKED_REASON = [
 #     reader that filters samples by the window first would find no frequency
 #     for the start of the scenario and report the whole run unmeasured;
 #   * CPU 0 doubles at ms 600, mid-window, and CPU 0 is where the main thread
-#     spends 935 of its ms. The weighted mean has to move with it;
+#     spends 875 of its ms in the window. The weighted mean has to move with it;
 #   * CPU 9 sits at 300 MHz and nothing of ours ever runs there. It is the
 #     negative control for the weighting: a plain average across CPU tracks
 #     would drag the answer down to 930 MHz and report a minimum of 300, and
@@ -984,7 +990,7 @@ def build(frames: bool = True, environment: bool = True,
     for a config that asked and a sampler that never ran, `"minified"` for
     samples that arrived from a build R8 minified, or `None` for a recording
     that never asked. `None` by default, because that is the default
-    recording, and the sample report in the README is this one.
+    recording. (The README's sample report comes from echolot/demo.py.)
     """
     builder = TraceProtoBuilder()
     process_tree(builder, [(APP_PID, APP_NAME, THREADS),
