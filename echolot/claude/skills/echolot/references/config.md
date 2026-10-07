@@ -31,7 +31,7 @@ scenario:
     _evidence: "probe: top slices, 245 ms on main"
   end:
     name: "Choreographer#doFrame*"
-  budget_ms: 2500              # not read by the code yet, see below
+  budget_ms: 2500              # not read by the code, see below
 
 runner:
   mode: launch                 # launch | command | gradle

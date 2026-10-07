@@ -605,7 +605,7 @@ def session(f):
                     (128, f"analyze · {f['fired']} of {f['detectors']} detectors fired · "
                           f"window {round(f['window_ms']):,} ms", t["fg"], 400)]),
         (4.8, 220, [(28, "round 2", t["dim"], 400),
-                    (128, "echolot mark --apply · 6 markers · recorded again · compare",
+                    (128, "echolot mark --apply · 3 markers · recorded again · compare",
                      t["fg"], 400)]),
         (5.6, 252, [(28, "round 3", t["dim"], 400),
                      (128, f"markers around {f['lock_class']} · the move holds",

@@ -280,7 +280,7 @@ _ART writes a "Lock contention on ..." slice with the owner's tid — ready-made
 <sub>detector `monitor_contention`, params: {'min_block_ms': 8, 'max_total_ms': 50, 'name_glob': 'Lock contention on a monitor lock*', 'name_glob_alt': 'monitor contention with owner*'}</sub>
 
 ## Blind spots: threads burning CPU with no instrumentation
-_the ONLY detector that finds a problem inside uninstrumented code. The agent does not guess — it is handed the fact "thread T ran for 340 ms, zero slices". That is exactly where adding trace{} pays off._
+_names a thread that burns CPU with no slice around it. The agent does not guess — it is handed the fact "thread T ran for 340 ms, zero slices". That is exactly where adding trace{} pays off._
 
 | Where | Runs | N | Total, ms | Instrumented, ms | Evidence |
 |---|---|---|---|---|---|
@@ -352,8 +352,9 @@ throttled between the rounds, is named above the table. See
 | `io_wait` | **threads the kernel parked waiting for a block device** |
 
 `uninstrumented_cpu`, `io_wait` and `frame_jank` find a problem where nobody
-wrote a `trace{}` call. What each detector sees is in
-[Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md), and writing your own in
+wrote a `trace{}` call, as [Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md)
+explains. What every detector sees, with its default thresholds, is what
+`echolot explain` prints, and writing your own is in
 [Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md).
 
 ## Commands
@@ -368,7 +369,7 @@ only the agent has. The pipeline — `collect`, `analyze`, `compare` — is unde
 | command | what it does |
 |---|---|
 | `echolot` | where this project stands, and the next step |
-| `echolot init` | install or update the `.claude/` layer; .gitignore, and checks the environment. With the plugin, its door runs `echolot init --for plugin`, which leaves `.claude/` out. `--private` keeps everything it writes out of git, for this clone only |
+| `echolot init` | install or update the `.claude/` layer, add echolot's two lines to `.gitignore`, and check the environment. With the plugin, its door runs `echolot init --for plugin`, which leaves `.claude/` out. `--private` keeps everything it writes out of git, for this clone only |
 | `echolot hunt "<what regressed>"` | open an investigation — see [The investigation](#the-investigation) |
 | `echolot doctor` | environment + self-check on a synthetic trace; exit 0 when every check passes, 1 when one fails or the self-check cannot run, 2 when trace_processor cannot be downloaded; `-q` for three lines (four where Codex is used) |
 

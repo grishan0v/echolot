@@ -161,7 +161,7 @@ some runs and not others.
 
 The fixture reads as a test because it is one: a problem planted for every
 detector, under names that say so — `DiskWaiter`, `LockWaiter`. A sample
-report written from it would show the reader eleven findings and a thread
+report written from it would show the reader twelve findings and a thread
 called `LockWaiter`. `echolot/demo.py` is the other kind of synthetic trace,
 built with the same packet writers: the cold start of an app that does not
 exist, a little over a second long, with the five findings a cold start like
@@ -197,7 +197,7 @@ The detectors were validated against a synthetic trace — 154 checks inside
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
 
-Six are newer than that hardware round. `io_wait`, `anr` and `repeated_work`
+Seven are newer than that hardware round. `io_wait`, `anr` and `repeated_work`
 have each been run on real traces since — fifteen cold starts of a freshly
 installed app on an A51, an ANR raised on purpose on an Android 13 phone, the
 traces of the hunts that found a duplicate — and their headers say what those
@@ -209,7 +209,11 @@ frame statistics yet. `main_thread_outlier` was written for a miss recorded on
 an A51 and has so far answered only the fixture. `anr_risk` is silent on the
 fixture by construction: its bar is the platform's five seconds, and the
 fixture is a one-second cold start. Its checks run it there with the bar
-lowered, and one holds it to silence at the bar it ships with.
+lowered, and one holds it to silence at the bar it ships with. `app_init` was
+built on real cold starts on Android 13 devices, read beside AOSP's
+`handleBindApplication`: what has a name in the stretch it reads —
+androidx.startup's Initializers, Firebase, ART's class sections — is listed
+in its header from those traces.
 
 ## Why the trace_processor version is pinned
 
@@ -353,7 +357,7 @@ trace_processor … (custom binary from toolchain.tp_binary, pin bypassed)
 With the flag, each of them names `--tp-binary` instead; with neither, there
 is no mark at all. `report.json` keeps the same under `toolchain`: `source` is
 `pinned`, `--tp-binary` or `toolchain.tp_binary`, and `binary` is the path
-that ran.
+of a custom binary, `null` for the pinned one.
 
 ### What the pin does not solve
 

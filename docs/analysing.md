@@ -195,7 +195,7 @@ which of those modules actually burns CPU. And where the first markers go —
 the entry points, from the manifest and the SDK, with a source on every row
 — is `echolot mark`, in [mark.md](mark.md).
 
-## Three detectors that need no instrumentation
+## Detectors for code nobody traced
 
 Three of the detectors find a problem where nobody wrote a `trace{}` call,
 which makes them the ones to read first on a project with none.
@@ -303,7 +303,7 @@ The Markers table folds nothing at all.
 
 `report.json` is the contract, and it is not the thing to read whole.
 `echolot report` prints one view of a report already on disk and writes
-nothing:
+nothing but its own line in `.echolot/log/runs.jsonl`:
 
 ```bash
 echolot report                                 # what fired: one line per detector

@@ -410,8 +410,9 @@ def ahead(project: Path) -> dict | None:
 
     So the name is read first, before any file is compared. A newer release
     wrote the layer: this one writes nothing and says to upgrade. That is
-    also the only news of a newer release echolot can give, since it makes
-    no network calls: a teammate's commit is what brings it.
+    also the only news of a newer release echolot can give, since it never
+    checks for one — its only download is the pinned trace_processor, once —
+    and a teammate's commit is what brings it.
 
     A name that does not read as a version — a hand edit, a spelling this
     release does not know — cannot be put in order with this one, and is
