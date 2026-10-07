@@ -220,8 +220,10 @@ different function than the frame names, a `return` in the body, a one-line
 body. Show the reasons rather than working around them.
 
 To measure a freeze rather than read about one, record long enough for
-`anr_risk` and `anr` to see it: `duration_ms: 12000` does not hold a
-five-second freeze plus the five the system waits before declaring anything.
+`anr_risk` and `anr` to see it: the seconds until the freeze starts, plus the
+five an unanswered input event is given before the system declares an ANR,
+plus a few for it to write the record. A freeze eight seconds in needs about
+sixteen, past the default `duration_ms: 12000`.
 
 ## Reading the report
 

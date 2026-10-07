@@ -316,7 +316,7 @@ goes away. Absent below four runs.
                   "values": [ … ], "count": 1, "runs": "5/5" },
       "after":  { "self_ms": 883.4, "min": 843.4, "max": 923.4,
                   "values": [ … ], "count": 1, "runs": "5/5" },
-      "delta_ms": 871.3, "ratio": 73.0,
+      "delta_ms": 871.3, "ratio": 73.01,
       "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3,
                  "resolves_ms": 40.0, "runs_needed": null },
       "holds": true }

@@ -33,7 +33,10 @@ a host that does not list this skill, and the loop's guide is the subagent's.
    `echolot collect -c echolot.yml -n 5`, or `-n 1` first after a change to
    the runner config, as `echolot guide hunt` says.
 4. **Hand the loop to a subagent that starts with none of this conversation**,
-   with this brief as its first message, filled in:
+   with this brief as its first message, filled in. `#<n>` is `opened #<n>`,
+   or the `→` row of `echolot hunt --list`; `Thresholds:` comes from the
+   `thresholds` column of `echolot report`: calibrated on the runs that hold
+   the regression means `--defaults`.
 
    ```text
    Run `echolot guide loop` first and follow it: it is your guide to the loop.

@@ -2,6 +2,8 @@
 
 `echolot collect` does this for you. The commands below are what it runs, and
 what to fall back on when you need something the runner does not cover yet.
+Run them as a script: a step that fails stops it, as it stops `collect`,
+rather than pulling a trace an earlier run left on the device.
 
 ## Cold start
 
@@ -9,7 +11,8 @@ what to fall back on when you need something the runner does not cover yet.
 PKG=com.example.app
 ACT=$(adb shell cmd package resolve-activity --brief $PKG | tail -1)
 
-cat > /tmp/trace.cfg <<'EOF'
+# Unquoted, so that $PKG below is the package set above.
+cat > /tmp/trace.cfg <<EOF
 buffers: { size_kb: 131072 fill_policy: DISCARD }
 data_sources: {
   config {
@@ -33,7 +36,7 @@ data_sources: {
       atrace_categories: "binder_driver"
       atrace_categories: "res"
       atrace_categories: "database"
-      atrace_apps: "com.example.app"
+      atrace_apps: "$PKG"
     }
   }
 }
@@ -52,8 +55,9 @@ duration_ms: 12000
 EOF
 
 adb shell am force-stop $PKG
+adb shell rm -f /data/misc/perfetto-traces/t.pftrace
 adb shell perfetto -c - --txt -o /data/misc/perfetto-traces/t.pftrace \
-    --background-wait < /tmp/trace.cfg
+    --background-wait < /tmp/trace.cfg || exit 1
 adb shell am start -W -n $ACT
 adb shell 'while pidof perfetto > /dev/null; do sleep 0.5; done'
 adb pull /data/misc/perfetto-traces/t.pftrace ./

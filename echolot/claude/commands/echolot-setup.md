@@ -114,7 +114,10 @@ start times, so the question names none.
 1. **Which scenario** are we analysing (from the benchmarks found, or cold start)
 2. **What counts as the end** of the scenario — the only genuinely semantic
    question, not derivable from the trace
-3. **The budget** — propose `baseline * 1.1`
+3. **The budget** — `scenario.budget_ms`, the time the human expects the
+   scenario to take. No command reads it: it is a note for whoever reads the
+   config next, and one probe trace is no baseline to derive it from, so take
+   the human's number or leave the key out
 4. **May we write into the code** for temporary instrumentation, and where
 
 And which process, when the probe shows several plausible ones: a fifth
