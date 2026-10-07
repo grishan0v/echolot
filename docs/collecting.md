@@ -269,7 +269,8 @@ it at: the same code on a lower clock takes longer, and `compare` without
 these numbers reports that as a regression. With them it says the clock moved
 instead. `runner.environment: false` leaves them out for a device whose buffer
 cannot afford them, and the report then says the device state was not
-recorded — never that it held steady.
+recorded — never that it held steady. `io_wait` goes silent as well: the disk
+flag it reads comes from `sched/sched_blocked_reason`, one of these events.
 
 `power/cpu_idle` is deliberately not in that list. It fires on every idle
 transition on every core, which is the largest source of events on the page,

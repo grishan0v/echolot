@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 import os
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -393,9 +394,14 @@ def _(report):
     env = bare["environment"]
     assert env["missing"] == ["cpu", "memory", "thermal"], env
     assert env["cpu"] is None and env["thermal"] is None, env
-    # And the rest of the report is unaffected: platform state is context, and
-    # its absence must not cost a single finding.
-    assert bare["summary"]["fired_ids"] == report["summary"]["fired_ids"], (
+    # The rest of the report is unaffected: platform state is context, and its
+    # absence costs one finding only. `io_wait` reads the disk flag from
+    # `sched/sched_blocked_reason`, one of the events such a recording leaves
+    # out, so it goes silent; every other detector fires as before.
+    io = next(d for d in bare["detectors"] if d["id"] == "io_wait")
+    assert not io["rows"] and not io.get("error"), io
+    assert bare["summary"]["fired_ids"] == [
+        d for d in report["summary"]["fired_ids"] if d != "io_wait"], (
         bare["summary"]["fired_ids"], report["summary"]["fired_ids"])
 
 
@@ -542,6 +548,14 @@ def _(report):
     # 'Lock contention on GC lock' is an ART-internal lock with no application
     # code behind it. The old '*ock contention*' mask dragged it in; after the
     # narrowing against a live trace (see the detector header) it must not.
+    #
+    # The evidence alone does not show it: under the wide mask the 20 ms GC
+    # wait joins the main thread's row, and `detail` still names the longest
+    # block, the 30 ms one. The row's own count and total do.
+    main = [r for r in rows(report, "monitor_contention")
+            if r["location"] == "m.example.app"]
+    assert len(main) == 1 and (main[0]["count"], main[0]["total_ms"]) == (2, 42.0), (
+        f"the main thread's row took in the GC lock's wait: {main}")
     details = [r["detail"] for r in rows(report, "monitor_contention")]
     assert not any("GC lock" in d for d in details), (
         f"over-matching on runtime locks is back: {details}"
@@ -928,12 +942,29 @@ def _(report):
 
 @check("uninstrumented_cpu: coverage counts nested slices only once")
 def _(report):
-    # main: 875 ms of Running inside the window, with the AppStart slice
-    # covering the whole window on top. Adding parent to children would exceed
-    # everything the thread ever did. The thread is not blind either way, but
-    # the arithmetic has to be honest or on a real trace it will mask a genuine
-    # blind spot.
-    assert "m.example.app" not in locations(report, "uninstrumented_cpu")
+    """main: 875 ms of Running inside the window, with the AppStart slice
+    covering the whole window on top. Adding parent to children would exceed
+    everything the thread ever did. The arithmetic has to be honest or on a
+    real trace it will mask a genuine blind spot.
+
+    Every thread with nested slices is a negative control, so the shipped
+    report cannot show it: counted twice, their coverage only rises, and they
+    stay out of the rows either way. With the bar above 100% every thread is
+    listed, and the numbers can be read. Costs one more pass over the fixture.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        every = _analyze(trace, Config(FIXTURE_CONFIG), cli_overrides={
+            "uninstrumented_cpu": {"max_covered_pct": 101}})
+    by_thread = {r["location"]: r for r in rows(every, "uninstrumented_cpu")}
+    main = by_thread.get("m.example.app")
+    assert main and main["covered_ms"] == main["total_ms"] == 875.0, (
+        "the main thread's slices nest; counted once they cover its 875 ms "
+        f"on a CPU exactly: {main}")
+    heap = by_thread.get("HeapTaskDaemon")
+    assert heap and heap["covered_ms"] == 80.0, (
+        f"HeapTaskDaemon: 80 ms of slices over 100 ms on a CPU: {heap}")
 
 
 # --- calibration -----------------------------------------------------------
@@ -1111,7 +1142,8 @@ def _(report):
         started = time.monotonic()
         try:
             runner.run_command(
-                f"(sleep 1; touch {sentinel}) & sleep 30", timeout=0.4,
+                f"(sleep 1; touch {shlex.quote(str(sentinel))}) & sleep 30",
+                timeout=0.4,
                 knob="runner.duration_ms")
         except runner.RunnerError as e:
             assert "still running after 0.4s" in str(e), e
@@ -1428,11 +1460,13 @@ def _(report):
     # token — but on its own track types rather than a thread track, so _slice
     # cannot see it. If that ever changes, main_thread_block starts reporting
     # rows called "1", "2", "3".
-    for det in ("main_thread_block", "gc_pressure", "monitor_contention",
-                "binder_txn", "uninstrumented_cpu"):
-        for row in rows(report, det):
-            assert not str(row["location"]).isdigit(), \
-                f"a frame token surfaced in {det}: {row}"
+    #
+    # Only main_thread_block can show it this way: binder_txn,
+    # monitor_contention and uninstrumented_cpu put the thread's name in
+    # `location`, and gc_pressure's masks match no string of digits.
+    for row in rows(report, "main_thread_block"):
+        assert not str(row["location"]).isdigit(), \
+            f"a frame token surfaced in main_thread_block: {row}"
 
 
 @check("frame_jank: a trace without a frame timeline is silence, not an error")
@@ -2215,8 +2249,10 @@ def _(report):
     assert first["count"] == 1 and first["total_ms"] == 60.0, first
     assert first["self_ms"] == 8.0, f"self time is the difference: {first}"
     assert first["detail"] == "SeedWorker", first
-    # The one-level-too-deep marker is a row too, three times in one wrapper.
-    assert rows["AGENTTMP_insert_preset"]["count"] >= 3, rows["AGENTTMP_insert_preset"]
+    # The one-level-too-deep marker is a row too, three times in each of two
+    # wrappers: six occurrences, 52 ms.
+    preset = rows["AGENTTMP_insert_preset"]
+    assert (preset["count"], preset["total_ms"]) == (6, 52.0), preset
     # Nothing but the prefix, since this config lists no domains.
     assert all(n.startswith("AGENTTMP_") for n in rows), sorted(rows)
     assert m["absent"] == [], m["absent"]
@@ -2321,13 +2357,24 @@ def _sample_repo(root: Path) -> None:
         "    }\n"
         "}\n", encoding="utf-8")
     # A benchmark reading the marker is not the app writing it, and a test
-    # faking it is not either.
-    bench = root / "app/src/androidTest/java"
+    # faking it is not either. The benchmark is a macrobenchmark module, whose
+    # code lives in `src/main` where the scan does look, so the rule that
+    # keeps `TraceSectionMetric` out is what holds it back; the fake sits in
+    # `androidTest`, which the scan skips whole.
+    (root / "benchmark").mkdir()
+    (root / "benchmark/build.gradle.kts").write_text("", encoding="utf-8")
+    bench = root / "benchmark/src/main/java"
     bench.mkdir(parents=True)
     (bench / "Bench.kt").write_text(
+        "package benchmark\n"
+        "import feature.collection.Marks\n"
+        "val metrics = listOf(TraceSectionMetric(Marks.LOAD))\n",
+        encoding="utf-8")
+    fake = root / "app/src/androidTest/java"
+    fake.mkdir(parents=True)
+    (fake / "Fake.kt").write_text(
         "package app\n"
         "import feature.collection.Marks\n"
-        "val metrics = listOf(TraceSectionMetric(Marks.LOAD))\n"
         "fun fake() { AppTraces.start(Marks.LOAD) }\n",
         encoding="utf-8")
 
@@ -3102,27 +3149,30 @@ def _(report):
 
 @check("merging repeats: median, not mean and not maximum")
 def _(report):
+    # Three runs, one of them an outlier: 120, 120 and 900 ms. The median is
+    # 120, the mean 380 and the maximum 900, so each of the three readings
+    # gives a different number. With two runs the median and the mean are
+    # the same number, and a check of two could not tell them apart.
     import copy
     from .report import aggregate
-    first, second = copy.deepcopy(report), copy.deepcopy(report)
-    second["trace"] = "second"
-    for d in second["detectors"]:
+    runs = [copy.deepcopy(report) for _ in range(3)]
+    runs[2]["trace"] = "third"
+    for d in runs[2]["detectors"]:
         if d["id"] != "main_thread_block":
             continue
         for r in d["rows"]:
             if r["location"] == "collection_mapping":
-                r["self_ms"] = 240.0        # twice as costly in the second run
-        d["rows"].append({"location": "flaky_once", "count": 1,
-                          "self_ms": 999.0, "total_ms": 999.0, "detail": "—"})
+                r["self_ms"] = 900.0        # the one run that went wrong
 
-    merged = aggregate([first, second])
+    merged = aggregate(runs)
     rows = {r["location"]: r for r in next(
         d for d in merged["detectors"]
         if d["id"] == "main_thread_block")["rows"]}
 
-    assert merged["runs"] == 2, merged["runs"]
-    assert rows["collection_mapping"]["self_ms"] == 180.0, (
-        f"the median of 120 and 240: {rows['collection_mapping']}"
+    assert merged["runs"] == 3, merged["runs"]
+    assert rows["collection_mapping"]["self_ms"] == 120.0, (
+        f"the median of 120, 120 and 900 — not 380, the mean, nor 900: "
+        f"{rows['collection_mapping']}"
     )
 
 
@@ -3278,16 +3328,21 @@ def _(report):
 @check(".claude/ layer: every part of the template is present")
 def _(report):
     import json as _json
-    from .layer import CLAUDE_DIR
+    from .layer import CLAUDE_DIR, guide_topics
     required = [
         "skills/echolot/SKILL.md",
         "agents/perf-hunter.md",
         "commands/echolot-setup.md",
         "commands/echolot-hunt.md",
+        "commands/echolot-reflect.md",
         "settings.json",
     ]
     for rel in required:
         assert (CLAUDE_DIR / rel).exists(), f"the template has no {rel}"
+    # And every file `echolot guide` prints from, so the next topic or command
+    # is covered without editing the list above.
+    for topic, path in guide_topics().items():
+        assert path.is_file(), f"`echolot guide {topic}` reads {path}, which is missing"
     # A broken settings.json quietly removes the permissions, and the agent
     # starts asking for confirmation on every call.
     _json.loads((CLAUDE_DIR / "settings.json").read_text(encoding="utf-8"))
@@ -3537,7 +3592,15 @@ def _(report):
     import contextlib
     import io
     from .main import cmd_init
-    from .state import NEXT_KINDS, next_kind, next_step, project_state
+    from .state import NEXT_KINDS, next_step, project_state
+    from .state import next_kind as decide
+    produced: set[str] = set()
+
+    def next_kind(st):
+        kind = decide(st)
+        produced.add(kind)
+        return kind
+
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
         # nothing here yet: install the layer
@@ -3606,10 +3669,18 @@ def _(report):
         hunt_mod.touch(project, analyze=True)
         assert next_kind(project_state(project)) == "hunt", \
             "the loop must never be interrupted by the choice"
-        # every kind the skill switches on is one the decision can produce
-        assert set(NEXT_KINDS) >= {"upgrade", "init", "init-force",
-                                   "fix-settings", "doctor", "setup",
-                                   "fix-config", "resume-or-new", "hunt"}
+    # Every kind the skill switches on is one the decision produces, and the
+    # decision produces nothing the skill has no branch for. The three steps
+    # the flow above does not reach are reached from a state built for each.
+    base = {"layer_verdict": "current", "last_doctor": None,
+            "config": {"scenario": "checkout"}, "hunt": None}
+    for st in (dict(base, last_doctor={"facts": {"failed": ["a check"]}}),
+               dict(base, layer_verdict="differs"),
+               dict(base, layer_verdict="unreadable")):
+        next_kind(st)
+    assert produced == set(NEXT_KINDS), (
+        f"next_kind produced {sorted(produced)}; the skill switches on "
+        f"{sorted(NEXT_KINDS)}")
 
 
 @check("init: `--all` is the flag, and `--force` still means the same")
@@ -3703,6 +3774,39 @@ def _(report):
             "a project's own AGENTS.md was edited"
 
 
+# The pointer 0.4.0 wrote, as it wrote it: the only release whose section had
+# no end marker. Kept as text rather than built from today's, so that the
+# migration below is checked against a file a real install left behind.
+_POINTER_040 = """<!-- echolot -->
+## Performance work: echolot
+
+This project uses [echolot](https://github.com/grishan0v/echolot) to find where
+Android startup time goes, from a Perfetto trace down to a place in the code.
+
+**Never open a `.perfetto-trace` yourself** — it is tens of megabytes and
+hundreds of thousands of slices. The tool turns it into about twenty rows.
+
+```bash
+echolot          # where this project stands, and what to do next
+echolot guide    # how to work with it — read this before performance work
+```
+
+`echolot guide` is printed by the installed package, so it always matches the
+version in use. `echolot guide hunt` is the loop; `echolot guide setup` builds
+the config.
+"""
+# The four files 0.4.0 put it in. Cursor's rule carries frontmatter first.
+_STUBS_040 = {
+    "agents": _POINTER_040,
+    "gemini": _POINTER_040,
+    "copilot": _POINTER_040,
+    "cursor": ("---\n"
+               "description: echolot — Android performance, trace to code\n"
+               "alwaysApply: true\n"
+               "---\n\n" + _POINTER_040),
+}
+
+
 @check("init: run again, the pointer is updated and the project's own text is not")
 def _(report):
     """The file these stubs go in belongs to the project, not to echolot.
@@ -3757,23 +3861,27 @@ def _(report):
     with tempfile.TemporaryDirectory() as d:
         project = Path(d)
         own = project / "AGENTS.md"
-        legacy = hosts_mod._without_an_end(agents.render()) + theirs
+        legacy = _STUBS_040["agents"] + theirs
         own.write_text(legacy, encoding="utf-8")
         what, _ = hosts_mod.write_stub(project, agents)
         assert what == "ours-without-an-end", what
         assert own.read_text(encoding="utf-8") == legacy, \
             "a file with no end marker was rewritten on a guess"
 
-    # The same file untouched is exactly what an earlier echolot wrote, so it
-    # is ours alone and this run gives it the end marker it lacks.
-    with tempfile.TemporaryDirectory() as d:
-        project = Path(d)
-        own = project / "AGENTS.md"
-        own.write_text(hosts_mod._without_an_end(agents.render()), encoding="utf-8")
-        what, _ = hosts_mod.write_stub(project, agents)
-        assert what == "updated", what
-        assert hosts_mod.END_MARKER in own.read_text(encoding="utf-8"), \
-            "an older install was not migrated to the marked form"
+    # The same file untouched is exactly what 0.4.0 wrote, so it is ours alone
+    # and this run gives it the end marker it lacks — in each of the four
+    # files that release wrote it to.
+    for key, stub in _STUBS_040.items():
+        host = hosts_mod.BY_KEY[key]
+        with tempfile.TemporaryDirectory() as d:
+            project = Path(d)
+            own = project / host.path
+            own.parent.mkdir(parents=True, exist_ok=True)
+            own.write_text(stub, encoding="utf-8")
+            what, _ = hosts_mod.write_stub(project, host)
+            assert what == "updated", (key, what)
+            assert hosts_mod.END_MARKER in own.read_text(encoding="utf-8"), (
+                f"{host.path} from 0.4.0 was not migrated to the marked form")
 
 
 @check("init: the picker can never hang an agent or the self-check")
@@ -3787,45 +3895,69 @@ def _(report):
     with the flag there must be a terminal on both ends.
     """
     import argparse
+    import contextlib
+    import io
+    import sys
 
     from . import hosts as hosts_mod
-    from .main import cmd_init
-
-    # A bare Namespace is what the self-check itself passes.
-    bare = argparse.Namespace(into=".", force=False, no_doctor=True)
-    assert not getattr(bare, "interactive", False), \
-        "a direct call would prompt — the self-check would hang"
+    from .main import build_parser, cmd_init
 
     class Tty:
         def isatty(self): return True
         def write(self, *a): pass
         def flush(self): pass
 
-    saved = os.environ.get("CI")
+    class NotTty(Tty):
+        def isatty(self): return False
+
+    # The first gate: only the CLI parser turns prompting on. A bare Namespace
+    # — what the self-check itself passes — must not reach the picker even on
+    # a terminal that would answer, so both are faked to say yes.
+    assert build_parser().parse_args(["init"]).interactive is True, \
+        "the CLI no longer turns the picker on"
+
+    def no_picker(*a, **k):
+        raise AssertionError("a bare call reached the picker — the self-check would hang")
+
+    real_interactive, real_pick = hosts_mod.interactive, hosts_mod.pick
+    hosts_mod.interactive, hosts_mod.pick = (lambda stream: True), no_picker
     try:
+        with tempfile.TemporaryDirectory() as d:
+            project = Path(d)
+            with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()):
+                cmd_init(argparse.Namespace(into=str(project), force=False,
+                                            no_doctor=True))
+            # And it really does install, silently, when called the bare way.
+            assert (project / ".claude").is_dir(), "the bare call installed nothing"
+    finally:
+        hosts_mod.interactive, hosts_mod.pick = real_interactive, real_pick
+
+    # The second gate: a terminal on both ends, and no CI. stdin is faked as
+    # well, since an agent, CI or a pipe gives a stdin that is no terminal and
+    # would answer "no" for every case below whatever the variables said.
+    names = ("CI", "ECHOLOT_NO_INPUT")
+    saved = {name: os.environ.get(name) for name in names}
+    real_stdin = sys.stdin
+    try:
+        for name in names:
+            os.environ.pop(name, None)
+        sys.stdin = Tty()
+        assert hosts_mod.interactive(Tty()), \
+            "a terminal on both ends and no CI should be asked — the checks below would mean nothing"
         os.environ["CI"] = "1"
         assert not hosts_mod.interactive(Tty()), "CI is not a place to ask questions"
         os.environ.pop("CI")
         os.environ["ECHOLOT_NO_INPUT"] = "1"
         assert not hosts_mod.interactive(Tty()), "ECHOLOT_NO_INPUT was ignored"
+        os.environ.pop("ECHOLOT_NO_INPUT")
+        assert not hosts_mod.interactive(NotTty()), "asked without a terminal"
     finally:
-        os.environ.pop("ECHOLOT_NO_INPUT", None)
-        if saved is not None:
-            os.environ["CI"] = saved
-        else:
-            os.environ.pop("CI", None)
-
-    class NotTty(Tty):
-        def isatty(self): return False
-    assert not hosts_mod.interactive(NotTty()), "asked without a terminal"
-
-    # And it really does install, silently, when called the bare way.
-    with tempfile.TemporaryDirectory() as d:
-        project = Path(d)
-        with recorder.isolated():
-            cmd_init(argparse.Namespace(into=str(project), force=False,
-                                        no_doctor=True))
-        assert (project / ".claude").is_dir(), "the bare call installed nothing"
+        sys.stdin = real_stdin
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 @check("init: declining Claude Code is remembered, not asked again forever")
@@ -4149,7 +4281,8 @@ def _(report):
     description, where a relative path resolves against pypi.org, so its links
     are absolute; docs/README.md is only ever read on GitHub, so its links are
     relative. An earlier version of this check knew only the relative form and
-    passed vacuously — it went green on a README that linked nothing at all.
+    passed vacuously — it went green on a README that linked nothing at all,
+    and a later one still did, letting a complete index stand in for it.
     """
     import re as _re
     from .layer import CLAUDE_DIR
@@ -4174,8 +4307,14 @@ def _(report):
         return found
 
     from_readme = links(readme)
-    linked = from_readme | links(index, bare=True)
-    assert from_readme or linked, "nothing under docs/ is linked from anywhere"
+    assert from_readme, "the README links nothing under docs/"
+    # The index's links count only when the README leads to the index, as
+    # docs/README.md or as the GitHub folder view `tree/<branch>/docs`.
+    # Without that, a complete index made up for a README that linked nothing.
+    to_index = _re.search(r"\((?:[^)\s]*/)?docs/README\.md\)"
+                          r"|\([^)\s]*/tree/[\w.-]+/docs/?\)",
+                          readme.read_text(encoding="utf-8"))
+    linked = from_readme | (links(index, bare=True) if to_index else set())
     for name in sorted(linked):
         assert (root / "docs" / name).exists(), (
             f"a link points at docs/{name}, but the file is missing"
