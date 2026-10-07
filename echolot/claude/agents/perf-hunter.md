@@ -194,7 +194,7 @@ waiting for one.
 The commands you will reach for, so that `--help` is not a round trip:
 
 ```
-echolot doctor -q                                  three lines; the full run is about 10 KB
+echolot doctor -q                                  three lines, four with Codex; the full run is about 10 KB
 echolot analyze <traces> -c echolot.yml            report → .echolot/out/ next to the config
 echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere; it files a copy for
                                                    compare too, so a round runs one or the other

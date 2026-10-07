@@ -22,6 +22,7 @@ The rules every picture follows are in docs/assets/README.md.
 """
 from __future__ import annotations
 
+import argparse
 import html
 import random
 import re
@@ -516,22 +517,29 @@ def compare(c, f):
         out.append(text(60, y0 + 58, r["detector"], size=12.5, fill=c["sub"], family=MONO))
         out.append(spans(300, y0 + 34, [(r["before"] or "—", c["sub"], 400),
                                         ("  →  ", c["faint"], 400),
-                                        (r["after"], c["ink"], 700), (" ms", c["sub"], 400)],
+                                        (r["after"] or "—", c["ink"], 700),
+                                        (" ms" if r["after"] else "", c["sub"], 400)],
                          size=16))
-        if r["delta"] == ["new"]:
-            out.append(f'<rect x="452" y="{y0 + 17}" width="46" height="24" rx="6" '
+        # A row found on one side only has a word for its Δ, `new` or `gone`.
+        one_side = r["delta"][0] if r["delta"] in (["new"], ["gone"]) else None
+        if one_side:
+            width = {"new": 46, "gone": 54}[one_side]
+            out.append(f'<rect x="452" y="{y0 + 17}" width="{width}" height="24" rx="6" '
                        f'fill="{c["hot_tint"]}"/>')
-            out.append(text(475, y0 + 34, "new", size=14, weight=700, fill=c["brick"],
-                            anchor="middle"))
+            out.append(text(452 + width // 2, y0 + 34, one_side, size=14, weight=700,
+                            fill=c["brick"], anchor="middle"))
         else:
             grown, factor = r["delta"]
             out.append(text(452, y0 + 34, grown, size=16, weight=700, fill=c["brick"]))
             out.append(text(452, y0 + 58, factor, size=12.5, fill=c["sub"]))
         before, after = r["n_before"], r["n_after"]
-        out.append(text(560, y0 + 34, f"{'—' if before is None else before} → {after}",
+        out.append(text(560, y0 + 34, f"{'—' if before is None else before} → "
+                                      f"{'—' if after is None else after}",
                         size=15, fill=c["ink"]))
         if before is None:
             meaning = "no slices on it" if after == 0 else "new"
+        elif after is None:
+            meaning = "gone"
         elif after > before:
             meaning = "called more often"
         elif after < before:
@@ -542,7 +550,8 @@ def compare(c, f):
         v = r["verdict"]
         if v is None:
             out.append(text(690, y0 + 34, "—", size=15, fill=c["faint"]))
-            out.append(text(690, y0 + 58, "new, no range yet", size=12.5, fill=c["sub"]))
+            out.append(text(690, y0 + 58, "gone, no range" if one_side == "gone"
+                            else "new, no range yet", size=12.5, fill=c["sub"]))
             continue
         lo, hi = min(v["lo"], 0.0), max(v["hi"], 0.0)
         pad = (hi - lo) * 0.08
@@ -591,7 +600,7 @@ def session(f):
         (2.0, 116, [(28, "?", t["sand"], 700), (48, question, t["fg"], 400)]),
         (2.6, 116, [(48 + len(question) * char_w + 18, "since the tab redesign", t["green"], 400)]),
         (3.2, 148, [(28, "✓", t["green"], 700),
-                    (48, "hunt #1 opened · 5 traces recorded", t["fg"], 400)]),
+                    (48, f"hunt #1 opened · {f['repeats']} traces recorded", t["fg"], 400)]),
         (4.0, 188, [(28, "round 1", t["dim"], 400),
                     (128, f"analyze · {f['fired']} of {f['detectors']} detectors fired · "
                           f"window {round(f['window_ms']):,} ms", t["fg"], 400)]),
@@ -701,11 +710,14 @@ pre{{background:{c['card']};border-radius:6px;padding:12px 16px;margin:0 0 12px;
 <ul><li><b>Finds the line to fix.</b> From a slow screen to a file and line, with the numbers that prove it.</li>
 <li><b>Same answer, every run.</b> A pinned trace_processor: the same trace always gives the same report.</li>
 <li><b>No tracing code needed.</b> Works on apps with zero trace {{}} calls; it places temporary markers itself.</li>
-<li><b>Works with your agent.</b> Claude Code out of the box; Cursor, Codex and others via echolot guide.</li></ul>
+<li><b>Works with your agent.</b> A plugin for Claude Code and Codex; Cursor and others via <code>echolot guide</code>.</li></ul>
 {img('session.svg')}
 <p><b>Contents</b> · <a>Quick start</a> · <a>How it works</a> · <a>What it saves</a> · …</p>
 <p><b>Reference</b> · <a>Detectors</a> · <a>Commands</a> · <a>Requirements</a> · …</p>
-<h2>Quick start</h2><pre>pipx install echolot</pre><pre>cd ~/my-app &amp;&amp; echolot init</pre><pre>/echolot</pre>
+<h2>Quick start</h2><pre>pipx install echolot</pre>
+<pre>claude plugin marketplace add grishan0v/echolot &amp;&amp; claude plugin install echolot@echolot   # Claude Code
+codex plugin marketplace add grishan0v/echolot &amp;&amp; codex plugin add echolot@echolot         # Codex</pre>
+<pre>/echolot</pre>
 <h2>How it works</h2>{img(f'loop-{theme}.svg')}
 <h2>What it saves</h2>{img(f'versus-{theme}.svg')}
 <h2>What changed</h2>{img(f'compare-{theme}.svg')}
@@ -734,13 +746,19 @@ def write_sample() -> bool:
 
 
 def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="render.py", description="Draws the README's pictures from their sources.")
+    parser.add_argument("--preview", metavar="DIR", type=Path,
+                        help="also write README-like pages into DIR: light and dark, "
+                             "desktop and phone")
+    args = parser.parse_args(argv)
     if write_sample():
         print(f"→ {README} (the sample report)")
     for name, body in pictures().items():
         (HERE / name).write_text(body, encoding="utf-8")
         print(f"→ {HERE / name}")
-    if argv[:1] == ["--preview"] and len(argv) == 2:
-        target = Path(argv[1])
+    if args.preview is not None:
+        target = args.preview
         target.mkdir(parents=True, exist_ok=True)
         for theme in THEMES:
             for kind, width in (("", 928), ("-phone", 375)):
