@@ -1065,12 +1065,14 @@ def build(frames: bool = True, environment: bool = True,
 
     # The platform state. Frequency belongs to its own CPU's bundle — that is
     # where a real kernel writes it. Thermal is a property of the device rather
-    # than of a core, so it goes on CPU 0 like any other global event.
-    for tid, at, io in BLOCKED_REASON:
-        by_cpu.setdefault(tid_to_cpu[tid], []).append(
-            (ms(at), next(seq), "blocked", tid, io))
-
+    # than of a core, so it goes on CPU 0 like any other global event. Why a
+    # task blocked is one of the same events (`ENVIRONMENT_EVENTS` in
+    # runner.py), so a recording with `runner.environment: false` has none of
+    # it, and `io_wait` has no disk flag to read.
     if environment:
+        for tid, at, io in BLOCKED_REASON:
+            by_cpu.setdefault(tid_to_cpu[tid], []).append(
+                (ms(at), next(seq), "blocked", tid, io))
         for cpu, at, khz in CPU_FREQ:
             by_cpu.setdefault(cpu, []).append((ms(at), next(seq), "freq", cpu, khz))
         for at, zone, milli_c in THERMAL:
