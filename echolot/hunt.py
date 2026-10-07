@@ -161,8 +161,9 @@ def _rel(project: Path, p: Path) -> str:
 def record_traces(project: Path, directory: Path) -> None:
     """Note that this directory of traces belongs to the open investigation.
 
-    Called wherever a set is pushed aside — between rounds by `collect`, and
-    at the boundary when a new investigation opens. Until this existed only
+    Called by `collect`, which pushes the previous round's set aside; the set
+    pushed aside when a new investigation opens is recorded by `open_new`
+    itself, as `traces_aside`. Until this existed only
     the closing set was recorded, so a hunt that ran four rounds remembered
     the last one and lost the three it reasoned from.
     """
@@ -292,9 +293,9 @@ def open_new(project: Path, question: str, since: str | None = None,
 def touch(project: Path, *, collect: bool = False, analyze: bool = False) -> None:
     """Record that the open investigation is still being worked on.
 
-    Called from `collect` and `analyze`, which is what makes `touched_at`
-    honest: the freshness rule is about work, not about when someone last
-    typed `echolot`. Silent when nothing is open — an ad-hoc `analyze` on a
+    Called from `collect`, `analyze` and `hunt --resume`, which is what makes
+    `touched_at` honest: the freshness rule is about work, not about when
+    someone last typed `echolot`. Silent when nothing is open — an ad-hoc `analyze` on a
     trace from somewhere else must not invent an investigation.
     """
     hunt = load(project)
@@ -330,9 +331,10 @@ def conclude(project: Path, conclusion: str) -> dict[str, Any] | None:
 def history(project: Path) -> list[dict[str, Any]]:
     """Every investigation this project has had, newest first, open one included.
 
-    Archived files are named by when the investigation opened, so the sort is
-    over the field rather than the filename: a hand-edited archive still lands
-    in the right place.
+    Archived records are `<n>/hunt.json`, sorted by their number, with
+    `opened_at` for the 0.2.0 records that have none; the sort is over the
+    fields rather than the path, so a hand-edited archive still lands in the
+    right place.
     """
     out: list[dict[str, Any]] = []
     current = load(project)
