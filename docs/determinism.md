@@ -41,10 +41,12 @@ All 154 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
-self-check tally — plus every failure, with the same exit code. It is for a
-subagent that has to confirm the environment before it starts, a CI step, or
-anyone piping into `head`; the full output is about ten kilobytes of "ok" that
-a second reader in the same session would pay for again.
+self-check tally — plus every failure, with the same exit code. Where Codex is
+used, a fourth line before the tally says whether its sandbox lets echolot
+out. It is for a subagent that has to confirm the environment before it
+starts, a CI step, or anyone piping into `head`; the full output is about ten
+kilobytes of "ok" that a second reader in the same session would pay for
+again.
 
 ```
 echolot 0.10.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
@@ -148,10 +150,12 @@ before writing one of these. A fixed set of examples is a fixed set of blind
 spots: a property that is false for a rare input can pass every run for as
 long as the seed holds, and then fail on a hypothesis upgrade that reshuffles
 the choice — on a commit that changed nothing. The rule that follows is that
-the input a test exists to check is never left to the strategy. It is written
-down as an `@example`, and the strategy is weighted to reach it: the table
-tests draw `|` from an alphabet of their own, because one character in a
-million turns up in some runs and not others.
+the input a test exists to check is never left to the strategy. Either it is
+written down as an `@example`, or the strategy builds it into every example it
+draws: the `Config.get` test for a path that runs past a leaf gets such a path
+each time. The strategy is also weighted to reach it: the table tests draw `|`
+from an alphabet of their own, because one character in a million turns up in
+some runs and not others.
 
 ## The demo app
 

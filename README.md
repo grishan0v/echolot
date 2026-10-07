@@ -363,7 +363,7 @@ only the agent has. The pipeline — `collect`, `analyze`, `compare` — is unde
 | `echolot` | where this project stands, and the next step |
 | `echolot init` | install or update the `.claude/` layer; .gitignore, and checks the environment. With the plugin, its door runs `echolot init --for plugin`, which leaves `.claude/` out. `--private` keeps everything it writes out of git, for this clone only |
 | `echolot hunt "<what regressed>"` | open an investigation — see [The investigation](#the-investigation) |
-| `echolot doctor` | environment + self-check on a synthetic trace; exit 0 when every check passes, 1 when one fails or the self-check cannot run, 2 when trace_processor cannot be downloaded; `-q` for three lines |
+| `echolot doctor` | environment + self-check on a synthetic trace; exit 0 when every check passes, 1 when one fails or the self-check cannot run, 2 when trace_processor cannot be downloaded; `-q` for three lines (four where Codex is used) |
 
 <details>
 <summary><b>The agent's, behind <code>/echolot</code></b> — you do not call these</summary>
