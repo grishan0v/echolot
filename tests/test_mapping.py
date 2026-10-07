@@ -100,6 +100,8 @@ def test_a_mapping_is_read_again_once_it_changes(tmp_path: Path) -> None:
     ("a.b.c", True),
     ("com.example.app.a.b", True),
     ("c.b$a.run", True),
+    ("x.a$Tab.run", True),      # the outer name is R8's, whatever the nested part
+    ("x.a$ABC.run", True),
     ("a0.ab.c", True),
     ("com.example.app.Store.save", False),
     ("com.example.app.StoreKt.a", False),

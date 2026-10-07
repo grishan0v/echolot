@@ -17,6 +17,7 @@ underneath, which is where the remaining ways to raise live.
 from __future__ import annotations
 
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -153,3 +154,12 @@ def test_ago_orders_recent_before_older(gap_seconds):
         return -1
 
     assert rank(ago(newer)) <= rank(ago(older))
+
+
+def test_ago_counts_minutes_to_89_and_then_rounds_the_hours(monkeypatch):
+    """The docstring promised "90m ago" for an hour and a half, which the
+    code never printed (#236). This pins what it does print."""
+    monkeypatch.setattr(time, "time", lambda: 100_000.0)
+    assert ago(100_000.0 - 5399) == "89m ago"
+    assert ago(100_000.0 - 5400) == "2h ago"
+    assert ago(100_000.0 - 4500) == "75m ago"

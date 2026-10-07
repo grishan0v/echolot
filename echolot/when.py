@@ -25,10 +25,11 @@ from datetime import datetime
 def ago(epoch: float | None) -> str:
     """How long ago, in the coarsest unit that still says something.
 
-    Seconds up to a minute and a half, then minutes up to an hour and a half,
-    then hours up to two days, then days. The thresholds overshoot each unit
-    deliberately: "90m ago" reads better than "2h ago" for something that
-    happened an hour and a half back.
+    Seconds up to a minute and a half, then minutes up to 89, then hours up
+    to two days, then days. The thresholds overshoot each unit deliberately:
+    "75m ago" reads better than "1h ago" for something that happened an hour
+    and a quarter back. From an hour and a half the hours round up, so 90
+    minutes is "2h ago".
     """
     if not epoch:
         return "never"
