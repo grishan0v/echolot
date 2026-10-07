@@ -254,8 +254,9 @@ GROUP BY s.name, s.thread_name
 HAVING COUNT(DISTINCT COALESCE(p.name, '(top level)')) >= 2
    AND COUNT(DISTINCT COALESCE(p.name, '(top level)')) <= {{max_callers}}
    AND SUM(MAX(s.dur, 0)) >= {{min_total_ms}} * 1000000
-   -- A slice still open when the trace stopped reads as zero here; dividing
-   -- by it would be a ratio about nothing.
+   -- An instant slice (dur = 0) has no cost to compare; dividing by it would
+   -- be a ratio about nothing. An open slice already runs to the window's end
+   -- in `_slice_win`.
    AND MIN(MAX(s.dur, 0)) > 0
    -- Equal cost, or a marker this hunt planted itself from exactly two places
    -- — see "The near miss". `substr` rather than LIKE: `_` is a wildcard

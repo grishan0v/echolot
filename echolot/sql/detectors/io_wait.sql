@@ -11,8 +11,9 @@
 --
 -- The state is `D` — uninterruptible sleep — and `io_wait` is the kernel
 -- saying that this particular sleep was block I/O rather than one of the
--- other things that park a task uninterruptibly. Both come from
--- `sched/sched_blocked_reason`, which `collect` records by default.
+-- other things that park a task uninterruptibly. The state comes from
+-- `sched/sched_switch`; `io_wait` comes from `sched/sched_blocked_reason`,
+-- which `collect` records unless `runner.environment: false`.
 --
 -- Why this is not `uninstrumented_cpu` under another name: that detector
 -- looks for threads burning CPU with nothing instrumented around it, and is
