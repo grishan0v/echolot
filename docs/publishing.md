@@ -39,13 +39,15 @@ values:
 ## Before a release: what CI already checked
 
 `.github/workflows/checks.yml` runs on every pull request into `main`, and on
-`main` after a merge: `pytest` on every Python version in its matrix — the
-five the classifiers claim, written out again by hand — with the coverage
-gate on each; `ruff check echolot tests` in a `lint` job; and a `package` job
-that looks at the README three ways, builds the artefacts and installs them.
-The `protect-main` ruleset requires two of those to pass before a merge:
-`checks`, which passes only when every Python version and the linter did, and
-`package`.
+`main` after a merge: `pytest` with the coverage gate, on 3.10 and 3.14 for a
+pull request and on all five versions the classifiers claim for `main`,
+written out again by hand; `ruff check echolot tests action` beside pytest on
+3.14; and a `package` job that looks at the README three ways, builds the
+artefacts and installs them. The `protect-main` ruleset requires two of those
+to pass before a merge: `checks`, which passes only when every Python version
+that ran passed, the linter with them, and `package`. A break that only 3.11,
+3.12 or 3.13 has shows up on `main` after the merge, so look at the run there
+before cutting a tag.
 
 The `package` job is the one that matters at release time, and it exists
 because a PyPI version number can never be reused. Not even after deletion. A
@@ -129,7 +131,8 @@ pull request goes under the first section whose label it carries.
 | Other | any other | a title with none of these types |
 
 `.github/workflows/labels.yml` sets the labels when a pull request is opened,
-and again when its title or its commits change. The type may carry a scope and
+again when its title changes, and once more when it is merged: the files it
+ended with are the ones that decide `detector`. The type may carry a scope and
 a `!`: `fix(report): …`, `feat!: …`. A title corrected from `feat:` to `fix:`
 moves the pull request from Features to Fixes. A title without one of these
 types gets no label from the workflow, and a label put on by hand stays.
