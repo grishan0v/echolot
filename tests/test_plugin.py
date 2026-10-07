@@ -311,11 +311,13 @@ def test_a_layer_left_from_an_earlier_init_is_said_and_not_asked_for(tmp_path, c
     call (#144).
     """
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    assert main(["init", "--into", str(tmp_path), "--for", "claude", "--no-input"]) in (0, 1)
+    assert main(["init", "--into", str(tmp_path), "--for", "claude", "--no-input",
+                 "--no-doctor"]) == 0
     agent = tmp_path / ".claude" / "agents" / "perf-hunter.md"
     agent.write_text(agent.read_text(encoding="utf-8") + "\n# older\n", encoding="utf-8")
     layer.write_manifest(tmp_path / ".claude", {"agents/perf-hunter.md": layer.sha(agent)})
-    assert main(["init", "--into", str(tmp_path), "--for", "plugin", "--no-input"]) == 0
+    assert main(["init", "--into", str(tmp_path), "--for", "plugin", "--no-input",
+                 "--no-doctor"]) == 0
     capsys.readouterr()
 
     check("the layer's files are still there", agent.exists(), agent)

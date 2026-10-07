@@ -200,16 +200,40 @@ def test_the_report_leads_with_what_it_could_not_see(report_without_a_transcript
 
 
 def test_from_log_can_be_asked_for_where_a_transcript_exists(tmp_path):
-    """`--from-log` is how the two reports get compared against each other."""
-    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
-    write_log(tmp_path, [
+    """`--from-log` is how the two reports get compared against each other.
+
+    So it has to win over a transcript that is there. A Claude Code session
+    for the project is planted under a home of the test's own; without the
+    flag the report is read from it, and with the flag from the run log
+    (#277).
+    """
+    from tests.test_reflect import build
+
+    project = tmp_path.resolve() / "proj"
+    project.mkdir()
+    (project / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    write_log(project, [
         line("2026-08-19T10:00:00+00:00", "analyze", ["analyze", "a"])])
-    done = subprocess.run(
-        [sys.executable, "-m", "echolot.main", "reflect", "--last", "--from-log",
-         "--project", str(tmp_path)],
-        capture_output=True, text=True, cwd=tmp_path,
-        env=dict(os.environ, ECHOLOT_NO_RECORD="1"))
+    home = tmp_path / "home"
+    build(home / ".claude" / "projects", project)
+    env = dict(os.environ, HOME=str(home), CODEX_HOME=str(home / ".codex"),
+               ECHOLOT_NO_RECORD="1")
+    note = "no agent transcript was used"
+
+    def reflect(*flags):
+        return subprocess.run(
+            [sys.executable, "-m", "echolot.main", "reflect", "--last", *flags,
+             "--project", str(project)],
+            capture_output=True, text=True, cwd=project, env=env)
+
+    plain = reflect()
+    check("without the flag the transcript is read",
+          plain.returncode == 0 and note not in plain.stdout,
+          plain.stdout[-400:] + plain.stderr[-300:])
+    done = reflect("--from-log")
     check("exits 0", done.returncode == 0, done.stderr[-300:])
+    check("and the report comes from the run log", note in done.stdout,
+          done.stdout[-400:])
     check("and does not announce a fallback it was asked for",
           "no agent transcript for this project" not in done.stderr, done.stderr)
 

@@ -202,6 +202,16 @@ def test_native_frames_sit_beside_the_java_ones_on_one_thread():
 
 def test_a_signature_survives_the_trailing_space_the_exports_carry():
     """Every real signature line ends in one, and no editor should decide that."""
+    assert "Worker-2 (waiting):tid=12 systid=1012\n" in DUMP, "the line this edits moved"
+    spaced = DUMP.replace("Worker-2 (waiting):tid=12 systid=1012\n",
+                          "Worker-2 (waiting):tid=12 systid=1012 \n")
+    threads = anr.parse(spaced).threads
+    check("still nine threads", len(threads) == 9, len(threads))
+    check("and the one with the space is among them",
+          any(str(t.tid) == "12" for t in threads), [t.tid for t in threads])
+
+
+def test_a_signature_survives_a_doubled_space_before_the_pipe():
     spaced = DUMP.replace("main (blocked):tid=1 systid=1001 |",
                           "main (blocked):tid=1 systid=1001  |")
     check("still nine threads", len(anr.parse(spaced).threads) == 9)
@@ -641,18 +651,23 @@ def test_a_thread_the_runtime_never_attached_says_so():
 
 # --- the verb ---------------------------------------------------------------
 
-def test_the_verb_reads_a_report_and_writes_nothing(tmp_path):
-    """Reconnaissance, not an investigation. That is why it is its own verb."""
+def test_the_verb_reads_a_report_and_writes_nothing_but_its_log_line(tmp_path, monkeypatch):
+    """Reconnaissance, not an investigation. That is why it is its own verb.
+
+    `anr` has no `--config` and writes under the working directory, so the
+    test runs it from the folder it watches; the autouse `no_record` fixture
+    keeps the one line it may write, its run log, out of the picture (#277).
+    """
     report_file = tmp_path / "export.txt"
     report_file.write_text(DUMP, encoding="utf-8")
-    before = sorted(p.name for p in tmp_path.iterdir())
+    monkeypatch.chdir(tmp_path)
+    before = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
 
     code, out, _ = run("anr", str(report_file))
     check("it exits 0", code == 0, code)
     check("and prints the lock section", "## What was holding the lock" in out, out)
-    check("nothing landed beside the report",
-          sorted(p.name for p in tmp_path.iterdir()) == before,
-          sorted(p.name for p in tmp_path.iterdir()))
+    after = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    check("nothing landed where it ran", after == before, after)
 
 
 def test_the_verb_gives_an_agent_the_same_findings_as_a_person(tmp_path):

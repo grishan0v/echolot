@@ -17,6 +17,7 @@ underneath, which is where the remaining ways to raise live.
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -136,27 +137,32 @@ def test_ago_says_never_for_exactly_zero_and_for_nothing_else(epoch):
         assert ago(epoch).endswith(" ago")
 
 
-@given(st.integers(min_value=1, max_value=3600))
-def test_ago_orders_recent_before_older(gap_seconds):
+@given(st.integers(min_value=1, max_value=10_000_000),
+       st.integers(min_value=1, max_value=10_000_000))
+@example(89, 90)                # seconds into minutes
+@example(5399, 5400)            # minutes into hours
+@example(172_799, 172_800)      # hours into days
+def test_ago_orders_recent_before_older(a, b):
     """A more recent timestamp is never reported as further in the past.
 
-    Both are read against "now" a moment apart, so this compares the two
-    calls' relative ordering rather than an exact string — the coarsening
-    into seconds/minutes/hours/days means two epochs close together can
-    legitimately render identically.
+    Two ages, from a second to about four months, so all four units are
+    reached; read against one frozen "now". The newer one's unit ranks no
+    higher than the older one's, and within a unit its number is no larger.
+    The version this replaces held the newer age at one second, which only
+    ever compared "some seconds" with "some unit" (#277).
     """
-    now = datetime.now(timezone.utc).timestamp()
-    older = now - gap_seconds - 1
-    newer = now - 1
-    unit_rank = {"s": 0, "m": 1, "h": 2, "d": 3}
+    from unittest import mock
 
-    def rank(text):
-        for suffix, r in unit_rank.items():
-            if suffix + " ago" in text:
-                return r
-        return -1
+    newer_age, older_age = sorted((a, b))
+    now = 1_000_000_000.0
+    with mock.patch.object(time, "time", lambda: now):
+        newer, older = ago(now - newer_age), ago(now - older_age)
 
-    assert rank(ago(newer)) <= rank(ago(older))
+    def key(text):
+        number, unit = re.fullmatch(r"(\d+)([smhd]) ago", text).groups()
+        return "smhd".index(unit), int(number)
+
+    assert key(newer) <= key(older), (newer_age, newer, older_age, older)
 
 
 def test_ago_counts_minutes_to_89_and_then_rounds_the_hours(monkeypatch):

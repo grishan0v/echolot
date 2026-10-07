@@ -105,13 +105,15 @@ import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 
 private const val TARGET = "com.example.app.beta"
 
+object Marks { const val LOAD = "catalog_loaded" }
+
 class StartupBenchmark {
     @get:Rule val rule = MacrobenchmarkRule()
 
     @Test
     fun startupToHome() = rule.measureRepeated(
         packageName = TARGET,
-        metrics = listOf(StartupTimingMetric(), TraceSectionMetric("home_shown"), TraceSectionMetric(Marks.LOAD)),
+        metrics = listOf(StartupTimingMetric(), TraceSectionMetric("home_shown"), TraceSectionMetric(Marks.LOAD), TraceSectionMetric(Elsewhere.GONE)),
         startupMode = StartupMode.COLD,
         iterations = 5,
     ) { startActivityAndWait() }
@@ -191,7 +193,10 @@ def test_describe_finds_the_app_the_benchmark_and_what_to_allow(tmp_path):
     check("its class and tests", b["classes"][0]["name"] == "com.example.benchmark.StartupBenchmark"
           and b["classes"][0]["tests"] == ["startupToHome", "scroll"], b["classes"])
     check("who it drives, through a constant", b["package_name"] == "com.example.app.beta", b)
-    check("what it measures, literal and constant", b["metrics"] == ["home_shown"], b["metrics"])
+    # A literal, a constant declared here, and one declared nowhere in sight,
+    # which is left out rather than guessed (#277).
+    check("what it measures, literal and constant",
+          b["metrics"] == ["home_shown", "catalog_loaded"], b["metrics"])
     check("a cold start", b["startup"], b)
     check("its runner arguments", b["runner_args"] == {"androidx.benchmark.suppressErrors": "EMULATOR"}, b)
     tasks = scan.gradle_tasks(b, facts.variants)

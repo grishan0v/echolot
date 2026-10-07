@@ -170,7 +170,13 @@ def test_names_never_cuts_a_name_for_a_pipe_and_grep_is_the_filter(trace):
     lock = next((r for r in text.splitlines() if "monitor contention with owner" in r), "")
     check("the long name is in the table", lock, text[:600])
     check("and it is whole — no ellipsis in a pipe", "…" not in lock, lock)
-    check("with every thread, not two and a count", "+1" not in lock and "+2" not in lock, lock)
+    # The row with three threads: a terminal would print two and a count, and
+    # a pipe gets all three. The row above has one thread and could not tell.
+    many = next((r for r in text.splitlines()
+                 if "Lock contention on a monitor lock (owner tid: #)" in r), "")
+    check("with every thread, not two and a count",
+          all(t in many for t in ("LockWaiter", "StuckForever", "m.example.app"))
+          and "+1" not in many, many or text[:600])
 
     only = run("names", str(trace), "--process", APP, "--min-ms", "0", "--top", "200",
                "--grep", "contention")

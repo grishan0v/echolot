@@ -405,6 +405,12 @@ def test_the_help_lists_every_guide_topic_and_every_client() -> None:
     guide = _help("guide")
     missing = [t for t in guide_topics() if t not in guide]
     check("guide --help names every topic", not missing, missing)
+    # The list itself, between its colon and its dash: `claude` and `agents`
+    # also turn up elsewhere in the help, and found anywhere they could leave
+    # the list unnoticed (#277).
     init_help = _help("init")
-    missing = [h.key for h in hosts.HOSTS if h.key not in init_help]
-    check("init --help names every client --for takes", not missing, missing)
+    listed = re.search(r"which agents to point at the tool: (.*?) — comma-separated", init_help)
+    check("init --help lists the clients --for takes", listed, init_help)
+    keys = {k.strip() for k in listed.group(1).split(",")}
+    check("init --help names every client --for takes, and nothing else",
+          keys == {h.key for h in hosts.HOSTS}, sorted(keys))
