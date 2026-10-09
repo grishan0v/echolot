@@ -127,7 +127,7 @@ Describe the problem the way you would to a colleague:
 | Cold start got slower | `/echolot why is cold start slow` | — |
 | Scrolling stutters | `/echolot the feed janks on scroll` | a scroll scenario in `echolot.yml`, which holds one scenario at a time; `frame_jank` needs Android 12+ |
 | "App isn't responding" | `/echolot the app froze, here is anr.txt` | the report: an export from Crashlytics or Play Console, or `dumpsys dropbox` |
-| The nightly benchmark got slower | one step after the benchmark in its workflow: `uses: grishan0v/echolot@main` | it analyzes the traces, compares them with the report the last good run kept, and keeps both. The inputs, and why it never fails a build over what moved, are in [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md) |
+| The nightly benchmark got slower | one step after the benchmark in its workflow: `uses: grishan0v/echolot@v0.11.0` | it analyzes the traces, compares them with the report the last good run kept, and keeps both. The inputs, and why it never fails a build over what moved, are in [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md) |
 
 ### Coming back later
 

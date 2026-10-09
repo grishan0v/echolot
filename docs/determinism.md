@@ -28,7 +28,7 @@ echolot doctor
 ## The .claude/ layer in this project
 
   10 template files: 10 current
-  installed by echolot 0.10.0, this is 0.10.0
+  installed by echolot 0.11.0, this is 0.11.0
   the layer is current.
 
 ## Self-check on a synthetic trace
@@ -49,7 +49,7 @@ kilobytes of "ok" that a second reader in the same session would pay for
 again.
 
 ```
-echolot 0.10.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
+echolot 0.11.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
 layer: current (10 files)
 self-check: 154 of 154 passed
 ```
@@ -345,7 +345,7 @@ itself, marks the row, and names the source under the path:
 `doctor -q` puts the same on its first line:
 
 ```
-echolot 0.10.0 · trace_processor … (custom binary from toolchain.tp_binary in local.yml) · …
+echolot 0.11.0 · trace_processor … (custom binary from toolchain.tp_binary in local.yml) · …
 ```
 
 and the footer under the findings in `report.md` reads:
