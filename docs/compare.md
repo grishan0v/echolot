@@ -401,7 +401,7 @@ permissions:
 
 steps:
   # … check out, start the device, run the benchmark …
-  - uses: grishan0v/echolot@main
+  - uses: grishan0v/echolot@v0.11.0
     with:
       traces: app/benchmark/build/outputs/**/StartupBenchmark_startup_iter*.perfetto-trace
 ```
