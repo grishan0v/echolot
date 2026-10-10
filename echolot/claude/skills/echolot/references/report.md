@@ -344,7 +344,7 @@ The contract is shared, but not every detector fills every column.
 | `covered_ms` | how much on-CPU time ran inside instrumented code |
 | `code` | where that is in the checkout, when the row names a method or a class — see below |
 | `detail` | the evidence: thread, state, lock name with the owner's tid; in a blind spot of a sampled recording, what the samples named |
-| `places` | the json behind `code`: every symbol the row names, with `file`, `line` and `role` |
+| `places` | the json behind `code`: every symbol the row names, with `file`, `line` and `role`, and `retraced` on one the build's mapping named back |
 | `stacks` | the json behind what `detail` says the samples named: `samples`, `with_stack`, and the ten largest of `leaf` and `ours`, each `frame` with its `samples` and `pct` |
 | `spread` | the per-run values behind the medians, for three columns — see below |
 
@@ -374,6 +374,13 @@ parked in `jdk.internal.misc.Unsafe.park` is the holder waiting on something
 else while holding the lock, which is the finding, not a gap. `exact: false`
 means two files of that name and no package to choose by: check before
 opening. Rows with nothing to place carry neither key.
+
+A minified build's lock slice says `a.a.run()(SourceFile:6)`. With
+`project.mapping` set, both frames are named back before they are placed,
+and such a place carries `retraced: true`: `symbol`, `file` and `line` are the
+source's, and the evidence still shows R8's names. Without the mapping the
+places name `a.a.run` with `file: null`. When the header warns that lock
+frames have no place in `project.mapping`, the mapping is from another build.
 
 **`spread` is what makes a number checkable.** Merging repeats reduces each row
 to a median, and a median cannot say whether a number is steady: 120 ms from

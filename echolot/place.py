@@ -19,17 +19,25 @@ frame of the project's own code the samples put first (stacks.py). The
 runtime gives a sampled frame no file, so the class decides, and a Kotlin
 top-level function's class is its file's name with `Kt` after it.
 
+A minified build writes the lock's two frames as R8 named them,
+`void a.a.run()(SourceFile:6)`, which is in no file of the checkout. With
+the build's mapping, those frames are retraced before they are placed (see
+`mapping.Retracer`): the place is the method that held the line, inlined or
+not, at the line it came from. The evidence keeps the frame as the runtime
+wrote it, so rows still match by what was recorded.
+
 The walk is `domains.source_files`, in the direction that keeps the import
-graph a tree: `domains` imports nothing of ours.
+graph a tree: `domains` and `mapping` import nothing of ours.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from . import mapping as mapping_mod
 from .domains import source_files
 
 # The informative shape of ART's contention slice:
@@ -71,6 +79,9 @@ class Place:
     file: str | None     # relative to the root; None when not in this checkout
     line: int | None
     exact: bool          # one candidate, or the package agreed
+    # Named by the build's mapping, the frame having been R8's. Written into
+    # the json only when it is so.
+    retraced: bool = False
 
 
 def index(root: Path) -> dict[str, list[Path]]:
@@ -190,7 +201,8 @@ def locate(symbol: str, file: str | None, line: int | None,
     return Place(role, symbol, path.relative_to(root).as_posix(), line, exact)
 
 
-def places_of(row: dict[str, Any], idx: dict[str, list[Path]], root: Path) -> list[Place]:
+def places_of(row: dict[str, Any], idx: dict[str, list[Path]], root: Path,
+              traced: dict[str, mapping_mod.Retraced] | None = None) -> list[Place]:
     """Everything a row names that could be a file, placed where it can be.
 
     Both frames of a contention slice are kept whether or not they are in
@@ -198,12 +210,16 @@ def places_of(row: dict[str, Any], idx: dict[str, list[Path]], root: Path) -> li
     the holder is waiting on something else while holding it — and dropping
     it because the JDK is not in the repository would lose that. A location
     that names a class is kept only when the class is here; `android.view.View`
-    placed nowhere says nothing.
+    placed nowhere says nothing. A frame R8 wrote is placed by what `traced`
+    says it was.
     """
     out: list[Place] = []
     found = parse_contention(str(row.get("detail") or ""))
     if found:
         for role, text in (("owner", found["at"]), ("blocked", found["blocked"])):
+            if text and traced and text in traced:
+                out.append(_place_traced(traced[text], idx, root, role))
+                continue
             frame = parse_frame(text) if text else None
             if frame:
                 out.append(locate(*frame, idx, root, role))
@@ -217,6 +233,57 @@ def places_of(row: dict[str, Any], idx: dict[str, list[Path]], root: Path) -> li
         here = locate(sampled, None, None, idx, root, "sampled")
         if here.file:
             out.append(here)
+    return out
+
+
+def _place_traced(traced: mapping_mod.Retraced, idx: dict[str, list[Path]],
+                  root: Path, role: str) -> Place:
+    """Where a frame R8 wrote is, by the names the mapping gave back.
+
+    The innermost frame is the place: the method the runtime stood in, at its
+    line, whether it was inlined into another or not. A frame that could be
+    several methods is placed by the first, since the file is their class's,
+    and given no line, since nothing says which of them it was. Nor is a
+    frame the mapping has no place for: its method keeps R8's name, and a
+    method declared under that name would be another one.
+    """
+    first = traced.frames[0]
+    here = locate(first.symbol, first.file, first.line, idx, root, role)
+    if len(traced.chains) > 1:
+        names = dict.fromkeys(chain[0].symbol for chain in traced.chains)
+        here = replace(here, symbol=" | ".join(names), line=None)
+    elif traced.outside:
+        here = replace(here, line=None)
+    return replace(here, retraced=True)
+
+
+def _retrace(report: dict[str, Any], mapping: Path) -> dict[str, mapping_mod.Retraced]:
+    """Every frame of a contention slice R8 wrote, by what it was in the source.
+
+    The frames are gathered first, so that the mapping is read once for the
+    classes they name and for no others.
+    """
+    frames: dict[str, tuple[str, str, str | None, int | None]] = {}
+    for det in report.get("detectors") or []:
+        for row in det.get("rows") or []:
+            found = parse_contention(str(row.get("detail") or ""))
+            if not found:
+                continue
+            for text in (found["at"], found["blocked"]):
+                m = _FRAME.match(text.strip()) if text else None
+                if not m:
+                    continue
+                cls, _, method = m.group("symbol").rpartition(".")
+                if cls:
+                    frames[text] = (cls, method, *mapping_mod.where(m.group("where")))
+    if not frames:
+        return {}
+    retracer = mapping_mod.retracer(mapping, {cls for cls, *_ in frames.values()})
+    out = {}
+    for text, (cls, method, file, line) in frames.items():
+        got = retracer.retrace(cls, method, file, line)
+        if got is not None:
+            out[text] = got
     return out
 
 
@@ -246,7 +313,7 @@ def code_column(places: list[Place]) -> str | None:
     return " · ".join(parts) or None
 
 
-def annotate(report: dict[str, Any], root: Path) -> int:
+def annotate(report: dict[str, Any], root: Path, mapping: Path | None = None) -> int:
     """Adds `places` and `code` to every row that names something placeable.
 
     Returns how many rows were placed. The index is built on first use, so a
@@ -254,9 +321,15 @@ def annotate(report: dict[str, Any], root: Path) -> int:
     walked rather than `project.source_root`: that key's example value is
     `app/src/main/kotlin`, and a lock in `domain/` is exactly the kind of
     place a project with several modules has.
+
+    With the build's `mapping`, the frames of contention slices that R8
+    wrote are retraced first, and the report says how many there were and
+    how many the mapping had no place for, in `retrace`: the sign of a
+    mapping from another build (see `report._retrace_lines`).
     """
     idx: dict[str, list[Path]] | None = None
     placed = 0
+    traced = _retrace(report, mapping) if mapping is not None else {}
     for det in report.get("detectors") or []:
         for row in det.get("rows") or []:
             needs = _CONTENTION.match(str(row.get("detail") or "")) \
@@ -266,12 +339,23 @@ def annotate(report: dict[str, Any], root: Path) -> int:
                 continue
             if idx is None:
                 idx = index(root) if root.is_dir() else {}
-            found = places_of(row, idx, root)
+            found = places_of(row, idx, root, traced)
             if not found:
                 continue
-            row["places"] = [asdict(p) for p in found]
+            row["places"] = [_json(p) for p in found]
             cell = code_column(found)
             if cell:
                 row["code"] = cell
                 placed += 1
+    if traced:
+        report["retrace"] = {"frames": len(traced),
+                             "outside": sum(1 for t in traced.values() if t.outside)}
     return placed
+
+
+def _json(place: Place) -> dict[str, Any]:
+    """A place as `report.json` has it: `retraced` only on a place that was."""
+    out = asdict(place)
+    if not place.retraced:
+        del out["retraced"]
+    return out

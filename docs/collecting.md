@@ -405,15 +405,42 @@ another — overloads usually share one — comes back as both,
 Reading a mapping costs seconds once per `analyze`: a synthetic one of 125 MB
 took 4.6 s to read, and each trace loaded 1.5 s slower with it.
 
-The header says how the app's sampled methods came back:
+The runtime also writes frames as text, and trace_processor sees none of
+those: both sides of a lock in ART's contention slice, and every thread of an
+ANR record. They carry a line, and the line is what R8's own `retrace` goes
+by. `analyze` names back the lock's two frames with the same mapping before
+it places them ([From a row to a line](analysing.md#from-a-row-to-a-line-without-domains)),
+and `echolot anr` names back a record's
+([A minified build](anr.md#a-minified-build)). One frame comes back as the
+method the runtime stood in, at the line it came from, and the methods it was
+inlined into, by the names R8's `retrace` gives. What a build writes depends on
+how it was built. A test app built three ways with R8 9.0 wrote this on an
+SM-A515F with Android 13:
+
+| the build | the lock slice | the ANR record |
+|---|---|---|
+| line numbers kept, `-renamesourcefileattribute SourceFile`, minimum API 24 | `a.a.run()(SourceFile:6)` | `a.a.run(SourceFile:6)` |
+| no `-keepattributes` | `a.a.run()(r8-map-id-…:6)` | `a.a.run(r8-map-id-…:6)` |
+| line numbers kept, minimum API 26 | `a.a.run()(SourceFile:-1)` | `a.a.run(unavailable:20)` |
+
+The last build has no line table at all: R8 maps the offsets of the
+instructions instead. The ANR record prints the offset where the line would
+be, and that is named exactly. The lock slice prints `-1`, and its frames are
+named by the methods R8 kept, with no line; their declarations are then the
+place, as for a release build that kept its names.
+
+The header says how the app's sampled methods came back, and what the
+mapping made of the lock slices:
 
 | the report says | what happened |
 |---|---|
 | … of the app's … sampled methods read as minified, `a.b.c` | a minified build and no `project.mapping` |
 | `project.mapping` named … of the app's … sampled methods back | the mapping is this build's; any still minified arrived that way |
 | … still read as minified after `project.mapping` renamed … | a mapping from another build: it renames the frames it happens to match, wrongly, and misses the rest |
+| `project.mapping` named back the … frames R8 wrote into the lock slices | `code` names the real methods, and the evidence keeps the frames as recorded |
+| … of the … frames R8 wrote into the lock slices have no place in `project.mapping` | a mapping from another build: no range of their method holds their line |
 
-The first and the last are warnings, and both wait for a tenth of the app's
+The first and the third are warnings, and both wait for a tenth of the app's
 sampled methods to read as minified. Some code arrives minified from
 elsewhere — SDKs ship that way — and no mapping of this build names it: a
 build that kept its names had 38 of its 3,309 sampled methods so on the
@@ -422,6 +449,11 @@ misses: R8's names are short and reused, so it knows a few of this build's
 names, renames those wrongly, and leaves the rest as they were. The names it
 got wrong cannot be told from right ones; the ones it left are what gives it
 away.
+
+The last is a warning too, from a tenth of the lock slices' frames up. A
+frame carries a line, and another build's mapping is told by lines no range
+of the method holds, which the right mapping never leaves. Such a frame gets
+its class back and keeps R8's method name, with no line.
 
 ## Merging repeats
 

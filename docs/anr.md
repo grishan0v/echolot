@@ -103,7 +103,8 @@ whose monitor it wants. Where the two names differ, the raw one stays in the
 output beside the resolved one. Only a name R8 wrote is resolved — a few
 lower-case letters where a class name would be. A monitor that kept its name
 stays as printed: `synchronized(cache)` inside `Repository.get` locks a
-`Cache`, not a `Repository`.
+`Cache`, not a `Repository`. Given the build's mapping, a monitor's class is
+named back directly ([A minified build](#a-minified-build)).
 
 When the file carries no lock note at all — Play Console strips them, and so
 do some Crashlytics exports — no chain can be read off it, and the report says
@@ -199,7 +200,7 @@ it or not: a frame of dagger, koin or sentry is neither placed nor counted as
 code this checkout is missing. The list still vetoes, so a test stub declaring
 `package android.util` does not make the platform yours. A report R8 renamed
 into packages of its own (`a.b.c(SourceFile:12)`) is in nothing the checkout
-declares; retrace it first.
+declares until the build's mapping names it back, as the next section says.
 
 > [!IMPORTANT]
 > **Check out the build the report came from.** Line numbers are the first
@@ -209,6 +210,43 @@ declares; retrace it first.
 > things about that: it refuses each such frame with its own reason, and when
 > most of the frames land somewhere it does not recognise, it adds one sentence
 > saying the checkout is probably not the build that froze.
+
+### A minified build
+
+```bash
+echolot anr record.txt --mapping app/build/outputs/mapping/release/mapping.txt
+```
+
+A minified build's frames read as R8 named them, `a.b.run(SourceFile:3)`.
+The device's own record is always like that, and so is an export from a
+console that was never given the build's mapping. Such a frame is in no file
+of the checkout and in no package it declares, so the report finds nothing
+of the project in it and says every frame belongs to the platform or a
+library. `--mapping` names the build's `mapping.txt`. Without the flag,
+`project.mapping` of the `echolot.yml` under `--root` is used, the key
+`analyze` reads; `mark --from-anr` reads it from the config it reads.
+
+The frames are named back before anything else is read, the way R8's own
+`retrace` does it: by the line, out through the methods inlined there. So
+one frame can become several: `Store.read(Store.java:17)`, then the
+`MainActivity.freeze(MainActivity.java:21)` it was inlined into. The number
+in a frame is read whatever the frame calls its file: `SourceFile`,
+`r8-map-id-…`, or `unavailable`. ART prints `unavailable` and an
+instruction's offset for a build R8 left without a line table, and that
+build's mapping is written in offsets, so such a frame is named exactly too
+([what each build writes](collecting.md#a-minified-build)). A monitor's
+class in a lock note is named back as well. A frame that arrived unminified,
+from Crashlytics or Play Console with the mapping uploaded, is not R8's and
+stays as it was.
+
+The header says how many frames the mapping named back. A frame it has no
+place for, with its line in no range of its method or a method its class
+does not have, keeps R8's method name and loses the line. The right mapping
+leaves no such frame and another build's leaves many, so from a tenth of the
+frames up the header warns. Without a mapping, the frames that still read
+as R8 named them are listed under what the report does not say, with the
+flag that names them. `--json` has both: `retrace` with `frames` and
+`outside`, and `minified`.
 
 ## Markers from a stack
 

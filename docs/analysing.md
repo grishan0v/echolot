@@ -369,6 +369,17 @@ and writes the answer into the row: a `code` column in the markdown, and
 line and which it is (`owner`, `blocked`, the `location` itself, or
 `sampled`).
 
+A minified build writes the lock's frames as R8 named them,
+`a.a.run()(SourceFile:6)`, and no file of the checkout holds them. With
+`project.mapping` set, `analyze` names both back before it places them: the
+place is the method the runtime stood in, inlined into another or not, at the
+line it came from, and it carries `retraced: true`. The evidence keeps the
+frame as it was recorded, and one line in the header says so. A frame the
+mapping has no place for, with its line in no range of its method, gets its
+class back and keeps R8's method name, and from a tenth of them up the header
+warns that the mapping is probably another build's
+([A minified build](collecting.md#a-minified-build)).
+
 The line is the runtime's when the build kept line numbers and the
 declaration's when it did not — a release build says `(File.kt:-1)` for
 everything, and the declaration is where a reader opens the file anyway.
