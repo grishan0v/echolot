@@ -64,7 +64,9 @@ The second shape is the more valuable one: it carries the owner, the method
 being waited on, and the call site. Under minification the names are
 obfuscated, but the `file:line` parts survive. `analyze` reads both frames
 and places them in the checkout — the row's `places` and its `code` column —
-so a contention row is an address, not a string to grep for.
+so a contention row is an address, not a string to grep for. When ART did not
+know the owner's method it leaves out ` at <frame>` — about one slice in fifty
+on real cold starts — and the row is placed by the waiter alone.
 
 Everything else shaped `Lock contention on <something> lock` is a
 **runtime-internal lock** with no application code behind it:

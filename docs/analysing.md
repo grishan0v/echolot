@@ -359,6 +359,9 @@ Some rows name the code themselves. ART's contention slice carries both
 sides of the lock as frames — `at void pkg.StoreRepository.update(…)(StoreRepository.kt:30)
 waiters=0 blocking from … StoreRepository.find()(StoreRepository.kt:61)` — and
 `main_thread_block` names a class when the slice is a View being inflated.
+When ART did not know the owner's method it leaves out ` at <frame>`, about
+one contention slice in fifty on real cold starts, and the waiter's side is
+placed alone.
 A blind spot with samples behind it names the project's method the samples
 fell under most. `analyze` looks those up in the checkout the config sits in
 and writes the answer into the row: a `code` column in the markdown, and

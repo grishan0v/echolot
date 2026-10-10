@@ -83,6 +83,40 @@ def test_both_frames_come_off_a_contention_slice():
     check("a line of -1 is no line", blocked[2] is None, blocked)
 
 
+# The same slice when ART did not know the owner's method:
+# `Monitor::PrettyContentionInfo` then leaves out ` at <frame>`. About one
+# contention slice in fifty on real cold starts has this shape (#269).
+NO_OWNER_FRAME = ("monitor contention with owner DefaultDispatcher-worker-3 (28463) waiters=0 "
+                  "blocking from void com.example.app.data.StoreRepository"
+                  ".update(java.lang.String)(StoreRepository.kt:-1)")
+
+
+def test_a_slice_without_the_owners_frame_still_gives_the_waiters():
+    got = place.parse_contention(NO_OWNER_FRAME)
+    check("it parses", got is not None, got)
+    check("with no owner frame", got["at"] is None, got)
+    check("the owner thread and the waiter count",
+          (got["owner_thread"], got["owner_tid"], got["waiters"])
+          == ("DefaultDispatcher-worker-3", 28463, 0), got)
+    blocked = place.parse_frame(got["blocked"])
+    check("and the waiter's frame",
+          blocked == ("com.example.app.data.StoreRepository.update", "StoreRepository.kt", None),
+          blocked)
+
+
+def test_annotate_places_the_waiter_when_the_owner_frame_is_missing(tmp_path):
+    root = checkout(tmp_path)
+    rep = {"detectors": [{"id": "monitor_contention", "rows": [
+        {"location": "DefaultDispatch", "total_ms": 30.0, "detail": NO_OWNER_FRAME}]}]}
+    placed = place.annotate(rep, root)
+    lock = rep["detectors"][0]["rows"][0]
+    check("the row is placed", placed == 1, placed)
+    check("by its waiter alone, with no owner role",
+          [p["role"] for p in lock.get("places", [])] == ["blocked"], lock.get("places"))
+    check("at the waiter's declaration",
+          lock.get("code") == "blocked at StoreRepository.kt:6", lock.get("code"))
+
+
 def test_the_other_shape_and_an_empty_file_part_parse_to_nothing_or_no_file():
     check("the tid-only shape names nobody",
           place.parse_contention("Lock contention on a monitor lock (owner tid: 13533)") is None, "")

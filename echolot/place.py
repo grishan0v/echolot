@@ -35,11 +35,16 @@ from .domains import source_files
 # The informative shape of ART's contention slice:
 #   monitor contention with owner <thread> (<tid>) at <frame> waiters=<n>
 #   blocking from <frame>
+# ` at <frame>` is there only when ART knew the owner's method:
+# `Monitor::PrettyContentionInfo` leaves it out when the owner's current
+# method is null, and about one contention slice in fifty on real cold starts
+# comes without it. The waiter's frame is there either way, and it is usually
+# the project's own code (#269).
 # The other shape, `Lock contention on a monitor lock (owner tid: N)`, names
 # nobody and is left alone.
 _CONTENTION = re.compile(
-    r"^monitor contention with owner (?P<owner>.+?) \((?P<tid>\d+)\) at "
-    r"(?P<at>.+?) waiters=(?P<waiters>\d+) blocking from (?P<blocked>.+)$")
+    r"^monitor contention with owner (?P<owner>.+?) \((?P<tid>\d+)\)"
+    r"(?: at (?P<at>.+?))? waiters=(?P<waiters>\d+) blocking from (?P<blocked>.+)$")
 
 # A frame as the runtime prints it: `<ret> pkg.Class.method(args)(File.kt:41)`.
 # The return type is a single token and is not always there. What is in the
@@ -77,7 +82,10 @@ def index(root: Path) -> dict[str, list[Path]]:
 
 
 def parse_contention(detail: str) -> dict[str, Any] | None:
-    """The two frames out of a contention slice, or None for any other name."""
+    """The two frames out of a contention slice, or None for any other name.
+
+    `at`, the owner's frame, is None when the runtime did not know it.
+    """
     m = _CONTENTION.match(detail or "")
     if not m:
         return None
@@ -195,8 +203,8 @@ def places_of(row: dict[str, Any], idx: dict[str, list[Path]], root: Path) -> li
     out: list[Place] = []
     found = parse_contention(str(row.get("detail") or ""))
     if found:
-        for role in ("owner", "blocked"):
-            frame = parse_frame(found["at"] if role == "owner" else found["blocked"])
+        for role, text in (("owner", found["at"]), ("blocked", found["blocked"])):
+            frame = parse_frame(text) if text else None
             if frame:
                 out.append(locate(*frame, idx, root, role))
     m = _CLASS.match(str(row.get("location") or ""))
