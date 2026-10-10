@@ -214,6 +214,48 @@ def _(report):
     assert "code" not in one_row(bare, "monitor_contention", "LockWaiter")
 
 
+@check("R8 mapping: a minified build's lock is placed by its real names")
+def _(report):
+    """The same lock from a build R8 minified, placed as the named build's is.
+
+    ART writes the lock's two frames as R8 named them, and trace_processor
+    never sees them: `analyze` retraces them with `project.mapping`. The
+    owner's line is R8's, 3, and comes back as 41; the waiter has none, as on
+    a build R8 left without a line table, and lands on `get`'s declaration.
+    """
+    import copy
+    from . import place
+    minified = ("monitor contention with owner Thread-3 (4455) at void "
+                "a.a.b(java.lang.String)(SourceFile:3) waiters=0 blocking from "
+                "java.lang.Object a.a.a()(SourceFile:-1)")
+    rep = copy.deepcopy(report)
+    row = one_row(rep, "monitor_contention", "LockWaiter")
+    row["detail"] = minified
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "app/src/main/java/com/example"
+        src.mkdir(parents=True)
+        (src / "Store.java").write_text(
+            "package com.example;\n"
+            "public class Store {\n"
+            "    public void put(String key) { get(); }\n"
+            "    public Object get() { return null; }\n"
+            "}\n", encoding="utf-8")
+        mapping = root / "mapping.txt"
+        mapping.write_text(
+            "com.example.Store -> a.a:\n"
+            '# {"id":"sourceFile","fileName":"Store.java"}\n'
+            "    1:5:void put(java.lang.String):39:43 -> b\n"
+            "    1:2:java.lang.Object get():4:5 -> a\n", encoding="utf-8")
+        place.annotate(rep, root, mapping)
+    row = one_row(rep, "monitor_contention", "LockWaiter")
+    assert row["code"] == "owner at Store.java:41 · blocked at Store.java:4", row.get("code")
+    assert [p["symbol"] for p in row["places"]] == [
+        "com.example.Store.put", "com.example.Store.get"], row["places"]
+    assert row["detail"] == minified, "the evidence stays as the runtime wrote it"
+    assert rep["retrace"] == {"frames": 2, "outside": 0}, rep.get("retrace")
+
+
 @check("every shipped detector ran, and every one fired")
 def _(report):
     # Counted rather than written down. The fixture's promise is that it plants

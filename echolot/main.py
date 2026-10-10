@@ -665,9 +665,11 @@ def cmd_analyze(args) -> int:
     # After the merge rather than per trace: the evidence a merged row
     # carries is the worst repeat's, and that is the string worth placing.
     # The checkout is the config's directory — where `analyze` was run from
-    # is a macrobenchmark's output directory as often as not.
+    # is a macrobenchmark's output directory as often as not. The build's
+    # mapping names back the lock slices' frames R8 wrote, which
+    # trace_processor never sees.
     from . import place as place_mod
-    placed = place_mod.annotate(rep, _project_root(cfg))
+    placed = place_mod.annotate(rep, _project_root(cfg), cfg.mapping)
     if placed:
         recorder.note(placed=placed)
 
@@ -2396,6 +2398,13 @@ def cmd_anr(args) -> int:
     if not path.is_file():
         print(f"no such file: {path}", file=sys.stderr)
         return 2
+    # A mapping named here and not there is a typo, said before anything is
+    # read; one the config names is only looked for once the root is known.
+    named = Path(args.mapping).expanduser() if args.mapping else None
+    if named is not None and not named.is_file():
+        print(f"no such file: {named} — --mapping takes the build's mapping.txt",
+              file=sys.stderr)
+        return 2
 
     text = path.read_text(encoding="utf-8", errors="replace")
     source = anr_mod.detect(text)
@@ -2421,6 +2430,13 @@ def cmd_anr(args) -> int:
         # default `.` is always there, so this is a path typed by hand.
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
+    # Before anything reads the threads: which frames are the app's, which
+    # thread is idle and where a frame is in the checkout all go by names,
+    # and a minified build's are R8's.
+    mapping = named or _config_mapping(
+        root / "echolot.yml", hint="; --mapping names the build's mapping.txt")
+    if mapping is not None:
+        anr_mod.retrace(report, mapping)
     # A directory with no sources in it is no checkout, and costs the
     # report nothing: every frame "missing from it" sent the reader off
     # to look for another build.
@@ -2436,10 +2452,32 @@ def cmd_anr(args) -> int:
                   lock_notes=report.lock_notes,
                   blocks_main=any(c.blocks_main for c in found),
                   placed=len(code[0]) if code else 0)
+    if report.retraced is not None:
+        recorder.note(retraced=report.retraced["frames"],
+                      outside_mapping=report.retraced["outside"])
 
     print(anr_mod.to_json(report, code) if args.json
           else anr_mod.render(report, code))
     return 0
+
+
+def _config_mapping(config: Path, cfg: Config | None = None,
+                    hint: str = "") -> Path | None:
+    """`project.mapping` of a config, for a command that needs little else of it.
+
+    `anr` reads no config otherwise, and `mark` passes the one it loaded.
+    A config that does not load, or names a mapping that is not there, is
+    said and passed over: the frames then stay as R8 wrote them, and the
+    report says that too.
+    """
+    if cfg is None and not config.is_file():
+        return None
+    try:
+        return (cfg or Config.load(config)).mapping
+    except ConfigError as e:
+        print(f"[!] {e}\n    the frames R8 wrote stay as they are{hint}",
+              file=sys.stderr)
+        return None
 
 
 def cmd_domains(args) -> int:
@@ -2487,6 +2525,7 @@ def cmd_mark(args) -> int:
         print(f"config not found: {args.config}", file=sys.stderr)
         recorder.failed(f"config not found: {args.config}")
         return 2
+    cfg: Config | None = None
     if config is not None:
         try:
             cfg = Config.load(config, getattr(args, "local", None))
@@ -2548,6 +2587,11 @@ def cmd_mark(args) -> int:
             print(f"{source} is not a report this reader knows", file=sys.stderr)
             return 2
         report = anr_mod.parse(text)
+        # The frames of a minified build are placed by their real names, as
+        # `echolot anr` places them, with the mapping the config names.
+        mapping = _config_mapping(Path(config), cfg) if cfg is not None else None
+        if mapping is not None:
+            anr_mod.retrace(report, mapping)
         placed, missing = anr_mod.locate(report, root)
         # A frame placed in one of several files of its name is a guess, and
         # a marker in the wrong one measures a file the build never ran —
@@ -3899,6 +3943,10 @@ def build_parser() -> argparse.ArgumentParser:
                            "tell the app's own code from its libraries by the "
                            "packages its sources declare (default: the current "
                            "directory)")
+    an_r.add_argument("--mapping", metavar="MAPPING",
+                      help="the R8 mapping.txt of the build that froze, to name "
+                           "back the frames R8 renamed (default: project.mapping "
+                           "of the echolot.yml under --root)")
     an_r.add_argument("--json", action="store_true",
                       help="the same findings in the shape an agent walks")
     an_r.set_defaults(func=cmd_anr)

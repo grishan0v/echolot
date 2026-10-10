@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import place  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from tests import lockapp  # noqa: E402
 from tests.support import check  # noqa: E402
 
 # The slice as it came off a Galaxy A51 on Android 13, release build: the
@@ -255,3 +256,113 @@ def test_annotate_walks_nothing_when_there_is_nothing_to_place(tmp_path):
     placed = place.annotate(rep, tmp_path / "nowhere")
     check("nothing placed, no error on a missing root", placed == 0, placed)
     check("the row is untouched", "places" not in rep["detectors"][0]["rows"][0], rep)
+
+
+# --- a minified build -----------------------------------------------------------
+
+def lock_report(detail: str) -> dict:
+    return {"detectors": [{"id": "monitor_contention", "rows": [
+        {"location": "main", "total_ms": 8500.0, "detail": detail}]}]}
+
+
+def mapping_file(tmp_path: Path, text: str = lockapp.MAPPING) -> Path:
+    path = tmp_path / "mapping.txt"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_a_minified_lock_is_placed_where_the_mapping_says(tmp_path):
+    root = lockapp.checkout(tmp_path / "app")
+    for build in ("lines", "default"):
+        rep = lock_report(lockapp.SLICE[build])
+        place.annotate(rep, root, mapping_file(tmp_path))
+        row = rep["detectors"][0]["rows"][0]
+        roles = {p["role"]: p for p in row["places"]}
+        check(f"{build}: the worker inside Store.hold, at the loop it spun in",
+              (roles["owner"]["symbol"], roles["owner"]["line"])
+              == ("com.example.locks.Store.hold", 10), roles)
+        check(f"{build}: the main thread at the `synchronized` it could not enter, "
+              f"inlined into MainActivity.freeze as it was",
+              (roles["blocked"]["symbol"], roles["blocked"]["line"])
+              == ("com.example.locks.Store.read", 17), roles)
+        check(f"{build}: the file is the checkout's",
+              roles["blocked"]["file"] == "app/src/main/java/com/example/locks/Store.java",
+              roles)
+        check(f"{build}: both say the mapping named them",
+              all(p.get("retraced") is True for p in row["places"]), row["places"])
+        check(f"{build}: the code column", row["code"]
+              == "owner at Store.java:10 · blocked at Store.java:17", row["code"])
+        check(f"{build}: the evidence stays as the runtime wrote it",
+              row["detail"] == lockapp.SLICE[build], row["detail"])
+        check(f"{build}: the report counts them", rep["retrace"]
+              == {"frames": 2, "outside": 0}, rep.get("retrace"))
+
+
+def test_a_lock_slice_with_no_line_is_placed_at_the_methods_r8_kept(tmp_path):
+    # A build R8 left without a line table writes `-1` into the lock slice.
+    root = lockapp.checkout(tmp_path / "app")
+    rep = lock_report(lockapp.SLICE["offsets"])
+    place.annotate(rep, root, mapping_file(tmp_path, lockapp.OFFSETS))
+    row = rep["detectors"][0]["rows"][0]
+    check("at their declarations, as a frame of an unminified release build is",
+          row["code"] == "owner at Holder.java:17 · blocked at MainActivity.java:20", row)
+
+
+def test_without_the_mapping_a_minified_lock_is_nowhere(tmp_path):
+    root = lockapp.checkout(tmp_path / "app")
+    rep = lock_report(lockapp.SLICE["lines"])
+    placed = place.annotate(rep, root)
+    row = rep["detectors"][0]["rows"][0]
+    check("both frames kept, in no file", placed == 0
+          and [(p["symbol"], p["file"]) for p in row["places"]]
+          == [("a.a.run", None), ("a.b.run", None)], row)
+    check("no `retraced` on a place that was not", all("retraced" not in p
+                                                       for p in row["places"]), row)
+    check("and no count", "retrace" not in rep, rep)
+
+
+def test_a_frame_of_the_platform_is_not_asked_of_the_mapping(tmp_path):
+    (tmp_path / "app").mkdir()
+    root = checkout(tmp_path / "app")
+    rep = lock_report(REAL)
+    place.annotate(rep, root, mapping_file(tmp_path))
+    row = rep["detectors"][0]["rows"][0]
+    check("placed as it always was",
+          row["code"] == "blocked at StoreRepository.kt:6"
+          and not any(p.get("retraced") for p in row["places"]), row)
+    check("nothing to count", "retrace" not in rep, rep)
+
+
+def test_another_builds_mapping_is_told_by_the_frames_it_has_no_place_for(tmp_path):
+    # The worker's class is there under another build's numbering: its `run`
+    # has no line 6. The main thread's class is not there at all.
+    other = ("com.example.locks.Holder -> a.a:\n"
+             "    1:2:void run():19:20 -> run\n")
+    root = lockapp.checkout(tmp_path / "app")
+    rep = lock_report(lockapp.SLICE["lines"])
+    place.annotate(rep, root, mapping_file(tmp_path, other))
+    row = rep["detectors"][0]["rows"][0]
+    owner = row["places"][0]
+    check("the class comes back, the method keeps R8's name, and no line",
+          (owner["symbol"], owner["line"], owner.get("retraced"))
+          == ("com.example.locks.Holder.run", None, True), owner)
+    check("counted", rep["retrace"] == {"frames": 1, "outside": 1}, rep.get("retrace"))
+    text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
+    check("and the header says check the mapping", text.startswith("> ⚠️")
+          and "1 of the 1 frames" in text and "another build" in text, text)
+
+
+def test_the_header_says_what_the_mapping_made_of_the_lock_frames():
+    check("nothing without a mapping, or with nothing R8 wrote",
+          report_mod._retrace_lines(None) == []
+          and report_mod._retrace_lines({"frames": 0, "outside": 0}) == [])
+    lines = report_mod._retrace_lines({"frames": 4, "outside": 0})
+    check("one plain line: why `code` and the evidence name it differently",
+          len(lines) == 1 and not lines[0].startswith(">")
+          and "named back the 4 frames" in lines[0] and "as recorded" in lines[0], lines)
+    lines = report_mod._retrace_lines({"frames": 40, "outside": 1})
+    check("a frame or two out of many is said, not warned about",
+          len(lines) == 1 and not lines[0].startswith(">") and "1 had no place" in lines[0],
+          lines)
+    check("a tenth is a warning",
+          report_mod._retrace_lines({"frames": 10, "outside": 1})[0].startswith("> ⚠️"))

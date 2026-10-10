@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from . import mapping as mapping_mod
 from .domains import source_files
 
 # --- the format -------------------------------------------------------------
@@ -279,7 +280,8 @@ class Ownership:
 
     A frame R8 renamed into a package of its own — `a.b.c(SourceFile:12)` —
     is in nothing a checkout declares, and reads as somebody else's once one
-    is read. Such a report wants retracing before anything is placed.
+    is read. With the build's mapping such a report is retraced before
+    anything is asked of it (see `retrace`).
     """
     package: str = ""
     # The packages the checkout's sources declare. None when no checkout was
@@ -418,6 +420,10 @@ class Report:
     # The packages the checkout declares, once `locate` has read one — what
     # `Ownership` decides by. Not the report's content either.
     declared: frozenset[str] | None = field(default=None, repr=False, compare=False)
+    # What the build's mapping made of the frames R8 wrote, once `retrace`
+    # has run: how many it named back, and how many it had no place for.
+    # None when no mapping was given.
+    retraced: dict[str, int] | None = None
 
     @property
     def package(self) -> str:
@@ -693,6 +699,81 @@ def _scoped(report: Report) -> Report:
     if not report.head.get("Process"):
         report.head["Process"] = target
     return report
+
+
+# --- a minified build -------------------------------------------------------
+#
+# The device's own record of a minified build says `a.b.run(SourceFile:3)`,
+# and so does an export from a console that was never given the build's
+# mapping. Nothing in such a frame is in the checkout, its package reads as
+# somebody else's, and a coroutine worker parked in `c.b$a.run` is not seen
+# as idle. So the frames are named back first, and everything after reads
+# the source's names.
+
+
+def retrace(report: Report, mapping: Path) -> None:
+    """Every frame R8 wrote, and every monitor's class, named back by the build's mapping.
+
+    As R8's own `retrace` does it: by the line, out through the methods
+    inlined there, so one frame can become several. The number in a frame is
+    taken whatever file it names — `SourceFile`, `r8-map-id-…`, and
+    `unavailable`, where ART prints an instruction's offset for a build R8
+    left without a line table, which is what that build's mapping is written
+    in. A frame that arrived unminified, from a console that had the mapping,
+    is not R8's and stays as it was (see `mapping._ours`).
+    """
+    parsed: dict[str, tuple[str, str, str | None, int | None]] = {}
+    for thread in report.threads:
+        for text in thread.frames:
+            m = _FRAME.match(text)
+            if m is None or text in parsed:
+                continue
+            cls, _, method = m.group("symbol").strip().rpartition(".")
+            if cls:
+                parsed[text] = (cls, method, *mapping_mod.where(m.group("where")))
+    monitors = {t.lock.cls for t in report.threads if t.lock}
+    retracer = mapping_mod.retracer(mapping, {p[0] for p in parsed.values()} | monitors)
+    named: dict[str, list[str]] = {}
+    outside = 0
+    for text, (cls, method, file, line) in parsed.items():
+        got = retracer.retrace(cls, method, file, line)
+        if got is not None:
+            named[text] = _as_lines(got, file)
+            outside += got.outside
+    for thread in report.threads:
+        thread.frames = [new for text in thread.frames for new in named.get(text, [text])]
+        if thread.lock:
+            thread.lock.cls = retracer.real(thread.lock.cls) or thread.lock.cls
+    report._chains = None
+    report.retraced = {"frames": len(named), "outside": outside}
+
+
+def _as_lines(traced: mapping_mod.Retraced, file: str | None) -> list[str]:
+    """A retraced frame as the lines of a dump: one per method inlined there.
+
+    A frame that could be several methods stays one line naming each, as a
+    sampled frame does, `pkg.Disk.checksum | checksumLegacy(Disk.kt)`: the
+    package reads off it as off any other. A native method keeps saying so.
+    """
+    if len(traced.chains) == 1:
+        if file == "Native method":
+            return [f"{frame.symbol}(Native method)" for frame in traced.frames]
+        return [frame.text() for frame in traced.frames]
+    first = traced.chains[0][0]
+    names = [first.symbol] + [chain[0].method if chain[0].cls == first.cls
+                              else chain[0].symbol for chain in traced.chains[1:]]
+    return [" | ".join(dict.fromkeys(names)) + f"({first.file})"]
+
+
+def _minified(report: Report) -> list[str]:
+    """The frames worth reading that still read as R8 named them, first seen first."""
+    seen: dict[str, None] = {}
+    for thread in of_interest(report):
+        for text in thread.frames:
+            m = _FRAME.match(text)
+            if m and mapping_mod.minified(m.group("symbol").strip()):
+                seen.setdefault(text)
+    return list(seen)
 
 
 # --- what "doing nothing" looks like ----------------------------------------
@@ -1343,6 +1424,7 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
     if report.entries > 1:
         out.append("This file holds more than one ANR. Everything below is "
                    "the first of them.")
+    out.extend(_retrace_note(report.retraced))
     out.append("")
 
     found = chains(report)
@@ -1499,6 +1581,32 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
     return "\n".join(out).rstrip() + "\n"
 
 
+# A mapping from another build is told by the frames it has no place for, and
+# the right one leaves none. From a tenth of the frames it was asked about,
+# the line is a warning, as the Marker Report's is for the sampled methods a
+# mapping named (`report.MINIFIED_SHARE`).
+_OUTSIDE_SHARE = 0.10
+
+
+def _retrace_note(retraced: dict[str, int] | None) -> list[str]:
+    """What the build's mapping made of the frames R8 wrote, under the header."""
+    if retraced is None:
+        return []
+    total, outside = retraced["frames"], retraced["outside"]
+    if not total:
+        return ["The build's mapping was read, and no frame here was R8's."]
+    if outside / total >= _OUTSIDE_SHARE:
+        return [f"> ⚠️ {outside} of the {total} frames R8 wrote have no place in "
+                f"the mapping: no range of their method holds their line. A "
+                f"mapping from another build names the frames it happens to "
+                f"match, wrongly, and has no place for the rest: check that it "
+                f"is this build's."]
+    line = f"The build's mapping named back the {total} frames R8 wrote."
+    if outside:
+        line += f" {outside} had no place in it and keep R8's method name."
+    return [line]
+
+
 # Why a file has no reason in it, said of the file that was read. Only the
 # device's own record carries a `Subject`, and the sentence used to say "a
 # Crashlytics export" whatever the input was — while sending the reader to
@@ -1556,6 +1664,18 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
     if stray:
         gaps.append(f"- {stray} line(s) inside thread blocks that are neither "
                     f"frames nor a lock note.")
+    left = _minified(report)
+    if left and report.retraced is None:
+        gaps.append(f"- What {len(left)} frames are: they read as R8 named them, "
+                    f"first `{left[0]}`. The build's `mapping.txt` names them "
+                    f"back: `--mapping`, or `project.mapping` in the echolot.yml "
+                    f"under `--root`.")
+    elif left:
+        gaps.append(f"- What {len(left)} frames are: they still read as R8 named "
+                    f"them after the mapping, first `{left[0]}`. Code that "
+                    f"arrived minified, as some SDKs ship, is in no mapping of "
+                    f"this build, and one from another build misses the app's "
+                    f"own.")
     if missing:
         gaps.append(f"- Where {len(missing)} of this project's frames are: they "
                     f"name a source file this checkout does not have. Either "
@@ -1651,6 +1771,11 @@ def summary(report: Report,
         },
         "load": [{"share": s, "process": n} for s, n in report.load],
         "own_frames": any(t.own(ours) for t in of_interest(report)),
+        # What the build's mapping made of the frames R8 wrote: how many it
+        # named back and how many it had no place for. Null without one.
+        "retrace": report.retraced,
+        # The frames worth reading that still read as R8 named them.
+        "minified": len(_minified(report)),
         "unread": {
             "outside": len(report.unread),
             "inside": sum(len(t.unread) for t in report.threads),

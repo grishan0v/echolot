@@ -76,6 +76,14 @@ methods read as minified, with a mapping and without one; fewer than that is
 code that arrived minified, as some SDKs ship, and no mapping of this build
 names it.
 
+The same file names back the frames the runtime writes as text, which
+trace_processor never sees. `analyze` retraces both sides of a lock slice
+before placing them, and such a place carries `retraced: true`. `echolot anr`
+takes `--mapping`, or reads this key from the config under `--root`, and
+`mark --from-anr` reads it from its config. A lock frame the mapping has no
+place for is the sign of another build's mapping, and the header warns from a
+tenth of them.
+
 ### `scenario.start` / `scenario.end`
 
 A GLOB over the slice name. Start is the first occurrence. End is where the

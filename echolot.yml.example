@@ -27,8 +27,9 @@ project:
   # may go into every path in instrumentation.allowed.
   source_root: app/src/main/kotlin
   # The R8 or ProGuard mapping.txt of the build that was recorded, for a
-  # minified build: analyze names its sampled frames back with it. It needs
-  # project.package, the package as installed, and it has to be this build's.
+  # minified build: analyze names its sampled frames and its lock slices back
+  # with it, and anr the frames of an ANR record. It needs project.package,
+  # the package as installed, and it has to be this build's.
   # mapping: app/build/outputs/mapping/<variant>/mapping.txt
 
 # Scenario window bounds: a GLOB over the slice name.

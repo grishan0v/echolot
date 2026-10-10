@@ -878,6 +878,34 @@ def _names_lines(names: dict[str, Any] | None) -> list[str]:
             f"mapping of this build names."]
 
 
+def _retrace_lines(retrace: dict[str, Any] | None) -> list[str]:
+    """What `project.mapping` made of the frames R8 wrote into lock slices.
+
+    The rows' `code` names the real methods, and their evidence still says
+    `a.a.run()(SourceFile:6)`; one line says why the two differ. A frame
+    the mapping has no place for — its line in no range of its method, or a
+    method its class lacks — is what a mapping from another build leaves,
+    and the right one leaves none. From a tenth of the frames up, the line is
+    a warning, as it is for the sampled methods (`MINIFIED_SHARE`).
+    """
+    if not retrace or not retrace.get("frames"):
+        return []
+    total, outside = retrace["frames"], retrace.get("outside") or 0
+    if outside / total >= MINIFIED_SHARE:
+        return [
+            f"> ⚠️ {outside} of the {total} frames R8 wrote into the lock slices "
+            f"have no place in `project.mapping`: no range of their method holds "
+            f"their line. A mapping from another build names the frames it "
+            f"happens to match, wrongly, and has no place for the rest: check "
+            f"that it is this build's."
+        ]
+    line = (f"`project.mapping` named back the {total} frames R8 wrote into the "
+            f"lock slices; the evidence keeps them as recorded.")
+    if outside:
+        line += f" {outside} had no place in it and keep R8's method name."
+    return [line]
+
+
 def _sampling_lines(s: dict[str, Any] | None) -> list[str]:
     """What sampled the app while it was measured, and what came of it.
 
@@ -1050,6 +1078,7 @@ def to_markdown(report: dict[str, Any]) -> str:
         )
 
     out.extend(_environment_lines(report.get("environment") or {}))
+    out.extend(_retrace_lines(report.get("retrace")))
 
     s = report["summary"]
     out.append(
@@ -1208,6 +1237,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_startup_lines(w.get("startup")))
     out.extend(_environment_lines(report.get("environment") or {}))
+    out.extend(_retrace_lines(report.get("retrace")))
     return out
 
 

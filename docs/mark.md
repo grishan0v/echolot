@@ -193,6 +193,10 @@ around them:
   came from. The working tree is not that build, and no line number in the
   report means anything until it is.
 
+A minified build's frames are named back first with `project.mapping` from
+the config `mark` reads, as `anr` names them
+([A minified build](anr.md#a-minified-build)); without it they land nowhere.
+
 See [ANRs](anr.md) for the rest of that path.
 
 ## `--pools`: naming the threads instead of marking the work

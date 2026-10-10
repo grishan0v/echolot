@@ -101,7 +101,9 @@ blocked is queued like the threads behind it, a victim rather than the cause,
 and `anr` walks past it to the end. `echolot mark --from-anr <report>`
 turns those frames into a marker plan, which is a better first round than
 `mark` from the manifest: it instruments what was measured to be on the thread
-rather than where instrumentation usually belongs.
+rather than where instrumentation usually belongs. A report whose frames read
+`a.b.run(SourceFile:3)` is a minified build's: give `anr` that build's
+`mapping.txt` with `--mapping`, or as `project.mapping`, before reading it.
 
 Two things to carry into the loop below. If the main thread was **idle**
 (`nativePollOnce`), it was not the culprit and its top frame is Android's
@@ -230,7 +232,8 @@ echolot mark                                       the first markers for a proje
                                                    where and why; --apply puts them in,
                                                    --remove takes exactly those out
 echolot anr <report> --root .                      an ANR report: the lock chain, who was
-                                                   working, where the frames are; --json
+                                                   working, where the frames are; --json;
+                                                   --mapping for a minified build's
 echolot mark --from-anr <report>                   markers on what was on the stack
 echolot explain                                    the detectors and their default params
 ```

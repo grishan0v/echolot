@@ -3,7 +3,9 @@
 
 What trace_processor does with the packet is the self-check's to pin, in
 `R8 mapping: a minified build's frames come back by their names`. Here: what
-is read out of a mapping.txt, what goes into the packet, and the words.
+is read out of a mapping.txt, what goes into the packet, the words, and how
+a frame the runtime wrote as text — a lock slice's, an ANR record's — is
+retraced, against R8's own output and what a phone printed (lockapp.py).
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from echolot import fixture, mapping  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config, ConfigError  # noqa: E402
 from echolot.tp import _then  # noqa: E402
+from tests import lockapp  # noqa: E402
 from tests.support import check  # noqa: E402
 
 # R8's output for a few shapes it writes: a renamed class with line ranges,
@@ -194,3 +197,187 @@ def test_repeats_keep_the_most_minified_methods_any_of_them_saw() -> None:
     # from another.
     check("the worst repeat speaks for the names", merged["names"]
           == {"methods": 8, "minified": 3, "renamed": 5}, merged)
+
+
+# --- frames written as text ---------------------------------------------------
+#
+# Every name below is the one R8's own `retrace` (R8 9.0) printed for the same
+# frame against the same mapping, except where a test says why it differs.
+
+RETRACE = R8 + """\
+com.example.app.Disk -> a.f:
+# {"id":"sourceFile","fileName":"Disk.kt"}
+    1:3:long checksum(java.io.File):12:14 -> c
+    4:4:long checksumLegacy(java.io.File):30:30 -> c
+    1:2:byte[] readSync(java.io.File):20:21 -> d
+com.example.app.Plain -> a.g:
+    void noLines() -> a
+    1:3:void identity() -> b
+"""
+
+
+def retraced(mapping_text: str, frame: str, tmp_path: Path) -> mapping.Retraced | None:
+    """One frame as a stack trace prints it, `pkg.Class.method(File:line)`, retraced."""
+    path = tmp_path / "mapping.txt"
+    path.write_text(mapping_text, encoding="utf-8")
+    symbol, _, rest = frame.partition("(")
+    cls, _, method = symbol.rpartition(".")
+    file, line = mapping.where(rest.rstrip(")"))
+    return mapping.retracer(path, {cls}).retrace(cls, method, file, line)
+
+
+@pytest.mark.parametrize("frame, named", [
+    # By the line: the two ranges run side by side.
+    ("a.b.c(SourceFile:3)", ["com.example.app.Store.save(Store.kt:24)"]),
+    ("a.b.c(SourceFile:8)", ["com.example.app.Store.save(Store.kt:31)"]),
+    # A method inlined there comes first, then the one R8 kept, at the call.
+    ("a.b.d(SourceFile:2)", ["com.example.app.Inner.inlined(Inner.java:11)",
+                             "com.example.app.Store.flush(Store.kt:40)"]),
+    # No line: the method R8 kept, whatever was inlined into it.
+    ("a.b.c(SourceFile)", ["com.example.app.Store.save(Store.kt)"]),
+    ("a.b.d(SourceFile)", ["com.example.app.Store.flush(Store.kt)"]),
+    # A class R8 kept: a method it renamed, one it did not, and one whose
+    # class it left alone altogether, whose lines are R8's all the same.
+    ("com.example.app.KeptActivity.a(SourceFile:2)",
+     ["com.example.app.KeptActivity.helper(KeptActivity.java:41)"]),
+    ("com.example.app.KeptActivity.onCreate(SourceFile:2)",
+     ["com.example.app.KeptActivity.onCreate(KeptActivity.java:16)"]),
+    ("com.example.app.Untouched.run(SourceFile:2)",
+     ["com.example.app.Untouched.run(Untouched.java:6)"]),
+    # Two methods R8 gave one name, told apart by their ranges.
+    ("a.f.c(SourceFile:4)", ["com.example.app.Disk.checksumLegacy(Disk.kt:30)"]),
+    # The number is read whatever the file says: R8's own name for it, the
+    # mapping's id, nothing, or ART's `unavailable` before an offset.
+    ("a.f.c(r8-map-id-3f9a2c1:2)", ["com.example.app.Disk.checksum(Disk.kt:13)"]),
+    ("a.f.c(:2)", ["com.example.app.Disk.checksum(Disk.kt:13)"]),
+    ("a.f.c(unavailable:2)", ["com.example.app.Disk.checksum(Disk.kt:13)"]),
+    # A method line without ranges did not move its lines.
+    ("a.g.a(SourceFile:7)", ["com.example.app.Plain.noLines(Plain.java:7)"]),
+    ("a.g.b(SourceFile:2)", ["com.example.app.Plain.identity(Plain.java:2)"]),
+])
+def test_a_frame_comes_back_as_r8s_retrace_names_it(frame: str, named: list[str],
+                                                      tmp_path: Path) -> None:
+    got = retraced(RETRACE, frame, tmp_path)
+    check(f"{frame}", got is not None and not got.outside
+          and [f.text() for f in got.frames] == named and len(got.chains) == 1, got)
+
+
+def test_a_nested_class_is_in_its_outer_classs_file(tmp_path: Path) -> None:
+    # R8's `retrace` says `Store.java` here, a guess from the class's name,
+    # while the mapping says where Store was written.
+    got = retraced(RETRACE, "a.b$a.a(SourceFile:2)", tmp_path)
+    check("the outer class's file", got is not None and [f.text() for f in got.frames]
+          == ["com.example.app.Store$Companion.create(Store.kt:81)"], got)
+
+
+@pytest.mark.parametrize("frame", [
+    "a.z.y(SourceFile:3)",                                  # a class the mapping lacks
+    "com.example.app.KeptActivity.onCreate(KeptActivity.kt:16)",  # already retraced
+    "com.example.app.KeptActivity.helper(KeptActivity.kt:40)",    # the class's own name
+    "java.lang.Thread.sleep(Native method)",
+])
+def test_a_frame_that_is_not_r8s_stays_as_it_was(frame: str, tmp_path: Path) -> None:
+    check(f"{frame}", retraced(RETRACE, frame, tmp_path) is None)
+
+
+@pytest.mark.parametrize("frame, named", [
+    # A line in no range of its method: the class comes back, the method
+    # keeps R8's name, and the line goes — R8's `retrace` keeps it.
+    ("a.b.c(SourceFile:20)", "com.example.app.Store.c(Store.kt)"),
+    ("a.g.b(SourceFile:9)", "com.example.app.Plain.b(Plain.java)"),
+    # A method its class does not have, with a line or without.
+    ("a.b.x(SourceFile:3)", "com.example.app.Store.x(Store.kt)"),
+    ("a.b.x(SourceFile)", "com.example.app.Store.x(Store.kt)"),
+])
+def test_a_frame_the_mapping_has_no_place_for_is_called_so(frame: str, named: str,
+                                                            tmp_path: Path) -> None:
+    got = retraced(RETRACE, frame, tmp_path)
+    check(f"{frame}", got is not None and got.outside
+          and [f.text() for f in got.frames] == [named], got)
+
+
+def test_without_a_line_two_methods_of_one_name_are_both(tmp_path: Path) -> None:
+    # R8's `retrace` prints the first. A sample has no line either, and the
+    # Marker Report names such a frame as both (see stacks.py).
+    got = retraced(RETRACE, "a.f.c(SourceFile)", tmp_path)
+    check("both, each as R8 kept it", got is not None and [[f.text() for f in c] for c in got.chains]
+          == [["com.example.app.Disk.checksum(Disk.kt)"],
+              ["com.example.app.Disk.checksumLegacy(Disk.kt)"]], got)
+
+
+@pytest.mark.parametrize("build, mapping_text", [
+    ("lines", lockapp.MAPPING), ("default", lockapp.MAPPING), ("offsets", lockapp.OFFSETS)])
+def test_what_a_phone_wrote_comes_back_by_name(build: str, mapping_text: str,
+                                               tmp_path: Path) -> None:
+    main, holder = lockapp.FRAMES[build]
+    blocked = retraced(mapping_text, main, tmp_path)
+    check("the main thread inside Store.read, inlined into MainActivity.freeze",
+          blocked is not None and [f.text() for f in blocked.frames]
+          == ["com.example.locks.Store.read(Store.java:17)",
+              "com.example.locks.MainActivity.freeze(MainActivity.java:21)"], blocked)
+    owner = retraced(mapping_text, holder, tmp_path)
+    check("the worker inside Store.hold, inlined into Holder.run",
+          owner is not None and [f.text() for f in owner.frames]
+          == ["com.example.locks.Store.hold(Store.java:10)",
+              "com.example.locks.Holder.run(Holder.java:23)"], owner)
+
+
+def test_a_lock_slice_without_lines_is_named_by_the_methods_r8_kept(tmp_path: Path) -> None:
+    # `(SourceFile:-1)`: the build with offsets gives a lock slice no line.
+    for frame, named in (("a.a.run(SourceFile:-1)", "com.example.locks.Holder.run(Holder.java)"),
+                         ("a.b.run(SourceFile:-1)",
+                          "com.example.locks.MainActivity.freeze(MainActivity.java)")):
+        got = retraced(lockapp.OFFSETS, frame, tmp_path)
+        check(f"{frame}", got is not None and [f.text() for f in got.frames] == [named], got)
+
+
+def test_a_synthetic_class_and_a_kept_one_are_named_back(tmp_path: Path) -> None:
+    got = retraced(lockapp.MAPPING, "com.example.locks.MainActivity.onCreate(SourceFile:3)",
+                   tmp_path)
+    check("onCreate at the line Holder.start was inlined at", got is not None
+          and [f.text() for f in got.frames]
+          == ["com.example.locks.Holder.start(Holder.java:13)",
+              "com.example.locks.MainActivity.onCreate(MainActivity.java:16)"], got)
+    path = tmp_path / "mapping.txt"
+    retracer = mapping.retracer(path, {"a.c", "java.lang.Object"})
+    check("a monitor's class comes back by its name",
+          (retracer.real("a.c"), retracer.real("java.lang.Object"),
+           retracer.real("com.example.locks.MainActivity"))
+          == ("com.example.locks.Store", None, None))
+
+
+@pytest.mark.parametrize("text, parsed", [
+    ("SourceFile:6", ("SourceFile", 6)),
+    ("Store.kt:-1", ("Store.kt", None)),
+    (":-2", (None, None)),
+    ("unavailable:0", ("unavailable", 0)),
+    (f"{lockapp.MAP_ID}:3", (lockapp.MAP_ID, 3)),
+    ("Native method", ("Native method", None)),
+    ("", (None, None)),
+])
+def test_what_a_frames_parenthesis_says(text: str, parsed: tuple) -> None:
+    check(f"{text!r}", mapping.where(text) == parsed, mapping.where(text))
+
+
+def test_only_the_classes_asked_for_are_read_with_their_lines(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.txt"
+    path.write_text(RETRACE, encoding="utf-8")
+    classes, files = mapping._read_lines(path, frozenset({"a.f"}))
+    check("one class, with its methods", sorted(classes) == ["a.f"]
+          and sorted(classes["a.f"].methods) == ["c", "d"], classes)
+    check("and every class's file, for what was inlined from it",
+          files == {"com.example.app.Store": "Store.kt", "com.example.app.Disk": "Disk.kt"},
+          files)
+
+
+def test_a_retracer_is_read_again_once_the_mapping_changes(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.txt"
+    path.write_text(lockapp.MAPPING, encoding="utf-8")
+    first = mapping.retracer(path, ["a.a"])
+    check("read once while the file stays", mapping.retracer(path, ["a.a"]) is first)
+    path.write_text(lockapp.OFFSETS, encoding="utf-8")
+    os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1_000_000))
+    again = mapping.retracer(path, ["a.a"])
+    check("and again once it changes", again is not first
+          and again.retrace("a.a", "run", "unavailable", 20) is not None
+          and again.retrace("a.a", "run", "unavailable", 20).frames[0].line == 10)

@@ -33,6 +33,17 @@ Read it from the checkout. The packages its sources declare are what makes a
 frame the app's own; without them a library the tool has never heard of reads
 as the app's.
 
+A minified build's frames read `a.b.run(SourceFile:3)`, and nothing in them is
+the app's until the build's mapping names them back:
+
+```bash
+echolot anr report.txt --root . --mapping app/build/outputs/mapping/release/mapping.txt
+```
+
+Without `--mapping`, `project.mapping` of the echolot.yml under `--root` is
+used. The device's own record of such a build is always minified; an export is
+when the console never got the mapping.
+
 ## What to do with what it says
 
 | the report says | your next move |
@@ -42,6 +53,8 @@ as the app's.
 | the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working |
 | frames placed in the checkout | open those lines |
 | frames landing nowhere | check out the build the report names. Line numbers are the first thing to go stale |
+| "What N frames are: they read as R8 named them" under what it does not say | a minified build: run it again with that build's mapping |
+| frames R8 wrote "have no place in the mapping" | the mapping is another build's. Find the one that froze before reading the names |
 | "every frame belongs to the platform or a library", then "the frames nearest to the app" | the platform is a dead end, a library the app drives is not: `SystemJobScheduler.cancel` points at the app's WorkManager setup. Read that setup |
 | "Who was holding what" under what it does not say | this file carries no lock notes; an empty chain list is the file's limit, not the freeze's. Get the device's own record |
 | a CPU table with the device busy | a machine under load is a different story from an app that blocked itself |
