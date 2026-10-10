@@ -387,6 +387,14 @@ pipx install echolot                          # the CLI the skills drive
   `echolot` skill, `$echolot` in a prompt and `echolot:echolot` in Codex's
   list, and it also answers a plain question about slow startup.
 
+Claude Code needs git 2.36 or newer on `PATH` for this. It fetches
+`plugins/echolot` with a sparse checkout of a partial clone, and tries the
+checkout offline first: git 2.35 and older reach for the network anyway, are
+refused, and crash with the index still locked, so the retry stops at
+`index.lock: File exists`. Ubuntu 22.04 ships git 2.34.1 and the git-scm.com
+installer for macOS 2.33.0; git from Xcode's command line tools or Homebrew is
+new enough. Codex installs the plugin with old git as well (#205).
+
 An upgrade is `pipx upgrade echolot`, and then the plugin: `claude plugin
 marketplace update echolot` and `claude plugin update echolot@echolot`, which
 Claude Code applies after a restart; `codex plugin marketplace upgrade

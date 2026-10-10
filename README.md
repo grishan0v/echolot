@@ -71,7 +71,8 @@ Inside a Claude Code session the same two steps are
 `/plugin install echolot@echolot`. Once the marketplace is added, Codex also
 installs the plugin from `/plugins` in the CLI or from the Plugins tab of the
 ChatGPT desktop app. The plugin is not in Anthropic's or OpenAI's catalogs
-yet.
+yet. Claude Code needs git 2.36 or newer for the install: with an older git
+it stops at `index.lock: File exists`.
 
 <details>
 <summary><b>Without the plugin</b>: the <code>.claude/</code> layer in Claude Code, and other agents</summary>
@@ -414,7 +415,7 @@ only the agent has. The pipeline — `collect`, `analyze`, `compare` — is unde
 | **`adb`** | on `PATH` — ships in the Android SDK platform-tools |
 | **Device** | a phone or emulator with USB debugging on |
 | **Agent** *(optional)* | [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) with the plugin, or Claude Code with the `.claude/` layer, for the full workflow; Cursor and others via `echolot guide` |
-| **`git`** *(for the plugin)* | the marketplace fetches the plugin with it. The install failed with git 2.33 and works with 2.50; the versions in between are not checked yet ([#205](https://github.com/grishan0v/echolot/issues/205)) |
+| **`git`** *(for the plugin)* | 2.36 or newer for Claude Code, which fetches the plugin with it; with 2.35 and older the install stops at `index.lock: File exists`. Ubuntu 22.04 ships 2.34.1 and the git-scm.com installer for macOS 2.33.0. Codex installs it with either ([#205](https://github.com/grishan0v/echolot/issues/205)) |
 | **Android 12+** *(for one detector)* | `frame_jank` reads SurfaceFlinger's frame timeline. Older devices do not have it, and the detector is then silent — which reads exactly like "no bad frames" |
 
 Validated on Android 14 (emulator) and Android 13 (Galaxy A51).
