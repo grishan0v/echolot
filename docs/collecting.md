@@ -208,6 +208,10 @@ and its latest report, and marks the open investigation's. Its next step
 names the scenario, `--scenario feed_scroll`: the open investigation's, else
 the first.
 
+In CI, the GitHub Action measures the scenario its `scenario` input names,
+one a step or one a leg of a matrix, each kept under its own
+`artifact-name`: [Comparing](compare.md#several-scenarios) shows the matrix.
+
 ## Which device
 
 In `launch` and `command` modes, in the order they are consulted:

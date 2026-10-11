@@ -71,6 +71,58 @@ def test_analyze_stops_on_a_line_that_names_no_trace(tmp_path: Path, capsys) -> 
           "`bench` names no trace — it is a directory" in said, said)
 
 
+TWO_SCENARIOS = """\
+project:
+  package: com.example.app
+  process: com.example.app
+scenarios:
+  first_frame:
+    start: {name: AppStart}
+    end: {name: Screen.firstFrame}
+  loaded:
+    start: {name: AppStart}
+    end: {name: Screen.loaded}
+"""
+
+
+def test_analyze_measures_the_scenario_the_input_names(tmp_path: Path, monkeypatch,
+                                                         capfd) -> None:
+    """The `scenario` input reaches `echolot analyze`, and an empty one is no
+    scenario: passed on as `--scenario ""`, every workflow that never set the
+    input would stop at `analyze`."""
+    from echolot import fixture
+    (tmp_path / "fixture_iter000.perfetto-trace").write_bytes(fixture.build())
+    config = tmp_path / "echolot.yml"
+    config.write_text(TWO_SCENARIOS)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+
+    def analyze(scenario: str) -> tuple[int, Path]:
+        out = tmp_path / f"out-{scenario or 'none'}"
+        code = ci.main(["analyze", "--echolot", _echolot(tmp_path), "--config", str(config),
+                        "--out", str(out), "--traces", "fixture_iter*.perfetto-trace",
+                        "--scenario", scenario, "--root", str(tmp_path)])
+        return code, out / "report.json"
+
+    measured = {}
+    for scenario in ("loaded", ""):
+        code, path = analyze(scenario)
+        report = json.loads(path.read_text(encoding="utf-8"))
+        measured[scenario] = (code, report["scenario"], report["window"]["end_anchor"]["glob"])
+    check("the input's scenario, with its window",
+          measured["loaded"] == (0, "loaded", "Screen.loaded"), measured)
+    check("and without it the first, as before there was an input",
+          measured[""] == (0, "first_frame", "Screen.firstFrame"), measured)
+
+    capfd.readouterr()
+    code, path = analyze("feed_scroll")
+    said = capfd.readouterr()
+    check("a scenario the config lacks fails the step, with no report",
+          code == 2 and not path.exists(), (code, said.err[-400:]))
+    check("and echolot names the ones it has",
+          "no such scenario in this config. It has `first_frame`, `loaded`" in said.err,
+          said.err[-400:])
+
+
 # --- the baseline -----------------------------------------------------------
 
 def _archive(**files: bytes) -> bytes:
@@ -200,6 +252,30 @@ def test_compare_runs_against_the_baseline_and_says_how_many_rows_moved(
           and said["baseline"] == str(out / "baseline" / "report.json"), sorted(os.listdir(out)))
     check("and its header names them the way they sit in the artifact",
           "Before  `baseline/report.json`" in (out / "comparison.md").read_text(), "")
+
+
+def test_a_baseline_of_another_scenario_is_kept_without_a_comparison(
+        tmp_path: Path, demo_report, capsys, monkeypatch) -> None:
+    """A step that changed its `scenario` and kept its `artifact-name` finds
+    the other scenario's report as its baseline."""
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "report.json").write_text(json.dumps(demo_report))
+    (tmp_path / "base.json").write_text(json.dumps({**demo_report, "scenario": "feed_scroll"}))
+    (tmp_path / "echolot.yml").write_text("project:\n  process: com.example.app\n")
+    outputs = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(outputs))
+
+    code = ci.main(["compare", "--echolot", _echolot(tmp_path),
+                    "--config", str(tmp_path / "echolot.yml"), "--out", str(out),
+                    "--baseline", str(tmp_path / "base.json")])
+    said = dict(line.split("=", 1) for line in outputs.read_text().splitlines())
+    check("the step passes, with no comparison and the reason for the summary",
+          code == 0 and said["comparison"] == "" and said["failed"] == "`echolot compare` exited 2"
+          and not (out / "comparison.json").exists(), said)
+    check("and a warning", "::warning" in capsys.readouterr().out)
+    check("the report itself names its scenario", demo_report["scenario"] == "coldStart",
+          demo_report.get("scenario"))
 
 
 def test_a_baseline_that_is_not_there_leaves_the_outputs_empty(tmp_path: Path, monkeypatch,

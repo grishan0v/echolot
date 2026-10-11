@@ -446,10 +446,11 @@ Linux and macOS runners.
 |---|---|---|
 | `traces` | — | the repeats of one test: paths or globs, one per line, relative to the workspace; `**` reaches into subdirectories |
 | `config` | `echolot.yml` | the project's config |
+| `scenario` | the config's first | which of the config's `scenarios:` the traces are, and `analyze` measures; a name the config lacks fails the step |
 | `baseline` | — | a `report.json` to compare against, in place of the lookup |
 | `baseline-branch` | the base branch, or else the default branch | whose last good run holds the baseline |
 | `baseline-workflow` | this workflow | the workflow file whose runs keep the baseline, such as `nightly.yml`, for a pull request job that compares against a nightly |
-| `artifact-name` | `echolot-report` | what the reports are kept as and looked up by; each leg of a matrix needs its own |
+| `artifact-name` | `echolot-report` | what the reports are kept as and looked up by; each leg of a matrix, and each scenario, needs its own |
 | `comment` | `false` | `true` posts the comparison on the pull request and edits that one comment on every push. It needs `pull-requests: write`, which a pull request from a fork does not get |
 | `python` | `python3` | the Python, 3.10 or newer, echolot is installed with |
 | `token` | the job's token | reads the earlier runs' artifacts and posts the comment |
@@ -465,8 +466,48 @@ Its outputs are:
 
 All but the first are empty when there was nothing to compare against.
 `.github/workflows/action.yml` runs the action this way on the demo app's
-traces for every pull request here, and on the demo's planted change,
-where exactly the lock's two rows have to move.
+traces for every pull request here, on the demo's planted change, where
+exactly the lock's two rows have to move, and on one of two scenarios in one
+config, where the report has to be that scenario's.
+
+### Several scenarios
+
+A config that names several scenarios, as
+[Collecting](collecting.md#several-scenarios) shows, is guarded one
+scenario a step. The `scenario` input says which one the traces are, and
+`analyze` measures it, with its window. Without the input, the action
+measures the first, as `analyze` does without `--scenario`.
+
+Each scenario keeps its reports under an `artifact-name` of its own, so each
+run is compared with the last report of its own scenario. A matrix gives
+each leg one:
+
+```yaml
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - scenario: coldStart
+            test: StartupBenchmark_startup
+          - scenario: feed_scroll
+            test: ScrollBenchmark_feed
+    steps:
+      # … check out, start the device, run the benchmark's ${{ matrix.test }} …
+      - uses: grishan0v/echolot@v0.11.0
+        with:
+          traces: app/benchmark/build/outputs/**/${{ matrix.test }}_iter*.perfetto-trace
+          scenario: ${{ matrix.scenario }}
+          artifact-name: echolot-${{ matrix.scenario }}
+```
+
+When one benchmark run writes the traces of both scenarios, call the action
+twice in that job instead, a step for each scenario, each with its own
+`artifact-name`. Two calls under one name fail, since a run keeps one
+artifact of each name. A baseline of another scenario, found under a name
+the two once shared, is refused by `compare`: the report is kept without a
+comparison, and the summary says so.
 
 ## Related
 

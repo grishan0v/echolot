@@ -28,6 +28,12 @@ inputs:
     description: The project's echolot.yml.
     required: false
     default: echolot.yml
+  scenario:
+    description: >-
+      Which of the config's `scenarios:` the traces are, and `analyze`
+      measures. Empty: the first, or the config's one `scenario:`.
+    required: false
+    default: ""
   baseline:
     description: >-
       A report.json to compare against. Left empty, the action fetches the one
@@ -46,8 +52,8 @@ inputs:
     default: ""
   artifact-name:
     description: >-
-      What the reports are kept as and looked up by. Each leg of a matrix
-      needs its own.
+      What the reports are kept as and looked up by. Each leg of a matrix,
+      and each scenario, needs its own.
     required: false
     default: echolot-report
   comment:
@@ -166,10 +172,12 @@ runs:
         ECHOLOT: ${{ steps.install.outputs.echolot }}
         CONFIG: ${{ inputs.config }}
         TRACES: ${{ inputs.traces }}
+        SCENARIO: ${{ inputs.scenario }}
         OUT: ${{ steps.where.outputs.out }}
       run: >-
         "$PY" "$GITHUB_ACTION_PATH/action/ci.py" analyze
         --echolot "$ECHOLOT" --config "$CONFIG" --out "$OUT" --traces "$TRACES"
+        --scenario "$SCENARIO"
 
     - name: Find the baseline
       id: baseline

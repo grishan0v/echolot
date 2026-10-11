@@ -6,7 +6,8 @@ the echolot the action installed, and it ships with the action, never with the
 wheel. Each subcommand is one step of the action, and passes what the next
 step needs through $GITHUB_OUTPUT:
 
-    ci.py analyze   the traces the input names, then `echolot analyze`
+    ci.py analyze   the traces the input names, then `echolot analyze` of the
+                    scenario it names
     ci.py baseline  the report.json the last good run on a branch kept
     ci.py compare   `echolot compare` against it, when there is one
     ci.py summary   the comparison, and the report, in the job summary
@@ -104,8 +105,18 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     print(f"{len(files)} trace(s):", *(f"  {f}" for f in files), sep="\n")
+    # An empty input is no scenario. Passed on as `--scenario ""`, it is a
+    # name no config has, and every workflow that never set the input would
+    # stop at `analyze`.
+    scenario = ["--scenario", args.scenario] if args.scenario else []
+    if scenario:
+        print(f"scenario {args.scenario}")
+    # Out before echolot's own output. A runner's stdout is a pipe, which
+    # Python buffers, and the list of traces came out under the report, or
+    # under the error it was the input of.
+    sys.stdout.flush()
     done = subprocess.run([args.echolot, "analyze", "-c", args.config, "-o", str(out),
-                           *map(str, files)], check=False)
+                           *scenario, *map(str, files)], check=False)
     if done.returncode != 0:
         return done.returncode
     output(report=str(out / "report.json"))
@@ -410,6 +421,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--config", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--traces", required=True)
+    p.add_argument("--scenario", default="")
     p.add_argument("--root", default=os.environ.get("GITHUB_WORKSPACE", "."))
     p.set_defaults(func=cmd_analyze)
 
