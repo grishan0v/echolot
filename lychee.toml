@@ -19,11 +19,10 @@ retry_wait_time = 2
 #
 # A string rather than `true`: lychee v0.24.2, the version lychee-action v2.9.0
 # installs, reads the key as none, anchor-only, text-only or full, and a
-# boolean does not parse — the whole run would stop at the config. And no
-# absolute GitHub link to a Markdown file may carry an anchor: lychee cannot
-# see the headings of a file GitHub renders in the browser, and says so in its
-# own source, which is one more reason the README links to documents rather
-# than into them.
+# boolean does not parse — the whole run would stop at the config. lychee
+# cannot see the headings of a file GitHub renders in the browser, and says so
+# in its own source; the README's links into this repository, the only such
+# links, are checked by tests/test_docs.py instead (see `exclude` below).
 include_fragments = "anchor-only"
 
 # `checks.yml` already fails the build on a relative link in README.md — see
@@ -62,4 +61,13 @@ exclude = [
   # tests/test_readme_pictures.py checks the same addresses against the tree
   # the pull request brings.
   '^https://raw\.githubusercontent\.com/grishan0v/echolot/main/docs/assets/',
+
+  # The README's links to the documents and the licence, by their full
+  # address on `main` for the same reason. GitHub answers a burst of such
+  # requests from a runner with 503: five runs from 2026-10-10 failed on 6 to
+  # 11 of these twenty links and on nothing else, while the files were there
+  # (#343). And a document a pull request adds is not on `main` yet, as with
+  # the pictures. tests/test_docs.py checks each address against the tree the
+  # pull request brings, its anchor included.
+  '^https://github\.com/grishan0v/echolot/(?:blob|tree)/main/',
 ]

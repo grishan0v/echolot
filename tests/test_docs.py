@@ -251,6 +251,44 @@ def test_every_anchor_a_link_names_is_a_heading_there(document):
         f"{document} links to anchors no heading makes: {', '.join(broken)}")
 
 
+# --- addresses into this repository, on main --------------------------------
+
+# The README names the documents and the licence by their full address on
+# `main`, since PyPI resolves nothing relative. The link checker leaves them
+# out (lychee.toml): GitHub answered a burst of them from a runner with 503 on
+# five runs in a row, and a document a pull request adds is not on `main` until
+# it merges (#343). They are held to the tree the pull request brings instead,
+# as the README's pictures are in test_readme_pictures.py.
+_OWN = re.compile(r"https://github\.com/grishan0v/echolot/(blob|tree)/main/"
+                  r"([^)\s\"'#>]*)(?:#([^)\s\"'>]+))?")
+
+
+@pytest.mark.parametrize("document", ["SECURITY.md", *LINKING])
+def test_every_address_into_this_repository_is_in_its_tree(document):
+    """What a link to `blob/main/…` names is here, and so is its heading.
+
+    The tree is the pull request's, so a document renamed without its link
+    fails the pull request that renames it, and one added with its link
+    passes. An anchor is checked against the headings, which the link
+    checker could never do for a page GitHub renders in the browser.
+    """
+    broken = []
+    for kind, rel, fragment in _OWN.findall(_unfenced(ROOT / document)):
+        target = ROOT / rel
+        if not (target.is_file() if kind == "blob" else target.is_dir()):
+            broken.append(f"{kind}/main/{rel}")
+        elif fragment and target.suffix == ".md" and fragment not in _anchors(target):
+            broken.append(f"{kind}/main/{rel}#{fragment}")
+    assert not broken, (
+        f"{document} links to what this tree does not have: {', '.join(broken)}")
+
+
+def test_the_readme_links_into_this_repository_at_all():
+    """The check above found the README's links, and did not pass on none."""
+    found = _OWN.findall(_unfenced(ROOT / "README.md"))
+    assert len(found) >= 10, found
+
+
 # --- the version, which is also a claim about the tool ----------------------
 
 def test_the_version_comes_from_the_code_and_only_from_there():
