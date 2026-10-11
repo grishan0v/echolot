@@ -394,6 +394,15 @@ project:
   mapping: app/build/outputs/mapping/benchmark/mapping.txt
 ```
 
+`echolot scan` writes the key into the config it drafts when the variant to
+measure is minified: its build type sets `minifyEnabled`, or starts with
+`initWith` from one that does, as a benchmark build type started from release
+usually is. The path is where AGP writes the mapping when the variant is
+built, so it may name a file that is not there yet. `gradle` mode builds the
+variant with the first collect; in `launch` mode it is there once you build
+the variant. Until then `analyze` says so, on stderr and at the top of the
+report, and makes the report without it: R8's names stay as recorded.
+
 `analyze` reads the file into a deobfuscation packet and hands it to
 trace_processor after each trace, the way Perfetto's own tools attach one; the
 trace on disk is not touched. trace_processor matches the packet to the
@@ -439,6 +448,7 @@ mapping made of the lock slices:
 | … still read as minified after `project.mapping` renamed … | a mapping from another build: it renames the frames it happens to match, wrongly, and misses the rest |
 | `project.mapping` named back the … frames R8 wrote into the lock slices | `code` names the real methods, and the evidence keeps the frames as recorded |
 | … of the … frames R8 wrote into the lock slices have no place in `project.mapping` | a mapping from another build: no range of their method holds their line |
+| `project.mapping` names …, and no file was there | the variant has not been built since the config named it: build it and analyze again |
 
 The first and the third are warnings, and both wait for a tenth of the app's
 sampled methods to read as minified. Some code arrives minified from

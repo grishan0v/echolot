@@ -2250,6 +2250,36 @@ def _(report):
     assert any("profileable" in n for n in bare.notes), bare.notes
 
 
+@check("scan: a minified build to measure gets its mapping in the draft")
+def _(report):
+    """The first round of a minified build would go on `a.b.c` everywhere.
+
+    A benchmark build type starts from release with `initWith`, and is
+    minified when release is: the draft names the mapping AGP will write
+    for that variant, and a config naming a file not built yet is read
+    without it rather than refused. A build that is not minified gets no
+    such key.
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        plain = "\n".join(scan.skeleton(scan.describe(root, devices=False)))
+        script = root / "app/build.gradle"
+        script.write_text(script.read_text(encoding="utf-8").replace(
+            "debug { debuggable = true }", "debug { debuggable = true }\n    release { minifyEnabled true }"),
+            encoding="utf-8")
+        facts = scan.describe(root, devices=False)
+        text = "\n".join(scan.skeleton(facts))
+        (root / "echolot.yml").write_text(text, encoding="utf-8")
+        cfg = Config.load(root / "echolot.yml")
+        expected = root / "app/build/outputs/mapping/betaBenchmark/mapping.txt"
+        assert cfg.mapping is None and cfg.missing_mapping == expected, cfg.missing_mapping
+    assert "mapping:" not in plain, plain
+    assert "  mapping: app/build/outputs/mapping/betaBenchmark/mapping.txt" in text, text
+    assert "minifyEnabled in buildTypes.release of app/build.gradle, which benchmark starts" in text, text
+
+
 @check("scan: the benchmark, what it measures, and the task that runs it")
 def _(report):
     from . import scan

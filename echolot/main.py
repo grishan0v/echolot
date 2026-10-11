@@ -650,6 +650,12 @@ def cmd_analyze(args) -> int:
             print("[i] --defaults: the config's detectors section is ignored, "
                   "every detector runs with its built-in thresholds",
                   file=sys.stderr)
+        # Said once for all the traces, and the report is made without it:
+        # setup names a minified build's mapping before anything is built.
+        missing = cfg.missing_mapping
+        if missing is not None:
+            print(f"[!] {_missing_mapping(missing)}", file=sys.stderr)
+            recorder.note(mapping="missing")
         # Repeats are merged by median: one outlier must not drag the
         # conclusion along, and the "Runs" column separates the reproducible
         # from the one-off.
@@ -676,12 +682,17 @@ def cmd_analyze(args) -> int:
     # Which config made this report. Without it the next reader of
     # report.json cannot tell the project's run from one against an ad-hoc
     # config in /tmp — they look the same.
+    named = cfg.mapping or cfg.missing_mapping
     rep["config"] = {
         "path": str(Path(cfg.path).resolve()) if cfg.path else None,
         "sha": cfg.sha,
         "local": str(Path(cfg.local_path).resolve()) if cfg.local_path else None,
         "defaults": bool(args.defaults),
         "set": cli_overrides or None,
+        # The build's mapping, and whether it was there to read: one the
+        # build has not written yet leaves R8's names in the report.
+        "mapping": None if named is None else {"path": str(named.resolve()),
+                                               "found": named.is_file()},
     }
 
     w = rep.get("window") or {}
@@ -2473,11 +2484,21 @@ def _config_mapping(config: Path, cfg: Config | None = None,
     if cfg is None and not config.is_file():
         return None
     try:
-        return (cfg or Config.load(config)).mapping
+        cfg = cfg or Config.load(config)
+        mapping, missing = cfg.mapping, cfg.missing_mapping
     except ConfigError as e:
         print(f"[!] {e}\n    the frames R8 wrote stay as they are{hint}",
               file=sys.stderr)
         return None
+    if missing is not None:
+        print(f"[!] {_missing_mapping(missing)}{hint}", file=sys.stderr)
+    return mapping
+
+
+def _missing_mapping(path: Path) -> str:
+    """The one sentence for a mapping the config names and the build has not written."""
+    return (f"project.mapping: no file at {path} yet. AGP writes it when the "
+            f"variant is built; until then the frames R8 renamed keep its names")
 
 
 def cmd_domains(args) -> int:

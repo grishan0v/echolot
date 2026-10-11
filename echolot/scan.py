@@ -301,13 +301,45 @@ def flavor_combinations(flavors: list[dict], dimensions: list[str]) -> list[list
     return combos
 
 
+def minified(bt: dict, build_types: list[dict]) -> tuple[bool | None, str | None]:
+    """Whether a build type is minified, and the build type that says so.
+
+    Its own `minifyEnabled` decides. Without one, the build type it starts
+    from with `initWith` does, since AGP copies the flag along with the rest:
+    a benchmark build type is usually `initWith(release)` and minified when
+    release is. (None, None) for a build type that names neither, which AGP
+    leaves unminified.
+    """
+    by_name = {b["name"]: b for b in build_types}
+    seen: set[str] = set()
+    current: dict | None = bt
+    while current is not None and current["name"] not in seen:
+        seen.add(current["name"])
+        if current.get("minify") is not None:
+            return current["minify"], current["name"]
+        current = by_name.get(current.get("init_with") or "")
+    return None, None
+
+
+def mapping_path(app: dict[str, Any] | None, variant: str) -> str:
+    """Where AGP writes a variant's R8 mapping, from the root.
+
+    `<module>/build/outputs/mapping/<variant>/mapping.txt`, written when the
+    variant is built and not before.
+    """
+    module = (app or {}).get("dir") or ""
+    prefix = "" if module in ("", ".") else module.rstrip("/") + "/"
+    return f"{prefix}build/outputs/mapping/{variant}/mapping.txt"
+
+
 def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: list[dict],
                 dimensions: list[str] | None = None) -> list[dict]:
     """flavours × build type, with the applicationId each one installs as.
 
     Across dimensions, one flavour of each, as the Android Gradle plugin
     builds them: `freeStagingBenchmark`, never `freeBenchmark` beside
-    `stagingBenchmark`. None at all when that cannot be read.
+    `stagingBenchmark`. None at all when that cannot be read. A minified one
+    carries where its mapping will be.
     """
     base = (app or {}).get("application_id")
     combos = flavor_combinations(flavors, dimensions or [])
@@ -320,13 +352,25 @@ def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: li
                     + (bt.get("application_id_suffix") or "")
             words = [f["name"] for f in combo] + [bt["name"]]
             name = words[0] + "".join(w[:1].upper() + w[1:] for w in words[1:])
+            minify, minified_by = minified(bt, build_types)
             out.append({"name": name,
                         "flavor": "".join(_cap(f["name"]) if i else f["name"]
                                           for i, f in enumerate(combo)) or None,
                         "build_type": bt["name"], "application_id": app_id,
                         "debuggable": bt.get("debuggable"),
-                        "measure": _measures(bt)})
+                        "measure": _measures(bt),
+                        "minified": minify, "minified_by": minified_by,
+                        "mapping": mapping_path(app, name) if minify else None})
     return out
+
+
+def _minify_evidence(variant: dict, script: str) -> str:
+    """Why a variant is called minified: the script, the build type and, if
+    it inherits the flag, how."""
+    bt, by = variant["build_type"], variant["minified_by"]
+    if by == bt:
+        return f"minifyEnabled in buildTypes.{bt} of {script}"
+    return f"minifyEnabled in buildTypes.{by} of {script}, which {bt} starts from with initWith"
 
 
 def _measures(bt: dict) -> str:
@@ -587,14 +631,23 @@ def skeleton(facts: Facts) -> list[str]:
     if bench and bench["classes"]:
         pick = sorted(bench["classes"], key=lambda c: (not c.get("startup"),
                                                        not c.get("metrics")))[0]
+    # A minified variant's frames come back as R8 named them, and the first
+    # round would go on reading `a.b.c`. So its mapping is named, built or
+    # not: AGP writes the file when the variant is built, which in gradle
+    # mode the first collect does.
+    minify = chosen if chosen and chosen.get("minified") else None
+    mapping = [f"  mapping: {minify['mapping']}"] if minify else []
+    why = (f"; the mapping, written when the variant is built: {_minify_evidence(minify, where)}"
+           if minify else "")
     if read_id:
         out = ["project:",
                f"  package: {read_id}",
                f'  process: "{read_id}*"',
+               *mapping,
                "  _source: derived",
                f'  _evidence: "applicationId in {where}'
                + (f', variant {chosen["name"]}' if chosen else "")
-               + (f' — the others: {", ".join(others[:6])}' if others else "") + '"']
+               + (f' — the others: {", ".join(others[:6])}' if others else "") + why + '"']
     else:
         # Not read is not derived: a constant or a convention plugin sets it,
         # and a placeholder written as `derived` was taken on trust.
@@ -604,9 +657,11 @@ def skeleton(facts: Facts) -> list[str]:
         out = ["project:",
                "  package: com.example.app",
                '  process: "com.example.app*"',
+               *mapping,
                "  _source: default",
                f'  _evidence: "applicationId not read from {where} — set through a constant '
-               f'or a convention plugin; find it there, or in `adb shell pm list packages`"']
+               f'or a convention plugin; find it there, or in `adb shell pm list packages`'
+               + why + '"']
     out += ["",
             "scenario:",
             f"  name: {pick['tests'][0] if pick and pick['tests'] else 'coldStart'}",
@@ -675,6 +730,13 @@ def render(facts: Facts) -> str:
         if chosen:
             out.append("")
             out.append(f"Start from **{chosen['name']}**: {chosen['measure']}.")
+            if chosen.get("minified"):
+                there = (Path(facts.root) / chosen["mapping"]).is_file()
+                script = (app or {}).get("build_script") or "build.gradle"
+                out.append(f"It is minified ({_minify_evidence(chosen, script)}), so the config below "
+                           f"names its R8 mapping, `{chosen['mapping']}`"
+                           + (" — there now." if there else
+                              " — not there yet: AGP writes it when the variant is built."))
     out += ["", "## Benchmarks", ""]
     if not facts.benchmarks:
         out.append("_no MacrobenchmarkRule in the tree — `runner.mode: launch` drives a cold start by itself_")

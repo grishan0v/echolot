@@ -738,7 +738,7 @@ def _startup_against_window(startup: dict[str, Any]) -> list[str]:
     return [f"That is the platform's measure rather than the window: the startup "
             f"{start}, and {end}."]
 
-def _environment_lines(env: dict[str, Any]) -> list[str]:
+def _environment_lines(env: dict[str, Any], unbuilt: bool = False) -> list[str]:
     """One line for the machine the numbers below were measured on.
 
     Placed above the findings rather than under them: it is the condition
@@ -824,7 +824,7 @@ def _environment_lines(env: dict[str, Any]) -> list[str]:
             f"is about those repeats alone, and `compare` says so too."
         )
     out.extend(_sampling_lines(env.get("sampling")))
-    out.extend(_names_lines((env.get("sampling") or {}).get("names")))
+    out.extend(_names_lines((env.get("sampling") or {}).get("names"), unbuilt))
     return out
 
 
@@ -837,12 +837,14 @@ def _environment_lines(env: dict[str, Any]) -> list[str]:
 MINIFIED_SHARE = 0.10
 
 
-def _names_lines(names: dict[str, Any] | None) -> list[str]:
+def _names_lines(names: dict[str, Any] | None, unbuilt: bool = False) -> list[str]:
     """Whether the app's sampled methods came back by name.
 
     Nothing for a build that kept its names and was given no mapping. A
     warning for a minified build without one: the frames of the app read as
-    `a.b.c`, and `project.mapping` is the fix. With a mapping, one line saying
+    `a.b.c`, and `project.mapping` is the fix — unless the config names one
+    the build has not written yet (`unbuilt`), which its own line says (see
+    `_mapping_lines`). With a mapping, one line saying
     how many methods it named back — or a warning when many still read as
     minified, which is what a mapping from another build leaves: it renames
     the frames it happens to match, wrongly, and misses the rest, and the rows
@@ -855,11 +857,12 @@ def _names_lines(names: dict[str, Any] | None) -> list[str]:
     if "renamed" not in names:
         if not many:
             return []
+        fix = ("" if unbuilt else
+               " Set `project.mapping` to the build's `mapping.txt` and the "
+               "frames come back by name.")
         return [
             f"> ⚠️ {left} of the app's {total} sampled methods read as minified, "
-            f"`a.b.c`: a reader cannot find them, and neither can `code`. Set "
-            f"`project.mapping` to the build's `mapping.txt` and the frames "
-            f"come back by name."
+            f"`a.b.c`: a reader cannot find them, and neither can `code`.{fix}"
         ]
     if many:
         return [
@@ -876,6 +879,30 @@ def _names_lines(names: dict[str, Any] | None) -> list[str]:
     return [f"{line}. {left} still read as minified, too few to be this build's "
             f"own: code that arrived minified, as some SDKs ship, which no "
             f"mapping of this build names."]
+
+
+def _unbuilt(report: dict[str, Any]) -> bool:
+    """Whether the config named a mapping that was not there for this report."""
+    named = (report.get("config") or {}).get("mapping")
+    return bool(named) and not named.get("found")
+
+
+def _mapping_lines(report: dict[str, Any]) -> list[str]:
+    """A mapping the config names and the build had not written yet.
+
+    `scan` names a minified build's mapping before anything is built, and
+    AGP writes the file with the variant. Until it is there the report is
+    made without it, and says so here rather than stopping.
+    """
+    if not _unbuilt(report):
+        return []
+    path = report["config"]["mapping"]["path"]
+    return [
+        f"> ⚠️ `project.mapping` names `{path}`, and no file was there: AGP "
+        f"writes it when the variant is built. Until it is, the frames R8 "
+        f"renamed keep its names, in the samples and in the lock slices; build "
+        f"the variant and analyze again."
+    ]
 
 
 def _retrace_lines(retrace: dict[str, Any] | None) -> list[str]:
@@ -1077,7 +1104,8 @@ def to_markdown(report: dict[str, Any]) -> str:
             f"`scenario.start` earlier to see the cause."
         )
 
-    out.extend(_environment_lines(report.get("environment") or {}))
+    out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
+    out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
 
     s = report["summary"]
@@ -1236,7 +1264,8 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
                    f"process(es) matched the mask; the largest was taken")
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_startup_lines(w.get("startup")))
-    out.extend(_environment_lines(report.get("environment") or {}))
+    out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
+    out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
     return out
 

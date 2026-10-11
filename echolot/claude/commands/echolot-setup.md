@@ -36,7 +36,13 @@ it came from:
   trace**; the note says so, repeat it to the human immediately
 - the variants — flavour × build type, what each installs as, and which one
   to measure on: a `benchmark` build type (release-like, profileable) over
-  `release` over anything debuggable, which skews everything
+  `release` over anything debuggable, which skews everything. And whether
+  that one is minified: its build type sets `minifyEnabled`, or starts with
+  `initWith` from one that does. Then the skeleton names `project.mapping`,
+  the R8 mapping AGP writes for that variant when it is built. `gradle` mode
+  builds it with the first collect; in `launch` mode it is there once the
+  human builds the variant. Until then `analyze` says so at the top of the
+  report and leaves R8's names as they are
 - the module with `MacrobenchmarkRule`, its test classes and methods, the
   package it drives, the `TraceSectionMetric` names it measures (anchor
   candidates, and `domains` entries), its runner arguments, and the gradle
@@ -44,7 +50,8 @@ it came from:
 - the devices attached
 - a config to start from — the skeleton the questions below refine. What
   it read off the tree says `_source: derived` with its `_evidence` (the
-  package and process, an end anchor taken from a `TraceSectionMetric`);
+  package and process, a minified build's mapping, an end anchor taken from
+  a `TraceSectionMetric`);
   what it could not read is an engine default and says `_source: default`
   (the start anchor, and an end it did not find, written `"?"`). The
   `runner` section carries `_evidence` alone, and `instrumentation` neither

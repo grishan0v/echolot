@@ -67,6 +67,15 @@ build gives. Optional; without it, names stay as recorded. A relative path is
 taken from the config's directory, and R8 writes the file to
 `build/outputs/mapping/<variant>/mapping.txt`.
 
+`echolot scan` names it in the config it drafts when the variant to measure
+is minified: its build type sets `minifyEnabled`, or starts with `initWith`
+from one that does. The file is written when the variant is built, so it may
+not be there yet: `gradle` mode builds the variant with the first collect,
+and in `launch` mode the person does. A mapping not there yet is said on
+stderr and at the top of the report, `config.mapping.found` is false, and
+the report is made without it. Build the variant and analyze again; do not
+remove the key.
+
 It needs `project.package`, the package as installed on the device — for a
 benchmark build often the release's with a suffix — because the mapping
 names back that package's frames. The mapping has to be **this** build's: one

@@ -181,12 +181,32 @@ class Config:
 
     @property
     def mapping(self) -> Path | None:
-        """The build's R8 or ProGuard `mapping.txt`, or None when there is none.
+        """The build's R8 or ProGuard `mapping.txt`, or None when there is none to read.
 
         A relative path is taken from the config's directory, where the build
         outputs live as well. The mapping names a package's frames back, so it
         needs `project.package`: the package as installed on the device, which
         for a benchmark build is often the release's with a suffix.
+
+        A file that is not there yet is no mistake of the config's: AGP
+        writes it when the variant is built, and `scan` names it before
+        anything has been. It reads as None here, and `missing_mapping`
+        names it for whoever says so.
+        """
+        path = self._mapping_named()
+        return path if path is not None and path.is_file() else None
+
+    @property
+    def missing_mapping(self) -> Path | None:
+        """The mapping the config names, when there is no file there yet."""
+        path = self._mapping_named()
+        return path if path is not None and not path.is_file() else None
+
+    def _mapping_named(self) -> Path | None:
+        """The path `project.mapping` names, whether or not the file is there.
+
+        What the value cannot mean is the config's mistake and is refused: a
+        value that is no path, and a mapping without the package it is for.
         """
         value = self.get("project.mapping")
         if value is None or value == "":
@@ -202,11 +222,6 @@ class Config:
         path = Path(value).expanduser()
         if not path.is_absolute():
             path = (Path(self.path).parent if self.path else Path.cwd()) / path
-        if not path.is_file():
-            raise ConfigError(
-                f"project.mapping: no such file {path} — R8 writes it to "
-                f"build/outputs/mapping/<variant>/mapping.txt when the build "
-                f"is minified")
         return path
 
     @property

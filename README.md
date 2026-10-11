@@ -383,7 +383,7 @@ only the agent has. The pipeline — `collect`, `analyze`, `compare` — is unde
 |---|---|
 | `guide` | how to work with this tool, printed by the package — what an agent without the `.claude/` layer reads instead of it |
 | `report` | views of the last report without opening the json: what fired, one detector's rows with the evidence kept short, the window, the markers — `--json` for any of them |
-| `scan` | what the repository says about itself, read as text: the app module and its applicationId, the variants and which one to measure on, the macrobenchmark with its tests and the sections it measures, the gradle task that runs it, the devices attached — and an `echolot.yml` to start from |
+| `scan` | what the repository says about itself, read as text: the app module and its applicationId, the variants and which one to measure on, the macrobenchmark with its tests and the sections it measures, the gradle task that runs it, the devices attached — and an `echolot.yml` to start from, with the R8 mapping when the build to measure is minified |
 | `anr` | an ANR report from the field — the lock chain, the few threads that were not idle, and where their frames are in this checkout. Crashlytics and Play Console exports, and the device's own `dumpsys dropbox` record; a minified build's frames come back by name from its R8 mapping |
 | `probe` | processes, threads by CPU, scenario anchor candidates — the threads' sections and the process's async ones |
 | `names` | slice name inventory and detector mask coverage |

@@ -170,7 +170,7 @@ def test_a_mapping_the_config_cannot_give_is_said_and_passed_over(tmp_path):
     code, out, err = run("anr", str(record), "--root", str(root))
     check("the report is still read", code == 0 and "# ANR Report" in out, code)
     check("and stderr says why the frames stay as they are",
-          "no such file" in err and "--mapping" in err, err)
+          "no file at" in err and "when the variant is built" in err and "--mapping" in err, err)
     check("which the report says too", "they read as R8 named them" in out, out)
 
 

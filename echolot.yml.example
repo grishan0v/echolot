@@ -29,7 +29,9 @@ project:
   # The R8 or ProGuard mapping.txt of the build that was recorded, for a
   # minified build: analyze names its sampled frames and its lock slices back
   # with it, and anr the frames of an ANR record. It needs project.package,
-  # the package as installed, and it has to be this build's.
+  # the package as installed, and it has to be this build's. scan names it
+  # when the variant to measure is minified; a file the build has not written
+  # yet is said, and the report is made without it.
   # mapping: app/build/outputs/mapping/<variant>/mapping.txt
 
 # Scenario window bounds: a GLOB over the slice name.

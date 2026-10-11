@@ -132,13 +132,22 @@ def test_project_mapping_is_a_file_next_to_the_config(tmp_path: Path) -> None:
           == out / "mapping.txt")
 
 
-@pytest.mark.parametrize("project, said", [
-    ({"mapping": ["mapping.txt"]}, "must be a path"),
-    ({"mapping": "nowhere/mapping.txt"}, "no such file"),
-])
-def test_a_mapping_the_config_cannot_use_is_said(tmp_path: Path, project: dict, said: str) -> None:
-    with pytest.raises(ConfigError, match=said):
-        _ = cfg(tmp_path, **project).mapping
+def test_a_mapping_that_is_no_path_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="must be a path"):
+        _ = cfg(tmp_path, mapping=["mapping.txt"]).mapping
+
+
+def test_a_mapping_the_build_has_not_written_yet_is_named_and_not_read(tmp_path: Path) -> None:
+    # `scan` names a minified build's mapping before anything is built, and
+    # AGP writes it with the variant: not there yet is no mistake.
+    config = cfg(tmp_path, mapping="app/build/outputs/mapping/benchmark/mapping.txt")
+    expected = tmp_path / "app/build/outputs/mapping/benchmark/mapping.txt"
+    check("nothing to read", config.mapping is None)
+    check("and the path it names, for whoever says so", config.missing_mapping == expected,
+          config.missing_mapping)
+    expected.parent.mkdir(parents=True)
+    expected.write_text(fixture.MAPPING, encoding="utf-8")
+    check("read once it is there", config.mapping == expected and config.missing_mapping is None)
 
 
 def test_a_mapping_needs_the_package_it_is_for(tmp_path: Path) -> None:
@@ -381,3 +390,56 @@ def test_a_retracer_is_read_again_once_the_mapping_changes(tmp_path: Path) -> No
     check("and again once it changes", again is not first
           and again.retrace("a.a", "run", "unavailable", 20) is not None
           and again.retrace("a.a", "run", "unavailable", 20).frames[0].line == 10)
+
+
+# --- a mapping the build has not written yet (#209) ---------------------------
+
+def test_a_mapping_not_built_yet_is_said_once_at_the_top() -> None:
+    unbuilt = {"config": {"mapping": {"path": "/p/app/build/outputs/mapping/benchmark/mapping.txt",
+                                      "found": False}}}
+    lines = report_mod._mapping_lines(unbuilt)
+    check("a warning naming the file and what writes it", len(lines) == 1
+          and lines[0].startswith("> ⚠️") and "/p/app/build/outputs/mapping/benchmark/mapping.txt"
+          in lines[0] and "built" in lines[0], lines)
+    check("nothing when it was there, or when none is named",
+          report_mod._mapping_lines({"config": {"mapping": {"path": "/m", "found": True}}}) == []
+          and report_mod._mapping_lines({"config": {"mapping": None}}) == []
+          and report_mod._mapping_lines({}) == [])
+    lines = report_mod._names_lines({"methods": 8, "minified": 8}, unbuilt=True)
+    check("the minified-names warning does not ask for a key that is set",
+          len(lines) == 1 and lines[0].startswith("> ⚠️") and "Set `project.mapping`" not in lines[0],
+          lines)
+
+
+def test_analyze_makes_the_report_while_the_mapping_is_not_built(tmp_path: Path,
+                                                                  monkeypatch) -> None:
+    import contextlib
+    import io
+    import json
+
+    from echolot.main import main
+
+    trace = tmp_path / "fixture.perfetto-trace"
+    trace.write_bytes(fixture.build())
+    (tmp_path / "echolot.yml").write_text(
+        "project:\n"
+        "  package: com.example.app\n"
+        "  process: com.example.app\n"
+        "  mapping: app/build/outputs/mapping/benchmark/mapping.txt\n"
+        "scenario:\n"
+        "  name: fixture\n"
+        "  start: {name: AppStart}\n"
+        "  end: {name: Screen.firstFrame}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(["analyze", str(trace)])
+    check("the report is made", code == 0, err.getvalue()[-800:])
+    check("stderr says the mapping is not there yet, once",
+          err.getvalue().count("project.mapping: no file at") == 1, err.getvalue()[-800:])
+    report = json.loads((tmp_path / ".echolot/out/report.json").read_text(encoding="utf-8"))
+    expected = str((tmp_path / "app/build/outputs/mapping/benchmark/mapping.txt").resolve())
+    check("report.json says which mapping, and that it was not there",
+          report["config"]["mapping"] == {"path": expected, "found": False},
+          report["config"]["mapping"])
+    check("and so does the header", "no file was there" in out.getvalue(), out.getvalue()[:1500])
