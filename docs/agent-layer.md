@@ -722,7 +722,12 @@ without the flag, and only that scenario's loose set moves aside. Inside it,
 first scenario, and the investigation's evidence then mixed two journeys.
 The scenario is the question's, so a config that no longer has it is drift,
 named among the signs that the investigation is not the one being asked
-about.
+about. `/echolot-hunt` picks it from the human's words, by the scenarios'
+names and anchors that `echolot status` and `echolot.yml` give, and asks
+when the words fit none of them or more than one. `/echolot-setup` adds a
+scenario to a config that has one without starting over: the scenario there
+moves under `scenarios:` as it was, and the new one is probed and anchored
+with the human the way the first was.
 
 ### Who opens it, and who closes it
 

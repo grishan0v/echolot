@@ -60,7 +60,7 @@ and anything that drifted since. **Show that recap as it is**, then ask with
 |---|---|
 | carry on | `echolot hunt --resume`, then the `echolot-hunt` skill, saying the human chose to carry on: it works inside that investigation, with the question and the change it recorded |
 | something new | the `echolot-hunt` skill with their question: it asks for the change and opens the new investigation before anything is recorded for it |
-| just show the report | print `.echolot/out/report.md` and stop |
+| just show the report | print `.echolot/out/report.md` — `.echolot/out/<scenario>/report.md`, the investigation's scenario, when the config names several — and stop |
 
 Lean towards "something new" when the recap shows a `!` line — the scenario
 changed, the config changed, or it has been untouched for over a week.

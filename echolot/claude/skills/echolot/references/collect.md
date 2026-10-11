@@ -2,6 +2,8 @@
 
 `echolot collect` does this for you. The commands below are what it runs, and
 what to fall back on when you need something the runner does not cover yet.
+With several scenarios in the config, `collect --scenario <name>` records
+that one, with its runner keys and its name on the traces.
 Run them as a script: a step that fails stops it, as it stops `collect`,
 rather than pulling a trace an earlier run left on the device.
 

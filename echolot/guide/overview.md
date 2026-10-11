@@ -47,7 +47,12 @@ echolot collect -c echolot.yml -n 5        # capture traces, when there are none
 echolot analyze <trace...> -c echolot.yml  # the report
 ```
 
-`analyze` writes `.echolot/out/report.json` for you and `report.md` for humans.
+A config can name several scenarios under `scenarios:`, and `echolot status`
+lists them. `collect`, `analyze` and `report` then take `--scenario <name>`,
+and inside an open investigation its scenario without the flag.
+
+`analyze` writes `.echolot/out/report.json` for you and `report.md` for humans,
+in `.echolot/out/<scenario>/` for each of several scenarios.
 **Read the json** — it has a stable schema — through `echolot report`: what
 fired, `--detector <id> --top 5` for one detector's rows with the evidence
 kept short, `--window`, `--markers`, `--json` for any of them. Cutting the

@@ -23,3 +23,6 @@ the window, not the findings: `start_anchor.matches` and
 `end_anchor.matches` above zero, a window
 that looks like the scenario, and not every detector firing at once. Then
 `echolot` should say `next: hunt`.
+
+A project with a config that wants another journey measured needs no new
+setup: the end of `echolot guide setup` says how to add a scenario.

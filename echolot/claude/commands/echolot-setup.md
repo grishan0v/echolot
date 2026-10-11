@@ -201,6 +201,47 @@ touching the config: `echolot analyze --defaults` (every detector, built-in
 thresholds) and `--set detector.param=value` (one threshold, one run). Both
 leave a mark in the report.
 
+## Adding a scenario
+
+A project that has a config may want another journey measured, a feed scroll
+beside the cold start. That is no new setup: the scenario that is there stays
+as it was, and the new one gets a window and a runner of its own.
+
+1. **Move the config to `scenarios:`.** The `scenario:` block goes under
+   `scenarios:`, keyed by its `name`, with `name` dropped and everything else
+   kept as it is, `_source` and `_evidence` included:
+
+   ```yaml
+   scenarios:
+     coldStart:
+       start: {name: "bindApplication", _source: default}
+       end: {name: "Screen.firstFrame", _source: confirmed_by_user, _evidence: "probe: …"}
+     feed_scroll:
+       runner:
+         mode: command
+         command: "adb shell input swipe 500 1500 500 300 600"
+   ```
+
+   The key is the name its traces and reports carry, so the scenario that was
+   there keeps them. A scenario takes `start`, `end`, `budget_ms` and
+   `runner`, and nothing else: the thresholds under `detectors:` are the
+   config's, shared by every scenario.
+2. **What drives the new journey.** Its `runner:` holds only the keys that
+   differ from the top-level one: `mode: command` and the command that
+   scrolls, or, in `gradle` mode, the class in `gradle_args` whose test drives
+   it. When the repository does not say, ask the human: a macrobenchmark test,
+   a UI test, an `adb` command.
+3. **A probe of it**, with no anchors yet, so its window is the whole trace:
+   `echolot collect --scenario feed_scroll -n 1`, then
+   `echolot probe <its trace> --process '<package>*'`.
+4. **Where it ends, with the human**, as question 2 asks it: the options are
+   the probe's longest slices, and the answer goes under the new scenario as
+   `end`, with `_source: confirmed_by_user`. Ask for a `start` the same way
+   when the journey begins later than the trace does; without one, the window
+   opens where the trace starts.
+
+`echolot status` then lists both scenarios, a line each.
+
 ## When you are done
 
 ```bash

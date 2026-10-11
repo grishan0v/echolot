@@ -22,6 +22,14 @@ one is not. The tool localises a **specific** regression well and searches for
 the unknown badly — without the change you will hunt everything that looks
 expensive and come back with a guess.
 
+**The scenario.** `echolot.yml` may name several journeys under
+`scenarios:`, and `echolot status` lists them, a line each. With one there is
+nothing to choose. With several, match the human's words to one by its name
+and its anchors — "the feed stutters when scrolling" is a scroll, "the app
+opens slowly" is the cold start — and ask, with the scenarios as the options,
+when the words fit none of them or more than one. Carrying on the open
+investigation, its scenario is chosen already: `echolot hunt` names it.
+
 **The investigation.** Record what is being chased before you measure or
 record anything for it:
 
@@ -34,6 +42,10 @@ and reports whether the last one left temporary markers in the sources. Every
 round and every report from here on is filed under it — which is what
 `echolot compare` reads from the second round on; with nothing open it has
 nothing to compare.
+
+With several scenarios, add `--scenario <name>`: the investigation is about
+that one, only its traces move aside, and every `collect`, `analyze` and
+`report` inside it takes that scenario without the flag.
 
 If `echolot hunt` reported markers left by the previous investigation,
 remove them before recording: `echolot mark --remove` takes out what

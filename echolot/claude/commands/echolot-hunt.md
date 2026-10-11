@@ -48,6 +48,15 @@ agent hunts everything that looks expensive and comes back with a guess.
 Carrying on an investigation that is already open, its record holds the first
 and the third: `echolot hunt` prints them.
 
+**The scenario.** `echolot.yml` may name several journeys under
+`scenarios:`, and `echolot status` lists them, a line each. With one there is
+nothing to choose. With several, the question is about one of them: match the
+human's words to a scenario by its name and its anchors — "the feed stutters
+when scrolling" is a scroll, "the app opens slowly" is the cold start. When
+the words fit none of them, or more than one, ask with `AskUserQuestion`, the
+scenarios as the options. Carrying on the open investigation, its scenario is
+chosen already, and `echolot hunt` names it.
+
 **The investigation.** First, are you carrying on the one already open? Yes
 when the human chose "carry on" at the door (`echolot hunt --resume` has run),
 or when `echolot hunt` shows an open investigation that the human's words
@@ -65,6 +74,11 @@ set aside, each `analyze` keeps a copy of its report, and from the second
 round on `echolot compare` reads those copies — with no investigation open it
 has nothing to compare. Its last lines name the loop, which needs an agent:
 that is the rest of this command, so do not start `/echolot` again.
+
+With several scenarios, add `--scenario <name>` to the command: the
+investigation is about that scenario, only its traces move aside, and every
+`collect`, `analyze` and `report` inside it takes that scenario without the
+flag.
 
 Opening one moves the scenario's traces that are loose in `.echolot/traces/`
 into a directory beside them, and says where on stderr:
@@ -131,6 +145,8 @@ Pass the agent:
 - that the investigation is open, and its number (`opened #<n>` when it
   opened, `echolot hunt --list` otherwise): every `analyze` it runs is filed
   there, and `echolot compare` reads from it
+- with several scenarios, which one the investigation is about: its commands
+  take it without `--scenario`
 - whether the config's thresholds are trustworthy for this hunt (see above),
   and if not, that it should start with `analyze --defaults`
 - that doctor passed, and at what time — so the agent skips its own run

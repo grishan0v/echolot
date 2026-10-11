@@ -280,3 +280,41 @@ def test_the_comparison_example_has_the_sha_and_detail_compare_writes(tmp_path):
     sha = re.search(r'"config_sha": "([0-9a-f]+)"', text).group(1)
     check("as long as Config.sha", len(sha) == len(Config.load(config).sha), sha)
     check("detail on the row and both sides", text.count('"detail": "com.example.app"') == 3, text)
+
+
+# --- several scenarios (#352) -----------------------------------------------------
+
+def test_a_hunt_opens_on_the_scenario_its_question_is_about():
+    """With several scenarios, the question picks one, the human settles it
+    when the words cannot, and the investigation opens on it."""
+    for path in (HUNT_COMMAND, GUIDE_HUNT, PLUGIN / "echolot-hunt" / "SKILL.md"):
+        flat = _flat(path)
+        check(f"{path.name}: the scenarios are read off status",
+              "echolot status" in flat and "scenario" in flat, flat[:300])
+        check(f"{path.name}: the investigation opens on one", "--scenario <name>" in flat,
+              flat[:300])
+    command = _flat(HUNT_COMMAND)
+    check("the command asks when the words fit none or more than one",
+          "fit none of them, or more than one, ask with `AskUserQuestion`" in command, command)
+    check("and the agent is told which scenario the investigation is about",
+          "which one the investigation is about" in command, command)
+
+
+def test_the_loop_measures_the_investigations_scenario():
+    flat = _flat(LOOP)
+    check("its commands take it without the flag",
+          "take it without `--scenario`" in flat and "the open investigation's" in flat, flat)
+    check("and no other is passed", "Do not pass another" in flat, flat)
+
+
+def test_setup_adds_a_scenario_and_keeps_the_one_there():
+    text = _read(SETUP_COMMAND)
+    check("a section for it", "## Adding a scenario" in text, text[-2000:])
+    flat = " ".join(text.split())
+    check("the old block moves under its own name, kept as it was",
+          "keyed by its `name`, with `name` dropped and everything else kept as it is" in flat,
+          flat[-2000:])
+    check("the new one is probed by name", "echolot collect --scenario feed_scroll -n 1" in flat,
+          flat[-2000:])
+    check("the plugin's setup points at it",
+          "how to add a scenario" in _flat(PLUGIN / "echolot-setup" / "SKILL.md"))

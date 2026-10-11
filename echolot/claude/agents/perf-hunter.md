@@ -73,6 +73,13 @@ It is open while you work, and that is what the loop stands on: every
 `(this investigation's copy)` says where — and `echolot compare` with no
 arguments reads the last two copies.
 
+The investigation is about one scenario, too. In a config that names
+several, `collect`, `analyze`, `calibrate` and `report` take it without
+`--scenario`, and stderr says so:
+`[i] scenario <name>, the open investigation's: --scenario picks another`.
+Do not pass another. A round recorded for a second scenario is another
+journey, and `compare` refuses to hold two scenarios against each other.
+
 **Do not re-record over the traces you analysed.** They are the baseline.
 `echolot collect` keeps them for you: it moves the previous set out of
 `.echolot/traces` into `.echolot/traces/<scenario>-<stamp>/` and records that

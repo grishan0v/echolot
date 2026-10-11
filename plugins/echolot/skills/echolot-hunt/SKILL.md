@@ -22,9 +22,11 @@ a host that does not list this skill, and the loop's guide is the subagent's.
    echolot hunt "<what regressed, in their words>" --since "<the change, or unknown>"
    ```
 
+   Several scenarios in `echolot.yml`, as `echolot status` lists them: match
+   the question to one, ask when you cannot tell, and add `--scenario <name>`.
    Every later `collect` and `analyze` is filed under it, and `echolot compare`
-   reads from it. It moves every loose trace aside, and stderr names the
-   directory. Those traces are this question's evidence only if the human
+   reads from it. It moves the scenario's loose traces aside, and stderr
+   names the directory. Those traces are this question's evidence only if the human
    recorded them for it before asking; most often they are an earlier
    question's last round or setup's probe capture. Exit 2 means
    `echolot.yml` does not load: show the error and stop. Markers the previous
