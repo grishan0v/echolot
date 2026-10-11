@@ -287,6 +287,23 @@ def _out_dir(out: str, cfg: Config) -> Path:
     return Path(cfg.path).resolve().parent / p
 
 
+def _note_scenario(cfg: Config, asked: str | None) -> None:
+    """Which scenario this run measures, said when the config names several.
+
+    Without `--scenario` it is the first, and a second scenario is the
+    likeliest one to be measured by mistake: so the choice is said on
+    stderr, with the names to pick from. The run log keeps the name either
+    way, for `reflect`.
+    """
+    names = cfg.scenarios
+    if asked is None and len(names) > 1:
+        print(f"[i] scenario {names[0]}, the first of {len(names)} in the "
+              f"config: --scenario picks another ({', '.join(names[1:])})",
+              file=sys.stderr)
+    if len(names) > 1:
+        recorder.note(scenario=cfg.scenario_name)
+
+
 def _project_root(cfg: Config) -> Path:
     """The directory the config names, which is what "this project" means.
 
@@ -635,7 +652,8 @@ def _markers_info(tp, cfg: Config) -> dict:
 
 def cmd_analyze(args) -> int:
     try:
-        cfg = Config.load(args.config, args.local)
+        cfg = Config.load(args.config, args.local, scenario=args.scenario)
+        _note_scenario(cfg, args.scenario)
         tp_binary, tp_source = _tp_binary_source(args, cfg)
         _note_local(cfg)
         if not args.defaults:
@@ -2702,13 +2720,14 @@ def cmd_collect(args) -> int:
     # handler as the load: `runner: gradle` and a config naming no package
     # both used to pass the load and end in a traceback on the next line.
     try:
-        cfg = Config.load(args.config, args.local)
+        cfg = Config.load(args.config, args.local, scenario=args.scenario)
         section = cfg.runner
         package = cfg.get("project.package") or cfg.process
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         recorder.failed(f"config error: {e}")
         return 2
+    _note_scenario(cfg, args.scenario)
 
     mode = str(section.get("mode", "launch"))
     iterations = (args.iterations if args.iterations is not None
@@ -3183,10 +3202,11 @@ def cmd_calibrate(args) -> int:
     what counts as normal, and that decision is not handed to a script.
     """
     try:
-        cfg = Config.load(args.config, args.local)
+        cfg = Config.load(args.config, args.local, scenario=args.scenario)
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
+    _note_scenario(cfg, args.scenario)
 
     tp_binary = _tp_binary(args, cfg)
     _note_local(cfg)
@@ -3258,8 +3278,11 @@ def cmd_calibrate(args) -> int:
     total = len(args.traces)
     print(f"# The detectors section, derived from {total} "
           f"known-healthy runs.")
-    print("# Scenario window: " + ", ".join(f"{w:.0f} ms" for w in windows)
-          + spread)
+    # The section is the whole config's, whichever scenario it came from, so
+    # a config with several says which one that was.
+    which = (f"Scenario {cfg.scenario_name}, window: " if len(cfg.scenarios) > 1
+             else "Scenario window: ")
+    print(f"# {which}" + ", ".join(f"{w:.0f} ms" for w in windows) + spread)
     print("#")
     print("# The numbers are a statistic over a healthy run plus a margin.")
     print("# This is not a finished config but a proposal: thresholds define")
@@ -4014,6 +4037,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="how many repeats (default from runner.iterations)")
     col.add_argument("-o", "--out", default=".echolot/traces")
     col.add_argument("--device", help="device serial, when there are several")
+    col.add_argument("--scenario", metavar="NAME",
+                     help="which of the config's scenarios to record (default: the first)")
     col.set_defaults(func=cmd_collect)
 
     ini = add("init", "yours", "", "install or update the .claude/ layer; checks the environment",
@@ -4073,6 +4098,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="repeats of ONE scenario on a healthy build")
     cal.add_argument("-c", "--config", default="echolot.yml")
     cal.add_argument("--local", help="path to local.yml (defaults to alongside)")
+    cal.add_argument("--scenario", metavar="NAME",
+                     help="which of the config's scenarios the traces are (default: the first)")
     cal.add_argument("--min-sample", type=int, default=10,
                      help="below this many values no threshold is derived")
     cal.set_defaults(func=cmd_calibrate)
@@ -4087,6 +4114,9 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("-c", "--config", default="echolot.yml",
                     help="the project config (default: echolot.yml in cwd)")
     an.add_argument("--local", help="path to local.yml (defaults to alongside)")
+    an.add_argument("--scenario", metavar="NAME",
+                    help="which of the config's scenarios the traces are: its window "
+                         "(default: the first)")
     an.add_argument("-o", "--out", default=".echolot/out",
                     help="where report.md and report.json go; a relative path "
                          "is taken from the config's directory (default: "

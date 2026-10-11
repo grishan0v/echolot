@@ -188,7 +188,10 @@ device:
 
 `echolot calibrate` expects **repeats of one scenario** on a known-healthy
 build. Mixing a cold start with a minute of scrolling yields thresholds for
-nothing; the command warns when the windows diverge more than twofold.
+nothing; the command warns when the windows diverge more than twofold. With
+several scenarios in the config, `--scenario` says which one the traces are,
+as for `collect` and `analyze`, and the section names it: the thresholds it
+prints are the config's, shared by every scenario.
 
 Between repeats: `force-stop`, never `pm clear`. Wiping data changes the
 scenario rather than repeating it.

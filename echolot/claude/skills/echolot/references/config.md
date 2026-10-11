@@ -139,6 +139,41 @@ as a build artefact for whoever asks later.
 Keeping the field is still worthwhile: it records what the team considers
 acceptable, and it survives a change of device better than memory does.
 
+### `scenarios`
+
+Several journeys in one config: a cold start and a feed scroll, each with its
+own window. `scenarios:` takes the place of `scenario:`; a config with both
+does not load.
+
+```yaml
+scenarios:
+  cold_start:
+    start: {name: "bindApplication"}
+    end: {name: "Choreographer#doFrame*"}
+  feed_scroll:
+    start: {name: "feed_scroll_start"}
+    end: {name: "feed_scroll_end"}
+    runner:                    # the runner keys this scenario changes
+      mode: command
+      command: "adb shell input swipe 500 1500 500 300 600"
+```
+
+Each key is the scenario's name, and its traces carry it:
+`feed_scroll_iter000.perfetto-trace`. A name is letters, digits, `_`, `.` and
+`-`. Under it goes what `scenario:` holds — `start`, `end`, `budget_ms` — less
+`name`, and a `runner:` whose keys are laid over the top-level `runner:` for
+this scenario alone; a list such as `gradle_args` is replaced whole. Anything
+else under a scenario is refused, `detectors` included: the thresholds are the
+config's, shared by every scenario.
+
+`collect`, `analyze` and `calibrate` take `--scenario <name>`. Without it they
+take the first scenario in the file and say so on stderr, naming the others.
+Pass the flag whenever the config names more than one: a second scenario is
+the one most easily measured by mistake. `analyze` writes its report to `-o`
+whatever the scenario, `.echolot/out/` by default, so the last scenario
+analysed is the one there; `calibrate` says which scenario its section came
+from.
+
 ### `runner`
 
 `mode: launch` drives the scenario itself: force-stop, record, `am start -W`.

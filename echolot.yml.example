@@ -55,6 +55,24 @@ scenario:
   # considers acceptable, which is worth writing down on its own.
   budget_ms: 2500
 
+# Several journeys in one config: `scenarios:` in place of `scenario:`, never
+# beside it. Each key is a scenario's name, which its traces carry
+# (`feed_scroll_iter000.perfetto-trace`), and each holds what `scenario:`
+# holds, less `name`, plus the runner keys it changes, laid over `runner:`
+# below. `collect`, `analyze` and `calibrate` take `--scenario <name>`;
+# without it they take the first, and say so.
+#
+# scenarios:
+#   cold_start:
+#     start: {name: "bindApplication"}
+#     end: {name: "Choreographer#doFrame*"}
+#   feed_scroll:
+#     start: {name: "feed_scroll_start"}
+#     end: {name: "feed_scroll_end"}
+#     runner:
+#       mode: command
+#       command: "adb shell input swipe 500 1500 500 300 600"
+
 runner:
   # launch  — we drive it: force-stop and launch the activity. Cold start.
   # command — something else drives it, we record around it.

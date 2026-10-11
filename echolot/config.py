@@ -8,6 +8,7 @@ default declared in the detector's own .sql file.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -55,16 +56,30 @@ def merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+# A scenario's name goes into the names of its traces,
+# `feed_scroll_iter000.perfetto-trace`, so it is held to what a file name
+# carries everywhere.
+_SCENARIO_NAME = re.compile(r"[A-Za-z0-9][\w.-]*")
+# What a scenario under `scenarios:` may hold: what `scenario:` holds, less
+# the name its key already gives, and the runner keys it changes.
+_SCENARIO_KEYS = ("start", "end", "budget_ms", "runner")
+
+
 class Config:
     def __init__(self, raw: dict[str, Any], path: Path | None = None,
                  local_path: Path | None = None):
         self.raw = raw
         self.path = path
         self.local_path = local_path
+        # Which of `scenarios:` the scenario's accessors read. None is the
+        # first, and the only one of a config with one `scenario:`.
+        self.scenario_key: str | None = None
 
     @classmethod
-    def load(cls, path: str | Path, local: str | Path | None = None) -> "Config":
-        """The project config, with local overrides layered on top.
+    def load(cls, path: str | Path, local: str | Path | None = None,
+             scenario: str | None = None) -> "Config":
+        """The project config, with local overrides layered on top, reading
+        the scenario called `scenario` (see `select`).
 
         Reads like `gradle.properties` next to `local.properties`: `echolot.yml`
         is committed and identical for everyone, `local.yml` sits beside it in
@@ -100,8 +115,9 @@ class Config:
         # sentence: `reflect` reads the thresholds for its snapshot outside
         # any such handler, and `detectors:` written as a list took it down
         # with a traceback. Every loader already answers a config that does
-        # not load.
+        # not load. The scenarios too, for the same reason.
         cfg._detectors()
+        cfg.select(scenario)
         return cfg
 
     @property
@@ -226,14 +242,105 @@ class Config:
 
     @property
     def scenario_start(self) -> str:
-        return self._anchor("scenario.start")
+        return self._anchor("start")
 
     @property
     def scenario_end(self) -> str:
-        return self._anchor("scenario.end")
+        return self._anchor("end")
 
-    def _anchor(self, dotted: str) -> str:
-        node = self.get(dotted)
+    @property
+    def scenarios(self) -> list[str]:
+        """The scenarios this config names, in its order.
+
+        `scenarios:` maps each name to a scenario; `scenario:` is one, named
+        by its `name`. A config with neither has one scenario too, the whole
+        trace, named `run` as before.
+        """
+        many = self._many()
+        return list(many) if many is not None else [self.scenario_name]
+
+    def select(self, name: str | None) -> "Config":
+        """Read the scenario called `name` from here on: its window, its
+        name, and its runner keys over the config's.
+
+        None reads the first. A name this config does not have is refused,
+        with the names it does have.
+        """
+        many = self._many()
+        if name is None:
+            self.scenario_key = None
+        elif many is None:
+            if name != self.scenario_name:
+                raise ConfigError(
+                    f"--scenario {name}: this config has one scenario, "
+                    f"`{self.scenario_name}`. Name several under `scenarios:` "
+                    f"to choose among them")
+        elif name not in many:
+            raise ConfigError(
+                f"--scenario {name}: no such scenario in this config. It has "
+                + ", ".join(f"`{n}`" for n in many))
+        else:
+            self.scenario_key = name
+        return self
+
+    def _many(self) -> dict[str, dict[str, Any]] | None:
+        """`scenarios:`, refused in a sentence when it has no shape; None
+        for a config that writes one `scenario:` or none."""
+        many = self.get("scenarios")
+        if many is None:
+            return None
+        if self.get("scenario") is not None:
+            raise ConfigError(
+                "scenario and scenarios are two ways to write the scenarios: "
+                "keep one. One scenario goes under `scenario:`; several go "
+                "under `scenarios:`, each named by its key")
+        if not isinstance(many, dict) or not many:
+            raise ConfigError(
+                f"scenarios must map a name to a scenario, got {many!r}: "
+                f"`scenarios:`, then `cold_start:` indented, with its `start` "
+                f"and `end` under it")
+        out: dict[str, dict[str, Any]] = {}
+        for name, block in many.items():
+            if not isinstance(name, str) or not _SCENARIO_NAME.fullmatch(name):
+                raise ConfigError(
+                    f"scenarios: {name!r} cannot name a scenario. The name goes "
+                    f"into its traces' file names: letters, digits, `_`, `.` "
+                    f"and `-`, starting with a letter or a digit")
+            block = {} if block is None else block
+            if not isinstance(block, dict):
+                raise ConfigError(
+                    f"scenarios.{name} must be a mapping with `start` and "
+                    f"`end` under it, got {block!r}")
+            if "name" in block:
+                raise ConfigError(
+                    f"scenarios.{name}: a scenario under `scenarios:` is named "
+                    f"by its key, so it has no `name`")
+            unknown = [k for k in block
+                       if k not in _SCENARIO_KEYS and not str(k).startswith("_")]
+            if unknown:
+                raise ConfigError(
+                    f"scenarios.{name}: no key {', '.join(repr(k) for k in unknown)} "
+                    f"in a scenario. It takes {', '.join(_SCENARIO_KEYS)}")
+            if block.get("runner") is not None and not isinstance(block["runner"], dict):
+                raise ConfigError(
+                    f"scenarios.{name}.runner must be a mapping of the runner "
+                    f"keys this scenario changes, got {block['runner']!r}")
+            out[name] = block
+        return out
+
+    def _scenario(self) -> tuple[str, dict[str, Any]]:
+        """The scenario the accessors read: where it is written, and its block."""
+        many = self._many()
+        if many is None:
+            node = self.get("scenario")
+            return "scenario", node if isinstance(node, dict) else {}
+        name = self.scenario_key or next(iter(many))
+        return f"scenarios.{name}", many[name]
+
+    def _anchor(self, key: str) -> str:
+        where, block = self._scenario()
+        dotted = f"{where}.{key}"
+        node = block.get(key)
         if node is None:
             return NO_ANCHOR
         if isinstance(node, dict):
@@ -333,7 +440,8 @@ class Config:
 
     @property
     def runner(self) -> dict[str, Any]:
-        """The runner section. Absence is fine: the defaults are enough."""
+        """The runner section, with the selected scenario's runner keys laid
+        over it. Absence is fine: the defaults are enough."""
         node = self.get("runner") or {}
         if not isinstance(node, dict):
             # `runner: gradle` is the likely shape of it: the mode written
@@ -343,11 +451,17 @@ class Config:
                 f"is one key under it: `runner:`, then `mode: "
                 f"{node if node in ('launch', 'command', 'gradle') else 'launch'}`"
                 f" on the next line, indented.")
-        return node
+        where, block = self._scenario()
+        own = block.get("runner") if where != "scenario" else None
+        return merge(node, own) if own else node
 
     @property
     def scenario_name(self) -> str:
-        return str(self.get("scenario.name") or "run")
+        """What the scenario is called, and what its traces are named after."""
+        where, block = self._scenario()
+        if where != "scenario":
+            return where.split(".", 1)[1]
+        return str(block.get("name") or "run")
 
     def context_params(self, upid: int) -> dict[str, Any]:
         """upid is resolved against the trace in main.py — see _resolve_process."""

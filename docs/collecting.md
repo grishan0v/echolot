@@ -155,6 +155,44 @@ suppress:
 And the task name is often ambiguous, because the baselineprofile plugin adds
 flavours. `./gradlew :benchmark:tasks | grep -i connected` lists the options.
 
+## Several scenarios
+
+A project that guards a cold start and a feed scroll names both in one
+config, under `scenarios:` instead of `scenario:`:
+
+```yaml
+scenarios:
+  cold_start:
+    start: {name: "bindApplication"}
+    end: {name: "Choreographer#doFrame*"}
+  feed_scroll:
+    start: {name: "feed_scroll_start"}
+    end: {name: "feed_scroll_end"}
+    runner:
+      mode: command
+      command: "adb shell input swipe 500 1500 500 300 600"
+runner:
+  mode: launch
+  iterations: 5
+```
+
+Each scenario holds its window, and the runner keys it changes, laid over
+`runner:` for it alone: here the cold start is launched by `collect`, and the
+scroll is driven by a command, five times each. The same macrobenchmark task
+can serve both with another class in `gradle_args`.
+
+```bash
+echolot collect --scenario feed_scroll
+echolot analyze .echolot/traces/feed_scroll_iter*.perfetto-trace --scenario feed_scroll
+```
+
+The name goes into the traces' names, so the two sets live side by side in
+`.echolot/traces/`, and a new round of one sets aside that scenario's
+previous traces and no other's. `collect`, `analyze` and `calibrate` take
+`--scenario`; without it they take the first scenario and say so on stderr.
+`analyze` still writes to `-o`, `.echolot/out/` by default, whichever
+scenario it measured.
+
 ## Which device
 
 In `launch` and `command` modes, in the order they are consulted:
