@@ -456,6 +456,20 @@ class Config:
         return merge(node, own) if own else node
 
     @property
+    def report_dir(self) -> str:
+        """Where `analyze` writes the report by default, from the config's
+        directory, and where `report`, `compare` and `status` look for it.
+
+        `.echolot/out`, as it has always been. A config that names its
+        scenarios under `scenarios:` keeps a directory per scenario under it,
+        `.echolot/out/feed_scroll`, so that measuring one does not overwrite
+        the other's latest report.
+        """
+        if self.get("scenarios") is None:
+            return ".echolot/out"
+        return f".echolot/out/{self.scenario_name}"
+
+    @property
     def scenario_name(self) -> str:
         """What the scenario is called, and what its traces are named after."""
         where, block = self._scenario()

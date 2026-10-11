@@ -102,8 +102,13 @@ def build(
     absent: list[str] | None = None,
     environment: dict[str, Any] | None = None,
     markers: dict[str, Any] | None = None,
+    scenario: str | None = None,
 ) -> dict[str, Any]:
     """`absent` — shipped detectors this config left out. See `to_markdown`.
+
+    `scenario` — which of the config's scenarios the window is, so that a
+    report says what it measured and `compare` can refuse two of them. A
+    report written before it existed has none.
 
     `environment` — the platform state every duration below is conditional on.
     Optional because a report can be built from a trace recorded before those
@@ -119,6 +124,7 @@ def build(
         "schema": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "trace": trace,
+        "scenario": scenario,
         "toolchain": toolchain or {},
         "window": window,
         "environment": environment or {},
@@ -1033,6 +1039,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(_traces_line(traces))
     else:
         out.append(f"Trace: `{report['trace']}`")
+    if report.get("scenario"):
+        out.append(f"Scenario: `{report['scenario']}`")
     if w.get("process"):
         out.append(f"Process: `{w['process']}` (pid {w.get('pid')})")
     alts = w.get("process_alternatives")
@@ -1258,7 +1266,10 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     out = []
     traces = report.get("traces")
     what = f"{len(traces)} runs, medians" if traces else f"`{report.get('trace')}`"
-    line = f"**{what}** · process `{w.get('process')}`"
+    line = f"**{what}**"
+    if report.get("scenario"):
+        line += f" · scenario `{report['scenario']}`"
+    line += f" · process `{w.get('process')}`"
     if w.get("duration_ms") is not None:
         line += f" · window **{w['duration_ms']} ms**"
         if w.get("duration_ms_min") is not None:

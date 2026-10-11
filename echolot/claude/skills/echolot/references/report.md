@@ -3,7 +3,9 @@
 `echolot analyze` writes two files into `.echolot/out/` next to the config:
 `report.json` for you and `report.md` for humans. One set of data, two formats.
 A relative `-o` is taken from the config's directory, so running from a build
-folder full of traces still lands the report in the project.
+folder full of traces still lands the report in the project. A config that
+names several scenarios keeps a directory per scenario,
+`.echolot/out/<scenario>/`, and the report's `scenario` says which it is.
 
 Two flags for one run only, no config edited: `--set detector.param=value`
 overrides one threshold; `--defaults` ignores the config's `detectors` section
@@ -97,7 +99,13 @@ taken from the repeat where the row cost most.
 comment — and says nothing about `local.yml`, which is not hashed. The
 thresholds each detector ran with are its `params`, and `compare` lists the
 ones that differ in its `thresholds` warning. `defaults: true` means `--defaults` ran every detector with its built-in
-numbers, `set` lists what `--set` overrode for that run.
+numbers, `set` lists what `--set` overrode for that run. `mapping` is the
+build's R8 mapping the config names, and `found: false` means the build had not
+written it yet: R8's names stay in the report.
+
+**`scenario`** — which of the config's scenarios the window is: the key under
+`scenarios:`, or the `name` of a single `scenario:`. `compare` refuses two
+reports whose scenarios differ. A report from before the key existed has none.
 
 **`environment`** — what the device was doing to the app while the scenario
 ran. Not a finding: it is the condition every duration in this report is
@@ -253,7 +261,9 @@ echolot report -d repeated_work --json         # the same selection as json — 
 echolot report path/to/report.json --window    # an older report, a round's own copy
 ```
 
-Without a path it reads `.echolot/out/report.json` next to the config.
+Without a path it reads `.echolot/out/report.json` next to the config, or
+`.echolot/out/<scenario>/report.json` for the scenario `--scenario` names,
+the first one's without it.
 
 ## Check these before drawing conclusions
 

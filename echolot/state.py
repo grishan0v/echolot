@@ -38,6 +38,9 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
 
     cfg_path = project / config
     st["config"] = None
+    # Where the latest report is: the config's, per scenario when it names
+    # several (the first of them here), else `.echolot/out` as always.
+    report_dir = ".echolot/out"
     if cfg_path.exists():
         try:
             cfg = Config.load(cfg_path)
@@ -52,6 +55,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                 "confirmed": cfg.confirmed(),
                 "temp_prefix": cfg.get("instrumentation.temp_prefix"),
             }
+            report_dir = cfg.report_dir
         except ConfigError as e:
             st["config"] = {"path": cfg_path, "error": str(e)}
 
@@ -80,7 +84,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     st["collect"] = collect_state(project)
 
     st["report"] = None
-    rep = project / ".echolot" / "out" / "report.json"
+    rep = project / report_dir / "report.json"
     if rep.exists():
         try:
             r = json.loads(rep.read_text(encoding="utf-8"))

@@ -223,6 +223,7 @@ fired. The silent ones are named too.
 
 Runs: **5**, numbers are medians across them
 Traces: `coldStart_iter000`, `coldStart_iter001`, `coldStart_iter002`, `coldStart_iter003`, `coldStart_iter004`
+Scenario: `coldStart`
 Process: `com.example.app` (pid 12903)
 Scenario window: **1136.05 ms** (from 1084.25 to 1214.18)
 Main thread: 40% on a CPU · 1% waiting for a CPU · 9% blocked in the kernel · 49% sleeping

@@ -190,8 +190,14 @@ The name goes into the traces' names, so the two sets live side by side in
 `.echolot/traces/`, and a new round of one sets aside that scenario's
 previous traces and no other's. `collect`, `analyze` and `calibrate` take
 `--scenario`; without it they take the first scenario and say so on stderr.
-`analyze` still writes to `-o`, `.echolot/out/` by default, whichever
-scenario it measured.
+
+Each scenario keeps its own latest report too: `analyze` writes it to
+`.echolot/out/<scenario>/` unless `-o` says otherwise, and the report names
+its scenario, in `report.json` and at the top of `report.md`. `echolot
+report --scenario` reads that scenario's report, the first one's without the
+flag. `compare` refuses two reports of different scenarios, and compares a
+report it is given with the latest report of that report's own scenario. A
+config with one `scenario:` keeps `.echolot/out/`.
 
 ## Which device
 

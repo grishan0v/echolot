@@ -12,7 +12,7 @@ far each row moved. The top row is usually the answer.
 ```bash
 echolot compare                       # the open investigation: previous round vs latest
 echolot compare --hunt 3              # investigation 3: its first report vs its last
-echolot compare old.json              # that report vs .echolot/out/report.json
+echolot compare old.json              # that report vs the latest of its scenario
 echolot compare old.json new.json     # exactly those two
 ```
 
@@ -24,7 +24,12 @@ nearest one up the tree within the checkout, so `compare` run from a build
 folder finds the project and its open investigation; `-c` names another,
 although `--help` does not list the flag. With one report named, the newer
 side is `.echolot/out/report.json` next to the config, whatever `-o` says: `-o`
-is where the comparison goes. Run from a folder with no config, or with one
+is where the comparison goes. For a config with several scenarios it is the
+latest report of the scenario the named report measured, in
+`.echolot/out/<scenario>/`, and `--scenario` names another. Two reports of
+different scenarios are refused: a cold start against a feed scroll moves
+every row and means nothing. A report from before reports named their
+scenario is compared as it is. Run from a folder with no config, or with one
 that does not load, it writes to `-o` when one is given, taken from the working
 directory; with neither it prints the comparison, writes nothing, and says so
 on stderr, with the reason when the config is there and does not load.

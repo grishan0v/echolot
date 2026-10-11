@@ -287,6 +287,14 @@ def _out_dir(out: str, cfg: Config) -> Path:
     return Path(cfg.path).resolve().parent / p
 
 
+def _rel_to(path: Path, root: Path) -> str:
+    """A path as the project names it, `.echolot/out/report.json`."""
+    try:
+        return Path(path).relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _note_scenario(cfg: Config, asked: str | None) -> None:
     """Which scenario this run measures, said when the config names several.
 
@@ -559,7 +567,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     return report_mod.build(str(trace), window, results,
                             toolchain=toolchain_info(tp_binary, tp_source),
                             absent=absent, environment=environment,
-                            markers=markers)
+                            markers=markers, scenario=cfg.scenario_name)
 
 
 def _markers_info(tp, cfg: Config) -> dict:
@@ -660,7 +668,9 @@ def cmd_analyze(args) -> int:
             _note_detectors(cfg)
         cli_overrides = parse_set(args.set or [], load_detectors(DETECTOR_DIR))
         # Before the traces are read: an -o that names a file used to fail
-        # at the end, after the whole analysis, with a traceback.
+        # at the end, after the whole analysis, with a traceback. Without -o,
+        # the scenario's own directory when the config names several.
+        args.out = args.out or cfg.report_dir
         planned = _out_dir(args.out, cfg)
         if planned.exists() and not planned.is_dir():
             raise ConfigError(f"-o {args.out}: {planned} is a file, not a directory")
@@ -794,6 +804,31 @@ def _reports_of_hunt(project: Path, ident: str) -> list[Path]:
     return reports
 
 
+def _same_scenario(before: dict, after: dict, before_path: Path, after_path: Path) -> None:
+    """Refuse two reports of different scenarios.
+
+    A cold start against a feed scroll moves every row, and none of it means
+    anything. A report written before reports named their scenario says
+    nothing either way, and is taken as it is.
+    """
+    a, b = before.get("scenario"), after.get("scenario")
+    if a and b and a != b:
+        raise ConfigError(
+            f"these reports measured two scenarios: {before_path} is `{a}`, "
+            f"{after_path} is `{b}`. A comparison holds one scenario's runs "
+            f"against its own; `--scenario` picks which latest report to use")
+
+
+def _scenario_of(path: Path) -> str | None:
+    """The scenario a report says it measured, or None when it says none or
+    does not read: `_load_report` says why when it is read for real."""
+    try:
+        found = json.loads(path.read_text(encoding="utf-8")).get("scenario")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return found if isinstance(found, str) else None
+
+
 def _compare_pair(args, project: Path) -> tuple[Path, Path]:
     """Which two reports, from what the caller gave.
 
@@ -809,8 +844,14 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
 
     # Where `analyze` writes by default, whatever `-o` says: `-o` is where the
     # comparison goes, and reading the newer side from it compared against
-    # whatever report.json sat there, or against nothing.
-    latest = _out_dir(".echolot/out", args.cfg) / "report.json" if args.cfg else \
+    # whatever report.json sat there, or against nothing. With scenarios, the
+    # named report's own scenario says whose latest report that is, unless
+    # `--scenario` said it first.
+    if len(paths) == 1 and args.cfg is not None and not args.scenario:
+        named = _scenario_of(paths[0])
+        if named in args.cfg.scenarios:
+            args.cfg.select(named)
+    latest = _out_dir(args.cfg.report_dir, args.cfg) / "report.json" if args.cfg else \
         Path(".echolot/out/report.json")
     if len(paths) == 1:
         # One path is "against what I just measured": the named report is the
@@ -904,15 +945,25 @@ def cmd_compare(args) -> int:
             # did not, for a config that was there.
             unloaded = e
         project = _project_root(args.cfg) if args.cfg else Path.cwd()
+        # A scenario named here is the config's to have, and one it lacks
+        # stops the comparison: it would compare whatever was there.
+        if args.cfg is not None and args.scenario:
+            args.cfg.select(args.scenario)
 
         before_path, after_path = _compare_pair(args, project)
+        before, after = _load_report(before_path), _load_report(after_path)
+        _same_scenario(before, after, before_path, after_path)
+        # The comparison goes beside the scenario's own report.
+        scenario = before.get("scenario") or after.get("scenario")
+        if args.cfg is not None and not args.scenario and scenario in args.cfg.scenarios:
+            args.cfg.select(scenario)
         # The same fallback `analyze`, `names`, `mark` and `reflect` use: a
         # config without the key, or none, still has markers planted under
         # the default prefix.
         prefix = (args.cfg.get("instrumentation.temp_prefix") if args.cfg else None) \
             or DEFAULT_PREFIX
         cmp = compare_mod.build(
-            _load_report(before_path), _load_report(after_path),
+            before, after,
             before_path=str(before_path), after_path=str(after_path),
             floor_ms=args.floor_ms, floor_ratio=args.floor_pct / 100.0,
             temp_prefix=str(prefix))
@@ -936,7 +987,7 @@ def cmd_compare(args) -> int:
     # accepted and ignored, and a CI script comparing two downloaded reports
     # got nothing on disk.
     if args.cfg is not None or args.out is not None:
-        out_dir = (_out_dir(args.out or ".echolot/out", args.cfg) if args.cfg is not None
+        out_dir = (_out_dir(args.out or args.cfg.report_dir, args.cfg) if args.cfg is not None
                    else Path(args.out))
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "comparison.json").write_text(
@@ -2339,11 +2390,13 @@ def cmd_status(args) -> int:
             note = " · made with --defaults"
         elif cfg and cfg.get("sha") and rep.get("config_sha") and rep["config_sha"] != cfg["sha"]:
             note = " · made with an older config"
-        lines.append(("report", f".echolot/out/report.json, {made} · {rep['runs']} run(s) · {what}{note}"))
+        lines.append(("report", f"{_rel_to(rep['path'], st['project'])}, {made} · "
+                                f"{rep['runs']} run(s) · {what}{note}"))
     elif rep:
         # There, and cut short or garbled: "none yet" said no analysis ever
         # ran here.
-        lines.append(("report", ".echolot/out/report.json does not read — run analyze again"))
+        lines.append(("report", f"{_rel_to(rep['path'], st['project'])} does not read — "
+                                f"run analyze again"))
     else:
         lines.append(("report", "none yet"))
     d = st["last_doctor"]
@@ -3706,6 +3759,23 @@ def cmd_scan(args) -> int:
     return 0
 
 
+def _report_dir(args) -> str:
+    """Where the latest report of the scenario the arguments name is.
+
+    The config's directory for it (`Config.report_dir`). Without a config,
+    or with one that does not load, `.echolot/out` as always; a `--scenario`
+    the config cannot give is a mistake, and says so.
+    """
+    if not Path(args.config).is_file():
+        return ".echolot/out"
+    try:
+        return Config.load(args.config, scenario=args.scenario).report_dir
+    except ConfigError:
+        if args.scenario:
+            raise
+        return ".echolot/out"
+
+
 def cmd_report(args) -> int:
     """Views of a report that is already on disk.
 
@@ -3719,8 +3789,8 @@ def cmd_report(args) -> int:
     """
     _nearest_config(args)
     project = project_of(args)
-    path = Path(args.report) if args.report else project / ".echolot" / "out" / "report.json"
     try:
+        path = Path(args.report) if args.report else project / _report_dir(args) / "report.json"
         rep = _load_report(path)
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -4117,10 +4187,11 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("--scenario", metavar="NAME",
                     help="which of the config's scenarios the traces are: its window "
                          "(default: the first)")
-    an.add_argument("-o", "--out", default=".echolot/out",
+    an.add_argument("-o", "--out", default=None,
                     help="where report.md and report.json go; a relative path "
                          "is taken from the config's directory (default: "
-                         ".echolot/out next to the config)")
+                         ".echolot/out next to the config, and "
+                         ".echolot/out/<scenario> for a config with scenarios:)")
     an.add_argument("--set", action="append", default=[],
                     metavar="DETECTOR.PARAM=VALUE",
                     help="override one threshold for this run only, e.g. "
@@ -4142,6 +4213,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the older report first, then the newer one")
     cp.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
     cp.add_argument("--local", help=argparse.SUPPRESS)
+    cp.add_argument("--scenario", metavar="NAME",
+                    help="whose latest report to compare against, for a config with "
+                         "scenarios: (default: the named report's own scenario)")
     cp.add_argument("--hunt", metavar="N|WORDS",
                     help="an investigation's first report against its last")
     cp.add_argument("-o", "--out", default=None,
@@ -4195,6 +4269,8 @@ def build_parser() -> argparse.ArgumentParser:
                          ".echolot/out/report.json next to the config.")
     rp.add_argument("report", nargs="?", help="a report.json (default: the last one)")
     rp.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
+    rp.add_argument("--scenario", metavar="NAME",
+                    help="whose latest report, for a config with scenarios: (default: the first)")
     rp.add_argument("--detector", "-d", action="append", metavar="ID",
                     help="this detector's rows, longest first; repeatable")
     rp.add_argument("--top", type=_at_least_one, metavar="N",

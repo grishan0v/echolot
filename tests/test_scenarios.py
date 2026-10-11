@@ -210,3 +210,118 @@ def test_collect_records_the_scenario_with_its_runner(tmp_path: Path, monkeypatc
           names == ["warm_iter000.perfetto-trace", "warm_iter001.perfetto-trace"], names)
     check("and its reset: nothing stopped between launches",
           "force-stop" not in fake.kinds(), fake.kinds())
+
+
+# --- each scenario's report (#347) -------------------------------------------------
+
+def analyzed(project: Path, trace: Path, monkeypatch, *picks: str | None) -> None:
+    """`analyze` run in the project, once per scenario named (None: no flag)."""
+    monkeypatch.chdir(project)
+    for picked in picks:
+        code, _, err = run("analyze", str(trace), *(["--scenario", picked] if picked else []))
+        check(f"analyze {picked}: exit 0", code == 0, err[-600:])
+
+
+def test_each_scenario_keeps_its_own_report_and_names_itself(tmp_path: Path, trace: Path,
+                                                             monkeypatch) -> None:
+    write(tmp_path, TWO)
+    analyzed(tmp_path, trace, monkeypatch, "first_frame", "loaded")
+    out = tmp_path / ".echolot/out"
+    check("a directory per scenario, and none shared",
+          sorted(p.name for p in out.iterdir()) == ["first_frame", "loaded"],
+          sorted(p.name for p in out.iterdir()))
+    for name, end in (("first_frame", "Screen.firstFrame"), ("loaded", "Screen.loaded")):
+        rep = json.loads((out / name / "report.json").read_text(encoding="utf-8"))
+        check(f"{name}: the report names its scenario, and measured its window",
+              rep["scenario"] == name and rep["window"]["end_anchor"]["glob"] == end, rep["scenario"])
+        md = (out / name / "report.md").read_text(encoding="utf-8")
+        check(f"{name}: so does its header", f"Scenario: `{name}`" in md, md[:300])
+
+
+def test_one_scenario_writes_where_it_always_did(tmp_path: Path, trace: Path, monkeypatch) -> None:
+    write(tmp_path, {"project": PROJECT,
+                     "scenario": {"name": "fixture", "start": {"name": "AppStart"},
+                                  "end": {"name": "Screen.firstFrame"}}})
+    analyzed(tmp_path, trace, monkeypatch, None)
+    rep = json.loads((tmp_path / ".echolot/out/report.json").read_text(encoding="utf-8"))
+    check("in .echolot/out, named after its scenario", rep["scenario"] == "fixture", rep["scenario"])
+
+
+def test_an_out_directory_given_is_where_it_goes(tmp_path: Path, trace: Path, monkeypatch) -> None:
+    write(tmp_path, TWO)
+    monkeypatch.chdir(tmp_path)
+    code, _, err = run("analyze", str(trace), "--scenario", "loaded", "-o", "elsewhere")
+    check("exit 0, and -o kept", code == 0 and (tmp_path / "elsewhere/report.json").is_file()
+          and not (tmp_path / ".echolot/out").exists(), err[-400:])
+
+
+def test_a_report_from_before_says_no_scenario() -> None:
+    from echolot import report as report_mod
+    text = report_mod.to_markdown(json.loads(json.dumps(OLD_REPORT)))
+    check("no scenario line for a report that names none", "Scenario: `" not in text, text[:300])
+
+
+OLD_REPORT = {
+    "trace": "t.perfetto-trace", "window": {"process": "com.example.app"},
+    "summary": {"detectors_run": 0, "detectors_fired": 0, "fired_ids": [], "absent_ids": []},
+    "detectors": [],
+}
+
+
+def test_report_reads_the_scenario_it_is_asked_for(tmp_path: Path, trace: Path,
+                                                    monkeypatch) -> None:
+    write(tmp_path, TWO)
+    analyzed(tmp_path, trace, monkeypatch, "first_frame", "loaded")
+    code, out, err = run("report", "--window")
+    check("the first scenario's by default", code == 0 and "Screen.firstFrame" in out
+          and "scenario `first_frame`" in out, (out[:400], err[-300:]))
+    code, out, _ = run("report", "--window", "--scenario", "loaded")
+    check("the one named with --scenario", code == 0 and "Screen.loaded" in out, out[:400])
+    code, _, err = run("report", "--scenario", "scroll")
+    check("one the config lacks: exit 2, in a sentence", code == 2
+          and "no such scenario" in err and "Traceback" not in err, err[-300:])
+
+
+def test_compare_refuses_two_scenarios(tmp_path: Path, trace: Path, monkeypatch) -> None:
+    write(tmp_path, TWO)
+    analyzed(tmp_path, trace, monkeypatch, "first_frame", "loaded")
+    out = tmp_path / ".echolot/out"
+    code, _, err = run("compare", str(out / "first_frame/report.json"),
+                       str(out / "loaded/report.json"))
+    check("exit 2, naming both", code == 2 and "two scenarios" in err
+          and "`first_frame`" in err and "`loaded`" in err, err[-400:])
+
+
+def test_compare_against_the_latest_of_the_named_reports_scenario(tmp_path: Path, trace: Path,
+                                                                   monkeypatch) -> None:
+    write(tmp_path, TWO)
+    analyzed(tmp_path, trace, monkeypatch, "loaded", "first_frame")
+    kept = tmp_path / "before.json"
+    kept.write_bytes((tmp_path / ".echolot/out/loaded/report.json").read_bytes())
+    code, out, err = run("compare", str(kept))
+    check("the newer side is that scenario's latest, though the first ran last",
+          code == 0 and "loaded/report.json" in out + err, (out[-600:], err[-400:]))
+    check("and the comparison goes beside it",
+          (tmp_path / ".echolot/out/loaded/comparison.md").is_file(),
+          sorted(p.name for p in (tmp_path / ".echolot/out/loaded").iterdir()))
+
+
+def test_compare_takes_a_report_from_before_as_it_is(tmp_path: Path, trace: Path,
+                                                     monkeypatch) -> None:
+    write(tmp_path, TWO)
+    analyzed(tmp_path, trace, monkeypatch, "loaded")
+    latest = tmp_path / ".echolot/out/loaded/report.json"
+    old = json.loads(latest.read_text(encoding="utf-8"))
+    del old["scenario"]
+    (tmp_path / "old.json").write_text(json.dumps(old), encoding="utf-8")
+    code, _, err = run("compare", str(tmp_path / "old.json"), str(latest))
+    check("no scenario to hold against: compared", code == 0, err[-400:])
+
+
+def test_status_finds_the_report_where_analyze_put_it(tmp_path: Path, trace: Path,
+                                                      monkeypatch) -> None:
+    write(tmp_path, TWO)
+    analyzed(tmp_path, trace, monkeypatch, None)
+    code, out, err = run("status")
+    check("the first scenario's report, by its path", code == 0
+          and ".echolot/out/first_frame/report.json" in out, (out[-800:], err[-300:]))

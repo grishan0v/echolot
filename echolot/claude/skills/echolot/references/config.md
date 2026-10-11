@@ -169,10 +169,10 @@ config's, shared by every scenario.
 `collect`, `analyze` and `calibrate` take `--scenario <name>`. Without it they
 take the first scenario in the file and say so on stderr, naming the others.
 Pass the flag whenever the config names more than one: a second scenario is
-the one most easily measured by mistake. `analyze` writes its report to `-o`
-whatever the scenario, `.echolot/out/` by default, so the last scenario
-analysed is the one there; `calibrate` says which scenario its section came
-from.
+the one most easily measured by mistake. Each scenario keeps its own latest
+report, in `.echolot/out/<scenario>/` unless `-o` says otherwise, and the
+report names its scenario; `report` and `compare` take `--scenario` too.
+`calibrate` says which scenario its section came from.
 
 ### `runner`
 
