@@ -714,6 +714,16 @@ opened — the human captured the traces, then asked. They are moved, not lost,
 and they are still that question's evidence: the command hands the agent the
 directory `echolot hunt` names, rather than recording them again.
 
+An investigation is about one scenario. In a config that names several,
+`echolot hunt --scenario feed_scroll "<q>"` opens it on that one, the first
+without the flag, and only that scenario's loose set moves aside. Inside it,
+`collect`, `analyze`, `calibrate` and `report` take its scenario when no
+`--scenario` is given, and say so on stderr: one forgotten flag measured the
+first scenario, and the investigation's evidence then mixed two journeys.
+The scenario is the question's, so a config that no longer has it is drift,
+named among the signs that the investigation is not the one being asked
+about.
+
 ### Who opens it, and who closes it
 
 On the Claude Code path both ends belong to the `echolot-hunt` command. It

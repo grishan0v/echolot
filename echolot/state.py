@@ -47,6 +47,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
             calibrated = bool(cfg.detector_overrides)
             st["config"] = {
                 "path": cfg_path, "scenario": cfg.scenario_name,
+                "scenarios": cfg.scenarios,
                 "process": cfg.get("project.process") or cfg.get("project.package"),
                 "thresholds": "from the config" if calibrated else "built-in defaults",
                 "local": cfg.local_path is not None,

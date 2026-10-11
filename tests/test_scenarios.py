@@ -325,3 +325,118 @@ def test_status_finds_the_report_where_analyze_put_it(tmp_path: Path, trace: Pat
     code, out, err = run("status")
     check("the first scenario's report, by its path", code == 0
           and ".echolot/out/first_frame/report.json" in out, (out[-800:], err[-300:]))
+
+
+# --- an investigation is about one scenario (#348) ----------------------------------
+
+def traces_of(project: Path, *names: str) -> Path:
+    """One old trace of each scenario named, where `collect` keeps them."""
+    traces = project / ".echolot/traces"
+    traces.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (traces / f"{name}_iter000.perfetto-trace").write_bytes(b"an earlier round")
+    return traces
+
+
+def test_hunt_opens_on_the_scenario_named_and_sets_aside_its_traces(tmp_path: Path,
+                                                                    monkeypatch) -> None:
+    from echolot import hunt as hunt_mod
+    write(tmp_path, TWO)
+    traces = traces_of(tmp_path, "first_frame", "loaded")
+    monkeypatch.chdir(tmp_path)
+    code, out, err = run("hunt", "--scenario", "loaded", "the feed got slower")
+    check("opened", code == 0 and "opened #1" in out, err[-400:])
+    check("on that scenario", hunt_mod.load(tmp_path)["scenario"] == "loaded",
+          hunt_mod.load(tmp_path))
+    left = sorted(p.name for p in traces.glob("*.perfetto-trace"))
+    check("its previous traces set aside, the other scenario's left",
+          left == ["first_frame_iter000.perfetto-trace"], left)
+    check("and nothing said about a first scenario", "[i] scenario" not in err, err[-300:])
+
+
+def test_hunt_without_a_scenario_takes_the_first_and_says_so(tmp_path: Path,
+                                                             monkeypatch) -> None:
+    from echolot import hunt as hunt_mod
+    write(tmp_path, TWO)
+    monkeypatch.chdir(tmp_path)
+    code, _, err = run("hunt", "startup got slower")
+    check("the first, said", code == 0 and hunt_mod.load(tmp_path)["scenario"] == "first_frame"
+          and "[i] scenario first_frame, the first of 2" in err, err[-400:])
+
+
+def test_hunt_refuses_a_scenario_it_cannot_measure(tmp_path: Path, monkeypatch) -> None:
+    from echolot import hunt as hunt_mod
+    write(tmp_path, TWO)
+    traces = traces_of(tmp_path, "loaded")
+    monkeypatch.chdir(tmp_path)
+    code, _, err = run("hunt", "--scenario", "scroll", "the feed got slower")
+    check("exit 2, in a sentence", code == 2 and "no such scenario" in err, err[-400:])
+    check("nothing opened, nothing moved", hunt_mod.load(tmp_path) is None
+          and (traces / "loaded_iter000.perfetto-trace").is_file())
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    monkeypatch.chdir(bare)
+    code, _, err = run("hunt", "--scenario", "loaded", "a question")
+    check("and with no config to name it in", code == 2 and "no echolot.yml" in err, err[-300:])
+
+
+def test_inside_an_investigation_the_commands_take_its_scenario(tmp_path: Path, trace: Path,
+                                                                monkeypatch) -> None:
+    write(tmp_path, TWO)
+    monkeypatch.chdir(tmp_path)
+    run("hunt", "--scenario", "loaded", "the feed got slower")
+    code, _, err = run("analyze", str(trace))
+    rep = json.loads((tmp_path / ".echolot/out/loaded/report.json").read_text(encoding="utf-8"))
+    check("analyze measured the investigation's scenario, and said so",
+          code == 0 and rep["scenario"] == "loaded"
+          and "[i] scenario loaded, the open investigation's" in err, err[-400:])
+    code, out, _ = run("report", "--window")
+    check("report reads its report", code == 0 and "Screen.loaded" in out, out[:400])
+    code, _, err = run("analyze", str(trace), "--scenario", "first_frame")
+    check("--scenario still wins", code == 0
+          and (tmp_path / ".echolot/out/first_frame/report.json").is_file()
+          and "the open investigation's" not in err, err[-400:])
+
+
+def test_collect_inside_an_investigation_records_its_scenario(tmp_path: Path,
+                                                              monkeypatch) -> None:
+    fake = FakeAdb()
+    monkeypatch.setattr(runner, "_run", fake)
+    monkeypatch.delenv("ANDROID_SERIAL", raising=False)
+    write(tmp_path, {"project": {"package": "com.example.app"},
+                     "scenarios": {"cold": {}, "warm": {"runner": {"iterations": 1}}},
+                     "runner": {"iterations": 2}})
+    monkeypatch.chdir(tmp_path)
+    run("hunt", "--scenario", "warm", "warm start got slower")
+    code, _, err = run("collect")
+    names = sorted(p.name for p in (tmp_path / ".echolot/traces").glob("*.perfetto-trace"))
+    check("the investigation's traces", code == 0
+          and names == ["warm_iter000.perfetto-trace"], (names, err[-400:]))
+
+
+def test_a_concluded_investigation_picks_no_scenario(tmp_path: Path, trace: Path,
+                                                     monkeypatch) -> None:
+    write(tmp_path, TWO)
+    monkeypatch.chdir(tmp_path)
+    run("hunt", "--scenario", "loaded", "the feed got slower")
+    run("hunt", "--done", "a lock in the feed's repository")
+    code, _, err = run("analyze", str(trace))
+    check("the first again", code == 0 and "[i] scenario first_frame, the first of 2" in err
+          and (tmp_path / ".echolot/out/first_frame/report.json").is_file(), err[-400:])
+
+
+def test_drift_names_a_scenario_the_config_no_longer_has() -> None:
+    from echolot import hunt as hunt_mod
+    hunt = {"scenario": "feed_scroll", "status": "open"}
+    said = hunt_mod.drift(hunt, {"config": {"scenario": "cold_start",
+                                            "scenarios": ["cold_start", "checkout"]}})
+    check("several: the one it measures is gone, and what there is", said
+          == ["the config no longer has this investigation's scenario, feed_scroll: "
+              "it has cold_start, checkout"], said)
+    check("one of several that is still there is no drift", hunt_mod.drift(
+        {"scenario": "checkout", "status": "open"},
+        {"config": {"scenario": "cold_start", "scenarios": ["cold_start", "checkout"]}}) == [])
+    said = hunt_mod.drift({"scenario": "coldStart", "status": "open"},
+                          {"config": {"scenario": "firstLaunch", "scenarios": ["firstLaunch"]}})
+    check("one scenario, renamed: said as before",
+          said == ["the config's scenario changed: coldStart → firstLaunch"], said)

@@ -295,6 +295,28 @@ def _rel_to(path: Path, root: Path) -> str:
         return str(path)
 
 
+def _pick_scenario(cfg: Config, asked: str | None) -> None:
+    """The scenario this run measures: `--scenario`, else the open
+    investigation's, else the first.
+
+    Inside an investigation, its scenario is the question's: a `collect` or
+    an `analyze` without the flag measured the first one, and the
+    investigation's evidence then mixed two journeys. Said on stderr, as the
+    first is, when the config names several.
+    """
+    names = cfg.scenarios
+    if asked is None and len(names) > 1:
+        hunt = hunt_mod.load(_project_root(cfg)) or {}
+        theirs = hunt.get("scenario") if hunt.get("status", "open") == "open" else None
+        if theirs in names:
+            cfg.select(theirs)
+            print(f"[i] scenario {theirs}, the open investigation's: --scenario "
+                  f"picks another", file=sys.stderr)
+            recorder.note(scenario=theirs)
+            return
+    _note_scenario(cfg, asked)
+
+
 def _note_scenario(cfg: Config, asked: str | None) -> None:
     """Which scenario this run measures, said when the config names several.
 
@@ -661,7 +683,7 @@ def _markers_info(tp, cfg: Config) -> dict:
 def cmd_analyze(args) -> int:
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
-        _note_scenario(cfg, args.scenario)
+        _pick_scenario(cfg, args.scenario)
         tp_binary, tp_source = _tp_binary_source(args, cfg)
         _note_local(cfg)
         if not args.defaults:
@@ -2145,27 +2167,23 @@ def _clip(text: str, width: int = 58) -> str:
     return text if len(text) <= width else text[:width - 1] + "…"
 
 
-def _hunt_config(project: Path, config: str
-                 ) -> tuple[str | None, str | None, dict[str, Any], str | None]:
-    """Scenario name, config hash and the confirmed values — what an
-    investigation is opened against — and the project's marker prefix.
+def _hunt_config(project: Path, config: str) -> Config | None:
+    """The config an investigation is opened against: its scenario, its hash
+    and the values a person confirmed, and the project's marker prefix.
 
     An investigation records what it was opened against so that `drift` can
     later say "the scenario changed" instead of the human having to remember,
     and `analyze` can say which value a person confirmed has changed since.
 
-    No config at all is `(None, None, {})`: nothing names a scenario yet. A config
-    that is there and does not load raises, for `cmd_hunt` to refuse on. It
-    used to come back as `(None, None)` too, in silence — and since
-    `Config.load` checks `detectors:`, one malformed entry under it is enough
-    to get there.
+    No config at all is None: nothing names a scenario yet. A config that is
+    there and does not load raises, for `cmd_hunt` to refuse on. It used to
+    come back as nothing too, in silence — and since `Config.load` checks
+    `detectors:`, one malformed entry under it is enough to get there.
     """
     path = project / config     # an absolute config stays itself
     if not path.exists():
-        return None, None, {}, None
-    cfg = Config.load(path)
-    return (cfg.scenario_name, cfg.sha, cfg.confirmed(),
-            cfg.get("instrumentation.temp_prefix"))
+        return None
+    return Config.load(path)
 
 
 def _project_and_config(args) -> tuple[Path, str]:
@@ -2228,13 +2246,33 @@ def cmd_hunt(args) -> int:
         # stops `/echolot` at the door. Refused before anything is touched,
         # so asking again once the config loads loses nothing.
         try:
-            scenario, sha, confirmed, prefix = _hunt_config(project, config)
+            cfg = _hunt_config(project, config)
         except (ConfigError, OSError) as e:
             print(f"error: {config} does not load: {e}", file=sys.stderr)
             print("Nothing was opened and no traces were moved aside. Fix the "
                   "config, then ask again.", file=sys.stderr)
             recorder.failed(f"{config} does not load: {e}")
             return 2
+        # The investigation is about one scenario: the one named, else the
+        # first, said when there are several. A name the config cannot give
+        # is refused before anything is touched, as a config that does not
+        # load is.
+        try:
+            if cfg is None and args.scenario:
+                raise ConfigError(f"--scenario {args.scenario}: there is no "
+                                  f"{config} to name it in")
+            if cfg is not None:
+                cfg.select(args.scenario)
+                _note_scenario(cfg, args.scenario)
+        except ConfigError as e:
+            print(f"error: {e}", file=sys.stderr)
+            print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
+            recorder.failed(str(e))
+            return 2
+        scenario = cfg.scenario_name if cfg else None
+        sha = cfg.sha if cfg else None
+        confirmed = cfg.confirmed() if cfg else {}
+        prefix = cfg.get("instrumentation.temp_prefix") if cfg else None
         # The whole point of the feature: a new investigation must not start
         # on the previous one's traces. Nothing is deleted — the set moves
         # aside exactly the way `collect` moves it between rounds.
@@ -2774,13 +2812,15 @@ def cmd_collect(args) -> int:
     # both used to pass the load and end in a traceback on the next line.
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
+        # Before the runner is read: the scenario picked is whose runner
+        # keys apply, the investigation's included.
+        _pick_scenario(cfg, args.scenario)
         section = cfg.runner
         package = cfg.get("project.package") or cfg.process
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         recorder.failed(f"config error: {e}")
         return 2
-    _note_scenario(cfg, args.scenario)
 
     mode = str(section.get("mode", "launch"))
     iterations = (args.iterations if args.iterations is not None
@@ -3259,7 +3299,7 @@ def cmd_calibrate(args) -> int:
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
-    _note_scenario(cfg, args.scenario)
+    _pick_scenario(cfg, args.scenario)
 
     tp_binary = _tp_binary(args, cfg)
     _note_local(cfg)
@@ -3769,11 +3809,13 @@ def _report_dir(args) -> str:
     if not Path(args.config).is_file():
         return ".echolot/out"
     try:
-        return Config.load(args.config, scenario=args.scenario).report_dir
+        cfg = Config.load(args.config, scenario=args.scenario)
     except ConfigError:
         if args.scenario:
             raise
         return ".echolot/out"
+    _pick_scenario(cfg, args.scenario)
+    return cfg.report_dir
 
 
 def cmd_report(args) -> int:
@@ -3987,6 +4029,9 @@ def build_parser() -> argparse.ArgumentParser:
     hn.add_argument("question", nargs="*",
                     help="what regressed, in your words — opens a new investigation")
     hn.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
+    hn.add_argument("--scenario", metavar="NAME",
+                    help="which of the config's scenarios the question is about "
+                         "(default: the first)")
     hn.add_argument("--since", dest="hunt_since", metavar="CHANGE",
                     help="after which change: a commit, a bump, a date, or 'unknown'")
     hn.add_argument("--resume", action="store_true",

@@ -424,9 +424,13 @@ def drift(hunt: dict[str, Any] | None, st: dict[str, Any]) -> list[str]:
     cfg = st.get("config") or {}
     if not cfg.get("error"):
         scenario = hunt.get("scenario")
+        names = cfg.get("scenarios") or ([cfg["scenario"]] if cfg.get("scenario") else [])
         changed = confirmed_changed(hunt, cfg.get("confirmed") or {})
-        if scenario and cfg.get("scenario") and scenario != cfg["scenario"]:
-            out.append(f"the config's scenario changed: {scenario} → {cfg['scenario']}")
+        if scenario and names and scenario not in names and len(names) == 1:
+            out.append(f"the config's scenario changed: {scenario} → {names[0]}")
+        elif scenario and names and scenario not in names:
+            out.append(f"the config no longer has this investigation's scenario, "
+                       f"{scenario}: it has {', '.join(names)}")
         elif changed:
             out.append("a value a person confirmed changed since this investigation "
                        "opened: " + "; ".join(f"{c['field']} {c['was']!r} → {c['now']!r}"

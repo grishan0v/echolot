@@ -199,6 +199,10 @@ flag. `compare` refuses two reports of different scenarios, and compares a
 report it is given with the latest report of that report's own scenario. A
 config with one `scenario:` keeps `.echolot/out/`.
 
+An investigation is about one scenario too: `echolot hunt --scenario
+feed_scroll "<question>"` opens it on that one, and inside it the commands
+take its scenario when no `--scenario` is given.
+
 ## Which device
 
 In `launch` and `command` modes, in the order they are consulted:
