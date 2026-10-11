@@ -287,6 +287,27 @@ def _out_dir(out: str, cfg: Config) -> Path:
     return Path(cfg.path).resolve().parent / p
 
 
+def _report_text(rep: dict | None, cfg: dict | None, project: Path,
+                 none: str = "none yet") -> str:
+    """What `status` says of one latest report: where, when, what it found."""
+    if not rep:
+        return none
+    where = _rel_to(rep["path"], project)
+    if rep.get("error"):
+        # There, and cut short or garbled: "none yet" said no analysis ever
+        # ran here.
+        return f"{where} does not read — run analyze again"
+    made = when.ago(when.iso_epoch(rep.get("generated_at")))
+    what = (f"{rep['fired']} of {rep['run']} detectors fired"
+            if rep.get("run") is not None else "")
+    note = ""
+    if rep.get("defaults"):
+        note = " · made with --defaults"
+    elif cfg and cfg.get("sha") and rep.get("config_sha") and rep["config_sha"] != cfg["sha"]:
+        note = " · made with an older config"
+    return f"{where}, {made} · {rep['runs']} run(s) · {what}{note}"
+
+
 def _rel_to(path: Path, root: Path) -> str:
     """A path as the project names it, `.echolot/out/report.json`."""
     try:
@@ -2324,8 +2345,9 @@ def cmd_hunt(args) -> int:
         # Code was being sent to a command it does not have.
         door = state.hunt_door(state.project_state(project, config))
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
-        print("By hand: echolot collect -c echolot.yml -n 5, then "
-              + state.analyze_line(state.repeats(scenario, 5) if scenario else None),
+        named = scenario if cfg is not None and len(cfg.scenarios) > 1 else None
+        print(f"By hand: {state.collect_line_for(named)}, then "
+              + state.analyze_line(state.repeats(scenario, 5) if scenario else None, named),
               file=sys.stderr)
         return 0
 
@@ -2403,7 +2425,9 @@ def cmd_status(args) -> int:
     elif cfg.get("error"):
         lines.append(("config", f"echolot.yml does not load: {cfg['error']}"))
     else:
-        bits = [f"scenario {cfg['scenario']}", f"thresholds {cfg['thresholds']}"]
+        many = st.get("scenarios")
+        bits = [f"{len(many)} scenarios" if many else f"scenario {cfg['scenario']}",
+                f"thresholds {cfg['thresholds']}"]
         if cfg.get("runner"):
             bits.append(f"runner {cfg['runner']}")
         if cfg.get("local"):
@@ -2418,25 +2442,19 @@ def cmd_status(args) -> int:
         lines.append(("traces", f"{tr['count']} in .echolot/traces, newest {when.ago(tr['newest'])}"))
     else:
         lines.append(("traces", "none in .echolot/traces"))
-    rep = st["report"]
-    if rep and not rep.get("error"):
-        made = when.ago(when.iso_epoch(rep.get("generated_at")))
-        what = (f"{rep['fired']} of {rep['run']} detectors fired"
-                if rep.get("run") is not None else "")
-        note = ""
-        if rep.get("defaults"):
-            note = " · made with --defaults"
-        elif cfg and cfg.get("sha") and rep.get("config_sha") and rep["config_sha"] != cfg["sha"]:
-            note = " · made with an older config"
-        lines.append(("report", f"{_rel_to(rep['path'], st['project'])}, {made} · "
-                                f"{rep['runs']} run(s) · {what}{note}"))
-    elif rep:
-        # There, and cut short or garbled: "none yet" said no analysis ever
-        # ran here.
-        lines.append(("report", f"{_rel_to(rep['path'], st['project'])} does not read — "
-                                f"run analyze again"))
+    if st.get("scenarios"):
+        # One line a scenario, its traces and its latest report, so that the
+        # one the next step names is seen beside the others.
+        hunt = st.get("hunt") or {}
+        open_on = hunt.get("scenario") if hunt.get("status", "open") == "open" else None
+        for sc in st["scenarios"]:
+            count = len(sc["files"])
+            mark = "  ← the open investigation's" if sc["name"] == open_on else ""
+            lines.append(("scenario", f"{sc['name']} · {count} trace(s) · "
+                          + _report_text(sc["report"], cfg, st["project"], "no report yet")
+                          + mark))
     else:
-        lines.append(("report", "none yet"))
+        lines.append(("report", _report_text(st["report"], cfg, st["project"])))
     d = st["last_doctor"]
     if d:
         facts = d.get("facts") or {}

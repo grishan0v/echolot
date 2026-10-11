@@ -203,6 +203,11 @@ An investigation is about one scenario too: `echolot hunt --scenario
 feed_scroll "<question>"` opens it on that one, and inside it the commands
 take its scenario when no `--scenario` is given.
 
+`echolot status` lists each scenario on a line of its own, with its traces
+and its latest report, and marks the open investigation's. Its next step
+names the scenario, `--scenario feed_scroll`: the open investigation's, else
+the first.
+
 ## Which device
 
 In `launch` and `command` modes, in the order they are consulted:

@@ -440,3 +440,86 @@ def test_drift_names_a_scenario_the_config_no_longer_has() -> None:
                           {"config": {"scenario": "firstLaunch", "scenarios": ["firstLaunch"]}})
     check("one scenario, renamed: said as before",
           said == ["the config's scenario changed: coldStart → firstLaunch"], said)
+
+
+# --- status and the next step name the scenario (#349) ------------------------------
+
+def a_report(project: Path, scenario: str) -> None:
+    """A latest report of the scenario, where `analyze` would leave it."""
+    out = project / ".echolot/out" / scenario
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "report.json").write_text(json.dumps({
+        "generated_at": "2026-10-11T09:00:00+00:00", "scenario": scenario,
+        "summary": {"detectors_fired": 4, "detectors_run": 13},
+        "traces": ["a", "b", "c"], "config": {}}), encoding="utf-8")
+
+
+def status_of(project: Path, monkeypatch) -> tuple[str, str]:
+    """`echolot status`, and the next step it would print past the layer."""
+    from echolot import state
+    monkeypatch.chdir(project)
+    code, out, err = run("status")
+    check("status: exit 0", code == 0, err[-400:])
+    st = state.project_state(project)
+    st["layer_verdict"] = "current"
+    return out, state.next_step(st)
+
+
+def test_status_lists_each_scenario_with_its_traces_and_report(tmp_path: Path,
+                                                                monkeypatch) -> None:
+    write(tmp_path, TWO)
+    traces_of(tmp_path, "first_frame", "loaded")
+    (tmp_path / ".echolot/traces/loaded_iter001.perfetto-trace").write_bytes(b"x")
+    a_report(tmp_path, "first_frame")
+    out, step = status_of(tmp_path, monkeypatch)
+    check("the config counts its scenarios", "echolot.yml · 2 scenarios" in out, out)
+    check("each scenario on a line, with its traces and its report",
+          "scenario  first_frame · 1 trace(s) · .echolot/out/first_frame/report.json" in out
+          and "3 run(s) · 4 of 13 detectors fired" in out
+          and "scenario  loaded · 2 trace(s) · no report yet" in out, out)
+    check("and no report line of one scenario standing for all", "\nreport " not in out, out)
+    check("the next step is the first scenario's, by name",
+          "--scenario first_frame" in step
+          and ".echolot/traces/first_frame_iter000.perfetto-trace" in step
+          and "loaded_iter" not in step, step)
+
+
+def test_status_and_the_next_step_follow_the_open_investigation(tmp_path: Path,
+                                                                monkeypatch) -> None:
+    write(tmp_path, TWO)
+    traces_of(tmp_path, "first_frame")
+    monkeypatch.chdir(tmp_path)
+    run("hunt", "--scenario", "loaded", "the feed got slower")
+    traces_of(tmp_path, "loaded")
+    out, step = status_of(tmp_path, monkeypatch)
+    check("the investigation names its scenario", '"the feed got slower" · scenario loaded' in out,
+          out)
+    check("its scenario is marked", "loaded · 1 trace(s) · no report yet  ← the open investigation's"
+          in out, out)
+    check("the next step is its scenario's", "--scenario loaded" in step
+          and ".echolot/traces/loaded_iter000.perfetto-trace" in step, step)
+
+
+def test_the_next_step_with_no_traces_records_the_scenario(tmp_path: Path, monkeypatch) -> None:
+    write(tmp_path, TWO)
+    _, step = status_of(tmp_path, monkeypatch)
+    check("collect, named", "echolot collect -c echolot.yml -n 5 --scenario first_frame" in step,
+          step)
+
+
+def test_one_scenario_status_reads_as_before(tmp_path: Path, monkeypatch) -> None:
+    write(tmp_path, {"project": PROJECT, "scenario": {"name": "fixture"}})
+    traces_of(tmp_path, "fixture")
+    out, step = status_of(tmp_path, monkeypatch)
+    check("the config names its scenario, and the report has its own line",
+          "echolot.yml · scenario fixture" in out and "\nreport  none yet" in out
+          and "\nscenario " not in out, out)
+    check("and the next step names none", "--scenario" not in step, step)
+
+
+def test_the_line_hunt_ends_with_names_the_scenario(tmp_path: Path, monkeypatch) -> None:
+    write(tmp_path, TWO)
+    monkeypatch.chdir(tmp_path)
+    _, _, err = run("hunt", "--scenario", "loaded", "the feed got slower")
+    check("both commands carry it", "echolot collect -c echolot.yml -n 5 --scenario loaded" in err
+          and "-c echolot.yml --scenario loaded" in err, err[-600:])

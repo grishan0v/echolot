@@ -38,12 +38,16 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
 
     cfg_path = project / config
     st["config"] = None
+    # Which question all of the below is about. None is a normal answer:
+    # every project predates its first investigation.
+    st["hunt"] = hunt_mod.load(project)
     # Where the latest report is: the config's, per scenario when it names
-    # several (the first of them here), else `.echolot/out` as always.
+    # several, else `.echolot/out` as always.
     report_dir = ".echolot/out"
+    loaded: Config | None = None
     if cfg_path.exists():
         try:
-            cfg = Config.load(cfg_path)
+            cfg = loaded = Config.load(cfg_path)
             calibrated = bool(cfg.detector_overrides)
             st["config"] = {
                 "path": cfg_path, "scenario": cfg.scenario_name,
@@ -56,9 +60,18 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                 "confirmed": cfg.confirmed(),
                 "temp_prefix": cfg.get("instrumentation.temp_prefix"),
             }
+            # The scenario the next step is about: the open investigation's,
+            # else the first. Everything below that names one scenario's
+            # traces or report names this one's.
+            hunt = st["hunt"] or {}
+            theirs = hunt.get("scenario") if hunt.get("status", "open") == "open" else None
+            if theirs in cfg.scenarios:
+                cfg.select(theirs)
+            st["config"]["scenario"] = cfg.scenario_name
             report_dir = cfg.report_dir
         except ConfigError as e:
             st["config"] = {"path": cfg_path, "error": str(e)}
+            loaded = None
 
     traces_dir = project / ".echolot" / "traces"
     # Each modification time read once, and a file that will not stat left
@@ -84,25 +97,23 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                     "newest": max(stamps.values(), default=None)}
     st["collect"] = collect_state(project)
 
-    st["report"] = None
-    rep = project / report_dir / "report.json"
-    if rep.exists():
-        try:
-            r = json.loads(rep.read_text(encoding="utf-8"))
-            s = r.get("summary") or {}
-            c = r.get("config") or {}
-            st["report"] = {
-                "path": rep, "generated_at": r.get("generated_at"),
-                "fired": s.get("detectors_fired"), "run": s.get("detectors_run"),
-                "runs": len(r.get("traces") or []) or 1,
-                "config_sha": c.get("sha"), "defaults": c.get("defaults"),
-            }
-        except (OSError, ValueError):
-            st["report"] = {"path": rep, "error": "unreadable"}
-
-    # Which question all of the above is about. None is a normal answer:
-    # every project predates its first investigation.
-    st["hunt"] = hunt_mod.load(project)
+    st["report"] = _report(project / report_dir / "report.json")
+    # A config that names several scenarios: each one's traces and latest
+    # report, for `status` to list. None for one scenario, which prints as
+    # it always has.
+    st["scenarios"] = None
+    if loaded is not None and loaded.get("scenarios") is not None:
+        focus = loaded.scenario_name
+        st["scenarios"] = []
+        for name in loaded.scenarios:
+            loaded.select(name)
+            files = sorted(f".echolot/traces/{p.name}" for p in stamps
+                           if (m := runner._ITERATION.match(p.name))
+                           and m.group("scenario") == name)
+            st["scenarios"].append({
+                "name": name, "focus": name == focus, "files": files,
+                "report": _report(project / loaded.report_dir / "report.json")})
+        loaded.select(focus)
 
     # The last self-check, whichever command ran it: `init` runs one too and
     # its facts carry `checks` like a doctor's. Read off `doctor` alone, a
@@ -114,6 +125,27 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
         elif run.get("cmd") == "analyze":
             st["last_analyze"] = run
     return st
+
+
+def _report(rep: Path) -> dict | None:
+    """What `status` says of a report.json: when, how many runs, what fired.
+
+    None when there is none; `error` when it is there and does not read.
+    """
+    if not rep.exists():
+        return None
+    try:
+        r = json.loads(rep.read_text(encoding="utf-8"))
+        s = r.get("summary") or {}
+        c = r.get("config") or {}
+        return {
+            "path": rep, "generated_at": r.get("generated_at"),
+            "fired": s.get("detectors_fired"), "run": s.get("detectors_run"),
+            "runs": len(r.get("traces") or []) or 1,
+            "config_sha": c.get("sha"), "defaults": c.get("defaults"),
+        }
+    except (OSError, ValueError):
+        return {"path": rep, "error": "unreadable"}
 
 
 def collect_state(project: Path) -> dict | None:
@@ -337,14 +369,23 @@ def next_step(st: dict) -> str:
 
 def _hunt_step(st: dict) -> str:
     traces = st["traces"]
+    # With several scenarios, the one this step is about, by name: the open
+    # investigation's, else the first (see `project_state`).
+    scenario = (st.get("config") or {}).get("scenario") if st.get("scenarios") else None
     if not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
         return (f"{_door(st)} hunt` — or by hand: "
-                f"echolot collect -c echolot.yml -n 5")
+                f"{collect_line_for(scenario)}")
     return (f"{_door(st)} hunt` — or by hand: "
-            f"{analyze_line(traces.get('files'))}")
+            f"{analyze_line(traces.get('files'), scenario)}")
 
 
-def analyze_line(files: list[str] | None) -> str:
+def collect_line_for(scenario: str | None = None) -> str:
+    """`echolot collect` for a scenario, named when the config has several."""
+    return "echolot collect -c echolot.yml -n 5" + (
+        f" --scenario {shlex.quote(scenario)}" if scenario else "")
+
+
+def analyze_line(files: list[str] | None, scenario: str | None = None) -> str:
     """`echolot analyze` over the repeats of one scenario, each file named.
 
     `.echolot/traces/` keeps every scenario's set, since re-recording one
@@ -355,11 +396,12 @@ def analyze_line(files: list[str] | None) -> str:
     sandbox, where trace_processor cannot start. With no scenario to name
     the files by, the line says what to put there.
     """
+    named = f" --scenario {shlex.quote(scenario)}" if scenario else ""
     if not files:
         return ("echolot analyze <each trace of the scenario in "
-                ".echolot/traces, named> -c echolot.yml")
+                ".echolot/traces, named> -c echolot.yml" + named)
     return ("echolot analyze " + " ".join(shlex.quote(f) for f in files)
-            + " -c echolot.yml")
+            + " -c echolot.yml" + named)
 
 
 def repeats(scenario: str, n: int) -> list[str]:

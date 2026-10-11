@@ -512,6 +512,8 @@ def summary_line(hunt: dict[str, Any] | None, st: dict[str, Any]) -> str:
         return "none open — the next hunt opens one"
     q = hunt.get("question") or "(no question recorded)"
     bits = [f'"{q}"']
+    if hunt.get("scenario") and len((st.get("config") or {}).get("scenarios") or []) > 1:
+        bits.append(f"scenario {hunt['scenario']}")
     state = hunt.get("status") or "open"
     if state != "open":
         bits.append(state)

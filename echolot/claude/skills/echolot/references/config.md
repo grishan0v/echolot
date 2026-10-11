@@ -171,7 +171,9 @@ take the first scenario in the file and say so on stderr, naming the others.
 Pass the flag whenever the config names more than one: a second scenario is
 the one most easily measured by mistake. Inside an open investigation the
 default is its scenario instead of the first — `echolot hunt --scenario
-<name> "<q>"` opens one on a scenario — and the flag still wins. Each scenario keeps its own latest
+<name> "<q>"` opens one on a scenario — and the flag still wins. `status`
+lists every scenario with its traces and latest report, and its next step
+carries `--scenario` for the one it is about. Each scenario keeps its own latest
 report, in `.echolot/out/<scenario>/` unless `-o` says otherwise, and the
 report names its scenario; `report` and `compare` take `--scenario` too.
 `calibrate` says which scenario its section came from.
