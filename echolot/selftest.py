@@ -982,6 +982,49 @@ def _(report):
     assert names == {"methods": 8, "minified": 7, "renamed": 1}, names
 
 
+@check("R8 mapping: a build that kept its names says so, and keeps its lines")
+def _(report):
+    """A minified build's mapping, given to the build that kept its names.
+
+    Nothing reads as minified there, so the signs of another build's mapping
+    stay quiet: the samples come back as recorded and the mapping names none
+    of them, which the header now calls out. And the lock's owner is in a
+    class R8 kept, at a line that happens to lie in one of R8's ranges:
+    nothing else in the report is R8's, so the line is the source's, and the
+    frame is placed as written.
+    """
+    import copy
+    from . import place
+    from . import report as report_mod
+    kept = ("com.example.Store -> com.example.Store:\n"
+            "    1:50:void put(java.lang.String):100:149 -> put\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build(sampling="arrived"))
+        path = Path(tmp) / "mapping.txt"
+        path.write_text(fixture.MAPPING + kept, encoding="utf-8")
+        project = {**FIXTURE_CONFIG["project"], "mapping": str(path)}
+        named = _analyze(trace, Config({**FIXTURE_CONFIG, "project": project}))
+        root = Path(tmp) / "checkout"
+        src = root / "app/src/main/java/com/example"
+        src.mkdir(parents=True)
+        (src / "Store.java").write_text(
+            "package com.example;\n"
+            "public class Store {\n"
+            "    public void put(String key) { get(); }\n"
+            "    public Object get() { return null; }\n"
+            "}\n", encoding="utf-8")
+        rep = copy.deepcopy(report)
+        place.annotate(rep, root, path)
+    names = named["environment"]["sampling"]["names"]
+    assert names == {"methods": 8, "minified": 0, "renamed": 0}, names
+    lines = report_mod._names_lines(names)
+    assert lines and lines[0].startswith("> ⚠️") and "keeps its names" in lines[0], lines
+    row = one_row(rep, "monitor_contention", "LockWaiter")
+    assert row["code"] == "owner at Store.java:41 · blocked at Store.java:4", row.get("code")
+    assert not any(p.get("retraced") for p in row["places"]), row["places"]
+
+
 @check("uninstrumented_cpu: coverage counts nested slices only once")
 def _(report):
     """main: 875 ms of Running inside the window, with the AppStart slice

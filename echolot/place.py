@@ -257,11 +257,13 @@ def _place_traced(traced: mapping_mod.Retraced, idx: dict[str, list[Path]],
     return replace(here, retraced=True)
 
 
-def _retrace(report: dict[str, Any], mapping: Path) -> dict[str, mapping_mod.Retraced]:
+def _retrace(report: dict[str, Any], mapping: Path) -> mapping_mod.Batch | None:
     """Every frame of a contention slice R8 wrote, by what it was in the source.
 
-    The frames are gathered first, so that the mapping is read once for the
-    classes they name and for no others.
+    The frames are gathered first and retraced together: the mapping is read
+    once for the classes they name and no others, and each frame says
+    something about the build the rest came from (`mapping.retrace_frames`).
+    So does the trace's own word, when the mapping named sampled methods back.
     """
     frames: dict[str, tuple[str, str, str | None, int | None]] = {}
     for det in report.get("detectors") or []:
@@ -277,14 +279,9 @@ def _retrace(report: dict[str, Any], mapping: Path) -> dict[str, mapping_mod.Ret
                 if cls:
                     frames[text] = (cls, method, *mapping_mod.where(m.group("where")))
     if not frames:
-        return {}
-    retracer = mapping_mod.retracer(mapping, {cls for cls, *_ in frames.values()})
-    out = {}
-    for text, (cls, method, file, line) in frames.items():
-        got = retracer.retrace(cls, method, file, line)
-        if got is not None:
-            out[text] = got
-    return out
+        return None
+    names = ((report.get("environment") or {}).get("sampling") or {}).get("names") or {}
+    return mapping_mod.retrace_frames(mapping, frames, minified=bool(names.get("renamed")))
 
 
 def _sampled(row: dict[str, Any]) -> str | None:
@@ -325,11 +322,14 @@ def annotate(report: dict[str, Any], root: Path, mapping: Path | None = None) ->
     With the build's `mapping`, the frames of contention slices that R8
     wrote are retraced first, and the report says how many there were and
     how many the mapping had no place for, in `retrace`: the sign of a
-    mapping from another build (see `report._retrace_lines`).
+    mapping from another build (see `report._retrace_lines`). A map id the
+    frames carry that is not the mapping's goes there too, and then nothing
+    is retraced.
     """
     idx: dict[str, list[Path]] | None = None
     placed = 0
-    traced = _retrace(report, mapping) if mapping is not None else {}
+    batch = _retrace(report, mapping) if mapping is not None else None
+    traced = batch.traced if batch is not None else {}
     for det in report.get("detectors") or []:
         for row in det.get("rows") or []:
             needs = _CONTENTION.match(str(row.get("detail") or "")) \
@@ -347,9 +347,11 @@ def annotate(report: dict[str, Any], root: Path, mapping: Path | None = None) ->
             if cell:
                 row["code"] = cell
                 placed += 1
-    if traced:
-        report["retrace"] = {"frames": len(traced),
-                             "outside": sum(1 for t in traced.values() if t.outside)}
+    if batch is not None and (traced or batch.foreign):
+        report["retrace"] = {"frames": len(traced), "outside": batch.outside}
+        if batch.foreign:
+            report["retrace"]["map_id"] = {"frames": batch.foreign[0],
+                                           "mapping": batch.foreign[1]}
     return placed
 
 

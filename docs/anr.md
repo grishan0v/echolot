@@ -243,10 +243,16 @@ The header says how many frames the mapping named back. A frame it has no
 place for, with its line in no range of its method or a method its class
 does not have, keeps R8's method name and loses the line. The right mapping
 leaves no such frame and another build's leaves many, so from a tenth of the
-frames up the header warns. Without a mapping, the frames that still read
-as R8 named them are listed under what the report does not say, with the
-flag that names them. `--json` has both: `retrace` with `frames` and
-`outside`, and `minified`.
+frames up the header warns. A record whose frames name their files after a
+mapping, `r8-map-id-<id>`, says which one it needs: when no frame carries
+this mapping's `pg_map_id`, the header says so and no frame is named back.
+A frame of a class R8 kept, which reads as the source does, is named back
+on a line in one of R8's ranges only beside a frame that is unmistakably
+R8's, so a record of a build that kept its names keeps its lines. Without a
+mapping, the frames that still read as R8 named them are listed under what
+the report does not say, with the flag that names them. `--json` has both:
+`retrace` with `frames`, `outside` and, for another build's mapping,
+`map_id`; and `minified`.
 
 ## Markers from a stack
 

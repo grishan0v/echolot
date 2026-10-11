@@ -41,7 +41,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from . import mapping as mapping_mod
 from .domains import source_files
@@ -421,9 +421,10 @@ class Report:
     # `Ownership` decides by. Not the report's content either.
     declared: frozenset[str] | None = field(default=None, repr=False, compare=False)
     # What the build's mapping made of the frames R8 wrote, once `retrace`
-    # has run: how many it named back, and how many it had no place for.
-    # None when no mapping was given.
-    retraced: dict[str, int] | None = None
+    # has run: how many it named back, how many it had no place for, and the
+    # map id the frames carry when it is not the mapping's. None when no
+    # mapping was given.
+    retraced: dict[str, Any] | None = None
 
     @property
     def package(self) -> str:
@@ -720,7 +721,9 @@ def retrace(report: Report, mapping: Path) -> None:
     `unavailable`, where ART prints an instruction's offset for a build R8
     left without a line table, which is what that build's mapping is written
     in. A frame that arrived unminified, from a console that had the mapping,
-    is not R8's and stays as it was (see `mapping._ours`).
+    is not R8's and stays as it was (see `mapping._ours`). The frames are
+    retraced together, as one build's (`mapping.retrace_frames`): when they
+    name their files after a mapping that is not this one, nothing is.
     """
     parsed: dict[str, tuple[str, str, str | None, int | None]] = {}
     for thread in report.threads:
@@ -732,20 +735,18 @@ def retrace(report: Report, mapping: Path) -> None:
             if cls:
                 parsed[text] = (cls, method, *mapping_mod.where(m.group("where")))
     monitors = {t.lock.cls for t in report.threads if t.lock}
-    retracer = mapping_mod.retracer(mapping, {p[0] for p in parsed.values()} | monitors)
-    named: dict[str, list[str]] = {}
-    outside = 0
-    for text, (cls, method, file, line) in parsed.items():
-        got = retracer.retrace(cls, method, file, line)
-        if got is not None:
-            named[text] = _as_lines(got, file)
-            outside += got.outside
+    batch = mapping_mod.retrace_frames(mapping, parsed, also=monitors)
+    if batch.foreign:
+        report.retraced = {"frames": 0, "outside": 0,
+                           "map_id": {"frames": batch.foreign[0], "mapping": batch.foreign[1]}}
+        return
+    named = {text: _as_lines(got, parsed[text][2]) for text, got in batch.traced.items()}
     for thread in report.threads:
         thread.frames = [new for text in thread.frames for new in named.get(text, [text])]
         if thread.lock:
-            thread.lock.cls = retracer.real(thread.lock.cls) or thread.lock.cls
+            thread.lock.cls = batch.retracer.real(thread.lock.cls) or thread.lock.cls
     report._chains = None
-    report.retraced = {"frames": len(named), "outside": outside}
+    report.retraced = {"frames": len(named), "outside": batch.outside}
 
 
 def _as_lines(traced: mapping_mod.Retraced, file: str | None) -> list[str]:
@@ -1588,10 +1589,17 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
 _OUTSIDE_SHARE = 0.10
 
 
-def _retrace_note(retraced: dict[str, int] | None) -> list[str]:
+def _retrace_note(retraced: dict[str, Any] | None) -> list[str]:
     """What the build's mapping made of the frames R8 wrote, under the header."""
     if retraced is None:
         return []
+    if retraced.get("map_id"):
+        ids = retraced["map_id"]
+        return [f"> ⚠️ The frames name their files after mapping "
+                f"`{mapping_mod.short_id(ids['frames'])}`, and this one is "
+                f"`{mapping_mod.short_id(ids['mapping'])}`: another build's. Its "
+                f"names would be wrong, so the frames stay as they were "
+                f"written. Pass the mapping of the build that froze."]
     total, outside = retraced["frames"], retraced["outside"]
     if not total:
         return ["The build's mapping was read, and no frame here was R8's."]

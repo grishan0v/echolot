@@ -29,7 +29,7 @@ MAIN = ["com.example.locks.Store.read(Store.java:17)",
         "com.example.locks.MainActivity.freeze(MainActivity.java:21)"]
 HOLDER = ["com.example.locks.Store.hold(Store.java:10)",
           "com.example.locks.Holder.run(Holder.java:23)"]
-MAPPINGS = {"lines": lockapp.MAPPING, "default": lockapp.MAPPING, "offsets": lockapp.OFFSETS}
+MAPPINGS = {"lines": lockapp.MAPPING, "default": lockapp.DEFAULT, "offsets": lockapp.OFFSETS}
 
 
 def run(*argv: str) -> tuple[int, str, str]:
@@ -193,3 +193,33 @@ def test_mark_from_anr_plans_from_the_frames_by_their_names(tmp_path):
     files = {p["file"].rsplit("/", 1)[-1] for p in plan["proposals"]}
     check("the proposals are in the files the frames were retraced to",
           {"Store.java", "MainActivity.java"} <= files, plan["proposals"])
+
+
+# --- a mapping and a build that is not its own (#342) --------------------------
+
+def test_frames_named_after_another_mapping_are_left_as_written(tmp_path):
+    # The build with no `-keepattributes` names its files after its own
+    # mapping, and this is the other build's.
+    report = retraced(tmp_path, "default", mapping_text=lockapp.MAPPING)
+    check("nothing named back", report.main.frames[0] == lockapp.FRAMES["default"][0]
+          and report.retraced["frames"] == 0, report.retraced)
+    check("the ids in the json", report.retraced["map_id"] == {
+        "frames": lockapp.MAP_ID.removeprefix("r8-map-id-"),
+        "mapping": "c2d66c23dd18be785acf86ecf50d8d7c1abe10b6de3a101cc4f3f25f7dff18b6"},
+          report.retraced)
+    text = anr.render(report)
+    check("and the header says the mapping is another build's",
+          "> ⚠️ The frames name their files after mapping `4393c57b0c71…`" in text
+          and "`c2d66c23dd18…`: another build's" in text, text)
+
+
+def test_a_build_that_kept_its_names_keeps_its_lines(tmp_path):
+    # Line 3 of MainActivity.onCreate is in one of R8's ranges, and nothing
+    # else here is R8's: the line is the source's.
+    text = lockapp._RECORD.format(
+        main="com.example.locks.MainActivity.onCreate(MainActivity.java:3)",
+        holder="com.example.locks.Store.hold(Store.java:10)", monitor="java.lang.Object")
+    report = retraced(tmp_path, text=text, mapping_text=lockapp.MAPPING)
+    check("untouched", report.main.frames[0]
+          == "com.example.locks.MainActivity.onCreate(MainActivity.java:3)", report.main.frames)
+    check("and nothing counted", report.retraced == {"frames": 0, "outside": 0}, report.retraced)

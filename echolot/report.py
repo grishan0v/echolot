@@ -872,6 +872,14 @@ def _names_lines(names: dict[str, Any] | None, unbuilt: bool = False) -> list[st
             f"match, wrongly, and misses the rest: check that it is this "
             f"build's."
         ]
+    if total and names["renamed"] / total < MINIFIED_SHARE:
+        return [
+            f"> ⚠️ `project.mapping` named back {names['renamed']} of the app's "
+            f"{total} sampled methods, and they did not read as minified: the "
+            f"build recorded keeps its names, or the mapping is another "
+            f"build's. Check that its variant is the one that ran; a build "
+            f"that is not minified needs no mapping."
+        ]
     line = (f"`project.mapping` named {names['renamed']} of the app's {total} "
             f"sampled methods back")
     if not left:
@@ -915,6 +923,16 @@ def _retrace_lines(retrace: dict[str, Any] | None) -> list[str]:
     and the right one leaves none. From a tenth of the frames up, the line is
     a warning, as it is for the sampled methods (`MINIFIED_SHARE`).
     """
+    if retrace and retrace.get("map_id"):
+        from .mapping import short_id
+        ids = retrace["map_id"]
+        return [
+            f"> ⚠️ The lock slices name their files after mapping "
+            f"`{short_id(ids['frames'])}`, and `project.mapping` is "
+            f"`{short_id(ids['mapping'])}`: another build's. Its names would be "
+            f"wrong, so the frames stay as recorded; point `project.mapping` at "
+            f"the mapping of the build that ran."
+        ]
     if not retrace or not retrace.get("frames"):
         return []
     total, outside = retrace["frames"], retrace.get("outside") or 0

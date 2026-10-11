@@ -204,7 +204,7 @@ that name a lock chain.
 | frames placed in the checkout | open those lines |
 | frames landing nowhere | check out the build the report names — line numbers go stale first |
 | "What N frames are: they read as R8 named them" under what it does not say | a minified build: run it again with `--mapping` and that build's `mapping.txt`, or set `project.mapping` in the config under `--root`. Until then nothing in it is the app's |
-| a warning that frames R8 wrote have no place in the mapping | the mapping is another build's: find the one that froze before reading the names |
+| a warning that frames R8 wrote have no place in the mapping, or name another mapping's id | the mapping is another build's: find the one that froze before reading the names |
 
 `--json` is the same findings in the shape you walk: `chains`, `main.stack`,
 `working[].where` / `.top` / `.stack`, `nearest`, `lock_notes`, `code.placed`,

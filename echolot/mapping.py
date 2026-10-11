@@ -272,30 +272,51 @@ def where(text: str) -> tuple[str | None, int | None]:
 class Retracer:
     """The classes some frames name, read out of a mapping with their lines."""
 
-    def __init__(self, classes: dict[str, _Named], files: dict[str, str]):
+    def __init__(self, classes: dict[str, _Named], files: dict[str, str],
+                 map_id: str | None = None):
         self._classes = classes
         # Every class's file by its real name: a method inlined from a class
         # names that class, and only its own entry says where it was written.
         self._files = files
+        # The id R8 gave this mapping, which a build that names its files
+        # after the mapping carries in every frame (see `retrace_frames`).
+        self.map_id = map_id
 
     def real(self, cls: str) -> str | None:
         """The source's name for a class R8 renamed, None for one it kept."""
         named = self._classes.get(cls)
         return named.real if named is not None and named.real != cls else None
 
+    def written(self, cls: str, method: str, file: str | None) -> bool:
+        """Whether a frame is R8's whatever its line says.
+
+        A class R8 renamed, a method of a kept class it renamed, or a file
+        R8 named in place of the source's: `SourceFile`, `r8-map-id-…`,
+        `unavailable`. A frame like that says the build is a minified one.
+        """
+        named = self._classes.get(cls)
+        if named is None:
+            return False
+        if named.real != cls:
+            return True
+        chains = _chains(named.methods.get(method, []))
+        return bool(chains) and (_renamed(chains, method) or not _source(file))
+
     def retrace(self, cls: str, method: str, file: str | None,
-                line: int | None) -> Retraced | None:
+                line: int | None, by_line: bool = True) -> Retraced | None:
         """The frame R8 wrote as `cls.method(file:line)`, by its source's names.
 
         None when the frame is not one of R8's: its class is not in the
         mapping, or the class kept its name and the frame already reads as
-        the source does (see `_ours`).
+        the source does (see `_ours`). `by_line` lets a line of R8's alone
+        make a kept class's frame R8's, which holds only for a build that is
+        minified (see `retrace_frames`).
         """
         named = self._classes.get(cls)
         if named is None:
             return None
         chains = _chains(named.methods.get(method, []))
-        if named.real == cls and not _ours(chains, method, file, line):
+        if named.real == cls and not _ours(chains, method, file, line, by_line):
             return None
         if line is not None:
             held = [c for c in chains if c[0].holds(line)] \
@@ -347,22 +368,92 @@ def _chains(ranges: list[Range]) -> list[list[Range]]:
 
 
 def _ours(chains: list[list[Range]], method: str, file: str | None,
-          line: int | None) -> bool:
+          line: int | None, by_line: bool = True) -> bool:
     """Whether a frame of a class R8 kept is one R8 wrote.
 
     Such a class is in the mapping under its own name, and so is a frame of
-    it that already reads as the source: an export whose console retraced it.
-    R8's frame is the one whose method R8 renamed, or that names no source
-    file — `SourceFile`, `r8-map-id-…`, `unavailable` — or whose line is one
-    of R8's. A method the mapping does not list is the class's own.
+    it that already reads as the source: an export whose console retraced
+    it, or a build that was never minified. R8's frame is the one whose
+    method R8 renamed, or that names no source file — `SourceFile`,
+    `r8-map-id-…`, `unavailable` — or, in a build known to be minified
+    (`by_line`), whose line is one of R8's. A method the mapping does not
+    list is the class's own.
     """
     if not chains:
         return False
-    if any(chain[-1].name != method or chain[-1].owner for chain in chains):
+    if _renamed(chains, method) or not _source(file):
         return True
-    if not (file or "").endswith((".kt", ".java")):
-        return True
-    return line is not None and any(chain[0].holds(line) for chain in chains)
+    return by_line and line is not None and any(chain[0].holds(line) for chain in chains)
+
+
+def _renamed(chains: list[list[Range]], method: str) -> bool:
+    """Whether R8 renamed a kept class's method: the method it kept is
+    another, or another class's."""
+    return any(chain[-1].name != method or chain[-1].owner for chain in chains)
+
+
+def _source(file: str | None) -> bool:
+    """Whether a frame names a source file, as an unminified build does."""
+    return (file or "").endswith((".kt", ".java"))
+
+
+_MAP_ID = "r8-map-id-"
+
+
+def short_id(map_id: str) -> str:
+    """A map id as the reports print it: R8's are 64 hex digits, and twelve
+    tell two apart."""
+    return map_id if len(map_id) <= 12 else map_id[:12] + "…"
+
+
+def map_id(file: str | None) -> str | None:
+    """The mapping's id in a file R8 named after it, `r8-map-id-<id>`."""
+    return file[len(_MAP_ID):] or None if file and file.startswith(_MAP_ID) else None
+
+
+@dataclass
+class Batch:
+    """The frames of one report, retraced together (see `retrace_frames`)."""
+    retracer: Retracer
+    traced: dict[str, Retraced]
+    # The map id the frames carry and the mapping's own, when no frame
+    # carries the mapping's: another build's mapping, and nothing retraced.
+    foreign: tuple[str, str] | None = None
+
+    @property
+    def outside(self) -> int:
+        return sum(1 for t in self.traced.values() if t.outside)
+
+
+def retrace_frames(path: Path, frames: dict[str, tuple[str, str, str | None, int | None]],
+                   also: Iterable[str] = (), minified: bool = False) -> Batch:
+    """The frames of one report, each `(class, method, file, line)` by its
+    text, retraced together with the build's mapping.
+
+    Together, because the frames speak for one another. One that is
+    unmistakably R8's (see `Retracer.written`) says the build is minified,
+    and only then does a line of R8's make a kept class's frame R8's on its
+    own: in a build that kept its names the same line is the source's, and
+    retracing it would name another line. `minified` is the same word from
+    elsewhere — the sampled methods the mapping named back. And a build that
+    names its files after the mapping, `r8-map-id-<id>`, says which mapping
+    it has: when no frame carries this mapping's `pg_map_id`, the mapping is
+    another build's, and every frame stays as it was written. `also` are
+    classes to read for other reasons, a monitor's.
+    """
+    reader = retracer(path, {cls for cls, *_ in frames.values()} | set(also))
+    ids = {i for i in (map_id(file) for _, _, file, _ in frames.values()) if i}
+    mine = reader.map_id
+    if ids and mine and not any(i.startswith(mine) or mine.startswith(i) for i in ids):
+        return Batch(reader, {}, (sorted(ids)[0], mine))
+    by_line = minified or any(reader.written(cls, method, file)
+                              for cls, method, file, _ in frames.values())
+    traced = {}
+    for text, (cls, method, file, line) in frames.items():
+        got = reader.retrace(cls, method, file, line, by_line)
+        if got is not None:
+            traced[text] = got
+    return Batch(reader, traced)
 
 
 def retracer(path: Path, classes: Iterable[str]) -> Retracer:
@@ -376,8 +467,10 @@ def _retracer(path: Path, mtime_ns: int, size: int, wanted: frozenset[str]) -> R
     return Retracer(*_read_lines(path, wanted))
 
 
-def _read_lines(path: Path, wanted: frozenset[str]) -> tuple[dict[str, _Named], dict[str, str]]:
-    """In one pass: the method lines of the classes wanted, and every class's file.
+def _read_lines(path: Path, wanted: frozenset[str]
+                ) -> tuple[dict[str, _Named], dict[str, str], str | None]:
+    """In one pass: the method lines of the classes wanted, every class's file,
+    and the mapping's own id from its header, `# pg_map_id: …`.
 
     Only the classes some frame names are kept with their lines: a frame is
     looked up by its own class, and a large app's mapping holds millions of
@@ -387,12 +480,15 @@ def _read_lines(path: Path, wanted: frozenset[str]) -> tuple[dict[str, _Named], 
     """
     found: dict[str, _Named] = {}
     files: dict[str, str] = {}
+    map_id: str | None = None
     real: str | None = None
     current: _Named | None = None
     with path.open(encoding="utf-8", errors="replace") as text:
         for line in text:
             head = line[:1]
             if head == "#":
+                if real is None and line.startswith("# pg_map_id:"):
+                    map_id = line.split(":", 1)[1].strip() or None
                 # The class's file is on a comment of its own under it:
                 # `# {"id":"sourceFile","fileName":"Store.kt"}`.
                 if real is not None and "sourceFile" in line:
@@ -413,7 +509,7 @@ def _read_lines(path: Path, wanted: frozenset[str]) -> tuple[dict[str, _Named], 
                 real = m.group("real")
                 if m.group("min") in wanted:
                     current = found.setdefault(m.group("min"), _Named(real))
-    return found, files
+    return found, files, map_id
 
 
 def _range(m: re.Match[str]) -> Range:

@@ -13,8 +13,9 @@ It was built three ways, and each writes the same two frames differently:
 
 - line numbers kept, `-renamesourcefileattribute SourceFile`, minimum API 24:
   `a.a.run()(SourceFile:6)` in the lock slice and the record alike;
-- no `-keepattributes` at all: `(r8-map-id-…:6)` in both, with the same
-  mapping as above apart from its id;
+- no `-keepattributes` at all: `(r8-map-id-…:6)` in both, the id being the
+  `pg_map_id` of its mapping (`DEFAULT`), which is the first one's under
+  another id;
 - line numbers kept, minimum API 26: R8 drops the line table and maps the
   instructions' offsets (`OFFSETS`). The record prints the offset as
   `(unavailable:20)`, and the lock slice has no line at all, `(SourceFile:-1)`.
@@ -124,8 +125,7 @@ final class Mix {
 """,
 }
 
-# Line numbers kept, minimum API 24. The build with no `-keepattributes`
-# wrote the same mapping under another id.
+# Line numbers kept, minimum API 24.
 MAPPING = """\
 # compiler: R8
 # compiler_version: 9.0.3-dev
@@ -183,6 +183,14 @@ com.example.locks.Store -> a.c:
     1:2:void <init>():3:4 -> <init>
 """
 
+# No `-keepattributes`: the same mapping under its own id, which this build
+# names every file after, and one range of a synthetic constructor longer.
+DEFAULT = MAPPING.replace(
+    "c2d66c23dd18be785acf86ecf50d8d7c1abe10b6de3a101cc4f3f25f7dff18b6",
+    "4393c57b0c7168f3e64b60a24500a91f013ffb62811e70c4e12a368195dbb312").replace(
+    "    1:1:void a.MainActivity$$ExternalSyntheticLambda0.<init>",
+    "    1:6:void a.MainActivity$$ExternalSyntheticLambda0.<init>")
+
 # Line numbers kept, minimum API 26: the ranges on the left are offsets of
 # instructions, not lines.
 OFFSETS = """\
@@ -190,6 +198,7 @@ OFFSETS = """\
 # compiler_version: 9.0.3-dev
 # min_api: 26
 # {"id":"com.android.tools.r8.mapping","version":"2.2"}
+# pg_map_id: a28ae275062f49d2aeef666a4a6ccdc1daaab6ff78f3c504dabaf4229bf4c5f5
 com.example.locks.Holder -> a.a:
 # {"id":"sourceFile","fileName":"Holder.java"}
     com.example.locks.Store store -> a

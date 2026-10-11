@@ -91,7 +91,10 @@ before placing them, and such a place carries `retraced: true`. `echolot anr`
 takes `--mapping`, or reads this key from the config under `--root`, and
 `mark --from-anr` reads it from its config. A lock frame the mapping has no
 place for is the sign of another build's mapping, and the header warns from a
-tenth of them.
+tenth of them. Frames named after a mapping, `r8-map-id-<id>`, are named back
+only when that is this mapping's `pg_map_id`. A build that kept its names is
+told by the samples: the mapping names back none of them, and the header
+says the build may not be minified at all, and then it needs no mapping.
 
 ### `scenario.start` / `scenario.end`
 

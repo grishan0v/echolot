@@ -273,9 +273,9 @@ def mapping_file(tmp_path: Path, text: str = lockapp.MAPPING) -> Path:
 
 def test_a_minified_lock_is_placed_where_the_mapping_says(tmp_path):
     root = lockapp.checkout(tmp_path / "app")
-    for build in ("lines", "default"):
+    for build, text in (("lines", lockapp.MAPPING), ("default", lockapp.DEFAULT)):
         rep = lock_report(lockapp.SLICE[build])
-        place.annotate(rep, root, mapping_file(tmp_path))
+        place.annotate(rep, root, mapping_file(tmp_path, text))
         row = rep["detectors"][0]["rows"][0]
         roles = {p["role"]: p for p in row["places"]}
         check(f"{build}: the worker inside Store.hold, at the loop it spun in",
@@ -366,3 +366,65 @@ def test_the_header_says_what_the_mapping_made_of_the_lock_frames():
           lines)
     check("a tenth is a warning",
           report_mod._retrace_lines({"frames": 10, "outside": 1})[0].startswith("> ⚠️"))
+
+
+# --- a mapping and a build that is not its own (#342) --------------------------
+
+# The lock as a build that kept its names writes it: MainActivity is a class
+# R8 kept, and line 3 of its `onCreate` happens to be in one of R8's ranges.
+UNMINIFIED = ("monitor contention with owner Holder (21322) at void "
+              "com.example.locks.Store.hold(long)(Store.java:10) waiters=0 blocking from "
+              "void com.example.locks.MainActivity.onCreate(android.os.Bundle)(MainActivity.java:3)")
+
+
+def test_a_build_that_kept_its_names_is_not_retraced_by_its_lines(tmp_path):
+    root = lockapp.checkout(tmp_path / "app")
+    rep = lock_report(UNMINIFIED)
+    place.annotate(rep, root, mapping_file(tmp_path))
+    row = rep["detectors"][0]["rows"][0]
+    check("both placed as written, the runtime's lines", row["code"]
+          == "owner at Store.java:10 · blocked at MainActivity.java:3", row)
+    check("nothing called retraced", not any(p.get("retraced") for p in row["places"])
+          and "retrace" not in rep, (row["places"], rep.get("retrace")))
+
+
+def test_beside_a_frame_that_is_r8s_the_line_is_r8s(tmp_path):
+    # The same kept frame, in a report whose other lock names a class R8
+    # renamed: the build is minified, and line 3 is R8's.
+    root = lockapp.checkout(tmp_path / "app")
+    rep = lock_report(UNMINIFIED.replace("com.example.locks.Store.hold(long)(Store.java:10)",
+                                         "a.a.run()(Store.java:6)"))
+    place.annotate(rep, root, mapping_file(tmp_path))
+    blocked = rep["detectors"][0]["rows"][0]["places"][1]
+    check("named back through what R8 inlined there", (blocked["symbol"], blocked["line"])
+          == ("com.example.locks.Holder.start", 13), blocked)
+
+
+def test_samples_the_mapping_named_back_say_the_build_is_minified(tmp_path):
+    root = lockapp.checkout(tmp_path / "app")
+    rep = lock_report(UNMINIFIED)
+    rep["environment"] = {"sampling": {"names": {"methods": 8, "minified": 0, "renamed": 8}}}
+    place.annotate(rep, root, mapping_file(tmp_path))
+    blocked = rep["detectors"][0]["rows"][0]["places"][1]
+    check("the kept frame is R8's", blocked.get("retraced") is True
+          and blocked["symbol"] == "com.example.locks.Holder.start", blocked)
+
+
+def test_frames_named_after_another_mapping_stay_as_recorded(tmp_path):
+    # The build with no `-keepattributes` names its files after its own
+    # mapping; given the other build's, nothing is named back.
+    root = lockapp.checkout(tmp_path / "app")
+    rep = lock_report(lockapp.SLICE["default"])
+    place.annotate(rep, root, mapping_file(tmp_path, lockapp.MAPPING))
+    row = rep["detectors"][0]["rows"][0]
+    check("both frames as written, in no file",
+          [(p["symbol"], p["file"]) for p in row["places"]]
+          == [("a.a.run", None), ("a.b.run", None)], row["places"])
+    check("the report says which ids", rep["retrace"] == {
+        "frames": 0, "outside": 0,
+        "map_id": {"frames": lockapp.MAP_ID.removeprefix("r8-map-id-"),
+                   "mapping": "c2d66c23dd18be785acf86ecf50d8d7c1abe10b6de3a101cc4f3f25f7dff18b6"}},
+          rep["retrace"])
+    text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
+    check("and the header warns, with ids a reader can compare",
+          text.startswith("> ⚠️") and "`4393c57b0c71…`" in text and "`c2d66c23dd18…`" in text, text)

@@ -448,22 +448,31 @@ mapping made of the lock slices:
 | … still read as minified after `project.mapping` renamed … | a mapping from another build: it renames the frames it happens to match, wrongly, and misses the rest |
 | `project.mapping` named back the … frames R8 wrote into the lock slices | `code` names the real methods, and the evidence keeps the frames as recorded |
 | … of the … frames R8 wrote into the lock slices have no place in `project.mapping` | a mapping from another build: no range of their method holds their line |
+| `project.mapping` named back … of the app's … sampled methods, and they did not read as minified | the build recorded keeps its names, or the mapping is another build's |
+| the lock slices name their files after mapping …, and `project.mapping` is … | another build's mapping, told by its id: the frames stay as recorded |
 | `project.mapping` names …, and no file was there | the variant has not been built since the config named it: build it and analyze again |
 
-The first and the third are warnings, and both wait for a tenth of the app's
-sampled methods to read as minified. Some code arrives minified from
-elsewhere — SDKs ship that way — and no mapping of this build names it: a
-build that kept its names had 38 of its 3,309 sampled methods so on the
-SM-A515F, a little over 1%. Another build's mapping is told by what it
-misses: R8's names are short and reused, so it knows a few of this build's
-names, renames those wrongly, and leaves the rest as they were. The names it
-got wrong cannot be told from right ones; the ones it left are what gives it
-away.
+The warnings about the sampled methods wait for a tenth of them. Some code
+arrives minified from elsewhere — SDKs ship that way — and no mapping of this
+build names it: a build that kept its names had 38 of its 3,309 sampled
+methods so on the SM-A515F, a little over 1%. Another build's mapping is told
+by what it misses: R8's names are short and reused, so it knows a few of this
+build's names, renames those wrongly, and leaves the rest as they were. The
+names it got wrong cannot be told from right ones; the ones it left are what
+gives it away. A build that kept its names leaves nothing minified, and the
+sign is the other way round: the mapping names back none of its methods.
 
-The last is a warning too, from a tenth of the lock slices' frames up. A
-frame carries a line, and another build's mapping is told by lines no range
-of the method holds, which the right mapping never leaves. Such a frame gets
-its class back and keeps R8's method name, with no line.
+The lock slices' frames carry a line, and another build's mapping is told by
+lines no range of the method holds, which the right mapping never leaves; from
+a tenth of those frames up, the header warns. Such a frame gets its class
+back and keeps R8's method name, with no line. A build that names its files
+after its mapping, `r8-map-id-<id>` when it kept no source file names, says
+outright which mapping it has: when no frame carries the mapping's own
+`pg_map_id`, nothing is named back. And a class R8 kept is in the mapping
+under its own name, so its frame is named back on the strength of a line in
+one of R8's ranges only when something else shows the build is minified: a
+frame of a class or a method R8 renamed, a file R8 named, or a sampled method
+the mapping named back. A build that kept its names keeps its lines.
 
 ## Merging repeats
 

@@ -315,7 +315,7 @@ def test_without_a_line_two_methods_of_one_name_are_both(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("build, mapping_text", [
-    ("lines", lockapp.MAPPING), ("default", lockapp.MAPPING), ("offsets", lockapp.OFFSETS)])
+    ("lines", lockapp.MAPPING), ("default", lockapp.DEFAULT), ("offsets", lockapp.OFFSETS)])
 def test_what_a_phone_wrote_comes_back_by_name(build: str, mapping_text: str,
                                                tmp_path: Path) -> None:
     main, holder = lockapp.FRAMES[build]
@@ -371,12 +371,13 @@ def test_what_a_frames_parenthesis_says(text: str, parsed: tuple) -> None:
 def test_only_the_classes_asked_for_are_read_with_their_lines(tmp_path: Path) -> None:
     path = tmp_path / "mapping.txt"
     path.write_text(RETRACE, encoding="utf-8")
-    classes, files = mapping._read_lines(path, frozenset({"a.f"}))
+    classes, files, map_id = mapping._read_lines(path, frozenset({"a.f"}))
     check("one class, with its methods", sorted(classes) == ["a.f"]
           and sorted(classes["a.f"].methods) == ["c", "d"], classes)
     check("and every class's file, for what was inlined from it",
           files == {"com.example.app.Store": "Store.kt", "com.example.app.Disk": "Disk.kt"},
           files)
+    check("and the mapping's own id, from its header", map_id == "3f9a2c1", map_id)
 
 
 def test_a_retracer_is_read_again_once_the_mapping_changes(tmp_path: Path) -> None:
@@ -443,3 +444,68 @@ def test_analyze_makes_the_report_while_the_mapping_is_not_built(tmp_path: Path,
           report["config"]["mapping"] == {"path": expected, "found": False},
           report["config"]["mapping"])
     check("and so does the header", "no file was there" in out.getvalue(), out.getvalue()[:1500])
+
+
+
+# --- a mapping and a build that is not its own (#342) --------------------------
+
+def batch(mapping_text: str, frames: list[str], tmp_path: Path, **kw) -> mapping.Batch:
+    path = tmp_path / "mapping.txt"
+    path.write_text(mapping_text, encoding="utf-8")
+    parsed = {}
+    for frame in frames:
+        symbol, _, rest = frame.partition("(")
+        cls, _, method = symbol.rpartition(".")
+        parsed[frame] = (cls, method, *mapping.where(rest.rstrip(")")))
+    return mapping.retrace_frames(path, parsed, **kw)
+
+
+KEPT = "com.example.locks.MainActivity.onCreate(MainActivity.java:3)"
+
+
+def test_a_kept_frame_is_r8s_by_its_line_only_in_a_minified_build(tmp_path: Path) -> None:
+    check("alone, a line in R8's range proves nothing",
+          batch(lockapp.MAPPING, [KEPT], tmp_path).traced == {})
+    got = batch(lockapp.MAPPING, [KEPT, "a.a.run(SourceFile:6)"], tmp_path).traced
+    check("beside a class R8 renamed, it is R8's line", [f.text() for f in got[KEPT].frames]
+          == ["com.example.locks.Holder.start(Holder.java:13)",
+              "com.example.locks.MainActivity.onCreate(MainActivity.java:16)"], got)
+    check("and so it is when the samples said the build is minified",
+          KEPT in batch(lockapp.MAPPING, [KEPT], tmp_path, minified=True).traced)
+    check("a file R8 named is R8's by itself", "com.example.locks.MainActivity.onCreate"
+          "(SourceFile:3)" in batch(lockapp.MAPPING,
+                                    ["com.example.locks.MainActivity.onCreate(SourceFile:3)"],
+                                    tmp_path).traced)
+
+
+def test_a_map_id_in_the_frames_is_the_mapping_or_another_builds(tmp_path: Path) -> None:
+    main, holder = lockapp.FRAMES["default"]
+    same = batch(lockapp.DEFAULT, [main, holder], tmp_path)
+    check("its own mapping names both", same.foreign is None and len(same.traced) == 2, same)
+    other = batch(lockapp.MAPPING, [main, holder], tmp_path)
+    check("another build's names none, and says which ids", other.traced == {}
+          and other.foreign == (lockapp.MAP_ID.removeprefix("r8-map-id-"),
+                                "c2d66c23dd18be785acf86ecf50d8d7c1abe10b6de3a101cc4f3f25f7dff18b6"),
+          other.foreign)
+    short = batch(lockapp.DEFAULT.replace(
+        "pg_map_id: 4393c57b0c7168f3e64b60a24500a91f013ffb62811e70c4e12a368195dbb312",
+        "pg_map_id: 4393c57"), [main], tmp_path)
+    check("an id R8 cut short is the same id", short.foreign is None and short.traced, short)
+    check("a mapping without an id has nothing to compare",
+          batch(lockapp.DEFAULT.replace("# pg_map_id:", "# pg_map:"), [main], tmp_path).traced)
+
+
+@pytest.mark.parametrize("file, map_id", [
+    (lockapp.MAP_ID, lockapp.MAP_ID.removeprefix("r8-map-id-")),
+    ("SourceFile", None), ("r8-map-id-", None), (None, None)])
+def test_the_map_id_in_a_files_name(file, map_id) -> None:
+    check(f"{file!r}", mapping.map_id(file) == map_id, mapping.map_id(file))
+
+
+def test_a_mapping_that_named_back_nothing_is_called_out() -> None:
+    lines = report_mod._names_lines({"methods": 3309, "minified": 38, "renamed": 0})
+    check("the build kept its names, or the mapping is another's",
+          len(lines) == 1 and lines[0].startswith("> ⚠️") and "keeps its names" in lines[0],
+          lines)
+    check("a mapping that named most of them back is a plain line", not report_mod._names_lines(
+        {"methods": 3309, "minified": 38, "renamed": 3200})[0].startswith(">"))
