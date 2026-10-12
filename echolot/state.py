@@ -48,7 +48,9 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     if cfg_path.exists():
         try:
             cfg = loaded = Config.load(cfg_path)
-            calibrated = bool(cfg.detector_overrides)
+            # The top-level section, every scenario's; a scenario's own
+            # thresholds are said on its line.
+            calibrated = bool(cfg.shared_overrides)
             st["config"] = {
                 "path": cfg_path, "scenario": cfg.scenario_name,
                 "scenarios": cfg.scenarios,
@@ -112,6 +114,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                            and m.group("scenario") == name)
             st["scenarios"].append({
                 "name": name, "focus": name == focus, "files": files,
+                "own_thresholds": bool(loaded.scenario_overrides),
                 "report": _report(project / loaded.report_dir / "report.json")})
         loaded.select(focus)
 

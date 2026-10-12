@@ -1125,12 +1125,16 @@ def config_snapshot(cfg: Config | None) -> dict[str, Any]:
         "path": str(cfg.path) if cfg.path else None,
         "local": str(cfg.local_path) if cfg.local_path else None,
         "scenario": cfg.get("scenario.name"),
+        # A config with several: their names, and the thresholds each one
+        # sets itself over the top-level ones.
+        "scenarios": cfg.scenarios if cfg.get("scenarios") is not None else None,
         "process": cfg.get("project.process"),
         "source_root": cfg.get("project.source_root"),
         "max_rounds": cfg.get("loop.max_rounds"),
         "instrumentation_allowed": cfg.get("instrumentation.allowed"),
         "temp_prefix": cfg.get("instrumentation.temp_prefix"),
-        "detector_overrides": cfg.detector_overrides,
+        "detector_overrides": cfg.shared_overrides,
+        "scenario_overrides": cfg.overrides_by_scenario,
     }
 
 

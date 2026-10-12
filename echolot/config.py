@@ -61,8 +61,40 @@ def merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
 # carries everywhere.
 _SCENARIO_NAME = re.compile(r"[A-Za-z0-9][\w.-]*")
 # What a scenario under `scenarios:` may hold: what `scenario:` holds, less
-# the name its key already gives, and the runner keys it changes.
-_SCENARIO_KEYS = ("start", "end", "budget_ms", "runner")
+# the name its key already gives, and the runner keys and the thresholds it
+# changes.
+_SCENARIO_KEYS = ("start", "end", "budget_ms", "runner", "detectors")
+
+
+def _detectors_section(node: Any, where: str) -> dict[str, Any]:
+    """A `detectors:` section, refused in a sentence when it has no shape.
+
+    Under a detector go its thresholds, or `false`, or nothing at all.
+    `frame_jank: true` used to pass here and fail two calls later as
+    `dict(True)` — a traceback for what reads like switching a detector
+    on, which is what every detector already is. `where` is the section's
+    place in the file: `detectors`, or a scenario's own.
+    """
+    node = node or {}
+    if not isinstance(node, dict):
+        lead = "the detectors section" if where == "detectors" else where
+        raise ConfigError(
+            f"{lead} must be a mapping of detector names, "
+            f"got a {type(node).__name__}. Each detector is a key: "
+            f"`frame_jank: false` turns one off, and thresholds go under "
+            f"its name — `main_thread_block:` with `min_slice_ms: 16` "
+            f"beneath it.")
+    for name, value in node.items():
+        if value is None or value is False or isinstance(value, dict):
+            continue
+        said = "true" if value is True else repr(value)
+        raise ConfigError(
+            f"{where}.{name}: {said} is not a setting. Every detector "
+            f"runs unless the config turns it off: leave `{name}` out to "
+            f"run it on its shipped thresholds, write thresholds under it "
+            f"to tune it (`echolot explain` lists them), or `{name}: "
+            f"false` to turn it off.")
+    return node
 
 
 class Config:
@@ -261,7 +293,7 @@ class Config:
 
     def select(self, name: str | None) -> "Config":
         """Read the scenario called `name` from here on: its window, its
-        name, and its runner keys over the config's.
+        name, and its runner keys and thresholds over the config's.
 
         None reads the first. A name this config does not have is refused,
         with the names it does have.
@@ -325,6 +357,7 @@ class Config:
                 raise ConfigError(
                     f"scenarios.{name}.runner must be a mapping of the runner "
                     f"keys this scenario changes, got {block['runner']!r}")
+            _detectors_section(block.get("detectors"), f"scenarios.{name}.detectors")
             out[name] = block
         return out
 
@@ -356,33 +389,45 @@ class Config:
             return str(name)
         return str(node)
 
-    def _detectors(self) -> dict[str, Any]:
-        """The `detectors:` section, refused in a sentence when it has no shape.
+    def _shared_detectors(self) -> dict[str, Any]:
+        """The top-level `detectors:` section, every scenario's."""
+        return _detectors_section(self.get("detectors"), "detectors")
 
-        Under a detector go its thresholds, or `false`, or nothing at all.
-        `frame_jank: true` used to pass here and fail two calls later as
-        `dict(True)` — a traceback for what reads like switching a detector
-        on, which is what every detector already is.
+    def _own_detectors(self) -> dict[str, Any]:
+        """The selected scenario's own `detectors:`, empty for a config with
+        one `scenario:`, which keeps its thresholds at the top level."""
+        where, block = self._scenario()
+        if where == "scenario":
+            # Read nowhere, and so refused rather than left to look as if it
+            # tuned something: one scenario's thresholds are the config's.
+            if block.get("detectors") is not None:
+                raise ConfigError(
+                    "scenario.detectors: a config with one scenario keeps its "
+                    "thresholds in the top-level `detectors:`. A scenario's own "
+                    "go under its name in `scenarios:`, beside the others'")
+            return {}
+        return _detectors_section(block.get("detectors"), f"{where}.detectors")
+
+    def _detectors(self) -> dict[str, Any]:
+        """The thresholds this scenario runs on: `detectors:`, with the
+        scenario's own section laid over it, a threshold at a time.
+
+        Two journeys of one app can differ two- or threefold in what is
+        normal for them, and one set calibrated on either hid rows in the
+        other or listed the other's normal run (#351). So a scenario under
+        `scenarios:` may carry a `detectors:` of its own. What it names wins
+        for it alone; what it leaves out comes from the top. `false` there
+        turns a detector off for that scenario, thresholds there turn on one
+        the top turned off, and an entry with nothing under it adds nothing.
         """
-        node = self.get("detectors") or {}
-        if not isinstance(node, dict):
-            raise ConfigError(
-                f"the detectors section must be a mapping of detector names, "
-                f"got a {type(node).__name__}. Each detector is a key: "
-                f"`frame_jank: false` turns one off, and thresholds go under "
-                f"its name — `main_thread_block:` with `min_slice_ms: 16` "
-                f"beneath it.")
-        for name, value in node.items():
-            if value is None or value is False or isinstance(value, dict):
+        out = dict(self._shared_detectors())
+        for name, value in self._own_detectors().items():
+            if value is None:
                 continue
-            said = "true" if value is True else repr(value)
-            raise ConfigError(
-                f"detectors.{name}: {said} is not a setting. Every detector "
-                f"runs unless the config turns it off: leave `{name}` out to "
-                f"run it on its shipped thresholds, write thresholds under it "
-                f"to tune it (`echolot explain` lists them), or `{name}: "
-                f"false` to turn it off.")
-        return node
+            base = out.get(name)
+            out[name] = (merge(base, value) if isinstance(value, dict) and isinstance(base, dict)
+                         else value)
+        return out
 
     @property
     def detector_overrides(self) -> dict[str, dict[str, Any]]:
@@ -395,19 +440,54 @@ class Config:
         """
         return {k: v for k, v in self._detectors().items() if v}
 
+    @property
+    def scenario_overrides(self) -> dict[str, dict[str, Any]]:
+        """The thresholds the selected scenario sets itself, per detector:
+        what makes a detector's `params_source` say `scenario`."""
+        return {k: v for k, v in self._own_detectors().items() if isinstance(v, dict) and v}
+
+    @property
+    def shared_overrides(self) -> dict[str, dict[str, Any]]:
+        """The thresholds of the top-level `detectors:`, per detector."""
+        return {k: v for k, v in self._shared_detectors().items() if isinstance(v, dict) and v}
+
+    @property
+    def overrides_by_scenario(self) -> dict[str, dict[str, dict[str, Any]]]:
+        """Each scenario's own thresholds, by name, for the ones that set
+        any, whichever is selected; empty for a config with one `scenario:`."""
+        out = {}
+        for name, block in (self._many() or {}).items():
+            own = _detectors_section(block.get("detectors"), f"scenarios.{name}.detectors")
+            mine = {k: v for k, v in own.items() if isinstance(v, dict) and v}
+            if mine:
+                out[name] = mine
+        return out
+
+    @property
+    def scenario_disabled(self) -> set[str]:
+        """The detectors the selected scenario turns off itself."""
+        return {k for k, v in self._own_detectors().items() if v is False}
+
     def unknown_detectors(self, known: set[str]) -> None:
         """Refuse a name under `detectors:` that is no detector.
 
         `frame_jnk: false` left `frame_jank` running, and the thresholds under
         a misspelled name were dropped, both without a word — while `--set`
         refuses the same typo, because a silently ignored one is worse than
-        none.
+        none. Every scenario's own section is read too, the ones not being
+        measured included: a typo there would wait for the day that scenario
+        is measured.
         """
-        unknown = sorted(str(k) for k in self._detectors() if k not in known)
-        if unknown:
-            names = ", ".join(f"'{u}'" for u in unknown)
-            raise ConfigError(
-                f"detectors: no detector {names}. Known: {', '.join(sorted(known))}")
+        sections = [("detectors", self._shared_detectors())]
+        sections += [(f"scenarios.{name}.detectors",
+                      _detectors_section(block.get("detectors"), f"scenarios.{name}.detectors"))
+                     for name, block in (self._many() or {}).items()]
+        for where, section in sections:
+            unknown = sorted(str(k) for k in section if k not in known)
+            if unknown:
+                names = ", ".join(f"'{u}'" for u in unknown)
+                raise ConfigError(
+                    f"{where}: no detector {names}. Known: {', '.join(sorted(known))}")
 
     @property
     def disabled_detectors(self) -> set[str]:

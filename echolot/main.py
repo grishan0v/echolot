@@ -451,8 +451,10 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
 
     Pure — no trace, no trace_processor — so the self-check can pin the
     rules without spinning up a session per case. Returns
-    [(detector, overrides, source)] with source one of
-    default / config / cli / config+cli.
+    [(detector, overrides, source)] with source `default`, or what gave the
+    numbers joined by `+`, in this order: `config` (the top-level
+    `detectors:`), `scenario` (the scenario's own `detectors:` under
+    `scenarios:`), `cli` (`--set`).
 
     Also where a threshold of the wrong kind is refused. That has to happen
     here rather than at render time: `analyze_trace` renders inside a
@@ -465,6 +467,7 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
         cfg.unknown_detectors({d.id for d in detectors})
     cli_overrides = cli_overrides or {}
     cfg_overrides = {} if use_defaults else cfg.detector_overrides
+    own = {} if use_defaults else cfg.scenario_overrides
     # Only what the config turned off, and only what it turned off on purpose.
     # `--set` on a detector asks for it by name, which outranks a `false`.
     off = (set() if use_defaults else cfg.disabled_detectors) - set(cli_overrides)
@@ -476,12 +479,19 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
         from_cfg = dict(cfg_overrides.get(d.id) or {})
         from_cli = dict(cli_overrides.get(d.id) or {})
         overrides = {**from_cfg, **from_cli}
+        # A threshold the scenario sets is the scenario's, whatever the top
+        # says about it; the rest of the config's numbers are the config's.
+        mine = own.get(d.id) or {}
+        from_scenario = {k: v for k, v in from_cfg.items() if k in mine}
+        from_top = {k: v for k, v in from_cfg.items() if k not in mine}
         source = "+".join(
-            s for s, on in (("config", bool(from_cfg)), ("cli", bool(from_cli))) if on
+            s for s, on in (("config", bool(from_top)), ("scenario", bool(from_scenario)),
+                            ("cli", bool(from_cli))) if on
         ) or "default"
         # Named per side, so the message points at the file or at the flag
         # rather than at "somewhere in the thresholds".
-        for values, whose in ((from_cfg, "from the config"),
+        for values, whose in ((from_top, "from the config"),
+                              (from_scenario, f"from scenarios.{cfg.scenario_name}.detectors"),
                               (from_cli, "from --set")):
             try:
                 d.check(values, whose)
@@ -502,12 +512,13 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     self-check, which keeps the config in memory and compares the result with
     expectations. Raises ConfigError.
 
-    Thresholds come from three places, in this order: the detector's own
-    defaults, the config's `detectors:` section, then `--set` from the command
-    line. `--defaults` drops the middle one — every detector, built-in numbers,
-    the config untouched. Each detector in the report says which of the three
-    it got (`params_source`), so a reader can tell calibrated numbers from
-    the shipped ones without opening the config.
+    Thresholds come from four places, in this order: the detector's own
+    defaults, the config's `detectors:` section, the scenario's own
+    `detectors:` when the config names several, then `--set` from the command
+    line. `--defaults` drops the config's two — every detector, built-in
+    numbers, the config untouched. Each detector in the report says which it
+    got (`params_source`), so a reader can tell calibrated numbers from the
+    shipped ones, and a scenario's from the config's, without opening it.
     """
     plan = plan_detectors(cfg, cli_overrides=cli_overrides, use_defaults=use_defaults)
     results = []
@@ -2450,7 +2461,8 @@ def cmd_status(args) -> int:
         for sc in st["scenarios"]:
             count = len(sc["files"])
             mark = "  ← the open investigation's" if sc["name"] == open_on else ""
-            lines.append(("scenario", f"{sc['name']} · {count} trace(s) · "
+            own = " · own thresholds" if sc.get("own_thresholds") else ""
+            lines.append(("scenario", f"{sc['name']}{own} · {count} trace(s) · "
                           + _report_text(sc["report"], cfg, st["project"], "no report yet")
                           + mark))
     else:
@@ -3340,7 +3352,9 @@ def cmd_calibrate(args) -> int:
         cfg.unknown_detectors({d.id for d in load_detectors(DETECTOR_DIR)})
         overrides = cfg.detector_overrides
         for d in detectors:
-            d.check(overrides.get(d.id), "from the config")
+            d.check(cfg.shared_overrides.get(d.id), "from the config")
+            d.check(cfg.scenario_overrides.get(d.id),
+                    f"from scenarios.{cfg.scenario_name}.detectors")
     except (ConfigError, ValueError) as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
@@ -3387,45 +3401,67 @@ def cmd_calibrate(args) -> int:
                   "with a minute of\n# scrolling yields thresholds for nothing.")
 
     total = len(args.traces)
-    print(f"# The detectors section, derived from {total} "
-          f"known-healthy runs.")
-    # The section is the whole config's, whichever scenario it came from, so
-    # a config with several says which one that was.
-    which = (f"Scenario {cfg.scenario_name}, window: " if len(cfg.scenarios) > 1
-             else "Scenario window: ")
+    # Thresholds calibrated on one scenario's runs are that scenario's. With
+    # several, the section goes under the scenario and is laid over the
+    # config's `detectors:` for it alone (#351); with one, it is the config's.
+    many = cfg.get("scenarios") is not None
+    name = cfg.scenario_name
+    print(f"# The detectors section{f' of scenario {name}' if many else ''}, derived "
+          f"from {total} known-healthy runs.")
+    which = f"Scenario {name}, window: " if many else "Scenario window: "
     print(f"# {which}" + ", ".join(f"{w:.0f} ms" for w in windows) + spread)
     print("#")
     print("# The numbers are a statistic over a healthy run plus a margin.")
     print("# This is not a finished config but a proposal: thresholds define")
     print("# what counts as normal, and that is not a script's decision.")
-    print("# Everything else the config's section holds is carried over, so")
-    print("# this section can replace it whole.")
-    print("detectors:")
+    if many:
+        print("# It goes under the scenario, beside its start and end, and is")
+        print("# laid over the config's detectors: for this scenario alone.")
+        print("# Everything else the scenario's own section holds is carried")
+        print("# over, so this can replace it whole.")
+        print(f"scenarios:\n  {name}:\n    detectors:")
+    else:
+        print("# Everything else the config's section holds is carried over, so")
+        print("# this section can replace it whole.")
+        print("detectors:")
+    # Under `scenarios.<name>.detectors`, four columns further in.
+    pad = "    " if many else ""
+    whose = "scenario" if many else "config"
+    # What the section stands on: the scenario's own entries when it goes
+    # under the scenario, else the config's. The top-level ones stay where
+    # they are, under the scenario's, and are not copied into it.
+    own = cfg.scenario_overrides if many else overrides
+    shared = cfg.shared_overrides if many else {}
+    off_here = cfg.scenario_disabled if many else disabled
 
     skipped = 0
     measured = {d.id: d for d in detectors}
     for d in shipped:
-        if d.id in disabled:
-            print(f"  {d.id}: false")
+        if d.id in off_here:
+            print(f"{pad}  {d.id}: false")
             continue
-        given = overrides.get(d.id) or {}
+        if d.id in disabled:
+            print(f"{pad}  # {d.id}: turned off in detectors:, so not measured")
+            continue
+        given = own.get(d.id) or {}
         lines: list[str] = []
         if d.id in measured:
             for c in d.calibrations:
                 line, rare = _calibrated(c, d, given, per_run[d.id], failed[d.id],
-                                         total, args.min_sample)
+                                         total, args.min_sample,
+                                         shared=shared.get(d.id) or {}, whose=whose)
                 lines.append(line)
                 skipped += rare
         # What the config sets and nothing here measured: masks, ratios, a
         # detector with no `@calibrate`. The numbers above were measured with
         # them, and dropped from the section, pasting it reset them all.
         calibrated = {c.param for c in d.calibrations} if d.id in measured else set()
-        lines += [f"    {k}: {_yaml_scalar(v)}    # from the config"
+        lines += [f"    {k}: {_yaml_scalar(v)}    # from the {whose}"
                   for k, v in given.items() if k not in calibrated]
         if lines:
-            print(f"  {d.id}:")
+            print(f"{pad}  {d.id}:")
             for line in lines:
-                print(line)
+                print(pad + line)
 
     broken = [d.id for d in detectors if failed[d.id] == total]
     if skipped:
@@ -3440,18 +3476,31 @@ def cmd_calibrate(args) -> int:
 
 
 def _calibrated(c, d, given: dict, runs: list[list[dict]], failed: int,
-                total: int, min_sample: int) -> tuple[str, int]:
+                total: int, min_sample: int, *, shared: dict | None = None,
+                whose: str = "config") -> tuple[str, int]:
     """One threshold's line in the section, and whether it was left for rarity.
 
     The statistic is taken over each run that has enough values and the
     median of those stands for the set; `--min-sample` applies per run, as the
     statistic does. A threshold no run could feed keeps the value in effect:
-    the config's, as a setting line, or the shipped one, as a comment.
+    the section's own (`whose` says whether that is the config's or the
+    scenario's), as a setting line, or the shipped one, as a comment.
+
+    `shared` is the top-level `detectors:` entry when the section goes under
+    a scenario. A number there would reach the scenario through the overlay,
+    where its own runs gave none to set against it: on two journeys of one
+    app, a cold start whose `min_abs_ms` had no tail to read from would have
+    run on the first launch's 2.8 instead of the default 40 (#351). So the
+    default is written down as a setting, and the line says what it covers.
     """
     def keep(why: str) -> str:
         if c.param in given:
             return (f"    {c.param}: {_yaml_scalar(given[c.param])}    "
-                    f"# kept the config's value — {why}")
+                    f"# kept the {whose}'s value — {why}")
+        if shared and c.param in shared:
+            return (f"    {c.param}: {_yaml_scalar(d.params[c.param])}    "
+                    f"# kept the default over the {_yaml_scalar(shared[c.param])} "
+                    f"in detectors: — {why}")
         return f"    # {c.param}: kept the default ({d.params[c.param]}) — {why}"
 
     if failed == total:

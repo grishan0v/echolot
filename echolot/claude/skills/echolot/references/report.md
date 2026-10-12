@@ -151,8 +151,11 @@ sampler lost, which a profileable app's cold start does now and then. If
 some repeats have stacks and others none, it was the second.
 
 **`detectors[].params_source`** — where this detector's thresholds came from:
-`default` (the numbers shipped in the .sql), `config` (calibrated or
-hand-set in `echolot.yml`), `cli` (`--set`), or `config+cli`. When it is not
+`default` (the numbers shipped in the .sql), or what gave them, joined by `+`
+in this order: `config` (calibrated or hand-set in the top-level `detectors:`
+of `echolot.yml`), `scenario` (the scenario's own `detectors:` under
+`scenarios:`, the report's `scenario`), `cli` (`--set`) — `config+scenario`,
+`scenario+cli` and the like. When it is not
 `default`, `defaults` holds the shipped values for the overridden parameters,
 so you can see how far the bar moved without running `explain`. A silent
 detector with calibrated thresholds means "nothing above the calibrated

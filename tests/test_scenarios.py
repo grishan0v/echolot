@@ -114,8 +114,12 @@ def test_provenance_rides_along_and_a_confirmed_end_is_found() -> None:
     ({"scenarios": {"a/b": {}}}, "cannot name a scenario"),
     ({"scenarios": {"cold": "AppStart"}}, "must be a mapping"),
     ({"scenarios": {"cold": {"name": "cold"}}}, "named by its key"),
-    ({"scenarios": {"cold": {"detectors": {}}}}, "no key 'detectors'"),
+    ({"scenarios": {"cold": {"thresholds": {}}}}, "no key 'thresholds'"),
     ({"scenarios": {"cold": {"runner": "launch"}}}, "runner must be a mapping"),
+    ({"scenarios": {"cold": {"detectors": ["frame_jank"]}}},
+     "scenarios.cold.detectors must be a mapping of detector names"),
+    ({"scenarios": {"cold": {"detectors": {"frame_jank": True}}}},
+     r"scenarios\.cold\.detectors\.frame_jank: true is not a setting"),
 ])
 def test_a_scenarios_section_without_a_shape_is_refused_on_load(tmp_path: Path, raw: dict,
                                                                  said: str) -> None:
@@ -523,3 +527,153 @@ def test_the_line_hunt_ends_with_names_the_scenario(tmp_path: Path, monkeypatch)
     _, _, err = run("hunt", "--scenario", "loaded", "the feed got slower")
     check("both commands carry it", "echolot collect -c echolot.yml -n 5 --scenario loaded" in err
           and "-c echolot.yml --scenario loaded" in err, err[-600:])
+
+
+# --- thresholds per scenario (#351) -----------------------------------------
+
+def with_thresholds(top: dict, own: dict) -> dict:
+    """TWO, with `detectors:` at the top and `loaded`'s own section."""
+    raw = json.loads(json.dumps(TWO))
+    raw["detectors"] = top
+    raw["scenarios"]["loaded"]["detectors"] = own
+    return raw
+
+
+def test_a_scenarios_thresholds_are_laid_over_the_configs() -> None:
+    cfg = config(with_thresholds(
+        {"main_thread_block": {"min_slice_ms": 30},
+         "binder_txn": {"min_txn_ms": 12, "skip_glob": "*x*"}, "frame_jank": False},
+        {"binder_txn": {"min_txn_ms": 7}, "gc_pressure": False,
+         "frame_jank": {"min_frames": 2}, "main_thread_block": None}))
+    check("the first scenario runs on the config's",
+          cfg.detector_overrides == {"main_thread_block": {"min_slice_ms": 30},
+                                     "binder_txn": {"min_txn_ms": 12, "skip_glob": "*x*"}}
+          and cfg.disabled_detectors == {"frame_jank"} and cfg.scenario_overrides == {},
+          (cfg.detector_overrides, cfg.disabled_detectors))
+    cfg.select("loaded")
+    over = cfg.detector_overrides
+    check("a threshold at a time: the scenario's number, the config's mask",
+          over["binder_txn"] == {"min_txn_ms": 7, "skip_glob": "*x*"}, over)
+    check("an entry with nothing under it adds nothing",
+          over["main_thread_block"] == {"min_slice_ms": 30}, over)
+    check("thresholds turn on what the top turned off, and `false` turns off for it alone",
+          over["frame_jank"] == {"min_frames": 2} and cfg.disabled_detectors == {"gc_pressure"},
+          (over, cfg.disabled_detectors))
+    check("and what it sets itself is known apart",
+          cfg.scenario_overrides == {"binder_txn": {"min_txn_ms": 7},
+                                     "frame_jank": {"min_frames": 2}}, cfg.scenario_overrides)
+
+
+def test_one_scenario_keeps_its_thresholds_at_the_top(tmp_path: Path) -> None:
+    raw = {"project": PROJECT, "detectors": {"main_thread_block": {"min_slice_ms": 30}},
+           "scenario": {"name": "cold", "end": {"name": "Screen.loaded"}}}
+    cfg = Config.load(write(tmp_path, raw))
+    check("the top is its own", cfg.detector_overrides == {"main_thread_block": {"min_slice_ms": 30}}
+          and cfg.scenario_overrides == {}, cfg.detector_overrides)
+    raw["scenario"]["detectors"] = {"main_thread_block": {"min_slice_ms": 5}}
+    with pytest.raises(ConfigError, match="keeps its thresholds in the top-level `detectors:`"):
+        Config.load(write(tmp_path, raw))
+
+
+def test_a_detector_no_scenario_has_is_refused_wherever_it_is_named() -> None:
+    from echolot.main import plan_detectors
+    cfg = config(with_thresholds({}, {"frame_jnk": False}))
+    with pytest.raises(ConfigError, match=r"scenarios\.loaded\.detectors: no detector 'frame_jnk'"):
+        plan_detectors(cfg)
+
+
+def test_params_source_says_whose_the_thresholds_are() -> None:
+    from echolot.main import plan_detectors
+    cfg = config(with_thresholds(
+        {"main_thread_block": {"min_slice_ms": 30}, "binder_txn": {"skip_glob": "*x*"}},
+        {"binder_txn": {"min_txn_ms": 7}, "io_wait": {"min_io_wait_ms": 25}})).select("loaded")
+    plan = {d.id: (ov, source) for d, ov, source in
+            plan_detectors(cfg, cli_overrides={"io_wait": {"min_io_wait_ms": 5}})}
+    check("the config's, the config's and the scenario's, the scenario's and --set's",
+          (plan["main_thread_block"][1], plan["binder_txn"][1], plan["io_wait"][1])
+          == ("config", "config+scenario", "scenario+cli"), plan)
+    check("--set still wins", plan["io_wait"][0] == {"min_io_wait_ms": 5}, plan["io_wait"])
+    check("and the first scenario's are the config's alone",
+          {source for _, _, source in plan_detectors(cfg.select("first_frame"))}
+          == {"config", "default"})
+
+    bad = config(with_thresholds({}, {"binder_txn": {"min_txn_ms": "7ms"}})).select("loaded")
+    with pytest.raises(ConfigError, match=r"from scenarios\.loaded\.detectors"):
+        plan_detectors(bad)
+
+
+def test_analyze_says_the_thresholds_were_the_scenarios(tmp_path: Path, trace: Path) -> None:
+    path = write(tmp_path, with_thresholds({}, {"main_thread_block": {"min_slice_ms": 5}}))
+    out = tmp_path / "out"
+    code, _, err = run("analyze", str(trace), "-c", str(path), "--scenario", "loaded",
+                       "-o", str(out))
+    check("exit 0", code == 0, err[-600:])
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    block = next(d for d in report["detectors"] if d["id"] == "main_thread_block")
+    check("the detector's thresholds are the scenario's, with the shipped ones beside them",
+          block["params_source"] == "scenario" and block["params"]["min_slice_ms"] == 5
+          and block["defaults"] == {"min_slice_ms": 16}, block)
+    header = (out / "report.md").read_text(encoding="utf-8")
+    check("and the header names the scenario", "thresholds: scenario `loaded`'s own for 1 of"
+          in header, header[:1200])
+
+
+def test_calibrate_prints_the_scenarios_own_section(tmp_path: Path, trace: Path) -> None:
+    """The section goes under the scenario. A number at the top that its runs
+    gave nothing to set against does not reach it: the cold start of #351's
+    spike would have run on the first launch's 2.8 instead of the default 40."""
+    raw = with_thresholds(
+        {"main_thread_outlier": {"min_abs_ms": 2.8}, "frame_jank": False,
+         "binder_txn": {"skip_glob": "*async*x"}},
+        {"binder_txn": {"min_txn_ms": 7}, "gc_pressure": False,
+         "repeated_work": {"max_callers": 5}})
+    path = write(tmp_path, raw)
+    code, out, err = run("calibrate", str(trace), "-c", str(path), "--scenario", "loaded")
+    check("exit 0", code == 0, err[-600:])
+    check("under the scenario's name", "scenarios:\n  loaded:\n    detectors:\n" in out, out)
+    check("a number the runs could not give is the default, over the top's, said so",
+          "        min_abs_ms: 40    # kept the default over the 2.8 in detectors:" in out, out)
+    check("the scenario's own value is kept, its own settings carried",
+          "        min_txn_ms: 7    # kept the scenario's value" in out
+          and "        max_callers: 5    # from the scenario" in out, out)
+    check("its `false` stands, the top's is said and not measured",
+          "      gc_pressure: false" in out
+          and "      # frame_jank: turned off in detectors:, so not measured" in out, out)
+    check("and the top's mask stays at the top", "*async*x" not in out, out)
+
+    pasted = yaml.safe_load(out)["scenarios"]["loaded"]["detectors"]
+    raw["scenarios"]["loaded"]["detectors"] = pasted
+    cfg = config(raw)
+    check("pasted, the first scenario keeps the top's number",
+          cfg.detector_overrides["main_thread_outlier"] == {"min_abs_ms": 2.8},
+          cfg.detector_overrides)
+    cfg.select("loaded")
+    check("and the scenario runs on its own",
+          cfg.detector_overrides["main_thread_outlier"] == {"min_abs_ms": 40}
+          and cfg.detector_overrides["binder_txn"] == {"skip_glob": "*async*x", "min_txn_ms": 7}
+          and cfg.disabled_detectors == {"frame_jank", "gc_pressure"}, cfg.detector_overrides)
+
+
+def test_status_says_which_scenario_has_thresholds_of_its_own(tmp_path: Path,
+                                                               monkeypatch) -> None:
+    write(tmp_path, with_thresholds({}, {"main_thread_block": {"min_slice_ms": 5}}))
+    out, _ = status_of(tmp_path, monkeypatch)
+    check("the config's own are none", "thresholds built-in defaults" in out, out)
+    check("the scenario's line says it has its own",
+          "scenario  loaded · own thresholds · 0 trace(s)" in out
+          and "scenario  first_frame · 0 trace(s)" in out, out)
+
+
+def test_reflect_knows_the_scenarios_and_their_thresholds() -> None:
+    from echolot.reflect import facts, render
+    cfg = config(with_thresholds({"main_thread_block": {"min_slice_ms": 30}},
+                                 {"main_thread_block": {"min_slice_ms": 5}}))
+    snap = facts.config_snapshot(cfg)
+    check("the names, the top's thresholds, and the ones each scenario sets itself",
+          snap["scenarios"] == ["first_frame", "loaded"]
+          and snap["detector_overrides"] == {"main_thread_block": {"min_slice_ms": 30}}
+          and snap["scenario_overrides"] == {"loaded": {"main_thread_block": {"min_slice_ms": 5}}},
+          snap)
+    check("and its config line names them",
+          "scenarios `first_frame`, `loaded`" in render._config_line(snap),
+          render._config_line(snap))

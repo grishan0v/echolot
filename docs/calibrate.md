@@ -122,6 +122,60 @@ Two thresholds fell about threefold and one rose by about a third. One config wi
 numbers would have meant something completely different on those two machines —
 which is the entire argument for this command.
 
+## Several scenarios
+
+Thresholds do not travel between the journeys of one app either. Two of
+them, recorded on one Galaxy A51 from one version of the code, its cold start
+and its first launch after `pm clear`, calibrated like this:
+
+```
+                       cold start   first launch
+runnable_starvation           3.6            9.8
+uninstrumented_cpu           10.4           27.3
+binder_txn total              1.1            2.5
+main_thread_block            17.8           21.5
+```
+
+Analysed with the first launch's numbers, the cold start lost 9 of its 12
+`runnable_starvation` rows and 6 of its 8 `uninstrumented_cpu` rows. The first
+launch, with the cold start's, listed 30 and 20 rows instead of 13 and 7, all
+of them its normal run.
+
+So in a config with `scenarios:`, each scenario can have a `detectors:` of
+its own, laid over the top-level one for that scenario alone, a threshold at
+a time. What the scenario names wins for it, what it leaves out comes from the
+top, `false` turns a detector off for that scenario, and thresholds turn on
+one the top turned off. The top-level section is the place for what every
+scenario shares: masks, switches.
+
+With `scenarios:`, `calibrate` prints the section of the scenario it
+measured, to paste under that scenario beside its `start` and `end`:
+
+```yaml
+scenarios:
+  cold_start:
+    detectors:
+      main_thread_block:
+        min_slice_ms: 17.8    # top10(self_ms)=11.9 × 1.5, median of 5 run(s), sample 246–254 per run
+      main_thread_outlier:
+        min_abs_ms: 40    # kept the default over the 2.8 in detectors: — top10(max_ms)=0.15, the tail of the distribution is degenerate
+```
+
+It carries over what the scenario's own section holds and leaves the
+top-level one where it is. One line needs saying. A threshold the scenario's
+runs gave no number for, which the top-level section sets, comes back as the
+default, written down as a setting. Left out, the top's number would reach
+the scenario through the overlay: above, the cold start would have run on the
+first launch's 2.8 ms where its own runs supported only the default 40.
+Delete the line when the top's number is one you set for every scenario.
+
+A report says whose numbers it ran on: `params_source` is `scenario` for a
+detector whose thresholds came from the scenario's own section, and the
+`Config:` line in `report.md` reads ``thresholds: scenario `cold_start`'s own
+for 5 of 13 detectors``. `echolot status` marks the scenarios with thresholds
+of their own. A config with one `scenario:` keeps its thresholds in the
+top-level `detectors:`.
+
 ## Calibrate on healthy runs, not on the runs under investigation
 
 The word "healthy" carries the whole method. Thresholds derived from the ten

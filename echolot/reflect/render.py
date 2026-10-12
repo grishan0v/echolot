@@ -123,6 +123,8 @@ def _config_line(cfg: dict[str, Any]) -> str:
     bits = [f"`{cfg.get('path')}`"]
     if cfg.get("scenario"):
         bits.append(f"scenario `{cfg['scenario']}`")
+    elif cfg.get("scenarios"):
+        bits.append("scenarios " + ", ".join(f"`{s}`" for s in cfg["scenarios"]))
     if cfg.get("max_rounds") is not None:
         bits.append(f"max_rounds {cfg['max_rounds']}")
     if cfg.get("instrumentation_allowed"):

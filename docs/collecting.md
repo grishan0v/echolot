@@ -181,13 +181,13 @@ Each scenario holds its window, and the runner keys it changes, laid over
 scroll is driven by a command, five times each. The same macrobenchmark task
 can serve both with another class in `gradle_args`.
 
-Thresholds are shared: every scenario is analysed with the config's
-`detectors:`. Two journeys of one app can differ two- or threefold in how
-long their slices and waits normally run, so thresholds calibrated on one of
-them hide rows in the other, or fill its report with rows that are only its
-normal run. Calibrate on the scenario you hunt in, or keep the shipped
-defaults. A scenario that needs thresholds of its own can keep a config file
-of its own.
+Each scenario may carry thresholds of its own. Two journeys of one app can
+differ two- or threefold in how long their slices and waits normally run, so
+thresholds calibrated on one of them hide rows in the other, or fill its
+report with rows that are only its normal run. A `detectors:` under a
+scenario's name is laid over the config's for that scenario alone, a
+threshold at a time, and `echolot calibrate --scenario feed_scroll` prints the
+section that goes there: see [Calibrating](calibrate.md#several-scenarios).
 
 ```bash
 echolot collect --scenario feed_scroll

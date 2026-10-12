@@ -123,8 +123,11 @@ REFS = ROOT / "echolot" / "claude" / "skills" / "echolot" / "references"
 
 
 def test_the_loop_reads_calibration_with_cli_overrides_too():
+    """`config+cli` is calibrated numbers with a flag on top, and a scenario's
+    own `detectors:` is calibrated numbers too (#351)."""
     flat = _flat(LOOP)
-    check("config+cli counts as calibrated", "`config` or `config+cli`" in flat, flat)
+    check("a source that names config or scenario counts as calibrated",
+          "`detectors[].params_source` names `config` or `scenario`" in flat, flat)
 
 
 def test_the_hunt_texts_let_collect_set_the_last_round_aside():

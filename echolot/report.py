@@ -1498,17 +1498,23 @@ def _config_line(report: dict[str, Any]) -> str | None:
         parts.append("thresholds: **built-in defaults** (`--defaults`, the config's "
                      "detectors section ignored)")
     else:
-        n_cfg = sum(1 for d in report["detectors"]
-                    if "config" in d.get("params_source", ""))
-        n_cli = sum(1 for d in report["detectors"]
-                    if "cli" in d.get("params_source", ""))
+        def counted(part: str) -> int:
+            return sum(1 for d in report["detectors"]
+                       if part in d.get("params_source", "").split("+"))
+        n_cfg, n_own, n_cli = counted("config"), counted("scenario"), counted("cli")
         n_all = len(report["detectors"])
-        if n_cfg == 0 and n_cli == 0:
+        if n_cfg == 0 and n_own == 0 and n_cli == 0:
             parts.append("thresholds: built-in defaults")
         else:
             bits = []
             if n_cfg:
-                bits.append(f"from the config for {n_cfg} of {n_all} detectors")
+                bits.append(f"from the config for {n_cfg}")
+            if n_own:
+                # A scenario's own `detectors:`, laid over the config's for it.
+                who = f"scenario `{report['scenario']}`" if report.get("scenario") else "the scenario"
+                bits.append(f"{who}'s own for {n_own}")
+            if bits:
+                bits[0] += f" of {n_all} detectors"
             if n_cli:
                 bits.append(f"`--set` on {n_cli}")
             parts.append("thresholds: " + ", ".join(bits))

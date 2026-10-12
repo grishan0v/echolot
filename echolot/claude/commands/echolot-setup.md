@@ -223,9 +223,10 @@ as it was, and the new one gets a window and a runner of its own.
    ```
 
    The key is the name its traces and reports carry, so the scenario that was
-   there keeps them. A scenario takes `start`, `end`, `budget_ms` and
-   `runner`, and nothing else: the thresholds under `detectors:` are the
-   config's, shared by every scenario.
+   there keeps them. A scenario takes `start`, `end`, `budget_ms`, `runner`
+   and `detectors`, and nothing else. The top-level `detectors:` stays where
+   it is. Whatever was calibrated there was calibrated on the scenario that
+   was there, and the new one runs on it until step 5.
 2. **What drives the new journey.** Its `runner:` holds only the keys that
    differ from the top-level one: `mode: command` and the command that
    scrolls, or, in `gradle` mode, the class in `gradle_args` whose test drives
@@ -239,8 +240,16 @@ as it was, and the new one gets a window and a runner of its own.
    `end`, with `_source: confirmed_by_user`. Ask for a `start` the same way
    when the journey begins later than the trace does; without one, the window
    opens where the trace starts.
+5. **Its thresholds**, once there are healthy runs of it, as "Thresholds"
+   above says: `echolot calibrate --scenario feed_scroll <its traces>` prints
+   `scenarios.feed_scroll.detectors`, which goes under the new scenario. A
+   number the top-level section holds and these runs could not give comes
+   back as the default, so the first scenario's numbers do not reach the new
+   one. Until then the new scenario runs on the top-level section, calibrated
+   on the other journey: say so to the human.
 
-`echolot status` then lists both scenarios, a line each.
+`echolot status` then lists both scenarios, a line each, and marks the ones
+with thresholds of their own.
 
 ## When you are done
 

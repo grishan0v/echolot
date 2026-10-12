@@ -161,10 +161,10 @@ scenarios:
 Each key is the scenario's name, and its traces carry it:
 `feed_scroll_iter000.perfetto-trace`. A name is letters, digits, `_`, `.` and
 `-`. Under it goes what `scenario:` holds — `start`, `end`, `budget_ms` — less
-`name`, and a `runner:` whose keys are laid over the top-level `runner:` for
-this scenario alone; a list such as `gradle_args` is replaced whole. Anything
-else under a scenario is refused, `detectors` included: the thresholds are the
-config's, shared by every scenario.
+`name`, a `runner:` whose keys are laid over the top-level `runner:` for
+this scenario alone (a list such as `gradle_args` is replaced whole), and a
+`detectors:` of its own, laid over the top-level one the same way. Anything
+else under a scenario is refused.
 
 `collect`, `analyze` and `calibrate` take `--scenario <name>`. Without it they
 take the first scenario in the file and say so on stderr, naming the others.
@@ -176,7 +176,8 @@ lists every scenario with its traces and latest report, and its next step
 carries `--scenario` for the one it is about. Each scenario keeps its own latest
 report, in `.echolot/out/<scenario>/` unless `-o` says otherwise, and the
 report names its scenario; `report` and `compare` take `--scenario` too.
-`calibrate` says which scenario its section came from.
+`calibrate --scenario` prints that scenario's own `detectors:` (see
+`detectors` below).
 
 ### `runner`
 
@@ -272,6 +273,41 @@ Thresholds are not picked by hand: `echolot calibrate` derives them from
 healthy runs and prints a ready section with the reasoning attached, which
 can replace this one whole: it carries over every `false` and every value it
 did not measure.
+
+**A scenario's own.** Two journeys of one app can differ two- or threefold in
+what is normal for them, so thresholds calibrated on one hide rows in the
+other or list the other's normal run. In a config with `scenarios:`, a
+scenario may carry `detectors:` under its name, laid over the top-level one
+for it alone, a threshold at a time: what it names wins, what it leaves out
+comes from the top, `false` turns a detector off for that scenario, and
+thresholds turn on one the top turned off.
+
+```yaml
+detectors:                     # every scenario's: masks, switches
+  binder_txn:
+    skip_glob: "*async*"
+scenarios:
+  cold_start:
+    start: {name: "bindApplication"}
+    end: {name: "Choreographer#doFrame*"}
+    detectors:
+      main_thread_block:
+        min_slice_ms: 17.8
+  feed_scroll:
+    detectors:
+      main_thread_block:
+        min_slice_ms: 21.5
+```
+
+With `scenarios:`, `calibrate` prints `scenarios.<name>.detectors` for the
+scenario it measured, to paste under that scenario: it carries over what the
+scenario's own section holds, and leaves the top-level one where it is. A
+threshold its runs gave no number for, which the top sets, is written as the
+default with `# kept the default over the … in detectors:`, so that another
+scenario's number does not reach this one. A report says whose numbers it ran
+on: `params_source` is `scenario` for the scenario's own (see the report
+reference). A config with one `scenario:` keeps its thresholds in the
+top-level `detectors:`, and `detectors` under `scenario:` is refused.
 
 ### `instrumentation`
 

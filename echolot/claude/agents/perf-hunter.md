@@ -53,7 +53,7 @@ instrumentation:
 **Do not nudge thresholds until something fires.** An empty report is an
 answer. Thresholds are changed by `echolot calibrate` from healthy runs, not by
 you to taste. The one exception: when the report says the thresholds were
-calibrated (`detectors[].params_source` is `config` or `config+cli`) and the runs they were
+calibrated (`detectors[].params_source` names `config` or `scenario`) and the runs they were
 calibrated on are the runs you are hunting in, the bar sits above the problem.
 Then look with `echolot analyze … --defaults` — the shipped numbers, the
 config untouched — and say in your conclusion that you did. Never write a
