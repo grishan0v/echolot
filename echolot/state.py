@@ -223,7 +223,10 @@ def collect_line(st: dict) -> str | None:
             where = f"{p.get('done', 0)}/{p['iterations']} iterations"
         else:
             where = "the macrobenchmark drives the iterations"
-        return f"running: {scenario}, {where}, started {when.ago(p.get('started'))}"
+        # Between two repeats, waiting for `runner.cooldown`: minutes in
+        # which nothing else moves, and which read as a hang without it.
+        cooling = f", cooling: {p['cooling']}" if p.get("cooling") else ""
+        return f"running: {scenario}, {where}{cooling}, started {when.ago(p.get('started'))}"
     if status == "interrupted":
         done = f" at {p.get('done', 0)}/{p['iterations']}" if p.get("iterations") else ""
         return (f"interrupted{done}, started {when.ago(p.get('started'))} — "

@@ -911,8 +911,13 @@ def collect(package: str, out_dir: Path, iterations: int,
     """
     import time
 
+    from . import stabilize
+
     section = section or {}
     mode = str(section.get("mode", "launch"))
+    # The device's state is checked with the rest of the section, before
+    # anything is touched: a typo in `cooldown` stops here, not after a build.
+    settle = stabilize.wanted(section)
     tell = progress or (lambda **kw: None)
     tell(scenario=name, mode=mode, started=time.time(), pid=os.getpid(),
          iterations=None if mode == "gradle" else iterations, done=0)
@@ -943,6 +948,11 @@ def collect(package: str, out_dir: Path, iterations: int,
         log(f"gradle: {command}")
         log(f"  in {root.resolve()}")
         env = None
+        if settle and not device:
+            # To be held still the device has to be known before gradle
+            # picks it, and it is picked the way gradle would: the one adb
+            # lists, or the one ANDROID_SERIAL names.
+            device = pick_device(os.environ.get("ANDROID_SERIAL"))
         if device:
             # The connected test tasks run on every device adb lists unless
             # ANDROID_SERIAL names one. `--device` and runner.device used to
@@ -967,8 +977,18 @@ def collect(package: str, out_dir: Path, iterations: int,
                 f"What the traces carry is up to the benchmark's own perfetto "
                 f"config; the report says which platform state it found.")
         since = time.time()
-        spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
-                            cwd=root, env=env)
+        if settle:
+            with stabilize.Settled(section, str(device), run=_run, log=log,
+                                   notify=tell) as settled:
+                if settled.cooldown is not None:
+                    log("  cooldown: before the task only; the macrobenchmark "
+                        "runs its repeats back to back")
+                settled.cool()
+                spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
+                                    cwd=root, env=env)
+        else:
+            spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
+                                cwd=root, env=env)
         # A build that failed raised above, and one that wrote nothing
         # copies nothing: either way the previous set stays where it was.
         results = harvest(root, since, out_dir, name, before_copy=make_room)
@@ -1015,44 +1035,49 @@ def collect(package: str, out_dir: Path, iterations: int,
             f"sampled at the same rate")
 
     results = []
-    for i in range(iterations):
-        out = out_dir / f"{name}_iter{i:03d}.perfetto-trace"
-        if reset == "force-stop":
-            _run(["adb", "-s", dev, "shell", "am", "force-stop", package])
-        _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
-        _run(["adb", "-s", dev, "shell", "perfetto", "-c", "-", "--txt",
-              "-o", DEVICE_TRACE, "--background-wait"],
-             stdin=config, timeout=120)
+    with stabilize.Settled(section, dev, run=_run, log=log, notify=tell) as settled:
+        for i in range(iterations):
+            out = out_dir / f"{name}_iter{i:03d}.perfetto-trace"
+            # Before the app is stopped and the recording starts, so
+            # that a repeat begins on a cool device whatever the last
+            # one left behind.
+            settled.cool()
+            if reset == "force-stop":
+                _run(["adb", "-s", dev, "shell", "am", "force-stop", package])
+            _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
+            _run(["adb", "-s", dev, "shell", "perfetto", "-c", "-", "--txt",
+                  "-o", DEVICE_TRACE, "--background-wait"],
+                 stdin=config, timeout=120)
 
-        info: dict = {}
-        if mode == "launch":
-            info = _launch(dev, activity)
-        else:
-            spent = run_command(command, timeout=duration_ms // 1000 + 300,
-                                knob="runner.duration_ms",
-                                env={"ANDROID_SERIAL": dev})
-            if spent * 1000 > duration_ms:
-                log(f"  [!] the scenario ran {spent:.0f}s against a "
-                    f"{duration_ms / 1000:.0f}s recording window — the trace "
-                    f"covers only its beginning")
+            info: dict = {}
+            if mode == "launch":
+                info = _launch(dev, activity)
+            else:
+                spent = run_command(command, timeout=duration_ms // 1000 + 300,
+                                    knob="runner.duration_ms",
+                                    env={"ANDROID_SERIAL": dev})
+                if spent * 1000 > duration_ms:
+                    log(f"  [!] the scenario ran {spent:.0f}s against a "
+                        f"{duration_ms / 1000:.0f}s recording window — the trace "
+                        f"covers only its beginning")
 
-        _run(["adb", "-s", dev, "shell",
-              "while pidof perfetto > /dev/null; do sleep 0.5; done"],
-             timeout=duration_ms // 1000 + 300)
-        # A trace is recorded and about to take the first name: the moment
-        # the previous set has to make room, and not a moment earlier.
-        make_room()
-        info.update(_pull(dev, out))
-        results.append(info)
+            _run(["adb", "-s", dev, "shell",
+                  "while pidof perfetto > /dev/null; do sleep 0.5; done"],
+                 timeout=duration_ms // 1000 + 300)
+            # A trace is recorded and about to take the first name: the moment
+            # the previous set has to make room, and not a moment earlier.
+            make_room()
+            info.update(_pull(dev, out))
+            results.append(info)
 
-        extra = ""
-        if info.get("total_time_ms") is not None:
-            extra = f", am start -W: {info['total_time_ms']} ms"
-        if info.get("launch_state"):
-            extra += f" ({info['launch_state']})"
-        log(f"  [{i + 1}/{iterations}] {out.name}  "
-            f"{info['size'] / 1e6:.1f} MB{extra}")
-        tell(done=i + 1)
+            extra = ""
+            if info.get("total_time_ms") is not None:
+                extra = f", am start -W: {info['total_time_ms']} ms"
+            if info.get("launch_state"):
+                extra += f" ({info['launch_state']})"
+            log(f"  [{i + 1}/{iterations}] {out.name}  "
+                f"{info['size'] / 1e6:.1f} MB{extra}")
+            tell(done=i + 1)
     return results
 
 

@@ -156,7 +156,10 @@ look.
 A macrobenchmark round is minutes of silence — a gradle build, then the
 iterations. `echolot` (status) has a `collect` line while one is in flight:
 `running: coldStart, 7/15 iterations, started 3m ago`, or `the macrobenchmark
-drives the iterations` where gradle does. A run whose process is gone and
+drives the iterations` where gradle does. Between two repeats that
+`runner.cooldown` holds back, it adds what the wait is for: `cooling: cpu
+40.4 °C, waiting for 34`, a minute or two in which nothing else moves and
+nothing is stuck. A run whose process is gone and
 that never finished reads `interrupted`; one that failed reads `failed 2m
 ago: …` with the line of the output that names the cause — the exception the
 benchmark threw, say — and the fix when the failure is a known one, until a
@@ -192,8 +195,12 @@ device:
 build. Mixing a cold start with a minute of scrolling yields thresholds for
 nothing; the command warns when the windows diverge more than twofold. With
 several scenarios in the config, `--scenario` says which one the traces are,
-as for `collect` and `analyze`, and the section names it: the thresholds it
-prints are the config's, shared by every scenario.
+as for `collect` and `analyze`, and the section it prints is that scenario's
+own, `scenarios.<name>.detectors`, to go under it.
+
+On a phone, record them with `runner.cooldown`. Repeats recorded back to back
+warm the device, and the set drifts slower repeat by repeat: thresholds taken
+from it carry the heat as well as the app.
 
 Between repeats: `force-stop`, never `pm clear`. Wiping data changes the
 scenario rather than repeating it.

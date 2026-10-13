@@ -228,11 +228,27 @@ Every key the runner reads, and where it applies:
 | `gradle` | gradle | `./gradlew` |
 | `project_root` | gradle | the config's directory; a relative path is taken from there, as `-o` is |
 | `timeout_s` | gradle | 3600 — the whole gradle run, build included |
+| `cooldown` | launch, command, gradle | off. `max_c`, the °C each repeat waits for; `sensor`, one of `battery` (from `dumpsys battery`, the default), `cpu`, `gpu`, `skin` (from the thermal HAL); `timeout_s`, 600. In gradle mode once, before the task. Belongs in local.yml |
+| `fixed_performance` | launch, command, gradle | off; `true` asks for the platform's fixed performance mode and says whether any frequency limit moved |
+| `airplane_mode` | launch, command, gradle | off; `true` turns the radio off while the set runs |
+| `brightness` | launch, command, gradle | none; a screen level from 0 to 255, auto-brightness off |
 
 In gradle mode the macrobenchmark makes the recording, so the keys that shape
 one — `environment`, `atrace_categories`, `buffer_kb`, `duration_ms`,
 `reset_policy`, `sampling` — do not apply, and `collect` says so when it finds
 them set.
+
+The last four keys hold the device still around a set, and `collect` puts
+back whatever it changed when the set ends, a failed one included. `cooldown`
+is the one that matters on a phone: recorded back to back, a repeat starts
+with the throttle the one before left on, and the set drifts slower repeat by
+repeat (on an A51, from 2066 to 1915 MHz over eight cold starts; with the wait,
+2032 to 2049). A sensor the device does not have stops `collect` before anything
+is changed; a device that does not cool within `timeout_s` is recorded
+anyway, and the report's `environment` shows how hot it ran. The thermal
+HAL's sensors are smoothed and lag the cores: pick `max_c` a little above the
+sensor's reading at rest. `airplane_mode` changes what an app that goes to the
+network does at start, so record the rounds of one comparison alike.
 
 ### `detectors`
 

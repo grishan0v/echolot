@@ -244,6 +244,61 @@ unless `ANDROID_SERIAL` names one — so `--device` or `runner.device` is passed
 to gradle as `ANDROID_SERIAL`. With neither, an `ANDROID_SERIAL` already in
 your environment passes through untouched, and `collect` says it is using it.
 
+## The device's state
+
+A duration is the work done over the speed it was done at, and a phone does
+not keep its speed. On the SM-A515F, eight cold starts of a large app
+recorded back to back all ran with the kernel throttling the big cluster,
+the first one included, and the clock they ran at fell repeat by repeat, from
+2066 to 1915 MHz: the clock 7% lower at the last repeat than at the first,
+for an app nobody changed. At the start of five of the eight recordings the
+throttle was already on, left there by the repeat before.
+
+Four keys under `runner:` hold the device still around a set. Each is off
+unless set, and a device's numbers belong in `local.yml`:
+
+```yaml
+runner:
+  cooldown:                 # before each repeat
+    sensor: cpu             # battery (the default), cpu, gpu or skin
+    max_c: 34
+    timeout_s: 600
+  fixed_performance: true   # the platform's fixed performance mode
+  airplane_mode: true       # no radio while the set runs
+  brightness: 128           # 0–255, auto-brightness off
+```
+
+- **`cooldown`** waits before each repeat until the sensor reads at or below
+  `max_c`. Eight more starts on the same phone, each waiting for its `cpu`
+  sensor to read 34 °C, ran at 2032 to 2049 MHz with no drift, and none began
+  with the throttle on. Each still throttled during its own start, since one
+  start of that app is enough to trip it: what the wait gives is the same
+  phone at the start of every repeat. The starts' own spread
+  stayed what the app gives it, 8.6% back to back and 11.4% with the wait.
+  The wait costs time: 91 to 203 seconds a repeat there, 17 minutes for the
+  set against 2. `battery` is read from `dumpsys battery`, which every
+  device has; `cpu`, `gpu` and `skin` from the thermal HAL, `dumpsys
+  thermalservice`, from Android 10 on. A sensor the device does not have
+  stops `collect` before anything is touched, naming the ones it has. The
+  kernel's own zones, the ones that trip the throttle, are closed to the shell
+  on a production build. The HAL's sensors are smoothed and lag them, so
+  `max_c` goes a little above the sensor's reading at rest: 34 for the A51's
+  `cpu`, which reads about 31 there. A device that does not cool within
+  `timeout_s` is recorded anyway, and the line says so; the report's
+  `environment` shows how hot it ran.
+- **`fixed_performance`** asks for the platform's fixed performance mode,
+  which holds the clock at a level the device can keep. Whether a device has
+  one is up to its power HAL: the A51 takes the command and moves no frequency
+  limit. `collect` reads the limits before and after, and says which it was.
+- **`airplane_mode`** turns the radio off. An app that goes to the network at
+  start does something else without it, so record both rounds of a comparison
+  alike.
+- **`brightness`** holds the screen at one level, auto-brightness off.
+
+Whatever `collect` changed, it puts back when the set ends, a failed set
+included, and says so a line each. In gradle mode the macrobenchmark runs its
+repeats back to back, so `cooldown` waits once, before the task.
+
 ## While it runs, and when it fails
 
 A macrobenchmark round is minutes of silence. `collect` writes where it stands
