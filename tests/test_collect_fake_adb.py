@@ -54,6 +54,15 @@ RESOLVED = ("priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 "
 AM_START = ("Starting: Intent {{ cmp={activity} }}\nStatus: ok\n"
             "LaunchState: COLD\nActivity: {activity}\nTotalTime: {total}\n"
             "WaitTime: {wait}\nComplete\n")
+# What an SM-A515F (Android 13) answered behind its lock screen: no TotalTime.
+AM_START_UNMEASURED = (f"Starting: Intent {{ cmp={ACTIVITY} }}\nStatus: ok\n"
+                       f"LaunchState: UNKNOWN (0)\nActivity: {ACTIVITY}\nComplete\n")
+
+# `dumpsys power; dumpsys window policy`, cut to the lines screen.py reads:
+# a phone on its desk, charging, the screen on and unlocked.
+SCREEN_ON = ("  mWakefulness=Awake\n  mIsPowered=true\n  mStayOn=true\n"
+             "    mShowingDream=false mDreamingLockscreen=false\n"
+             "    isKeyguardShowing=false\n")
 
 
 def kind(args: list[str]) -> str:
@@ -62,7 +71,9 @@ def kind(args: list[str]) -> str:
     for name, needle in (("devices", "adb devices"), ("resolve", "resolve-activity"),
                          ("force-stop", "am force-stop"), ("rm", "rm -f"),
                          ("perfetto", "perfetto -c"), ("start", "am start -W"),
-                         ("wait", "pidof perfetto"), ("pull", " pull ")):
+                         ("wait", "pidof perfetto"), ("pull", " pull "),
+                         ("screen", "dumpsys power"), ("wake", "KEYCODE_WAKEUP"),
+                         ("dismiss", "dismiss-keyguard")):
         if needle in text:
             return name
     return text
@@ -73,12 +84,17 @@ class FakeAdb:
 
     `fail` names a kind of call that fails the way adb does, with an error
     of its own; the pull writes a small file where the trace would land.
+    `script` gives a kind of call its answers in order, the last one kept
+    for every call after it: the screen as it changes, a launch the system
+    measured no start for.
     """
 
-    def __init__(self, listing: str = ONE_DEVICE, totals=(523,), fail: str | None = None):
+    def __init__(self, listing: str = ONE_DEVICE, totals=(523,), fail: str | None = None,
+                 script: dict[str, list[str]] | None = None):
         self.listing = listing
         self.totals = list(totals)
         self.fail = fail
+        self.script = {k: list(v) for k, v in (script or {}).items()}
         self.calls: list[list[str]] = []
         self.stdin: list[str | None] = []
 
@@ -89,6 +105,11 @@ class FakeAdb:
         what = kind(args)
         if what == self.fail:
             raise runner.RunnerError(f"{' '.join(args)}\nerror: {what} refused")
+        answers = self.script.get(what)
+        if answers:
+            return answers.pop(0) if len(answers) > 1 else answers[0]
+        if what == "screen":
+            return SCREEN_ON
         if what == "devices":
             return self.listing
         if what == "resolve":
@@ -123,16 +144,18 @@ def old_set(out: Path, name: str = "startup", n: int = 3) -> list[str]:
 
 # --- launch mode: the calls, in order -----------------------------------------
 
-def test_launch_mode_asks_once_then_runs_six_steps_per_iteration(tmp_path, adb):
+def test_launch_mode_asks_once_then_runs_seven_steps_per_iteration(tmp_path, adb):
     said: list[str] = []
     results = runner.collect(PACKAGE, tmp_path / "traces", 3, section={},
                              name="startup", log=said.append)
     kinds = adb.kinds()
-    check("the device, then the activity, once each and first",
-          kinds[:2] == ["devices", "resolve"], kinds)
-    check("then per iteration: stop, clear, record, launch, wait, pull",
-          kinds[2:] == ["force-stop", "rm", "perfetto", "start", "wait", "pull"] * 3,
+    check("the device, the activity and the screen, once each and first",
+          kinds[:3] == ["devices", "resolve", "screen"], kinds)
+    check("then per iteration: the screen, stop, clear, record, launch, wait, pull",
+          kinds[3:] == ["screen", "force-stop", "rm", "perfetto", "start", "wait", "pull"] * 3,
           kinds)
+    check("a screen on and unlocked says nothing",
+          not any("screen" in line for line in said), said)
     check("every call after `adb devices` names the device it picked",
           all(c[:3] == ["adb", "-s", SERIAL] for c in adb.calls[1:]), adb.calls)
     recording = adb.stdin[kinds.index("perfetto")] or ""
@@ -249,8 +272,8 @@ def test_the_set_moves_after_the_device_check_and_before_the_first_pull(tmp_path
     check("once", kinds.count("<set aside>") == 1 and len(moved) == 1, kinds)
     where = kinds.index("<set aside>")
     check("after the device check and the first recording, right before its pull",
-          kinds[:where] == ["devices", "resolve", "force-stop", "rm", "perfetto",
-                            "start", "wait"] and kinds[where + 1] == "pull", kinds)
+          kinds[:where] == ["devices", "resolve", "screen", "screen", "force-stop", "rm",
+                            "perfetto", "start", "wait"] and kinds[where + 1] == "pull", kinds)
     check("the old set is in the directory it went to",
           sorted(p.name for p in moved[0].iterdir()) == before)
 
@@ -289,8 +312,8 @@ def test_the_scenario_command_gets_the_device_as_android_serial(tmp_path, adb):
           seen.read_text(encoding="utf-8").split() == ["emulator-5554"] * 2,
           seen.read_text(encoding="utf-8"))
     kinds = adb.kinds()
-    check("and nothing but record, wait and pull around it",
-          kinds[1:] == ["rm", "perfetto", "wait", "pull"] * 2, kinds)
+    check("and nothing but the screen, record, wait and pull around it",
+          kinds[1:] == ["screen"] + ["screen", "rm", "perfetto", "wait", "pull"] * 2, kinds)
 
 
 def test_without_device_the_one_attached_is_the_serial(tmp_path, adb):

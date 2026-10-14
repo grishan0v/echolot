@@ -938,7 +938,7 @@ def collect(package: str, out_dir: Path, iterations: int,
     import contextlib
     import time
 
-    from . import composenames, stabilize
+    from . import composenames, screen, stabilize
 
     section = section or {}
     mode = str(section.get("mode", "launch"))
@@ -1065,6 +1065,10 @@ def collect(package: str, out_dir: Path, iterations: int,
         log(f"  sampling callstacks at {hz} Hz (runner.sampling): the app "
             f"runs slower for it, so compare this set only with another "
             f"sampled at the same rate")
+    # A launch behind a dark, locked screen starts nothing that can be
+    # measured (screen.py). Read before anything is touched, and again
+    # before each repeat: a set that waits to cool can outlast the screen.
+    screen.ready(dev, _run, log)
 
     results = []
     # Composable names go on after the device is held still and off before
@@ -1079,6 +1083,7 @@ def collect(package: str, out_dir: Path, iterations: int,
             # that a repeat begins on a cool device whatever the last
             # one left behind.
             settled.cool()
+            screen.ready(dev, _run, log, during=f"before repeat {i + 1} of {iterations}")
             if reset == "force-stop":
                 _run(["adb", "-s", dev, "shell", "am", "force-stop", package])
             _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
@@ -1106,6 +1111,18 @@ def collect(package: str, out_dir: Path, iterations: int,
             _run(["adb", "-s", dev, "shell",
                   "while pidof perfetto > /dev/null; do sleep 0.5; done"],
                  timeout=duration_ms // 1000 + 300)
+            # After a force-stop `UNKNOWN` is a launch the system measured no
+            # start for. A screen that went dark or locked since the check
+            # explains it, and the set stops before the trace takes a name;
+            # on a screen that is on and unlocked the line says so.
+            unmeasured = (mode == "launch" and reset == "force-stop"
+                          and str(info.get("launch_state", "")).startswith("UNKNOWN"))
+            if unmeasured:
+                now = screen.read(dev, _run)
+                if now.dark or now.locked:
+                    _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
+                    raise RunnerError(screen.unmeasured_sentence(
+                        dev, now, f"repeat {i + 1} of {iterations}"))
             # A trace is recorded and about to take the first name: the moment
             # the previous set has to make room, and not a moment earlier.
             make_room()
@@ -1119,6 +1136,9 @@ def collect(package: str, out_dir: Path, iterations: int,
                 extra += f" ({info['launch_state']})"
             log(f"  [{i + 1}/{iterations}] {out.name}  "
                 f"{info['size'] / 1e6:.1f} MB{extra}")
+            if unmeasured:
+                log("      [!] am start -W measured no start, with the screen on and "
+                    "unlocked: this trace may hold none")
             tell(done=i + 1)
     return results
 

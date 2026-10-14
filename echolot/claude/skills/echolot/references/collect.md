@@ -56,6 +56,10 @@ data_sources: { config {
 duration_ms: 12000
 EOF
 
+# The screen on and unlocked: a launch behind the lock screen starts nothing
+# that can be measured. A lock screen with a PIN is the user's to open.
+adb shell input keyevent KEYCODE_WAKEUP
+adb shell wm dismiss-keyguard
 adb shell am force-stop $PKG
 adb shell rm -f /data/misc/perfetto-traces/t.pftrace
 adb shell perfetto -c - --txt -o /data/misc/perfetto-traces/t.pftrace \
@@ -66,7 +70,9 @@ adb pull /data/misc/perfetto-traces/t.pftrace ./
 ```
 
 `am start -W` prints `TotalTime` — an independent check that the window in the
-report is plausible.
+report is plausible. `LaunchState: UNKNOWN` with no `TotalTime` after a
+`force-stop` is a launch the system measured no start for, most often behind a
+dark or locked screen.
 
 ## What the config must contain
 
@@ -172,6 +178,15 @@ that never finished reads `interrupted`; one that failed reads `failed 2m
 ago: …` with the line of the output that names the cause — the exception the
 benchmark threw, say — and the fix when the failure is a known one, until a
 newer set of traces exists.
+
+**The screen is `collect`'s to wake** in launch and command modes. Before the
+set and before each repeat it reads the screen, wakes it when it is dark, and
+dismisses a lock screen that asks for nothing, a line each. A lock screen with
+a PIN, a pattern or a password stops it with `<serial> is locked (…)`: ask the
+user to unlock the phone, and never type a PIN over adb. A screen that went
+dark between repeats is said with whether the phone charges.
+`stay_on_while_plugged_in` holds the screen on only while it does, and
+`runner.cooldown`'s waits are long enough for the screen to time out.
 
 **Run one iteration first** whenever the runner config is new or changed. In
 launch and command modes that is `echolot collect -c echolot.yml -n 1`: one

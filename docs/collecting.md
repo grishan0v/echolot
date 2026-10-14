@@ -244,6 +244,41 @@ unless `ANDROID_SERIAL` names one — so `--device` or `runner.device` is passed
 to gradle as `ANDROID_SERIAL`. With neither, an `ANDROID_SERIAL` already in
 your environment passes through untouched, and `collect` says it is using it.
 
+## The screen
+
+A launch behind a dark, locked screen starts nothing that can be measured. On
+the SM-A515F, connected over USB and not charging, its screen dozing and its
+lock screen up, `am start -W` answered `LaunchState: UNKNOWN (0)` and no
+`TotalTime`. The traces held the app's process and no start, and the report
+could only say that the window's end anchor was missing.
+
+So in `launch` and `command` modes `collect` reads the screen before the set
+and again before each repeat:
+
+- a screen that is asleep, dozing or showing a screensaver is woken;
+- a lock screen that asks for nothing is dismissed;
+- a lock screen that asks for a PIN, a pattern or a password stops `collect`
+  before anything is recorded. Unlock the phone and collect again.
+
+A screen that was on and unlocked gets no line. Whatever `collect` did to it
+gets one.
+
+The screen can go dark during a set: a repeat can wait minutes for
+`runner.cooldown`, longer than a screen timeout. `stay_on_while_plugged_in`
+(Developer options, Stay awake) keeps the screen on only while the phone
+charges, and the A51 above was connected and not charging. When the screen
+went dark between repeats, the line says whether the phone was charging. A
+phone that locks with its screen stops the set there.
+
+`am start -W` answering `UNKNOWN` after a `force-stop` means the system
+measured no start. If the screen went dark or locked since the check,
+`collect` stops at that repeat, and the traces recorded before it are kept;
+the repeat's own trace is not. On a screen that is on and unlocked the
+repeat is kept, and its line says that no start was measured.
+
+In `gradle` mode the macrobenchmark drives the device, its screen included,
+and `collect` reads nothing from it beyond what `runner.cooldown` waits on.
+
 ## The device's state
 
 A duration is the work done over the speed it was done at, and a phone does
