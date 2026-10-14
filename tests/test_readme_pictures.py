@@ -156,6 +156,18 @@ def test_the_narrow_tables_follow_the_system_theme():
         assert f'[fill="{render.THEMES["light"]["ink"]}"]' in drawn, name
 
 
+def test_the_card_for_links_is_what_github_takes():
+    """GitHub shows social-preview.png where a link to the repository is
+    shared, and takes it only by hand, in the repository's settings: 1280 by
+    640 is the size it asks for, and it refuses a file over 1 MB."""
+    card = ASSETS / "social-preview.png"
+    head = card.read_bytes()[:24]
+    assert head[:8] == b"\x89PNG\r\n\x1a\n", "social-preview.png is not a PNG"
+    size = int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+    assert size == (1280, 640), size
+    assert card.stat().st_size < 1024 * 1024, card.stat().st_size
+
+
 @pytest.mark.parametrize("theme", ["light", "dark"])
 @pytest.mark.parametrize("phone", [False, True])
 def test_the_preview_is_the_readme(theme, phone):

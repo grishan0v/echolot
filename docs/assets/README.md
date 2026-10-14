@@ -62,6 +62,14 @@ install commands are code blocks.
   theme. Both are 840 × 660, twice the size the README gives them, reduced to
   256 colours with libimagequant: a quarter of the size, and no difference
   the eye can find.
+- **The card for links, not drawn here either.** `social-preview.png` is what
+  GitHub shows where a link to the repository is shared: the plate version of
+  the logo in the middle of a 1280 × 640 plate of the same slate, the size
+  GitHub asks for. The logo takes the middle 550 × 446, so an app that crops
+  the card to a square still shows all of it. GitHub takes the card only in
+  Settings → General → Social preview and has no API for it, so a new one is
+  uploaded there by hand. `tests/test_readme_pictures.py` holds it to that
+  size and to GitHub's limit of 1 MB.
 - **Flat SVG, system fonts.** GitHub's own font stacks, no web fonts: an SVG
   served from this repository cannot load them.
 - **Full addresses.** The README names each picture at
