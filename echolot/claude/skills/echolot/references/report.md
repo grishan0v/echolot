@@ -49,6 +49,7 @@ produce. The keys only a merged report has are named under the block.
                                 "throttled_runs": "0/5", "runs": "5/5" },
                    "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
                    "sampling": null,
+                   "compose_names": null,
                    "missing": [] },
   "summary": { "detectors_run": 14, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
@@ -124,6 +125,17 @@ clean.
 `thermal.throttled` is the one to act on. A hot device is not a slowed device;
 a cooling device above zero is the kernel saying it took capacity away, and
 the numbers below then understate the app.
+
+`compose_names` is whether composables were named while the trace recorded,
+read from the trace: `asked`, the recording's config held a `track_event`
+source (`runner.compose_names`, or a macrobenchmark's
+`perfettoSdkTracing.enable=true`); `calls`, the composable calls on the main
+thread in the window; merged, `runs` counts the repeats that had any. `null`
+is neither. Names come with the app's Perfetto SDK loaded at its start, which
+cost a cold start 67 ms on the device it was measured on, so a round with
+names compares only with another with names, and `compare` says so when they
+differ. Asked for and none arrived is a warning in the header: an app
+without `runtime-tracing`, or an SDK nobody switched on.
 
 `sampling` is whether a callstack sampler ran while the trace recorded —
 `runner.sampling`, or whatever config recorded the trace — read from the

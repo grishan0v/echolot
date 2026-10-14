@@ -442,7 +442,9 @@ A composable gets a name in the trace when the app adds
 app's Perfetto SDK on. A macrobenchmark does it with
 `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=true`
 in `runner.gradle_args`; without the flag, Macrobenchmark 1.5 recorded no
-names. `collect` in launch and command modes does not record them. Each call
+names. In launch and command modes, `runner.compose_names: true` switches it
+on for the set and off after it ([Collecting](collecting.md#composable-names)).
+Each call
 is then a slice on the main thread, `fully.qualified.Name (File.kt:line)`, at
 the composable's declaration.
 

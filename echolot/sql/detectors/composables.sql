@@ -6,12 +6,14 @@
 --       is counted here with what it calls, down to the next composable of the
 --       app's own
 -- @param: min_self_ms = 8
--- @param: name_glob = * (*.kt:*)
+-- @param: name_glob = * ([A-Za-z]*.kt:[0-9]*)
 -- @calibrate: min_self_ms = top10(self_ms) * 1.5
 -- @identity: location
 --
 -- `androidx.compose.runtime:runtime-tracing` names every composable call, on
--- the main thread, `fully.qualified.Name (File.kt:line)`, nested under the
+-- the main thread, `fully.qualified.Name (File.kt:line)`. The mask wants a
+-- letter after ` (`: ART's contention slice also ends in `(File.kt:61)`, and
+-- what follows its ` (` is a thread id. The calls are nested under the
 -- `Compose:recompose` that composed it. On a real cold start that was 922
 -- calls of 177 names, 49 of them the app's own, and not one in the report:
 -- summed by name, none had the 16 ms of self time a `main_thread_block` row

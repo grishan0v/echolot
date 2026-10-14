@@ -728,6 +728,24 @@ def _(report):
         assert not stray, (detector, stray)
 
 
+@check("composable names: counted in the trace, with what the recording asked for")
+def _(report):
+    """`compare` warns when one round had composable names and the other not,
+    since they come with the app's Perfetto SDK loaded at its start. Read off
+    the trace rather than off `runner.compose_names`: the calls in the
+    window, and whether the recording's config held a `track_event` source.
+    A contention slice ends in `(File.kt:61)` too, and is not a call."""
+    from .config import Config
+    assert report["environment"]["compose_names"] == {"asked": False, "calls": 8}, \
+        report["environment"]["compose_names"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "names.perfetto-trace"
+        path.write_bytes(fixture.build(names=True))
+        named = _analyze(path, Config(FIXTURE_CONFIG))
+    assert named["environment"]["compose_names"] == {"asked": True, "calls": 8}, \
+        named["environment"]["compose_names"]
+
+
 @check("composables: placed where the name says, and owned by the checkout")
 def _(report):
     """The name carries the declaration's file and line, so the row goes

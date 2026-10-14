@@ -295,6 +295,7 @@ def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
             "major_faults": round(median(faults)) if faults else None,
         }
     out["sampling"] = _merge_sampling([e.get("sampling") for e in envs])
+    out["compose_names"] = _merge_compose_names([e.get("compose_names") for e in envs])
     out["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if out[k] is None)
     return out
@@ -307,6 +308,21 @@ def short_runs(runs: Any) -> tuple[int, int] | None:
     except ValueError:
         return None
     return (k, n) if k < n else None
+
+
+def _merge_compose_names(blocks: list[dict[str, Any] | None]) -> dict[str, Any] | None:
+    """Composable names across repeats: the median calls of the runs that had
+    any, and how many runs that was — a set half recorded with names has the
+    SDK's cost in its spread, as a half-sampled one has the sampler's."""
+    seen = [b for b in blocks if b]
+    if not seen:
+        return None
+    named = [b for b in seen if b.get("calls")]
+    return {
+        "asked": any(b.get("asked") for b in seen),
+        "calls": round(median([b["calls"] for b in named])) if named else 0,
+        "runs": f"{len(named)}/{len(blocks)}",
+    }
 
 
 def _merge_sampling(samplings: list[dict[str, Any] | None]) -> dict[str, Any] | None:
@@ -831,7 +847,32 @@ def _environment_lines(env: dict[str, Any], unbuilt: bool = False) -> list[str]:
         )
     out.extend(_sampling_lines(env.get("sampling")))
     out.extend(_names_lines((env.get("sampling") or {}).get("names"), unbuilt))
+    out.extend(_compose_names_lines(env.get("compose_names")))
     return out
+
+
+def _compose_names_lines(c: dict[str, Any] | None) -> list[str]:
+    """Whether composables were named, and what that costs a comparison.
+
+    Nothing for a trace that neither asked for names nor had any: that is
+    every trace of an app without `runtime-tracing`.
+    """
+    if not c:
+        return []
+    if not c.get("calls"):
+        return [
+            "> ⚠️ The recording asked for composable names and none arrived: the "
+            "app does not carry `androidx.compose.runtime:runtime-tracing`, or its "
+            "Perfetto SDK was not switched on, which `runner.compose_names` does for "
+            "a cold start."
+        ]
+    ran, _, total = (c.get("runs") or "").partition("/")
+    part = f", in {ran} of {total} repeats" if total and ran != total else ""
+    return [
+        f"Composable names: {c['calls']} calls{part}. They come with the app's "
+        f"Perfetto SDK loaded at its start, which costs the start time, so compare "
+        f"these numbers only with another round recorded with them."
+    ]
 
 
 # The share of the app's sampled methods that has to read as minified before

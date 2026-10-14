@@ -594,6 +594,53 @@ one of R8's ranges only when something else shows the build is minified: a
 frame of a class or a method R8 renamed, a file R8 named, or a sampled method
 the mapping named back. A build that kept its names keeps its lines.
 
+## Composable names
+
+A Compose app that carries `androidx.compose.runtime:runtime-tracing` can
+name every composable call in a trace, and the `composables` detector ranks
+the app's own by the time they hold
+([Analysing](analysing.md#rows-of-compose)). The names come through the
+app's Perfetto SDK, which is off until something switches it on:
+
+```yaml
+runner:
+  compose_names: true
+```
+
+Before the first repeat, `collect` asks the app which version of
+`tracing-perfetto` it carries and takes that version's library for the
+device's ABI, `tracing-perfetto-binary` from Gradle's cache or from Google's
+Maven, checked against the SHA-1 published beside it and kept in
+`~/.cache/echolot`. It pushes the library into the app's own media
+directory, switches cold-start tracing on, and adds the SDK's `track_event`
+source to the recording. After the set it switches it off and removes the
+library, a failed set included.
+
+On an SM-A515F with a Compose app built for it, three cold starts each came
+back with all 921 composable calls of the start, and the report ranked the
+app's own with their files and lines. It costs the start: loading the SDK
+took the app 54 to 87 ms, and a cold start of about 580 ms ran 67 ms longer
+on the median. So a round with names compares only with another with names,
+the report says which it was, and `compare` warns when two were not
+recorded alike.
+
+Two things the device decides:
+
+- **Android 11 or later**, the library's own minimum. An app without
+  `runtime-tracing` has no receiver to switch, and `collect` stops with a
+  sentence before anything is recorded.
+- **The recording starts differently.** `perfetto --background-wait`, which
+  `collect` otherwise waits on, waits for every process on the device that
+  has the Perfetto SDK to start its data source. Frozen background apps
+  never answer, and on that device it came back after 22 seconds, past the
+  end of a 12-second recording. With names on, the recording detaches at
+  once and the scenario starts two seconds later.
+
+In gradle mode the macrobenchmark makes the recording, and its own flag
+switches the SDK on:
+`-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=true`
+in `runner.gradle_args`.
+
 ## Merging repeats
 
 Numbers are merged by **median** — not by mean (one outlier would drag the

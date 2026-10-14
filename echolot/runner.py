@@ -193,7 +193,31 @@ DEVICE_TRACE = "/data/misc/perfetto-traces/echolot.pftrace"
 # they are the keys most likely to be copied in from a launch-mode config and
 # believed.
 RECORDING_KNOBS = ("environment", "atrace_categories", "buffer_kb",
-                   "duration_ms", "reset_policy", "sampling")
+                   "duration_ms", "reset_policy", "sampling", "compose_names")
+
+# What `runner.compose_names` adds to the recording: the Perfetto SDK's events
+# in the category Compose writes to, and nothing any other SDK on the device
+# sends (see composenames.py).
+TRACK_EVENT_SOURCE = """
+data_sources: {
+  config {
+    name: "track_event"
+    track_event_config {
+      disabled_categories: "*"
+      enabled_categories: "rendering"
+    }
+  }
+}
+"""
+
+# `perfetto --background-wait` returns once every data source has started,
+# and a `track_event` source waits on every process on the device that has
+# the Perfetto SDK. Frozen background apps never answer: on an SM-A515F it
+# came back after 22 s, past the end of a 12 s recording, and the launch
+# was missed whole. So a recording with composable names detaches at once,
+# and the scenario starts this long after — every one of seven cold starts
+# on that device was in its recording.
+TRACK_EVENT_START_S = 2
 
 
 class RunnerError(Exception):
@@ -558,8 +582,9 @@ _NAME_SHAPE = re.compile(r"^[A-Za-z0-9_.:\-]+$")
 
 def trace_config(package: str, duration_ms: int, categories: list[str],
                  buffer_kb: int, environment: bool = True,
-                 sampling_hz: int | None = None) -> str:
-    """The device's trace config. `sampling_hz` adds callstack sampling at that rate.
+                 sampling_hz: int | None = None, compose_names: bool = False) -> str:
+    """The device's trace config. `sampling_hz` adds callstack sampling at that rate,
+    and `compose_names` the Perfetto SDK's events that name composables.
 
     The samples get a buffer the size of the main one: perfetto fills a
     buffer as it writes, so a cap nobody reaches costs nothing.
@@ -579,7 +604,8 @@ def trace_config(package: str, duration_ms: int, categories: list[str],
         environment=env if environment else "",
         sys_stats=SYS_STATS_SOURCE if environment else "",
         perf_buffer=PERF_BUFFER.format(buffer_kb=buffer_kb) if sampling_hz else "",
-        perf=PERF_SOURCE.format(hz=sampling_hz) if sampling_hz else "")
+        perf=PERF_SOURCE.format(hz=sampling_hz) if sampling_hz else "",
+    ) + (TRACK_EVENT_SOURCE if compose_names else "")
 
 
 def sampling(section: dict, log: Callable[[str], None] = print) -> int | None:
@@ -911,13 +937,16 @@ def collect(package: str, out_dir: Path, iterations: int,
     """
     import time
 
-    from . import stabilize
+    import contextlib
+
+    from . import composenames, stabilize
 
     section = section or {}
     mode = str(section.get("mode", "launch"))
     # The device's state is checked with the rest of the section, before
     # anything is touched: a typo in `cooldown` stops here, not after a build.
     settle = stabilize.wanted(section)
+    names = composenames.wanted(section)
     tell = progress or (lambda **kw: None)
     tell(scenario=name, mode=mode, started=time.time(), pid=os.getpid(),
          iterations=None if mode == "gradle" else iterations, done=0)
@@ -976,6 +1005,10 @@ def collect(package: str, out_dir: Path, iterations: int,
                 f"{'does' if len(ignored) == 1 else 'do'} not apply here. "
                 f"What the traces carry is up to the benchmark's own perfetto "
                 f"config; the report says which platform state it found.")
+            if "compose_names" in ignored:
+                log("      Composable names are the benchmark's to switch on: "
+                    "-Pandroid.testInstrumentationRunnerArguments.androidx."
+                    "benchmark.perfettoSdkTracing.enable=true in runner.gradle_args.")
         since = time.time()
         if settle:
             with stabilize.Settled(section, str(device), run=_run, log=log,
@@ -1020,7 +1053,7 @@ def collect(package: str, out_dir: Path, iterations: int,
                           _listed(section, "atrace_categories") or DEFAULT_CATEGORIES,
                           _positive(section, "buffer_kb", 131072),
                           environment=bool(section.get("environment", True)),
-                          sampling_hz=hz)
+                          sampling_hz=hz, compose_names=names)
 
     dev = pick_device(device)
     activity = None
@@ -1035,7 +1068,12 @@ def collect(package: str, out_dir: Path, iterations: int,
             f"sampled at the same rate")
 
     results = []
-    with stabilize.Settled(section, dev, run=_run, log=log, notify=tell) as settled:
+    # Composable names go on after the device is held still and off before
+    # it is put back, so that the app is the last thing touched and the
+    # first thing restored.
+    switched = (composenames.Names(package, dev, run=_run, log=log) if names
+                else contextlib.nullcontext())
+    with stabilize.Settled(section, dev, run=_run, log=log, notify=tell) as settled, switched:
         for i in range(iterations):
             out = out_dir / f"{name}_iter{i:03d}.perfetto-trace"
             # Before the app is stopped and the recording starts, so
@@ -1045,9 +1083,14 @@ def collect(package: str, out_dir: Path, iterations: int,
             if reset == "force-stop":
                 _run(["adb", "-s", dev, "shell", "am", "force-stop", package])
             _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
+            # With composable names, `--background-wait` waits on every SDK
+            # producer on the device and outlasts the recording (see
+            # TRACK_EVENT_START_S).
             _run(["adb", "-s", dev, "shell", "perfetto", "-c", "-", "--txt",
-                  "-o", DEVICE_TRACE, "--background-wait"],
+                  "-o", DEVICE_TRACE, "--background" if names else "--background-wait"],
                  stdin=config, timeout=120)
+            if names:
+                time.sleep(TRACK_EVENT_START_S)
 
             info: dict = {}
             if mode == "launch":

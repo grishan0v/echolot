@@ -1194,7 +1194,7 @@ def _own_composables(tp, cfg: Config) -> None:
     """
     names = [r["name"] for r in tp.query(
         "SELECT DISTINCT name FROM _slice_win "
-        "WHERE is_main_thread = 1 AND name GLOB '* (*.kt:*)'")]
+        "WHERE is_main_thread = 1 AND name GLOB '* ([A-Za-z]*.kt:[0-9]*)'")]
     root = Path(cfg.path).resolve().parent if cfg.path else None
     own = place_mod.own_composables(names, root, cfg.get("project.package"))
     tp.exec_script("DROP TABLE IF EXISTS _compose_own;")
@@ -1209,7 +1209,7 @@ def _claim_names(tp, overrides: dict) -> None:
 
     Four of the fourteen detectors know the names of what they are looking for
     and say so in a `*name_glob*` param: `*GC`, `Lock contention on a monitor
-    lock*`, `binder transaction`, and a composable's `* (*.kt:*)`.
+    lock*`, `binder transaction`, and a composable's `* ([A-Za-z]*.kt:[0-9]*)`.
     `repeated_work` knows no name in advance —
     it asks a question about shape and so has to look at every name there
     is, which means it also looks at names that belong to somebody else.
@@ -1568,9 +1568,41 @@ def _environment_info(tp, package: str = "", mapped: bool = False) -> dict:
         names = _names_info(tp, package, mapped)
         if names:
             env["sampling"]["names"] = names
+    env["compose_names"] = _compose_names_info(tp, one)
     env["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if env[k] is None)
     return env
+
+
+# The recording's config asked for the Perfetto SDK's events when it holds a
+# `track_event` source: `runner.compose_names` writes one, and so does a
+# macrobenchmark run with `perfettoSdkTracing.enable=true`.
+_TRACK_EVENT_BLOCK = re.compile(r'name:\s*"track_event"')
+
+
+def _compose_names_info(tp, one) -> dict | None:
+    """Whether composables were named while this trace recorded, read from the trace.
+
+    `asked`: the recording's config held a `track_event` source. `calls`: the
+    composable calls on the main thread in the window, in runtime-tracing's
+    shape. What `compare` goes by is whether any arrived: the names come with
+    the app's Perfetto SDK loaded at its start, which on an SM-A515F cost a
+    cold start 67 ms on the median, and a round without them did not pay it.
+    A config that asked and a trace with none is an app without
+    `runtime-tracing`, or an SDK nobody switched on; the report says so.
+    """
+    try:
+        rows = tp.query("SELECT str_value AS text FROM metadata "
+                        "WHERE name = 'trace_config_pbtxt'")
+        asked = bool(_TRACK_EVENT_BLOCK.search((rows[0]["text"] if rows else None) or ""))
+    except Exception as e:  # a trace_processor without the key
+        print(f"[!] environment: {e}", file=sys.stderr)
+        asked = False
+    calls = one("SELECT COUNT(*) AS n FROM _slice_win WHERE is_main_thread = 1 "
+                "AND name GLOB '* ([A-Za-z]*.kt:[0-9]*)'").get("n") or 0
+    if not asked and not calls:
+        return None
+    return {"asked": asked, "calls": calls}
 
 
 def _names_info(tp, package: str, mapped: bool) -> dict | None:

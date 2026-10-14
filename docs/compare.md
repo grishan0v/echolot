@@ -207,6 +207,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `environment` | the clock the two rounds ran at differs by the floor or more, 10% unless `--floor-pct` says otherwise, either way, or a side carries no clock at all, or a side read its clock or thermal state in only some of its repeats. Two rounds that recorded no platform state get no warning — see below |
 | `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
+| `compose_names` | one round was recorded with composable names and the other not, or only some of its repeats were. The names come with the app's Perfetto SDK loaded at its start, which cost a cold start 67 ms on the device it was measured on |
 
 The one to read first is `environment`, because it is the only one that can
 make the whole table say the opposite of what it looks like. A duration is the

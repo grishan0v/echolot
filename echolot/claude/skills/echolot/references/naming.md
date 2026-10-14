@@ -214,7 +214,8 @@ adds `androidx.compose.runtime:runtime-tracing`. The recording switches the
 app's Perfetto SDK on, which a macrobenchmark does with
 `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=true`
 in `runner.gradle_args`; Macrobenchmark 1.5 recorded none without it.
-`collect` in launch and command modes does not record them. Each call is then
+In launch and command modes `runner.compose_names: true` switches it on for
+the set and off after it. Each call is then
 a slice on the main thread, `fully.qualified.Name (File.kt:line)`, nested
 under `Compose:recompose`. The file and line are the composable's
 declaration, so open the file there.

@@ -336,9 +336,10 @@ def test_the_naming_reference_reads_compose_rows():
     check("the pass's self time is the composables, none of them named",
           "The self time of `Compose:recompose` is the composable functions running" in flat,
           flat[-3000:])
-    check("names need the app and the recording, and collect's own modes record none",
+    check("names need the app and the recording, and collect's modes switch it on themselves",
           "androidx.compose.runtime:runtime-tracing" in flat
           and "androidx.benchmark.perfettoSdkTracing.enable=true" in flat
-          and "`collect` in launch and command modes does not record them" in flat, flat[-3000:])
+          and "In launch and command modes `runner.compose_names: true` switches it on" in flat,
+          flat[-3000:])
     check("and where to see them until a detector ranks them",
           "echolot names <trace> --grep '\\.kt:'" in flat, flat[-3000:])

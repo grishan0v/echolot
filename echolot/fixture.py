@@ -1010,7 +1010,7 @@ ANR_COUNTERS = [
 
 
 def build(frames: bool = True, environment: bool = True,
-          sampling: str | None = None) -> bytes:
+          sampling: str | None = None, names: bool = False) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1030,6 +1030,10 @@ def build(frames: bool = True, environment: bool = True,
     samples that arrived from a build R8 minified, or `None` for a recording
     that never asked. `None` by default, because that is the default
     recording. (The README's sample report comes from echolot/demo.py.)
+
+    `names=True` writes the config `runner.compose_names` records with, a
+    `track_event` source for Compose's category. The composables themselves
+    are in the trace either way: they are slices like any other.
     """
     builder = TraceProtoBuilder()
     process_tree(builder, [(APP_PID, APP_NAME, THREADS),
@@ -1042,6 +1046,11 @@ def build(frames: bool = True, environment: bool = True,
     if sampling:
         _samples(builder, arrived=sampling in ("arrived", "minified"),
                  minified=sampling == "minified")
+    if names:
+        source = builder.add_packet().trace_config.data_sources.add().config
+        source.name = "track_event"
+        source.track_event_config.disabled_categories.append("*")
+        source.track_event_config.enabled_categories.append("rendering")
 
     # Collect ftrace events per CPU.
     by_cpu: dict[int, list] = {}

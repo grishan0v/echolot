@@ -239,6 +239,7 @@ def _check(before: dict, after: dict,
 
     out.extend(_environment_moved(before, after, floor_ratio))
     out.extend(_sampling_moved(before, after))
+    out.extend(_compose_names_moved(before, after))
 
     nb, na = _runs(before), _runs(after)
     if nb != na:
@@ -433,6 +434,40 @@ def _sampling_moved(before: dict, after: dict) -> list[dict[str, str]]:
                 f"reason alone, on code nobody touched. Record both rounds "
                 f"with the same `runner.sampling`.",
     }]
+
+
+def _compose_names_moved(before: dict, after: dict) -> list[dict[str, str]]:
+    """Whether one side was recorded with composable names and the other not.
+
+    The names come with the app's Perfetto SDK loaded at its start, and that
+    is time the app spent: on an SM-A515F a cold start of about 580 ms ran
+    67 ms longer with it on the median. A report from before the field
+    existed carries no `compose_names` and is unknown rather than without, so
+    it gets no sentence.
+    """
+    eb, ea = before.get("environment") or {}, after.get("environment") or {}
+    if "compose_names" not in eb or "compose_names" not in ea:
+        return []
+    was, now = _named(eb["compose_names"]), _named(ea["compose_names"])
+    if was == now:
+        return []
+    return [{
+        "id": "compose_names",
+        "text": f"Composable names were {was} before and {now} after. They come "
+                f"with the app's Perfetto SDK loaded at its start, which takes "
+                f"time from the app, so a row can move for that reason alone. "
+                f"Record both rounds with the same `runner.compose_names`.",
+    }]
+
+
+def _named(c: dict | None) -> str:
+    """One side's composable names in words, for the sentence above."""
+    if not c or not c.get("calls"):
+        return "off"
+    ran, _, total = (c.get("runs") or "").partition("/")
+    if total and ran != total:
+        return f"on in {ran} of {total} repeats"
+    return "on"
 
 
 def _sampled(s: dict | None) -> str:

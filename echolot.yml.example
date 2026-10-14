@@ -115,6 +115,11 @@ runner:
   # Callstack samples, in Hz; true is 100. Off by default because it slows the
   # app, so a sampled round compares only with one sampled at the same rate.
   # sampling: false
+  # A Compose app's composable names, for an app that carries
+  # androidx.compose.runtime:runtime-tracing: collect switches its Perfetto SDK
+  # on for the set and off after it. Off by default because loading the SDK
+  # costs the start, so a round with names compares only with one with names.
+  # compose_names: false
   #
   # mode: command
   # command: >
@@ -123,8 +128,8 @@ runner:
   #
   # mode: gradle
   # The macrobenchmark makes the recording in this mode, so environment,
-  # atrace_categories, buffer_kb, duration_ms, reset_policy and sampling do
-  # not apply.
+  # atrace_categories, buffer_kb, duration_ms, reset_policy, sampling and
+  # compose_names do not apply.
   # gradle_task: ":benchmark:connectedBenchmarkBenchmarkAndroidTest"
   # Where ./gradlew lives, and where the traces are looked for afterwards. A
   # relative path is taken from this file's directory, the way -o is, and
