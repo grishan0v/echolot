@@ -935,9 +935,8 @@ def collect(package: str, out_dir: Path, iterations: int,
     once per iteration where we drive them, and only that it started where
     the macrobenchmark does. See `Progress`.
     """
-    import time
-
     import contextlib
+    import time
 
     from . import composenames, stabilize
 
