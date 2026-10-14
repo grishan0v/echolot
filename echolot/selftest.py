@@ -506,7 +506,7 @@ def _(report):
                if r["location"] == "AppStart")
     assert row["total_ms"] == 1006.0, row
     assert row["self_ms"] < row["total_ms"], f"children not subtracted: {row}"
-    assert row["self_ms"] == 171.0, f"1006 minus 835 ms of children: {row}"
+    assert row["self_ms"] == 136.0, f"1006 minus 870 ms of children: {row}"
 
 
 @check("main_thread_block: self time never exceeds the window")
@@ -688,6 +688,73 @@ def _(report):
     assert block["count"] == 6 and block["self_ms"] == 64.0, block
     outlier = only_row(report, "main_thread_outlier")
     assert outlier["count"] == 1 and outlier["max_ms"] == 44.0, outlier
+
+
+# --- composables ------------------------------------------------------------
+
+@check("composables: the app's own, with the library's time under them")
+def _(report):
+    """With runtime-tracing every composable call is a slice, and each holds
+    almost nothing of its own: on a real cold start none came near a
+    `main_thread_block` row. A row counts the library's calls under it, down
+    to the next composable of the app's own, which is its own row's — so
+    `FeedScreen`'s two `FeedItem`s leave its 18 ms, and the rows add up
+    without counting a moment twice."""
+    got = {r["location"]: r for r in rows(report, "composables")}
+    screen_name = "com.example.app.ui.FeedScreen (FeedScreen.kt:24)"
+    item_name = "com.example.app.ui.FeedItem (FeedItem.kt:31)"
+    assert list(got) == [item_name, screen_name], list(got)
+    screen, item = got[screen_name], got[item_name]
+    assert (screen["count"], screen["total_ms"], screen["self_ms"], screen["max_ms"]) \
+        == (1, 18.0, 14.0, 18.0), screen
+    assert (item["count"], item["total_ms"], item["self_ms"], item["max_ms"]) \
+        == (4, 14.0, 14.0, 5.0), item
+    # What composed them, read off the pass around each call.
+    assert screen["detail"] == "1 in a frame", screen
+    assert item["detail"] == "2 in a frame · 2 during measure", item
+
+
+@check("composables: nothing but the app's own is a row, whatever it holds")
+def _(report):
+    loc = locations(report, "composables")
+    assert not any(name.startswith("androidx.") for name in loc), loc
+    # 9 ms clears the bar, and a third party's composable is still not the
+    # app's: ownership is the project's package, or its checkout.
+    assert "com.vendor.chart.Chart (Chart.kt:12)" not in loc, loc
+    # Nor did any of them reach a detector that ranks by name: their own
+    # time is under every bar there, which is why this one exists.
+    for detector in ("main_thread_block", "repeated_work", "main_thread_outlier"):
+        stray = [name for name in locations(report, detector) if ".kt:" in name]
+        assert not stray, (detector, stray)
+
+
+@check("composables: placed where the name says, and owned by the checkout")
+def _(report):
+    """The name carries the declaration's file and line, so the row goes
+    straight there. And a build whose package is not the code's —
+    `com.example.app.beta`, a benchmark build's suffix — still knows its own
+    composables by the files the checkout holds where their package says."""
+    import copy
+    from . import place
+    from .config import Config
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "feature/feed/src/main/kotlin/com/example/app/ui"
+        src.mkdir(parents=True)
+        for name in ("FeedScreen", "FeedItem"):
+            (src / f"{name}.kt").write_text("package com.example.app.ui\n", encoding="utf-8")
+        rep = copy.deepcopy(report)
+        place.annotate(rep, root)
+        trace = root / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        project = {**FIXTURE_CONFIG["project"], "package": "com.example.app.beta"}
+        cfg = Config({**FIXTURE_CONFIG, "project": project}, root / "echolot.yml")
+        owned = locations(_analyze(trace, cfg), "composables")
+    row = one_row(rep, "composables", "com.example.app.ui.FeedScreen (FeedScreen.kt:24)")
+    assert row["code"] == "FeedScreen.kt:24", row
+    assert row["places"][0]["file"] == \
+        "feature/feed/src/main/kotlin/com/example/app/ui/FeedScreen.kt", row["places"]
+    assert owned == locations(report, "composables"), owned
 
 
 @check("repeated_work: one name entered from two places, at the same price")

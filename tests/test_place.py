@@ -428,3 +428,70 @@ def test_frames_named_after_another_mapping_stay_as_recorded(tmp_path):
     text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
     check("and the header warns, with ids a reader can compare",
           text.startswith("> ⚠️") and "`4393c57b0c71…`" in text and "`c2d66c23dd18…`" in text, text)
+
+
+# --- composables ----------------------------------------------------------
+
+def test_a_composables_name_carries_its_declaration() -> None:
+    check("runtime-tracing's shape, lambdas included",
+          place.parse_composable("com.example.app.ui.Feed.<anonymous> (Feed.kt:42)")
+          == ("com.example.app.ui.Feed.<anonymous>", "Feed.kt", 42))
+    for name in ("Compose:recompose", "void com.example.Store.put(java.lang.String)(Store.java:41)",
+                 "com.example.app.ui.Feed (Feed.java:42)", "Feed (Feed.kt:)"):
+        check(f"not a composable: {name}", place.parse_composable(name) is None)
+
+
+def _feed_checkout(root: Path, package_dir: str = "com/example/app/ui") -> Path:
+    src = root / "feature/feed/src/main/kotlin" / package_dir
+    src.mkdir(parents=True)
+    for name in ("FeedScreen", "FeedItem"):
+        (src / f"{name}.kt").write_text("package x\n", encoding="utf-8")
+    return root
+
+
+def test_the_apps_own_composables_by_package_or_by_checkout(tmp_path: Path) -> None:
+    names = ["com.example.app.ui.FeedScreen (FeedScreen.kt:24)",
+             "com.example.app.ui.FeedItem.<anonymous> (FeedItem.kt:31)",
+             "androidx.compose.material3.Text (Text.kt:153)",
+             "com.vendor.chart.Chart (Chart.kt:12)",
+             "Compose:recompose"]
+    check("by the project's package alone, with no checkout",
+          place.own_composables(names, None, "com.example.app") == names[:2])
+    root = _feed_checkout(tmp_path / "repo")
+    check("by the checkout, when the package is a build's and not the code's",
+          place.own_composables(names, root, "com.example.app.beta") == names[:2])
+    other = _feed_checkout(tmp_path / "other", "com/elsewhere/ui")
+    check("a file of that name where another package lives is not the app's",
+          place.own_composables(names, other, None) == [])
+
+
+def test_a_top_level_composables_package_leaves_out_the_function(tmp_path: Path) -> None:
+    src = tmp_path / "app/src/main/kotlin/com/example/app/ui"
+    src.mkdir(parents=True)
+    (src / "Items.kt").write_text("package com.example.app.ui\n", encoding="utf-8")
+    check("`com.example.app.ui.feedItem` is a function in com/example/app/ui",
+          place.own_composables(["com.example.app.ui.feedItem (Items.kt:9)"], tmp_path, None)
+          == ["com.example.app.ui.feedItem (Items.kt:9)"])
+
+
+def test_no_composables_no_walk(tmp_path: Path, monkeypatch) -> None:
+    """The checkout is walked for a trace that names composables, and only
+    then: a big checkout costs its walk on every analyze otherwise."""
+    def refuse(root):
+        raise AssertionError("walked the checkout for nothing")
+    monkeypatch.setattr(place, "index", refuse)
+    check("nothing to own", place.own_composables(["Compose:recompose", "inflate"],
+                                                    tmp_path, None) == [])
+
+
+def test_annotate_places_a_composable_at_its_declaration(tmp_path: Path) -> None:
+    root = _feed_checkout(tmp_path)
+    report = {"detectors": [{"id": "composables", "rows": [
+        {"location": "com.example.app.ui.FeedScreen (FeedScreen.kt:24)"},
+        {"location": "androidx.compose.material3.Text (Text.kt:153)"}]}]}
+    check("one placed", place.annotate(report, root) == 1)
+    placed, library = report["detectors"][0]["rows"]
+    check("at the line the name gives", placed["code"] == "FeedScreen.kt:24"
+          and placed["places"][0]["file"]
+          == "feature/feed/src/main/kotlin/com/example/app/ui/FeedScreen.kt", placed)
+    check("and the library's is not in this checkout", "code" not in library, library)

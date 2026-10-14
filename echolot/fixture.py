@@ -360,6 +360,45 @@ SLICES = {
             # even work however often it repeats.
             *[("measure", 530 + i * 8, 6, []) for i in range(6)],
 
+            # --- composables ------------------------------------------
+            # What `androidx.compose.runtime:runtime-tracing` writes: every
+            # composable call a slice, `Name (File.kt:line)`, under the
+            # `Compose:recompose` that composed it. Two passes, in gaps the
+            # main thread spends running. In a frame, the app's `FeedScreen`
+            # with two of its `FeedItem`s — one under the library's
+            # `Column` — and a third party's `Chart` of 9 ms; during
+            # measure, the library's `LazyColumn` composing two more.
+            #
+            # `composables` ranks the app's own by their calls less the
+            # app's own nested in them: `FeedScreen` 18 ms end to end, 14 of
+            # them its own, and `FeedItem` 14 over four calls, two in a frame
+            # and two during measure. `Chart` is above the bar and is no row:
+            # not androidx, and not the app's either. No name here clears
+            # another detector's bar — the most self time any holds is
+            # `Chart`'s 9, and `Compose:recompose` has two callers and two
+            # costs.
+            ("Recomposer:recompose", 579, 20, [
+                ("Compose:recompose", 579.5, 19, [
+                    ("com.example.app.ui.FeedScreen (FeedScreen.kt:24)", 580, 18, [
+                        ("androidx.compose.foundation.layout.Column (Column.kt:73)",
+                         580.5, 4, [
+                             ("com.example.app.ui.FeedItem (FeedItem.kt:31)", 581, 2, []),
+                         ]),
+                        ("com.example.app.ui.FeedItem (FeedItem.kt:31)", 585, 2, []),
+                        ("com.vendor.chart.Chart (Chart.kt:12)", 588, 9, []),
+                    ]),
+                ]),
+            ]),
+            ("AndroidOwner:onMeasure", 962, 15, [
+                ("Compose:recompose", 962.5, 14, [
+                    ("androidx.compose.foundation.lazy.LazyColumn (LazyDsl.kt:378)",
+                     963, 13, [
+                         ("com.example.app.ui.FeedItem (FeedItem.kt:31)", 963.5, 5, []),
+                         ("com.example.app.ui.FeedItem (FeedItem.kt:31)", 969, 5, []),
+                     ]),
+                ]),
+            ]),
+
             # Negative control: three occurrences and a spike. A name seen
             # three times has no typical duration for anything to be an
             # outlier from, and min_occurrences is what says so.

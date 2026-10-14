@@ -219,13 +219,14 @@ a slice on the main thread, `fully.qualified.Name (File.kt:line)`, nested
 under `Compose:recompose`. The file and line are the composable's
 declaration, so open the file there.
 
-That moves the time and hides it from the rows. On a cold start with names,
+That moves the time out of the phases' rows. On a cold start with names,
 `Compose:recompose` kept 5 ms of self time out of 144, and its row left
-`main_thread_block`. No composable took its place: summed by name, none had the
-16 ms of self time a `main_thread_block` row needs. The library's `NavHost`
-came nearest with 8, and the app's own had about a millisecond each, their
-time being in the library's composables under them. Until a detector ranks
-them, `echolot names <trace> --grep '\.kt:'` lists them, the
-app's and the library's, with how many calls each and their total time, the
-nested time in it. It folds the line into `#`, as it does every number in a
-name; the name and the file find the declaration.
+`main_thread_block`. No composable took its place there: summed by name,
+none had the 16 ms of self time a `main_thread_block` row needs. The
+library's `NavHost` came nearest with 8, and the app's own had about a
+millisecond each, their time being in the library's composables under them.
+`composables` is where they are: the app's own, by their calls with the
+library's under them counted in, each at the declaration its name carries.
+`echolot names <trace> --grep '\.kt:'` lists every composable, the
+library's too, with how many calls each and their total time; it folds the
+line into `#`, as it does every number in a name.

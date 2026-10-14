@@ -191,6 +191,12 @@ loss is the actionable number and the frame's own length is not. The frame
 duration is in `detail` instead, since that is the number a benchmark's
 percentiles are quoted in.
 
+`composables` bends `self_ms` the same way. A composable's own slice holds
+about a millisecond, the rest being the library's composables under it, so
+its `self_ms` is the calls less the app's own composables nested in them,
+the library's counted in. The rows still add up without counting a moment
+twice, which is what self time is for.
+
 That is allowed and it is not free: anything reading the report generically —
 `compare`, the markdown table — treats the numbers as milliseconds and gets
 milliseconds, but a reader who assumes duration reads them wrong. So the
@@ -473,8 +479,8 @@ writes a config.
   Then the checks that pin what it must find and what it must not, beside the
   others in `selftest.py`.
 - **The counts in the README.** `tests/test_docs.py` reads the number in
-  "runs thirteen SQL detectors" and in the sample report's
-  `Detectors fired: **N of 13**`, and fails while either disagrees with the
+  "runs fourteen SQL detectors" and in the sample report's
+  `Detectors fired: **N of 14**`, and fails while either disagrees with the
   files. The sample report is what `analyze` prints for the demo app,
   `echolot/demo.py`, and `tests/test_doc_samples.py` holds it to that
   character for character, down to the **Silent** line, which names every

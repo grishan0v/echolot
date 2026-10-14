@@ -50,7 +50,7 @@ produce. The keys only a merged report has are named under the block.
                    "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
                    "sampling": null,
                    "missing": [] },
-  "summary": { "detectors_run": 13, "detectors_fired": 4,
+  "summary": { "detectors_run": 14, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
               "local": null, "defaults": false, "set": null },
@@ -450,8 +450,19 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 | `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
 | `repeated_work` | the same named work entered from more than one caller | `detail` names the callers; a `near miss` row means the occurrences are too unlike to be one work |
 | `io_wait` | threads the kernel parked waiting for a block device | `thread` says `main` or `background`, and so does `detail`; there is no code to look at, only I/O to remove or move |
+| `composables` | a Compose app's own composables, by the composition time they hold | `code` is the declaration the name carries; `detail` says what composed the calls: `in a frame`, `during measure`, `elsewhere`. Silent without `runtime-tracing` in the app |
 
 ### What matters about individual ones
+
+**`composables`** bends `self_ms`: it is the calls less the calls of the
+app's own composables nested in them, with the library's composables under
+them counted in. A composable's slice holds a millisecond of its own and the
+rest is `material3` and `foundation` underneath, so plain self time ranks
+nothing; counted this way the rows still add up without counting a moment
+twice. `total_ms` is the calls end to end. A count is not a recomposition
+count: seven calls can be seven icons, and `detail` says what composed them.
+Only the app's own are rows, by the project's package or by a file the
+checkout holds where the package says.
 
 **`repeated_work`** asks a question of shape rather than of size. Every other
 detector gates on a magnitude — a sum, a maximum, a count — and a duplicate is

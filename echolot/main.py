@@ -48,6 +48,7 @@ from . import compare as compare_mod
 from . import hunt as hunt_mod
 from . import codex, layer, recorder, state, table, when
 from . import mapping as mapping_mod
+from . import place as place_mod
 from . import report as report_mod
 from . import stacks as stacks_mod
 from .config import NO_ANCHOR, Config, ConfigError
@@ -756,7 +757,6 @@ def cmd_analyze(args) -> int:
     # is a macrobenchmark's output directory as often as not. The build's
     # mapping names back the lock slices' frames R8 wrote, which
     # trace_processor never sees.
-    from . import place as place_mod
     placed = place_mod.annotate(rep, _project_root(cfg), cfg.mapping)
     if placed:
         recorder.note(placed=placed)
@@ -1178,15 +1178,39 @@ def _setup_context(tp, cfg: Config, upid: int,
         ))
     _claim_names(tp, cfg.detector_overrides if mask_overrides is None
                  else mask_overrides)
+    _own_composables(tp, cfg)
     return bounds
+
+
+def _own_composables(tp, cfg: Config) -> None:
+    """`_compose_own` — the composables in the window that are the project's.
+
+    `composables` ranks the app's own and counts the library's under them,
+    and which is which is a question about the checkout: the trace names
+    `androidx.compose.material3.Text (Text.kt:…)` and `com.example.app.ui.Feed
+    (Feed.kt:42)` alike. So it is answered here, where the config's directory
+    is known, and handed to the SQL as a table (see `place.own_composables`).
+    The checkout is walked only for a trace that names composables at all.
+    """
+    names = [r["name"] for r in tp.query(
+        "SELECT DISTINCT name FROM _slice_win "
+        "WHERE is_main_thread = 1 AND name GLOB '* (*.kt:*)'")]
+    root = Path(cfg.path).resolve().parent if cfg.path else None
+    own = place_mod.own_composables(names, root, cfg.get("project.package"))
+    tp.exec_script("DROP TABLE IF EXISTS _compose_own;")
+    tp.exec_script("CREATE TABLE _compose_own (name TEXT PRIMARY KEY);")
+    if own:
+        rows = ", ".join(f"('{sql_value(n)}')" for n in own)
+        tp.exec_script(f"INSERT INTO _compose_own (name) VALUES {rows};")
 
 
 def _claim_names(tp, overrides: dict) -> None:
     """`_claimed_name` — every slice name a detector's mask already speaks for.
 
-    Three of the thirteen detectors know the names of what they are looking for
+    Four of the fourteen detectors know the names of what they are looking for
     and say so in a `*name_glob*` param: `*GC`, `Lock contention on a monitor
-    lock*`, `binder transaction`. `repeated_work` knows no name in advance —
+    lock*`, `binder transaction`, and a composable's `* (*.kt:*)`.
+    `repeated_work` knows no name in advance —
     it asks a question about shape and so has to look at every name there
     is, which means it also looks at names that belong to somebody else.
 

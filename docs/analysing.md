@@ -446,13 +446,16 @@ names. `collect` in launch and command modes does not record them. Each call
 is then a slice on the main thread, `fully.qualified.Name (File.kt:line)`, at
 the composable's declaration.
 
-That moves the time out of the rows. On a cold start with names,
+That moves the time out of the phases' rows. On a cold start with names,
 `Compose:recompose` kept 5 ms of self time out of 144, and left
 `main_thread_block`; no composable came close to the 16 ms of self time a row
-needs, since a composable's time is mostly in the library's composables under
-it. Until a detector ranks them by the time they hold,
-`echolot names <trace> --grep '\.kt:'` lists them with their calls and total
-time.
+needs there, since a composable's time is mostly in the library's composables
+under it. The `composables` detector ranks the app's own by the time they
+hold, the library's under them counted in, each placed at the declaration
+its name carries. On that start its rows were the navigation host, 29 ms of
+its 42, an icon painter seven calls and 19 ms, six of them during measure, a
+bottom bar and a button. `echolot names <trace> --grep '\.kt:'` lists every
+composable, the library's too.
 
 ## Once you have two of them
 

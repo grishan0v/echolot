@@ -8,7 +8,8 @@ hunt the subagent spent forty-six percent of its window reading the
 application to find `StoreRepository.update`, whose file
 name was in the row all along. `main_thread_block` names a class the same
 way — `com.example.app.ui.AnimatedBanner` is a file
-in the checkout, and the row did not say which.
+in the checkout, and the row did not say which. A composable's row names its
+declaration outright: runtime-tracing writes `Feed.<anonymous> (Feed.kt:42)`.
 
 This module reads those names off a row and puts the file next to them:
 `places` in the json with the symbol, the path and the line, and one short
@@ -71,6 +72,12 @@ _WHERE = re.compile(r"^(?P<file>[\w$]+\.(?:kt|java)):(?P<line>-?\d+)$")
 # `Choreographer#doFrame` are not that, and neither is `inflate`.
 _CLASS = re.compile(r"^(?:[a-z_]\w*\.){2,}(?P<cls>[A-Z]\w*)$")
 
+# A composable call as `androidx.compose.runtime:runtime-tracing` names it:
+# the fully qualified name, then the file and line of its declaration, as in
+# `com.example.app.ui.Feed.<anonymous> (Feed.kt:42)`.
+_COMPOSABLE = re.compile(
+    r"^(?P<symbol>[\w$.<>-]+) \((?P<file>[\w$]+\.kt):(?P<line>\d+)\)$")
+
 
 @dataclass
 class Place:
@@ -103,6 +110,62 @@ def parse_contention(detail: str) -> dict[str, Any] | None:
     return {"owner_thread": m.group("owner"), "owner_tid": int(m.group("tid")),
             "at": m.group("at"), "blocked": m.group("blocked"),
             "waiters": int(m.group("waiters"))}
+
+
+def parse_composable(name: str) -> tuple[str, str, int] | None:
+    """(symbol, file name, line) out of a composable's slice name, or None."""
+    m = _COMPOSABLE.match(name.strip())
+    if not m:
+        return None
+    return m.group("symbol"), m.group("file"), int(m.group("line"))
+
+
+def _composable_package(symbol: str) -> str:
+    """The directory a composable's package spells: its segments up to the
+    first that names a class or a lambda. A top-level function is lowercase
+    all the way, and its last segment is the function."""
+    parts = symbol.split(".")
+    package = []
+    for part in parts:
+        if part[:1].isupper() or part.startswith("<"):
+            break
+        package.append(part)
+    if len(package) == len(parts):
+        package = package[:-1]
+    return "/".join(package)
+
+
+def own_composables(names: list[str], root: Path | None,
+                    package: str | None) -> list[str]:
+    """The composables among `names` that are the project's own.
+
+    A name under the project's package is, and so is one whose file the
+    checkout holds in the directory its package spells. Both, since neither
+    is enough alone: a benchmark build's package carries a suffix the code
+    does not (`com.example.app.beta`), and a config kept in memory has no
+    checkout. A file of the same name elsewhere is somebody else's, which
+    is why the package has to agree where `_choose` would settle for one
+    candidate.
+    """
+    idx: dict[str, list[Path]] | None = None
+    own = []
+    for name in names:
+        found = parse_composable(name)
+        if not found:
+            continue
+        symbol, file, _ = found
+        if package and symbol.startswith(package + "."):
+            own.append(name)
+            continue
+        if root is None or not root.is_dir():
+            continue
+        if idx is None:
+            idx = index(root)
+        wanted = _composable_package(symbol)
+        if wanted and any(("/" + p.parent.as_posix()).endswith("/" + wanted)
+                          for p in idx.get(file) or []):
+            own.append(name)
+    return own
 
 
 def parse_frame(frame: str) -> tuple[str, str | None, int | None] | None:
@@ -228,6 +291,13 @@ def places_of(row: dict[str, Any], idx: dict[str, list[Path]], root: Path,
         here = locate(m.group(0), None, None, idx, root, "location")
         if here.file:
             out.append(here)
+    # A composable's name carries its declaration's file and line, so the
+    # row goes straight there.
+    composable = parse_composable(str(row.get("location") or ""))
+    if composable:
+        here = locate(*composable, idx, root, "location")
+        if here.file:
+            out.append(here)
     sampled = _sampled(row)
     if sampled:
         here = locate(sampled, None, None, idx, root, "sampled")
@@ -334,6 +404,7 @@ def annotate(report: dict[str, Any], root: Path, mapping: Path | None = None) ->
         for row in det.get("rows") or []:
             needs = _CONTENTION.match(str(row.get("detail") or "")) \
                 or _CLASS.match(str(row.get("location") or "")) \
+                or _COMPOSABLE.match(str(row.get("location") or "")) \
                 or _sampled(row)
             if not needs:
                 continue

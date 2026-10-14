@@ -166,7 +166,7 @@ agent.
 
 ## How it works
 
-echolot runs thirteen SQL detectors over a Perfetto trace and returns about
+echolot runs fourteen SQL detectors over a Perfetto trace and returns about
 twenty rows: where the time went, how much of it, and the evidence behind each
 claim. Same trace in, same report out: the `trace_processor` version is pinned.
 
@@ -231,7 +231,7 @@ Covered by the findings below: **42%** of the main thread's window, each moment 
 Startup: cold, **1174 ms** from the launch to the first frame: 42% sleeping · 17% `choreographer_do_frame` · 17% `inflate` · 6% blocked in the kernel · 5% `monitor_contention` · 3% `launch_delay` · 2% `bind_application` · 2% `activity_start`
 That is the platform's measure rather than the window: the startup began 38 ms before the window opened, and ended with it.
 Device: clock **1478 MHz** (from 1325 to 1574 across repeats), peak 54 °C, 1514 MB free at the low point
-Detectors fired: **5 of 13**
+Detectors fired: **5 of 14**
 Config: `/home/you/my-app/echolot.yml` (sha 3d78738defec) · thresholds: built-in defaults
 
 ## Markers
@@ -290,7 +290,7 @@ _names a thread that burns CPU with no slice around it. The agent does not guess
 
 <sub>detector `uninstrumented_cpu`, params: {'min_running_ms': 50, 'max_covered_pct': 50}</sub>
 
-**Silent:** anr, anr_risk, app_init, binder_txn, gc_pressure, io_wait, repeated_work, runnable_starvation
+**Silent:** anr, anr_risk, app_init, binder_txn, composables, gc_pressure, io_wait, repeated_work, runnable_starvation
 
 <sub>trace_processor v56.1</sub>
 ```
@@ -352,6 +352,7 @@ throttled between the rounds, is named above the table. See
 | `main_thread_outlier` | one occurrence far longer than that work usually takes |
 | `repeated_work` | the same work reached from more than one caller, costing about the same both times |
 | `io_wait` | **threads the kernel parked waiting for a block device** |
+| `composables` | a Compose app's own composables by the composition time they hold, with `runtime-tracing` in the app |
 
 `uninstrumented_cpu`, `io_wait` and `frame_jank` find a problem where nobody
 wrote a `trace{}` call, as [Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md)

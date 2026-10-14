@@ -172,7 +172,7 @@ Delete the line when the top's number is one you set for every scenario.
 A report says whose numbers it ran on: `params_source` is `scenario` for a
 detector whose thresholds came from the scenario's own section, and the
 `Config:` line in `report.md` reads ``thresholds: scenario `cold_start`'s own
-for 5 of 13 detectors``. `echolot status` marks the scenarios with thresholds
+for 5 of 14 detectors``. `echolot status` marks the scenarios with thresholds
 of their own. A config with one `scenario:` keeps its thresholds in the
 top-level `detectors:`.
 
