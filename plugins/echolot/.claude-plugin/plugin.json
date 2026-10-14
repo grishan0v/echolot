@@ -9,5 +9,6 @@
   "homepage": "https://github.com/grishan0v/echolot",
   "repository": "https://github.com/grishan0v/echolot",
   "license": "Apache-2.0",
-  "keywords": ["android", "performance", "perfetto", "tracing", "profiling"]
+  "keywords": ["android", "performance", "perfetto", "tracing", "profiling",
+               "android-performance", "jank", "anr", "app-startup", "jetpack-compose"]
 }

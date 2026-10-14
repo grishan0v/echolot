@@ -11,7 +11,7 @@
 # never over what `compare` found: whether the build got slower is the
 # benchmark's answer. The glue lives in action/ci.py; docs/compare.md has the
 # inputs, the permissions and the first run.
-name: echolot
+name: echolot Android trace report
 description: Where the time went in a benchmark's Perfetto traces, and what moved since the last run on the base branch
 author: grishan0v
 branding:

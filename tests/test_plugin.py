@@ -50,11 +50,24 @@ def _skill(name: str) -> tuple[dict, str]:
     return yaml.safe_load(head), body
 
 
-def test_the_plugin_is_the_four_skills_and_a_manifest():
+def test_the_plugin_is_the_four_skills_a_manifest_and_a_readme():
     found = sorted(p.parent.name for p in (PLUGIN / "skills").glob("*/SKILL.md"))
     check("the plugin carries the four entry points", found == sorted(SKILLS), found)
-    extra = [p.name for p in PLUGIN.iterdir() if p.name not in (".claude-plugin", "skills")]
+    extra = [p.name for p in PLUGIN.iterdir()
+             if p.name not in (".claude-plugin", "skills", "README.md")]
     check("no commands/ or agents/ beside the skills: Codex drops them", not extra, extra)
+
+
+def test_the_readme_says_what_the_plugin_runs_writes_fetches_and_sends():
+    """Claude's plugin directory blocks a plugin folder without a README of 40
+    words or more, and its security scan asks that the README say everything
+    the plugin runs, sends or fetches (#376)."""
+    text = (PLUGIN / "README.md").read_text(encoding="utf-8")
+    prose = re.sub(r"```.*?```", "", text, flags=re.S)
+    check("40 words or more outside code blocks", len(prose.split()) >= 40,
+          len(prose.split()))
+    for word in ("**Runs**", "**Writes**", "**Fetches**", "**Sends**", "pipx install echolot"):
+        check(f"the README says {word}", word in text, word)
 
 
 def test_the_manifest_names_the_plugin_and_the_package_version():
