@@ -414,6 +414,46 @@ Walking down to the code the same way for both wastes a round.
 `main_thread_outlier` puts the median and how many occurrences it came from in
 `detail`, which is also the number to hold a benchmark's percentiles against.
 
+## Rows of Compose
+
+A Compose app writes its phases into the trace with nothing set up, and they
+become rows like any slice. On a large Compose app's cold start on an
+SM-A515F they were 5 of the 20 `main_thread_block` rows, `Compose:recompose
+×55, 224 ms` among them, and 6 of the 12 `main_thread_outlier` rows, one
+`Recomposer:recompose` of 314 ms among those. Where each one sits in the trace
+says what it is:
+
+| slice | sits under | what it is |
+|---|---|---|
+| `Recomposer:recompose` | `animation`, the frame's first stage | the frame's recomposition, every composition whose state changed |
+| `Compose:recompose` | `Recomposer:recompose`, `AndroidOwner:onMeasure`, or nothing | one composition recomposed: in a frame; during measure, where a lazy list or another subcomposing layout composes its items; or the first composition, from `setContent` |
+| `Compose:applyChanges` | the same three | that composition's result applied to the UI tree |
+| `AndroidOwner:onMeasure`, `onLayout` | `measure`, `layout` | a `ComposeView` measuring and placing its layout nodes |
+| `AndroidOwner:draw` | `Record View#draw()` | drawing them |
+| `TextStringSimpleNode::measure` | `AndroidOwner:onMeasure` | a text measured, its layout built under it as `TextLayout:initLayout` |
+
+The self time of `Compose:recompose` is the composable functions running: none
+of them has a slice of its own, so their time is the pass's, 195 of the
+224 ms above. The row says that composition is expensive. No slice in the
+trace says which composable.
+
+A composable gets a name in the trace when the app adds
+`androidx.compose.runtime:runtime-tracing` and the recording switches the
+app's Perfetto SDK on. A macrobenchmark does it with
+`-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=true`
+in `runner.gradle_args`; without the flag, Macrobenchmark 1.5 recorded no
+names. `collect` in launch and command modes does not record them. Each call
+is then a slice on the main thread, `fully.qualified.Name (File.kt:line)`, at
+the composable's declaration.
+
+That moves the time out of the rows. On a cold start with names,
+`Compose:recompose` kept 5 ms of self time out of 144, and left
+`main_thread_block`; no composable came close to the 16 ms of self time a row
+needs, since a composable's time is mostly in the library's composables under
+it. Until a detector ranks them by the time they hold,
+`echolot names <trace> --grep '\.kt:'` lists them with their calls and total
+time.
+
 ## Once you have two of them
 
 Everything here reads one set of traces. The question that brought you —

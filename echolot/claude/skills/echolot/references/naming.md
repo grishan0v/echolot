@@ -186,13 +186,46 @@ What to make of what it reports:
 
 ## Compose
 
-```
-Compose:recompose
-Recomposer:recompose
-AndroidOwner:onMeasure / onTouch / draw
-TextLayout:initLayout
-getAllUncoveredSemanticsNodesToIntObjectMap   ← semantics tree walk
-```
+A Compose app writes its phases into the trace with nothing set up, and they
+reach a report like any slice: on a large Compose app's cold start,
+`Compose:recompose ×55, 224 ms` in `main_thread_block`, and one
+`Recomposer:recompose` of 314 ms in `main_thread_outlier`. Where each one sits
+says what it is; the parents below are read off real cold starts.
 
-The last one can be expensive and is a leaf: its self time equals its total,
-meaning the time is spent right there.
+| slice | sits under | what it is |
+|---|---|---|
+| `Recomposer:recompose` | `animation`, the frame's first stage | the frame's recomposition, every composition whose state changed |
+| `Compose:recompose` | `Recomposer:recompose`, `AndroidOwner:onMeasure`, or nothing | one composition recomposed: in a frame; during measure, where a lazy list or another subcomposing layout composes its items; or the first composition, from `setContent` |
+| `Compose:applyChanges` | the same three | that composition's result applied to the UI tree |
+| `Compose:onRemembered` | the same three | `remember` observers told they entered the composition |
+| `AndroidOwner:onMeasure` | `measure` | a `ComposeView` measuring its layout nodes |
+| `AndroidOwner:onLayout` | `layout` | placing them |
+| `AndroidOwner:draw` | `Record View#draw()` | drawing them; `AndroidOwner:measureAndLayout` there is a measure left for the draw |
+| `TextStringSimpleNode::measure` | `AndroidOwner:onMeasure` | a text measured; `TextLayout:initLayout` under it builds its layout |
+| `getAllUncoveredSemanticsNodesToIntObjectMap` | | a walk of the semantics tree. It can be expensive, and it is a leaf: its self time is its total, spent right there |
+
+**The self time of `Compose:recompose` is the composable functions
+running.** None of them has a slice of its own, so their time is the pass's:
+195 of the 224 ms above. The row says composition is expensive, and nothing
+in the trace says which composable.
+
+**Composables get names from the app and from the recording, both.** The app
+adds `androidx.compose.runtime:runtime-tracing`. The recording switches the
+app's Perfetto SDK on, which a macrobenchmark does with
+`-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=true`
+in `runner.gradle_args`; Macrobenchmark 1.5 recorded none without it.
+`collect` in launch and command modes does not record them. Each call is then
+a slice on the main thread, `fully.qualified.Name (File.kt:line)`, nested
+under `Compose:recompose`. The file and line are the composable's
+declaration, so open the file there.
+
+That moves the time and hides it from the rows. On a cold start with names,
+`Compose:recompose` kept 5 ms of self time out of 144, and its row left
+`main_thread_block`. No composable took its place: summed by name, none had the
+16 ms of self time a `main_thread_block` row needs. The library's `NavHost`
+came nearest with 8, and the app's own had about a millisecond each, their
+time being in the library's composables under them. Until a detector ranks
+them, `echolot names <trace> --grep '\.kt:'` lists them, the
+app's and the library's, with how many calls each and their total time, the
+nested time in it. It folds the line into `#`, as it does every number in a
+name; the name and the file find the declaration.

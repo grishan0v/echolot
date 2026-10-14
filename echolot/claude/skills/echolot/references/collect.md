@@ -145,6 +145,13 @@ refuses to start:
 The task name is often ambiguous (the baselineprofile plugin adds flavours) —
 `./gradlew :benchmark:tasks | grep -i connected` lists the options.
 
+A Compose app that ships `androidx.compose.runtime:runtime-tracing` names its
+composables in the trace only when the run switches its Perfetto SDK on:
+`-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.perfettoSdkTracing.enable=true`
+in `runner.gradle_args`. Without it Macrobenchmark 1.5 recorded none, and
+`collect` in the other two modes records none either. What the names do to a
+report is under Compose in the naming reference.
+
 Traces are written per iteration, but `collect` harvests only after the task
 succeeds: a run that failed halfway gathers nothing, and `.echolot/traces`
 keeps the previous set. What the half-run wrote stays in the module's output

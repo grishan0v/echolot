@@ -321,3 +321,24 @@ def test_setup_adds_a_scenario_and_keeps_the_one_there():
           flat[-2000:])
     check("the plugin's setup points at it",
           "how to add a scenario" in _flat(PLUGIN / "echolot-setup" / "SKILL.md"))
+
+
+def test_the_naming_reference_reads_compose_rows():
+    """Compose's phases reach a report with nothing set up. The agent reading
+    `Compose:recompose ×55, 224 ms` is told what the pass is, that its self
+    time is the composables running with none of them named, how names get
+    into a trace, and what they do to the rows (#364)."""
+    naming = ROOT / "echolot" / "claude" / "skills" / "echolot" / "references" / "naming.md"
+    flat = _flat(naming)
+    check("each phase by where it sits",
+          "| `Compose:recompose` | `Recomposer:recompose`, `AndroidOwner:onMeasure`, or nothing |"
+          in flat and "| `Recomposer:recompose` | `animation`" in flat, flat[-3000:])
+    check("the pass's self time is the composables, none of them named",
+          "The self time of `Compose:recompose` is the composable functions running" in flat,
+          flat[-3000:])
+    check("names need the app and the recording, and collect's own modes record none",
+          "androidx.compose.runtime:runtime-tracing" in flat
+          and "androidx.benchmark.perfettoSdkTracing.enable=true" in flat
+          and "`collect` in launch and command modes does not record them" in flat, flat[-3000:])
+    check("and where to see them until a detector ranks them",
+          "echolot names <trace> --grep '\\.kt:'" in flat, flat[-3000:])
