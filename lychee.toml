@@ -30,18 +30,12 @@ include_fragments = "anchor-only"
 # absolute URL, and an anchor no heading answers any more, are the failures
 # left for this checker to catch.
 exclude = [
-  # shields.io renders the README's badges (build status is served straight
-  # off github.com and is excluded separately below). Each SVG is generated
-  # per request from live data — PyPI's current version, this repo's licence
-  # — and GitHub Actions runners share IP ranges shields.io rate-limits under
-  # load. A 429 here is about shared traffic, not a broken link.
+  # shields.io renders the README's badges, the build status among them.
+  # Each SVG is generated per request from live data — the latest run on
+  # `main`, PyPI's current version — and GitHub Actions runners share IP
+  # ranges shields.io rate-limits under load. A 429 here is about shared
+  # traffic, not a broken link.
   '^https://img\.shields\.io/',
-
-  # The workflow-status badge: `badge.svg?branch=main` is regenerated
-  # from whatever the latest run on that branch happens to be, not a fixed
-  # asset. There is no "broken" for this checker to find here, only today's
-  # colour.
-  '^https://github\.com/grishan0v/echolot/actions/workflows/[^/]+/badge\.svg',
 
   # PyPI's account pages — the project's publishing settings and the API
   # token form, both linked from docs/publishing.md. They need a logged-in

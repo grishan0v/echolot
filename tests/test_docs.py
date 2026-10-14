@@ -78,8 +78,8 @@ CHECK_TALLIES = [
 # Only the second number counts. The first is how many fired on the run that
 # produced the sample, which is a fact about that run and not about the tool.
 #
-# The README's pictures state the count too. They read it out of this same
-# tally when docs/assets/render.py draws them, and test_readme_pictures.py
+# The README's table of detectors states no count: it lists every detector,
+# drawn by docs/assets/render.py from the files, and test_readme_pictures.py
 # fails when a committed picture differs from what the script draws now.
 DETECTOR_TALLIES = [
     ("README.md", r"runs " + NUMBER + r" SQL detectors"),
@@ -145,12 +145,9 @@ def test_the_fixture_s_findings_are_the_detectors_that_fire_on_it():
 
 # --- the sample output, which is a claim like any other ---------------------
 
-# The comparison table is printed in two documents, and it is the one sample
-# in the set that a reader is invited to match against their own output
-# column by column.
-# The README shows the same rows as a picture, drawn from the table in
-# docs/compare.md by docs/assets/render.py; test_readme_pictures.py holds the
-# picture to that table, and this holds the table to what compare prints.
+# The comparison table is the one sample in the set that a reader is invited
+# to match against their own output column by column. This holds it to what
+# compare prints.
 COMPARE_SAMPLES = ["docs/compare.md"]
 
 

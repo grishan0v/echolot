@@ -235,14 +235,15 @@ def test_the_main_thread_leaves_markers_to_the_loop():
     check("the brief carries it instead", "`Instrumentation: none`" in flat, flat)
 
 
-def test_the_readme_hands_the_loop_to_a_subagent_where_the_host_can():
-    flat = _flat(ROOT / "README.md")
+def test_the_agent_layer_hands_the_loop_to_a_subagent_where_the_host_can():
+    """The README said all three until it was cut to a first visit; the
+    document it points to for agents without the plugin says them now."""
+    flat = _flat(ROOT / "docs" / "agent-layer.md")
     check("a plain init finds only agents the project has",
-          "points only at agents whose files the project already has" in flat, flat)
-    check("Codex without the plugin is set up by name", "echolot init --for agents,codex" in flat,
-          flat)
+          "writes a few lines into whatever the project shows evidence of" in flat, flat)
+    check("Codex without the plugin is set up by name", "`--for …,codex` adds it" in flat, flat)
     check("the main context only where no subagent can start",
-          "where it cannot, the loop runs in your main context" in flat, flat)
+          "A client without one runs the loop in the main context" in flat, flat)
 
 
 def test_every_text_lists_what_stands_on_thread_state():

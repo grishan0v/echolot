@@ -478,17 +478,18 @@ writes a config.
   the fixture is the wrong shape to hold one, the way it names `anr_risk`.
   Then the checks that pin what it must find and what it must not, beside the
   others in `selftest.py`.
-- **The counts in the README.** `tests/test_docs.py` reads the number in
-  "runs fourteen SQL detectors" and in the sample report's
-  `Detectors fired: **N of 14**`, and fails while either disagrees with the
-  files. The sample report is what `analyze` prints for the demo app,
-  `echolot/demo.py`, and `tests/test_doc_samples.py` holds it to that
-  character for character, down to the **Silent** line, which names every
-  detector that did not fire there — a new detector included. The README's
-  pictures state the count too, read out of that tally. Both tests fail
-  until `python docs/assets/render.py` writes the sample and draws the
-  pictures again. The detector tables in the
-  README and in `references/report.md` are lists kept by hand.
+- **The README.** `tests/test_docs.py` reads the number in "runs fourteen
+  SQL detectors" and in the sample report's `Detectors fired: **N of 14**`,
+  and fails while either disagrees with the files. The sample report is what
+  `analyze` prints for the demo app, `echolot/demo.py`, and
+  `tests/test_doc_samples.py` holds it to that character for character, down
+  to the **Silent** line, which names every detector that did not fire there
+  — a new detector included. The README's table of detectors is a picture
+  drawn from each detector's `@title`, in the order `DETECTOR_ORDER` in
+  `docs/assets/render.py` gives, and the script stops until the new one has
+  a place there. Both tests fail until `python docs/assets/render.py` writes
+  the sample and draws the table again. The table in `references/report.md`
+  is a list kept by hand.
 - **The time its rows stand for.** A shipped detector needs an
   `-- @intervals` query, and a first query that ends in `LIMIT n`:
   `test_every_shipped_detector_has_one` in `tests/test_in_rows.py` fails

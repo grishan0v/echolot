@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """The README's pictures, held to what draws them.
 
-A number inside a picture is a claim about the tool exactly like a number in a
-sentence, and it goes stale the same way: nobody re-reads a picture when the
-sentence it was drawn from changes. docs/assets/render.py reads its numbers out
-of the README and the recorded runs; these checks draw every picture again and
-compare, so the committed files cannot drift from their sources unnoticed.
+The README's tables are pictures drawn by docs/assets/render.py: the
+detectors' table from each detector's `@title`, the questions from the
+script's own list. These checks draw every picture again and compare, so a
+committed file cannot drift from its source unnoticed, and they hold the
+README to the way it shows them: a light picture PyPI can show, a dark one
+and a narrow one for GitHub, and the words of each table in its alt text.
 """
 from __future__ import annotations
 
@@ -42,9 +43,22 @@ def test_the_committed_pictures_are_what_the_script_draws():
 
 
 def test_nothing_in_the_folder_is_left_over_from_an_older_script():
-    drawn = set(_render().pictures())
+    render = _render()
     on_disk = {p.name for p in ASSETS.glob("*.svg")}
-    assert on_disk <= drawn, f"no longer drawn by render.py: {sorted(on_disk - drawn)}"
+    kept = set(render.pictures()) | set(render.RETIRED)
+    assert on_disk <= kept, f"no longer drawn by render.py: {sorted(on_disk - kept)}"
+
+
+def test_the_pictures_released_readmes_show_stay_in_the_tree():
+    """The releases already on PyPI show their README's pictures from `main`.
+    A picture the README stops showing stays, or those pages show empty
+    boxes for as long as the releases are up."""
+    render = _render()
+    gone = sorted(name for name in render.RETIRED if not (ASSETS / name).is_file())
+    assert not gone, f"pictures released READMEs show are gone from docs/assets: {gone}"
+    shown = set(re.findall(re.escape(RAW) + r"docs/assets/([^\"\s)]+)", _readme()))
+    assert not shown & set(render.RETIRED), (
+        f"the README shows retired pictures: {sorted(shown & set(render.RETIRED))}")
 
 
 def test_every_picture_the_readme_names_is_in_the_tree():
@@ -55,6 +69,16 @@ def test_every_picture_the_readme_names_is_in_the_tree():
     assert named, "the README names none of this repository's own pictures"
     missing = sorted(p for p in named if not (ROOT / p).is_file())
     assert not missing, f"the README names files that are not in the tree: {missing}"
+
+
+def test_every_table_is_shown_in_its_three_versions():
+    """Light as the <img>, which is what PyPI keeps; dark and narrow as
+    <source> for GitHub. A file drawn and never shown is a table the README
+    lost."""
+    readme = _readme()
+    for name in _render().tables():
+        for version in ("narrow", "dark", "light"):
+            assert f"{RAW}docs/assets/{name}-{version}.svg" in readme, f"{name}-{version}.svg"
 
 
 def test_a_themed_picture_falls_back_to_its_light_version():
@@ -86,58 +110,65 @@ def test_a_narrow_picture_comes_before_the_theme():
                 f"a narrow <source> after a theme one:\n{block.strip()}")
 
 
-def test_the_numbers_come_from_the_readme():
-    """The script reads the README rather than keeping copies of its figures,
-    so a figure changed there changes the picture. Swap one and look."""
+def test_each_table_says_its_words_in_its_alt_text():
+    """A screen reader, a search and a page with its images off get the
+    table in words. render.py writes them; this fails when the README's
+    copy is not what it would write."""
     render = _render()
-    moved = _readme().replace("An 81 MB trace with 475k slices",
-                              "An 93 MB trace with 475k slices")
-    assert moved != _readme(), "the sentence this check edits has moved"
-    hero = render.pictures(moved)["hero-light.svg"]
-    assert "93 MB" in hero and "81 MB" not in hero
+    readme = _readme()
+    assert render.with_alts(readme) == readme, (
+        "the tables' alt text is out of date — run `python docs/assets/render.py`")
+    for words in ("/echolot why is cold start slow",
+                  "main_thread_block: Where the main thread spent its time."):
+        assert words in readme, words
 
 
-def test_the_session_counts_the_traces_the_readme_records():
-    """The session picture and the loop picture both say how many times a round
-    records the scenario. Both read it from the README's `collect -n` (#249)."""
+def test_the_detectors_table_is_every_detector_by_its_title():
+    """The table's words are the detectors' own: the title its section has in
+    the report, for every file in echolot/sql/detectors/."""
+    from echolot.main import DETECTOR_DIR
+    from echolot.tp import load_detectors
+
+    drawn = _render().pictures()["detectors-light.svg"]
+    for detector in load_detectors(DETECTOR_DIR):
+        assert f">{detector.id}<" in drawn, detector.id
+        assert detector.title.replace("'", "&#x27;") in drawn, detector.title
+
+
+def test_a_detector_the_table_does_not_place_stops_the_script(monkeypatch):
+    """A new detector has to be given a place in the table's order. Placed at
+    the end by default, it would land after the blind spots, wherever it
+    belongs."""
     render = _render()
-    moved = _readme().replace("echolot collect -c echolot.yml -n 5",
-                              "echolot collect -c echolot.yml -n 7")
-    assert moved != _readme(), "the command this check edits has moved"
-    drawn = render.pictures(moved)
-    assert "hunt #1 opened · 7 traces recorded" in drawn["session.svg"]
-    assert "records the scenario 7 times" in drawn["loop-light.svg"]
+    monkeypatch.setattr(render, "DETECTOR_ORDER", render.DETECTOR_ORDER[1:])
+    with pytest.raises(SystemExit, match="not placed: \\['main_thread_block'\\]"):
+        render.pictures()
 
 
-def test_a_gone_row_is_drawn_the_way_a_new_one_is(tmp_path, monkeypatch):
-    """`compare` prints two rows without a range, **new** and **gone**. The
-    sample in docs/compare.md has no gone row yet, and adding one crashed the
-    script (#249)."""
+def test_the_narrow_tables_follow_the_system_theme():
+    """GitHub picks a narrow picture by the width of the screen alone, so a
+    narrow table is one file for both themes, and repaints itself when the
+    system asks for dark."""
     render = _render()
-    sample = render.COMPARE_DOC.read_text(encoding="utf-8")
-    last = "| 12 → 31 | no, -13.4 … +162.6 · ~7 runs a side |\n"
-    assert last in sample, "the sample row this check adds after has moved"
-    gone = ("| Old.load | com.example.app | main_thread_block | 30.0 ±2 | — | **gone** "
-            "| 3 → — | — |\n")
-    doc = tmp_path / "compare.md"
-    doc.write_text(sample.replace(last, last + gone, 1), encoding="utf-8")
-    monkeypatch.setattr(render, "COMPARE_DOC", doc)
-    drawn = render.compare(render.THEMES["light"], render.readme_facts())
-    for words in ("Old.load", ">gone<", "3 → —", "gone, no range"):
-        assert words in drawn, words
+    for name in render.tables():
+        drawn = render.pictures()[f"{name}-narrow.svg"]
+        assert "@media (prefers-color-scheme:dark)" in drawn, name
+        assert f'[fill="{render.THEMES["light"]["ink"]}"]' in drawn, name
 
 
-def test_the_preview_page_opens_the_way_the_readme_does(tmp_path):
-    """`--preview` rebuilds the top of the README around the pictures; since
-    #216 the README offers the plugin first and `echolot init` without it."""
-    page = _render().preview_page("light", tmp_path)
-    bullet = re.search(r"^- \*\*Works with your agent\.\*\* (.+?)\n\n", _readme(),
-                       re.S | re.M)
-    assert bullet, "the README's agent bullet has moved"
-    words = re.sub(r"`([^`]+)`", r"<code>\1</code>", " ".join(bullet.group(1).split()))
-    assert words in page, words
-    assert "claude plugin install echolot@echolot" in page
-    assert "echolot init" not in page
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("phone", [False, True])
+def test_the_preview_is_the_readme(theme, phone):
+    """`--preview` renders the README itself, so it cannot drift from it, and
+    chooses the <source> a reader on that screen and theme would get."""
+    page = _render().preview_page(theme, phone)
+    assert "Turns a huge Android trace into 20 rows of facts" in page
+    assert RAW not in page, "a picture still read from GitHub"
+    assert 'src="assets/ask-light.svg"' in page
+    narrow = re.search(r'<source media="([^"]+)" srcset="assets/ask-narrow\.svg"', page)
+    dark = re.search(r'<source media="([^"]+)" srcset="assets/ask-dark\.svg"', page)
+    assert narrow.group(1) == ("all" if phone else "not all")
+    assert dark.group(1) == ("all" if theme == "dark" else "not all")
 
 
 @pytest.mark.parametrize("argv", [["--preview"], ["--preveiw", "out"],

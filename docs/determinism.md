@@ -184,11 +184,11 @@ slice says the lock is taken and waited for, so the lock's row gets its
 The README's sample report is what `analyze` prints for it, and
 `tests/test_doc_samples.py` holds the two together character for character.
 A change to a detector or to the renderer that moves the sample fails that
-test, and `python docs/assets/render.py` writes the sample again, with the
-pictures that quote it. `tests/test_demo.py` checks the story the sample
-tells: the five findings, the outlier in two repeats of five, and that
-`compare` between the two variants moves the lock's two rows and nothing
-else. `doctor` runs the fixture only.
+test, and `python docs/assets/render.py` writes the sample again.
+`tests/test_demo.py` checks the story the sample tells: the five findings,
+the outlier in two repeats of five, and that `compare` between the two
+variants moves the lock's two rows and nothing else. `doctor` runs the
+fixture only.
 
 ## What the detectors were checked against
 

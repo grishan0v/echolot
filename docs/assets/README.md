@@ -2,72 +2,78 @@
 
 [← Docs index](../README.md) · [README](../../README.md)
 
-Every picture in the README is drawn by [render.py](render.py) and committed
-next to it. Change the script or the README, then draw them again:
+The README shows two kinds of picture: the logo, which a designer drew, and
+its tables, which [render.py](render.py) draws and commits next to it. Change
+the script, then draw them again:
 
 ```bash
-python docs/assets/render.py                     # writes the sample report and the .svg files here
-python docs/assets/render.py --preview /tmp/pv   # plus four README-like pages: light and dark, desktop and phone
+python docs/assets/render.py                     # the sample report, the tables' alt text, the .svg files
+python docs/assets/render.py --preview /tmp/pv   # plus the README as four pages: light and dark, desktop and phone
 ```
 
 The script first writes the README's sample report: what `analyze` prints
-for the demo app, `echolot/demo.py`. The pictures that quote the sample are
-then drawn from the new text. `tests/test_doc_samples.py` fails when the
-README's sample differs from the demo's report, and
+for the demo app, `echolot/demo.py`. `tests/test_doc_samples.py` fails when
+the README's sample differs from the demo's report, and
 `tests/test_readme_pictures.py` draws everything once more and fails when a
 committed file differs from what the script draws now.
 
-## Where the numbers come from
+## Why the tables are pictures
 
-A number in a picture is a claim like a number in a sentence, so it comes from
-the same place:
+GitHub draws a Markdown table with a border round every cell and a stripe on
+every other row, and its stylesheet is not the README's to change. A picture
+can take the logo's colours and leave room between the rows.
 
-- the size of a trace and its report, the sample's window, tally and lock wait,
-  and the number of repeats in the `collect` example are read out of the
-  README's own text; a README edit that moves one fails the test until the
-  pictures are drawn again;
-- the number of rounds a hunt may take is read out of `perf-hunter.md`, the
-  instructions the agent follows;
-- the rows of the comparison are read out of the sample table in
-  `docs/compare.md`, which `tests/test_docs.py` holds to what `compare` prints;
-- the cost of a hunt is worked out from the recorded runs listed in the
-  script, one number per run. The medians, the ratio and the count of models
-  are computed from those runs and never typed.
+What a picture takes away, the README gives back. The words of each table go
+into its alt text, which the script writes, for a screen reader, a search and
+a page with its images off. Whatever a reader has to copy stays text: the
+install commands are code blocks.
+
+## Where the words come from
+
+- the table of detectors: every file in `echolot/sql/detectors/`, by its
+  `@title`, the heading its section has in the report. The order is
+  `DETECTOR_ORDER` in the script, and a detector it does not place stops the
+  script;
+- the table of what to type: `ASK` in the script.
 
 ## The rules
 
-- **Two themes.** A themed picture comes as `<name>-light.svg` and
-  `<name>-dark.svg`, and the README shows them through `<picture>` with the
-  light one as the `<img>`. PyPI removes the `<source>` and always shows that
-  `<img>`, on white. The terminal replay, `session.svg`, keeps its own colours
-  and needs one file.
-- **A phone gets its own hero.** Words inside an SVG shrink with it: the
-  880-wide hero on a 375-pixel screen had words 5 pixels high.
-  `hero-narrow.svg` stacks the same panels at 360 wide, and the hero's
-  `<picture>` offers it first, for screens up to 767 pixels. That `<source>`
-  asks for the width alone: GitHub rewrites the theme half of a condition that
-  names both. So the narrow file is one file, and CSS inside it follows the
-  reader's system theme.
-- **The first screen owns no margins.** The hero and the session are cropped
-  to what they draw, so their left edge is the text's and the space between
-  blocks is the README's own paragraph spacing. Their words come in two sizes:
-  16 for what a thing is, 13 for the detail under it.
-- **The logo is the one picture not drawn here.** `logo-light.png` is the
-  designer's lockup; `logo-dark.png` is the same bitmap with the plate and the
-  letters swapped. A new lockup replaces both.
+- **The logo's colours.** The slate of its plate, `#262C33`, and the three
+  colours its sphere runs through from the top down: mint, teal and blue. A
+  row's dot takes the sphere's colour for its place in the table, and the
+  line under the labels runs through all three. Everything else is a grey
+  that sits in GitHub's page, and the slate is the ink on white.
+- **Room, and no borders.** Small capitals for the labels, a hairline between
+  the rows, no box round the table.
+- **Three files a table.** `<name>-light.svg` and `<name>-dark.svg` at the
+  README's width, and `<name>-narrow.svg` for a phone, whose screen would
+  shrink the wide one's words to five pixels. The README shows them through
+  `<picture>` with the light one as the `<img>`: PyPI removes the `<source>`
+  and always shows that `<img>`, on white. The narrow `<source>` comes first
+  and asks for the width alone, since GitHub rewrites the theme half of a
+  condition that names both. So the narrow file is one file: CSS inside it
+  follows the reader's system theme, and it sits on a card of its own, which
+  keeps it readable when the system and GitHub disagree about the theme.
+- **The logo is the one picture not drawn here.** The designer drew it twice,
+  on its dark plate and with no background. `echolot-light.png` is the plate
+  version, cut around the sphere with rounded corners, for the light theme and
+  for PyPI. `echolot-dark.png` is the one with no background, on a canvas of
+  the same size with the sphere at the same place and scale, for the dark
+  theme. Both are 840 × 660, twice the size the README gives them, reduced to
+  256 colours with libimagequant: a quarter of the size, and no difference
+  the eye can find.
 - **Flat SVG, system fonts.** GitHub's own font stacks, no web fonts: an SVG
-  served from this repository cannot load them. Motion is CSS inside the SVG,
-  and it stops for readers who ask for reduced motion.
+  served from this repository cannot load them.
 - **Full addresses.** The README names each picture at
   `https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/…`,
-  since PyPI resolves nothing relative. A file keeps its name for good: a
-  release on PyPI shows these addresses for as long as it is up. The link
-  check leaves these addresses out, because a new picture is not on `main`
-  until its pull request merges; the test checks instead that each one names
-  a file in the tree.
+  since PyPI resolves nothing relative. The link check leaves these addresses
+  out, because a new picture is not on `main` until its pull request merges;
+  the test checks instead that each one names a file in the tree.
+- **A file keeps its name for good.** A release on PyPI shows its README's
+  pictures from `main` for as long as it is up. The ones the README showed up
+  to 0.12.0 stay here as they are: the old logo, the hero, the animated
+  session, the hunt loop, the cost of a hunt and the comparison. `RETIRED` in
+  the script lists them, nothing draws them any more, and the test fails when
+  one goes. A new picture gets a new name.
 - **No real project.** The names are the README's placeholders:
   `com.example.app`, `StoreRepository`.
-- **Measurements carry their caption:** what was measured, how many runs, the
-  echolot version.
-- **Colour means one thing.** Deep teal is echolot; the warm end of the logo's
-  palette is where the time went. Everything else is grey.
