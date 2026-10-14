@@ -51,7 +51,7 @@ produce. The keys only a merged report has are named under the block.
                    "sampling": null,
                    "compose_names": null,
                    "missing": [] },
-  "summary": { "detectors_run": 14, "detectors_fired": 4,
+  "summary": { "detectors_run": 15, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
               "local": null, "defaults": false, "set": null },
@@ -461,6 +461,7 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 | `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |
 | `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
 | `repeated_work` | the same named work entered from more than one caller | `detail` names the callers; a `near miss` row means the occurrences are too unlike to be one work |
+| `main_thread_waits` | the main thread's sleeps that a thread of the app ended | `location` is that thread, its digits folded (`arch_disk_io_#`, `DefaultDispatch`); `detail` says whether the main thread was idle or blocked, and in which slice, with the share of each when it was both. Lock waits, binder replies and `RenderThread` stay with their own detectors |
 | `io_wait` | threads the kernel parked waiting for a block device | `thread` says `main` or `background`, and so does `detail`; there is no code to look at, only I/O to remove or move |
 | `composables` | a Compose app's own composables, by the composition time they hold | `code` is the declaration the name carries; `detail` says what composed the calls: `in a first composition`, a view composed for the first time; `in a frame`, a recomposition after state changed; `during measure`, a lazy list composing its items; `elsewhere`, anything else. Silent without `runtime-tracing` in the app |
 

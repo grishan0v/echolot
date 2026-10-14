@@ -86,6 +86,9 @@ def _scene(monkeypatch, main_sched: list, main_slices: list,
     rest = [e for e in SCHED if e[1] not in (fixture.TID_MAIN, fixture.TID_WORKER)]
     monkeypatch.setattr(fixture, "SCHED", [
         *rest, *main_sched, (1, fixture.TID_WORKER, start - 50, end + 50, S)])
+    # The fixture's wakeups end sleeps of its own schedule, which this one
+    # replaces: left in, they would wake a main thread asleep for good here.
+    monkeypatch.setattr(fixture, "WAKINGS", [])
     monkeypatch.setattr(fixture, "SLICES", {
         fixture.TID_MAIN: main_slices,
         fixture.TID_WORKER: [("scenario_start", start, 1, []),

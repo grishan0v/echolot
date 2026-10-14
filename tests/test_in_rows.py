@@ -147,7 +147,8 @@ def _about_main(det_id: str, row: dict) -> bool:
         return detail == MAIN
     if det_id == "repeated_work":
         return detail.endswith("— on " + MAIN) or f"— on {MAIN};" in detail
-    return det_id in ("main_thread_outlier", "anr_risk", "app_init", "composables")
+    return det_id in ("main_thread_outlier", "anr_risk", "app_init", "composables",
+                      "main_thread_waits")
 
 
 def _analysed(monkeypatch, tmp_path: Path,

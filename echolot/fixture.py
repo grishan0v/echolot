@@ -54,6 +54,8 @@ TID_SEED = 4207
 TID_LOCKED = 4208
 TID_DISK = 4209
 TID_DISK_BG = 4210
+TID_ROOM_0 = 4211
+TID_ROOM_1 = 4212
 
 THREADS = {
     # The main thread's name cut from the front, the way a package name
@@ -70,6 +72,9 @@ THREADS = {
     TID_LOCKED: "LockWaiter",
     TID_DISK: "DiskWaiter",
     TID_DISK_BG: "OtherBlocked",
+    # Room's disk executor, whose threads wake the main thread below.
+    TID_ROOM_0: "arch_disk_io_0",
+    TID_ROOM_1: "arch_disk_io_1",
 }
 
 # --- a foreign process: the process-isolation control ----------------------
@@ -417,6 +422,17 @@ SLICES = {
             ("Rare_work", 643, 1, []),
             ("Rare_work", 645, 45, []),
 
+            # --- main_thread_waits --------------------------------------
+            # The main thread asleep in `loadConfig` from 692 to 698, until
+            # Room's `arch_disk_io_1` woke it (WAKINGS below). It also sleeps
+            # idle from 1086 to 1098, with no slice open, until
+            # `arch_disk_io_0` does, and at 860 that thread ends a sleep that
+            # began inside the GC lock's contention, which is a lock's wait
+            # and not counted. One row, `arch_disk_io_#`: 2 waits, 18 ms,
+            # 12 idle and 6 blocked in `loadConfig`. `loadConfig` holds 9 ms
+            # of self time, under `main_thread_block`'s bar.
+            ("loadConfig", 690.5, 9, []),
+
             # Negative control: 20x the median, and 20 ms. A ratio without an
             # absolute floor under it turns every short repeated slice into a
             # finding.
@@ -513,7 +529,7 @@ ASYNC_SLICES = [
 R, S, D = 0, 1, 2
 
 SCHED = [
-    # main: four stretches on CPU 0, the first and the last deliberately
+    # main: six stretches on CPU 0, the first and the last deliberately
     # crossing the window bounds [100, 1105]. The first starts BEFORE the
     # window opens, the last ends AFTER it closes. This checks whether
     # context.sql clips intervals to the window or merely filters them by
@@ -527,7 +543,9 @@ SCHED = [
     # either.
     (0, TID_MAIN, 50, 200, D),
     (0, TID_MAIN, 260, 600, S),
-    (0, TID_MAIN, 610, 800, S),
+    (0, TID_MAIN, 610, 692, S),
+    # Asleep 692..698 inside `loadConfig`, until Room's thread wakes it.
+    (0, TID_MAIN, 698, 800, S),
     # An idle moment inside the scenario: the main thread sleeps 800..860,
     # and only 845..850 of it has nothing open below the anchor — the rest is
     # covered by AppStart's children (the GC lock contention, Steady_heavy,
@@ -535,7 +553,10 @@ SCHED = [
     # reached the queue, and a pending event would have been served. The
     # anchor `AppStart` spans right across it at depth 0, which is why that
     # depth is not evidence of anything.
-    (0, TID_MAIN, 860, 1300, S),
+    (0, TID_MAIN, 860, 1086, S),
+    # Idle 1086..1098, nothing open below the anchor, until Room's thread
+    # wakes it again.
+    (0, TID_MAIN, 1098, 1300, S),
 
     # StuckForever: 10 ms on a CPU and then blocked for good. Enough to give
     # the thread a place in the schedule and far too little to interest
@@ -594,8 +615,25 @@ SCHED = [
     (2, TID_DISK_BG, 200, 210, D),
     (2, TID_DISK_BG, 610, 620, S),
 
+    # Room's two disk threads, each on a CPU just long enough to wake the
+    # main thread (WAKINGS).
+    (8, TID_ROOM_1, 695, 698, S),
+    (8, TID_ROOM_0, 857, 860, S),
+    (8, TID_ROOM_0, 1094, 1098, S),
+
     # the foreign process
     (5, OTHER_PID, 200, 700, S),
+]
+
+# Who woke whom: (ms the wakee is back on its CPU, waker_tid, wakee_tid).
+# `sched_waking`, emitted on the waker's CPU while it runs, a nanosecond before
+# the wakee runs: trace_processor puts the waker on the state the woken
+# thread enters, the one after its sleep, and a real wait for the CPU there
+# would be `runnable_starvation`'s, which this fixture keeps for its own case.
+WAKINGS = [
+    (698, TID_ROOM_1, TID_MAIN),
+    (860, TID_ROOM_0, TID_MAIN),
+    (1098, TID_ROOM_0, TID_MAIN),
 ]
 
 # Which sleeps the kernel blamed on a block device: (tid, at_ms, io_wait).
@@ -1083,6 +1121,11 @@ def build(frames: bool = True, environment: bool = True,
             (ms(end), next(seq), "sched", names[tid], tid, end_state, idle, 0)
         )
 
+    # sched_waking: who ended a sleep.
+    for at, waker, wakee in WAKINGS:
+        by_cpu[tid_to_cpu[waker]].append(
+            (ms(at) - 1, next(seq), "waking", waker, wakee, names[wakee], tid_to_cpu[wakee]))
+
     # atrace print: the slices.
     all_slices = dict(SLICES)
     all_slices.update(OTHER_SLICES)
@@ -1172,9 +1215,10 @@ def ftrace(builder, by_cpu: dict[int, list]) -> None:
 
     An event is a tuple: its timestamp, a sequence number that orders events
     of one timestamp, its kind, and the fields the kind needs — `sched`
-    (prev_comm, prev_pid, prev_state, next_comm, next_pid), `blocked` (tid,
-    io_wait), `freq` (cpu, khz), `temp` (zone, millidegrees), `cdev` (device,
-    level), and `print` (tid, atrace line).
+    (prev_comm, prev_pid, prev_state, next_comm, next_pid), `waking` (waker
+    tid, wakee tid, wakee's name, wakee's CPU), `blocked` (tid, io_wait),
+    `freq` (cpu, khz), `temp` (zone, millidegrees), `cdev` (device, level),
+    and `print` (tid, atrace line).
     """
     for cpu in sorted(by_cpu):
         packet = builder.add_packet()
@@ -1196,6 +1240,15 @@ def ftrace(builder, by_cpu: dict[int, list]) -> None:
                 sw.next_comm = next_comm
                 sw.next_pid = next_pid
                 sw.next_prio = 120
+            elif kind == "waking":
+                _, _, _, waker, wakee, wakee_comm, wakee_cpu = item
+                event.pid = waker
+                wk = event.sched_waking
+                wk.comm = wakee_comm
+                wk.pid = wakee
+                wk.prio = 120
+                wk.success = 1
+                wk.target_cpu = wakee_cpu
             elif kind == "blocked":
                 _, _, _, tid, io = item
                 event.pid = tid

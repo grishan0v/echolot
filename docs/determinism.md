@@ -37,7 +37,7 @@ echolot doctor
   ok    the right process is picked, the foreign one is dropped
   ...
 
-All 161 checks passed — the pipeline computes correctly.
+All 162 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
@@ -51,7 +51,7 @@ again.
 ```
 echolot 0.13.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
 layer: current (10 files)
-self-check: 161 of 161 passed
+self-check: 162 of 162 passed
 ```
 
 Exit code 0/1, and 2 on a first run that could not download trace_processor
@@ -161,7 +161,7 @@ some runs and not others.
 
 The fixture reads as a test because it is one: a problem planted for every
 detector, under names that say so — `DiskWaiter`, `LockWaiter`. A sample
-report written from it would show the reader thirteen findings and a thread
+report written from it would show the reader fourteen findings and a thread
 called `LockWaiter`. `echolot/demo.py` is the other kind of synthetic trace,
 built with the same packet writers: the cold start of an app that does not
 exist, a little over a second long, with the five findings a cold start like
@@ -192,12 +192,12 @@ fixture only.
 
 ## What the detectors were checked against
 
-The detectors were validated against a synthetic trace — 161 checks inside
+The detectors were validated against a synthetic trace — 162 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
 
-Seven are newer than that hardware round. `io_wait`, `anr` and `repeated_work`
+Nine are newer than that hardware round. `io_wait`, `anr` and `repeated_work`
 have each been run on real traces since — fifteen cold starts of a freshly
 installed app on an A51, an ANR raised on purpose on an Android 13 phone, the
 traces of the hunts that found a duplicate — and their headers say what those
@@ -213,7 +213,10 @@ lowered, and one holds it to silence at the bar it ships with. `app_init` was
 built on real cold starts on Android 13 devices, read beside AOSP's
 `handleBindApplication`: what has a name in the stretch it reads —
 androidx.startup's Initializers, Firebase, ART's class sections — is listed
-in its header from those traces.
+in its header from those traces. `composables` was built on a Compose app's
+cold starts recorded on an A51 with composable names, and `main_thread_waits`
+on cold starts of two apps there, a large Kotlin app and a Compose app; both
+headers say what those starts showed.
 
 ## Why the trace_processor version is pinned
 

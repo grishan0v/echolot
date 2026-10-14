@@ -1207,7 +1207,7 @@ def _own_composables(tp, cfg: Config) -> None:
 def _claim_names(tp, overrides: dict) -> None:
     """`_claimed_name` — every slice name a detector's mask already speaks for.
 
-    Four of the fourteen detectors know the names of what they are looking for
+    Four of the fifteen detectors know the names of what they are looking for
     and say so in a `*name_glob*` param: `*GC`, `Lock contention on a monitor
     lock*`, `binder transaction`, and a composable's `* ([A-Za-z]*.kt:[0-9]*)`.
     `repeated_work` knows no name in advance —

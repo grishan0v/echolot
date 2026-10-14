@@ -266,6 +266,21 @@ does not let anyone read — on an SM-A515F the function came back empty for all
 of them. The name appears on a userdebug kernel and the row is worth acting on
 without it.
 
+`main_thread_waits` needs none either. A main thread asleep has no slice that
+says what it waits for, and the kernel names the thread that woke it. A row
+is a thread of the app that ended the main thread's sleeps, with its digits
+folded, so that Room's `arch_disk_io_0` to `_3` are one row and every
+coroutine worker is `DefaultDispatch`, as the kernel's fifteen characters
+leave it. `detail` says whether the main thread was idle, with no slice open,
+or blocked, and in which slice; when it was both, it gives each a share. On a Compose
+app's first launch on an A51 the main thread was idle for 0.7 s of 2.1 s
+until Room's threads woke it about 260 times while the database filled. On a
+large Kotlin app's cold starts it blocked inside two SDKs' initializers until
+the thread loading SharedPreferences let it go, 58 ms on the median. A lock's
+wait stays with
+`monitor_contention`, a binder reply with `binder_txn`, and a sleep that
+`RenderThread` or another process ended is left out.
+
 `frame_jank` needs no instrumentation at all: SurfaceFlinger records every
 frame's deadline and what it actually took, and says whose fault a miss was.
 Android 12 and up — see [requirements](../README.md#requirements).

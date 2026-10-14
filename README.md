@@ -83,14 +83,14 @@ the report the last good run kept:
 
 ## What it catches
 
-echolot runs fourteen SQL detectors over a Perfetto trace. Each one that finds
+echolot runs fifteen SQL detectors over a Perfetto trace. Each one that finds
 something becomes a section of the report:
 
 <p>
   <picture>
     <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-narrow.svg">
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-dark.svg">
-    <img alt="The detectors, and what each one catches. main_thread_block: Where the main thread spent its time. main_thread_outlier: Single occurrences far longer than the same work usually takes. app_init: What ran after the Application was created, before the first Activity. anr_risk: Stretches where the main thread never got back to the message queue. anr: ANRs the system recorded during this trace. monitor_contention: Monitor contention. binder_txn: Long binder transactions. io_wait: Threads the kernel put to sleep waiting for the disk. runnable_starvation: CPU preemption (runnable but not running). gc_pressure: Garbage collector pressure. frame_jank: Frames that missed their deadline. composables: The app's composables, by the composition time they hold. uninstrumented_cpu: Blind spots: threads burning CPU with no instrumentation. repeated_work: The same work reached from more than one place." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-light.svg" width="880">
+    <img alt="The detectors, and what each one catches. main_thread_block: Where the main thread spent its time. main_thread_outlier: Single occurrences far longer than the same work usually takes. app_init: What ran after the Application was created, before the first Activity. anr_risk: Stretches where the main thread never got back to the message queue. anr: ANRs the system recorded during this trace. monitor_contention: Monitor contention. binder_txn: Long binder transactions. io_wait: Threads the kernel put to sleep waiting for the disk. runnable_starvation: CPU preemption (runnable but not running). main_thread_waits: The main thread's waits on the app's own threads. gc_pressure: Garbage collector pressure. frame_jank: Frames that missed their deadline. composables: The app's composables, by the composition time they hold. uninstrumented_cpu: Blind spots: threads burning CPU with no instrumentation. repeated_work: The same work reached from more than one place." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-light.svg" width="880">
   </picture>
 </p>
 
@@ -116,7 +116,7 @@ Covered by the findings below: **42%** of the main thread's window, each moment 
 Startup: cold, **1174 ms** from the launch to the first frame: 42% sleeping · 17% `choreographer_do_frame` · 17% `inflate` · 6% blocked in the kernel · 5% `monitor_contention` · 3% `launch_delay` · 2% `bind_application` · 2% `activity_start`
 That is the platform's measure rather than the window: the startup began 38 ms before the window opened, and ended with it.
 Device: clock **1478 MHz** (from 1325 to 1574 across repeats), peak 54 °C, 1514 MB free at the low point
-Detectors fired: **5 of 14**
+Detectors fired: **5 of 15**
 Config: `/home/you/my-app/echolot.yml` (sha 3d78738defec) · thresholds: built-in defaults
 
 ## Markers
@@ -175,7 +175,7 @@ _names a thread that burns CPU with no slice around it. The agent does not guess
 
 <sub>detector `uninstrumented_cpu`, params: {'min_running_ms': 50, 'max_covered_pct': 50}</sub>
 
-**Silent:** anr, anr_risk, app_init, binder_txn, composables, gc_pressure, io_wait, repeated_work, runnable_starvation
+**Silent:** anr, anr_risk, app_init, binder_txn, composables, gc_pressure, io_wait, main_thread_waits, repeated_work, runnable_starvation
 
 <sub>trace_processor v56.1</sub>
 ```

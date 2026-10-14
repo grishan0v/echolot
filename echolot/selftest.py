@@ -369,10 +369,10 @@ def _(report):
 @check("clock: weighted by the cores this app actually held")
 def _(report):
     cpu = report["environment"]["cpu"]
-    # 1945 ms on a CPU inside the window, of which 435 ms on CPU 0 after it
-    # doubled at ms 600: (1510 × 1000 + 435 × 2000) / 1945.
-    assert cpu["on_cpu_ms"] == 1945.0, cpu
-    assert cpu["mean_mhz"] == 1223.7, cpu
+    # 1937 ms on a CPU inside the window, of which 417 ms on CPU 0 after it
+    # doubled at ms 600: (1520 × 1000 + 417 × 2000) / 1937.
+    assert cpu["on_cpu_ms"] == 1937.0, cpu
+    assert cpu["mean_mhz"] == 1215.3, cpu
     assert cpu["max_mhz"] == 2000.0, cpu
 
 
@@ -396,7 +396,7 @@ def _(report):
     # with the window applied first, there would be no frequency for the
     # beginning of the scenario and the coverage below would fall short.
     cpu = report["environment"]["cpu"]
-    assert cpu["measured_ms"] == 1945.0, (
+    assert cpu["measured_ms"] == 1937.0, (
         f"the pre-window sample did not carry into the window: {cpu}")
 
 
@@ -506,7 +506,7 @@ def _(report):
                if r["location"] == "AppStart")
     assert row["total_ms"] == 1006.0, row
     assert row["self_ms"] < row["total_ms"], f"children not subtracted: {row}"
-    assert row["self_ms"] == 124.0, f"1006 minus 882 ms of children: {row}"
+    assert row["self_ms"] == 115.0, f"1006 minus 891 ms of children: {row}"
 
 
 @check("main_thread_block: self time never exceeds the window")
@@ -727,6 +727,23 @@ def _(report):
     for detector in ("main_thread_block", "repeated_work", "main_thread_outlier"):
         stray = [name for name in locations(report, detector) if ".kt:" in name]
         assert not stray, (detector, stray)
+
+
+# --- main_thread_waits --------------------------------------------------------
+
+@check("main_thread_waits: the app's thread that ended each sleep, idle or blocked")
+def _(report):
+    """Room's two disk threads woke the main thread: once while it sat in
+    `loadConfig`, once while it was idle with nothing open below the anchor.
+    One row for both, their digits folded. The third wakeup ended a sleep
+    that began in the GC lock's contention, and a lock's wait is left to the
+    detectors of locks."""
+    row = only_row(report, "main_thread_waits")
+    assert (row["location"], row["count"], row["total_ms"], row["max_ms"]) \
+        == ("arch_disk_io_#", 2, 18.0, 12.0), row
+    # 12 ms idle, 6 blocked: shares, so that a merged row's median total and
+    # its worst repeat's evidence do not read as a sum.
+    assert row["detail"] == "67% idle · 33% blocked in loadConfig", row
 
 
 @check("composable names: counted in the trace, with what the recording asked for")
@@ -1113,7 +1130,7 @@ def _(report):
 
 @check("uninstrumented_cpu: coverage counts nested slices only once")
 def _(report):
-    """main: 875 ms of Running inside the window, with the AppStart slice
+    """main: 857 ms of Running inside the window, with the AppStart slice
     covering the whole window on top. Adding parent to children would exceed
     everything the thread ever did. The arithmetic has to be honest or on a
     real trace it will mask a genuine blind spot.
@@ -1130,8 +1147,8 @@ def _(report):
             "uninstrumented_cpu": {"max_covered_pct": 101}})
     by_thread = {r["location"]: r for r in rows(every, "uninstrumented_cpu")}
     main = by_thread.get("m.example.app")
-    assert main and main["covered_ms"] == main["total_ms"] == 875.0, (
-        "the main thread's slices nest; counted once they cover its 875 ms "
+    assert main and main["covered_ms"] == main["total_ms"] == 857.0, (
+        "the main thread's slices nest; counted once they cover its 857 ms "
         f"on a CPU exactly: {main}")
     heap = by_thread.get("HeapTaskDaemon")
     assert heap and heap["covered_ms"] == 80.0, (

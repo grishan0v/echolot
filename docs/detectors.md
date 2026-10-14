@@ -450,6 +450,15 @@ where `/proc` wrote kilobytes. One unit is converted on the way in and the
 other is not, and nothing but a query says which. Build a five-line trace
 carrying the events you care about, query it, and look.
 
+### A thread's waker is on the state after its sleep
+
+`thread_state.waker_utid` names the thread that woke this one, from
+`sched/sched_waking`, and trace_processor writes it on the state the thread
+was woken into, the `R` that follows the sleep. The sleep itself carries no
+waker. `main_thread_waits` reads it with `LEAD` over the main thread's states
+in order; a join of the table to itself on `ts + dur` does the same and costs
+far more on a trace of a few hundred thousand states.
+
 ### Everything must survive being run twice
 
 A detector runs against a session that already holds the views from the last
@@ -478,8 +487,8 @@ writes a config.
   the fixture is the wrong shape to hold one, the way it names `anr_risk`.
   Then the checks that pin what it must find and what it must not, beside the
   others in `selftest.py`.
-- **The README.** `tests/test_docs.py` reads the number in "runs fourteen
-  SQL detectors" and in the sample report's `Detectors fired: **N of 14**`,
+- **The README.** `tests/test_docs.py` reads the number in "runs fifteen
+  SQL detectors" and in the sample report's `Detectors fired: **N of 15**`,
   and fails while either disagrees with the files. The sample report is what
   `analyze` prints for the demo app, `echolot/demo.py`, and
   `tests/test_doc_samples.py` holds it to that character for character, down

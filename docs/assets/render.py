@@ -74,8 +74,8 @@ ASK = [
 DETECTOR_ORDER = [
     "main_thread_block", "main_thread_outlier", "app_init", "anr_risk", "anr",
     "monitor_contention", "binder_txn", "io_wait", "runnable_starvation",
-    "gc_pressure", "frame_jank", "composables", "uninstrumented_cpu",
-    "repeated_work",
+    "main_thread_waits", "gc_pressure", "frame_jank", "composables",
+    "uninstrumented_cpu", "repeated_work",
 ]
 
 # Pictures the README no longer shows. The releases 0.9.0 to 0.12.0 show them
