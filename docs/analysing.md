@@ -426,8 +426,8 @@ says what it is:
 | slice | sits under | what it is |
 |---|---|---|
 | `Recomposer:recompose` | `animation`, the frame's first stage | the frame's recomposition, every composition whose state changed |
-| `Compose:recompose` | `Recomposer:recompose`, `AndroidOwner:onMeasure`, or nothing | one composition recomposed: in a frame; during measure, where a lazy list or another subcomposing layout composes its items; or the first composition, from `setContent` |
-| `Compose:applyChanges` | the same three | that composition's result applied to the UI tree |
+| `Compose:recompose` | `Recomposer:recompose`, `AndroidOwner:onMeasure`, `traversal`, or nothing | one composition: recomposed in a frame, where state changed; composed during measure, where a lazy list or another subcomposing layout composes its items; or a view composed for the first time, under `traversal` when the frame that attaches the view composes it, or under nothing |
+| `Compose:applyChanges` | the same four | that composition's result applied to the UI tree |
 | `AndroidOwner:onMeasure`, `onLayout` | `measure`, `layout` | a `ComposeView` measuring and placing its layout nodes |
 | `AndroidOwner:draw` | `Record View#draw()` | drawing them |
 | `TextStringSimpleNode::measure` | `AndroidOwner:onMeasure` | a text measured, its layout built under it as `TextLayout:initLayout` |
@@ -456,8 +456,10 @@ under it. The `composables` detector ranks the app's own by the time they
 hold, the library's under them counted in, each placed at the declaration
 its name carries. On that start its rows were the navigation host, 29 ms of
 its 42, an icon painter seven calls and 19 ms, six of them during measure, a
-bottom bar and a button. `echolot names <trace> --grep '\.kt:'` lists every
-composable, the library's too.
+bottom bar and a button. A row's `detail` says which of the places in the
+table above composed its calls: `in a first composition`, `in a frame`,
+`during measure`, or `elsewhere` for any other. `echolot names <trace>
+--grep '\.kt:'` lists every composable, the library's too.
 
 ## Once you have two of them
 

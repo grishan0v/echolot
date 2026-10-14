@@ -331,9 +331,10 @@ def test_the_naming_reference_reads_compose_rows():
     into a trace, and what they do to the rows (#364)."""
     naming = ROOT / "echolot" / "claude" / "skills" / "echolot" / "references" / "naming.md"
     flat = _flat(naming)
-    check("each phase by where it sits",
-          "| `Compose:recompose` | `Recomposer:recompose`, `AndroidOwner:onMeasure`, or nothing |"
-          in flat and "| `Recomposer:recompose` | `animation`" in flat, flat[-3000:])
+    check("each phase by where it sits, a view's first composition under `traversal` too",
+          "| `Compose:recompose` | `Recomposer:recompose`, `AndroidOwner:onMeasure`, "
+          "`traversal`, or nothing |" in flat
+          and "| `Recomposer:recompose` | `animation`" in flat, flat[-3000:])
     check("the pass's self time is the composables, none of them named",
           "The self time of `Compose:recompose` is the composable functions running" in flat,
           flat[-3000:])

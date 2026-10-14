@@ -363,20 +363,31 @@ SLICES = {
             # --- composables ------------------------------------------
             # What `androidx.compose.runtime:runtime-tracing` writes: every
             # composable call a slice, `Name (File.kt:line)`, under the
-            # `Compose:recompose` that composed it. Two passes, in gaps the
-            # main thread spends running. In a frame, the app's `FeedScreen`
-            # with two of its `FeedItem`s — one under the library's
-            # `Column` — and a third party's `Chart` of 9 ms; during
-            # measure, the library's `LazyColumn` composing two more.
+            # `Compose:recompose` that composed it. Three passes, in gaps the
+            # main thread spends running. First the screen's first
+            # composition, in the traversal of the frame that attaches its
+            # view: the app's `FeedScreen` with one `FeedItem`. Then in a
+            # frame, `FeedScreen` again with two of its `FeedItem`s — one
+            # under the library's `Column` — and a third party's `Chart` of
+            # 9 ms; during measure, the library's `LazyColumn` composing two
+            # more.
             #
             # `composables` ranks the app's own by their calls less the
-            # app's own nested in them: `FeedScreen` 18 ms end to end, 14 of
-            # them its own, and `FeedItem` 14 over four calls, two in a frame
-            # and two during measure. `Chart` is above the bar and is no row:
-            # not androidx, and not the app's either. No name here clears
-            # another detector's bar — the most self time any holds is
-            # `Chart`'s 9, and `Compose:recompose` has two callers and two
-            # costs.
+            # app's own nested in them: `FeedScreen` 28 ms end to end over two
+            # calls, 23 of them its own, and `FeedItem` 15 over five calls:
+            # one in the first composition, two in a frame and two during
+            # measure. `Chart` is above the bar and is no row: not androidx,
+            # and not the app's either. No name here clears another
+            # detector's bar — `main_thread_block` wants 16 ms of self time,
+            # and the most any of them holds is `FeedItem`'s 15 — and
+            # `Compose:recompose` has three callers and three costs.
+            ("traversal", 484, 12, [
+                ("Compose:recompose", 484.5, 11, [
+                    ("com.example.app.ui.FeedScreen (FeedScreen.kt:24)", 485, 10, [
+                        ("com.example.app.ui.FeedItem (FeedItem.kt:31)", 486, 1, []),
+                    ]),
+                ]),
+            ]),
             ("Recomposer:recompose", 579, 20, [
                 ("Compose:recompose", 579.5, 19, [
                     ("com.example.app.ui.FeedScreen (FeedScreen.kt:24)", 580, 18, [

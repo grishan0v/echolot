@@ -195,9 +195,9 @@ says what it is; the parents below are read off real cold starts.
 | slice | sits under | what it is |
 |---|---|---|
 | `Recomposer:recompose` | `animation`, the frame's first stage | the frame's recomposition, every composition whose state changed |
-| `Compose:recompose` | `Recomposer:recompose`, `AndroidOwner:onMeasure`, or nothing | one composition recomposed: in a frame; during measure, where a lazy list or another subcomposing layout composes its items; or the first composition, from `setContent` |
-| `Compose:applyChanges` | the same three | that composition's result applied to the UI tree |
-| `Compose:onRemembered` | the same three | `remember` observers told they entered the composition |
+| `Compose:recompose` | `Recomposer:recompose`, `AndroidOwner:onMeasure`, `traversal`, or nothing | one composition: recomposed in a frame, where state changed; composed during measure, where a lazy list or another subcomposing layout composes its items; or a view composed for the first time, under `traversal` when the frame that attaches the view composes it, or under nothing |
+| `Compose:applyChanges` | the same four | that composition's result applied to the UI tree |
+| `Compose:onRemembered` | the same four | `remember` observers told they entered the composition |
 | `AndroidOwner:onMeasure` | `measure` | a `ComposeView` measuring its layout nodes |
 | `AndroidOwner:onLayout` | `layout` | placing them |
 | `AndroidOwner:draw` | `Record View#draw()` | drawing them; `AndroidOwner:measureAndLayout` there is a measure left for the draw |
@@ -228,6 +228,7 @@ library's `NavHost` came nearest with 8, and the app's own had about a
 millisecond each, their time being in the library's composables under them.
 `composables` is where they are: the app's own, by their calls with the
 library's under them counted in, each at the declaration its name carries.
+Its `detail` says which of the places in the table composed the calls.
 `echolot names <trace> --grep '\.kt:'` lists every composable, the
 library's too, with how many calls each and their total time; it folds the
 line into `#`, as it does every number in a name.

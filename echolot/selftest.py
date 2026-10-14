@@ -506,7 +506,7 @@ def _(report):
                if r["location"] == "AppStart")
     assert row["total_ms"] == 1006.0, row
     assert row["self_ms"] < row["total_ms"], f"children not subtracted: {row}"
-    assert row["self_ms"] == 136.0, f"1006 minus 870 ms of children: {row}"
+    assert row["self_ms"] == 124.0, f"1006 minus 882 ms of children: {row}"
 
 
 @check("main_thread_block: self time never exceeds the window")
@@ -698,20 +698,21 @@ def _(report):
     almost nothing of its own: on a real cold start none came near a
     `main_thread_block` row. A row counts the library's calls under it, down
     to the next composable of the app's own, which is its own row's — so
-    `FeedScreen`'s two `FeedItem`s leave its 18 ms, and the rows add up
+    `FeedScreen`'s three `FeedItem`s leave its 28 ms, and the rows add up
     without counting a moment twice."""
     got = {r["location"]: r for r in rows(report, "composables")}
     screen_name = "com.example.app.ui.FeedScreen (FeedScreen.kt:24)"
     item_name = "com.example.app.ui.FeedItem (FeedItem.kt:31)"
-    assert list(got) == [item_name, screen_name], list(got)
+    assert list(got) == [screen_name, item_name], list(got)
     screen, item = got[screen_name], got[item_name]
     assert (screen["count"], screen["total_ms"], screen["self_ms"], screen["max_ms"]) \
-        == (1, 18.0, 14.0, 18.0), screen
+        == (2, 28.0, 23.0, 18.0), screen
     assert (item["count"], item["total_ms"], item["self_ms"], item["max_ms"]) \
-        == (4, 14.0, 14.0, 5.0), item
-    # What composed them, read off the pass around each call.
-    assert screen["detail"] == "1 in a frame", screen
-    assert item["detail"] == "2 in a frame · 2 during measure", item
+        == (5, 15.0, 15.0, 5.0), item
+    # What composed them, read off the pass around each call: the first
+    # composition is the pass under `traversal`.
+    assert screen["detail"] == "1 in a first composition · 1 in a frame", screen
+    assert item["detail"] == "1 in a first composition · 2 in a frame · 2 during measure", item
 
 
 @check("composables: nothing but the app's own is a row, whatever it holds")
@@ -736,13 +737,13 @@ def _(report):
     window, and whether the recording's config held a `track_event` source.
     A contention slice ends in `(File.kt:61)` too, and is not a call."""
     from .config import Config
-    assert report["environment"]["compose_names"] == {"asked": False, "calls": 8}, \
+    assert report["environment"]["compose_names"] == {"asked": False, "calls": 10}, \
         report["environment"]["compose_names"]
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "names.perfetto-trace"
         path.write_bytes(fixture.build(names=True))
         named = _analyze(path, Config(FIXTURE_CONFIG))
-    assert named["environment"]["compose_names"] == {"asked": True, "calls": 8}, \
+    assert named["environment"]["compose_names"] == {"asked": True, "calls": 10}, \
         named["environment"]["compose_names"]
 
 

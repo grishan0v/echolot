@@ -36,12 +36,20 @@
 -- composable in it, and this detector says nothing.
 --
 -- `detail` says what composed the calls, read off the parent of the
--- `Compose:recompose` around each: `in a frame`, the frame's recomposition
--- (`Recomposer:recompose`); `during measure`, a lazy list or another
--- subcomposing layout composing its items as it measured
--- (`AndroidOwner:onMeasure`); `elsewhere`, the rest, most often a
--- `ComposeView`'s first composition. A count alone cannot tell recomposing
--- from composing many: seven calls of the icon painter were seven icons.
+-- `Compose:recompose` around each:
+-- - `in a first composition`, a view composed for the first time. Under
+--   `traversal` when the frame that attaches the view composes it: on a
+--   Compose app's cold starts that one pass took 42 to 44 ms, more than
+--   any other, and composed the navigation host. Or under nothing: on a
+--   large app's cold start each such pass followed
+--   `Compose:initializeView`, or the pass of the view before it;
+-- - `in a frame`, the frame's recomposition (`Recomposer:recompose`), where
+--   state changed;
+-- - `during measure`, a lazy list or another subcomposing layout composing
+--   its items as it measured (`AndroidOwner:onMeasure`);
+-- - `elsewhere`, the rest.
+-- A count alone cannot tell recomposing from composing many: seven calls of
+-- the icon painter were seven icons.
 
 WITH calls AS MATERIALIZED (
     SELECT s.slice_id, s.name, s.dur
@@ -57,12 +65,27 @@ nest AS MATERIALIZED (
            (SELECT a.id FROM ancestor_slice(c.slice_id) a
             JOIN calls p ON p.slice_id = a.id
             ORDER BY a.depth DESC LIMIT 1)                         AS outer_id,
-           -- What composed it: whatever the nearest pass sits under.
-           (SELECT pp.name FROM ancestor_slice(c.slice_id) a
-            JOIN slice pp ON pp.id = a.parent_id
+           -- The nearest pass around it: what composed it is what that
+           -- pass sits under.
+           (SELECT a.id FROM ancestor_slice(c.slice_id) a
             WHERE a.name = 'Compose:recompose'
-            ORDER BY a.depth DESC LIMIT 1)                         AS pass_parent
+            ORDER BY a.depth DESC LIMIT 1)                         AS pass_id
     FROM calls c
+),
+composed AS (
+    SELECT n.slice_id,
+           CASE
+               WHEN pp.name = 'Recomposer:recompose' THEN 'frame'
+               WHEN pp.name GLOB 'AndroidOwner:*' THEN 'measure'
+               -- A pass with nothing above it has a parent id of NULL; a
+               -- call with no pass around it has no pass at all.
+               WHEN pp.name = 'traversal'
+                    OR (p.id IS NOT NULL AND p.parent_id IS NULL) THEN 'first'
+               ELSE 'elsewhere'
+           END                                                     AS how
+    FROM nest n
+    LEFT JOIN slice p ON p.id = n.pass_id
+    LEFT JOIN slice pp ON pp.id = p.parent_id
 ),
 inner_time AS (
     SELECT n.outer_id AS slice_id, SUM(c.dur) AS ns
@@ -77,13 +100,12 @@ grouped AS (
            SUM(c.dur)                                              AS total_ns,
            SUM(c.dur - COALESCE(i.ns, 0))                          AS self_ns,
            MAX(c.dur)                                              AS max_ns,
-           SUM(n.pass_parent = 'Recomposer:recompose')             AS in_frame,
-           SUM(n.pass_parent GLOB 'AndroidOwner:*')                AS in_measure,
-           SUM(n.pass_parent IS NULL
-               OR (n.pass_parent != 'Recomposer:recompose'
-                   AND n.pass_parent NOT GLOB 'AndroidOwner:*'))   AS elsewhere
+           SUM(w.how = 'first')                                    AS in_first,
+           SUM(w.how = 'frame')                                    AS in_frame,
+           SUM(w.how = 'measure')                                  AS in_measure,
+           SUM(w.how = 'elsewhere')                                AS elsewhere
     FROM calls c
-    JOIN nest n USING (slice_id)
+    JOIN composed w USING (slice_id)
     LEFT JOIN inner_time i USING (slice_id)
     GROUP BY c.name
 )
@@ -94,7 +116,8 @@ SELECT
     ROUND(self_ns / 1e6, 2)                                  AS self_ms,
     ROUND(max_ns / 1e6, 2)                                   AS max_ms,
     -- ' · ' joins what is there; the first three characters drop the lead.
-    SUBSTR(CASE WHEN in_frame > 0 THEN ' · ' || in_frame || ' in a frame' ELSE '' END
+    SUBSTR(CASE WHEN in_first > 0 THEN ' · ' || in_first || ' in a first composition' ELSE '' END
+        || CASE WHEN in_frame > 0 THEN ' · ' || in_frame || ' in a frame' ELSE '' END
         || CASE WHEN in_measure > 0 THEN ' · ' || in_measure || ' during measure' ELSE '' END
         || CASE WHEN elsewhere > 0 THEN ' · ' || elsewhere || ' elsewhere' ELSE '' END, 4)
                                                              AS detail
