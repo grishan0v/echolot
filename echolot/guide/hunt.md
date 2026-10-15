@@ -117,8 +117,10 @@ eighteen thousand characters it reads on its own, and here it only fills your
 window. Then **wait for it**: its conclusion is the whole answer, and a turn
 that ends on "I will come back with its output" may never get a next one.
 
-**No subagents?** Then the loop is yours: run `echolot guide loop` and follow
-it, in short passes. Quote the two or three rows that matter and keep the rest
+**No subagents?** Look among the tools your host lists on request first: some
+hosts keep the one that starts a subagent there, and a model that only looked
+at the tools in front of it ran the loop itself (#204). With none there either,
+the loop is yours: run `echolot guide loop` and follow it, in short passes. Quote the two or three rows that matter and keep the rest
 out of the conversation.
 
 ## When the conclusion comes back

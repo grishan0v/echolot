@@ -53,8 +53,9 @@ a host that does not list this skill, and the loop's guide is the subagent's.
    **Do not run `echolot guide loop` yourself**: it is the subagent's, and here
    it only fills this window. Then **wait for its conclusion**. Do not end
    your turn while it runs: a turn that ends on "I will come back with its
-   output" may never get a next one. If your host cannot start a subagent,
-   the loop is yours: `echolot guide loop`, in short passes.
+   output" may never get a next one. If your host has no subagent tool, even
+   among those it lists on request, the loop is yours: `echolot guide loop`,
+   in short passes.
 5. **When the conclusion comes back, close the investigation first**, every
    time and whatever it came to, and only then answer the human. Left for
    after the answer, it is the step that gets skipped:
