@@ -317,10 +317,26 @@ and the warning names the gradle task that builds and installs the variant
 the config measures, by the rule `mark --apply` names it with
 ([mark](mark.md#what-comes-next-the-build)); in gradle mode the
 macrobenchmark builds the app, so the traces are older than the markers. A
-marker missing beside others that are there gets no warning: it wraps code
-the scenario does not run. `report.json` carries the names as
+marker missing beside others that are there gets no warning here: from the
+traces alone it reads as code the scenario does not run. `collect` reads the
+build itself before the round, and stops at a build that lacks any of them
+([Collecting](collecting.md#the-build-on-the-phone)). A name the code puts
+together at run time, `"AGENTTMP_load_$id"`, counts as there when a name in
+the traces starts with its fixed part. `report.json` carries the names as
 `markers.unbuilt`, and every prefixed name the traces hold as
 `markers.in_trace`.
+
+The other way round gets a warning too: prefixed names the traces hold that
+no string in the code makes any more. `mark --remove` took them out, or a
+hand did, after the app that was recorded was built, so it has none of the
+changes made to the code since. A fix is among them as often as not, and a
+round compared as if it had one says the fix did nothing. Any string in the
+code counts, tagged or not: a marker added by hand without the tag is in the
+code all the same. A name put together at run time — a template, a format, a
+string joined to more with `+` — makes every name that starts with its fixed
+part. A config kept where there is no Kotlin or Java says nothing, since
+every name would read as taken out. The warning names the gradle task as the
+other one does, and `report.json` carries the names as `markers.removed`.
 
 Names that carry the temporary prefix keep their digits. `names` folds
 numbers into families — `worker-2` and `worker-5` are one pool — and leaves a

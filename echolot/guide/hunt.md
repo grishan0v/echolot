@@ -53,7 +53,9 @@ remove them before recording: `echolot mark --remove` takes out what
 which go by hand. Left in, they are compiled into the new traces and read as
 part of code nobody touched this time. In `launch` and `command` mode build
 and install the app after removing them: `collect` records the build on the
-phone, and the one there still has them.
+phone, and the one there still has them. A round recorded from it anyway
+gets a warning at the top of its report, naming the markers the traces hold
+and the code no longer has.
 
 Open nothing when you are carrying on the one already open: the human chose
 to (`echolot hunt --resume` has run), or `echolot hunt` shows an open

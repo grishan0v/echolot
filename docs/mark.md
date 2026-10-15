@@ -164,9 +164,15 @@ macrobenchmark builds and installs the app, and the line says to record.
 
 A round recorded without that build holds none of the new markers: a hunt
 that recorded one found its markers missing, put that down to the trace, and
-concluded without the breakdown they were placed for. `analyze` says so at
+concluded without the breakdown they were placed for. So `collect` reads the
+build on the phone for the code's markers before it records, and stops at one
+that lacks any — see
+[Collecting](collecting.md#the-build-on-the-phone) — and `analyze` says so at
 the top of the report — see
-[Analysing](analysing.md#your-own-names-measured-every-time).
+[Analysing](analysing.md#your-own-names-measured-every-time). After
+`--remove` it is the other way round: the build on the phone keeps the
+markers until it is built again, and `analyze` names those the traces hold
+and the code no longer has.
 
 `instrumentation.allowed` from `echolot.yml` is honoured, globs included: each
 entry is matched path segment by path segment, so `feature/*/src/main` — the

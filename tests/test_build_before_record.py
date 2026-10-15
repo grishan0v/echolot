@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from echolot import fixture, mark, recorder, scan, selftest  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import _unbuilt_markers, main  # noqa: E402
+from echolot.main import _markers_against_code, main  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_mark_edits import LAUNCHER, manifest, write  # noqa: E402
 
@@ -277,7 +277,7 @@ def _project(tmp_path: Path, runner: str = "launch", names: tuple[str, ...] = ("
 def test_markers_in_the_code_and_in_no_trace_are_put_in_the_report(tmp_path: Path) -> None:
     cfg = _project(tmp_path, names=("AGENTTMP_a", "AGENTTMP_b"))
     rep = _report([])
-    _unbuilt_markers(rep, cfg)
+    _markers_against_code(rep, cfg)
     check("their names, files, the mode, and the task",
           rep["markers"].get("unbuilt") == {
               "names": ["AGENTTMP_a", "AGENTTMP_b"], "files": ["app/src/main/kotlin/App.kt"],
@@ -295,7 +295,7 @@ def test_one_marker_the_traces_hold_says_the_build_has_them(tmp_path: Path) -> N
     """The others wrap code the scenario does not run."""
     cfg = _project(tmp_path, names=("AGENTTMP_a", "AGENTTMP_b"))
     rep = _report(["AGENTTMP_b", "AGENTTMP_old"])
-    _unbuilt_markers(rep, cfg)
+    _markers_against_code(rep, cfg)
     check("nothing said", "unbuilt" not in rep["markers"], rep["markers"])
 
 
@@ -303,20 +303,20 @@ def test_nothing_is_said_without_a_checkout_or_without_what_the_traces_hold(
         tmp_path: Path) -> None:
     cfg = _project(tmp_path)
     rep = _report(None)
-    _unbuilt_markers(rep, cfg)
+    _markers_against_code(rep, cfg)
     check("a report that cannot say what the traces hold", "unbuilt" not in rep["markers"])
     rep = _report([])
-    _unbuilt_markers(rep, Config(cfg.raw))
+    _markers_against_code(rep, Config(cfg.raw))
     check("a config that lives in memory has no code to read", "unbuilt" not in rep["markers"])
     write(tmp_path, "app/src/main/kotlin/App.kt", "class App\n")
-    _unbuilt_markers(rep, cfg)
+    _markers_against_code(rep, cfg)
     check("and code with no markers has none to miss", "unbuilt" not in rep["markers"])
 
 
 def test_in_gradle_mode_the_traces_are_older_than_the_markers(tmp_path: Path) -> None:
     cfg = _project(tmp_path, runner="gradle")
     rep = _report([])
-    _unbuilt_markers(rep, cfg)
+    _markers_against_code(rep, cfg)
     check("no task to name", rep["markers"]["unbuilt"]["install"] == [], rep["markers"])
     check("collect builds it", "> ⚠️ The temporary marker `AGENTTMP_a` is in the code and not "
           "in these traces: the traces were recorded before it went in. In gradle mode "
@@ -344,6 +344,11 @@ def test_the_views_say_it_where_the_markers_are_looked_for() -> None:
           report_mod.markers_view(rep))
 
 
+# The markers the fixture's trace holds besides the one each test puts in it.
+FIXTURE_MARKERS = ("AGENTTMP_insert_preset", "AGENTTMP_parse_json", "AGENTTMP_seed_again",
+                   "AGENTTMP_seed_first", "AGENTTMP_seed_third")
+
+
 def test_analyze_holds_the_code_against_the_whole_trace(tmp_path: Path, monkeypatch) -> None:
     """A marker that ran outside the window is in the build all the same."""
     slices = copy.deepcopy(fixture.SLICES)
@@ -357,7 +362,8 @@ def test_analyze_holds_the_code_against_the_whole_trace(tmp_path: Path, monkeypa
                           "process": "com.example.app"}}
     write(tmp_path, "echolot.yml", yaml.safe_dump(config))
     source = tmp_path / "app/src/main/kotlin/App.kt"
-    write(tmp_path, "app/src/main/kotlin/App.kt", "class App {\n" + PAIR.format("AGENTTMP_late") + "}\n")
+    write(tmp_path, "app/src/main/kotlin/App.kt", "class App {\n" + "".join(
+        PAIR.format(n) for n in ("AGENTTMP_late", *FIXTURE_MARKERS)) + "}\n")
 
     code, out, _ = _run("analyze", str(trace), "-c", str(tmp_path / "echolot.yml"))
     rep = json.loads((tmp_path / ".echolot/out/report.json").read_text(encoding="utf-8"))
@@ -365,8 +371,9 @@ def test_analyze_holds_the_code_against_the_whole_trace(tmp_path: Path, monkeypa
     check("the marker after the window is in the trace, and not in the table",
           "AGENTTMP_late" in rep["markers"]["in_trace"]
           and all(r["location"] != "AGENTTMP_late" for r in rep["markers"]["rows"]), rep["markers"])
-    check("so the build has it, and nothing is said",
-          "unbuilt" not in rep["markers"] and "temporary marker" not in out, out[:3000])
+    check("so the build has it, the code has every one the trace holds, and nothing is said",
+          "unbuilt" not in rep["markers"] and "removed" not in rep["markers"]
+          and "temporary marker" not in out, out[:3000])
 
     source.write_text("class App {\n" + PAIR.format("AGENTTMP_new") + "}\n", encoding="utf-8")
     code, out, _ = _run("analyze", str(trace), "-c", str(tmp_path / "echolot.yml"))
@@ -376,3 +383,7 @@ def test_analyze_holds_the_code_against_the_whole_trace(tmp_path: Path, monkeypa
     check("and in what analyze printed, with the task",
           "The temporary marker `AGENTTMP_new` is in the code and not in these traces" in out
           and "`./gradlew :app:installBenchmark`" in out, out[:3000])
+    check("the ones the code no longer has are said too (#393)",
+          rep["markers"]["removed"]["names"] == sorted(("AGENTTMP_late", *FIXTURE_MARKERS))
+          and "6 temporary markers are in these traces and nowhere in the code" in out,
+          out[:3000])

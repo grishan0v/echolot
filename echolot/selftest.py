@@ -2587,7 +2587,7 @@ def _(report):
     """
     import copy
 
-    from .main import _unbuilt_markers
+    from .main import _markers_against_code
     from .report import to_markdown
     assert report["markers"]["in_trace"] == [
         "AGENTTMP_insert_preset", "AGENTTMP_parse_json", "AGENTTMP_seed_again",
@@ -2596,7 +2596,7 @@ def _(report):
     def said(root: Path) -> tuple[dict | None, str]:
         rep = copy.deepcopy(report)
         with recorder.isolated():
-            _unbuilt_markers(rep, Config.load(root / "echolot.yml"))
+            _markers_against_code(rep, Config.load(root / "echolot.yml"))
         return rep["markers"].get("unbuilt"), to_markdown(rep)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -2630,6 +2630,65 @@ def _(report):
     # The macrobenchmark builds the app, so it is the recording that is older.
     assert gradle["install"] == [] and "In gradle mode `echolot collect` builds" in gradle_text, \
         gradle_text[:3000]
+
+
+@check("markers: names the traces hold and no string in the code makes are said with the build")
+def _(report):
+    """A round recorded from the build made before `mark --remove`.
+
+    The build on the phone keeps the markers until it is built again, and with
+    them it lacks every change made to the code since: a round from it,
+    compared as if it had the fix, says the fix did nothing (#393). Every
+    prefixed name in the traces is held against every string in the code,
+    tagged or not, and a name the code puts together at run time makes every
+    name that starts with its fixed part.
+    """
+    import copy
+
+    from .main import _markers_against_code
+    from .report import to_markdown
+
+    def said(root: Path) -> tuple[dict | None, str]:
+        rep = copy.deepcopy(report)
+        with recorder.isolated():
+            _markers_against_code(rep, Config.load(root / "echolot.yml"))
+        return rep["markers"].get("removed"), to_markdown(rep)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        (root / "echolot.yml").write_text(
+            "project:\n  package: com.example.app\nrunner:\n  mode: launch\n", encoding="utf-8")
+        source = root / "app/src/main/java/com/example/app/App.kt"
+        # Four of the trace's five: two tagged, one added by hand without the
+        # tag, one put together from a template.
+        kept = ("class App {\n"
+                '    android.os.Trace.beginSection("AGENTTMP_seed_first") // echolot:mark\n'
+                "    android.os.Trace.endSection() // echolot:mark\n"
+                '    android.os.Trace.beginSection("AGENTTMP_seed_again") // echolot:mark\n'
+                "    android.os.Trace.endSection() // echolot:mark\n"
+                '    fun parse() = trace("AGENTTMP_parse_json") { }\n'
+                '    fun insert(n: String) = trace("AGENTTMP_insert_$n") { }\n')
+        source.write_text(kept + "}\n", encoding="utf-8")
+        removed, text = said(root)
+        source.write_text(kept + '    val third = "AGENTTMP_seed_third"\n}\n', encoding="utf-8")
+        every_one, _ = said(root)
+        (root / "echolot.yml").write_text(
+            "project:\n  package: com.example.app\nrunner:\n  mode: gradle\n", encoding="utf-8")
+        source.write_text(kept + "}\n", encoding="utf-8")
+        gradle, gradle_text = said(root)
+    assert removed == {"names": ["AGENTTMP_seed_third"], "mode": "launch",
+                       "install": [":app:installProdBenchmark", ":app:installProdRelease"]}, removed
+    assert ("The temporary marker `AGENTTMP_seed_third` is in these traces and nowhere in the "
+            "code: the app on the phone was built before it was taken out, and has none of the "
+            "changes made to the code since. Build and install the app with `./gradlew "
+            ":app:installProdBenchmark`") in text, text[:3000]
+    # The code makes every name the traces hold: nothing was taken out.
+    assert every_one is None, every_one
+    # The macrobenchmark builds the app from the code, so the traces are older.
+    assert gradle["install"] == [] and ("the traces were recorded before it was taken out. In "
+                                        "gradle mode `echolot collect` builds the app from the "
+                                        "code as it is now") in gradle_text, gradle_text[:3000]
 
 
 # --- the domains map -------------------------------------------------------

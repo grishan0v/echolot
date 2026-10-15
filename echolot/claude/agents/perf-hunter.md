@@ -288,7 +288,14 @@ gradle task that does it. In gradle mode the macrobenchmark builds and
 installs the app itself. A round recorded from the old build holds none of
 the new markers, and `analyze` says so at the top of the report. That is the
 build, not the trace: build, install, record again, rather than concluding
-without the breakdown the markers were placed for.
+without the breakdown the markers were placed for. `collect` reads the build
+on the phone before it records and stops when it lacks any of the code's
+markers, naming them and the task: run the task, then `collect` again. A build
+made from this code that still lacks one leaves out the file it is in; move
+that marker into code the app runs. After `mark --remove`, `analyze` names the
+markers the traces hold and the code no longer has: that round came from a
+build made before the removal and every change since. Build, install, record
+again before comparing anything against it.
 
 **Never put a suspension point inside a section.** A section must end on the
 thread that began it, and a coroutine may resume on another thread of its pool;

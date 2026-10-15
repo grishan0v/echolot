@@ -112,6 +112,8 @@ report — and they are attributed to code nobody touched this time.
 `echolot mark --remove` takes out what `mark --apply` wrote; anything added by
 hand goes by hand. Outside gradle mode, build and install the app after that:
 `collect` records the build on the phone, and the one there still has them.
+A round recorded from it anyway gets a warning at the top of its report,
+naming the markers the traces hold and the code no longer has.
 
 **Thresholds.** Read `config` and `detectors[].params_source` in the last
 `report.json`, or the `Config:` line in `report.md`. If the thresholds were

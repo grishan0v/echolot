@@ -64,10 +64,13 @@ Launch and command modes build nothing: they record the app that is
 installed on the phone. After a change to its code — `echolot mark --apply`,
 a marker added by hand, `mark --remove` — build and install the variant the
 config measures before the next `collect`, or the round measures the old
-build. `mark --apply` ends with the gradle task that does it, and `analyze`
-says so when none of the temporary markers in the code is in the traces.
-Gradle mode builds and installs the app itself, as part of the
-macrobenchmark's task.
+build. `mark --apply` ends with the gradle task that does it. When the code
+has temporary markers, `collect` reads the build on the phone for them and
+stops before a round that could not hold them
+([The build on the phone](#the-build-on-the-phone)). `analyze` says it
+afterwards both ways: when none of the code's temporary markers is in the
+traces, and when the traces hold markers the code no longer has. Gradle mode
+builds and installs the app itself, as part of the macrobenchmark's task.
 
 ### `launch` — we drive it
 
@@ -92,6 +95,10 @@ from `am start` stops the set at that repeat: a `runner.activity` with a typo
 in it, or a build installed under another activity. The repeat's own trace
 is not kept, and the ones before it are.
 
+When the code has temporary markers, the build that is there is read for them
+next, and one that lacks any stops the set before it starts: see
+[The build on the phone](#the-build-on-the-phone).
+
 ### `command` — something else drives it
 
 We record the trace around a command of your choosing. Anything that can move
@@ -113,6 +120,10 @@ says the trace covers only its beginning.
 It runs with `ANDROID_SERIAL` set to the device being recorded, so a bare
 `adb shell …` inside it reaches that device — with a second one plugged in it
 would otherwise stop at "more than one device", whatever `--device` said.
+
+The scenario may install the app itself, so the build on the phone is read
+for the code's temporary markers once more after the first repeat when it
+lacked them before the set: see [The build on the phone](#the-build-on-the-phone).
 
 ### `gradle` — the macrobenchmark writes its own
 
@@ -297,6 +308,74 @@ repeat is kept, and its line says that no start was measured.
 
 In `gradle` mode the macrobenchmark drives the device, its screen included,
 and `collect` reads nothing from it beyond what `runner.cooldown` waits on.
+
+## The build on the phone
+
+A temporary marker reaches a trace only through a build, and `launch` and
+`command` modes record the build that is installed on the phone. A hunt ran
+`mark --apply` and then recorded five cold starts with nothing built in
+between. None of its markers was in the traces, the hunt put that down to the
+trace, and it ended without the breakdown the markers were placed for.
+
+So when the code has temporary markers — the prefixed names on lines tagged
+`// echolot:mark`, in the checkout the config is in — `collect` reads the
+build on the phone for them before the set:
+
+- `pm path` lists the app's APKs, and the phone's own `unzip` and `grep` pick
+  every name with the prefix out of their code. A marker's name is a string
+  in the app's code, so the build holds it exactly when it was built with
+  the marker in.
+- A build that lacks any of the code's markers stops `collect` before
+  anything is recorded. The sentence names them, the files they are in, and
+  the step that puts them on the phone, with the gradle task `mark --apply`
+  names:
+
+  ```text
+  collection error: the build of com.example.app on R58M123ABC lacks 1 of the
+  2 temporary markers in the code (AGENTTMP_feed_load in
+  app/src/main/kotlin/FeedViewModel.kt), so no trace of it would hold it.
+  Build and install the app with `./gradlew :app:installBenchmark`, then
+  collect again. …
+  ```
+
+- A build that has them all gets a line that says so, and the set goes on.
+
+Any one marker the build lacks stops it. A build holds every marker its code
+had, whatever the scenario runs, so a round's new markers missing from a
+build that has the older ones are caught here. In the traces they would read
+as code the scenario does not run, and `analyze` warns only when the traces
+hold none of the code's markers. A build made from this code that still
+lacks a marker leaves out the file it is in: a test source, another module
+or flavour. Move the marker into code the app runs, or take it out. A name
+the code puts together at run time, `"AGENTTMP_load_$id"`, is looked for by
+its fixed start, the only part of it that is a string in the build.
+
+When the phone cannot answer — no `unzip`, a `grep` that cannot read the
+code, an APK the shell may not open — `collect` says the build could not be
+read and records the set as before, and `analyze` says afterwards if the
+traces lack the markers. The search first reads a short input whose answer is
+known and counts the code files it found, so a phone whose tools behave
+differently reads as "could not be read", never as a build without the
+markers.
+
+The reading costs one `adb shell` call, and only when the code has temporary
+markers. On the SM-A515F a large Kotlin app's APK, with 30 MB of code in
+three files, took about 2 s, and a small app's 0.3 s. It runs before the
+device is held still, so `runner.cooldown` takes the heat of it.
+
+In `command` mode the scenario may install the app itself. A build that
+lacks markers before the set gets a line instead of a stop, and is read again
+once the first repeat has recorded: the set stops there if it still lacks
+them, and that repeat's trace is not kept.
+
+The time the app was installed is not asked. Held against the time the files
+were written, it says when the build went on the phone, which is another
+question: a checkout, a rebase or a formatter makes a file newer than a build
+that has its markers, an APK built before them and installed after reads as
+new, and a time says nothing of a marker in a file the build leaves out.
+
+In `gradle` mode the macrobenchmark builds the app from the code, and the
+build is not read.
 
 ## The device's state
 

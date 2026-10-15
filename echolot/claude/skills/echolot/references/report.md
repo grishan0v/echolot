@@ -269,7 +269,17 @@ variant the config measures; the markdown says it at the top. Read nothing
 about the markers off that round. Build and install the app and record
 again; in gradle mode `collect` builds it, so recording again is the whole
 step. A fresh round that still holds none of them means the scenario does
-not run the code they wrap.
+not run the code they wrap. A name the code puts together at run time
+(`"AGENTTMP_load_$id"`) counts as there when a trace name starts with its
+fixed part.
+
+`removed` appears when the traces hold prefixed names that no string in the
+code makes any more, tagged or not: `mark --remove` took them out after the
+app recorded was built, so that app has none of the changes made to the code
+since, a fix among them. It carries their `names`, the `mode` and `install`,
+as `unbuilt` does, and the markdown says it at the top. Compare nothing
+against that round and read no fix off it: build and install the app, and
+record again; in gradle mode, record again.
 
 ## Views — `echolot report`
 

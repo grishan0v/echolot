@@ -191,9 +191,31 @@ modes, and builds nothing. After a change to the code — `echolot mark
 --apply`, a marker added by hand, `mark --remove` — build and install the
 variant the config measures before recording again: `mark --apply` ends with
 the gradle task that does it. A round recorded without that measures the old
-build, and `analyze` says so when none of the temporary markers in the code
-is in the traces. In gradle mode the macrobenchmark builds and installs the
-app itself.
+build. In gradle mode the macrobenchmark builds and installs the app itself.
+
+**When the code has temporary markers, `collect` reads the build for them
+first.** It picks every prefixed name out of the installed APKs' code on the
+phone, and a build that lacks any of the code's markers stops it before
+anything is recorded: `the build of <package> on <serial> lacks 1 of the 3
+temporary markers in the code (AGENTTMP_x in <file>), so no trace of it would
+hold it. Build and install the app with ./gradlew …, then collect again.` Do
+exactly that: run the task it names, then `collect` again. If a build made
+from this code still lacks a marker, the file it is in is not part of that
+build (a test source, another module or flavour): move the marker into code
+the app runs, or take it out. `the build on the phone has all N temporary
+markers in the code` is the line when it has them. In command mode a build
+that lacks markers before the set is read again after the first repeat, since
+the scenario may install the app, and the set stops there if it still lacks
+them. `[!] whether the build on the phone has … could not be read` means the
+phone's tools could not tell, and the set goes on; `analyze` then says it if
+the traces lack the markers.
+
+`analyze` says it afterwards both ways, at the top of the report: when none of
+the code's temporary markers is in the traces (`markers.unbuilt`), and when
+the traces hold markers that no string in the code makes any more
+(`markers.removed`: the build on the phone was made before they were taken
+out, and has none of the changes since). Either way, build, install, and
+record again; read nothing off that round.
 
 **The screen is `collect`'s to wake** in launch and command modes. Before the
 set and before each repeat it reads the screen, wakes it when it is dark, and

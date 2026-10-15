@@ -998,6 +998,45 @@ def _unbuilt_markers_lines(report: dict[str, Any]) -> list[str]:
             f"install the app{how}, then record again. {still}"]
 
 
+def _removed_markers_lines(report: dict[str, Any], shown: int = 5) -> list[str]:
+    """Prefixed names the traces hold and no string in the code makes any more (#393).
+
+    `mark --remove` took them out, or a hand did, after the app that
+    recorded these traces was built: it has none of the changes made to the
+    code since, a fix among them, and a round compared as if it had one
+    says the fix did nothing. In gradle mode `collect` builds the app from
+    the code, so it is the traces that are older.
+    """
+    r = (report.get("markers") or {}).get("removed") or {}
+    names = r.get("names") or []
+    if not names:
+        return []
+    listed = ", ".join(f"`{n}`" for n in names[:shown])
+    if len(names) > shown:
+        listed += f" and {len(names) - shown} more"
+    if len(names) == 1:
+        head = f"The temporary marker {listed} is in these traces and nowhere in the code"
+        they = "it was"
+    else:
+        head = (f"{len(names)} temporary markers are in these traces and nowhere in the "
+                f"code ({listed})")
+        they = "they were"
+    if r.get("mode") == "gradle":
+        return [f"> ⚠️ {head}: the traces were recorded before {they} taken out. In "
+                f"gradle mode `echolot collect` builds the app from the code as it is "
+                f"now, so record again."]
+    tasks = r.get("install") or []
+    how = f" with {install_command(tasks)}" if tasks else ""
+    return [f"> ⚠️ {head}: the app on the phone was built before {they} taken out, "
+            f"and has none of the changes made to the code since. Build and install "
+            f"the app{how}, then record again."]
+
+
+def _code_markers_lines(report: dict[str, Any]) -> list[str]:
+    """Temporary markers the traces and the code disagree on: a build older than the code."""
+    return [*_unbuilt_markers_lines(report), *_removed_markers_lines(report)]
+
+
 def install_command(tasks: list[str]) -> str:
     """`./gradlew :app:installBenchmark`, and every other task installing as the same package.
 
@@ -1223,7 +1262,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
-    out.extend(_unbuilt_markers_lines(report))
+    out.extend(_code_markers_lines(report))
 
     s = report["summary"]
     out.append(
@@ -1387,7 +1426,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
-    out.extend(_unbuilt_markers_lines(report))
+    out.extend(_code_markers_lines(report))
     return out
 
 
@@ -1476,9 +1515,10 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
 def markers_view(report: dict[str, Any], top: int = 15) -> str:
     m = report.get("markers") or {}
     rows = m.get("rows") or []
-    # Where a hunt looked for its markers and found none (#390): the why
-    # goes above the table, or above the line that says there is none.
-    out = [*_unbuilt_markers_lines(report)]
+    # Where a hunt looked for its markers and found none (#390), or found
+    # ones the code no longer has (#393): the why goes above the table, or
+    # above the line that says there is none.
+    out = _code_markers_lines(report)
     if out:
         out.append("")
     if not rows and not m.get("absent"):
@@ -1512,7 +1552,7 @@ def select(report: dict[str, Any], detectors: list[str], top: int | None,
             "summary": report.get("summary"),
             "config": report.get("config"),
             "markers": {"rows": len(m.get("rows") or []), "absent": m.get("absent") or [],
-                        **({"unbuilt": m["unbuilt"]} if m.get("unbuilt") else {})},
+                        **{k: m[k] for k in ("unbuilt", "removed") if m.get(k)}},
             "detectors": [{"id": d["id"], "rows": len(d.get("rows") or []),
                            "params_source": d.get("params_source"),
                            "error": d.get("error")}

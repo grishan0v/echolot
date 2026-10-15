@@ -73,9 +73,13 @@ SCREEN_ON = ("  mWakefulness=Awake\n  mIsPowered=true\n  mStayOn=true\n"
 
 
 def kind(args: list[str]) -> str:
-    """What one adb call was for, in a word."""
+    """What one adb call was for, in a word.
+
+    The build read (#393) is first: its script lists the APKs with `pm path`.
+    """
     text = " ".join(args)
-    for name, needle in (("devices", "adb devices"), ("resolve", "resolve-activity"),
+    for name, needle in (("build", "unzip -p"),
+                         ("devices", "adb devices"), ("resolve", "resolve-activity"),
                          ("force-stop", "am force-stop"), ("rm", "rm -f"),
                          ("perfetto", "perfetto -c"), ("start", "am start -W"),
                          ("wait", "pidof perfetto"), ("pull", " pull "),

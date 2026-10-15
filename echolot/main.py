@@ -711,7 +711,7 @@ def _markers_info(tp, cfg: Config) -> dict:
     absent = [g for g in globs[1:]
               if not any(fnmatch.fnmatchcase(r["location"], g) for r in out)]
     # Every prefixed name in the trace, the window or not: what the markers
-    # in the code are held against (`_unbuilt_markers`). One that ran
+    # in the code are held against (`_markers_against_code`). One that ran
     # outside the window is in the build all the same.
     in_trace = sorted({r["name"] for r in tp.query(
         f"SELECT DISTINCT name FROM slice WHERE name GLOB '{sql_value(globs[0])}'")})
@@ -766,7 +766,7 @@ def cmd_analyze(args) -> int:
     placed = place_mod.annotate(rep, _project_root(cfg), cfg.mapping)
     if placed:
         recorder.note(placed=placed)
-    _unbuilt_markers(rep, cfg)
+    _markers_against_code(rep, cfg)
 
     # Which config made this report. Without it the next reader of
     # report.json cannot tell the project's run from one against an ad-hoc
@@ -827,21 +827,29 @@ def cmd_analyze(args) -> int:
     return 0
 
 
-def _unbuilt_markers(rep: dict[str, Any], cfg: Config) -> None:
-    """Put in the report the temporary markers the code has and no trace holds.
+def _markers_against_code(rep: dict[str, Any], cfg: Config) -> None:
+    """Put in the report the temporary markers the traces and the code disagree on.
 
-    `mark --apply` changes the code, and in launch and command modes
-    `collect` records the build that is on the phone. A hunt recorded a
-    round with no build in between, found none of the markers with `report
-    --markers` and with `names`, put that down to the trace, and closed at
-    medium confidence (#390). The report said the markers were missing,
-    which they were, and nothing about why.
+    Both ways say the build is older than the code. Markers the code has
+    and no trace holds (#390): `mark --apply` changes the code, and in
+    launch and command modes `collect` records the build that is on the
+    phone. A hunt recorded a round with no build in between, found none of
+    the markers with `report --markers` and with `names`, put that down to
+    the trace, and closed at medium confidence. Only when none is there:
+    one on a path the scenario does not take is missing on its own, from a
+    build that has the rest.
+
+    And prefixed names the traces hold that no string in the code makes any
+    more (#393): `mark --remove` took them out, and the build on the phone
+    still has them, with none of the changes made since. Any one of them:
+    a name in a trace was in the code of the build that recorded it. Not
+    said of a checkout with no Kotlin or Java in it, a config kept outside
+    the app, where every name would read as taken out.
 
     By name, against every prefixed name anywhere in the traces: a marker
-    that ran outside the window is in the build all the same. And only when
-    none is there: one on a path the scenario does not take is missing on
-    its own, from a build that has the rest. A config that lives in memory
-    has no checkout to read.
+    that ran outside the window is in the build all the same. A name the
+    code puts together at run time is matched by its fixed start. A config
+    that lives in memory has no checkout to read.
     """
     from . import mark as mark_mod
 
@@ -849,20 +857,34 @@ def _unbuilt_markers(rep: dict[str, Any], cfg: Config) -> None:
     if not cfg.path or markers.get("in_trace") is None:
         return
     root = _project_root(cfg)
-    planted = mark_mod.planted(root, markers.get("prefix") or mark_mod.DEFAULT_PREFIX)
-    if not planted or set(planted) & set(markers["in_trace"]):
+    in_trace = markers["in_trace"]
+    code = mark_mod.named(root, markers.get("prefix") or mark_mod.DEFAULT_PREFIX)
+
+    def seen(name: str) -> bool:
+        fixed = code.head_of(name)
+        return name in in_trace or (fixed is not None
+                                    and any(t.startswith(fixed) for t in in_trace))
+
+    unbuilt = code.planted if code.planted and not any(map(seen, code.planted)) else {}
+    removed = [n for n in in_trace if not code.makes(n)] if code.files else []
+    if not unbuilt and not removed:
         return
     try:
         mode = str(cfg.runner.get("mode", "launch"))
     except ConfigError:
         mode = "launch"
-    markers["unbuilt"] = {
-        "names": sorted(planted),
-        "files": sorted({f for files in planted.values() for f in files}),
-        "mode": mode,
-        "install": [] if mode == "gradle" else _install_tasks(root, cfg),
-    }
-    recorder.note(unbuilt_markers=len(planted))
+    install = [] if mode == "gradle" else _install_tasks(root, cfg)
+    if unbuilt:
+        markers["unbuilt"] = {
+            "names": sorted(unbuilt),
+            "files": sorted({f for files in unbuilt.values() for f in files}),
+            "mode": mode,
+            "install": install,
+        }
+        recorder.note(unbuilt_markers=len(unbuilt))
+    if removed:
+        markers["removed"] = {"names": removed, "mode": mode, "install": install}
+        recorder.note(removed_markers=len(removed))
 
 
 def _warn_confirmed_changed(root: Path, cfg: Config) -> list[dict[str, Any]]:
@@ -3041,6 +3063,9 @@ def cmd_collect(args) -> int:
     # it. Written before the first iteration and after the last, with why
     # when it ended badly.
     progress = runner.Progress(project / runner.PROGRESS_FILE)
+    # The temporary markers in the code, which the build on the phone must
+    # have for the set to hold them (#393). Gradle mode builds it from the code.
+    planted = _planted(cfg, project) if mode in ("launch", "command") else None
 
     _note_local(cfg)
     if mode == "gradle" and (args.iterations is not None or "iterations" in section):
@@ -3066,6 +3091,7 @@ def cmd_collect(args) -> int:
             # compared against.
             on_set_aside=lambda d: hunt_mod.record_traces(project, d),
             progress=progress.update,
+            planted=planted,
         )
     except runner.RunnerError as e:
         print(f"collection error: {e}", file=sys.stderr)
@@ -3107,6 +3133,16 @@ def cmd_collect(args) -> int:
         print(r["path"])
     hunt_mod.touch(project, collect=True)
     return 0
+
+
+def _planted(cfg: Config, root: Path):
+    """The code's temporary markers, with how to build them in; None when it has none."""
+    from . import mark as mark_mod
+    from . import runner
+
+    prefix = str(cfg.get("instrumentation.temp_prefix") or mark_mod.DEFAULT_PREFIX)
+    names = mark_mod.planted(root, prefix)
+    return runner.Planted(prefix, names, _install_step(cfg, root)) if names else None
 
 
 def _private_repo(args, target: Path):

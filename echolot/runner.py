@@ -17,6 +17,7 @@ import os
 import re
 import signal
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -564,6 +565,162 @@ def installed(device: str, package: str, run: Callable[..., str] | None = None) 
     return any(line.startswith("package:") for line in out.splitlines())
 
 
+# --- the build on the phone against the markers in the code (#393) -------------
+
+@dataclass(frozen=True)
+class Planted:
+    """The temporary markers in the code, which the build on the phone must have.
+
+    `names` maps each to the files it is in, as `mark.planted` lists them.
+    `install` is the step that puts them on the phone, in the words `mark
+    --apply` ends with: "build and install the app with `./gradlew …`".
+    """
+
+    prefix: str
+    names: dict[str, list[str]]
+    install: str
+
+
+# Run on the phone, where the build is. A marker's name is a string constant in
+# the app's code, and every string there ends with a zero byte: `grep -z` reads
+# one string at a time, and `-o` prints the name from the prefix to its end.
+# What could make the answer wrong is put in the answer (`_build_names_read`).
+# The first line hands the same grep a string whose answer is known; `unzip -l`
+# counts each APK's code files; the last line is grep's exit status. A phone
+# without unzip, a grep without -z, an APK the shell may not read: each reads
+# as "could not tell", never as a build without the markers. Measured on an
+# A51, Android 13: 30 MB of code in a large Kotlin app's APK, about 2 s.
+_BUILD_NAMES = """\
+printf 'x\\000\\021%secholot\\000y\\000' {prefix} | grep -a -z -o -E {pattern} | sed 's/^/echolot-selftest /'
+exec 3>&1
+for a in $(pm path {package} 2>/dev/null | sed -n 's/^package://p'); do
+  echo "echolot-apk $(unzip -l "$a" 'classes*.dex' 2>/dev/null | tail -n 1)" >&3
+  unzip -p "$a" 'classes*.dex' 2>/dev/null
+done | grep -a -z -o -E {pattern}
+echo "echolot-grep $?"
+"""
+
+
+def build_names(device: str, package: str, prefix: str,
+                run: Callable[..., str] | None = None) -> tuple[set[str] | None, str]:
+    """Every name with the prefix in the code of the build on the device.
+
+    None, with why, when the phone cannot say. Read on the phone rather
+    than by the install's time against the files': a checkout or a
+    formatter makes a file newer than a build that has its markers, an old
+    APK installed late reads as new, and a time says nothing of a marker in
+    a file the build leaves out.
+    """
+    import shlex
+
+    script = _BUILD_NAMES.format(
+        package=shlex.quote(package.split(":", 1)[0]), prefix=shlex.quote(prefix),
+        pattern=shlex.quote(re.sub(r"([.\[\](){}*+?|^$\\])", r"\\\1", prefix) + ".*"))
+    try:
+        out = (run or _run)(["adb", "-s", device, "shell", script], timeout=180)
+    except RunnerError as e:
+        return None, f"the phone did not answer: {e.gist}"
+    except UnicodeDecodeError:
+        return None, "a name in the app's code is not text this can read"
+    return _build_names_read(out, prefix)
+
+
+def _build_names_read(out: str, prefix: str) -> tuple[set[str] | None, str]:
+    """What `_BUILD_NAMES` printed: the names, or why they cannot be trusted."""
+    names: set[str] = set()
+    tested = False
+    apks = files = 0
+    status = None
+    for line in out.splitlines():
+        if line.startswith("echolot-selftest "):
+            tested = line[len("echolot-selftest "):] == prefix + "echolot"
+        elif line.startswith("echolot-apk"):
+            apks += 1
+            m = re.search(r"(\d+)\s+files?\s*$", line)
+            files += int(m.group(1)) if m else 0
+        elif line.startswith("echolot-grep "):
+            status = line[len("echolot-grep "):].strip()
+        elif line.startswith(prefix):
+            names.add(line)
+    if not apks:
+        return None, "`pm path` lists no APK of the app"
+    if not files:
+        return None, "`unzip` on the phone lists no code in the app's APKs"
+    if not tested or status not in ("0", "1"):
+        return None, "`grep` on the phone does not read the app's code the way this needs"
+    return names, ""
+
+
+def unbuilt(device: str, package: str, planted: Planted,
+            run: Callable[..., str] | None = None) -> tuple[list[str] | None, str]:
+    """The code's markers the build on the device lacks; None, with why, when it cannot tell.
+
+    A name the code puts together at run time is matched by its fixed start,
+    the only part of it that is a string in the build.
+    """
+    from .mark import head
+
+    names, why = build_names(device, package, planted.prefix, run)
+    if names is None:
+        return None, why
+    lacking = []
+    for name in planted.names:
+        fixed = head(name)
+        if name not in names and (fixed is None or not any(n.startswith(fixed) for n in names)):
+            lacking.append(name)
+    return sorted(lacking), ""
+
+
+def _has_line(planted: Planted) -> str:
+    n = len(planted.names)
+    return (f"  the build on the phone has "
+            f"{'the temporary marker' if n == 1 else f'all {n} temporary markers'} in the code")
+
+
+def _unread_line(planted: Planted, why: str) -> str:
+    """The set goes on as before, and `analyze` is what says it afterwards."""
+    n = len(planted.names)
+    return (f"  [!] whether the build on the phone has "
+            f"{'the temporary marker' if n == 1 else f'the {n} temporary markers'} in the "
+            f"code could not be read: {why}. `analyze` says so if the traces lack "
+            f"{'it' if n == 1 else 'all of them'}")
+
+
+def unbuilt_sentence(device: str, package: str, planted: Planted, lacking: list[str]) -> str:
+    """Why a set stops before it records: the build on the phone lacks the code's markers."""
+    n, k = len(planted.names), len(lacking)
+    if n == 1:
+        said = f"{_lacks(planted, lacking)}, {_where(planted, lacking)},"
+        them, one = "it", "it"
+    else:
+        said = f"{_lacks(planted, lacking)} ({_where(planted, lacking)}),"
+        them, one = ("it", "it") if k == 1 else ("them", "one")
+    install = planted.install[:1].upper() + planted.install[1:]
+    return (f"the build of {package} on {device} {said} so no trace of it would hold "
+            f"{them}. {install}, then collect again. If a build made from this code still "
+            f"lacks {one}, the file it is in is not part of that build, such as a test "
+            f"source or another module or flavour: move the marker, or take it out "
+            f"(`echolot mark --remove` takes out every marker).")
+
+
+def _lacks(planted: Planted, lacking: list[str]) -> str:
+    """`has none of the 3 temporary markers in the code`, `lacks 2 of the 7 …`."""
+    n, k = len(planted.names), len(lacking)
+    if n == 1:
+        return "lacks the temporary marker in the code"
+    if k == n:
+        return f"has none of the {n} temporary markers in the code"
+    return f"lacks {k} of the {n} temporary markers in the code"
+
+
+def _where(planted: Planted, lacking: list[str], shown: int = 5) -> str:
+    """`AGENTTMP_a in app/src/main/kotlin/A.kt`, for the first few, and how many more."""
+    said = [f"{name} in {', '.join(planted.names[name])}" for name in lacking[:shown]]
+    if len(lacking) > shown:
+        said.append(f"{len(lacking) - shown} more")
+    return "; ".join(said)
+
+
 def resolve_activity(device: str, package: str) -> str:
     out = _run(["adb", "-s", device, "shell", "cmd", "package",
                 "resolve-activity", "--brief", package], timeout=60)
@@ -922,7 +1079,8 @@ def collect(package: str, out_dir: Path, iterations: int,
             name: str = "run",
             log: Callable[[str], None] = print,
             on_set_aside: Callable[[Path], None] | None = None,
-            progress: Callable[..., None] | None = None) -> list[dict]:
+            progress: Callable[..., None] | None = None,
+            planted: Planted | None = None) -> list[dict]:
     """N repeats of a scenario. The mode decides who drives it.
 
     launch  — we do: force-stop and launch the activity. Cold start.
@@ -949,6 +1107,13 @@ def collect(package: str, out_dir: Path, iterations: int,
     `progress` is told where the run stands — `done` out of `iterations`
     once per iteration where we drive them, and only that it started where
     the macrobenchmark does. See `Progress`.
+
+    `planted` is the temporary markers in the code, when it has any. Launch
+    and command modes record the build on the phone, and a set from one
+    that lacks them holds none of them: it stops before it records (#393).
+    In command mode the scenario may install the app itself, so a build
+    found lacking is read again after the first repeat, and the set stops
+    there. Gradle mode builds the app from the code and is not asked.
     """
     import contextlib
     import time
@@ -1082,6 +1247,24 @@ def collect(package: str, out_dir: Path, iterations: int,
         log(f"device {dev}, activity {activity}")
     else:
         log(f"device {dev}, scenario: {command}")
+    # Markers reach a trace only through a build, and a set recorded straight
+    # after `mark --apply` held none of them (#390). Read before the device
+    # is held still, so that the cooldown takes the heat of the reading.
+    reread = False
+    if planted:
+        lacking, why = unbuilt(dev, package, planted)
+        if lacking and mode == "launch":
+            raise RunnerError(unbuilt_sentence(dev, package, planted, lacking))
+        if lacking == []:
+            log(_has_line(planted))
+        elif mode == "command":
+            reread = True
+            if lacking:
+                log(f"  [!] the build on the phone {_lacks(planted, lacking)}; the "
+                    f"scenario may install another, so it is read again after the "
+                    f"first repeat")
+        else:
+            log(_unread_line(planted, why))
     if hz:
         log(f"  sampling callstacks at {hz} Hz (runner.sampling): the app "
             f"runs slower for it, so compare this set only with another "
@@ -1132,6 +1315,17 @@ def collect(package: str, out_dir: Path, iterations: int,
             _run(["adb", "-s", dev, "shell",
                   "while pidof perfetto > /dev/null; do sleep 0.5; done"],
                  timeout=duration_ms // 1000 + 300)
+            # Command mode: whatever the scenario installed is on the phone
+            # now, and it is what this repeat recorded. Stopped before the
+            # trace takes a name, as a launch that failed is.
+            if reread and planted:
+                reread = False
+                lacking, why = unbuilt(dev, package, planted)
+                if lacking:
+                    _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
+                    raise RunnerError(f"repeat 1 of {iterations}: "
+                                      + unbuilt_sentence(dev, package, planted, lacking))
+                log(_has_line(planted) if lacking == [] else _unread_line(planted, why))
             # `am start` refused, an activity that is not there most often,
             # and exited 0 all the same: the repeat recorded the device and
             # no app. Stopped before the trace takes a name (#385).

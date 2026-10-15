@@ -1931,30 +1931,94 @@ def planted(root: Path, prefix: str = DEFAULT_PREFIX) -> dict[str, list[str]]:
     """The temporary markers in the code: each name, with the files it is in.
 
     The names with the prefix on the lines that carry the tag — the ones
-    `--apply` wrote and the ones added by hand in its shape — found by the
-    walk `remove` takes. An end line names nothing, so a marker is counted
-    by its begin. `analyze` holds the traces against these (#390): a round
-    recorded from a build made before them holds none.
+    `--apply` wrote and the ones added by hand in its shape. An end line
+    names nothing, so a marker is counted by its begin. `analyze` holds the
+    traces against these (#390), and `collect` the build on the phone
+    (#393): one made before them holds none.
+    """
+    return named(root, prefix).planted
+
+
+# A name the code puts together at run time: a Kotlin template (`$id`,
+# `${id}`) or a format (`%s`, `{0}`). Only the part before it is a string of
+# its own, in the app's code; the whole name is in no file.
+_PUT_TOGETHER = re.compile(r"[$%{]")
+
+
+def head(name: str) -> str | None:
+    """The fixed start of a name put together at run time; None for a whole one."""
+    m = _PUT_TOGETHER.search(name)
+    return name[:m.start()] if m else None
+
+
+@dataclass(frozen=True)
+class Named:
+    """The prefixed names in the code's string literals.
+
+    `planted` is the temporary markers, as `planted()` returns them. `exact`
+    is every literal that is a whole name, tagged or not: a marker added by
+    hand without the tag is in the code all the same. `heads` is every
+    literal a name is put together from at run time — a template's or a
+    format's fixed start, a literal joined to more with `+`, the prefix on
+    its own — and each one makes every name that starts with it. `files` is
+    how many Kotlin and Java files there were: none means no code to hold
+    anything against.
+    """
+
+    planted: dict[str, list[str]]
+    exact: frozenset[str]
+    heads: frozenset[str]
+    files: int
+
+    def makes(self, name: str) -> bool:
+        """Whether some string in the code can be this name."""
+        return name in self.exact or any(name.startswith(h) for h in self.heads)
+
+    def head_of(self, literal: str) -> str | None:
+        """The fixed start of the names a literal of the code puts together; None for itself."""
+        fixed = head(literal)
+        return literal if fixed is None and literal in self.heads else fixed
+
+
+def named(root: Path, prefix: str = DEFAULT_PREFIX) -> Named:
+    """Every prefixed name in the code's string literals, in one walk.
+
+    The walk `remove` takes, over every Kotlin and Java file; a file without
+    the prefix in its bytes is not read further. `analyze` wants both halves
+    (#390, #393): the tagged names against what the traces lack, and all of
+    them against what the traces hold and the code no longer has.
     """
     root = root.resolve()
-    named = re.compile('"(' + re.escape(prefix) + r'[^"\\]*)"')
+    literal = re.compile('"(' + re.escape(prefix) + r'[^"\\]*)"(\s*(?:\+|\.plus\(|\.concat\())?')
+    needle = prefix.encode()
     found: dict[str, list[str]] = {}
-    for p in domains_source_files(root):
+    exact: set[str] = set()
+    heads: set[str] = set()
+    sources = domains_source_files(root)
+    for p in sources:
         try:
             data = p.read_bytes()
         except OSError:
             continue
-        if TAG.encode() not in data:
+        if needle not in data:
             continue
         rel = _rel(p, root)
         for line in data.decode("utf-8", errors="replace").split("\n"):
-            if TAG not in line:
-                continue
-            for name in named.findall(line):
-                files = found.setdefault(name, [])
-                if rel not in files:
-                    files.append(rel)
-    return found
+            tagged = TAG in line
+            for m in literal.finditer(line):
+                text = m.group(1)
+                if tagged:
+                    files = found.setdefault(text, [])
+                    if rel not in files:
+                        files.append(rel)
+                fixed = head(text)
+                if fixed is not None:
+                    heads.add(fixed)
+                elif m.group(2) or text == prefix:
+                    heads.add(text)
+                else:
+                    exact.add(text)
+    return Named(found, frozenset(exact), frozenset(heads), len(sources))
 
 
 # --- rendering -------------------------------------------------------------------
