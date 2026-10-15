@@ -710,7 +710,13 @@ def _markers_info(tp, cfg: Config) -> dict:
     # changed under it.
     absent = [g for g in globs[1:]
               if not any(fnmatch.fnmatchcase(r["location"], g) for r in out)]
-    return {"prefix": prefix, "globs": globs, "rows": out, "absent": absent}
+    # Every prefixed name in the trace, the window or not: what the markers
+    # in the code are held against (`_unbuilt_markers`). One that ran
+    # outside the window is in the build all the same.
+    in_trace = sorted({r["name"] for r in tp.query(
+        f"SELECT DISTINCT name FROM slice WHERE name GLOB '{sql_value(globs[0])}'")})
+    return {"prefix": prefix, "globs": globs, "rows": out, "absent": absent,
+            "in_trace": in_trace}
 
 
 def cmd_analyze(args) -> int:
@@ -760,6 +766,7 @@ def cmd_analyze(args) -> int:
     placed = place_mod.annotate(rep, _project_root(cfg), cfg.mapping)
     if placed:
         recorder.note(placed=placed)
+    _unbuilt_markers(rep, cfg)
 
     # Which config made this report. Without it the next reader of
     # report.json cannot tell the project's run from one against an ad-hoc
@@ -818,6 +825,44 @@ def cmd_analyze(args) -> int:
     if kept is not None:
         print(f"→ {kept}  (this investigation's copy)", file=sys.stderr)
     return 0
+
+
+def _unbuilt_markers(rep: dict[str, Any], cfg: Config) -> None:
+    """Put in the report the temporary markers the code has and no trace holds.
+
+    `mark --apply` changes the code, and in launch and command modes
+    `collect` records the build that is on the phone. A hunt recorded a
+    round with no build in between, found none of the markers with `report
+    --markers` and with `names`, put that down to the trace, and closed at
+    medium confidence (#390). The report said the markers were missing,
+    which they were, and nothing about why.
+
+    By name, against every prefixed name anywhere in the traces: a marker
+    that ran outside the window is in the build all the same. And only when
+    none is there: one on a path the scenario does not take is missing on
+    its own, from a build that has the rest. A config that lives in memory
+    has no checkout to read.
+    """
+    from . import mark as mark_mod
+
+    markers = rep.get("markers") or {}
+    if not cfg.path or markers.get("in_trace") is None:
+        return
+    root = _project_root(cfg)
+    planted = mark_mod.planted(root, markers.get("prefix") or mark_mod.DEFAULT_PREFIX)
+    if not planted or set(planted) & set(markers["in_trace"]):
+        return
+    try:
+        mode = str(cfg.runner.get("mode", "launch"))
+    except ConfigError:
+        mode = "launch"
+    markers["unbuilt"] = {
+        "names": sorted(planted),
+        "files": sorted({f for files in planted.values() for f in files}),
+        "mode": mode,
+        "install": [] if mode == "gradle" else _install_tasks(root, cfg),
+    }
+    recorder.note(unbuilt_markers=len(planted))
 
 
 def _warn_confirmed_changed(root: Path, cfg: Config) -> list[dict[str, Any]]:
@@ -2829,8 +2874,11 @@ def cmd_mark(args) -> int:
     # with what was applied in it: the summary used to follow the JSON on
     # the same stdout, and whatever parsed it stopped there.
     applied = None
+    after = None
     if args.apply and not pl.ambiguity:
         applied = mark_mod.apply(root, pl)
+        if applied[0]:
+            after = _after_apply(cfg, root)
     if args.json:
         data = pl.to_dict()
         if applied is not None:
@@ -2840,6 +2888,7 @@ def cmd_mark(args) -> int:
             data["unwritable"] = list(applied.unwritable)
             data["already"] = [{"file": rel, "marker": marker}
                                for rel, marker in applied.already]
+            data["next"] = after
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
         for line in mark_mod.render(pl):
@@ -2868,9 +2917,76 @@ def cmd_mark(args) -> int:
             print(f"applied {sum(len(m) for _, m in done)} marker(s) in {len(done)} file(s); "
                   f"every inserted line ends with `{mark_mod.TAG}` — `echolot mark --remove` "
                   f"takes them out" if done else "nothing applicable to apply")
+            if after:
+                print(after)
         recorder.note(applied=sum(len(m) for _, m in done),
                       unreadable=len(unreadable), unwritable=len(applied.unwritable))
     return 0
+
+
+def _record_modes(cfg: Config) -> set[str]:
+    """`runner.mode` of every scenario the config names; empty when it cannot be read."""
+    chosen = cfg.scenario_key
+    try:
+        return {str(cfg.select(name).runner.get("mode", "launch")) for name in cfg.scenarios}
+    except ConfigError:
+        return set()
+    finally:
+        cfg.scenario_key = chosen
+
+
+def _install_tasks(root: Path, cfg: Config | None) -> list[str]:
+    """The gradle tasks that install the variant the config measures.
+
+    Each one where several variants install as `project.package`: which of
+    them is on the phone is not written anywhere `scan` reads. None where
+    the build scripts do not say, or cannot be read.
+    """
+    from . import scan as scan_mod
+
+    package = str(cfg.get("project.package") or "") if cfg is not None else ""
+    try:
+        return scan_mod.install_tasks(root, package)
+    except OSError:
+        return []
+
+
+def _install_step(cfg: Config | None, root: Path) -> str:
+    """How to build and install the variant the config measures, by task where known."""
+    tasks = _install_tasks(root, cfg)
+    if tasks:
+        return f"build and install the app with {report_mod.install_command(tasks)}"
+    package = str(cfg.get("project.package") or "") if cfg is not None else ""
+    return "build and install " + (f"the variant that installs as {package}" if package
+                                   else "the variant the config measures")
+
+
+def _after_apply(cfg: Config | None, root: Path) -> str:
+    """The line `mark --apply` ends with: how its markers reach a recording.
+
+    In launch and command modes `collect` records the build that is on the
+    phone, and `--apply` changes the code and nothing else. A hunt ran
+    `collect` straight after it, found none of the markers in the traces,
+    put that down to the trace, and closed at medium confidence without the
+    breakdown the markers were placed for (#390). So the line names the
+    build and install in between. In gradle mode the macrobenchmark builds
+    the app, and the line says so instead. A config whose scenarios record
+    both ways gets the build: it is what the others need.
+    """
+    if cfg is None:
+        return ("next: build and install the app, then record with `echolot collect`. In "
+                "launch and command modes `collect` records the build that is on the "
+                "phone, and that build has none of these markers; in gradle mode the "
+                "macrobenchmark builds it.")
+    modes = _record_modes(cfg)
+    if modes == {"gradle"}:
+        return ("next: record with `echolot collect`: in gradle mode the macrobenchmark "
+                "builds the app with these markers and installs it first.")
+    named = sorted(modes & {"launch", "command"}) or ["launch", "command"]
+    where = " and ".join(named) + (" modes" if len(named) > 1 else " mode")
+    return (f"next: {_install_step(cfg, root)}, then record with `echolot collect`. "
+            f"In {where} `collect` records the build that is on the phone, and that "
+            f"build has none of these markers.")
 
 
 def _mark_config(args, root: Path) -> str | None:

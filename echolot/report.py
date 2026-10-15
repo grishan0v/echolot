@@ -458,7 +458,7 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     for row in rows:
         if row["location"] in open_in:
             row["unfinished"] = True
-    return {
+    merged = {
         "prefix": head.get("prefix"),
         "globs": head.get("globs") or [],
         "rows": rows,
@@ -466,6 +466,12 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
                    if g in set(head.get("absent") or []) and not any(
                        fnmatch.fnmatchcase(n, g) for n in seen)],
     }
+    # The prefixed names any repeat held, the window or not. Only when every
+    # repeat says: one read back from before the key would count as holding
+    # none, and the markers in the code as missing from it.
+    if sections and all("in_trace" in s for s in sections):
+        merged["in_trace"] = sorted({n for s in sections for n in s["in_trace"]})
+    return merged
 
 
 def _merge_window_checks(reports: list[dict[str, Any]]) -> dict[str, Any]:
@@ -960,6 +966,49 @@ def _mapping_lines(report: dict[str, Any]) -> list[str]:
     ]
 
 
+def _unbuilt_markers_lines(report: dict[str, Any]) -> list[str]:
+    """Temporary markers in the code that no trace holds (#390).
+
+    In launch and command modes the app on the phone was built before them,
+    and only a build and an install put them in the next round; the line
+    names the gradle task where `analyze` could read it. In gradle mode
+    `collect` builds the app, so the traces are older than the markers.
+    Either way, markers that a fresh round still lacks wrap code the
+    scenario does not run.
+    """
+    u = (report.get("markers") or {}).get("unbuilt") or {}
+    names = u.get("names") or []
+    if not names:
+        return []
+    if len(names) == 1:
+        head = f"The temporary marker `{names[0]}` is in the code and not in these traces"
+        it, they, are, wrap = "it", "it", "is", "wraps"
+    else:
+        head = f"{len(names)} temporary markers are in the code and none is in these traces"
+        it, they, are, wrap = "them", "they", "are", "wrap"
+    still = (f"If {they} {are} still missing after that, the scenario does not run "
+             f"the code {they} {wrap}.")
+    if u.get("mode") == "gradle":
+        return [f"> ⚠️ {head}: the traces were recorded before {they} went in. In "
+                f"gradle mode `echolot collect` builds the app with {it}, so record "
+                f"again. {still}"]
+    tasks = u.get("install") or []
+    how = f" with {install_command(tasks)}" if tasks else ""
+    return [f"> ⚠️ {head}: the app on the phone was built before {it}. Build and "
+            f"install the app{how}, then record again. {still}"]
+
+
+def install_command(tasks: list[str]) -> str:
+    """`./gradlew :app:installBenchmark`, and every other task installing as the same package.
+
+    `mark --apply` and the report say it the same way.
+    """
+    line = f"`./gradlew {tasks[0]}`"
+    if len(tasks) > 1:
+        line += f" (or {', '.join(f'`{t}`' for t in tasks[1:])}, whichever is on the phone)"
+    return line
+
+
 def _retrace_lines(retrace: dict[str, Any] | None) -> list[str]:
     """What `project.mapping` made of the frames R8 wrote into lock slices.
 
@@ -1174,6 +1223,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
+    out.extend(_unbuilt_markers_lines(report))
 
     s = report["summary"]
     out.append(
@@ -1337,6 +1387,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
+    out.extend(_unbuilt_markers_lines(report))
     return out
 
 
@@ -1425,9 +1476,15 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
 def markers_view(report: dict[str, Any], top: int = 15) -> str:
     m = report.get("markers") or {}
     rows = m.get("rows") or []
+    # Where a hunt looked for its markers and found none (#390): the why
+    # goes above the table, or above the line that says there is none.
+    out = [*_unbuilt_markers_lines(report)]
+    if out:
+        out.append("")
     if not rows and not m.get("absent"):
-        return "_no markers: nothing carries the prefix and `domains` lists nothing_"
-    out = _markers_lines({**m, "rows": rows[:top]})
+        return "\n".join([*out, "_no markers: nothing carries the prefix and `domains` "
+                                "lists nothing_"])
+    out += _markers_lines({**m, "rows": rows[:top]})
     if len(rows) > top:
         out.append(f"_Showing {top} of {len(rows)}; `--top {len(rows)}` for all._")
     return "\n".join(out)
@@ -1448,13 +1505,14 @@ def select(report: dict[str, Any], detectors: list[str], top: int | None,
            window: bool, markers: bool) -> dict[str, Any]:
     """The json for a view: only the parts asked for, rows cut to `top`."""
     if not detectors and not window and not markers:
+        m = report.get("markers") or {}
         return {
             "window": report.get("window"),
             "environment": report.get("environment"),
             "summary": report.get("summary"),
             "config": report.get("config"),
-            "markers": {"rows": len((report.get("markers") or {}).get("rows") or []),
-                        "absent": (report.get("markers") or {}).get("absent") or []},
+            "markers": {"rows": len(m.get("rows") or []), "absent": m.get("absent") or [],
+                        **({"unbuilt": m["unbuilt"]} if m.get("unbuilt") else {})},
             "detectors": [{"id": d["id"], "rows": len(d.get("rows") or []),
                            "params_source": d.get("params_source"),
                            "error": d.get("error")}

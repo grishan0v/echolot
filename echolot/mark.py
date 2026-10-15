@@ -1927,6 +1927,36 @@ def remove(root: Path, unwritable: list[str] | None = None
     return touched, kept
 
 
+def planted(root: Path, prefix: str = DEFAULT_PREFIX) -> dict[str, list[str]]:
+    """The temporary markers in the code: each name, with the files it is in.
+
+    The names with the prefix on the lines that carry the tag — the ones
+    `--apply` wrote and the ones added by hand in its shape — found by the
+    walk `remove` takes. An end line names nothing, so a marker is counted
+    by its begin. `analyze` holds the traces against these (#390): a round
+    recorded from a build made before them holds none.
+    """
+    root = root.resolve()
+    named = re.compile('"(' + re.escape(prefix) + r'[^"\\]*)"')
+    found: dict[str, list[str]] = {}
+    for p in domains_source_files(root):
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        if TAG.encode() not in data:
+            continue
+        rel = _rel(p, root)
+        for line in data.decode("utf-8", errors="replace").split("\n"):
+            if TAG not in line:
+                continue
+            for name in named.findall(line):
+                files = found.setdefault(name, [])
+                if rel not in files:
+                    files.append(rel)
+    return found
+
+
 # --- rendering -------------------------------------------------------------------
 
 def render(pl: Plan) -> list[str]:

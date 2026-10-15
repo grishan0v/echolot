@@ -5,6 +5,7 @@
 ```bash
 echolot mark                     # where the first markers go, and why there
 echolot mark --apply             # put the applicable ones in
+./gradlew :app:installBenchmark  # launch and command modes: the task --apply names
 echolot collect -c echolot.yml -n 3 && echolot analyze .echolot/traces/coldStart_iter*.perfetto-trace -c echolot.yml
 echolot mark --remove            # take every one of them out, byte for byte
 ```
@@ -144,6 +145,29 @@ changing a line of the project's:
 
 Put the code on a line of its own and run `mark` again, or mark by hand.
 
+### What comes next: the build
+
+`--apply` changes the code and nothing else, and its last line says what
+comes next. In launch and command modes `collect` records the build that is
+on the phone and builds nothing, so the markers reach a trace only once the
+app is built and installed again. The line names the gradle task that does
+it, `./gradlew :app:installBenchmark`, where the app module's build script
+shows which variant installs as `project.package`. Two or three that do are
+named together, since which of them is on the phone is not written anywhere;
+with more than three, or none, the line names the package instead. A
+debuggable variant is never named: a debug install would put a build that
+runs slower and differently in place of the one measured. A build type that
+starts from another with `initWith` installs and is debuggable as that one
+is, since AGP copies both along with the rest. In gradle mode the
+macrobenchmark builds and installs the app, and the line says to record.
+`--json` carries the same line as `next`.
+
+A round recorded without that build holds none of the new markers: a hunt
+that recorded one found its markers missing, put that down to the trace, and
+concluded without the breakdown they were placed for. `analyze` says so at
+the top of the report — see
+[Analysing](analysing.md#your-own-names-measured-every-time).
+
 `instrumentation.allowed` from `echolot.yml` is honoured, globs included: each
 entry is matched path segment by path segment, so `feature/*/src/main` — the
 form `scan` writes — covers every module directly under `feature/`. A site
@@ -271,6 +295,8 @@ Counting those found fifteen sites on a codebase where four were real.
 analyze          → the report names system slices and threads; domains is empty
 mark --apply     → up to 3 markers at the entry points (Application.onCreate,
                    the launcher's onCreate, setContent), one command, ~1 KB
+build, install   → launch and command modes record the build on the phone;
+                   the last line of --apply names the task
 collect, analyze → the report now says AGENTTMP_set_content 1200 ms self
                    and domains points at MainActivity.kt:69
 read one place   → the file the report named — and, if needed, a second,

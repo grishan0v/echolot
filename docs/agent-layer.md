@@ -638,6 +638,8 @@ while round <= loop.max_rounds:
                                   would analyse
     otherwise: pick a blind spot (usually uninstrumented_cpu)
                add AGENTTMP_ markers inside instrumentation.allowed
+               build and install the app, unless the macrobenchmark
+                 does it (gradle mode)
                re-record
     round += 1
 

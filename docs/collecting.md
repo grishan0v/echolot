@@ -60,6 +60,15 @@ The numbers are digits alone, in the unit the key's name ends with:
 before the device is touched. A `reset_policy` other than `force-stop` or
 `none` gets a warning that says `force-stop` will run, and then it does.
 
+Launch and command modes build nothing: they record the app that is
+installed on the phone. After a change to its code — `echolot mark --apply`,
+a marker added by hand, `mark --remove` — build and install the variant the
+config measures before the next `collect`, or the round measures the old
+build. `mark --apply` ends with the gradle task that does it, and `analyze`
+says so when none of the temporary markers in the code is in the traces.
+Gradle mode builds and installs the app itself, as part of the
+macrobenchmark's task.
+
 ### `launch` — we drive it
 
 `force-stop`, start recording, `am start -W`, wait, pull. A cold start. With

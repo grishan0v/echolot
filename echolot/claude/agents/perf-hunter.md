@@ -37,8 +37,9 @@ instrumentation:
   `echolot mark`: it names the entry points from the manifest and the SDK —
   `Application.onCreate`, the launcher Activity's `onCreate`, `setContent`,
   the composables it calls, Room, DI — with a source on every row. Show the
-  list, then `echolot mark --apply`, re-record once. That report names this
-  application's code, and `domains` has something to point at.
+  list, then `echolot mark --apply`, build and install the app as its last
+  line says, and re-record once. That report names this application's code,
+  and `domains` has something to point at.
 - After that, read the one place the report named — the lines around it:
   `grep -n "name" -A5 -B5` or `sed -n 40,70p`. Never `cat` a whole source
   file into the window.
@@ -146,6 +147,10 @@ waiting for one.
    window.process_alternatives present  → possibly the wrong process
    config / params_source say calibrated on these very runs
                                         → analyze --defaults before believing silence
+   the warning that the code's temporary markers are not in these traces
+                                        → the app recorded was built before them:
+                                          do what it says and record again; this
+                                          round says nothing about the markers
    everything silent on a plausible window → exit: "clean"
    → in these cases fix the config, do not hunt a problem — except a value
      under `_source: confirmed_by_user`: a person chose it, and it is theirs.
@@ -197,6 +202,8 @@ waiting for one.
    a named place → a few AGENTTMP_ markers around it, by hand
    round == loop.max_rounds → exit with an interim conclusion, and do not
      re-record: a recording nobody analyses costs minutes on the device
+   build and install the app with the markers in it, unless runner.mode is
+     gradle: launch and command modes record the build on the phone
    copy the current traces aside, re-record, round += 1
    (cleanup: echolot mark --remove takes out what --apply put in)
 
@@ -266,12 +273,22 @@ try { // echolot:mark
 
 Java is the same with a `;` after each call. `android.os.Trace` is the
 framework's, so no dependency is needed; `androidx.tracing.trace { }` needs
-`androidx.tracing:tracing-ktx` in the module, and without it the build inside
-`collect` fails and the round is lost. The tag makes cleanup deterministic:
+`androidx.tracing:tracing-ktx` in the module, and without it the build fails
+and the round is lost. The tag makes cleanup deterministic:
 `echolot mark --remove` deletes every line in this shape, yours and the ones
 `--apply` wrote, rather than "remember what you added". A line in any other
 shape stays, and `--remove` lists it: take that one out by hand, keeping the
 code it wrapped.
+
+**A marker reaches a trace only through a build.** In launch and command
+modes `collect` records the app that is installed on the phone and builds
+nothing, so after `mark --apply` or a marker added by hand, build and install
+the variant the config measures before you record: `--apply` ends with the
+gradle task that does it. In gradle mode the macrobenchmark builds and
+installs the app itself. A round recorded from the old build holds none of
+the new markers, and `analyze` says so at the top of the report. That is the
+build, not the trace: build, install, record again, rather than concluding
+without the breakdown the markers were placed for.
 
 **Never put a suspension point inside a section.** A section must end on the
 thread that began it, and a coroutine may resume on another thread of its pool;

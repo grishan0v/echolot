@@ -51,7 +51,9 @@ If `echolot hunt` reported markers left by the previous investigation,
 remove them before recording: `echolot mark --remove` takes out what
 `mark --apply` wrote and every line in its shape, and it lists the rest,
 which go by hand. Left in, they are compiled into the new traces and read as
-part of code nobody touched this time.
+part of code nobody touched this time. In `launch` and `command` mode build
+and install the app after removing them: `collect` records the build on the
+phone, and the one there still has them.
 
 Open nothing when you are carrying on the one already open: the human chose
 to (`echolot hunt --resume` has run), or `echolot hunt` shows an open

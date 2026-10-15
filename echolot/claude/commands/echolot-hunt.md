@@ -110,7 +110,8 @@ checkout's root, `grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e '
 of context are still compiled in, still in the trace, and still in the
 report — and they are attributed to code nobody touched this time.
 `echolot mark --remove` takes out what `mark --apply` wrote; anything added by
-hand goes by hand.
+hand goes by hand. Outside gradle mode, build and install the app after that:
+`collect` records the build on the phone, and the one there still has them.
 
 **Thresholds.** Read `config` and `detectors[].params_source` in the last
 `report.json`, or the `Config:` line in `report.md`. If the thresholds were
@@ -153,8 +154,9 @@ Pass the agent:
 - whether the project has any instrumentation (`echolot domains --root .`
   says). If it has none, say so and say what follows: the report will name
   system slices and threads, and the agent's first move is `echolot mark`
-  (then `--apply`) and one re-record; reading the app to find where the
-  time goes comes after the report has named a place.
+  (then `--apply`, and a build and an install of the app outside gradle
+  mode) and one re-record; reading the app to find where the time goes
+  comes after the report has named a place.
 
 The window is the budget. In two hunts out of two the agent spent forty to
 sixty percent of it reading sources by hand; `echolot reflect` shows the

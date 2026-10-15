@@ -248,10 +248,13 @@ def build_types_of(stext: str) -> list[dict[str, Any]]:
     found = {}
     if body is not None:
         for name, inner in entries(body):
+            debuggable = _flag(inner, "debuggable")
             found[name] = {
                 "name": name,
                 "application_id_suffix": _value(inner, "applicationIdSuffix"),
-                "debuggable": _flag(inner, "debuggable"),
+                # AGP's `debug` is debuggable unless the script says otherwise,
+                # declared or not.
+                "debuggable": True if debuggable is None and name == "debug" else debuggable,
                 "profileable": _flag(inner, "profileable"),
                 "minify": _flag(inner, "minifyEnabled"),
                 "init_with": _init_with(inner),
@@ -301,6 +304,27 @@ def flavor_combinations(flavors: list[dict], dimensions: list[str]) -> list[list
     return combos
 
 
+def inherited(bt: dict, build_types: list[dict], key: str) -> Any:
+    """A build type's own `key`, else that of the build type it starts from with `initWith`.
+
+    AGP copies every property along with `initWith`, as `minified` says of
+    `minifyEnabled`: a build type that starts from debug installs with
+    debug's applicationIdSuffix and is debuggable as debug is. Read off its
+    own block alone, such a build type on a large Kotlin app was taken to
+    install as the store's package and to be no debug build; both were
+    wrong. None where no build type in the chain names it.
+    """
+    by_name = {b["name"]: b for b in build_types}
+    seen: set[str] = set()
+    current: dict | None = bt
+    while current is not None and current["name"] not in seen:
+        seen.add(current["name"])
+        if current.get(key) is not None:
+            return current[key]
+        current = by_name.get(current.get("init_with") or "")
+    return None
+
+
 def minified(bt: dict, build_types: list[dict]) -> tuple[bool | None, str | None]:
     """Whether a build type is minified, and the build type that says so.
 
@@ -345,11 +369,14 @@ def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: li
     combos = flavor_combinations(flavors, dimensions or [])
     out = []
     for bt in build_types:
+        # What `initWith` copies, read through the chain: see `inherited`.
+        suffix = inherited(bt, build_types, "application_id_suffix")
+        debuggable = inherited(bt, build_types, "debuggable")
         for combo in combos or []:
             app_id = next((f["application_id"] for f in combo if f.get("application_id")), None) or base
             if app_id:
                 app_id += "".join(f.get("application_id_suffix") or "" for f in combo) \
-                    + (bt.get("application_id_suffix") or "")
+                    + (suffix or "")
             words = [f["name"] for f in combo] + [bt["name"]]
             name = words[0] + "".join(w[:1].upper() + w[1:] for w in words[1:])
             minify, minified_by = minified(bt, build_types)
@@ -357,8 +384,8 @@ def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: li
                         "flavor": "".join(_cap(f["name"]) if i else f["name"]
                                           for i, f in enumerate(combo)) or None,
                         "build_type": bt["name"], "application_id": app_id,
-                        "debuggable": bt.get("debuggable"),
-                        "measure": _measures(bt),
+                        "debuggable": debuggable,
+                        "measure": _measures({**bt, "debuggable": debuggable}),
                         "minified": minify, "minified_by": minified_by,
                         "mapping": mapping_path(app, name) if minify else None})
     return out
@@ -384,11 +411,16 @@ def _measures(bt: dict) -> str:
     return "unknown"
 
 
+def _rank(variant: dict) -> tuple:
+    """Benchmark over release over the rest, debuggable last, then by name."""
+    order = {"benchmark": 0, "release": 1}
+    return (order.get(variant["build_type"], 2), variant.get("debuggable") is True,
+            variant["name"])
+
+
 def preferred(variants: list[dict]) -> dict | None:
     """The variant to start from: benchmark over release over the rest, first flavour."""
-    order = {"benchmark": 0, "release": 1}
-    ranked = sorted(variants, key=lambda v: (order.get(v["build_type"], 2),
-                                             v.get("debuggable") is True, v["name"]))
+    ranked = sorted(variants, key=_rank)
     return ranked[0] if ranked else None
 
 
@@ -579,8 +611,8 @@ def allowed_paths(root: Path) -> list[str]:
     return sorted(seen)
 
 
-def describe(root: Path, *, devices: bool = True) -> Facts:
-    facts = Facts(root=str(root))
+def _app_and_variants(root: Path, facts: Facts) -> None:
+    """The app module, its flavours and build types, and the variants they make."""
     facts.app = app_module(root, facts)
     stext = ""
     if facts.app and facts.app.get("build_script"):
@@ -594,6 +626,49 @@ def describe(root: Path, *, devices: bool = True) -> Facts:
         facts.notes.append("the flavours span several dimensions and flavorDimensions could "
                            "not be read, so no variant is named: `./gradlew :app:tasks --all` "
                            "lists them")
+
+
+# More tasks than this is a list nobody picks from: a large Kotlin app whose
+# flavours all install as one package had twelve.
+INSTALL_TASKS_SHOWN = 3
+
+
+def install_tasks(root: Path, package: str | None) -> list[str]:
+    """The gradle tasks that install the variants installing as `package`.
+
+    `:app:installBenchmark` and the like: in launch and command modes
+    `collect` records the build on the phone, and a change to the code
+    reaches a recording only through one of these (#390). Several when
+    several variants install as it, the one to measure on first as
+    `preferred` ranks them: which one is on the phone is not written
+    anywhere this can read.
+
+    Never a debuggable variant: a debug install would put a build that runs
+    slower and differently in place of the one measured. On a large Kotlin
+    app the only variants the script showed installing as the measured
+    package were debug ones, while the build on the phone was not
+    debuggable. Empty then, and when nothing installs as the package, when
+    more than INSTALL_TASKS_SHOWN do, or when the app module or its
+    applicationId cannot be read: the caller says it in words.
+    """
+    if not package:
+        return []
+    facts = Facts(root=str(root))
+    _app_and_variants(root, facts)
+    if not facts.app:
+        return []
+    found = [v for v in facts.variants
+             if v.get("application_id") == package and v.get("debuggable") is not True]
+    if len(found) > INSTALL_TASKS_SHOWN:
+        return []
+    module = facts.app["module"]
+    return [f"{'' if module == ':' else module}:install{_cap(v['name'])}"
+            for v in sorted(found, key=_rank)]
+
+
+def describe(root: Path, *, devices: bool = True) -> Facts:
+    facts = Facts(root=str(root))
+    _app_and_variants(root, facts)
     _profileable_note(facts)
     facts.benchmarks = benchmarks_of(root)
     facts.allowed = allowed_paths(root)

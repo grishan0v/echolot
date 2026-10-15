@@ -61,7 +61,8 @@ produce. The keys only a merged report has are named under the block.
                            "count": 1, "self_ms": 8.0, "total_ms": 60.0,
                            "max_ms": 60.0, "spread": { … },
                            "detail": "SeedWorker" } ],
-               "absent": ["Screen.firstFrame"] },
+               "absent": ["Screen.firstFrame"],
+               "in_trace": ["AGENTTMP_seed_first"] },
   "detectors": [
     { "id": "…", "title": "…", "why": "…",
       "params": { … }, "params_source": "config",
@@ -258,6 +259,17 @@ when you pass such a number on.
 `absent` lists the `domains` names the window never held in any repeat: a
 map pointing at something this scenario does not run, or a name that
 changed under it. The markdown says the same under "Not in the window".
+
+`in_trace` is every prefixed name the traces hold, the window or not.
+`unbuilt` appears when the code has temporary markers — the prefixed names
+on lines tagged `// echolot:mark` — and none of them is in `in_trace`: the
+app recorded was built before them. It carries their `names`, the `files`,
+the `mode`, and `install`, the gradle tasks that build and install the
+variant the config measures; the markdown says it at the top. Read nothing
+about the markers off that round. Build and install the app and record
+again; in gradle mode `collect` builds it, so recording again is the whole
+step. A fresh round that still holds none of them means the scenario does
+not run the code they wrap.
 
 ## Views — `echolot report`
 

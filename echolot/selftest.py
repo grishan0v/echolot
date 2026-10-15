@@ -2503,6 +2503,64 @@ def _(report):
     assert "Not in the window: `never_there`" in text, text[:2000]
 
 
+@check("markers: the code's temporary markers, none of them in the traces, are said with the build")
+def _(report):
+    """A round recorded straight after `mark --apply` holds none of its markers.
+
+    In launch and command modes `collect` records the build on the phone, and
+    a hunt that recorded with no build in between found its markers missing,
+    put that down to the trace, and closed at medium confidence (#390). The
+    names on the code's tagged lines are held against every prefixed name in
+    the traces, and the report says so only when none of them is there, with
+    the task that builds and installs the variant the config measures.
+    """
+    import copy
+
+    from .main import _unbuilt_markers
+    from .report import to_markdown
+    assert report["markers"]["in_trace"] == [
+        "AGENTTMP_insert_preset", "AGENTTMP_parse_json", "AGENTTMP_seed_again",
+        "AGENTTMP_seed_first", "AGENTTMP_seed_third"], report["markers"]["in_trace"]
+
+    def said(root: Path) -> tuple[dict | None, str]:
+        rep = copy.deepcopy(report)
+        with recorder.isolated():
+            _unbuilt_markers(rep, Config.load(root / "echolot.yml"))
+        return rep["markers"].get("unbuilt"), to_markdown(rep)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        (root / "echolot.yml").write_text(
+            "project:\n  package: com.example.app\nrunner:\n  mode: launch\n", encoding="utf-8")
+        source = root / "app/src/main/java/com/example/app/App.kt"
+        pair = ('    android.os.Trace.beginSection("{}") // echolot:mark\n'
+                "    android.os.Trace.endSection() // echolot:mark\n")
+        source.write_text("class App {\n" + pair.format("AGENTTMP_app_oncreate") + "}\n",
+                          encoding="utf-8")
+        unbuilt, text = said(root)
+        source.write_text(source.read_text(encoding="utf-8")
+                          + pair.format("AGENTTMP_seed_first"), encoding="utf-8")
+        one_there, _ = said(root)
+        (root / "echolot.yml").write_text(
+            "project:\n  package: com.example.app\nrunner:\n  mode: gradle\n", encoding="utf-8")
+        source.write_text("class App {\n" + pair.format("AGENTTMP_app_oncreate") + "}\n",
+                          encoding="utf-8")
+        gradle, gradle_text = said(root)
+    assert unbuilt == {"names": ["AGENTTMP_app_oncreate"],
+                       "files": ["app/src/main/java/com/example/app/App.kt"],
+                       "mode": "launch",
+                       "install": [":app:installProdBenchmark", ":app:installProdRelease"]}, unbuilt
+    assert ("The temporary marker `AGENTTMP_app_oncreate` is in the code and not in these "
+            "traces: the app on the phone was built before it. Build and install the app "
+            "with `./gradlew :app:installProdBenchmark`") in text, text[:3000]
+    # One of them is in the build: the rest wrap code the scenario does not run.
+    assert one_there is None, one_there
+    # The macrobenchmark builds the app, so it is the recording that is older.
+    assert gradle["install"] == [] and "In gradle mode `echolot collect` builds" in gradle_text, \
+        gradle_text[:3000]
+
+
 # --- the domains map -------------------------------------------------------
 
 def _sample_repo(root: Path) -> None:

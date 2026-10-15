@@ -186,6 +186,15 @@ after a launch, an activity that is not there, stops the set at that repeat
 with the line. Neither used to: `am start` exits 0 either way, and the traces
 held the device and no app.
 
+**`collect` records the build that is on the phone** in launch and command
+modes, and builds nothing. After a change to the code — `echolot mark
+--apply`, a marker added by hand, `mark --remove` — build and install the
+variant the config measures before recording again: `mark --apply` ends with
+the gradle task that does it. A round recorded without that measures the old
+build, and `analyze` says so when none of the temporary markers in the code
+is in the traces. In gradle mode the macrobenchmark builds and installs the
+app itself.
+
 **The screen is `collect`'s to wake** in launch and command modes. Before the
 set and before each repeat it reads the screen, wakes it when it is dark, and
 dismisses a lock screen that asks for nothing, a line each. A lock screen with

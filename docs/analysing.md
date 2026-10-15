@@ -307,6 +307,21 @@ That makes `domains` more than a map for the reader. It is also what `analyze`
 measures of the project's own vocabulary, run after run, without a threshold
 in the way.
 
+Temporary markers that are in the code and in none of the traces get a
+warning at the top of the report. The code's markers are the prefixed names
+on lines tagged `// echolot:mark`, in the checkout the config is in, and they
+are held against every prefixed name anywhere in the traces, the window or
+not. When none of them is there, the app that was recorded was built before
+them. In launch and command modes `collect` records the build on the phone,
+and the warning names the gradle task that builds and installs the variant
+the config measures, by the rule `mark --apply` names it with
+([mark](mark.md#what-comes-next-the-build)); in gradle mode the
+macrobenchmark builds the app, so the traces are older than the markers. A
+marker missing beside others that are there gets no warning: it wraps code
+the scenario does not run. `report.json` carries the names as
+`markers.unbuilt`, and every prefixed name the traces hold as
+`markers.in_trace`.
+
 Names that carry the temporary prefix keep their digits. `names` folds
 numbers into families — `worker-2` and `worker-5` are one pool — and leaves a
 prefixed name whole: `AGENTTMP_fill_v4` and `AGENTTMP_fill_v6` are two markers
