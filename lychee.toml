@@ -64,4 +64,12 @@ exclude = [
   # the pictures. tests/test_docs.py checks each address against the tree the
   # pull request brings, its anchor included.
   '^https://github\.com/grishan0v/echolot/(?:blob|tree)/main/',
+
+  # cursor.directory, the plugin's listing in Cursor's community catalog,
+  # linked from docs/agent-layer.md and docs/publishing.md. The site sits
+  # behind Vercel's bot checkpoint, which answers a client that runs no
+  # JavaScript with 429 and a challenge page: curl, with lychee's user agent
+  # or a browser's, got that on 2026-10-15 while the listing loaded in a
+  # browser. No run of this checker could verify it.
+  '^https://cursor\.directory/',
 ]

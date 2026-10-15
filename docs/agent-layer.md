@@ -405,6 +405,13 @@ pipx install echolot                          # the CLI the skills drive
   team marketplaces import from the repository. It serves the default
   branch, which between releases can be ahead of the echolot on PyPI.
 
+  Cursor's community catalog lists the plugin at
+  [cursor.directory/plugins/echolot](https://cursor.directory/plugins/echolot).
+  The listing shows the text of the four skills, copied from this
+  repository, with a button that copies each one. To use them, install the
+  plugin as above: that keeps the four skills together, at the release of
+  the echolot installed.
+
 Claude Code needs git 2.36 or newer on `PATH` for this. It fetches
 `plugins/echolot` with a sparse checkout of a partial clone, and tries the
 checkout offline first: git 2.35 and older reach for the network anyway, are

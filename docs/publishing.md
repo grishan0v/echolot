@@ -112,6 +112,17 @@ It releases the GitHub Action as well: `uses: grishan0v/echolot@vX.Y.Z`
 installs the echolot of that tag from the action's own checkout, so the
 action and the tool it runs are always the same version.
 
+cursor.directory, Cursor's community catalog, keeps a copy of the plugin of
+its own: the text and the description of each skill, as `main` had them when
+the listing was submitted on 2026-10-15, the skills of 0.15.0. No tag reaches
+it, and nothing syncs it with this repository. When a release changes a file
+under `plugins/echolot/skills/`, update that skill in the listing's edit form,
+<https://cursor.directory/plugins/echolot/edit>, signed in as the account
+that submitted it: the body of its `SKILL.md` below the frontmatter goes into
+Content, and the frontmatter's `description` into Description. A change to a
+skill's text hides the listing until the site's security scan has passed
+again.
+
 A tag, and therefore a release, is a snapshot: it contains what was committed
 before the tag was made and nothing after. To ship a fix, bump the version in
 another pull request and tag again — an uploaded version number can never be
