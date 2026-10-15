@@ -70,6 +70,16 @@ install commands are code blocks.
   Settings → General → Social preview and has no API for it, so a new one is
   uploaded there by hand. `tests/test_readme_pictures.py` holds it to that
   size and to GitHub's limit of 1 MB.
+- **The plugin's icon, drawn here but not by render.py.**
+  `plugins/echolot/.claude-plugin/icon.png` is what Claude's plugin directory
+  shows beside the plugin's name: a circle's outline and the same circle
+  shifted right four times, each copy's left arc ending on the outline, in
+  the slate and the sphere's three colours. [icon.py](icon.py) draws it,
+  1024 × 1024, with Pillow, which neither extra carries:
+  `uv run --no-project --with pillow python docs/assets/icon.py`. The
+  directory takes the icon once, at the first submission, so the script is
+  kept for the next picture. `tests/test_plugin.py` holds the file to the
+  directory's rules: a square PNG, 512 to 2048 px a side, under 2 MB.
 - **Flat SVG, system fonts.** GitHub's own font stacks, no web fonts: an SVG
   served from this repository cannot load them.
 - **Full addresses.** The README names each picture at

@@ -70,6 +70,22 @@ def test_the_readme_says_what_the_plugin_runs_writes_fetches_and_sends():
         check(f"the README says {word}", word in text, word)
 
 
+def test_the_icon_is_one_the_directory_takes():
+    """Claude's plugin directory reads .claude-plugin/icon.png when plugin.json
+    names no icon: a square PNG or JPEG, 512 to 2048 px a side, under 2 MB. It
+    takes the icon once, at the first submission, so a file it would refuse
+    leaves the default icon for good (#380)."""
+    icon = PLUGIN / ".claude-plugin" / "icon.png"
+    head = icon.read_bytes()[:24]
+    check("icon.png is a PNG", head[:8] == b"\x89PNG\r\n\x1a\n", head[:8])
+    width, height = int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+    check("square", width == height, (width, height))
+    check("512 to 2048 px a side", 512 <= width <= 2048, width)
+    check("under 2 MB", icon.stat().st_size < 2 * 1024 * 1024, icon.stat().st_size)
+    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text("utf-8"))
+    check("plugin.json leaves the icon at its default path", "icon" not in manifest, manifest)
+
+
 def test_the_manifest_names_the_plugin_and_the_package_version():
     """One version for the plugin and the CLI it drives.
 
