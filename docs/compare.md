@@ -407,7 +407,7 @@ permissions:
 
 steps:
   # … check out, start the device, run the benchmark …
-  - uses: grishan0v/echolot@v0.14.0
+  - uses: grishan0v/echolot@v0.14.1
     with:
       traces: app/benchmark/build/outputs/**/StartupBenchmark_startup_iter*.perfetto-trace
 ```
@@ -496,7 +496,7 @@ jobs:
             test: ScrollBenchmark_feed
     steps:
       # … check out, start the device, run the benchmark's ${{ matrix.test }} …
-      - uses: grishan0v/echolot@v0.14.0
+      - uses: grishan0v/echolot@v0.14.1
         with:
           traces: app/benchmark/build/outputs/**/${{ matrix.test }}_iter*.perfetto-trace
           scenario: ${{ matrix.scenario }}
