@@ -393,9 +393,10 @@ pipx install echolot                          # the CLI the skills drive
 
   ```bash
   v=$(echolot --version | awk '{print $2}')
-  git clone --quiet --depth 1 --branch "v$v" https://github.com/grishan0v/echolot "$TMPDIR/echolot-$v"
+  git -c advice.detachedHead=false clone --quiet --depth 1 --branch "v$v" \
+    https://github.com/grishan0v/echolot "${TMPDIR:-/tmp}/echolot-$v"
   rm -rf ~/.cursor/plugins/local/echolot
-  cp -R "$TMPDIR/echolot-$v/plugins/echolot" ~/.cursor/plugins/local/echolot
+  cp -R "${TMPDIR:-/tmp}/echolot-$v/plugins/echolot" ~/.cursor/plugins/local/echolot
   ```
 
   Customize lists it, with its four skills. The door is the `echolot` skill,

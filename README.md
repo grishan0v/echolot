@@ -41,10 +41,17 @@ claude plugin install echolot@echolot
 # Codex
 codex plugin marketplace add grishan0v/echolot
 codex plugin add echolot@echolot
+
+# Cursor: copy the plugin that matches the installed echolot, then restart Cursor
+v=$(echolot --version | awk '{print $2}')
+git -c advice.detachedHead=false clone --quiet --depth 1 --branch "v$v" \
+  https://github.com/grishan0v/echolot "${TMPDIR:-/tmp}/echolot-$v"
+rm -rf ~/.cursor/plugins/local/echolot
+cp -R "${TMPDIR:-/tmp}/echolot-$v/plugins/echolot" ~/.cursor/plugins/local/echolot
 ```
 
-Cursor loads the plugins Claude Code has installed. Without Claude Code,
-[copy the plugin into Cursor's local plugins](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin).
+Cursor also loads the plugins Claude Code has installed and enabled, so with
+the plugin in Claude Code there is nothing to copy.
 
 Open the agent in your Android project and say what is wrong:
 
