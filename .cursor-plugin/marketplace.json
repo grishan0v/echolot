@@ -1,0 +1,17 @@
+{
+  "name": "echolot",
+  "owner": {
+    "name": "Andrey Grishanov"
+  },
+  "metadata": {
+    "description": "echolot: Android performance regressions, from a Perfetto trace down to a place in the code"
+  },
+  "plugins": [
+    {
+      "name": "echolot",
+      "source": "plugins/echolot",
+      "description": "Localise Android performance regressions from a Perfetto trace down to a place in the code. The skills drive the echolot CLI, installed separately: pipx install echolot.",
+      "category": "development"
+    }
+  ]
+}

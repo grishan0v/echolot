@@ -3808,19 +3808,44 @@ def cmd_doctor(args) -> int:
         _record_not_run(f"self-check could not run: {e}", info, e)
         return 1
 
-    failed = [(name, why) for name, why in results if why]
+    failed = [(name, why) for name, why in results
+              if why and not selftest.skipped(why)]
+    skips = _skips(results)
     for name, why in results:
-        print(f"  ok    {name}" if not why else f"  FAILS {name}\n          {why}")
+        if not why:
+            print(f"  ok    {name}")
+        elif selftest.skipped(why):
+            print(f"  skip  {name}\n          {why[len(selftest.SKIPPED):]}")
+        else:
+            print(f"  FAILS {name}\n          {why}")
     recorder.note(checks=len(results), failed=[name for name, _ in failed],
-                  trace_processor=info.get("trace_processor"))
+                  trace_processor=info.get("trace_processor"),
+                  **({"skipped": [name for name, _ in skips]} if skips else {}))
 
     print()
     if failed:
         print(f"Mismatches: {len(failed)} of {len(results)}. "
               f"Reports from this environment cannot be trusted.")
         return 1
+    if skips:
+        print(f"All {len(results) - len(skips)} checks that ran passed — the pipeline "
+              f"computes correctly. {len(skips)} could not run here: "
+              f"{'; '.join(sorted({why for _, why in skips}))}.")
+        return 0
     print(f"All {len(results)} checks passed — the pipeline computes correctly.")
     return 0
+
+
+def _skips(results) -> list[tuple[str, str]]:
+    """The checks this environment did not let run, each with the reason.
+
+    A skip is not a failure: Cursor's sandbox refuses a `.cursor/` in a
+    temporary project, and `init` there said the reports could not be
+    trusted (#204). The reason is said, so nobody reads a skip as a pass.
+    """
+    from . import selftest
+    return [(name, why[len(selftest.SKIPPED):]) for name, why in results
+            if selftest.skipped(why)]
 
 
 def _doctor_quiet(args, info: dict, project: Path | None = None,
@@ -3872,15 +3897,22 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
         print(f"self-check: could not run — {e}")
         _record_not_run(f"self-check: could not run — {e}", info, e)
         return 1, False
-    failed = [(name, why) for name, why in results if why]
+    failed = [(name, why) for name, why in results
+              if why and not selftest.skipped(why)]
+    skips = _skips(results)
     recorder.note(checks=len(results), failed=[name for name, _ in failed],
-                  trace_processor=info.get("trace_processor"))
+                  trace_processor=info.get("trace_processor"),
+                  **({"skipped": [name for name, _ in skips]} if skips else {}))
     if failed:
         print(f"self-check: {len(failed)} of {len(results)} FAIL — reports from "
               f"this environment cannot be trusted")
         for name, why in failed:
             print(f"  FAILS {name}\n          {why}")
         return 1, True
+    if skips:
+        print(f"self-check: {len(results) - len(skips)} of {len(results)} passed, "
+              f"{len(skips)} skipped — {'; '.join(sorted({why for _, why in skips}))}")
+        return 0, True
     print(f"self-check: {len(results)} of {len(results)} passed")
     return 0, True
 

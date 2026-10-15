@@ -21,6 +21,12 @@ CODEX_SANDBOX_NETWORK_DISABLED=1 in every command it runs with the network
 off, and CODEX_SANDBOX=seatbelt on macOS. The variables only name the
 sandbox; nothing is refused in advance on their word, because a rule can have
 let `echolot` out of it.
+
+Cursor's sandbox marks itself too, CURSOR_SANDBOX=seatbelt on macOS. It lets
+localhost through: on an SM-A515F with Cursor 3.24, `analyze`, `adb devices`
+and `collect` ran in it and passed. What it refuses is any `.cursor/` it did
+not make, a temporary project's included, and two of the self-check's checks
+of `init` write one (#204).
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from pathlib import Path
 from .config import ConfigError
 
 CODEX = "codex"
+CURSOR = "cursor"
 
 # What lets `echolot` out of Codex's sandbox without a prompt each time. Tried
 # on a live session (#188): with it, `doctor`, `analyze` and `collect` passed,
@@ -57,10 +64,13 @@ class SandboxError(ConfigError):
 
 
 def host(env: Mapping[str, str] | None = None) -> str | None:
-    """Whose sandbox this process runs in, when the agent said: `codex`."""
+    """Whose sandbox this process runs in, when the agent said: `codex` or
+    `cursor`."""
     env = os.environ if env is None else env
     if env.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1" or env.get("CODEX_SANDBOX"):
         return CODEX
+    if env.get("CURSOR_SANDBOX"):
+        return CURSOR
     return None
 
 
@@ -99,6 +109,13 @@ def ways_out(where: str | None) -> list[str]:
             f"once it trusts the project and a session starts; or, for every "
             f"project, {CODEX_RULE} in "
             f"{shown(codex_home(os.environ) / 'rules' / 'echolot.rules')}.",
+        ]
+    if where == CURSOR:
+        # A command on the user's allowlist runs outside Cursor's sandbox.
+        return [
+            "approve running echolot outside the sandbox when Cursor asks;",
+            "or let it out for good: echolot on Cursor's command allowlist, "
+            "whose commands run outside the sandbox.",
         ]
     return [
         f"Codex: approve running echolot outside the sandbox when it asks, or "

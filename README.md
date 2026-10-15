@@ -15,7 +15,7 @@
   <br>
   <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Claude Code: plugin" src="https://img.shields.io/badge/Claude_Code-plugin-brightgreen?logo=claude&logoColor=white"></a>
   <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Codex: plugin" src="https://img.shields.io/badge/Codex-plugin-brightgreen"></a>
-  <a href="https://github.com/grishan0v/echolot/issues/204"><img alt="Cursor: plugin in progress" src="https://img.shields.io/badge/Cursor-plugin_in_progress-yellow?logo=cursor&logoColor=white"></a>
+  <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Cursor: plugin" src="https://img.shields.io/badge/Cursor-plugin-brightgreen?logo=cursor&logoColor=white"></a>
 </p>
 <br>
 
@@ -25,8 +25,8 @@
   gives the same report.
 - **No tracing code needed.** Works on apps with zero `trace {}` calls; it
   places temporary markers itself.
-- **Works with your agent.** A plugin for Claude Code and Codex; Cursor and
-  others via `echolot guide`.
+- **Works with your agent.** A plugin for Claude Code, Codex and Cursor; any
+  other agent via `echolot guide`.
 
 ## Quick start
 
@@ -46,6 +46,9 @@ codex plugin marketplace add grishan0v/echolot
 codex plugin add echolot@echolot
 ```
 
+Cursor loads the plugins Claude Code has installed. Without Claude Code,
+[copy the plugin into Cursor's local plugins](docs/agent-layer.md#installing-the-plugin).
+
 Open the agent in your Android project and say what is wrong:
 
 <p>
@@ -56,8 +59,8 @@ Open the agent in your Android project and say what is wrong:
   </picture>
 </p>
 
-With the plugin, the command is `/echolot:echolot` in Claude Code and
-`$echolot` in Codex. Without it, `echolot init` puts `/echolot` into the
+With the plugin, the command is `/echolot:echolot` in Claude Code,
+`$echolot` in Codex and `/echolot` in Cursor. Without it, `echolot init` puts `/echolot` into the
 project's `.claude/` and points other agents at `echolot guide`; see
 [The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md).
 

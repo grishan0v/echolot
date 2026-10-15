@@ -14,6 +14,7 @@ Run through `echolot doctor`.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import os
 import shlex
@@ -70,6 +71,45 @@ def check(name):
         CHECKS.append((name, fn))
         return fn
     return deco
+
+
+# A check this environment does not let run, said rather than failed. Cursor's
+# sandbox refuses any `.cursor/` it did not make, a temporary project's
+# included, and two checks of `init` write one there: `init` in that sandbox
+# ended in "2 of 162 FAIL — reports from this environment cannot be trusted",
+# of an environment where every report could be (#204).
+SKIPPED = "skipped: "
+
+
+class Skipped(Exception):
+    """Raised by a check that cannot run here, with the reason."""
+
+
+def skipped(why: str | None) -> bool:
+    """Whether a check's result is a skip rather than a failure."""
+    return bool(why) and why.startswith(SKIPPED)
+
+
+@contextlib.contextmanager
+def _cursor_may_refuse():
+    """Cursor's sandbox refusing a `.cursor/` is a skip; anything else is not."""
+    from . import sandbox
+    try:
+        yield
+    except PermissionError as e:
+        if sandbox.host() == sandbox.CURSOR and ".cursor" in str(e.filename or e):
+            raise Skipped("Cursor's sandbox refuses to create .cursor/ in a "
+                          "temporary project") from None
+        raise
+
+
+def _writes_cursor(fn):
+    """For a check that writes `.cursor/` into a temporary project."""
+    @functools.wraps(fn)
+    def wrapped(report):
+        with _cursor_may_refuse():
+            return fn(report)
+    return wrapped
 
 
 # --- helpers ---------------------------------------------------------------
@@ -1994,6 +2034,37 @@ def _(report):
         "the check itself raised KeyError at selftest.py:"), out["breaks"]
     # And the run went on: one broken check is one failure, not none of them.
     assert sum(1 for why in out.values() if why) == 3, out
+
+
+@check("doctor: a check the sandbox does not let run is a skip, and only that one")
+def _(report):
+    """Cursor's sandbox refuses a `.cursor/` it did not make. A check that
+    writes one says so there and is not a failure; the same refusal anywhere
+    else, or another error there, still is."""
+    from . import selftest as st
+
+    def refused(_report):
+        with st._cursor_may_refuse():
+            raise PermissionError(1, "Operation not permitted", "/tmp/x/.cursor")
+
+    def other(_report):
+        with st._cursor_may_refuse():
+            raise PermissionError(1, "Operation not permitted", "/tmp/x/.idea")
+
+    before = os.environ.get("CURSOR_SANDBOX")
+    try:
+        os.environ["CURSOR_SANDBOX"] = "seatbelt"
+        inside = dict(st.run_checks({}, [("refused", refused), ("other", other)]))
+        del os.environ["CURSOR_SANDBOX"]
+        outside = dict(st.run_checks({}, [("refused", refused)]))
+    finally:
+        if before is None:
+            os.environ.pop("CURSOR_SANDBOX", None)
+        else:
+            os.environ["CURSOR_SANDBOX"] = before
+    assert st.skipped(inside["refused"]) and "Cursor's sandbox" in inside["refused"], inside
+    assert inside["other"] and not st.skipped(inside["other"]), inside
+    assert outside["refused"] and not st.skipped(outside["refused"]), outside
 
 
 @check("doctor: what a check prints stays out of the run hosting it, stderr too")
@@ -4026,6 +4097,7 @@ _STUBS_040 = {
 
 
 @check("init: run again, the pointer is updated and the project's own text is not")
+@_writes_cursor
 def _(report):
     """The file these stubs go in belongs to the project, not to echolot.
 
@@ -4179,6 +4251,7 @@ def _(report):
 
 
 @check("init: declining Claude Code is remembered, not asked again forever")
+@_writes_cursor
 def _(report):
     """Opting out must not become a loop.
 
@@ -4685,6 +4758,8 @@ def run_checks(report: dict, checks) -> list[tuple[str, str | None]]:
             try:
                 fn(report)
                 out.append((name, None))
+            except Skipped as e:
+                out.append((name, SKIPPED + str(e)))
             except Exception as e:
                 # Every check fails on its own. Letting anything but an
                 # AssertionError out of here took the whole run with it:

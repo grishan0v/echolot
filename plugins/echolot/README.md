@@ -1,6 +1,6 @@
 # echolot plugin
 
-Skills for Claude Code and Codex that find the cause of an Android performance
+Skills for Claude Code, Codex and Cursor that find the cause of an Android performance
 regression: a slow cold start, a stuttering scroll, an ANR. The agent records
 Perfetto traces of the app, reads the report the
 [echolot](https://github.com/grishan0v/echolot) CLI builds from them, and

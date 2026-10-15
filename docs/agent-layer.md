@@ -386,6 +386,24 @@ pipx install echolot                          # the CLI the skills drive
   CLI or the Plugins tab of the ChatGPT desktop app. The door is the
   `echolot` skill, `$echolot` in a prompt and `echolot:echolot` in Codex's
   list, and it also answers a plain question about slow startup.
+- **Cursor** loads the plugins Claude Code has installed and enabled, so the
+  plugin installed there is in Cursor too, at the same release. Without
+  Claude Code, copy the plugin of the installed echolot's release into
+  Cursor's folder for local plugins, and restart Cursor:
+
+  ```bash
+  v=$(echolot --version | awk '{print $2}')
+  git clone --quiet --depth 1 --branch "v$v" https://github.com/grishan0v/echolot "$TMPDIR/echolot-$v"
+  rm -rf ~/.cursor/plugins/local/echolot
+  cp -R "$TMPDIR/echolot-$v/plugins/echolot" ~/.cursor/plugins/local/echolot
+  ```
+
+  Customize lists it, with its four skills. The door is the `echolot` skill,
+  `/echolot` in a chat, and the agent opens it by itself for a plain
+  question about a slow start; the hunt hands its loop to Cursor's `Task`
+  subagent. `.cursor-plugin/marketplace.json` at the root is what Cursor's
+  team marketplaces import from the repository. It serves the default
+  branch, which between releases can be ahead of the echolot on PyPI.
 
 Claude Code needs git 2.36 or newer on `PATH` for this. It fetches
 `plugins/echolot` with a sparse checkout of a partial clone, and tries the
@@ -438,6 +456,14 @@ The way out is to let the one command through:
   for every project.
 - **Claude Code**, when its own sandbox is turned on: `"echolot *"` in
   `sandbox.excludedCommands`.
+
+Cursor's sandbox lets localhost through: with Cursor 3.24 on an SM-A515F,
+`analyze`, `adb devices` and `collect` ran in it and passed. It marks the
+commands it runs, `CURSOR_SANDBOX=seatbelt` on macOS, and refuses any
+`.cursor/` it did not make, a temporary project's included. Two checks of
+`init` in the self-check write one, so there they are skipped and say why,
+and `init` and `doctor` pass with them skipped. A command on Cursor's
+allowlist runs outside its sandbox altogether (#204).
 
 Turning the network on for every command is wider than it needs to be, and
 still leaves the first download of trace_processor nowhere to write: perfetto

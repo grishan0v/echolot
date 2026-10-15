@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The plugin: four thin skills that Claude Code and Codex both load.
+"""The plugin: four thin skills that Claude Code, Codex and Cursor load.
 
 The `.claude/` layer is written for Claude Code: a skill that hands work on
 through the Skill tool, asks with AskUserQuestion, and calls `perf-hunter` by
@@ -54,7 +54,7 @@ def test_the_plugin_is_the_four_skills_a_manifest_and_a_readme():
     found = sorted(p.parent.name for p in (PLUGIN / "skills").glob("*/SKILL.md"))
     check("the plugin carries the four entry points", found == sorted(SKILLS), found)
     extra = [p.name for p in PLUGIN.iterdir()
-             if p.name not in (".claude-plugin", "skills", "README.md")]
+             if p.name not in (".claude-plugin", ".cursor-plugin", "skills", "README.md")]
     check("no commands/ or agents/ beside the skills: Codex drops them", not extra, extra)
 
 
@@ -293,6 +293,46 @@ def test_the_plugin_is_never_found_by_looking_at_the_tree(tmp_path):
 
 
 # --- the marketplace ---------------------------------------------------------------
+
+CURSOR_MANIFEST = PLUGIN / ".cursor-plugin" / "plugin.json"
+CURSOR_MARKETPLACE = ROOT / ".cursor-plugin" / "marketplace.json"
+
+
+def test_cursors_manifest_says_what_claudes_does():
+    """Cursor reads `.cursor-plugin/plugin.json`, and Claude Code and Codex
+    read `.claude-plugin/` (#204). One plugin, so one name, one version and
+    one description: the release that moves Claude's version moves this one
+    too, or this fails."""
+    claude = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text("utf-8"))
+    cursor = json.loads(CURSOR_MANIFEST.read_text("utf-8"))
+    for key in ("name", "version", "description", "homepage", "repository",
+                "license", "keywords"):
+        check(f"{key} as in Claude's manifest", cursor.get(key) == claude.get(key),
+              (key, cursor.get(key), claude.get(key)))
+    check("the author by name: Cursor's schema takes a name and an email",
+          cursor.get("author") == {"name": claude["author"]["name"]}, cursor.get("author"))
+    check("the logo is the icon Claude's directory reads",
+          cursor.get("logo") == ".claude-plugin/icon.png"
+          and (PLUGIN / cursor["logo"]).is_file(), cursor.get("logo"))
+    check("the skills found by their folders, as the other hosts find them",
+          "skills" not in cursor, cursor)
+
+
+def test_cursors_marketplace_serves_the_plugin_folder():
+    """What Cursor's team marketplaces import from the repository (#204). A
+    source there is a folder and takes no ref, so it serves the default
+    branch; the manifest in that folder wins over the entry."""
+    m = json.loads(CURSOR_MARKETPLACE.read_text("utf-8"))
+    check("the marketplace is called echolot", m.get("name") == "echolot", m)
+    check("it names its owner", (m.get("owner") or {}).get("name"), m)
+    entries = m.get("plugins") or []
+    check("one plugin, echolot", [e.get("name") for e in entries] == ["echolot"], entries)
+    source = entries[0].get("source")
+    check("from the folder the plugin is kept in, with Cursor's manifest there",
+          source == "plugins/echolot"
+          and (ROOT / source / ".cursor-plugin" / "plugin.json").is_file(), source)
+    check("the version is the manifest's alone", "version" not in entries[0], entries[0])
+
 
 MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 

@@ -297,7 +297,8 @@ def next_kind(st: dict) -> str:
 
 def whose_sandbox(host: str) -> str:
     """The `sandbox` fact doctor logs, as the words `status` and `next` use."""
-    return "Codex's sandbox" if host == "codex" else "the agent's sandbox"
+    return {"codex": "Codex's sandbox", "cursor": "Cursor's sandbox"}.get(
+        host, "the agent's sandbox")
 
 
 def door(st: dict) -> str:

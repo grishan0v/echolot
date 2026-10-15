@@ -83,10 +83,11 @@ after, on the commit the merge put there.
 
 ```bash
 # 1. on a branch, bump __version__ in echolot/__init__.py, "version" in
-#    plugins/echolot/.claude-plugin/plugin.json and "ref" in
+#    plugins/echolot/.claude-plugin/plugin.json and in
+#    plugins/echolot/.cursor-plugin/plugin.json, and "ref" in
 #    .claude-plugin/marketplace.json ("v" + the version), and open a pull
 #    request into main (pyproject.toml reads the version from that attribute;
-#    tests/test_plugin.py fails until the three agree). Past 0.10.0, the
+#    tests/test_plugin.py fails until the four agree). Past 0.10.0, the
 #    action's `uses: grishan0v/echolot@...` lines in README.md and
 #    docs/compare.md name the same tag; tests/test_action.py holds them
 # 2. once it is merged, tag the merged commit — the tag must be "v" + that
