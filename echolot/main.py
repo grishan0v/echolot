@@ -46,7 +46,7 @@ from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
 
 from . import compare as compare_mod
 from . import hunt as hunt_mod
-from . import codex, layer, recorder, state, table, when
+from . import codex, layer, plugin, recorder, sandbox, state, table, when
 from . import mapping as mapping_mod
 from . import place as place_mod
 from . import report as report_mod
@@ -2553,6 +2553,8 @@ def cmd_status(args) -> int:
     lines.append(("layer", st["layer_line"].split(": ", 1)[1]))
     if st.get("codex_line"):
         lines.append(("codex", st["codex_line"]))
+    if st.get("cursor_line"):
+        lines.append(("cursor", st["cursor_line"]))
     cfg = st["config"]
     if cfg is None:
         lines.append(("config", "none — no echolot.yml here"))
@@ -3191,6 +3193,65 @@ def _keep_from_git(repo, patterns: list[str]) -> None:
     if not said.startswith("!"):
         print("  A private install: git sees none of it in this clone. "
               "`echolot init --shared`\n  hands it to the team.")
+
+
+PLUGIN_WAYS = """\
+The plugin, for the agent you use:
+  Claude Code  claude plugin marketplace add grishan0v/echolot
+               claude plugin install echolot@echolot
+  Codex        codex plugin marketplace add grishan0v/echolot
+               codex plugin add echolot@echolot
+  Cursor       echolot plugin cursor, then restart Cursor. With the plugin in
+               Claude Code there is nothing to do: Cursor loads it from there."""
+
+
+def cmd_plugin(args) -> int:
+    """The plugin for each agent; `cursor` copies this echolot's into Cursor.
+
+    Claude Code and Codex install it from the marketplace in this repository,
+    and `echolot plugin` says how. Cursor takes a copy in its folder for local
+    plugins, which four shell commands used to make (#399).
+    """
+    if args.host is None:
+        print(PLUGIN_WAYS)
+        line = plugin.stale_line()
+        if line:
+            print(f"\ncursor: {line}")
+        return 0
+    try:
+        done = plugin.install()
+    except plugin.Refused as e:
+        print(f"error: {e}.", file=sys.stderr)
+        recorder.failed(str(e))
+        return 2
+    except OSError as e:
+        if sandbox.host() != sandbox.CURSOR:
+            raise
+        # Cursor's sandbox lets a command write in the project only, and
+        # refuses any .cursor/ it did not make (#204).
+        said = (f"Cursor's sandbox did not let echolot write "
+                f"{plugin.shown(plugin.cursor_copy())} ({e}). Run `echolot plugin "
+                f"cursor` in a terminal, or approve running it outside the sandbox "
+                f"when Cursor asks")
+        print(f"error: {said}.", file=sys.stderr)
+        recorder.failed(said)
+        return 2
+    where = plugin.shown(done["copy"])
+    if done["before"]:
+        instead = f", in place of {done['before']}'s"
+    elif done["replaced"]:
+        instead = ", in place of an earlier copy"
+    else:
+        instead = ""
+    print(f"copied the plugin of echolot {recorder.version()} into {where}{instead}")
+    print('restart Cursor, or run "Developer: Reload Window" in it: it loads the '
+          "plugin's skills at the start, and /echolot is the door")
+    if done["claude_code"]:
+        print(f"Claude Code has the echolot plugin installed and enabled, and Cursor "
+              f"loads that one too: one of the two is enough. To keep Claude "
+              f"Code's, delete {where}")
+    recorder.note(cursor_plugin=recorder.version(), replaced=done["before"])
+    return 0
 
 
 def cmd_init(args) -> int:
@@ -3941,6 +4002,16 @@ def cmd_doctor(args) -> int:
     said = codex.print_status(Path.cwd(), layer.hosts.keys(Path.cwd()))
     if said:
         recorder.note(codex=said)
+    # Where Cursor has a copy of the plugin from another release (#399). Not
+    # in `doctor -q`: its lines are counted, and `echolot`, which the plugin's
+    # door runs first, says it there.
+    stale = plugin.stale_line()
+    if stale:
+        import textwrap
+        print("\n## The plugin in Cursor\n")
+        print(textwrap.fill(stale[0].upper() + stale[1:] + ".", width=80,
+                            initial_indent="  ", subsequent_indent="  ",
+                            break_on_hyphens=False, break_long_words=False))
 
     print("\n## Self-check on a synthetic trace\n")
     try:
@@ -4193,7 +4264,7 @@ def _dump(tp, sql: str) -> None:
 # alphabetical. A verb missing from here is caught by the self-check.
 # The agent's half is ordered by the working flow. `anr` comes before `probe`
 # because a report from the field arrives before there is a trace to probe.
-ORDER = ("status", "init", "hunt", "doctor", "collect", "analyze", "compare",
+ORDER = ("status", "init", "plugin", "hunt", "doctor", "collect", "analyze", "compare",
          "guide", "report", "scan", "anr", "probe", "names", "domains", "mark",
          "calibrate", "explain", "reflect")
 
@@ -4514,6 +4585,24 @@ def build_parser() -> argparse.ArgumentParser:
                           ".gitignore lines are meant to be committed; undoes "
                           "--private")
     ini.set_defaults(func=cmd_init)
+
+    # The plugin, for each agent, beside the layer `init` installs: both put
+    # echolot where an agent reads it. `cursor` is the one a command does,
+    # since Cursor installs nothing from a repository for one person (#399).
+    # The usage is not written `[cursor]`: rich reads a word in brackets as a
+    # style, prints nothing for it, and the column comes out short.
+    plg = add("plugin", "yours", "cursor",
+              "copy the plugin into Cursor; alone, how each agent installs it",
+              description="Claude Code and Codex install the plugin from the "
+                          "marketplace in echolot's repository, and `echolot plugin` "
+                          "says how. Cursor loads it from its folder for local "
+                          "plugins: `echolot plugin cursor` copies this echolot's "
+                          "plugin there, in place of an older copy. Run it again "
+                          "after upgrading echolot.")
+    plg.add_argument("host", nargs="?", choices=["cursor"],
+                     help="copy this echolot's plugin into Cursor's folder for "
+                          "local plugins, ~/.cursor/plugins/local")
+    plg.set_defaults(func=cmd_plugin)
 
     cal = add("calibrate", "agent", "<trace...>", "thresholds from known-healthy runs")
     cal.add_argument("traces", nargs="+",

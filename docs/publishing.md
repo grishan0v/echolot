@@ -112,6 +112,13 @@ It releases the GitHub Action as well: `uses: grishan0v/echolot@vX.Y.Z`
 installs the echolot of that tag from the action's own checkout, so the
 action and the tool it runs are always the same version.
 
+The package on PyPI carries the plugin too. setup.py copies `plugins/echolot`
+into the wheel as `echolot/plugin`, and MANIFEST.in puts it in the sdist that
+the wheel is built from; `echolot plugin cursor` copies it into Cursor. So
+there is nothing else to move for Cursor: the version in its manifest moves
+with the other three, and the package's smoke test in `checks.yml` fails when
+the wheel or the sdist arrives without the plugin.
+
 cursor.directory, Cursor's community catalog, keeps a copy of the plugin of
 its own: the text and the description of each skill, as `main` had them when
 the listing was submitted on 2026-10-15, the skills of 0.15.0. No tag reaches

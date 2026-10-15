@@ -388,16 +388,21 @@ pipx install echolot                          # the CLI the skills drive
   list, and it also answers a plain question about slow startup.
 - **Cursor** loads the plugins Claude Code has installed and enabled, so the
   plugin installed there is in Cursor too, at the same release. Without
-  Claude Code, copy the plugin of the installed echolot's release into
-  Cursor's folder for local plugins, and restart Cursor:
+  Claude Code, copy the plugin into Cursor's folder for local plugins,
+  `~/.cursor/plugins/local/echolot`, then restart Cursor or run "Developer:
+  Reload Window" in it:
 
   ```bash
-  v=$(echolot --version | awk '{print $2}')
-  git -c advice.detachedHead=false clone --quiet --depth 1 --branch "v$v" \
-    https://github.com/grishan0v/echolot "${TMPDIR:-/tmp}/echolot-$v"
-  rm -rf ~/.cursor/plugins/local/echolot
-  cp -R "${TMPDIR:-/tmp}/echolot-$v/plugins/echolot" ~/.cursor/plugins/local/echolot
+  echolot plugin cursor
   ```
+
+  The copy is the plugin the installed echolot carries in its package, so it
+  needs no git and no network, and it is always that echolot's release. It
+  replaces an older copy whole. A link at that place, or a folder that is not
+  echolot's plugin, is left as it is, and the command says why. Inside
+  Cursor's sandbox, which lets a command write in the project only, it stops
+  and says so: run it in a terminal, or let the agent run it outside the
+  sandbox when Cursor asks.
 
   Customize lists it, with its four skills. The door is the `echolot` skill,
   `/echolot` in a chat, and the agent opens it by itself for a plain
@@ -424,7 +429,9 @@ new enough. Codex installs the plugin with old git as well (#205).
 An upgrade is `pipx upgrade echolot`, and then the plugin: `claude plugin
 marketplace update echolot` and `claude plugin update echolot@echolot`, which
 Claude Code applies after a restart; `codex plugin marketplace upgrade
-echolot` and `codex plugin add echolot@echolot` again in Codex.
+echolot` and `codex plugin add echolot@echolot` again in Codex; `echolot
+plugin cursor` again for Cursor's copy. Until then, `echolot` and `doctor`
+say that the copy in Cursor is from another release.
 
 The entry fetches `plugins/echolot` at the release tag of the version in the
 code. So what a person installs is the plugin the CLI
@@ -432,7 +439,9 @@ on PyPI was released with: served from `main`, it would name topics and flags
 that no released echolot has yet. A new plugin reaches people with the next
 release, when the tag and `version` move together — Claude Code copies a
 plugin again only when its `version` changes. `tests/test_plugin.py` fails
-when the tag, `plugin.json` and `echolot/__init__.py` disagree.
+when the tag, `plugin.json` and `echolot/__init__.py` disagree. The package
+carries the same plugin: setup.py copies `plugins/echolot` into the wheel as
+`echolot/plugin`, and that is the copy `echolot plugin cursor` makes.
 
 On a project that ran `init` before, the `.claude/` layer is still there, and
 Claude Code loads its skills beside the plugin's. Once the plugin's door has

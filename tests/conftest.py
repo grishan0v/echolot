@@ -53,6 +53,18 @@ def no_record(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_cursor_here(monkeypatch, tmp_path_factory):
+    """`echolot` and `doctor` look for a copy of the plugin in Cursor's folder
+    under the home directory (#399). A test sees an empty home instead,
+    whatever the machine running it has installed. HOME itself stays: the
+    pinned trace_processor is kept under it."""
+    from echolot import plugin
+    home = tmp_path_factory.getbasetemp() / "empty-home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(plugin, "_home", lambda: home)
+
+
+@pytest.fixture(autouse=True)
 def keep_cwd():
     """Several cases chdir into a temp project, and one of them may fail there.
 

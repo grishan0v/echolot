@@ -42,12 +42,8 @@ claude plugin install echolot@echolot
 codex plugin marketplace add grishan0v/echolot
 codex plugin add echolot@echolot
 
-# Cursor: copy the plugin that matches the installed echolot, then restart Cursor
-v=$(echolot --version | awk '{print $2}')
-git -c advice.detachedHead=false clone --quiet --depth 1 --branch "v$v" \
-  https://github.com/grishan0v/echolot "${TMPDIR:-/tmp}/echolot-$v"
-rm -rf ~/.cursor/plugins/local/echolot
-cp -R "${TMPDIR:-/tmp}/echolot-$v/plugins/echolot" ~/.cursor/plugins/local/echolot
+# Cursor: a copy in its folder for local plugins, then restart Cursor
+echolot plugin cursor
 ```
 
 Cursor also loads the plugins Claude Code has installed and enabled, so with

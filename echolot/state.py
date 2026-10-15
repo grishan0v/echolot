@@ -18,7 +18,7 @@ import os
 import shlex
 from pathlib import Path
 
-from . import codex, hosts, layer, recorder, runner
+from . import codex, hosts, layer, plugin, recorder, runner
 from . import hunt as hunt_mod
 from .config import Config, ConfigError
 
@@ -35,6 +35,9 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     # Where Codex is used: whether a rule lets echolot out of its sandbox.
     said = codex.one_line(project, hosts.keys(project))
     st["codex_line"] = said[1] if said else None
+    # Where Cursor has a copy of the plugin from another release: a copy does
+    # not follow an upgrade of echolot (#399).
+    st["cursor_line"] = plugin.stale_line()
 
     cfg_path = project / config
     st["config"] = None

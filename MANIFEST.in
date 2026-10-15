@@ -1,0 +1,4 @@
+# The plugin, for setup.py to copy into the wheel as echolot/plugin (#399).
+# `python -m build` builds the wheel from the sdist, which has nothing else to
+# copy it from.
+graft plugins/echolot
