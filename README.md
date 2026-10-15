@@ -47,7 +47,7 @@ codex plugin add echolot@echolot
 ```
 
 Cursor loads the plugins Claude Code has installed. Without Claude Code,
-[copy the plugin into Cursor's local plugins](docs/agent-layer.md#installing-the-plugin).
+[copy the plugin into Cursor's local plugins](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin).
 
 Open the agent in your Android project and say what is wrong:
 
