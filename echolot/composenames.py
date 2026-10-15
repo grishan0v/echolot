@@ -39,7 +39,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .runner import RunnerError
+from .runner import RunnerError, installed
 
 RECEIVER = "androidx.tracing.perfetto.TracingReceiver"
 ENABLE = "androidx.tracing.perfetto.action.ENABLE_TRACING_COLD_START"
@@ -220,6 +220,13 @@ class Names:
             self.log("  composable names: the Perfetto SDK on for every cold start of the "
                      "set, with the library the app carries")
         else:
+            # Nothing answers for an app that is not there either, and the
+            # sentence about its missing receiver was said of one (#385).
+            if code == 0 and not installed(self.device, self.package, self.run):
+                raise RunnerError(
+                    f"runner.compose_names: {self.package} is not installed on "
+                    f"{self.device}, so nothing answered. Install the build you "
+                    f"mean to measure, and collect again.")
             raise self._refused(code, data)
         # The broadcast started the app to deliver it; the first repeat starts
         # it again, cold, with the SDK loading as it starts.

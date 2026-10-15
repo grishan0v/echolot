@@ -54,6 +54,13 @@ RESOLVED = ("priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 "
 AM_START = ("Starting: Intent {{ cmp={activity} }}\nStatus: ok\n"
             "LaunchState: COLD\nActivity: {activity}\nTotalTime: {total}\n"
             "WaitTime: {wait}\nComplete\n")
+# `pm path` for an installed app: a line per APK. For one that is not there it
+# prints nothing, and exits 1, which the runner's `|| true` turns into 0.
+INSTALLED = f"package:/data/app/~~kQ1==/{PACKAGE}-x9A==/base.apk\n"
+# What `am start -W` prints for an app or an activity that is not there, and
+# exits 0 with (an SM-A515F, Android 13).
+AM_START_MISSING = (f"Starting: Intent {{ cmp={ACTIVITY} }}\nError type 3\n"
+                    f"Error: Activity class {{{ACTIVITY}}} does not exist.\n")
 # What an SM-A515F (Android 13) answered behind its lock screen: no TotalTime.
 AM_START_UNMEASURED = (f"Starting: Intent {{ cmp={ACTIVITY} }}\nStatus: ok\n"
                        f"LaunchState: UNKNOWN (0)\nActivity: {ACTIVITY}\nComplete\n")
@@ -73,7 +80,7 @@ def kind(args: list[str]) -> str:
                          ("perfetto", "perfetto -c"), ("start", "am start -W"),
                          ("wait", "pidof perfetto"), ("pull", " pull "),
                          ("screen", "dumpsys power"), ("wake", "KEYCODE_WAKEUP"),
-                         ("dismiss", "dismiss-keyguard")):
+                         ("dismiss", "dismiss-keyguard"), ("installed", "pm path")):
         if needle in text:
             return name
     return text
@@ -110,6 +117,8 @@ class FakeAdb:
             return answers.pop(0) if len(answers) > 1 else answers[0]
         if what == "screen":
             return SCREEN_ON
+        if what == "installed":
+            return INSTALLED
         if what == "devices":
             return self.listing
         if what == "resolve":
@@ -149,10 +158,10 @@ def test_launch_mode_asks_once_then_runs_seven_steps_per_iteration(tmp_path, adb
     results = runner.collect(PACKAGE, tmp_path / "traces", 3, section={},
                              name="startup", log=said.append)
     kinds = adb.kinds()
-    check("the device, the activity and the screen, once each and first",
-          kinds[:3] == ["devices", "resolve", "screen"], kinds)
+    check("the device, the app on it, the activity and the screen, once each and first",
+          kinds[:4] == ["devices", "installed", "resolve", "screen"], kinds)
     check("then per iteration: the screen, stop, clear, record, launch, wait, pull",
-          kinds[3:] == ["screen", "force-stop", "rm", "perfetto", "start", "wait", "pull"] * 3,
+          kinds[4:] == ["screen", "force-stop", "rm", "perfetto", "start", "wait", "pull"] * 3,
           kinds)
     check("a screen on and unlocked says nothing",
           not any("screen" in line for line in said), said)
@@ -272,8 +281,9 @@ def test_the_set_moves_after_the_device_check_and_before_the_first_pull(tmp_path
     check("once", kinds.count("<set aside>") == 1 and len(moved) == 1, kinds)
     where = kinds.index("<set aside>")
     check("after the device check and the first recording, right before its pull",
-          kinds[:where] == ["devices", "resolve", "screen", "screen", "force-stop", "rm",
-                            "perfetto", "start", "wait"] and kinds[where + 1] == "pull", kinds)
+          kinds[:where] == ["devices", "installed", "resolve", "screen", "screen",
+                            "force-stop", "rm", "perfetto", "start", "wait"]
+          and kinds[where + 1] == "pull", kinds)
     check("the old set is in the directory it went to",
           sorted(p.name for p in moved[0].iterdir()) == before)
 
@@ -292,6 +302,47 @@ def test_a_scenario_whose_name_begins_with_this_ones_is_left_alone(tmp_path, adb
     check("this scenario's probe went with its set",
           (moved[0] / "startup_probe_2026-09-05.perfetto-trace").exists(),
           list(moved[0].iterdir()))
+
+
+# --- an app that is not there (#385) -------------------------------------------
+
+def test_an_app_that_is_not_installed_stops_collect_before_anything_is_recorded(
+        tmp_path, adb):
+    """`runner.activity` named, so nothing else asks the device: `am start`
+    of the missing app printed an error, exited 0, and five traces of the
+    device and no app went to an agent's loop."""
+    out = tmp_path / "traces"
+    before = old_set(out)
+    adb.script["installed"] = [""]
+    with pytest.raises(runner.RunnerError) as e:
+        runner.collect(PACKAGE, out, 3, section={"activity": ACTIVITY},
+                       name="startup", log=lambda m: None)
+    check("said, with the device", f"{PACKAGE} is not installed on {SERIAL}" in str(e.value),
+          str(e.value))
+    kinds = adb.kinds()
+    check("nothing stopped, recorded or launched",
+          not {"force-stop", "perfetto", "start"} & set(kinds), kinds)
+    check("and the set from before is where it was",
+          sorted(p.name for p in out.iterdir()) == before, list(out.iterdir()))
+
+
+def test_am_starts_error_stops_the_set_at_that_repeat(tmp_path, adb):
+    """An activity that is not there, in an app that is: the package check
+    passes, and `am start` says so and exits 0."""
+    out = tmp_path / "traces"
+    adb.script["start"] = [AM_START_MISSING]
+    with pytest.raises(runner.RunnerError) as e:
+        runner.collect(PACKAGE, out, 3, section={"activity": ACTIVITY},
+                       name="startup", log=lambda m: None)
+    said = str(e.value)
+    check("at the first repeat, with am start's own line",
+          said.startswith("repeat 1 of 3: ") and "does not exist." in said
+          and "runner.activity" in said, said)
+    kinds = adb.kinds()
+    check("the recording waited out and removed, and never pulled",
+          kinds[-2:] == ["wait", "rm"] and "pull" not in kinds, kinds)
+    check("no trace took a name", not out.exists() or not list(out.iterdir()),
+          list(out.iterdir()) if out.exists() else None)
 
 
 # --- command mode: the scenario runs against the device being recorded -------

@@ -73,6 +73,16 @@ system saying it timed no start, usually because the activity was already in
 front and nothing was launched; `collect` counts those launches and leaves
 them out of the spread.
 
+`am start` of an app or an activity that is not on the device prints
+`Error: Activity class {…} does not exist.` and exits 0. Taken as a launch,
+that recorded five traces of the device and no app, and an agent spent its
+whole loop on them. So before the set `collect` asks the device whether the
+package is installed (`pm path`), and an app that is not there stops it with a
+sentence, before anything is recorded. After each launch, an `Error:` line
+from `am start` stops the set at that repeat: a `runner.activity` with a typo
+in it, or a build installed under another activity. The repeat's own trace
+is not kept, and the ones before it are.
+
 ### `command` — something else drives it
 
 We record the trace around a command of your choosing. Anything that can move

@@ -549,6 +549,21 @@ def _join(parts: list[str]) -> str:
     return subprocess.list2cmdline(parts)
 
 
+def installed(device: str, package: str, run: Callable[..., str] | None = None) -> bool:
+    """Whether the package is on the device, by `pm path`.
+
+    It prints a `package:` line for each of the app's APKs, and nothing for a
+    package that is not there, exiting 1 then; `|| true` keeps that from
+    reading as adb failing, which still stops everything as it should. Asked
+    because nothing else does when `runner.activity` names the activity:
+    `am start` of an app that is not installed prints an error and exits 0,
+    and `collect` recorded five traces of the device and no app (#385).
+    """
+    out = (run or _run)(["adb", "-s", device, "shell", f"pm path {package} || true"],
+                        timeout=60)
+    return any(line.startswith("package:") for line in out.splitlines())
+
+
 def resolve_activity(device: str, package: str) -> str:
     out = _run(["adb", "-s", device, "shell", "cmd", "package",
                 "resolve-activity", "--brief", package], timeout=60)
@@ -1057,6 +1072,12 @@ def collect(package: str, out_dir: Path, iterations: int,
     dev = pick_device(device)
     activity = None
     if mode == "launch":
+        if not installed(dev, package):
+            raise RunnerError(
+                f"{package} is not installed on {dev}. Install the build you "
+                f"mean to measure, and collect again: `am start` of an app that "
+                f"is not there prints an error and exits 0, and every trace "
+                f"would hold the device and no app.")
         activity = section.get("activity") or resolve_activity(dev, package)
         log(f"device {dev}, activity {activity}")
     else:
@@ -1111,6 +1132,16 @@ def collect(package: str, out_dir: Path, iterations: int,
             _run(["adb", "-s", dev, "shell",
                   "while pidof perfetto > /dev/null; do sleep 0.5; done"],
                  timeout=duration_ms // 1000 + 300)
+            # `am start` refused, an activity that is not there most often,
+            # and exited 0 all the same: the repeat recorded the device and
+            # no app. Stopped before the trace takes a name (#385).
+            if info.get("launch_error"):
+                _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
+                raise RunnerError(
+                    f"repeat {i + 1} of {iterations}: `am start -W -n {activity}` "
+                    f"started nothing: {info['launch_error']} Check "
+                    f"runner.activity, and that the build installed is the one "
+                    f"it names.")
             # After a force-stop `UNKNOWN` is a launch the system measured no
             # start for. A screen that went dark or locked since the check
             # explains it, and the set stops before the trace takes a name;
@@ -1153,6 +1184,12 @@ def _launch(device: str, activity: str) -> dict:
         if m:
             value = m.group(1).strip()
             info[field] = int(value) if value.isdigit() else value
+    # What `am start` says when it starts nothing, and exits 0 with:
+    # `Error: Activity class {…} does not exist.` under `Error type 3`.
+    error = next((ln.strip() for ln in started.splitlines()
+                  if ln.strip().startswith("Error:")), None)
+    if error:
+        info["launch_error"] = error
     return info
 
 

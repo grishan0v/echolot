@@ -179,6 +179,13 @@ ago: …` with the line of the output that names the cause — the exception the
 benchmark threw, say — and the fix when the failure is a known one, until a
 newer set of traces exists.
 
+**An app that is not on the device stops `collect`** in launch mode, before
+anything is recorded: `<package> is not installed on <serial>`. Install the
+build the scenario measures and collect again. An `Error:` from `am start`
+after a launch, an activity that is not there, stops the set at that repeat
+with the line. Neither used to: `am start` exits 0 either way, and the traces
+held the device and no app.
+
 **The screen is `collect`'s to wake** in launch and command modes. Before the
 set and before each repeat it reads the screen, wakes it when it is dark, and
 dismisses a lock screen that asks for nothing, a line each. A lock screen with

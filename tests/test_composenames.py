@@ -57,9 +57,11 @@ def caches(tmp_path, monkeypatch):
 class App:
     """The device and the app's tracing receiver, answering as on the A51."""
 
-    def __init__(self, first: int = 11, second: int = 1, unanswered: bool = False) -> None:
+    def __init__(self, first: int = 11, second: int = 1, unanswered: bool = False,
+                 installed: bool = True) -> None:
         self.first, self.second = first, second
         self.unanswered = unanswered
+        self.installed = installed
         self.asked: list[str] = []
 
     def __call__(self, args, stdin=None, timeout=120) -> str:
@@ -76,6 +78,8 @@ class App:
             return COMPLETED.format(code=1, extra="") + "\n"
         if text == "getprop ro.product.cpu.abi":
             return "arm64-v8a\n"
+        if text.startswith(f"pm path {PACKAGE}"):
+            return f"package:/data/app/~~kQ1==/{PACKAGE}-x9A==/base.apk\n" if self.installed else ""
         return ""
 
 
@@ -219,6 +223,21 @@ def test_a_refusal_is_a_sentence_and_leaves_nothing_behind(caches, first, second
     pushed = any(" push " in q for q in app.asked)
     check("a pushed library is removed again",
           not pushed or app.asked[-1] == f"rm -f {MEDIA}/libtracing_perfetto.so", app.asked)
+
+
+def test_an_app_that_is_not_there_is_said_so_and_not_called_one_without_tracing(caches) -> None:
+    """Nothing answers the broadcast for an app that is not installed either,
+    and "it does not carry runtime-tracing" was said of one (#385)."""
+    app = App(first=0, installed=False)
+    with pytest.raises(RunnerError) as e:
+        with names(app):
+            pass
+    said = str(e.value)
+    check("not installed, on that device",
+          f"{PACKAGE} is not installed on {SERIAL}" in said
+          and "runtime-tracing" not in said, said)
+    check("asked the device only after nothing answered",
+          app.asked.index(f"pm path {PACKAGE} || true") > 0, app.asked)
 
 
 # --- in collect ----------------------------------------------------------------
