@@ -43,25 +43,31 @@ install commands are code blocks.
   row's dot takes the sphere's colour for its place in the table, and the
   line under the labels runs through all three. Everything else is a grey
   that sits in GitHub's page, and the slate is the ink on white.
-- **Room, and no borders.** Small capitals for the labels, a hairline between
-  the rows, no box round the table.
-- **Three files a table.** `<name>-light.svg` and `<name>-dark.svg` at the
+- **Room, and no borders between the cells.** Small capitals for the labels,
+  a hairline between the rows. The table sits on a card with round corners,
+  for the reason below.
+- **Two files a table, each for both themes.** `<name>-wide.svg` at the
   README's width, and `<name>-narrow.svg` for a phone, whose screen would
   shrink the wide one's words to five pixels. The README shows them through
-  `<picture>` with the light one as the `<img>`: PyPI removes the `<source>`
-  and always shows that `<img>`, on white. The narrow `<source>` comes first
-  and asks for the width alone, since GitHub rewrites the theme half of a
-  condition that names both. So the narrow file is one file: CSS inside it
-  follows the reader's system theme, and it sits on a card of its own, which
-  keeps it readable when the system and GitHub disagree about the theme.
+  `<picture>`: the narrow one as a `<source>` that asks for the width alone,
+  the wide one as the `<img>`, which is all PyPI keeps. No `<source>` picks
+  by `prefers-color-scheme`: there it means the reader's system, while
+  GitHub's page follows the theme picked on GitHub, and when the two
+  disagree a light picture lands on a dark page with its text gone. So each
+  file is drawn in the light colours, with CSS inside that repaints it dark.
+  Inside a picture, Chrome answers `prefers-color-scheme` with the page's
+  `color-scheme`, which GitHub sets from its own theme; a browser that asks
+  the system instead still shows the table on its card, readable.
 - **The logo is the one picture not drawn here.** The designer drew it twice,
-  on its dark plate and with no background. `echolot-light.png` is the plate
-  version, cut around the sphere with rounded corners, for the light theme and
-  for PyPI. `echolot-dark.png` is the one with no background, on a canvas of
-  the same size with the sphere at the same place and scale, for the dark
-  theme. Both are 840 × 660, twice the size the README gives them, reduced to
-  256 colours with libimagequant: a quarter of the size, and no difference
-  the eye can find.
+  on its dark plate and with no background. The README shows
+  `echolot-light.png`, the plate version, cut around the sphere with rounded
+  corners, in both themes and on PyPI: on the plate, its white words read
+  on any page. `echolot-dark.png`, the one with no background, is retired:
+  shown for the dark theme by the system's choice, it put white words on a
+  white page wherever GitHub was light and the system dark. Both are
+  840 × 660, twice the size the README gives them, reduced to 256 colours
+  with libimagequant: a quarter of the size, and no difference the eye can
+  find.
 - **The card for links, not drawn here either.** `social-preview.png` is what
   GitHub shows where a link to the repository is shared: the plate version of
   the logo in the middle of a 1280 × 640 plate of the same slate, the size
@@ -89,8 +95,9 @@ install commands are code blocks.
   the test checks instead that each one names a file in the tree.
 - **A file keeps its name for good.** A release on PyPI shows its README's
   pictures from `main` for as long as it is up. The ones the README showed up
-  to 0.12.0 stay here as they are: the old logo, the hero, the animated
-  session, the hunt loop, the cost of a hunt and the comparison. `RETIRED` in
+  to 0.15.0 stay here as they are: the old logo, the hero, the animated
+  session, the hunt loop, the cost of a hunt, the comparison, the logo with
+  no background and the tables' light and dark pairs. `RETIRED` in
   the script lists them, nothing draws them any more, and the test fails when
   one goes. A new picture gets a new name.
 - **No real project.** The names are the README's placeholders:

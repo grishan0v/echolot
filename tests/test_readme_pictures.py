@@ -5,8 +5,9 @@ The README's tables are pictures drawn by docs/assets/render.py: the
 detectors' table from each detector's `@title`, the questions from the
 script's own list. These checks draw every picture again and compare, so a
 committed file cannot drift from its source unnoticed, and they hold the
-README to the way it shows them: a light picture PyPI can show, a dark one
-and a narrow one for GitHub, and the words of each table in its alt text.
+README to the way it shows them: a wide picture and a narrow one, each
+following the page's theme from inside, and the words of each table in its
+alt text.
 """
 from __future__ import annotations
 
@@ -71,43 +72,28 @@ def test_every_picture_the_readme_names_is_in_the_tree():
     assert not missing, f"the README names files that are not in the tree: {missing}"
 
 
-def test_every_table_is_shown_in_its_three_versions():
-    """Light as the <img>, which is what PyPI keeps; dark and narrow as
-    <source> for GitHub. A file drawn and never shown is a table the README
-    lost."""
+def test_every_table_is_shown_in_its_two_versions():
+    """Wide as the <img>, which is what PyPI keeps; narrow as the <source>
+    a phone gets on GitHub. A file drawn and never shown is a table the
+    README lost."""
     readme = _readme()
     for name in _render().tables():
-        for version in ("narrow", "dark", "light"):
-            assert f"{RAW}docs/assets/{name}-{version}.svg" in readme, f"{name}-{version}.svg"
+        assert re.search(r'<source media="\(max-width: 767px\)" srcset="'
+                         + re.escape(f"{RAW}docs/assets/{name}-narrow.svg") + '"', readme), name
+        assert re.search(r'<img [^>]*src="' + re.escape(f"{RAW}docs/assets/{name}-wide.svg") + '"',
+                         readme), name
 
 
-def test_a_themed_picture_falls_back_to_its_light_version():
-    """PyPI's sanitiser removes <source>, so the <img> inside <picture> is
-    what PyPI shows, on a white page: it has to be the light version."""
-    pictures = re.findall(r"<picture>(.*?)</picture>", _readme(), re.S)
-    assert pictures, "the README has no <picture>"
-    for block in pictures:
-        dark = re.search(r'<source media="\(prefers-color-scheme: dark\)" '
-                         r'srcset="([^"]+)-dark\.(svg|png)"', block)
-        light = re.search(r'<img [^>]*src="([^"]+)-light\.(svg|png)"', block)
-        assert dark and light and dark.groups() == light.groups(), (
-            f"a <picture> without a dark <source> and a light <img> of the "
-            f"same name:\n{block.strip()}")
-
-
-def test_a_narrow_picture_comes_before_the_theme():
-    """A browser takes the first <source> that matches. A narrow version
-    placed after the dark one would never show on a phone with a dark
-    theme, and one that also names a theme is not safe on GitHub, which
-    rewrites that half of the condition — so it asks for the width alone."""
-    for block in re.findall(r"<picture>(.*?)</picture>", _readme(), re.S):
-        media = re.findall(r'<source media="([^"]+)"', block)
-        narrow = [i for i, m in enumerate(media) if "max-width" in m]
-        for i in narrow:
-            assert "prefers-color-scheme" not in media[i], (
-                f"a narrow <source> that also names a theme: {media[i]}")
-            assert all(i < j for j, m in enumerate(media) if "prefers-color-scheme" in m), (
-                f"a narrow <source> after a theme one:\n{block.strip()}")
+def test_no_picture_is_chosen_by_the_system_theme():
+    """A <source> for prefers-color-scheme follows the reader's system,
+    while GitHub's page follows the theme picked on GitHub. When the two
+    disagree, a light picture lands on a dark page and its text is gone.
+    The theme is followed from inside a picture, on its own card, and the
+    logo is the version on its plate, readable on either page."""
+    readme = _readme()
+    assert "prefers-color-scheme" not in readme
+    assert "#gh-dark-mode-only" not in readme and "#gh-light-mode-only" not in readme, (
+        "PyPI shows both pictures of a #gh-*-mode-only pair")
 
 
 def test_each_table_says_its_words_in_its_alt_text():
@@ -129,7 +115,7 @@ def test_the_detectors_table_is_every_detector_by_its_title():
     from echolot.main import DETECTOR_DIR
     from echolot.tp import load_detectors
 
-    drawn = _render().pictures()["detectors-light.svg"]
+    drawn = _render().pictures()["detectors-wide.svg"]
     for detector in load_detectors(DETECTOR_DIR):
         assert f">{detector.id}<" in drawn, detector.id
         assert detector.title.replace("'", "&#x27;") in drawn, detector.title
@@ -145,15 +131,20 @@ def test_a_detector_the_table_does_not_place_stops_the_script(monkeypatch):
         render.pictures()
 
 
-def test_the_narrow_tables_follow_the_system_theme():
-    """GitHub picks a narrow picture by the width of the screen alone, so a
-    narrow table is one file for both themes, and repaints itself when the
-    system asks for dark."""
+@pytest.mark.parametrize("version", ["wide", "narrow"])
+def test_a_table_follows_the_theme_on_its_card(version):
+    """A table is one file for both themes and repaints itself when the
+    page it sits on is dark. Its card keeps it readable where it is painted
+    for the other theme than the page's."""
     render = _render()
+    light = render.THEMES["light"]
     for name in render.tables():
-        drawn = render.pictures()[f"{name}-narrow.svg"]
+        drawn = render.pictures()[f"{name}-{version}.svg"]
         assert "@media (prefers-color-scheme:dark)" in drawn, name
-        assert f'[fill="{render.THEMES["light"]["ink"]}"]' in drawn, name
+        assert f'[fill="{light["ink"]}"]' in drawn, name
+        first = re.search(r"</style>(<[^>]+>)", drawn).group(1)
+        assert first.startswith('<rect x="0.5" y="0.5"') and f'fill="{light["page"]}"' in first, (
+            f"{name}-{version}.svg: the first thing drawn is not its card: {first}")
 
 
 def test_the_card_for_links_is_what_github_takes():
@@ -171,16 +162,16 @@ def test_the_card_for_links_is_what_github_takes():
 @pytest.mark.parametrize("theme", ["light", "dark"])
 @pytest.mark.parametrize("phone", [False, True])
 def test_the_preview_is_the_readme(theme, phone):
-    """`--preview` renders the README itself, so it cannot drift from it, and
-    chooses the <source> a reader on that screen and theme would get."""
+    """`--preview` renders the README itself, so it cannot drift from it,
+    chooses the <source> a reader on that screen would get, and sets the
+    theme the way GitHub does, as the page's color-scheme."""
     page = _render().preview_page(theme, phone)
     assert "Turns a huge Android trace into 20 rows of facts" in page
     assert RAW not in page, "a picture still read from GitHub"
-    assert 'src="assets/ask-light.svg"' in page
+    assert 'src="assets/ask-wide.svg"' in page
     narrow = re.search(r'<source media="([^"]+)" srcset="assets/ask-narrow\.svg"', page)
-    dark = re.search(r'<source media="([^"]+)" srcset="assets/ask-dark\.svg"', page)
     assert narrow.group(1) == ("all" if phone else "not all")
-    assert dark.group(1) == ("all" if theme == "dark" else "not all")
+    assert f":root{{color-scheme:{theme}}}" in page
 
 
 @pytest.mark.parametrize("argv", [["--preview"], ["--preveiw", "out"],

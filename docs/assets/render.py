@@ -78,14 +78,16 @@ DETECTOR_ORDER = [
     "uninstrumented_cpu", "repeated_work",
 ]
 
-# Pictures the README no longer shows. The releases 0.9.0 to 0.12.0 show them
+# Pictures the README no longer shows. The releases 0.9.0 to 0.15.0 show them
 # on PyPI, which reads each one from `main`, so they stay here as they are;
 # nothing draws them any more, and tests/test_readme_pictures.py checks that
 # they are still in the tree.
 RETIRED = (
-    "compare-dark.svg", "compare-light.svg", "hero-dark.svg", "hero-light.svg",
-    "hero-narrow.svg", "logo-dark.png", "logo-light.png", "loop-dark.svg",
-    "loop-light.svg", "session.svg", "versus-dark.svg", "versus-light.svg",
+    "ask-dark.svg", "ask-light.svg", "compare-dark.svg", "compare-light.svg",
+    "detectors-dark.svg", "detectors-light.svg", "echolot-dark.png",
+    "hero-dark.svg", "hero-light.svg", "hero-narrow.svg", "logo-dark.png",
+    "logo-light.png", "loop-dark.svg", "loop-light.svg", "session.svg",
+    "versus-dark.svg", "versus-light.svg",
 )
 
 
@@ -142,10 +144,13 @@ def sphere_line(x, y, w, h, gid):
             f'height="{h:g}" fill="url(#{gid})"/>')
 
 
-def follows_the_system(light: dict, dark: dict) -> str:
-    """CSS that repaints a picture drawn in the light colours when the reader's
-    system asks for dark. Each light colour has one role only, so the swap
-    goes by the colour itself."""
+def follows_the_theme(light: dict, dark: dict) -> str:
+    """CSS that repaints a picture drawn in the light colours when the page it
+    sits on is dark. Inside a picture, Chrome answers prefers-color-scheme with
+    the page's color-scheme, which GitHub sets from the theme picked on GitHub;
+    a browser that answers with the system's theme still shows the picture on
+    its own card. Each light colour has one role only, so the swap goes by the
+    colour itself."""
     rules = [f'[fill="{v}"]{{fill:{dark[k]}}}[stroke="{v}"]{{stroke:{dark[k]}}}'
              for k, v in light.items() if dark[k] != v]
     return "@media (prefers-color-scheme:dark){" + "".join(rules) + "}"
@@ -156,19 +161,31 @@ Kind = tuple[str, float, str, int]
 WIDE, NARROW = 880, 360
 
 
-def wide_table(c, labels, rows, *, split, lead: Kind, rest: Kind, title, gid, row=58):
-    """A table at the README's width. A row is a dot in the sphere's colour for
-    its place in the table, its lead, and the rest at `split`, with a note under
-    the rest when it has one. No borders: a line in the sphere's colours under
-    the labels, and a hairline between the rows."""
-    left = 30
-    out = [text(left, 13, labels[0], size=11.5, weight=600, fill=c["sub"], spacing=1.6),
-           text(split, 13, labels[1], size=11.5, weight=600, fill=c["sub"], spacing=1.6),
-           sphere_line(0, 28, WIDE, 1.5, gid)]
-    y = 29.5
+def card(w, h) -> str:
+    """The card a table sits on. The table is one file for both themes, and
+    the card keeps it readable when it is painted for the other theme than the
+    page's: a browser that asks the system, a page whose theme it cannot see."""
+    c = THEMES["light"]
+    return (f'<rect x="0.5" y="0.5" width="{w - 1:g}" height="{h - 1:g}" rx="16" '
+            f'fill="{c["page"]}" stroke="{c["line"]}"/>')
+
+
+def wide_table(labels, rows, *, split, lead: Kind, rest: Kind, title, gid, row=58):
+    """A table at the README's width, on its card. A row is a dot in the
+    sphere's colour for its place in the table, its lead, and the rest at
+    `split`, with a note under the rest when it has one. No borders between
+    the cells: a line in the sphere's colours under the labels, and a hairline
+    between the rows."""
+    c = THEMES["light"]
+    pad = 24
+    left, split = pad + 30, pad + split
+    out = [text(left, pad + 13, labels[0], size=11.5, weight=600, fill=c["sub"], spacing=1.6),
+           text(split, pad + 13, labels[1], size=11.5, weight=600, fill=c["sub"], spacing=1.6),
+           sphere_line(pad, pad + 28, WIDE - 2 * pad, 1.5, gid)]
+    y = pad + 29.5
     for i, (first, second, note) in enumerate(rows):
         base = y + row / 2 + 7
-        out.append(f'<circle cx="6" cy="{base - 5:g}" r="4" '
+        out.append(f'<circle cx="{pad + 6}" cy="{base - 5:g}" r="4" '
                    f'fill="{sphere_at(i / max(len(rows) - 1, 1))}"/>')
         out.append(text(left, base, first, family=lead[0], size=lead[1], fill=c[lead[2]],
                         weight=lead[3]))
@@ -178,9 +195,11 @@ def wide_table(c, labels, rows, *, split, lead: Kind, rest: Kind, title, gid, ro
             out.append(text(split, base + 23, note, size=13.5, fill=c["sub"]))
         y += row + (21 if note else 0)
         if i < len(rows) - 1:
-            out.append(f'<rect x="{left}" y="{y:g}" width="{WIDE - left}" height="1" '
+            out.append(f'<rect x="{left}" y="{y:g}" width="{WIDE - pad - left}" height="1" '
                        f'fill="{c["line"]}"/>')
-    return svg(WIDE, y + 6, "".join(out), title)
+    height = y + pad - 8
+    return svg(WIDE, height, card(WIDE, height) + "".join(out), title,
+               style=follows_the_theme(THEMES["light"], THEMES["dark"]))
 
 
 def _wrap(s: str, kind: Kind, width: float) -> list[str]:
@@ -191,16 +210,11 @@ def _wrap(s: str, kind: Kind, width: float) -> list[str]:
 
 
 def narrow_table(rows, *, lead: Kind, rest: Kind, title, gid):
-    """The same table for a phone: each row one under the other, on a card of
-    its own. GitHub picks it by the width of the screen alone, so it is one
-    file, and CSS inside it follows the reader's system theme. The card keeps
-    it readable when the system and GitHub disagree about the theme."""
+    """The same table for a phone, on its card: each row one under the other."""
     c = THEMES["light"]
     pad, left = 20, 40
     width = NARROW - left - pad
-    out = [f'<rect x="0.5" y="0.5" width="{NARROW - 1}" height="HEIGHT" rx="16" '
-           f'fill="{c["page"]}" stroke="{c["line"]}"/>',
-           sphere_line(pad, pad, NARROW - 2 * pad, 1.5, gid)]
+    out = [sphere_line(pad, pad, NARROW - 2 * pad, 1.5, gid)]
     y = pad + 1.5
     for i, (first, second, note) in enumerate(rows):
         y += 32
@@ -220,9 +234,8 @@ def narrow_table(rows, *, lead: Kind, rest: Kind, title, gid):
             out.append(f'<rect x="{left - 2}" y="{y:g}" width="{NARROW - left - pad + 2}" '
                        f'height="1" fill="{c["line"]}"/>')
     height = y + pad - 6
-    body = "".join(out).replace("HEIGHT", f"{height - 1:g}")
-    return svg(NARROW, height, body, title,
-               style=follows_the_system(THEMES["light"], THEMES["dark"]))
+    return svg(NARROW, height, card(NARROW, height) + "".join(out), title,
+               style=follows_the_theme(THEMES["light"], THEMES["dark"]))
 
 
 def tables() -> dict[str, dict]:
@@ -246,10 +259,9 @@ def pictures() -> dict[str, str]:
     """Every picture this script draws, by file name."""
     out = {}
     for name, t in tables().items():
-        for theme, c in THEMES.items():
-            out[f"{name}-{theme}.svg"] = wide_table(
-                c, t["labels"], t["rows"], split=t["split"], lead=t["lead"], rest=t["rest"],
-                title=t["title"], gid=name, row=t["row"])
+        out[f"{name}-wide.svg"] = wide_table(
+            t["labels"], t["rows"], split=t["split"], lead=t["lead"], rest=t["rest"],
+            title=t["title"], gid=name, row=t["row"])
         lead, rest = t["narrow"]
         out[f"{name}-narrow.svg"] = narrow_table(t["rows"], lead=lead, rest=rest,
                                                  title=t["title"], gid=name)
@@ -264,7 +276,7 @@ def alt(table: dict) -> str:
     return f"{table['title']}. {rows}"
 
 
-_ALT = re.compile(r'(<img alt=")([^"]*)(" src="' + re.escape(RAW) + r'([a-z]+)-light\.svg")')
+_ALT = re.compile(r'(<img alt=")([^"]*)(" src="' + re.escape(RAW) + r'([a-z]+)-wide\.svg")')
 
 
 def with_alts(readme: str) -> str:
@@ -292,21 +304,21 @@ def with_alts(readme: str) -> str:
 def preview_page(theme: str, phone: bool, readme: str | None = None) -> str:
     """The README as GitHub shows it, near enough to judge the pictures by: in
     one theme, at a desktop's width or a phone's. The <source> a reader would
-    get is decided here, since the page is opened on a desktop either way, and
-    the pictures are read from `assets/` beside the page."""
+    get is decided here, since the page is opened on a desktop either way; the
+    theme is the page's color-scheme, as on GitHub, and the pictures, read
+    from `assets/` beside the page, follow it."""
     from markdown_it import MarkdownIt
 
     readme = README.read_text(encoding="utf-8") if readme is None else readme
     body = MarkdownIt("commonmark", {"html": True}).render(readme).replace(RAW, "assets/")
     body = body.replace('media="(max-width: 767px)"', f'media="{"all" if phone else "not all"}"')
-    body = body.replace('media="(prefers-color-scheme: dark)"',
-                        f'media="{"all" if theme == "dark" else "not all"}"')
     c = THEMES[theme]
     edge, code = ("#D1D9E0", "#F6F8FA") if theme == "light" else ("#3D444D", "#151B23")
     width = 375 if phone else 928
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width"><meta name="color-scheme" content="{theme}">
 <style>
+:root{{color-scheme:{theme}}}
 body{{margin:0;background:{c['page']};color:{c['ink']};font:16px/1.5 {SANS}}}
 .md{{max-width:{width}px;box-sizing:border-box;margin:{0 if phone else 24}px auto;
 padding:{16 if phone else 32}px;border:{0 if phone else 1}px solid {edge};border-radius:6px}}

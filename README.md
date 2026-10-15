@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/echolot-dark.png">
-    <img alt="echolot cli, an Android profiling tool" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/echolot-light.png" width="420" height="330">
-  </picture>
+  <img alt="echolot cli, an Android profiling tool" src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/echolot-light.png" width="420" height="330">
 </p>
 <p align="center">
   Turns a huge Android trace into 20 rows of facts an AI agent can actually use.
@@ -54,8 +51,7 @@ Open the agent in your Android project and say what is wrong:
 <p>
   <picture>
     <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ask-narrow.svg">
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ask-dark.svg">
-    <img alt="What to type in the agent, by the problem you arrive with. First time in a project: /echolot (sets it up: echolot.yml from the repository and a probe trace). Cold start got slower: /echolot why is cold start slow. Scrolling stutters: /echolot the feed janks on scroll (a scroll scenario in echolot.yml, and Android 12+). “App isn't responding”: /echolot the app froze, see anr.txt (the report from Crashlytics, Play Console or dumpsys dropbox)." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ask-light.svg" width="880">
+    <img alt="What to type in the agent, by the problem you arrive with. First time in a project: /echolot (sets it up: echolot.yml from the repository and a probe trace). Cold start got slower: /echolot why is cold start slow. Scrolling stutters: /echolot the feed janks on scroll (a scroll scenario in echolot.yml, and Android 12+). “App isn't responding”: /echolot the app froze, see anr.txt (the report from Crashlytics, Play Console or dumpsys dropbox)." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ask-wide.svg" width="880">
   </picture>
 </p>
 
@@ -92,8 +88,7 @@ something becomes a section of the report:
 <p>
   <picture>
     <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-narrow.svg">
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-dark.svg">
-    <img alt="The detectors, and what each one catches. main_thread_block: Where the main thread spent its time. main_thread_outlier: Single occurrences far longer than the same work usually takes. app_init: What ran after the Application was created, before the first Activity. anr_risk: Stretches where the main thread never got back to the message queue. anr: ANRs the system recorded during this trace. monitor_contention: Monitor contention. binder_txn: Long binder transactions. io_wait: Threads the kernel put to sleep waiting for the disk. runnable_starvation: CPU preemption (runnable but not running). main_thread_waits: The main thread's waits on the app's own threads. gc_pressure: Garbage collector pressure. frame_jank: Frames that missed their deadline. composables: The app's composables, by the composition time they hold. uninstrumented_cpu: Blind spots: threads burning CPU with no instrumentation. repeated_work: The same work reached from more than one place." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-light.svg" width="880">
+    <img alt="The detectors, and what each one catches. main_thread_block: Where the main thread spent its time. main_thread_outlier: Single occurrences far longer than the same work usually takes. app_init: What ran after the Application was created, before the first Activity. anr_risk: Stretches where the main thread never got back to the message queue. anr: ANRs the system recorded during this trace. monitor_contention: Monitor contention. binder_txn: Long binder transactions. io_wait: Threads the kernel put to sleep waiting for the disk. runnable_starvation: CPU preemption (runnable but not running). main_thread_waits: The main thread's waits on the app's own threads. gc_pressure: Garbage collector pressure. frame_jank: Frames that missed their deadline. composables: The app's composables, by the composition time they hold. uninstrumented_cpu: Blind spots: threads burning CPU with no instrumentation. repeated_work: The same work reached from more than one place." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-wide.svg" width="880">
   </picture>
 </p>
 
