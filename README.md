@@ -79,7 +79,7 @@ In CI, one step after the benchmark analyzes its traces and compares them with
 the report the last good run kept:
 
 ```yaml
-- uses: grishan0v/echolot@v0.14.1
+- uses: grishan0v/echolot@v0.15.0
   with:
     traces: app/benchmark/build/outputs/**/StartupBenchmark_startup_iter*.perfetto-trace
 ```

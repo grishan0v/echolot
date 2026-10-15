@@ -28,7 +28,7 @@ echolot doctor
 ## The .claude/ layer in this project
 
   10 template files: 10 current
-  installed by echolot 0.14.1, this is 0.14.1
+  installed by echolot 0.15.0, this is 0.15.0
   the layer is current.
 
 ## Self-check on a synthetic trace
@@ -37,7 +37,7 @@ echolot doctor
   ok    the right process is picked, the foreign one is dropped
   ...
 
-All 163 checks passed — the pipeline computes correctly.
+All 164 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
@@ -49,9 +49,9 @@ kilobytes of "ok" that a second reader in the same session would pay for
 again.
 
 ```
-echolot 0.14.1 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
+echolot 0.15.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
 layer: current (10 files)
-self-check: 163 of 163 passed
+self-check: 164 of 164 passed
 ```
 
 Exit code 0/1, and 2 on a first run that could not download trace_processor
@@ -192,7 +192,7 @@ fixture only.
 
 ## What the detectors were checked against
 
-The detectors were validated against a synthetic trace — 163 checks inside
+The detectors were validated against a synthetic trace — 164 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
@@ -348,7 +348,7 @@ itself, marks the row, and names the source under the path:
 `doctor -q` puts the same on its first line:
 
 ```
-echolot 0.14.1 · trace_processor … (custom binary from toolchain.tp_binary in local.yml) · …
+echolot 0.15.0 · trace_processor … (custom binary from toolchain.tp_binary in local.yml) · …
 ```
 
 and the footer under the findings in `report.md` reads:
