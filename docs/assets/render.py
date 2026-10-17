@@ -74,7 +74,8 @@ ASK = [
 DETECTOR_ORDER = [
     "main_thread_block", "main_thread_outlier", "app_init", "anr_risk", "anr",
     "monitor_contention", "binder_txn", "io_wait", "runnable_starvation",
-    "main_thread_waits", "gc_pressure", "frame_jank", "composables",
+    "main_thread_waits", "main_thread_kernel_waits", "gc_pressure", "frame_jank",
+    "composables",
     "uninstrumented_cpu", "repeated_work",
 ]
 

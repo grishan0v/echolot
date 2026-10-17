@@ -493,8 +493,8 @@ writes a config.
   the fixture is the wrong shape to hold one, the way it names `anr_risk`.
   Then the checks that pin what it must find and what it must not, beside the
   others in `selftest.py`.
-- **The README.** `tests/test_docs.py` reads the number in "runs fifteen
-  SQL detectors" and in the sample report's `Detectors fired: **N of 15**`,
+- **The README.** `tests/test_docs.py` reads the number in "runs sixteen
+  SQL detectors" and in the sample report's `Detectors fired: **N of 16**`,
   and fails while either disagrees with the files. The sample report is what
   `analyze` prints for the demo app, `echolot/demo.py`, and
   `tests/test_doc_samples.py` holds it to that character for character, down

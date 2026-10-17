@@ -409,10 +409,10 @@ def _(report):
 @check("clock: weighted by the cores this app actually held")
 def _(report):
     cpu = report["environment"]["cpu"]
-    # 1937 ms on a CPU inside the window, of which 417 ms on CPU 0 after it
-    # doubled at ms 600: (1520 × 1000 + 417 × 2000) / 1937.
-    assert cpu["on_cpu_ms"] == 1937.0, cpu
-    assert cpu["mean_mhz"] == 1215.3, cpu
+    # 1915 ms on a CPU inside the window, of which 417 ms on CPU 0 after it
+    # doubled at ms 600: (1498 × 1000 + 417 × 2000) / 1915.
+    assert cpu["on_cpu_ms"] == 1915.0, cpu
+    assert cpu["mean_mhz"] == 1217.8, cpu
     assert cpu["max_mhz"] == 2000.0, cpu
 
 
@@ -436,7 +436,7 @@ def _(report):
     # with the window applied first, there would be no frequency for the
     # beginning of the scenario and the coverage below would fall short.
     cpu = report["environment"]["cpu"]
-    assert cpu["measured_ms"] == 1937.0, (
+    assert cpu["measured_ms"] == 1915.0, (
         f"the pre-window sample did not carry into the window: {cpu}")
 
 
@@ -477,13 +477,16 @@ def _(report):
     assert env["missing"] == ["cpu", "memory", "thermal"], env
     assert env["cpu"] is None and env["thermal"] is None, env
     # The rest of the report is unaffected: platform state is context, and its
-    # absence costs one finding only. `io_wait` reads the disk flag from
-    # `sched/sched_blocked_reason`, one of the events such a recording leaves
-    # out, so it goes silent; every other detector fires as before.
-    io = next(d for d in bare["detectors"] if d["id"] == "io_wait")
-    assert not io["rows"] and not io.get("error"), io
+    # absence costs two findings only. `io_wait` and `main_thread_kernel_waits`
+    # read the disk flag from `sched/sched_blocked_reason`, one of the events
+    # such a recording leaves out, so both go silent rather than guess; every
+    # other detector fires as before.
+    flagged = ("io_wait", "main_thread_kernel_waits")
+    for d in bare["detectors"]:
+        if d["id"] in flagged:
+            assert not d["rows"] and not d.get("error"), d
     assert bare["summary"]["fired_ids"] == [
-        d for d in report["summary"]["fired_ids"] if d != "io_wait"], (
+        d for d in report["summary"]["fired_ids"] if d not in flagged], (
         bare["summary"]["fired_ids"], report["summary"]["fired_ids"])
 
 
@@ -784,6 +787,22 @@ def _(report):
     # 12 ms idle, 6 blocked: shares, so that a merged row's median total and
     # its worst repeat's evidence do not read as a sum.
     assert row["detail"] == "67% idle · 33% blocked in loadConfig", row
+
+
+@check("main_thread_kernel_waits: the main thread held in the kernel, by the thread that let it out")
+def _(report):
+    """20 ms in `D` with `io_wait = 0` inside `inflate`, ended by NativeLoader
+    while it ran `dlopen`: one row, named by the thread. Beside it, two of the
+    main thread's kernel sleeps that must stay out: the disk (`io_wait = 1`,
+    which is `io_wait`'s row) though the same thread ended it, and 2 ms of
+    non-disk sleep that another process ended. Plain sleeps (`S`) are
+    `main_thread_waits`', and a trace without the disk flag is silent here
+    (the platform-state check)."""
+    row = only_row(report, "main_thread_kernel_waits")
+    assert (row["location"], row["count"], row["total_ms"], row["max_ms"]) \
+        == ("NativeLoader", 1, 20.0, 20.0), row
+    assert row["detail"] == (
+        "waking inside dlopen: libimage.so 100% · main thread inside inflate 100%"), row
 
 
 @check("composable names: counted in the trace, with what the recording asked for")
@@ -1217,7 +1236,7 @@ def _(report):
 
 @check("uninstrumented_cpu: coverage counts nested slices only once")
 def _(report):
-    """main: 857 ms of Running inside the window, with the AppStart slice
+    """main: 835 ms of Running inside the window, with the AppStart slice
     covering the whole window on top. Adding parent to children would exceed
     everything the thread ever did. The arithmetic has to be honest or on a
     real trace it will mask a genuine blind spot.
@@ -1234,8 +1253,8 @@ def _(report):
             "uninstrumented_cpu": {"max_covered_pct": 101}})
     by_thread = {r["location"]: r for r in rows(every, "uninstrumented_cpu")}
     main = by_thread.get("m.example.app")
-    assert main and main["covered_ms"] == main["total_ms"] == 857.0, (
-        "the main thread's slices nest; counted once they cover its 857 ms "
+    assert main and main["covered_ms"] == main["total_ms"] == 835.0, (
+        "the main thread's slices nest; counted once they cover its 835 ms "
         f"on a CPU exactly: {main}")
     heap = by_thread.get("HeapTaskDaemon")
     assert heap and heap["covered_ms"] == 80.0, (

@@ -176,8 +176,10 @@ What to make of what it reports:
   That is a first-launch problem rather than a code one, and comparing a cold
   first launch against a warm one says nothing about either;
 - **a thread in `D` that `io_wait` does not claim** was parked for some other
-  reason. Look for threads holding a memory lock — `Jit thread pool` and
-  work that maps files are the usual pair;
+  reason. On the main thread `main_thread_kernel_waits` names the thread of
+  the app that let it out and what that thread was inside; most often it is
+  work that maps memory — loading native libraries, starting threads, opening
+  dex files — holding the process's memory-map lock;
 - **the kernel function is normally absent.** Turning the blocking address
   into a name needs `/proc/kallsyms`, which a production build does not let
   anyone read. Measured on an SM-A515F running Android 13: empty for all 6683

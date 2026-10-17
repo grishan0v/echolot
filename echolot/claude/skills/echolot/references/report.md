@@ -58,7 +58,7 @@ produce. The keys only a merged report has are named under the block.
                                 "verified": { "classes": 9, "ms": 68.0, "main_ms": 5.3 },
                                 "runs": "5/5" },
                    "missing": [] },
-  "summary": { "detectors_run": 15, "detectors_fired": 4,
+  "summary": { "detectors_run": 16, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
               "local": null, "defaults": false, "set": null },
@@ -533,6 +533,7 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 | `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |
 | `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
 | `repeated_work` | the same named work entered from more than one caller | `detail` names the callers; a `near miss` row means the occurrences are too unlike to be one work |
+| `main_thread_kernel_waits` | the main thread's uninterruptible sleeps that are not the disk, by the thread of the app that ended them | `location` is that thread, digits folded; `detail` says what it was inside when it woke the main thread (`waking inside dlopen: libfoo.so 61%`), then where the main thread was. Most often the process's memory-map lock; the trace cannot say which lock |
 | `main_thread_waits` | the main thread's sleeps that a thread of the app ended | `location` is that thread, its digits folded (`arch_disk_io_#`, `DefaultDispatch`); `detail` says whether the main thread was idle or blocked, and in which slice, with the share of each when it was both. Lock waits, binder replies and `RenderThread` stay with their own detectors |
 | `io_wait` | threads the kernel parked waiting for a block device | `thread` says `main` or `background`, and so does `detail`; there is no code to look at, only I/O to remove or move |
 | `composables` | a Compose app's own composables, by the composition time they hold | `code` is the declaration the name carries; `detail` says what composed the calls: `in a first composition`, a view composed for the first time; `in a frame`, a recomposition after state changed; `during measure`, a lazy list composing its items; `elsewhere`, anything else. Silent without `runtime-tracing` in the app |
@@ -646,9 +647,29 @@ bonus, not the norm.
 Two readings that come with it. If the same scenario is clean on the second
 run, the first one was populating the page cache, and that is a first-launch
 problem rather than a code one. And a thread in `D` that this detector does
-*not* claim was parked for something other than the disk — look for other
-threads holding a memory lock, `Jit thread pool` and file-mapping work being
-the usual pair.
+*not* claim was parked for something other than the disk. For the main
+thread, `main_thread_kernel_waits` says which of the app's threads let it out.
+
+**`main_thread_kernel_waits`** is the main thread in `D` with `io_wait = 0` —
+asleep in the kernel, and the kernel says it is not the disk — counted by the
+thread of the app that woke it. No slice names that time: the budget calls it
+blocked in the kernel, and `main_thread_block` counts it as self time of
+whatever slice was open, where it reads as slow code.
+
+    waking inside dlopen: libimage.so 100% · main thread inside inflate 100%
+
+Read `detail` for what the waking thread was doing. Loading a native library,
+starting threads (ART's `InitStack`), creating the EGL context, opening dex or
+oat files: work that maps memory and takes the process's memory-map lock for
+writing, which every page fault of the main thread then waits behind. On a
+large app's cold launch that was ~106 ms of ~1.45 s, the coroutine pool's
+library loading first. The fix is in time, not in the main thread's code:
+move that work past the first frame, do less of it at once, reuse threads
+instead of starting new ones. What the trace cannot say on a production
+kernel is which lock it was — the GPU driver's and the file system's leave the
+same signature — so say "most likely the memory-map lock", not more. A
+`kernel:` part in `detail` is the function's name on a userdebug kernel, and
+settles it.
 
 **`frame_jank`** is the only detector that answers "which frames stuttered"
 rather than "where did the total go", and the only one that needs no

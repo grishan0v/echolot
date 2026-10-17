@@ -57,6 +57,7 @@ TID_DISK_BG = 4210
 TID_ROOM_0 = 4211
 TID_ROOM_1 = 4212
 TID_JIT = 4213
+TID_LOADER = 4215
 
 THREADS = {
     # The main thread's name cut from the front, the way a package name
@@ -78,6 +79,9 @@ THREADS = {
     TID_ROOM_1: "arch_disk_io_1",
     # ART's compiler, whose methods compiled in the window `environment` counts.
     TID_JIT: "Jit thread pool",
+    # Loads a native library while the main thread is inside `inflate`, and
+    # is the thread that lets it out of the kernel (WAKINGS).
+    TID_LOADER: "NativeLoader",
 }
 
 # --- a foreign process: the process-isolation control ----------------------
@@ -509,6 +513,9 @@ SLICES = {
         ("JIT compiling void com.example.app.Late.run() (kind=Baseline) from "
          "/data/app/~~Zm9v==/com.example.app-YmFy==/base.apk", 1150, 2, []),
     ],
+    # The library load the main thread waited on in the kernel, from 360 to
+    # 380 ms, by NativeLoader's wakeup at its end.
+    TID_LOADER: [("dlopen: libimage.so", 350, 40, [])],
     # uninstrumented_cpu: a 300 ms slice by wall clock, but the thread sleeps
     # through most of it — only 60 ms on CPU. Plus 100 ms of Running with no
     # slices at all. Comparing slice duration against on-CPU time would give
@@ -579,7 +586,12 @@ SCHED = [
     # correctly, since a thread parked in the kernel is not serving the looper
     # either.
     (0, TID_MAIN, 50, 200, D),
-    (0, TID_MAIN, 260, 600, S),
+    # Held in the kernel for something other than the disk, twice: 20 ms
+    # inside `inflate`, ended by NativeLoader while it was in `dlopen`, and
+    # 2 ms more that another process ended. Only the first is the app's.
+    (0, TID_MAIN, 260, 360, D),
+    (0, TID_MAIN, 380, 384, D),
+    (0, TID_MAIN, 386, 600, S),
     (0, TID_MAIN, 610, 692, S),
     # Asleep 692..698 inside `loadConfig`, until Room's thread wakes it.
     (0, TID_MAIN, 698, 800, S),
@@ -661,6 +673,9 @@ SCHED = [
     # The JIT's thread, on a CPU only after the window: its slices need a
     # thread the trace knows, and its CPU time would move the window's clock.
     (7, TID_JIT, 1300, 1301, S),
+    # NativeLoader the same way: on a CPU only after the window, so that its
+    # slice and its wakeups need not move the window's clock.
+    (7, TID_LOADER, 1302, 1303, S),
 
     # the foreign process
     (5, OTHER_PID, 200, 700, S),
@@ -673,6 +688,11 @@ SCHED = [
 # would be `runnable_starvation`'s, which this fixture keeps for its own case.
 WAKINGS = [
     (698, TID_ROOM_1, TID_MAIN),
+    # The main thread out of the kernel: the disk (260) and the app's dlopen
+    # (380) by NativeLoader, and the short one (386) by another process.
+    (260, TID_LOADER, TID_MAIN),
+    (380, TID_LOADER, TID_MAIN),
+    (386, OTHER_PID, TID_MAIN),
     (860, TID_ROOM_0, TID_MAIN),
     (1098, TID_ROOM_0, TID_MAIN),
 ]
@@ -686,6 +706,8 @@ WAKINGS = [
 # 6683 of 6683 — and the fixture reproduces the phone rather than the ideal.
 BLOCKED_REASON = [
     (TID_MAIN, 200, 1),
+    (TID_MAIN, 360, 0),
+    (TID_MAIN, 384, 0),
     (TID_DISK, 160, 1),
     (TID_DISK, 320, 1),
     (TID_DISK, 420, 1),
@@ -1116,9 +1138,9 @@ CROWD_TIDS = [4220 + i for i in range(12)]
 
 
 def _crowded(sched: list, threads: dict, other_threads: dict) -> tuple[list, dict, dict]:
-    sched = [row for row in sched if row != (0, TID_MAIN, 260, 600, S)]
+    sched = [row for row in sched if row != (0, TID_MAIN, 386, 600, S)]
     sched += [
-        (0, TID_MAIN, 260, 400, R),
+        (0, TID_MAIN, 386, 400, R),
         (0, TID_CROWD, 400, 418, S),
         (0, OTHER_WORKER, 418, 426, S),
         (0, TID_MAIN, 430, 600, S),

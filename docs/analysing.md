@@ -282,6 +282,18 @@ and the launch that followed was warm. A lock's wait stays with
 `monitor_contention`, a binder reply with `binder_txn`, and a sleep that
 `RenderThread` or another process ended is left out.
 
+`main_thread_kernel_waits` is the same reading of a different sleep: the main
+thread in the kernel for something other than the disk (`D`, `io_wait = 0`),
+by the thread of the app that let it out. Here `RenderThread` and binder
+threads count, since whichever thread released the lock is the finding. On a
+large Kotlin app's cold launch on an A51 that was ~106 ms a launch, 97% of it
+ended by the app's own threads, and where they had a slice open it was work
+that maps memory: native libraries loading, threads starting, the EGL
+context, dex files. A test app on the same phone confirmed the mechanism:
+with three threads mapping memory beside it, its main thread spent 2.3 s
+there instead of 5 ms. Which kernel lock it was, the trace does not say on a
+production build; on a userdebug kernel `detail` names the function.
+
 `frame_jank` needs no instrumentation at all: SurfaceFlinger records every
 frame's deadline and what it actually took, and says whose fault a miss was.
 Android 12 and up — see [requirements](../README.md#requirements).

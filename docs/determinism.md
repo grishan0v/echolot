@@ -37,7 +37,7 @@ echolot doctor
   ok    the right process is picked, the foreign one is dropped
   ...
 
-All 167 checks passed — the pipeline computes correctly.
+All 168 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
@@ -51,7 +51,7 @@ again.
 ```
 echolot 0.16.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
 layer: current (10 files)
-self-check: 167 of 167 passed
+self-check: 168 of 168 passed
 ```
 
 Exit code 0/1, and 2 on a first run that could not download trace_processor
@@ -161,7 +161,7 @@ some runs and not others.
 
 The fixture reads as a test because it is one: a problem planted for every
 detector, under names that say so — `DiskWaiter`, `LockWaiter`. A sample
-report written from it would show the reader fourteen findings and a thread
+report written from it would show the reader fifteen findings and a thread
 called `LockWaiter`. `echolot/demo.py` is the other kind of synthetic trace,
 built with the same packet writers: the cold start of an app that does not
 exist, a little over a second long, with the five findings a cold start like
@@ -192,7 +192,7 @@ fixture only.
 
 ## What the detectors were checked against
 
-The detectors were validated against a synthetic trace — 167 checks inside
+The detectors were validated against a synthetic trace — 168 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
