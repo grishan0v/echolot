@@ -60,7 +60,11 @@ EOF
 # that can be measured. A lock screen with a PIN is the user's to open.
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard
+# HOME before the stop: an app stopped on screen can be started again at once
+# for its activity, and the next launch is warm.
+adb shell input keyevent KEYCODE_HOME
 adb shell am force-stop $PKG
+adb shell "i=0; while pidof $PKG > /dev/null && [ \$i -lt 50 ]; do sleep 0.1; i=\$((i + 1)); done"
 adb shell rm -f /data/misc/perfetto-traces/t.pftrace
 adb shell perfetto -c - --txt -o /data/misc/perfetto-traces/t.pftrace \
     --background-wait < /tmp/trace.cfg || exit 1
@@ -72,7 +76,11 @@ adb pull /data/misc/perfetto-traces/t.pftrace ./
 `am start -W` prints `TotalTime` — an independent check that the window in the
 report is plausible. `LaunchState: UNKNOWN` with no `TotalTime` after a
 `force-stop` is a launch the system measured no start for, most often behind a
-dark or locked screen.
+dark or locked screen. `WARM` or `HOT` after one is a process that was running
+again by the launch: the trace holds neither its start nor `bindApplication`.
+`collect` says `not a cold start` under such a repeat and counts them at the
+end; `adb logcat -b events -d | grep am_proc_start` says what the system
+started the process for.
 
 ## What the config must contain
 

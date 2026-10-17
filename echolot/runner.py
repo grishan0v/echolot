@@ -1025,14 +1025,16 @@ RESET_POLICIES = ("force-stop", "none")
 def reset_policy(section: dict, log: Callable[[str], None] = print) -> str:
     """What happens to the app between iterations — the value collect uses.
 
-    `force-stop` (cold, the default) or `none`, which resets nothing. That is
-    not a warm start: in launch mode the app is still in front from the
-    repeat before, `am start -W` has nothing to start, and only the first
-    repeat measures one. Anything else used to be announced as force-stop and
-    run as none: `cmd_collect` printed "Using force-stop." while the loop here
-    stopped the app on the exact string only, so a typo — `force_stop`, or an
-    empty value — measured no start under a cold start's name. Decided once,
-    here, and what is announced is what runs.
+    `force-stop` (cold, the default) or `none`, which resets nothing. A
+    force-stop sends the app to the background first and waits for its
+    process to be gone after (see _stop). `none` is not a warm start: in
+    launch mode the app is still in front from the repeat before, `am start
+    -W` has nothing to start, and only the first repeat measures one.
+    Anything else used to be announced as force-stop and run as none:
+    `cmd_collect` printed "Using force-stop." while the loop here stopped the
+    app on the exact string only, so a typo — `force_stop`, or an empty value
+    — measured no start under a cold start's name. Decided once, here, and
+    what is announced is what runs.
 
     `pm clear` is not on the list on purpose: it changes the scenario rather
     than repeating it. A cold start with an empty database and a user's cold
@@ -1083,7 +1085,7 @@ def collect(package: str, out_dir: Path, iterations: int,
             planted: Planted | None = None) -> list[dict]:
     """N repeats of a scenario. The mode decides who drives it.
 
-    launch  — we do: force-stop and launch the activity. Cold start.
+    launch  — we do: HOME, force-stop, and launch the activity. Cold start.
     command — someone else's command; we record the trace around it.
     gradle  — the macrobenchmark writes traces itself, we only collect them.
 
@@ -1288,8 +1290,9 @@ def collect(package: str, out_dir: Path, iterations: int,
             # one left behind.
             settled.cool()
             screen.ready(dev, _run, log, during=f"before repeat {i + 1} of {iterations}")
-            if reset == "force-stop":
-                _run(["adb", "-s", dev, "shell", "am", "force-stop", package])
+            # HOME, the force-stop and a wait for the process to be gone (see
+            # _stop). What is left of it is said under the repeat's line.
+            left = _stop(dev, package) if reset == "force-stop" else ""
             _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
             # With composable names, `--background-wait` waits on every SDK
             # producer on the device and outlasts the recording (see
@@ -1348,6 +1351,14 @@ def collect(package: str, out_dir: Path, iterations: int,
                     _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
                     raise RunnerError(screen.unmeasured_sentence(
                         dev, now, f"repeat {i + 1} of {iterations}"))
+            # Stopped, and the process was running again by the start all the
+            # same (#404): `am start -W` says so for a launch, and the pid left
+            # after the stop says it where `am start` says nothing.
+            state = str(info.get("launch_state", ""))
+            restarted = (reset == "force-stop" and not unmeasured
+                         and (state in NOT_COLD or (bool(left) and state != "COLD")))
+            if restarted:
+                info["not_cold"] = True
             # A trace is recorded and about to take the first name: the moment
             # the previous set has to make room, and not a moment earlier.
             make_room()
@@ -1364,8 +1375,63 @@ def collect(package: str, out_dir: Path, iterations: int,
             if unmeasured:
                 log("      [!] am start -W measured no start, with the screen on and "
                     "unlocked: this trace may hold none")
+            if restarted:
+                log("      [!] " + _not_cold_line(package, left))
             tell(done=i + 1)
     return results
+
+
+# How long the app's process may take to be gone after `am force-stop`, in
+# polls of 0.1 s: 5 s, as long as the Macrobenchmark library waits for it.
+STOP_POLLS = 50
+# And how long it has to stay gone, in seconds. On an A51 the system had it
+# running again 65–95 ms after the kill, a moment after it was first gone.
+STOP_SETTLE_S = 0.5
+
+# What `am start -W` calls a launch that found the process running.
+NOT_COLD = ("WARM", "HOT", "RELAUNCH")
+
+
+def _stop(device: str, package: str) -> str:
+    """Stops the app before a cold start; the pids of it still running after, if any.
+
+    HOME first. With an activity of the app on screen, `am force-stop` was
+    followed at once by the system starting the process again for that
+    activity: `am_proc_start … top-activity` in the events log, 65–95 ms
+    after the kill on an A51 (Android 13), before the recording began. `am
+    start -W` then said WARM, and the trace held neither the process start
+    nor `bindApplication` — from the second repeat on, since the repeat
+    before had left the app in front (#404). An app with one process stays
+    dead; one whose activity is bound to a service in a second process of
+    its own came back 8 times of 8. With the app in the background there is
+    no activity of it on screen to start it for: 0 of 8.
+
+    Then the process has to be gone, which takes the kernel a moment after
+    the kill, and stay gone for STOP_SETTLE_S: the old process was gone at
+    the first look, and the new one was there a moment later. The wait is
+    bounded, and a pid there at its end is the answer: the process is
+    running again. One `adb shell` call, so that nothing of the host's comes
+    in between.
+    """
+    import shlex
+
+    app = shlex.quote(package)
+    left = _run(["adb", "-s", device, "shell",
+                 f"input keyevent KEYCODE_HOME; am force-stop {app}; i=0; "
+                 f"while pidof {app} > /dev/null && [ $i -lt {STOP_POLLS} ]; do "
+                 f"sleep 0.1; i=$((i + 1)); done; sleep {STOP_SETTLE_S}; "
+                 f"pidof {app} || true"],
+                timeout=60)
+    return " ".join(left.split())
+
+
+def _not_cold_line(package: str, left: str) -> str:
+    """The line under a repeat that was stopped and did not start cold (#404)."""
+    when = (f"{package} was running again before the recording began (pid {left})"
+            if left else f"{package} was gone after the force-stop and running "
+                         f"again by the launch")
+    return (f"not a cold start: {when}. The trace holds neither its process start "
+            f"nor bindApplication")
 
 
 def _launch(device: str, activity: str) -> dict:

@@ -74,10 +74,27 @@ builds and installs the app itself, as part of the macrobenchmark's task.
 
 ### `launch` — we drive it
 
-`force-stop`, start recording, `am start -W`, wait, pull. A cold start. With
-`reset_policy: none` nothing is reset between repeats, and that is not a warm
-start: the app is still in front from the repeat before, so `am start -W` has
-nothing to start and only the first repeat can measure one.
+HOME, `force-stop`, a wait for the app's process to be gone, start recording,
+`am start -W`, wait, pull. A cold start. With `reset_policy: none` nothing is
+reset between repeats, and that is not a warm start: the app is still in front
+from the repeat before, so `am start -W` has nothing to start and only the
+first repeat can measure one.
+
+HOME comes first because the app is still on screen from the repeat before.
+Stopped there, an app whose activity is bound to a service in a second
+process of its own was started again by the system at once, for that
+activity: `am_proc_start … top-activity` in `adb logcat -b events`, 65–95 ms
+after the kill on an A51. `am start -W` then said `WARM`, and the trace held
+neither the process start nor `bindApplication`. From the background, the
+same app stayed dead after the force-stop, 8 times of 8. The wait after it
+lasts until `pidof` finds no process of the app, five seconds at most, and
+half a second more: the old process was gone at the first look, and the new
+one was there a moment later.
+
+A repeat that was stopped and started warm all the same gets a line under its
+own: `not a cold start`, with the pid when the process was running again
+before the recording began. The line at the end counts those repeats, and the
+spread of `TotalTime` over a set that has them is not put down to the device.
 
 `am start -W` prints `TotalTime`, which the runner reports — an independent
 check that the window in the report is plausible. `TotalTime: 0` is the

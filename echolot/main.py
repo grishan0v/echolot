@@ -3122,14 +3122,25 @@ def cmd_collect(args) -> int:
               f"launches report TotalTime: 0 — the system timed no start "
               f"there, usually because the activity was already in front.",
               file=sys.stderr)
+    # Repeats that were stopped and found the process running again by their
+    # start (#404). A spread over them and the cold ones is two kinds of start,
+    # and the device is not what to blame for it.
+    restarted = [r for r in results if r.get("not_cold")]
     if len(times) > 1:
         spread = (max(times) - min(times)) / min(times) * 100
         print(f"\nam start -W: from {min(times)} to {max(times)} ms "
               f"(spread {spread:.0f}%)", file=sys.stderr)
-        if spread > 30:
+        if spread > 30 and not restarted:
             print("That spread is wide — the device is under load or has not "
                   "settled. Thresholds from such runs will be noisy.",
                   file=sys.stderr)
+    if restarted:
+        print(f"\n[!] {len(restarted)} of {len(results)} repeats did not start cold: the "
+              f"app was stopped before each, and its process was running again by "
+              f"its start. Those traces hold neither the process start nor "
+              f"bindApplication, and a report over the whole set mixes two kinds of "
+              f"start. `adb logcat -b events -d | grep am_proc_start` says what the "
+              f"system started it for.", file=sys.stderr)
 
     for r in results:
         print(r["path"])

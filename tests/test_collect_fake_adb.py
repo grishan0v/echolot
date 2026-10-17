@@ -207,6 +207,144 @@ def test_reset_policy_runs_what_it_announces(tmp_path, adb, value, stops, warned
     check("warned exactly when the value was not one of the two", bool(notes) == warned, said)
     if warned:
         check("and the warning says what runs", "Using force-stop" in notes[0], notes)
+    homes = [c for c in adb.calls if "KEYCODE_HOME" in " ".join(c)]
+    check("HOME pressed with each force-stop, and never without one",
+          len(homes) == stops, adb.calls)
+
+
+# --- a force-stop that holds: HOME first, then the process gone (#404) --------
+
+def am_start(state: str = "COLD", total: int = 523) -> str:
+    """What `am start -W` prints for a launch it found in `state`."""
+    return AM_START.replace("LaunchState: COLD", f"LaunchState: {state}").format(
+        activity=ACTIVITY, total=total, wait=total + 20)
+
+
+def test_the_stop_sends_the_app_home_and_waits_for_its_process_to_be_gone(tmp_path, adb):
+    """With an activity of the app on screen, Android started its process again
+    right after `am force-stop`, for that activity, and every repeat after the
+    first launched warm under a cold start's name (an A51, Android 13)."""
+    runner.collect(PACKAGE, tmp_path / "traces", 2, section={}, name="startup",
+                   log=lambda m: None)
+    stops = [" ".join(c[3:]) for c in adb.calls if kind(c) == "force-stop"]
+    check("one adb shell call per repeat", len(stops) == 2
+          and all(c[:4] == ["adb", "-s", SERIAL, "shell"] and len(c) == 5
+                  for c in adb.calls if kind(c) == "force-stop"), adb.calls)
+    script = stops[0]
+    check("HOME first, then the force-stop",
+          script.index("input keyevent KEYCODE_HOME") < script.index(f"am force-stop {PACKAGE}"),
+          script)
+    check("then a wait on the app's process, bounded",
+          script.index(f"am force-stop {PACKAGE}") < script.index(f"while pidof {PACKAGE}")
+          and f"[ $i -lt {runner.STOP_POLLS} ]" in script, script)
+    # The old process was gone at the first look and the new one there a
+    # moment later: a look straight after the wait missed it now and then.
+    check("and a moment for the system to start it again, if it does",
+          script.index("done; ") < script.index(f"sleep {runner.STOP_SETTLE_S};"), script)
+    check("ending in what is left of it, and never in a failure when nothing is",
+          script.endswith(f"pidof {PACKAGE} || true"), script)
+
+
+@pytest.mark.parametrize("left, state, said", [
+    ("", "COLD", None),
+    ("23628\n", "WARM", "was running again before the recording began (pid 23628)"),
+    ("", "WARM", "was gone after the force-stop and running again by the launch"),
+    ("", "HOT", "was gone after the force-stop and running again by the launch"),
+    ("23628 23630\n", "", "(pid 23628 23630)"),
+    ("23628\n", "COLD", None),
+], ids=["cold", "back-warm", "came-back-later", "hot", "no-launch-state", "died-before-launch"])
+def test_a_repeat_that_was_stopped_and_did_not_start_cold_says_so(
+        tmp_path, adb, left, state, said):
+    """`am start -W` says how it found the process; the pid left after the
+    stop says it where `am start` says nothing of the kind."""
+    adb.script["force-stop"] = [left]
+    adb.script["start"] = [am_start(state) if state
+                           else am_start().replace("LaunchState: COLD\n", "")]
+    lines: list[str] = []
+    results = runner.collect(PACKAGE, tmp_path / "traces", 1, section={},
+                             name="startup", log=lines.append)
+    warned = [line for line in lines if "not a cold start" in line]
+    if said is None:
+        check("a cold launch says nothing", not warned and not results[0].get("not_cold"),
+              (lines, results))
+        return
+    check("a line under the repeat's own", len(warned) == 1
+          and lines.index(warned[0]) == next(
+              i for i, line in enumerate(lines) if "[1/1]" in line) + 1, lines)
+    check(f"that says {said!r}", said in warned[0] and PACKAGE in warned[0], warned)
+    check("and what the trace lacks", "neither its process start nor bindApplication"
+          in warned[0], warned)
+    check("the result carries it", results[0].get("not_cold") is True, results)
+
+
+def test_without_a_stop_a_warm_launch_is_nobodys_business(tmp_path, adb):
+    """`reset_policy: none` promises no cold start, and gets no line for its
+    second repeat finding the app in front."""
+    adb.script["start"] = [am_start("COLD"), am_start("HOT", 0)]
+    lines: list[str] = []
+    results = runner.collect(PACKAGE, tmp_path / "traces", 2,
+                             section={"reset_policy": "none"}, name="startup",
+                             log=lines.append)
+    check("no stop, no HOME", "force-stop" not in adb.kinds()
+          and not any("KEYCODE_HOME" in " ".join(c) for c in adb.calls), adb.calls)
+    check("and nothing said", not [s for s in lines if "not a cold start" in s]
+          and not any(r.get("not_cold") for r in results), (lines, results))
+
+
+def test_an_unmeasured_launch_is_said_once_and_as_unmeasured(tmp_path, adb):
+    """`UNKNOWN` on a screen that is on: the line that says no start was
+    measured is the one, whatever the stop left."""
+    adb.script["force-stop"] = ["23628\n"]
+    adb.script["start"] = [AM_START_UNMEASURED]
+    lines: list[str] = []
+    results = runner.collect(PACKAGE, tmp_path / "traces", 1, section={},
+                             name="startup", log=lines.append)
+    check("the unmeasured line", any("measured no start" in s for s in lines), lines)
+    check("and not the other", not [s for s in lines if "not a cold start" in s]
+          and not results[0].get("not_cold"), (lines, results))
+
+
+def test_a_scenario_command_that_began_with_the_process_up_says_so(tmp_path, adb):
+    """Command mode stops the app the same way, and `am start` is not ours
+    to read there: the pid left after the stop is what says it."""
+    adb.script["force-stop"] = ["", "4242\n"]
+    lines: list[str] = []
+    results = runner.collect(PACKAGE, tmp_path / "traces", 2,
+                             section={"mode": "command", "command": "true"},
+                             name="scroll", log=lines.append)
+    check("HOME and the stop before each repeat",
+          [kind(c) for c in adb.calls].count("force-stop") == 2
+          and all("KEYCODE_HOME" in " ".join(c) for c in adb.calls
+                  if kind(c) == "force-stop"), adb.calls)
+    warned = [s for s in lines if "not a cold start" in s]
+    check("the second repeat's line says so", len(warned) == 1 and "(pid 4242)" in warned[0]
+          and lines.index(warned[0]) - 1 == next(
+              i for i, s in enumerate(lines) if "[2/2]" in s), lines)
+    check("and only its result carries it",
+          [r.get("not_cold", False) for r in results] == [False, True], results)
+
+
+def test_collect_counts_the_repeats_that_were_not_cold_and_blames_no_device(
+        tmp_path, monkeypatch, capsys):
+    """295 and 281 ms against 622: a 121% spread, and the line under it used to
+    say the device was under load. The spread was between two kinds of start."""
+    fake = FakeAdb(script={"force-stop": ["", "23628\n", "23779\n"],
+                           "start": [am_start("COLD", 622), am_start("WARM", 295),
+                                     am_start("WARM", 281)]})
+    monkeypatch.setattr(runner, "_run", fake)
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with recorder.isolated():
+        code = main(["collect"])
+    out, err = capsys.readouterr()
+    check("exit 0, the three traces printed", code == 0
+          and len([s for s in out.splitlines() if s.endswith(".perfetto-trace")]) == 3,
+          err[-800:])
+    check("each warm repeat says so", err.count("not a cold start") == 2, err)
+    check("the set counts them", "2 of 3 repeats did not start cold" in err, err)
+    check("and says where to look", "grep am_proc_start" in err, err)
+    check("the spread is still given", "from 281 to 622 ms (spread 121%)" in err, err)
+    check("and not put down to the device", "device is under load" not in err, err)
 
 
 # --- sampling: sent to the device, and said ------------------------------------

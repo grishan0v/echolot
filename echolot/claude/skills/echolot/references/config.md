@@ -181,7 +181,7 @@ report names its scenario; `report` and `compare` take `--scenario` too.
 
 ### `runner`
 
-`mode: launch` drives the scenario itself: force-stop, record, `am start -W`.
+`mode: launch` drives the scenario itself: HOME, force-stop, record, `am start -W`.
 `mode: command` lets something else drive it (adb input, uiautomator, maestro,
 your own script) while the trace records around it. `mode: gradle` runs a
 macrobenchmark task and gathers the traces it wrote.

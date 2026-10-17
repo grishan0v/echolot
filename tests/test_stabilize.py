@@ -306,7 +306,7 @@ def test_collect_cools_before_each_repeat_and_puts_the_screen_back(tmp_path, mon
           and asked[-2:] == ["settings put system screen_brightness 39",
                              "settings put system screen_brightness_mode 1"], asked)
     kinds = [shell(c) for c in adb.calls]
-    stops = [i for i, k in enumerate(kinds) if k.startswith("am force-stop")]
+    stops = [i for i, k in enumerate(kinds) if "am force-stop" in k]
     # The screen is read after the wait, which can outlast it (screen.py).
     check("a reading before each repeat's stop, then the screen",
           all(kinds[i - 2] == "dumpsys battery"
