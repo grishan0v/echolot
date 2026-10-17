@@ -397,7 +397,7 @@ build is not read.
 ## The device's state
 
 A duration is the work done over the speed it was done at, and a phone does
-not keep its speed. On the SM-A515F, eight cold starts of a large app
+not keep its speed. On the SM-A515F, eight launches of a large app
 recorded back to back all ran with the kernel throttling the big cluster,
 the first one included, and the clock they ran at fell repeat by repeat, from
 2066 to 1915 MHz: the clock 7% lower at the last repeat than at the first,

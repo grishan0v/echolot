@@ -3,7 +3,7 @@
 
 The fixture holds three of the shapes under its `AppStart` anchor, and the
 self-check pins them. A pass with nothing above it cannot sit under an anchor
-at all, and it is how a large app's cold start composed its views for the
+at all, and it is how a large app's warm start composed its views for the
 first time: each such pass followed `Compose:initializeView`, or the pass of
 the view before it. So this trace is built here: one main thread, and one
 call of the app's own in each shape.
@@ -36,7 +36,7 @@ def _pass(name: str, start: float) -> tuple:
 
 SLICES = [
     # A view's first composition with nothing above it, after
-    # `Compose:initializeView`, as on a large app's cold start.
+    # `Compose:initializeView`, as on a large app's warm start.
     ("Compose:initializeView", 10, 1, []),
     _pass("Root", 12),
     # The first frame attaches a view, and its traversal composes it.

@@ -18,11 +18,12 @@
 -- for 0.7 s of 2.1 s, and Room's `arch_disk_io_*` threads woke it about 260
 -- times while the database filled. The report had those threads' CPU under
 -- `uninstrumented_cpu` and "45% sleeping" in the start's breakdown, and
--- nothing connected the two. On a large Kotlin app's cold starts the main
--- thread blocked for 19–36 ms a start inside its own work until another
--- thread of the app let it go: WebView's initialization, SharedPreferences,
--- coroutine workers. `main_thread_block` counted that time as the self time
--- of the slice that waited.
+-- nothing connected the two. On a large Kotlin app the main thread blocked
+-- for 19–36 ms a trace inside its own work until another thread of the app
+-- let it go: WebView's initialization, SharedPreferences, coroutine workers.
+-- `main_thread_block` counted that time as the self time of the slice that
+-- waited. Those traces caught the end of a start the system had begun on its
+-- own, right after a force-stop, and the launch that followed was warm.
 --
 -- A row is a thread of the app, named with its digits folded, so that
 -- `arch_disk_io_0` to `_3` are one row, and `pool-14-thread-` is the same

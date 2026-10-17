@@ -187,10 +187,10 @@ What to make of what it reports:
 ## Compose
 
 A Compose app writes its phases into the trace with nothing set up, and they
-reach a report like any slice: on a large Compose app's cold start,
+reach a report like any slice: on a large Compose app's warm start,
 `Compose:recompose ×55, 224 ms` in `main_thread_block`, and one
 `Recomposer:recompose` of 314 ms in `main_thread_outlier`. Where each one sits
-says what it is; the parents below are read off real cold starts.
+says what it is; the parents below are read off real starts, cold and warm.
 
 | slice | sits under | what it is |
 |---|---|---|

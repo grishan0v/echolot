@@ -243,7 +243,7 @@ The last four keys hold the device still around a set, and `collect` puts
 back whatever it changed when the set ends, a failed one included. `cooldown`
 is the one that matters on a phone: recorded back to back, a repeat starts
 with the throttle the one before left on, and the set drifts slower repeat by
-repeat (on an A51, from 2066 to 1915 MHz over eight cold starts; with the wait,
+repeat (on an A51, from 2066 to 1915 MHz over eight launches; with the wait,
 2032 to 2049). A sensor the device does not have stops `collect` before anything
 is changed; a device that does not cool within `timeout_s` is recorded
 anyway, and the report's `environment` shows how hot it ran. The thermal

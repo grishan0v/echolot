@@ -41,7 +41,7 @@
 --   `traversal` when the frame that attaches the view composes it: on a
 --   Compose app's cold starts that one pass took 42 to 44 ms, more than
 --   any other, and composed the navigation host. Or under nothing: on a
---   large app's cold start each such pass followed
+--   large app's warm start each such pass followed
 --   `Compose:initializeView`, or the pass of the view before it;
 -- - `in a frame`, the frame's recomposition (`Recomposer:recompose`), where
 --   state changed;

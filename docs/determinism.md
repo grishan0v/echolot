@@ -215,8 +215,9 @@ built on real cold starts on Android 13 devices, read beside AOSP's
 androidx.startup's Initializers, Firebase, ART's class sections — is listed
 in its header from those traces. `composables` was built on a Compose app's
 cold starts recorded on an A51 with composable names, and `main_thread_waits`
-on cold starts of two apps there, a large Kotlin app and a Compose app; both
-headers say what those starts showed.
+on starts of two apps there: a Compose app's first launches, which were cold,
+and a large Kotlin app's launches after a force-stop, which the platform
+counted as warm. Both headers say what those starts showed.
 
 ## Why the trace_processor version is pinned
 

@@ -2,7 +2,7 @@
 held still while they run.
 
 A duration is the work done over the speed it was done at, and a phone does
-not keep its speed for long. Eight cold starts recorded back to back on an
+not keep its speed for long. Eight launches recorded back to back on an
 SM-A515F ran at a clock that fell repeat by repeat, from 2066 to 1915 MHz, and
 five of them began with the kernel still throttling the big cluster after the
 start before. Waiting before each one for the `cpu` sensor to read 34 °C held

@@ -275,9 +275,10 @@ leave it. `detail` says whether the main thread was idle, with no slice open,
 or blocked, and in which slice; when it was both, it gives each a share. On a Compose
 app's first launch on an A51 the main thread was idle for 0.7 s of 2.1 s
 until Room's threads woke it about 260 times while the database filled. On a
-large Kotlin app's cold starts it blocked inside two SDKs' initializers until
-the thread loading SharedPreferences let it go, 58 ms on the median. A lock's
-wait stays with
+large Kotlin app it blocked inside two SDKs' initializers until the thread
+loading SharedPreferences let it go, 58 ms on the median. Those traces caught
+the end of a start the system had begun on its own, right after a force-stop,
+and the launch that followed was warm. A lock's wait stays with
 `monitor_contention`, a binder reply with `binder_txn`, and a sleep that
 `RenderThread` or another process ended is left out.
 
@@ -463,7 +464,7 @@ Walking down to the code the same way for both wastes a round.
 ## Rows of Compose
 
 A Compose app writes its phases into the trace with nothing set up, and they
-become rows like any slice. On a large Compose app's cold start on an
+become rows like any slice. On a large Compose app's warm start on an
 SM-A515F they were 5 of the 20 `main_thread_block` rows, `Compose:recompose
 ×55, 224 ms` among them, and 6 of the 12 `main_thread_outlier` rows, one
 `Recomposer:recompose` of 314 ms among those. Where each one sits in the trace
