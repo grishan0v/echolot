@@ -240,6 +240,7 @@ def _check(before: dict, after: dict,
     out.extend(_environment_moved(before, after, floor_ratio))
     out.extend(_sampling_moved(before, after))
     out.extend(_compose_names_moved(before, after))
+    out.extend(_compile_moved(before, after))
 
     nb, na = _runs(before), _runs(after)
     if nb != na:
@@ -458,6 +459,55 @@ def _compose_names_moved(before: dict, after: dict) -> list[dict[str, str]]:
                 f"time from the app, so a row can move for that reason alone. "
                 f"Record both rounds with the same `runner.compose_names`.",
     }]
+
+
+def _compile_moved(before: dict, after: dict) -> list[dict[str, str]]:
+    """Whether the two rounds ran the app compiled the same way.
+
+    Code compiled ahead of time from a profile runs at another speed than
+    code the JIT compiles while the app runs. On an SM-A515F a large app's
+    launch took ~1.4 s on its benchmark build and ~8.8 s on a debuggable
+    build that nothing had compiled, and every row of a comparison between
+    them grows for that reason alone. The reason counts too: a profile
+    widened by background dexopt (`bg-dexopt`) compiles more than the one
+    the install brought (`install-dm`).
+
+    A report from before the field carries no `compile` and is unknown, and
+    so is a side whose traces did not hold the state: no sentence for either.
+    A side whose own repeats disagree gets one, whatever the other side did.
+    """
+    eb, ea = before.get("environment") or {}, after.get("environment") or {}
+    if "compile" not in eb or "compile" not in ea:
+        return []
+    cb, ca = eb["compile"] or {}, ea["compile"] or {}
+    out: list[dict[str, str]] = []
+    was, now = _compiled(cb), _compiled(ca)
+    if was and now and was != now:
+        out.append({
+            "id": "compile",
+            "text": f"The app was compiled differently: {was} before, {now} "
+                    f"after. Code compiled ahead of time runs faster than code "
+                    f"the JIT compiles as the app runs, so a row can move for "
+                    f"that reason alone. Record both rounds on builds "
+                    f"compiled the same way.",
+        })
+    for side, c in (("before", cb), ("after", ca)):
+        if " and " in (c.get("filter") or "") or " and " in (c.get("reason") or ""):
+            out.append({
+                "id": "compile",
+                "text": f"The {side} side's repeats ran on different compile "
+                        f"states ({_compiled(c)}), so its medians mix two "
+                        f"speeds of the same code. Record that side again on "
+                        f"one build, installed one way.",
+            })
+    return out
+
+
+def _compiled(c: dict | None) -> str | None:
+    """One side's compile state in words, for the sentences above."""
+    if not c or not c.get("filter"):
+        return None
+    return f"`{c['filter']}`" + (f" ({c['reason']})" if c.get("reason") else "")
 
 
 def _named(c: dict | None) -> str:

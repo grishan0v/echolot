@@ -208,6 +208,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
 | `compose_names` | one round was recorded with composable names and the other not, or only some of its repeats were. The names come with the app's Perfetto SDK loaded at its start, which cost a cold start 67 ms on the device it was measured on |
+| `compile` | the app was compiled differently in the two rounds, or in the repeats of one — see below |
 
 The one to read first is `environment`, because it is the only one that can
 make the whole table say the opposite of what it looks like. A duration is the
@@ -247,6 +248,20 @@ recorded some other way is judged the same. A round that asked for one on a
 device whose sampler never started ran like a plain one and counts as plain,
 and a report written before the field existed gets no warning, since nobody
 can say how it was recorded.
+
+`compile` is about the app rather than the recording. ART runs the same code
+at another speed compiled ahead of time from a profile (`speed-profile`) than
+verified only (`verify`) or straight from the APK (`run-from-apk`), when the
+interpreter and the JIT carry it. A large app's launch on the SM-A515F took
+~1.4 s on its benchmark build and ~8.8 s on a debuggable build of it that
+nothing had compiled: a comparison of the two calls every row a regression,
+and the clock check above passes it, since the clock did not move. The state
+is ART's own slice for the app's dex, read from each trace, so a build that
+changed under the same config is caught. The reason is part of it: the same
+filter from a profile background dexopt widened (`bg-dexopt`) is not the build
+the install brought (`install-dm`). A side whose traces held no state — the
+process was already running when the recording began — and a report from
+before the field get no warning.
 
 Then `thresholds`. After `echolot calibrate` the numbers in
 `echolot.yml` are derived from particular runs, and comparing a calibrated

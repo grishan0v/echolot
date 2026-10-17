@@ -50,6 +50,11 @@ produce. The keys only a merged report has are named under the block.
                    "memory": { "available_mb_min": 1536.0, "major_faults": 250 },
                    "sampling": null,
                    "compose_names": null,
+                   "compile": { "filter": "speed-profile", "reason": "install-dm",
+                                "status": "up-to-date",
+                                "jit": { "methods": 7, "ms": 97.0 },
+                                "verified": { "classes": 9, "ms": 68.0, "main_ms": 5.3 },
+                                "runs": "5/5" },
                    "missing": [] },
   "summary": { "detectors_run": 15, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
@@ -137,6 +142,32 @@ cost a cold start 67 ms on the device it was measured on, so a round with
 names compares only with another with names, and `compare` says so when they
 differ. Asked for and none arrived is a warning in the header: an app
 without `runtime-tracing`, or an SDK nobody switched on.
+
+`compile` is how ART had compiled the app before it ran, read from the
+trace, and what it compiled while it ran. The same code runs at another speed
+under each: a large app's launch on one phone took ~1.4 s on its benchmark
+build and ~8.8 s on a debuggable build of it that nothing had compiled.
+
+- `filter`, `reason`, `status` — ART's slice for the app's own dex,
+  `location=… status=… filter=… reason=…`, read over the whole trace because
+  the process opens it at its start. `speed-profile` is compiled from a
+  profile, which is how an install from Google Play usually arrives, with
+  `reason` saying where the profile came from (`install-dm` from the build,
+  `bg-dexopt` widened later on the device). `verify` and `run-from-apk`
+  compiled none of the app's code ahead of time, and the report's header
+  warns. `null` when the trace does not hold the slice: the process was
+  already running when the recording began.
+- `jit` — the methods the JIT compiled inside the window, and its time.
+- `verified` — the classes ART verified at run time inside the window,
+  their time, and the part on the main thread (`main_ms`), which the user
+  waited for. Compiled code brings its classes verified; a library loaded
+  from elsewhere, or an app nothing compiled, verifies them here.
+
+Merged, the state is the one every repeat agrees on, or all of them joined
+by `and` — `run-from-apk and speed-profile` is a set of two builds, and the
+header says its medians mix two measurements. `runs` counts the repeats whose
+trace held the state. `compile` itself is `null` for a trace recorded without
+the `dalvik` atrace category, which `collect` records by default.
 
 `sampling` is whether a callstack sampler ran while the trace recorded —
 `runner.sampling`, or whatever config recorded the trace — read from the
@@ -368,6 +399,13 @@ a statement about the code alone; in the second the kernel was taking capacity
 away while these numbers were made. Neither is a reason to discard the report,
 and both are a reason to say so out loud before drawing a conclusion from a
 number that moved.
+
+**`environment.compile.filter` is `verify` or `run-from-apk`, or joins two
+with `and`** — in the first case none of the app's code was compiled ahead
+of time, and the numbers are slower than what most users see; say so before
+calling anything slow, and record again on a build compiled from its
+baseline profile. In the second the repeats ran two builds, or one build
+installed two ways, and no median in the report is either of them.
 
 **`toolchain.trace_processor`** — the parser version. If the numbers diverge
 between two reports, check this first: a version change alters trace semantics
@@ -754,6 +792,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `environment` | the clock the two rounds ran at differs by the relative floor or more (10% unless `--floor-pct` says otherwise), either way, or a side carries no clock, or read its clock or thermal state in only some of its repeats. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
 | `environment-thermal` | the kernel throttled the device during one round and not the other: that side is slower for a reason outside the code. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
+| `compile` | the two rounds ran the app compiled differently — another `filter`, or the same filter from another profile (`reason`) — or one side's repeats did. Code compiled ahead of time runs faster than code the JIT compiles as the app runs, so a row can move for that reason alone. A side whose traces held no state, and a report from before the field, get no warning |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
 | `process` | two different apps. `comparable: false` |
 | `defaults` / `config` | one side used `--defaults`, or the config's hash changed |

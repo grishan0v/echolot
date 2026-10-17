@@ -56,6 +56,7 @@ TID_DISK = 4209
 TID_DISK_BG = 4210
 TID_ROOM_0 = 4211
 TID_ROOM_1 = 4212
+TID_JIT = 4213
 
 THREADS = {
     # The main thread's name cut from the front, the way a package name
@@ -75,6 +76,8 @@ THREADS = {
     # Room's disk executor, whose threads wake the main thread below.
     TID_ROOM_0: "arch_disk_io_0",
     TID_ROOM_1: "arch_disk_io_1",
+    # ART's compiler, whose methods compiled in the window `environment` counts.
+    TID_JIT: "Jit thread pool",
 }
 
 # --- a foreign process: the process-isolation control ----------------------
@@ -280,7 +283,19 @@ SLICES = {
     ],
     TID_MAIN: [
         # BEFORE the window — main_thread_block must not see it
-        ("Bootstrap_OUTSIDE", 0, 50, []),
+        # Before the window, as a process opens its dex at its start: the
+        # compile state `environment.compile` reads off the whole trace. The
+        # first is another package's file, verified only, and must not be
+        # taken for the app's: the app's own is told by the path its parent
+        # names, not by coming first.
+        ("Bootstrap_OUTSIDE", 0, 50, [
+            ("OpenDexFilesFromOat(/data/app/~~d2Vi==/com.google.android.webview-dmlldw==/base.apk)",
+             5, 4, [("location=/data/app/~~d2Vi==/com.google.android.webview-dmlldw==/oat/arm64/"
+                     "base.odex status=up-to-date filter=verify reason=vdex", 6, 1, [])]),
+            ("OpenDexFilesFromOat(/data/app/~~Zm9v==/com.example.app-YmFy==/base.apk)",
+             20, 4, [("location=/data/app/~~Zm9v==/com.example.app-YmFy==/oat/arm64/"
+                      "base.odex status=up-to-date filter=speed-profile reason=install-dm", 21, 1, [])]),
+        ]),
         # The start anchor. Wraps the whole scenario, as on a real startup.
         ("AppStart", 100, 1006, [
             # app_init: the stretch a cold start spends between the
@@ -469,8 +484,30 @@ SLICES = {
     # uninstrumented_cpu negative control: 180 ms of slices over 200 ms of
     # Running = 90% coverage, so the thread must NOT land in the blind spots.
     TID_INSTR: [
-        ("work_a", 200, 90, []),
-        ("work_b", 300, 90, []),
+        # Classes ART verified at run time, as `environment.compile` counts
+        # them: Store and Feed, 5 ms. FeedBase is verified inside Feed and is
+        # Feed's time already; a class loader's check is not a class.
+        ("work_a", 200, 90, [
+            ("VerifyClass com.example.app.Store", 210, 3, []),
+            ("VerifyClassLoaderContextMatch", 250, 1, []),
+        ]),
+        ("work_b", 300, 90, [
+            ("VerifyClass com.example.app.Feed", 310, 2, [
+                ("VerifyClass com.example.app.FeedBase", 310.5, 1, []),
+            ]),
+        ]),
+    ],
+    # Two methods compiled inside the window, 10 ms, and one after it closes,
+    # which the window's count leaves out.
+    TID_JIT: [
+        ("JIT compiling void com.example.app.Store.load() (kind=Baseline) from "
+         "/data/app/~~Zm9v==/com.example.app-YmFy==/base.apk", 300, 4, [
+             ("Compiling baseline", 300.5, 3, [])]),
+        ("JIT compiling void com.example.app.Feed.bind() (kind=Optimized) from "
+         "/data/app/~~Zm9v==/com.example.app-YmFy==/base.apk", 600, 6, [
+             ("Compiling optimized", 600.5, 5, [])]),
+        ("JIT compiling void com.example.app.Late.run() (kind=Baseline) from "
+         "/data/app/~~Zm9v==/com.example.app-YmFy==/base.apk", 1150, 2, []),
     ],
     # uninstrumented_cpu: a 300 ms slice by wall clock, but the thread sleeps
     # through most of it — only 60 ms on CPU. Plus 100 ms of Running with no
@@ -620,6 +657,10 @@ SCHED = [
     (8, TID_ROOM_1, 695, 698, S),
     (8, TID_ROOM_0, 857, 860, S),
     (8, TID_ROOM_0, 1094, 1098, S),
+
+    # The JIT's thread, on a CPU only after the window: its slices need a
+    # thread the trace knows, and its CPU time would move the window's clock.
+    (7, TID_JIT, 1300, 1301, S),
 
     # the foreign process
     (5, OTHER_PID, 200, 700, S),

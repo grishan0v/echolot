@@ -1636,9 +1636,90 @@ def _environment_info(tp, package: str = "", mapped: bool = False) -> dict:
         if names:
             env["sampling"]["names"] = names
     env["compose_names"] = _compose_names_info(tp, one)
+    env["compile"] = _compile_info(tp, package, one)
     env["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if env[k] is None)
     return env
+
+
+# What ART writes when it opens a dex file, as a child of the
+# `OpenDexFilesFromOat(<path>)` it opened it for:
+#
+#   location=/data/app/~~…/com.example.app-…/oat/arm64/base.odex status=up-to-date filter=speed-profile reason=install-dm
+#   location=error status=io-error-no-oat filter=run-from-apk reason=unknown
+#
+# The second is a build with nothing compiled to open, and its `location`
+# names no file at all. That is why the app's own file is told by the
+# parent's path rather than by `location`.
+_DEX_STATE = re.compile(r"\bstatus=(\S+) filter=(\S+) reason=(\S+)")
+
+
+def _compile_info(tp, package: str, one) -> dict | None:
+    """How ART had compiled the app this trace ran, and what it compiled meanwhile.
+
+    The same code runs at very different speeds depending on it. Compiled
+    ahead of time from a profile (`speed-profile`), a launch runs the app's
+    hot code as machine code. Verified only (`verify`) or run from the APK
+    (`run-from-apk`), the interpreter and the JIT carry it. On an SM-A515F a
+    large app's launch took ~1.4 s on its benchmark build and ~8.8 s on a
+    debuggable build of the same app that nothing had compiled, and a
+    comparison of the two rounds would call every row a regression.
+
+    Three readings, from the `dalvik` atrace category that `collect` records
+    by default and a macrobenchmark's trace carries too:
+
+    - `filter`, `reason`, `status`: ART's slice for the app's own dex, read
+      over the whole trace, since the process opens it at its start, before
+      most windows open. `None` when the trace does not hold it: a process
+      that was already running when the recording began.
+    - `jit`: the methods the JIT compiled inside the window, and its time.
+    - `verified`: the classes ART verified at run time inside the window, a
+      class that compiled code would have carried verified already. Its time,
+      and the part of it on the main thread, which the user waited for.
+
+    `None` when the trace holds none of the three: a recording without the
+    `dalvik` category, or a window where nothing of the kind ran.
+    """
+    state: dict[str, Any] | None = None
+    if package:
+        try:
+            rows = tp.query(f"""
+                SELECT d.name AS name
+                FROM _slice d
+                JOIN slice x ON x.id = d.slice_id
+                JOIN slice o ON o.id = x.parent_id
+                WHERE d.name GLOB 'location=* filter=*'
+                  AND o.name GLOB 'OpenDexFilesFromOat(*/{sql_value(package)}-*'
+                ORDER BY d.ts
+                LIMIT 1""")
+        except Exception as e:  # a trace_processor without one of the tables
+            print(f"[!] environment: {e}", file=sys.stderr)
+            rows = []
+        found = _DEX_STATE.search(rows[0]["name"] or "") if rows else None
+        if found:
+            state = {"filter": found.group(2), "reason": found.group(3),
+                     "status": found.group(1)}
+    jit = one("SELECT COUNT(*) AS n, SUM(dur_win) AS ns FROM _slice_win "
+              "WHERE name GLOB 'JIT compiling *'")
+    # `VerifyClass ` with the space: `VerifyClassLoaderContextMatch` is ART
+    # checking a class loader, not a class. A verification inside another is
+    # counted once, by the outer one.
+    verified = one("""
+        SELECT COUNT(*) AS n, SUM(s.dur_win) AS ns,
+               SUM(CASE WHEN s.is_main_thread = 1 THEN s.dur_win ELSE 0 END) AS main_ns
+        FROM _slice_win s
+        WHERE s.name GLOB 'VerifyClass *'
+          AND NOT EXISTS (SELECT 1 FROM ancestor_slice(s.slice_id) a
+                          WHERE a.name GLOB 'VerifyClass *')""")
+    if state is None and not jit.get("n") and not verified.get("n"):
+        return None
+    out: dict[str, Any] = dict(state or {"filter": None, "reason": None, "status": None})
+    out["jit"] = {"methods": jit.get("n") or 0,
+                  "ms": round((jit.get("ns") or 0) / 1e6, 2)}
+    out["verified"] = {"classes": verified.get("n") or 0,
+                       "ms": round((verified.get("ns") or 0) / 1e6, 2),
+                       "main_ms": round((verified.get("main_ns") or 0) / 1e6, 2)}
+    return out
 
 
 # The recording's config asked for the Perfetto SDK's events when it holds a

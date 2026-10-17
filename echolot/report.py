@@ -296,9 +296,48 @@ def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
         }
     out["sampling"] = _merge_sampling([e.get("sampling") for e in envs])
     out["compose_names"] = _merge_compose_names([e.get("compose_names") for e in envs])
+    out["compile"] = _merge_compile([e.get("compile") for e in envs])
     out["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if out[k] is None)
     return out
+
+
+def _merge_compile(blocks: list[dict[str, Any] | None]) -> dict[str, Any] | None:
+    """The compile state across repeats: the one every repeat agrees on, or all of them.
+
+    Read like a startup's type. A set that mixes an app compiled from its
+    profile with one nobody compiled is two measurements, and a median over
+    both is neither, so the values it mixes are named together and the
+    header and `compare` both say so. `runs` counts the repeats whose trace
+    held the state at all. The JIT and the verification take medians, like
+    every other number here.
+    """
+    seen = [b for b in blocks if b]
+    if not seen:
+        return None
+    known = [b for b in seen if b.get("filter")]
+    # In the order of the filters, so that two builds read pair by pair:
+    # `run-from-apk and speed-profile`, `unknown and install-dm`.
+    states = sorted({(b["filter"], b.get("reason") or "", b.get("status") or "")
+                     for b in known})
+
+    def agreed(at: int) -> str | None:
+        values = list(dict.fromkeys(st[at] for st in states if st[at]))
+        return " and ".join(values) if values else None
+
+    def mid(block: str, key: str, digits: int = 2) -> float:
+        return round(median([(b.get(block) or {}).get(key) or 0 for b in seen]), digits)
+
+    return {
+        "filter": agreed(0),
+        "reason": agreed(1),
+        "status": agreed(2),
+        "jit": {"methods": round(mid("jit", "methods")), "ms": mid("jit", "ms")},
+        "verified": {"classes": round(mid("verified", "classes")),
+                     "ms": mid("verified", "ms"),
+                     "main_ms": mid("verified", "main_ms")},
+        "runs": f"{len(known)}/{len(blocks)}",
+    }
 
 
 def short_runs(runs: Any) -> tuple[int, int] | None:
@@ -811,6 +850,7 @@ def _environment_lines(env: dict[str, Any], unbuilt: bool = False) -> list[str]:
         bits.append(f"{memory['available_mb_min']:.0f} MB free at the low point")
     if bits:
         out.append("Device: " + ", ".join(bits))
+    out.extend(_compile_lines(env.get("compile")))
 
     if thermal and thermal.get("throttled"):
         where = thermal.get("throttle_device")
@@ -854,6 +894,70 @@ def _environment_lines(env: dict[str, Any], unbuilt: bool = False) -> list[str]:
     out.extend(_sampling_lines(env.get("sampling")))
     out.extend(_names_lines((env.get("sampling") or {}).get("names"), unbuilt))
     out.extend(_compose_names_lines(env.get("compose_names")))
+    return out
+
+
+# The filters under which ART compiled none of the app's code ahead of time:
+# the interpreter and the JIT carry the launch. `run-from-apk` is a build with
+# no compiled code to open at all, as a debuggable build nobody compiled is.
+UNCOMPILED_FILTERS = frozenset({
+    "assume-verified", "extract", "verify", "quicken",
+    "run-from-apk", "run-from-apk-fallback", "run-from-vdex-fallback",
+})
+
+
+def _compile_lines(c: dict[str, Any] | None) -> list[str]:
+    """How the app was compiled, under the clock: the other half of the machine it ran on.
+
+    One line while the app ran compiled. A warning when it ran compiled from
+    nothing, since that is not how a user who installed it gets it, and one
+    when the repeats disagree, since the set is then two measurements.
+    """
+    if not c:
+        return []
+    out: list[str] = []
+    filters = (c.get("filter") or "").split(" and ") if c.get("filter") else []
+    if filters:
+        bit = f"Compiled: **{c['filter']}**"
+        if c.get("reason"):
+            bit += f" ({c['reason']})"
+        short = short_runs(c.get("runs"))
+        if short:
+            bit += f", read in {short[0]} of {short[1]} repeats"
+    else:
+        bit = "Compiled: not in this trace, the process was already running when it began"
+    bits = [bit]
+    jit = c.get("jit") or {}
+    if jit.get("methods"):
+        bits.append(f"JIT {jit['methods']} methods, {jit.get('ms') or 0:.0f} ms")
+    verified = c.get("verified") or {}
+    if verified.get("classes"):
+        part = (f"{verified['classes']} classes verified at run time, "
+                f"{verified.get('ms') or 0:.0f} ms")
+        if verified.get("main_ms"):
+            part += f", {verified['main_ms']:.0f} ms of it on the main thread"
+        bits.append(part)
+    out.append(" · ".join(bits))
+    if len(filters) > 1 or " and " in (c.get("reason") or ""):
+        out.append(
+            f"> ⚠️ The repeats ran on different compile states ({c['filter']}"
+            + (f"; {c['reason']}" if c.get("reason") else "")
+            + "). Each is a different speed for the same code, so the medians "
+              "below mix two measurements. Record the set again on one build, "
+              "installed one way.")
+    bare = [f for f in filters if f in UNCOMPILED_FILTERS]
+    if bare:
+        some = len(bare) < len(filters)
+        out.append(
+            f"> ⚠️ The app ran with `filter={'`, `filter='.join(bare)}`"
+            + (" in some repeats" if some else "")
+            + ": none of its code was compiled ahead of time"
+            + (" in those" if some else "")
+            + ", so the interpreter and the JIT carried it. An install from "
+              "Google Play usually comes compiled from a profile, so these "
+              "numbers are slower than what most users see. Record again on a "
+              "build compiled from its baseline profile; `adb shell dumpsys "
+              "package dexopt` says how the installed one is compiled.")
     return out
 
 

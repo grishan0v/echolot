@@ -804,6 +804,21 @@ def _(report):
         named["environment"]["compose_names"]
 
 
+@check("compile state: the app's own dex, and what the JIT and the verifier did in the window")
+def _(report):
+    """`compare` warns when two rounds ran the app compiled differently, since
+    the same code runs at another speed compiled ahead of time than under
+    the JIT. The state is ART's slice for the app's own dex, told by the path
+    of the file it opened: the other package's dex before it, verified only,
+    is not the app's. Only the window's JIT and verification count, a nested
+    verification is its parent's time, and a class loader's check is not a
+    class. All of it on background threads here, so none on the main one."""
+    c = report["environment"]["compile"]
+    assert c == {"filter": "speed-profile", "reason": "install-dm", "status": "up-to-date",
+                 "jit": {"methods": 2, "ms": 10.0},
+                 "verified": {"classes": 2, "ms": 5.0, "main_ms": 0.0}}, c
+
+
 @check("composables: placed where the name says, and owned by the checkout")
 def _(report):
     """The name carries the declaration's file and line, so the row goes
