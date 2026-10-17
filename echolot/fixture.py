@@ -1099,8 +1099,45 @@ ANR_COUNTERS = [
 ]
 
 
+# --- a crowded variant: who held the main thread's core ------------------------
+#
+# `build(crowded=True)` only; the default trace keeps the main thread off the
+# CPU queue, and its budget's `waiting_for_cpu` is pinned at zero.
+#
+# The main thread is preempted at 400 ms and back on CPU 0 at 430. Meanwhile
+# CPU 0 runs a thread of the app for 18 ms and another process's for 8, and
+# stands idle for the last 4: `runnable_starvation`'s main-thread row says
+# the app held the core 60%, other processes 27%, nobody 13%. Twelve more
+# threads of the app queue at once from 880 ms on CPU 9 — more threads ready
+# than the trace has cores — for `window.crowding`.
+TID_CROWD = 4214
+OTHER_WORKER = 5001
+CROWD_TIDS = [4220 + i for i in range(12)]
+
+
+def _crowded(sched: list, threads: dict, other_threads: dict) -> tuple[list, dict, dict]:
+    sched = [row for row in sched if row != (0, TID_MAIN, 260, 600, S)]
+    sched += [
+        (0, TID_MAIN, 260, 400, R),
+        (0, TID_CROWD, 400, 418, S),
+        (0, OTHER_WORKER, 418, 426, S),
+        (0, TID_MAIN, 430, 600, S),
+    ]
+    # Each runs a millisecond and is preempted, then runs again a millisecond
+    # once all twelve have queued.
+    for i, tid in enumerate(CROWD_TIDS):
+        sched.append((9, tid, 880 + i, 881 + i, R))
+    for i, tid in enumerate(CROWD_TIDS):
+        sched.append((9, tid, 950 + i, 951 + i, S))
+    threads = {**threads, TID_CROWD: "CrowdWorker",
+               **{tid: f"Crowd-{i}" for i, tid in enumerate(CROWD_TIDS)}}
+    other_threads = {**other_threads, OTHER_WORKER: "OtherWorker"}
+    return sched, threads, other_threads
+
+
 def build(frames: bool = True, environment: bool = True,
-          sampling: str | None = None, names: bool = False) -> bytes:
+          sampling: str | None = None, names: bool = False,
+          crowded: bool = False) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1124,10 +1161,17 @@ def build(frames: bool = True, environment: bool = True,
     `names=True` writes the config `runner.compose_names` records with, a
     `track_event` source for Compose's category. The composables themselves
     are in the trace either way: they are slices like any other.
+
+    `crowded=True` puts the main thread in the CPU queue behind the app's own
+    thread and another process's, and more of the app's threads in the
+    queue at once than there are cores (see `_crowded`).
     """
+    sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
+    if crowded:
+        sched, threads, other_threads = _crowded(sched, threads, other_threads)
     builder = TraceProtoBuilder()
-    process_tree(builder, [(APP_PID, APP_NAME, THREADS),
-                           (OTHER_PID, OTHER_NAME, OTHER_THREADS),
+    process_tree(builder, [(APP_PID, APP_NAME, threads),
+                           (OTHER_PID, OTHER_NAME, other_threads),
                            (SF_PID, SF_NAME, SF_THREADS),
                            (SS_PID, SS_NAME, SS_THREADS)])
 
@@ -1144,16 +1188,16 @@ def build(frames: bool = True, environment: bool = True,
 
     # Collect ftrace events per CPU.
     by_cpu: dict[int, list] = {}
-    tid_to_cpu = {tid: cpu for cpu, tid, *_ in SCHED}
-    tid_to_tgid = {tid: APP_PID for tid in THREADS}
-    tid_to_tgid.update({tid: OTHER_PID for tid in OTHER_THREADS})
-    names = dict(THREADS)
-    names.update(OTHER_THREADS)
+    tid_to_cpu = {tid: cpu for cpu, tid, *_ in sched}
+    tid_to_tgid = {tid: APP_PID for tid in threads}
+    tid_to_tgid.update({tid: OTHER_PID for tid in other_threads})
+    names = dict(threads)
+    names.update(other_threads)
 
     seq = iter(range(10**6))
 
     # sched_switch: entering and leaving Running.
-    for cpu, tid, start, end, end_state in SCHED:
+    for cpu, tid, start, end, end_state in sched:
         idle = f"swapper/{cpu}"
         by_cpu.setdefault(cpu, []).append(
             (ms(start), next(seq), "sched", idle, 0, R, names[tid], tid)

@@ -150,4 +150,5 @@ guesses.
 - **Confidence.** If it is low, say so rather than smoothing it over.
 - **The device.** A finding about the device rather than the code —
   `runnable_starvation` on an emulator or a loaded machine — is worth a run
-  on real hardware before anything is fixed.
+  on real hardware before anything is fixed. When the main thread's row says
+  the app held its core, it is the app's own threads, not the device.

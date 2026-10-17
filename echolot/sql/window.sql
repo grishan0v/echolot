@@ -170,3 +170,66 @@ USING SPAN_JOIN(_running_span PARTITIONED utid, _top_slice_span PARTITIONED utid
 DROP TABLE IF EXISTS _cpu_by_slice;
 CREATE VIRTUAL TABLE _cpu_by_slice
 USING SPAN_LEFT_JOIN(_running_span PARTITIONED utid, _top_slice_span PARTITIONED utid);
+
+-- --- who held the core the main thread waited for -------------------------
+--
+-- A thread in `R` is ready and not let onto a CPU, and on its own that says
+-- nothing about whose fault it was. The trace knows: the scheduler's record
+-- of every CPU (`sched`) says what ran on the core the main thread was put on
+-- next, for as long as it waited. On a large app's launch on an SM-A515F that
+-- was the app's own threads for half of the main thread's wait, which makes
+-- "the device has other plans" the wrong reading.
+--
+-- Each wait of the main thread with the CPU it got next. The CPU is the one
+-- of the `Running` state that follows, and a wait the window ends before it
+-- is over has none.
+DROP VIEW IF EXISTS _main_runnable;
+CREATE VIEW _main_runnable AS
+SELECT ts, dur, state, cpu FROM (
+    SELECT t.ts, t.dur, t.state,
+           LEAD(CASE WHEN t.state = 'Running' THEN t.cpu END)
+               OVER (ORDER BY t.ts)                                 AS cpu
+    FROM _tstate_win t
+    CROSS JOIN _proc p
+    WHERE t.tid = p.pid
+)
+WHERE state IN ('R', 'R+') AND cpu IS NOT NULL AND dur > 0;
+
+-- What ran on each CPU inside the window, and whose it was: a thread of the
+-- app, a thread of anything else, or nothing (the idle task, utid 0). A
+-- stretch still running when the recording stopped runs to the window's end.
+DROP VIEW IF EXISTS _sched_win;
+CREATE VIEW _sched_win AS
+SELECT s.cpu,
+       MAX(s.ts, {{ts_start}})                                     AS ts,
+       MIN(CASE WHEN s.dur < 0 THEN {{ts_end}} ELSE s.ts + s.dur END, {{ts_end}})
+           - MAX(s.ts, {{ts_start}})                               AS dur,
+       CASE WHEN s.utid = 0 THEN 'idle'
+            WHEN t.upid = (SELECT upid FROM _proc) THEN 'app'
+            ELSE 'other' END                                       AS holder,
+       t.name                                                      AS holder_thread
+FROM sched s
+LEFT JOIN thread t ON t.utid = s.utid
+WHERE s.dur != 0
+  AND s.ts < {{ts_end}}
+  AND CASE WHEN s.dur < 0 THEN {{ts_end}} ELSE s.ts + s.dur END > {{ts_start}};
+
+-- The two side by side, per CPU. Neither overlaps itself inside a partition:
+-- one thread waits once at a time, and one core runs one thing at a time.
+DROP TABLE IF EXISTS _main_runnable_held;
+CREATE VIRTUAL TABLE _main_runnable_held
+USING SPAN_JOIN(_main_runnable PARTITIONED cpu, _sched_win PARTITIONED cpu);
+
+-- And the other cores, idle while the main thread waited: a wait that
+-- capacity stood by for is the scheduler's delay rather than a crowd.
+DROP VIEW IF EXISTS _main_runnable_any;
+CREATE VIEW _main_runnable_any AS
+SELECT ts, dur, state, cpu AS next_cpu FROM _main_runnable;
+
+DROP VIEW IF EXISTS _idle_win;
+CREATE VIEW _idle_win AS
+SELECT cpu, ts, dur FROM _sched_win WHERE holder = 'idle';
+
+DROP TABLE IF EXISTS _main_runnable_idle;
+CREATE VIRTUAL TABLE _main_runnable_idle
+USING SPAN_JOIN(_main_runnable_any, _idle_win PARTITIONED cpu);

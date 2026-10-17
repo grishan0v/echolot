@@ -395,7 +395,9 @@ conclusion from the data at hand is more useful than "did not find it".
 If the finding is about the device rather than the code
 (`runnable_starvation` on a loaded machine or an emulator) — say so. Sending
 someone to hunt a bug in code where the scheduler is at fault costs more than
-staying quiet.
+staying quiet. Read the main thread's row first: when it says the app held
+its core, the device was busy with the app, and the cause is the app's own
+threads.
 
 Check that against `environment` in `report.json` rather than guessing at it.
 It carries the clock this app's own threads ran at, whether the kernel

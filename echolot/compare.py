@@ -61,8 +61,8 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
     rows: list[dict[str, Any]] = []
     state_changed: list[dict[str, Any]] = []
 
-    by_id_before = {d["id"]: d for d in before.get("detectors", [])}
-    by_id_after = {d["id"]: d for d in after.get("detectors", [])}
+    by_id_before = {d["id"]: _upgraded(d) for d in before.get("detectors", [])}
+    by_id_after = {d["id"]: _upgraded(d) for d in after.get("detectors", [])}
 
     for det_id in [*by_id_before, *(k for k in by_id_after if k not in by_id_before)]:
         db = by_id_before.get(det_id)
@@ -609,6 +609,26 @@ def _failed(d: dict | None) -> bool:
 
 # --- pairing rows across two reports ---------------------------------------
 
+def _upgraded(d: dict) -> dict:
+    """A detector's block from an older report, read with the identity it has now.
+
+    `runnable_starvation` named a row by `detail`, `state R` or `state R+`,
+    until the main thread's evidence went into `detail`; the state is a column
+    of its own since. Paired on what both sides carry, an older report against
+    a newer one would be paired on `location` alone, and a thread's `R` row
+    would meet its `R+` row: the mistake `_match` exists to prevent. So the
+    older block gets its `state` read back out of `detail`.
+    """
+    identity = identity_of(d)
+    if d.get("id") != "runnable_starvation" or "state" in identity \
+            or "detail" not in identity:
+        return d
+    rows = [{**row, "state": str(row.get("detail") or "").removeprefix("state ")}
+            for row in d.get("rows") or []]
+    return {**d, "identity": ["state" if c == "detail" else c for c in identity],
+            "rows": rows}
+
+
 def _identity(db: dict | None, da: dict | None) -> tuple[str, ...]:
     """The columns that tell one row of this detector from another.
 
@@ -829,7 +849,15 @@ def _name(row: dict, identity: tuple[str, ...], how: str,
     halves are printed in the form they were matched in.
     """
     loc = str(row["location"])
-    detail = row.get("detail") if "detail" in identity else None
+    if "detail" in identity:
+        detail = row.get("detail")
+    else:
+        # A column of its own in the identity — `runnable_starvation`'s
+        # `state`, `io_wait`'s `thread` — tells two rows of one location
+        # apart the way `detail` does elsewhere, and is printed the same way.
+        named = [f"{c} {row[c]}" for c in identity
+                 if c != "location" and row.get(c) is not None]
+        detail = " · ".join(named) or None
     if how == "family":
         loc = family(loc, keep=keep)
         detail = None if detail is None else family(str(detail), keep=keep)

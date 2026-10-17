@@ -1351,6 +1351,7 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
     # this function lands somewhere else in the file — two of them arriving on
     # separate branches should not have to be merged by hand.
     window["main_thread"] = _main_thread_budget(tp, window)
+    window["crowding"] = _crowding_info(tp)
 
     for key, glob in (("start", cfg.scenario_start), ("end", cfg.scenario_end)):
         if glob == NO_ANCHOR:
@@ -1937,6 +1938,55 @@ def _main_thread_budget(tp, window: dict) -> dict | None:
     # explained" and "most of it was not looked at".
     out["accounted_pct"] = round(accounted / duration * 100, 1) if duration else None
     return out
+
+
+def _crowding_info(tp) -> dict | None:
+    """How many of the app's threads wanted a core at once, against how many cores there were.
+
+    The main thread's budget says how long it waited for a CPU, and
+    `runnable_starvation` who held the core meanwhile. This is the crowd
+    behind both: every thread of the app running or ready to run, counted
+    moment by moment across the window. On a large Kotlin app's launch on an
+    SM-A515F that was a peak of 27–28 threads on 8 cores, and more threads
+    ready than cores for ~250 ms of a ~1.4 s launch — the app crowding the
+    device out, not the device being busy.
+
+    `peak` is the most at one moment, `above_cores_ms` how long there were
+    more than `cores`, and `threads` how many of the app's threads had a
+    state in the window. Arithmetic over `_tstate_win`, like the budget, and
+    `None` for a trace with no scheduler data.
+    """
+    cores = (tp.query("SELECT COUNT(DISTINCT cpu) AS n FROM sched") or [{}])[0].get("n")
+    if not cores:
+        return None
+    # A start and an end at one moment are taken in that order, so that a
+    # thread switching from ready to running, or one leaving a core as
+    # another takes it, is never two threads at once.
+    rows = tp.query(f"""
+        WITH busy AS (
+            SELECT utid, ts, dur FROM _tstate_win
+            WHERE state IN ('Running', 'R', 'R+') AND dur > 0
+        ),
+        ev AS (
+            SELECT ts AS t, 1 AS d FROM busy
+            UNION ALL
+            SELECT ts + dur AS t, -1 AS d FROM busy
+        ),
+        level AS (
+            SELECT t, SUM(d) OVER (ORDER BY t, d ROWS UNBOUNDED PRECEDING) AS n,
+                   LEAD(t) OVER (ORDER BY t, d)                         AS next_t
+            FROM ev
+        )
+        SELECT (SELECT COUNT(DISTINCT utid) FROM _tstate_win)           AS threads,
+               MAX(n)                                                   AS peak,
+               SUM(CASE WHEN n > {int(cores)} AND next_t > t
+                        THEN next_t - t ELSE 0 END)                     AS above_ns
+        FROM level""")
+    if not rows or rows[0].get("peak") is None:
+        return None
+    return {"threads": rows[0]["threads"], "cores": int(cores),
+            "peak": rows[0]["peak"],
+            "above_cores_ms": round((rows[0]["above_ns"] or 0) / 1e6, 2)}
 
 
 def _spans_behind(tp, d, params: dict,

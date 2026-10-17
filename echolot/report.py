@@ -207,6 +207,21 @@ def _merge_budget(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 
+def _merge_crowding(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The app's crowd across repeats: medians, like the budget, and how many repeats had one."""
+    found = [r["window"]["crowding"] for r in reports
+             if (r.get("window") or {}).get("crowding")]
+    if not found:
+        return None
+    return {
+        "threads": round(median([c["threads"] for c in found])),
+        "cores": max(c["cores"] for c in found),
+        "peak": round(median([c["peak"] for c in found])),
+        "above_cores_ms": round(median([c["above_cores_ms"] for c in found]), 2),
+        "runs": f"{len(found)}/{len(reports)}",
+    }
+
+
 def _merge_startup(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The startup across repeats, reason by reason, by median, like the budget.
 
@@ -582,6 +597,7 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"]["duration_ms_min"] = min(windows)
         merged["window"]["duration_ms_max"] = max(windows)
         merged["window"]["main_thread"] = _merge_budget(reports)
+        merged["window"]["crowding"] = _merge_crowding(reports)
         merged["window"]["startup"] = _merge_startup(reports)
         merged["window"].update(_merge_window_checks(reports))
 
@@ -710,6 +726,21 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
             f"so the shares above are of what was seen, not of the scenario."
         )
     return out
+
+
+def _crowding_lines(c: dict[str, Any] | None) -> list[str]:
+    """The app's threads against the cores, under the budget, when they outnumbered them.
+
+    Nothing while there were never more threads ready than cores: then the
+    crowd explains no wait, and a line saying so would be read past.
+    """
+    if not c or not c.get("above_cores_ms"):
+        return []
+    return [f"App threads: up to {c['peak']} running or ready at once on "
+            f"{c['cores']} cores, more than {c['cores']} for "
+            f"{c['above_cores_ms']:.0f} ms of the window. A thread of the app "
+            f"waiting for a CPU then waits behind the app's own work, and "
+            f"`runnable_starvation` says who held the main thread's core."]
 
 
 def _in_rows_line(budget: dict[str, Any]) -> list[str]:
@@ -1304,6 +1335,7 @@ def to_markdown(report: dict[str, Any]) -> str:
             )
 
     out.extend(_budget_lines(w.get("main_thread")))
+    out.extend(_crowding_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup")))
 
     # An anchor that never matched silently collapses the window onto the whole
@@ -1526,6 +1558,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
         out.append(f"⚠️ {w.get('process_alternatives_total') or len(alts)} other "
                    f"process(es) matched the mask; the largest was taken")
     out.extend(_budget_lines(w.get("main_thread")))
+    out.extend(_crowding_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup")))
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(_mapping_lines(report))

@@ -39,7 +39,9 @@ produce. The keys only a merged report has are named under the block.
                                "window_ms": 772.3, "accounted_pct": 99.7,
                                "in_rows_ms": 401.6, "in_rows_pct": 52.0,
                                "in_rows_uncounted": [],
-                               "runs": "5/5" } },
+                               "runs": "5/5" },
+              "crowding": { "threads": 135, "cores": 8, "peak": 27,
+                            "above_cores_ms": 245.0, "runs": "5/5" } },
   "environment": { "cpu": { "mean_mhz": 1481.2, "mean_mhz_min": 1452.0,
                             "mean_mhz_max": 1503.9, "min_mhz": 300.0,
                             "max_mhz": 2400.0, "on_cpu_ms": 1945.0,
@@ -247,6 +249,16 @@ is in the rows about other threads: `uninstrumented_cpu`, `io_wait`, a
 background `binder_txn`. A low share with the main thread mostly on a CPU
 means it ran code no row names: slices below the thresholds, or none at all —
 `echolot names` shows which, and `mark` names the rest.
+
+**`window.crowding`** — the app's threads against the device's cores, moment
+by moment: `peak`, the most of them running or ready to run at once,
+`above_cores_ms`, how long there were more than `cores`, and `threads`, how
+many had a state in the window. Merged, the medians. The header prints it
+under the budget when the threads outnumbered the cores: `App threads: up to
+27 running or ready at once on 8 cores, more than 8 for 245 ms of the
+window.` On a large app's launch that was the case behind the main thread's
+wait for a CPU: half of it was spent behind the app's own work. Read it with
+`waiting_for_cpu` and with `runnable_starvation`'s row for the main thread.
 
 **`window.startup`** — the app's launch as Perfetto's standard library
 measures it, when the trace holds one: `type` (cold, warm, hot), `dur_ms` from
@@ -514,7 +526,7 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 | `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects |
 | `monitor_contention` | monitor contention | `places` names both sides of the lock in the checkout; `detail` carries the owner's tid |
 | `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |
-| `runnable_starvation` | thread ready but preempted | this is about the device, not the code |
+| `runnable_starvation` | thread ready but preempted | `state` names the row; on the main thread's row `detail` says who held its core — the app's own threads point at the app, other processes and idle cores at the device |
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}`; in a sampled recording, the method after `ours:` in `detail`, at the file `code` names |
 | `frame_jank` | frames that missed their deadline | `location` is why it missed, `detail` says whose fault |
 | `main_thread_outlier` | one occurrence far longer than usual | `detail` carries the median it is measured against |
@@ -562,10 +574,24 @@ nothing. Put `AGENTTMP_` markers around the app's own there, or `echolot mark`,
 and record again; what stays unnamed after that is libraries, which the
 manifest's `<provider>` entries list.
 
-**`runnable_starvation`** talks about hardware, not code. A thread in state `R`
-is ready to work but the scheduler will not let it in. On an emulator it fires
-almost always. Do not send an agent to fix code over this finding — first make
-sure the run happened on a real device with nothing else loading it.
+**`runnable_starvation`** says who kept a thread off the CPU. A thread in
+state `R` is ready to work and the scheduler will not let it in. One row per
+thread and state: `state` (`R`, or `R+`, woken and not yet run) is part of the
+row's name. For the main thread `detail` goes on:
+
+    state R · its core held by the app 45% (DefaultDispatch most), other processes 48%, idle 7% · 0.3 other cores idle on average
+
+The share is of the time the main thread waited, by what ran on the core it
+was put on next. **Mostly the app** — the cause is in the app, however real
+the device: too many of its threads at once, work that could start after the
+first frame, a pool larger than the cores. The thread named is the one that
+held the core longest; `window.crowding` says how many there were. **Mostly
+other processes** — the device was busy with something else, and on an
+emulator it nearly always is: make sure the run happened on a real device
+with nothing else loading it before sending anyone to the code. **Mostly
+idle**, or many other cores idle on average — capacity stood by and the
+scheduler was slow to use it; neither doing less nor moving work fixes that.
+Background threads' rows carry the state alone.
 
 **`uninstrumented_cpu`** is the only one that finds a problem inside
 uninstrumented code. `covered_ms` far below `total_ms` means the thread worked

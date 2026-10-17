@@ -191,7 +191,9 @@ confident look on weak data.
 
 If the finding is about the device rather than the code — for instance
 `runnable_starvation` on an emulator or a loaded machine — warn that the run is
-worth repeating on real hardware before fixing anything.
+worth repeating on real hardware before fixing anything. A main-thread row
+saying the app held its core is not that: the app's own threads were in the
+way.
 
 ## Closing the investigation
 

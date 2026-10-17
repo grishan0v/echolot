@@ -1038,6 +1038,38 @@ def _(report):
     row = only_row(report, "runnable_starvation")
     assert row["location"] == "OkHttp Dispatcher", row
     assert row["total_ms"] == 50.0, row
+    # The state names the row; a background thread's row carries no more
+    # evidence than that.
+    assert (row["state"], row["detail"]) == ("R", "state R"), row
+    # The fixture never crowds the cores: no line about it in the header.
+    crowd = report["window"]["crowding"]
+    assert crowd == {"threads": 13, "cores": 9, "peak": 5, "above_cores_ms": 0.0}, crowd
+
+
+@check("runnable_starvation: who held the core the main thread waited for")
+def _(report):
+    """The crowded variant: the main thread queues 30 ms for CPU 0, which runs
+    a thread of the app for 18 of them, another process's for 8, and nothing
+    for 4. Of the other cores, CPUs 2, 4 and 6 stand idle the whole time and
+    CPU 8 for 20 ms: 3.7 idle on average. The 1 ns stretches of `R` that every
+    wakeup in this fixture leaves are counted, and change no share. Twelve
+    threads of the app then queue on CPU 9 beside the running main thread,
+    more than the ten cores the trace has from 889 ms to 953."""
+    from .config import Config
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "crowded.perfetto-trace"
+        path.write_bytes(fixture.build(crowded=True))
+        crowded = _analyze(path, Config(FIXTURE_CONFIG))
+    main = [r for r in rows(crowded, "runnable_starvation")
+            if r["location"] == fixture.THREADS[fixture.TID_MAIN]]
+    assert len(main) == 1, rows(crowded, "runnable_starvation")
+    row = main[0]
+    assert (row["state"], row["total_ms"]) == ("R", 30.0), row
+    assert row["detail"] == (
+        "state R · its core held by the app 60% (CrowdWorker most), other "
+        "processes 27%, idle 13% · 3.7 other cores idle on average"), row
+    crowd = crowded["window"]["crowding"]
+    assert crowd == {"threads": 26, "cores": 10, "peak": 13, "above_cores_ms": 64.0}, crowd
 
 
 @check("uninstrumented_cpu: found the thread without a single slice")
@@ -3640,11 +3672,11 @@ def _(report):
                 "detectors": [{
                     "id": "runnable_starvation", "title": "t", "why": "",
                     "params": {}, "params_source": "default", "error": None,
-                    "identity": ["location", "detail"],
+                    "identity": ["location", "state"],
                     "rows": [
-                        {"location": "RenderThread", "count": 3,
+                        {"location": "RenderThread", "count": 3, "state": "R",
                          "total_ms": r_ms, "max_ms": r_ms, "detail": "state R"},
-                        {"location": "RenderThread", "count": 2,
+                        {"location": "RenderThread", "count": 2, "state": "R+",
                          "total_ms": rplus_ms, "max_ms": rplus_ms, "detail": "state R+"},
                     ]}]}
 
