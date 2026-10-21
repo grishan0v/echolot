@@ -2,7 +2,7 @@
 
 [← back to the README](../README.md)
 
-Twelve documents. If you are here for the first time, read them in the order of
+Thirteen documents. If you are here for the first time, read them in the order of
 the workflow: **collect → mark → analyse → compare → calibrate**. The rest
 explains why the tool is built the way it is.
 
@@ -29,6 +29,7 @@ Why the answers can be trusted, and what the tool refuses to do.
 |---|---|
 | 🔒 **[Determinism](determinism.md)** | the pinned `trace_processor`, the synthetic fixture, what `doctor` actually checks, and where determinism ends |
 | 🤖 **[The agent layer](agent-layer.md)** | what `echolot init` installs, and a private install git does not see; the plugin for Claude Code and Codex, why a CLI rather than an MCP server, why the loop lives in a subagent |
+| 🛡️ **[Privacy](privacy.md)** | what echolot reads and writes on the machine and the phone, the two downloads and how each is checked, and that nothing is sent anywhere |
 
 ## Extending it
 

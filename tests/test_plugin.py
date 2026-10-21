@@ -102,6 +102,26 @@ def test_the_manifest_names_the_plugin_and_the_package_version():
           "pipx install echolot" in manifest.get("description", ""), manifest)
 
 
+def test_the_manifest_gives_the_directory_its_listing_links():
+    """Claude's plugin directory builds the listing from plugin.json at the
+    tracked tag. Without `displayName` it called the plugin "Echolot", and it
+    left the privacy policy and support empty (#384). The homepage is the
+    documentation site: the listing names the repository on its own line."""
+    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text("utf-8"))
+    site = re.search(r"^site_url: (\S+)$", (ROOT / "mkdocs.yml").read_text("utf-8"),
+                     re.MULTILINE).group(1)
+    check("the name as it is written everywhere else",
+          manifest.get("displayName") == "echolot", manifest.get("displayName"))
+    check("the homepage is the documentation site", manifest.get("homepage") == site,
+          (manifest.get("homepage"), site))
+    check("support is the issue tracker",
+          manifest.get("supportUrl") == "https://github.com/grishan0v/echolot/issues",
+          manifest.get("supportUrl"))
+    check("the privacy policy is docs/privacy.md, where the site puts it",
+          manifest.get("privacyPolicyUrl") == site + "privacy/"
+          and (ROOT / "docs" / "privacy.md").is_file(), manifest.get("privacyPolicyUrl"))
+
+
 @pytest.mark.parametrize("name", SKILLS)
 def test_each_skill_is_thin_and_says_what_it_is(name):
     meta, body = _skill(name)
@@ -305,10 +325,13 @@ def test_cursors_manifest_says_what_claudes_does():
     too, or this fails."""
     claude = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text("utf-8"))
     cursor = json.loads(CURSOR_MANIFEST.read_text("utf-8"))
-    for key in ("name", "version", "description", "homepage", "repository",
-                "license", "keywords"):
+    for key in ("name", "displayName", "version", "description", "homepage",
+                "repository", "license", "keywords"):
         check(f"{key} as in Claude's manifest", cursor.get(key) == claude.get(key),
               (key, cursor.get(key), claude.get(key)))
+    check("without the links only Claude's directory reads: Cursor's schema "
+          "refuses a key it does not name",
+          not {"supportUrl", "privacyPolicyUrl"} & cursor.keys(), cursor)
     check("the author by name: Cursor's schema takes a name and an email",
           cursor.get("author") == {"name": claude["author"]["name"]}, cursor.get("author"))
     check("the logo is the icon Claude's directory reads",
@@ -361,6 +384,9 @@ def test_the_marketplace_serves_the_plugin_from_this_versions_release_tag():
           (source.get("ref"), echolot.__version__))
     check("the version is plugin.json's alone: set in both, Claude Code "
           "takes plugin.json's without a word", "version" not in entries[0], entries[0])
+    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text("utf-8"))
+    check("the homepage is plugin.json's", entries[0].get("homepage") == manifest.get("homepage"),
+          (entries[0].get("homepage"), manifest.get("homepage")))
 
 
 @pytest.mark.skipif(shutil.which("claude") is None, reason="Claude Code is not installed")

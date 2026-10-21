@@ -47,4 +47,6 @@ Also `adb` on `PATH` and an Android phone or emulator with USB debugging on.
 - **Sends** nothing anywhere.
 
 Documentation: [grishan0v.github.io/echolot](https://grishan0v.github.io/echolot/).
+Privacy: [grishan0v.github.io/echolot/privacy](https://grishan0v.github.io/echolot/privacy/).
+Questions: [the issue tracker](https://github.com/grishan0v/echolot/issues).
 License: Apache 2.0.

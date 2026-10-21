@@ -10,7 +10,7 @@
       "name": "echolot",
       "description": "Localise Android performance regressions from a Perfetto trace down to a place in the code. The skills drive the echolot CLI, installed separately: pipx install echolot.",
       "category": "development",
-      "homepage": "https://github.com/grishan0v/echolot",
+      "homepage": "https://grishan0v.github.io/echolot/",
       "source": {
         "source": "git-subdir",
         "url": "https://github.com/grishan0v/echolot.git",

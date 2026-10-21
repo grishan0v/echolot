@@ -208,6 +208,7 @@ same pages [on GitHub](https://github.com/grishan0v/echolot/tree/main/docs):
 [Calibrating](https://github.com/grishan0v/echolot/blob/main/docs/calibrate.md) ·
 [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) ·
 [The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md) ·
+[Privacy](https://github.com/grishan0v/echolot/blob/main/docs/privacy.md) ·
 [Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md) ·
 [Reflect](https://github.com/grishan0v/echolot/blob/main/docs/reflect.md)
 
