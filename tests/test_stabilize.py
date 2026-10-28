@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -115,6 +116,12 @@ class Clock:
 
     def __call__(self) -> float:
         return self.now
+
+    def stand_in(self, monkeypatch) -> None:
+        """Be the time `stabilize` reads, and only that. Patching `sleep` on
+        the `time` module itself would also catch the polling of a subprocess
+        that gradle mode waits on (#429)."""
+        monkeypatch.setattr(stabilize, "time", SimpleNamespace(sleep=self.sleep, monotonic=self))
 
 
 def settled(section, phone, log=None, clock=None) -> stabilize.Settled:
@@ -293,8 +300,7 @@ def test_collect_cools_before_each_repeat_and_puts_the_screen_back(tmp_path, mon
     monkeypatch.setattr(runner, "_run", adb)
     monkeypatch.delenv("ANDROID_SERIAL", raising=False)
     clock = Clock()
-    monkeypatch.setattr(stabilize.time, "sleep", clock.sleep)
-    monkeypatch.setattr(stabilize.time, "monotonic", clock)
+    clock.stand_in(monkeypatch)
     said: list[str] = []
     runner.collect(PACKAGE, tmp_path / "traces", 3,
                    section={"cooldown": {"max_c": 34}, "brightness": 100},
@@ -367,8 +373,7 @@ def test_gradle_mode_cools_once_before_the_task_and_hands_it_the_device(tmp_path
     monkeypatch.setattr(runner, "_run", adb)
     monkeypatch.delenv("ANDROID_SERIAL", raising=False)
     clock = Clock()
-    monkeypatch.setattr(stabilize.time, "sleep", clock.sleep)
-    monkeypatch.setattr(stabilize.time, "monotonic", clock)
+    clock.stand_in(monkeypatch)
     said: list[str] = []
     results = runner.collect(PACKAGE, tmp_path / "traces", 5, name="startup", log=said.append,
                              section={"mode": "gradle", "gradle": "./fake-gradlew",

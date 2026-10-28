@@ -206,7 +206,7 @@ class Settled:
         self.log = log
         self.notify = notify or (lambda **kw: None)
         # Looked up here rather than bound as defaults, so that a test that
-        # replaces `time.sleep` is the one a collect it drives waits with.
+        # replaces this module's `time` is the one a collect it drives waits with.
         self.sleep = sleep or time.sleep
         self.clock = clock or time.monotonic
         self._undo: list[tuple[str, list[list[str]]]] = []
