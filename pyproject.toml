@@ -13,7 +13,7 @@ name = "echolot"
 dynamic = ["version"]
 description = "Turns a huge Android trace into 20 rows of facts an AI agent can actually use"
 readme = "README.md"
-license = "Apache-2.0"
+license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Andrey Grishanov", email = "grishanov.dev@gmail.com" }]

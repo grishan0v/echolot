@@ -8,7 +8,7 @@
   <a href="https://github.com/grishan0v/echolot/actions/workflows/checks.yml"><img alt="checks" src="https://img.shields.io/github/actions/workflow/status/grishan0v/echolot/checks.yml?branch=main&label=checks&logo=githubactions&logoColor=white"></a>
   <a href="https://pypi.org/project/echolot/"><img alt="PyPI" src="https://img.shields.io/pypi/v/echolot?logo=pypi&logoColor=white"></a>
   <a href="https://pypi.org/project/echolot/"><img alt="Python versions" src="https://img.shields.io/badge/3.10--3.14-blue?logo=python&logoColor=white&label=python"></a>
-  <a href="https://github.com/grishan0v/echolot/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
+  <a href="https://github.com/grishan0v/echolot/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <br>
   <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Claude Code: plugin" src="https://img.shields.io/badge/Claude_Code-plugin-brightgreen?logo=claude&logoColor=white"></a>
   <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Codex: plugin" src="https://img.shields.io/badge/Codex-plugin-brightgreen"></a>
@@ -214,4 +214,4 @@ same pages [on GitHub](https://github.com/grishan0v/echolot/tree/main/docs):
 
 ## License
 
-[Apache 2.0](https://github.com/grishan0v/echolot/blob/main/LICENSE)
+[MIT](https://github.com/grishan0v/echolot/blob/main/LICENSE)
