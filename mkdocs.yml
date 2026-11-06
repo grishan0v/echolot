@@ -67,6 +67,7 @@ nav:
       - Determinism: determinism.md
       - The agent layer: agent-layer.md
       - Privacy: privacy.md
+      - Terms of use: terms.md
   - Extending it:
       - Detectors: detectors.md
       - Reflect: reflect.md
