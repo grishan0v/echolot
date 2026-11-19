@@ -6,16 +6,20 @@ with a place in the code, a mechanism, the measurements that show it, a change
 to make and how sure the agent is — and as one string it can be read but not
 checked, and two hunts cannot be set side by side.
 
-`echolot hunt --done --verdict <file>` takes the same answer as JSON. This
-module is everything that is known about that JSON without the project: its
-shape, the check that every measurement it cites is a row of a report the
-investigation filed, and how it reads back as text. It touches no files, so
-the same verdict against the same reports is accepted or refused the same way
-every time, which is what the check is for.
+`echolot hunt --done --verdict <file>` takes the same answer as JSON, and
+`echolot hunt --verdict <file>` without `--done` runs the same check and
+records nothing. This module is everything that is known about that JSON
+without the project: its shape, the check that every measurement it cites is
+a row of a report the investigation filed, and how it reads back as text. It
+touches no files, so the same verdict against the same reports is accepted or
+refused the same way every time, which is what the check is for.
 
 The content is the agent's. Nothing here rewrites, ranks or fills in a field:
 the verdict is stored as it came, and what echolot adds — what it found when
-it looked — goes beside it, in `hunt.json`'s `verdict_check`.
+it looked — goes beside it, in `hunt.json`'s `verdict_check`. Only the rows a
+verdict cites are checked against the reports; its lists of what was ruled
+out, what else was measured and what to change beyond any one cause are held
+to their shape and nothing more, because there is no row they point at.
 
 A citation is a `report` number, a `location`, and optionally a `detector`.
 The number is the one a report is filed under in the investigation
@@ -39,10 +43,12 @@ CONFIDENCE = ("high", "medium", "low")
 # them itself either way (`hunt.leftovers`) and records both.
 CLEANUP = ("removed", "none_added", "left")
 
-TOP_FIELDS = ("summary", "inside", "causes", "cleanup")
+TOP_FIELDS = ("summary", "inside", "causes", "suggestions", "ruled_out",
+              "also_measured", "cleanup")
 CAUSE_FIELDS = ("title", "where", "mechanism", "evidence", "fix", "expected_ms",
                 "confidence", "confidence_why")
 CITATION_FIELDS = ("report", "detector", "location")
+SUGGESTION_FIELDS = ("fix", "expected_ms")
 
 # The reports of an investigation by number. None is a file that is there and
 # does not read as a report.
@@ -98,6 +104,45 @@ def _expected(value: Any, where: str, out: list[str]) -> None:
         return
     out.append(f"{where}.expected_ms: a number of milliseconds, or [low, high] with "
                f"low not above high, neither negative")
+
+
+def _strings(verdict: dict[str, Any], key: str, what: str, out: list[str]) -> None:
+    """An optional list of non-empty strings. Only its shape is held."""
+    if key not in verdict:
+        return
+    items = verdict[key]
+    if not isinstance(items, list):
+        out.append(f"{key}: has to be a list of non-empty strings — {what}")
+        return
+    for i, item in enumerate(items):
+        if not _text(item):
+            out.append(f"{key}[{i}]: has to be a non-empty string")
+
+
+def _suggestions(verdict: dict[str, Any], out: list[str]) -> None:
+    """Changes that belong to no one cause: a `fix`, and what it should save.
+
+    The shape of a cause's own `fix` and `expected_ms`, so the same estimate
+    reads the same wherever it stands. No row is cited, so there is nothing
+    to look up.
+    """
+    if "suggestions" not in verdict:
+        return
+    items = verdict["suggestions"]
+    if not isinstance(items, list):
+        out.append('suggestions: has to be a list of objects like {"fix": "…", '
+                   '"expected_ms": 300} — changes that belong to no one cause')
+        return
+    for i, item in enumerate(items):
+        where = f"suggestions[{i}]"
+        if not isinstance(item, dict):
+            out.append(f"{where}: has to be an object with a fix")
+            continue
+        _unknown(item, SUGGESTION_FIELDS, where, out)
+        if not _text(item.get("fix")):
+            out.append(f"{where}.fix: required, a non-empty string")
+        if "expected_ms" in item:
+            _expected(item["expected_ms"], where, out)
 
 
 # --- the citations -----------------------------------------------------------
@@ -253,6 +298,10 @@ def validate(verdict: Any, reports: Reports) -> list[str]:
             _expected(cause["expected_ms"], where, out)
         if "confidence" in cause and cause["confidence"] not in CONFIDENCE:
             out.append(f"{where}.confidence: one of {', '.join(CONFIDENCE)}")
+
+    _suggestions(verdict, out)
+    _strings(verdict, "ruled_out", "what was checked and is not a cause", out)
+    _strings(verdict, "also_measured", "what else was measured, one line each", out)
     return out
 
 
@@ -366,8 +415,8 @@ def lines(verdict: Any, check: Any = None) -> list[str]:
         out.append(f"  causes ({len(causes)}, in the order the agent gave them):")
     elif "causes" in v:
         out.append("  causes: none — nothing was found")
+    pad = "       "
     for i, c in enumerate(causes, 1):
-        pad = "       "
         out.append(f"    {i}. {_indented(c.get('title') or '(no title)', pad)}")
         rows: list[tuple[str, list[str]]] = [
             ("where", [str(p) for p in _list(c.get("where"))]),
@@ -383,6 +432,18 @@ def lines(verdict: Any, check: Any = None) -> list[str]:
         for name, values in rows:
             for k, value in enumerate(values):
                 out.append(f"{pad}{(name + ':') if k == 0 else '':<12}{value}")
+    suggestions = [s for s in _list(v.get("suggestions")) if isinstance(s, dict)]
+    if suggestions:
+        out.append(f"  suggestions ({len(suggestions)}, not tied to one cause):")
+        for i, s in enumerate(suggestions, 1):
+            out.append(f"    {i}. {_indented(s.get('fix') or '(no fix)', pad)}")
+            if (said := _expected_text(s.get("expected_ms"))):
+                out.append(f"{pad}{'expected:':<12}{said}")
+    for key, name in (("ruled_out", "ruled out"), ("also_measured", "also measured")):
+        items = [s for s in _list(v.get(key)) if isinstance(s, str) and s.strip()]
+        if items:
+            out.append(f"  {name} ({len(items)}):")
+            out.extend(f"    - {_indented(s, '      ')}" for s in items)
     line = _cleanup_line(v.get("cleanup"), check)
     if line:
         out.append(f"  {line}")

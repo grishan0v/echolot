@@ -325,6 +325,8 @@ SHAPES = [
     {"summary": "", "causes": "none"},
     {"summary": "s", "inside": {"report": 3, "location": "x"},
      "causes": [{"title": "t", "where": [], "evidence": [{"report": 1, "location": "q"}]}]},
+    {"summary": "s", "causes": [], "suggestions": [{}, "x", {"fix": "f", "expected_ms": -1}],
+     "ruled_out": "a", "also_measured": [1, ""]},
     copy.deepcopy(VERDICT),
 ]
 
@@ -421,12 +423,13 @@ def test_the_text_form_is_what_it_was(tmp_path: Path) -> None:
           and "verdict" not in out, out)
 
 
-def test_the_flags_that_need_each_other(tmp_path: Path) -> None:
+def test_done_with_nothing_to_record_is_refused(tmp_path: Path) -> None:
+    """`--verdict` alone is the check, below. `--done` alone has nothing to keep."""
     p = hunt_with(tmp_path, ROUND_1)
-    code, _, err = run(p, "hunt", "--verdict", write(p, VERDICT))
-    check("--verdict alone", code == 2 and "goes with --done" in err, err)
     code, _, err = run(p, "hunt", "--done")
     check("--done with nothing", code == 2 and "--verdict" in err, err)
+    code, _, err = run(p, "hunt", "--done", "  ")
+    check("or with only blanks", code == 2 and "--verdict" in err, err)
     check("neither closed it", hunt_mod.load(p)["status"] == "open")
 
 
@@ -485,6 +488,10 @@ def test_list_and_the_recap_read_a_verdict_hunt_like_any_other(tmp_path: Path) -
     "not a verdict", [], {"causes": "none"}, {"causes": [1, None, {"evidence": 4}]},
     {"summary": 7, "inside": "x", "causes": [{"title": ["t"], "where": "w",
                                                 "expected_ms": "soon", "confidence": 3}]},
+    {"summary": "s", "causes": [], "ruled_out": 5, "also_measured": {"a": 1},
+     "suggestions": "x"},
+    {"summary": "s", "ruled_out": [None, 3],
+     "suggestions": [None, {"fix": ["a"], "expected_ms": []}]},
 ])
 def test_a_record_edited_by_hand_still_lists_and_shows(tmp_path: Path, stored: Any) -> None:
     """`hunt.json` is a file people open. A field of the wrong kind is skipped."""
@@ -553,3 +560,130 @@ def test_a_detector_that_stayed_silent_is_named_as_that() -> None:
         "title": "t", "where": ["w"],
         "evidence": [{"report": 1, "detector": "gc_pressure", "location": "x"}]}]}, quiet)
     check("silent, rather than a list of nothing", "it is silent in that report" in why[0], why)
+
+
+# --- the three lists: what was ruled out, what else was measured, what to change
+
+FULL: dict[str, Any] = {
+    **VERDICT,
+    "suggestions": [
+        {"fix": "Ship the rows in a prebuilt database.", "expected_ms": [1000, 1400]},
+        {"fix": "Open the database once, before the first screen."},
+    ],
+    "ruled_out": ["Layout inflation: 41 ms in each of three runs, as before",
+                  "Garbage collection: no pause above 8 ms"],
+    "also_measured": ["AGENTTMP_fill: 1,480 ms", "AGENTTMP_insert_cards: 1,150 ms"],
+}
+
+
+def test_the_three_lists_are_kept_as_the_agent_wrote_them(tmp_path: Path) -> None:
+    p = hunt_with(tmp_path, ROUND_1, ROUND_2)
+    code, _, err = run(p, "hunt", "--done", "--verdict", write(p, FULL))
+    check("accepted", code == 0, err)
+    check("whole and unchanged", hunt_mod.load(p)["verdict"] == FULL)
+    check("and they are not counted as cited rows",
+          hunt_mod.load(p)["verdict_check"]["cited"] == 3)
+
+
+def test_show_prints_the_three_lists_after_the_causes(tmp_path: Path) -> None:
+    p = hunt_with(tmp_path, ROUND_1, ROUND_2)
+    run(p, "hunt", "--done", "--verdict", write(p, FULL))
+    code, out, _ = run(p, "hunt", "--show", "1")
+    check("shows", code == 0, out)
+    for want in ("suggestions (2, not tied to one cause):",
+                 "1. Ship the rows in a prebuilt database.",
+                 "expected:   1000–1400 ms",
+                 "2. Open the database once, before the first screen.",
+                 "ruled out (2):",
+                 "- Layout inflation: 41 ms in each of three runs, as before",
+                 "- Garbage collection: no pause above 8 ms",
+                 "also measured (2):",
+                 "- AGENTTMP_fill: 1,480 ms"):
+        check(f"says: {want}", want in out, out)
+    where = [out.index(s) for s in ("causes (1", "suggestions (2", "ruled out (2",
+                                    "also measured (2", "cleanup:")]
+    check("causes, suggestions, ruled out, also measured, then the cleanup",
+          where == sorted(where), where)
+
+
+def test_an_empty_list_is_an_answer_that_has_nothing_to_show(tmp_path: Path) -> None:
+    p = hunt_with(tmp_path, ROUND_1)
+    bare = {"summary": "s", "causes": [], "ruled_out": [], "also_measured": [],
+            "suggestions": []}
+    code, _, err = run(p, "hunt", "--done", "--verdict", write(p, bare))
+    check("accepted", code == 0, err)
+    _, out, _ = run(p, "hunt", "--show", "1")
+    check("and shown as no block", "ruled out" not in out and "suggestions" not in out
+          and "also measured" not in out, out)
+
+
+def test_what_the_three_lists_may_hold() -> None:
+    def top(**fields: Any) -> list[str]:
+        return problems({"summary": "s", "causes": [], **fields}, ROUND_1)
+
+    for key in ("ruled_out", "also_measured"):
+        check(f"{key}: lines", top(**{key: ["a", "b"]}) == [])
+        check(f"{key}: an empty list", top(**{key: []}) == [])
+        for not_a_list in ("one line", None, {"a": "b"}, 3):
+            why = top(**{key: not_a_list})
+            check(f"{key}: {not_a_list!r} is not a list",
+                  len(why) == 1 and why[0].startswith(f"{key}: has to be a list"), why)
+        for bad in ("", "  ", 3, None, ["x"]):
+            why = top(**{key: ["fine", bad]})
+            check(f"{key}: {bad!r} is not a line",
+                  len(why) == 1 and why[0].startswith(f"{key}[1]: has to be a non-empty"), why)
+
+    check("a suggestion is a fix", top(suggestions=[{"fix": "f"}]) == [])
+    check("with an estimate as in a cause, a number or a range", top(suggestions=[
+        {"fix": "f", "expected_ms": 5}, {"fix": "g", "expected_ms": [1, 2]}]) == [])
+    check("an empty list is no suggestion", top(suggestions=[]) == [])
+    for bad, want in (({}, "suggestions[0].fix: required"),
+                      ({"fix": " "}, "suggestions[0].fix: required"),
+                      ({"fix": 3}, "suggestions[0].fix: required"),
+                      ({"fix": "f", "expected_ms": -1}, "suggestions[0].expected_ms"),
+                      ({"fix": "f", "expected_ms": [2, 1]}, "suggestions[0].expected_ms"),
+                      ({"fix": "f", "expected_ms": "soon"}, "suggestions[0].expected_ms"),
+                      ({"fix": "f", "why": "x"}, "suggestions[0]: no such field why"),
+                      ({"fix": "f", "report": 1}, "suggestions[0]: no such field report")):
+        why = top(suggestions=[bad])
+        check(f"{bad}", len(why) == 1 and want in why[0], why)
+    check("one that is not an object",
+          "suggestions[0]: has to be an object" in top(suggestions=["do it"])[0])
+    check("a second one is the second",
+          top(suggestions=[{"fix": "f"}, {"fix": ""}])[0].startswith("suggestions[1].fix"))
+    check("not a list", top(suggestions="do it")[0].startswith("suggestions: has to be a list"))
+
+
+def test_the_three_lists_are_held_to_their_shape_and_nothing_else() -> None:
+    """They point at no row, so a line that names a place no report holds is as
+    good as any other, and the same verdict is sound with or without reports."""
+    v = {"summary": "s", "causes": [], "ruled_out": ["report 9, location nowhere"],
+         "also_measured": ["AGENTTMP_ghost: 1 ms"], "suggestions": [{"fix": "do it"}]}
+    check("against reports that hold none of it", problems(v, ROUND_1) == [], problems(v, ROUND_1))
+    check("and against none at all", problems(v) == [], problems(v))
+
+
+def test_a_field_that_is_none_of_them_is_still_refused_with_the_fields_named() -> None:
+    why = problems({"summary": "s", "causes": [], "ruledout": ["x"]}, ROUND_1)
+    check("refused, once", len(why) == 1 and "no such field ruledout" in why[0], why)
+    for field in verdict_mod.TOP_FIELDS:
+        check(f"and {field} is one of the ones it names", field in why[0], why[0])
+    check("the three are among them", {"suggestions", "ruled_out", "also_measured"}
+          <= set(verdict_mod.TOP_FIELDS))
+
+
+def test_the_three_lists_read_back_whatever_their_shape() -> None:
+    text = "\n".join(verdict_mod.lines({
+        "summary": "s", "causes": [],
+        "ruled_out": "one line",
+        "also_measured": [None, 3, "", "AGENTTMP_a: 1 ms", "two\nlines"],
+        "suggestions": [1, {"fix": None}, {"fix": "do it", "expected_ms": "soon"},
+                        {"fix": "also", "expected_ms": 350}]}))
+    check("a list that is not one is skipped", "ruled out" not in text, text)
+    check("only the lines are counted", "also measured (2):" in text, text)
+    check("a line of several lines keeps its place",
+          "    - two\n      lines" in text, text)
+    check("a suggestion with no fix is still a suggestion",
+          "suggestions (3, not tied to one cause):" in text and "(no fix)" in text, text)
+    check("an estimate that is not one is left out and one that is is said",
+          "expected:   about 350 ms" in text and "soon" not in text, text)
