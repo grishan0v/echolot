@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import scan  # noqa: E402
+from echolot.config import Config  # noqa: E402
 from echolot.main import main  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -247,3 +248,53 @@ def test_the_command_prints_the_facts_and_the_json(tmp_path):
     got = json.loads(out.getvalue())
     check("json with the same facts", got["app"]["application_id"] == "com.example.app"
           and got["benchmarks"][0]["module"] == ":benchmark", list(got))
+
+
+# --- the launch scenario, where an end had to be picked (#446) -----------------------
+
+def test_an_app_with_no_benchmark_gets_the_launch_window_and_no_question(tmp_path):
+    root = repo(tmp_path)
+    (root / "benchmark/src/main/java/com/example/benchmark/StartupBenchmark.kt").unlink()
+    facts = scan.describe(root, devices=False)
+    lines = scan.skeleton(facts)
+    text = "\n".join(lines)
+    check("the window is the launch, read off the manifest's launcher",
+          "  window: {name: launch, _source: derived," in text
+          and f"the launcher Activity {facts.app['launcher']} in {facts.app['manifest']}" in text,
+          text)
+    check("the evidence says the trace decides the end", "the trace decides the end" in text
+          and "reportFullyDrawn" in text and "window.defined_by" in text, text)
+    check("no anchor beside it, and no question mark",
+          not [line for line in lines if line.startswith(("  start:", "  end:"))]
+          and '"?"' not in text, text)
+    check("with the runner that starts the launcher", "mode: launch" in text, text)
+    path = tmp_path / "echolot.yml"
+    path.write_text(text + "\n", encoding="utf-8")
+    cfg = Config.load(path)
+    check("and the skeleton loads as it is written",
+          (cfg.scenario_name, cfg.scenario_window, cfg.runner["mode"])
+          == ("coldStart", "launch", "launch"), cfg.raw["scenario"])
+
+
+def test_a_benchmark_keeps_its_anchors(tmp_path):
+    facts = scan.describe(repo(tmp_path), devices=False)
+    text = "\n".join(scan.skeleton(facts))
+    check("a section metric is still the end, after bindApplication",
+          'start: {name: "bindApplication", _source: default}' in text
+          and 'end: {name: "home_shown"' in text and "window:" not in text, text)
+    for cls in facts.benchmarks[0]["classes"]:
+        cls["metrics"] = []
+    text = "\n".join(scan.skeleton(facts))
+    check("and one that measures no section still asks for an end: what it drives may "
+          "be no launch", 'end: {name: "?", _source: default' in text and "window:" not in text,
+          text)
+
+
+def test_a_tree_with_no_launcher_still_asks_for_an_end(tmp_path):
+    root = repo(tmp_path)
+    (root / "benchmark/src/main/java/com/example/benchmark/StartupBenchmark.kt").unlink()
+    facts = scan.describe(root, devices=False)
+    facts.app = None
+    text = "\n".join(scan.skeleton(facts))
+    check("nothing to launch, so nothing to take the window from",
+          'end: {name: "?", _source: default' in text and "window:" not in text, text)

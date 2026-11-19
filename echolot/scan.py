@@ -740,16 +740,30 @@ def skeleton(facts: Facts) -> list[str]:
     out += ["",
             "scenario:",
             f"  name: {pick['tests'][0] if pick and pick['tests'] else 'coldStart'}",
-            '  start: {name: "bindApplication", _source: default}',
             ]
+    start = '  start: {name: "bindApplication", _source: default}'
     if pick and pick.get("metrics"):
         pattern = "; a pattern, `%` read as `*`" if "*" in pick["metrics"][0] else ""
-        out.append(f'  end: {{name: "{pick["metrics"][0]}", _source: derived, '
-                   f'_evidence: "TraceSectionMetric in {pick["file"]}{pattern}; '
-                   f'confirm against a probe"}}')
+        out += [start,
+                f'  end: {{name: "{pick["metrics"][0]}", _source: derived, '
+                f'_evidence: "TraceSectionMetric in {pick["file"]}{pattern}; '
+                f'confirm against a probe"}}']
+    elif not bench and facts.app:
+        # How the app opens, the one scenario whose window nobody has to
+        # name (#446): the runner below starts the launcher Activity, and the
+        # window is that launch as the platform records it. Where it ends is
+        # the trace's to say, so there is no anchor to pick and no question
+        # mark: a person can record this before any trace exists.
+        out.append(
+            '  window: {name: launch, _source: derived, _evidence: "the launcher Activity '
+            f'{facts.app["launcher"]} in {facts.app["manifest"]}, started by the runner below; '
+            'the trace decides the end: the launch\'s end as the platform records it, or the '
+            'app\'s reportFullyDrawn when that comes later, and the report says which '
+            '(window.defined_by)"}')
     else:
-        out.append('  end: {name: "?", _source: default, _evidence: "pick from `echolot probe` — '
-                   'the longest slice that means ready"}')
+        out += [start,
+                '  end: {name: "?", _source: default, _evidence: "pick from `echolot probe` — '
+                'the longest slice that means ready"}']
     out.append("")
     if bench:
         tasks = gradle_tasks(bench, facts.variants)
