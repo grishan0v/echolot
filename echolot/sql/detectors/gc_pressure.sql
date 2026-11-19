@@ -2,6 +2,7 @@
 -- @title: Garbage collector pressure
 -- @why: frequent GC means many intermediate allocations; GC itself is the
 --       symptom, not the cause
+-- @needs: atrace:dalvik
 -- @param: max_events = 15
 -- @param: max_total_ms = 120
 -- @param: name_glob = *GC

@@ -1,6 +1,7 @@
 -- @id: binder_txn
 -- @title: Long binder transactions
 -- @why: synchronous IPC into another process is a common hidden cost at startup
+-- @needs: atrace:binder_driver
 -- @param: min_txn_ms = 10
 -- @param: max_total_ms = 50
 -- @param: name_glob = binder transaction*

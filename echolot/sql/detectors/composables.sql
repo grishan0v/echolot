@@ -5,6 +5,7 @@
 --       millisecond, the rest being the library's composables under it. So it
 --       is counted here with what it calls, down to the next composable of the
 --       app's own
+-- @needs: composable_names
 -- @param: min_self_ms = 8
 -- @param: name_glob = * ([A-Za-z]*.kt:[0-9]*)
 -- @calibrate: min_self_ms = top10(self_ms) * 1.5

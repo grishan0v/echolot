@@ -2,6 +2,7 @@
 -- @title: Monitor contention
 -- @why: ART writes a "Lock contention on ..." slice with the owner's tid —
 --       ready-made evidence
+-- @needs: atrace:dalvik
 -- @param: min_block_ms = 8
 -- @param: max_total_ms = 50
 -- @param: name_glob = Lock contention on a monitor lock*

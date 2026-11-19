@@ -15,6 +15,11 @@ what the query GROUP BYs, as it reaches the report. It defaults to `location`
 and only needs saying when a detector groups by something else as well; see
 Detector.identity for what goes wrong when it is left unsaid.
 
+@needs names what the trace has to hold for the detector's silence to mean
+anything: `-- @needs: platform_state`, straight after `@why`. A detector that
+reads only what every recording `collect` makes holds says nothing. See
+needs.py for the sources and for what `analyze` does with them.
+
 A line reading `-- @intervals` after the query starts a second one, which
 says what stretches of the main thread's time the rows of the first stand
 for; see Detector.render_intervals. A line reading `-- @samples` starts a
@@ -38,6 +43,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from . import needs as needs_mod
 from . import sandbox
 from .config import ConfigError
 
@@ -206,12 +212,17 @@ class Detector:
     intervals_sql: str = ""
     # The query after `-- @samples`, the same.
     samples_sql: str = ""
+    # What the trace has to hold for a silent run to mean anything: names
+    # from needs.SOURCES, `()` for a detector that reads only what every
+    # recording `collect` makes holds.
+    needs: tuple[str, ...] = ()
 
     @classmethod
     def from_file(cls, path: Path) -> "Detector":
         text = path.read_text(encoding="utf-8")
         try:
             meta, params, calibrations = parse_meta(text)
+            needs = needs_mod.parse(meta.get("needs"))
         except ValueError as e:
             raise ValueError(f"{path.name}: {e}") from e
         first, *rest = _SECTION.split(text)
@@ -235,6 +246,7 @@ class Detector:
             path=path,
             intervals_sql=sections.get("intervals", ""),
             samples_sql=sections.get("samples", ""),
+            needs=needs,
         )
 
     def render_open(self, overrides: dict[str, Any] | None = None) -> str:

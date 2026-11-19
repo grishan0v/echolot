@@ -4,6 +4,7 @@
 --       with its reason. Nothing here is inferred — this is the record, and
 --       it is the only detector that can say a freeze actually fired rather
 --       than that one was close.
+-- @needs: atrace:am
 -- @module: android.anrs
 -- @identity: location, detail
 --

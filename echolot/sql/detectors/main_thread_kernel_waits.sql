@@ -3,6 +3,7 @@
 -- @why: the main thread sleeps in the kernel for something other than the
 --       disk, and a thread of the app is what lets it out. No slice names
 --       that time, and `io_wait` takes only the disk
+-- @needs: platform_state
 -- @param: min_total_ms = 16
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location

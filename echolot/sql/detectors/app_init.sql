@@ -4,6 +4,7 @@
 --       here, and the platform traces neither. What has a name is what
 --       libraries write themselves; the rest is one row that says how much
 --       nobody named.
+-- @needs: atrace:am
 -- @param: min_stretch_ms = 80
 -- @identity: location
 --

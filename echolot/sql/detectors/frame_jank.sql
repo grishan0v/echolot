@@ -4,6 +4,7 @@
 --       was. The only detector that answers "which frames stuttered" rather
 --       than "where did the total go" — and it needs no instrumentation in
 --       the app at all.
+-- @needs: frame_timeline
 -- @param: min_frames = 3
 -- @param: min_overrun_ms = 4
 -- @calibrate: min_frames = top10(count) * 1.5

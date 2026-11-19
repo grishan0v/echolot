@@ -5,6 +5,7 @@
 --       No amount of reading the code shows this: there is no slice, no CPU
 --       time and nothing to profile, which is why a cold start can spend
 --       hundreds of milliseconds here with every other detector silent.
+-- @needs: platform_state
 -- @param: min_io_wait_ms = 20
 -- @calibrate: min_io_wait_ms = top10(total_ms) * 1.5
 -- @identity: location, thread
