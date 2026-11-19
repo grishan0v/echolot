@@ -806,6 +806,7 @@ that shape as JSON:
 
 ```bash
 echolot hunt --done --verdict .echolot/verdict.json     # a file, or - for stdin
+echolot hunt --verdict .echolot/verdict.json            # only checks it, records nothing
 ```
 
 ```json
@@ -827,6 +828,18 @@ echolot hunt --done --verdict .echolot/verdict.json     # a file, or - for stdin
       "confidence_why": "three runs in each of two rounds, within 10% of each other"
     }
   ],
+  "suggestions": [
+    {"fix": "Ship the rows in a prebuilt database instead of filling it at launch.",
+     "expected_ms": [1000, 1400]}
+  ],
+  "ruled_out": [
+    "Layout inflation: 41 ms in each of three runs, as before the change",
+    "Garbage collection: no pause above 8 ms in any run"
+  ],
+  "also_measured": [
+    "AGENTTMP_fill: 1,480 ms",
+    "AGENTTMP_insert_cards: 1,150 ms"
+  ],
   "cleanup": "removed"
 }
 ```
@@ -836,9 +849,14 @@ in each cause `title`, `where` (a list of places in the code) and `evidence`.
 A verdict with one cause and no estimate is a verdict. Optional: `mechanism`,
 `fix`, `expected_ms` (a number, or `[low, high]`), `confidence` (`high`,
 `medium` or `low`) with `confidence_why`, `inside` and `cleanup` (`removed`,
-`none_added` or `left`). A field outside the list is refused, so a misspelt
-optional one does not vanish without a word. `Ruled out` and `Also measured` of
-the text conclusion have no field; they stay in the reply.
+`none_added` or `left`) — and three lists at the top of the verdict.
+`ruled_out` and `also_measured` are the `Ruled out` and `Also measured` lines of
+the text conclusion, one string each. `suggestions` are changes that belong to
+no one cause, such as one change that makes several go away: each is
+`{"fix": "…", "expected_ms": …}`, `fix` required and `expected_ms` as in a
+cause. None of the three points at a row, so only their shape is checked. A
+field outside these lists is refused, at any level, so a misspelt optional one
+does not vanish without a word.
 
 **What is checked.** Every `evidence` entry, and `inside`, has to be a row of a
 report this investigation filed. `report` is the number a report is filed
@@ -852,6 +870,17 @@ reads the verdict and the filed reports and nothing else, which makes the same
 verdict against the same reports accepted or refused the same way. It is the
 only thing echolot judges: the content is the agent's, and nothing is
 rewritten, ranked or filled in.
+
+**Checking without closing.** `echolot hunt --verdict <file>`, with no `--done`,
+makes that check and stops. It prints that the verdict would be accepted, or
+every entry it would refuse, and exits 0 or 2; it counts the markers in the
+sources the same way and says where they disagree with the verdict's `cleanup`.
+It records nothing and the investigation stays open. It is for the agent that
+wrote the file, which has the evidence in front of it and can put a refusal
+right before it returns: `perf-hunter` is told to run it, and never to close the
+investigation, which is the main thread's. The closing runs the same check
+again, so the two ends judge a verdict by the same rules. Like `--done`, it exits
+1 when no investigation is open or the last one is already concluded.
 
 **What is recorded.** `hunt.json` gains `verdict`, the file as it came, and
 `verdict_check`, what echolot found when it was handed in: the reports it held,
@@ -924,6 +953,8 @@ echolot hunt --resume        carry on with the open one
 echolot hunt --done "..."    record what it came to
 echolot hunt --done --verdict verdict.json
                              the same as a structured verdict, checked first
+echolot hunt --verdict verdict.json
+                             only check a verdict: records nothing, closes nothing
 ```
 
 Each one is numbered, and everything it produces is filed under it: every

@@ -48,6 +48,34 @@ def test_the_verdict_the_hunter_is_shown_is_one_echolot_accepts() -> None:
           example["causes"][0].get("expected_ms") and example["causes"][0].get("confidence"))
 
 
+def test_the_hunter_is_shown_every_field_the_check_accepts() -> None:
+    """The example is what an agent copies, so a field it does not show is a
+    field it will not use. Adding one to the check means adding it here."""
+    example = _example(AGENT.read_text(encoding="utf-8"))
+    evidence = [e for c in example["causes"] for e in c["evidence"]]
+    for name, shown, known in (
+            ("verdict", set(example), verdict_mod.TOP_FIELDS),
+            ("cause", set().union(*(set(c) for c in example["causes"])),
+             verdict_mod.CAUSE_FIELDS),
+            ("suggestion", set().union(*(set(s) for s in example["suggestions"])),
+             verdict_mod.SUGGESTION_FIELDS),
+            ("citation", set().union(*(set(e) for e in evidence)),
+             verdict_mod.CITATION_FIELDS)):
+        check(f"every {name} field is in the example", shown == set(known),
+              sorted(shown ^ set(known)))
+
+
+def test_the_hunter_checks_its_file_and_never_closes_the_investigation() -> None:
+    flat = " ".join(AGENT.read_text(encoding="utf-8").split())
+    check("it is given the check, by its command",
+          "echolot hunt --verdict .echolot/verdict.json" in flat, flat)
+    check("and told what it does and does not do",
+          "Without `--done` it only checks" in flat and "records nothing" in flat, flat)
+    check("its two lines of the reply have a place in the file",
+          "your `Ruled out` and `Also measured` go in it" in flat
+          and "`ruled_out` and `also_measured`" in flat, flat)
+
+
 def test_every_text_that_closes_a_hunt_gives_the_verdict_form() -> None:
     """The guide, the command and the plugin's skill say the same close."""
     plugin = Path(__file__).resolve().parent.parent / "plugins" / "echolot" / "skills" \
@@ -59,4 +87,6 @@ def test_every_text_that_closes_a_hunt_gives_the_verdict_form() -> None:
         check(f"the {where} closes with a verdict", "echolot hunt --done --verdict" in flat, flat)
         check(f"the {where} still has the text form", 'echolot hunt --done "' in flat, flat)
         check(f"the {where} says what to do when it is refused",
-              "refused" in flat and "nothing" in flat, flat)
+              ("refused" in flat or "refusal" in flat) and "nothing" in flat, flat)
+        check(f"the {where} says that without --done it only checks",
+              "without `--done`" in flat, flat)

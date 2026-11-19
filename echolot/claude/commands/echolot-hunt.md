@@ -206,12 +206,15 @@ echolot hunt --done --verdict .echolot/verdict.json
 ```
 
 echolot holds every row the verdict cites against the reports this
-investigation filed, and keeps the verdict as it was written. If it is
-refused — exit 2, each entry it could not find named on stderr — nothing was
-recorded and the investigation is still open: send the refusal back to the
-agent, which has the evidence, and run the command again on the corrected
-file. It counts the temporary markers left in the sources as well, and says
-on stderr when there are any.
+investigation filed, and keeps the verdict as it was written. The agent is
+told to run that same check on its file before returning, with
+`echolot hunt --verdict <file>` and no `--done`, which records nothing, so a
+refusal here is the exception. If one comes — exit 2, each entry it could not
+find named on stderr — nothing was recorded and the investigation is still
+open: send the refusal back to the agent, which has the evidence, and run the
+command again on the corrected file; without `--done` it only checks, which is
+the way to try a correction first. It counts the temporary markers left in the
+sources as well, and says on stderr when there are any.
 
 With no file, close with one line — the `Place`, a few words of the mechanism,
 and the confidence:

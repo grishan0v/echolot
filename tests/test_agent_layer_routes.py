@@ -389,6 +389,12 @@ def test_the_hunter_works_inside_the_investigation_and_does_not_open_one() -> No
     hunter = _read("agents/perf-hunter.md")
     check("perf-hunter never opens an investigation", 'echolot hunt "' not in hunter)
     check("or closes one", "echolot hunt --done" not in hunter)
+    # The one `hunt` command it is given only checks its verdict. `--done` in
+    # any position, or a `--verdict` that closes, would close it behind the
+    # main thread's back.
+    calls = re.findall(r"echolot hunt\b[^\n`]*", hunter)
+    check("it is given the check", any("--verdict" in c for c in calls), calls)
+    check("and no `hunt` call in its text closes", all("--done" not in c for c in calls), calls)
 
 
 # --- help that lists every choice -------------------------------------------

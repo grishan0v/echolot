@@ -6,7 +6,7 @@ description: Find the cause of one Android performance regression with echolot. 
 # The hunt
 
 This is the main thread's part. `echolot guide hunt` prints it at length for
-a host that does not list this skill, and the loop's guide is the subagent's.
+a host that does not list this skill; the loop's guide is the subagent's.
 
 1. `echolot doctor -q`, on its own. A non-zero exit: show what failed, and
    stop. If it says a sandbox refused a port, ask to run it outside the
@@ -55,17 +55,16 @@ a host that does not list this skill, and the loop's guide is the subagent's.
    among those it lists on request, the loop is yours: `echolot guide loop`,
    in short passes.
 5. **When the conclusion comes back, close the investigation first**, every
-   time and whatever it came to, then answer the human. When it ends
-   with a verdict file:
+   time, then answer the human. When it ends with a verdict file:
 
    ```bash
    echolot hunt --done --verdict .echolot/verdict.json
    ```
 
    Exit 2 is a refusal that records nothing: send its entries back to the
-   subagent and run it again. With no file:
+   subagent and run it again (without `--done` it only checks). With no file:
    `echolot hunt --done "<place> — <what happens there>; confidence <high|medium|low>"`.
 
    Then show the conclusion as it is. If it does not say the markers are
-   gone, check, with the command `echolot guide hunt` gives. Say a low
-   confidence out loud; a device finding is worth a run on real hardware.
+   gone, check with the command `echolot guide hunt` gives. Say a low
+   confidence out loud; a device finding wants a run on real hardware.
