@@ -25,6 +25,9 @@ produce. The keys only a merged report has are named under the block.
   "trace": "path of the first repeat",
   "traces": ["…/coldStart_iter000.perfetto-trace", "…"],
   "runs": 5,
+  "scenario": "coldStart", "budget_ms": 2500,
+  "verdict": { "level": "needs_attention", "budget_ms": 2500, "ratio": 3.1,
+               "text": "The launch takes 7.7 s. You allowed 2.5 s, so it takes 3.1 times as long." },
   "toolchain": { "perfetto_package": "0.57.2", "trace_processor": "v56.1",
                  "source": "pinned", "binary": null },
   "window": { "ts_start": …, "ts_end": …, "duration_ms": 772.3,
@@ -75,6 +78,10 @@ produce. The keys only a merged report has are named under the block.
       "params": { … }, "params_source": "config",
       "defaults": { "min_slice_ms": 16 },
       "identity": ["location", "detail"],
+      "attention": "needs_attention",
+      "plain": { "title": "…", "why": "…", "clean": "…",
+                 "found": "The heaviest piece is `draw`: 0.1 s of its own work, in all 5 launches. …",
+                 "reason": null },
       "rows": [ { "location": "draw", "detail": "com.example.app",
                   "runs": "5/5", "count": 4,
                   "self_ms": 125.4, "total_ms": 130.1, "max_ms": 61.2,
@@ -96,6 +103,25 @@ throttled, kept as a count because one throttled repeat is a fact about the
 set rather than a vote — and `environment.sampling.runs` with
 `runs_with_stack`, how many ran a callstack sampler and how many of those
 got stacks. A report of a single trace has none of these keys.
+
+**`budget_ms`, `verdict`, `detectors[].attention` and `detectors[].plain`** —
+the report in plain words, for a person; a model writes none of it, and the
+same report gives the same words. `budget_ms` is the config's
+`scenario.budget_ms`, `null` when it sets none. `verdict` sets the window
+against it: `level` is `fine` (within it), `worth_a_look` (up to a quarter
+over), `needs_attention` (more), or `not_checked` when there is no budget to
+compare with; `ratio` is window over budget, `text` the sentence. A detector's
+`attention` is one of `needs_attention`, `worth_a_look`, `fine` and
+`not_checked`: the first when one row that is main-thread time holds at least
+15% of the window and at least 150 ms in every run (and always for an `anr`
+row), the second for any other row, the third for a silent detector that ran,
+the last for one that did not (`checked: false` on the entry, or a failure).
+`plain` holds the detector's three fixed texts from its `.sql` header —
+`title` (what was checked), `why` (how it touches the app), `clean` (what a
+silent result says) — and `found`, one sentence built from its rows, `null`
+when it found nothing; `reason` says why a `not_checked` one did not run. A
+report from before these keys has none of them, and `echolot report --plain`
+works them out from the rows.
 
 **`detectors[].identity`** — the columns that name a row of this detector:
 `location`, and for several of them `detail` too. Merging repeats and

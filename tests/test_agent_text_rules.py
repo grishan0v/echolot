@@ -225,7 +225,7 @@ def test_detectors_md_names_both_readers_of_claimed_name():
     check("app_init reads _claimed_name too", "`repeated_work` and `app_init`" in flat, flat)
     check("no 'one detector with no mask'", "the one detector with no mask" not in flat, flat)
     check("the intervals item fails the build",
-          "The first three things below fail the build" in flat, flat)
+          "The first four things below fail the build" in flat, flat)
 
 
 def test_the_main_thread_leaves_markers_to_the_loop():

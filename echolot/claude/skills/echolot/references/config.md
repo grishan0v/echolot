@@ -31,7 +31,7 @@ scenario:
     _evidence: "probe: top slices, 245 ms on main"
   end:
     name: "Choreographer#doFrame*"
-  budget_ms: 2500              # not read by the code, see below
+  budget_ms: 2500              # written into the report, never a gate, see below
 
 runner:
   mode: launch                 # launch | command | gradle
@@ -125,9 +125,12 @@ the CLI puts `matches` into `window`. Check it before drawing conclusions.
 
 ### `scenario.budget_ms`
 
-Declared and **not read by the code**, deliberately: there is no performance
-gate and none is planned. Do not build logic on it and do not expect a run to
-fail when it is exceeded.
+What the scenario may take, in milliseconds. `analyze` writes it into
+`report.json` as `budget_ms`, and the plain reading (`verdict`, and
+`echolot report --plain`) sets the window against it. A number above zero;
+anything else is refused when `analyze` starts. There is still **no
+performance gate**, deliberately, and none is planned: do not build logic on
+it and do not expect a run to fail when it is exceeded.
 
 The question a budget answers — "did it get slower" — is already answered by
 the benchmark that produced the trace, and thresholds evaluated on a shared CI
@@ -137,7 +140,8 @@ in it: `doctor -q` as a precondition, then `analyze`, with `report.json` kept
 as a build artefact for whoever asks later.
 
 Keeping the field is still worthwhile: it records what the team considers
-acceptable, and it survives a change of device better than memory does.
+acceptable, and it survives a change of device better than memory does. Left
+out, the verdict says that no limit is set instead of judging the launch.
 
 ### `scenarios`
 

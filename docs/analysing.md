@@ -372,6 +372,7 @@ echolot report --window                        # the anchors, the main thread, t
 echolot report --markers                       # the Markers table, fifteen rows of it
 echolot report -d repeated_work --json         # the same selection as json, places included
 echolot report path/to/report.json --window    # another report, a round's own copy
+echolot report --plain                         # the report in plain words, one line per check
 ```
 
 Without a path it reads `.echolot/out/report.json` next to the config, or
@@ -421,6 +422,64 @@ off, grouped by what they lack, and the **Silent** line does not name them:
 whatever the trace gave it; none is not the answer "clean". `compare` leaves a
 detector that could not run on either side out of its table, and says so (see
 [Comparing](compare.md#when-two-reports-may-not-be-compared)).
+
+## A plain reading
+
+`echolot report --plain` reads a report for someone who has never opened a
+trace: the verdict on top, one item for each check that found something, and
+the rest as a count.
+
+```
+NEEDS ATTENTION   The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.8 times as long.
+
+ !  The screen waits for background work
+    The main thread waited 0.7 s for `arch_disk_io_#`, in all 3 launches. That is 36% of the launch.
+ ~  Work nobody can name
+    5 threads or pools of threads were busy for 1.2 s of processor time between them, mostly doing
+    work that nothing in the recording names. The busiest is `arch_disk_io_0`: 0.5 s, in all 3 launches.
+
+ ok 14 checks are fine
+```
+
+No model writes any of it, so the same report gives the same words. Each
+detector carries three fixed texts in its `.sql` header, beside `@title` and
+`@why`: what was checked (`@plain_title`), how it touches the app
+(`@plain_why`) and what a clean result says (`@plain_clean`). What was found is
+one sentence from a template per detector over its rows, in `echolot/plain.py`.
+The same words are in `report.json`, so the terminal, the page and an agent
+read alike (see `references/report.md` for the keys). The stretch is called "the
+launch" when the trace holds a startup, and "the run" otherwise.
+
+How much attention a check needs:
+
+| level | when |
+|---|---|
+| needs attention | one thing the main thread spent or lost holds at least 15% of the launch and at least 0.15 s, in every launch. A freeze the system itself recorded (`anr`) is always here |
+| worth a look | the check found something else: smaller, on another thread, or not in every launch |
+| fine | the check ran and found nothing above its limit |
+| not checked | the check could not run on these recordings, and says why |
+
+What the numbers rest on. The 15% is a share of the launch *as it is measured
+now*: after a fix has shortened the launch, a piece that did not change is a
+larger share of what is left, and can move from "worth a look" to "needs
+attention". Every sentence carries both the time and the share, so a steady
+piece reads steady. The 0.15 s is there because every launch has a biggest
+piece, and in a short one that piece is a large share: on fifteen recordings of
+a healthy half-second cold start, 15% alone marked a launch red on about
+half of the three-recording sets, and with the floor on none. Both numbers
+come from one app.
+
+Only time of the main thread can need attention. What other threads did is set
+against the launch's length, which is a yardstick rather than a share of it: the
+CPU time of five background threads can add up to two thirds of the launch while
+the main thread waits for them for a third of it, and that wait is the row that
+says so. A row on another thread is at most "worth a look".
+
+The verdict sets the launch against `scenario.budget_ms`: within it is fine, up
+to a quarter over is worth a look, more is needs attention. Nothing fails
+either way, since there is no gate. With no budget the verdict says how long the
+launch takes and that no limit is set, and its level is "not checked": green
+always means that something was looked at and found fine.
 
 ## Where a cold start went
 

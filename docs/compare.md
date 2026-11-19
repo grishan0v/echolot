@@ -408,6 +408,9 @@ that shape.
 
 `scenario.budget_ms` stays in the config. It records what a team considers
 acceptable, which is worth writing down whether or not anything enforces it.
+`analyze` copies it into the report, so that the plain reading can say how the
+launch stands against it (see "A plain reading" in the analysing guide); that
+is a sentence, and nothing fails over it.
 
 CI does hold one gate, and it measures this repository rather than a device:
 `pytest` fails when statement coverage drops below the threshold in

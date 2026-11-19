@@ -11,6 +11,9 @@ A detector is one self-contained `.sql` file. Metadata in the header,
 -- @why: why it matters
 -- @param: threshold_ms = 50
 -- @identity: location, detail
+-- @plain_title: Work that takes long
+-- @plain_why: One or two plain sentences on how it touches the app.
+-- @plain_clean: What a result with nothing in it says.
 
 SELECT name AS location, COUNT(*) AS count,
        ROUND(SUM(dur)/1e6, 2) AS total_ms,
@@ -65,6 +68,14 @@ A detector that reads only what every recording `collect` makes holds — the
 app's slices, its threads' states, who woke whom — declares nothing. The
 sources, and what `analyze` does with them, are
 [below](#when-the-trace-does-not-hold-what-a-detector-reads).
+
+`@plain_title`, `@plain_why` and `@plain_clean` are the detector in words for
+someone who has never opened a trace: what was checked, how it touches the app,
+and what a clean result says. One or two sentences each, with no jargon: they
+are fixed text, shown as they are by `echolot report --plain` and kept in
+`report.json`. They are the last keys of the header, followed by a blank `--`
+line, since a line of prose straight after a key is read as the rest of its
+value. [A plain reading](analysing.md#a-plain-reading) has the rest.
 
 ## The context views
 
@@ -551,7 +562,7 @@ than calling its rows gone or new (see [Comparing](compare.md)).
 ## Adding a detector
 
 A file in `echolot/sql/detectors/` runs on the next `analyze`. Shipping it
-takes more. The first three things below fail the build until they are done.
+takes more. The first four things below fail the build until they are done.
 The other four decide what the tool does with the detector once it runs —
 what survives a merge, which overrides it accepts, which masks `names` can
 see — and a mistake there fails nothing until somebody reads the report or
@@ -584,6 +595,12 @@ writes a config.
   too. A file only dropped in still runs without one, and the coverage line
   names it as not counted whenever it fires. See
   [What time the rows stand for](#what-time-the-rows-stand-for).
+- **Its words.** The three `@plain_*` texts in the header, and a template in
+  `echolot/plain.py` (`FOUND`) that says what its rows found in one sentence.
+  `tests/test_plain.py` fails for a detector without any of the four. Write
+  the template so that a sentence never claims more than its rows do, and
+  decide in `_on_main` whether its rows are time of the main thread: only those
+  can need attention by their size.
 - **Only part of a row survives a merge.** Repeats are folded row by row, and
   a merged row keeps its `@identity` columns, `runs`, the numeric contract
   columns — `count`, `self_ms`, `total_ms`, `max_ms` and `covered_ms`, as

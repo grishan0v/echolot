@@ -13,9 +13,9 @@
 # be mistaken for one that changes a run.
 
 # --- read by the code ------------------------------------------------------
-# Three keys in this part are the exception, read by no command:
-# project.source_root, scenario.budget_ms, and instrumentation.cleanup — the
-# hunt takes its markers out whatever that one says.
+# Two keys in this part are the exception, read by no command:
+# project.source_root and instrumentation.cleanup — the hunt takes its markers
+# out whatever that one says.
 project:
   package: com.example.app
   # A GLOB over process.name. If the app lives in several processes
@@ -48,11 +48,13 @@ scenario:
     name: "Choreographer#doFrame*"
     _source: confirmed_by_user
     _evidence: "probe: first frame after bindApplication"
-  # Not read by the code, and deliberately so — there is no performance gate.
-  # Why is in docs/compare.md under "There is no performance gate, on
-  # purpose": the question a budget answers is already answered by the
-  # benchmark that produced the trace. The field records what the team
-  # considers acceptable, which is worth writing down on its own.
+  # What the scenario may take, in milliseconds. `analyze` writes it into the
+  # report, and the plain reading (`echolot report --plain`) sets the launch
+  # against it: within it, a little over, far over. Nothing fails when it is
+  # exceeded — there is no performance gate. Why is in docs/compare.md under
+  # "There is no performance gate, on purpose": the question a budget answers
+  # is already answered by the benchmark that produced the trace. Leave the
+  # key out and the reading says no limit is set.
   budget_ms: 2500
 
 # Several journeys in one config: `scenarios:` in place of `scenario:`, never
