@@ -497,3 +497,59 @@ def test_a_record_edited_by_hand_still_lists_and_shows(tmp_path: Path, stored: A
     for argv in (("hunt", "--list"), ("hunt", "--show", "1"), ("hunt",), ()):
         code, out, err = run(p, *argv)
         check(f"{' '.join(argv) or 'status'} still answers", code == 0, out + err)
+
+
+# --- the shape, field by field -----------------------------------------------
+
+def test_a_citation_has_to_be_an_object_with_a_whole_report_number_and_a_location() -> None:
+    def cited(entry: Any) -> list[str]:
+        return problems({"summary": "s", "causes": [{
+            "title": "t", "where": ["w"], "evidence": [entry]}]}, ROUND_1)
+
+    check("a string", "has to be an object" in cited("report 1")[0])
+    for entry, field in (({"report": "1", "location": "x"}, "report"),
+                         ({"report": True, "location": "x"}, "report"),
+                         ({"report": 0, "location": "x"}, "report"),
+                         ({"report": 1, "location": "  "}, "location"),
+                         ({"report": 1, "location": "x", "detector": 3}, "detector")):
+        why = cited(entry)
+        check(f"{field} of {entry}", len(why) == 1 and f".{field}:" in why[0], why)
+    check("a citation with a field of its own is refused",
+          "no such field row" in cited({"report": 1, "location": "x", "row": 2})[0])
+
+
+def test_what_a_cause_may_hold() -> None:
+    def cause(**fields: Any) -> list[str]:
+        return problems({"summary": "s", "causes": [
+            {"title": "t", "where": ["w"],
+             "evidence": [{"report": 1, "location": "Store.fill"}], **fields}]}, ROUND_1)
+
+    check("a cause that is not an object", "has to be an object" in problems(
+        {"summary": "s", "causes": ["store"]}, ROUND_1)[0])
+    check("a number of milliseconds is an estimate", cause(expected_ms=350) == [])
+    check("so is a range", cause(expected_ms=[300, 400]) == [])
+    for bad in (-1, [400, 300], [1], [1, 2, 3], ["a", "b"], True, float("nan"), None):
+        check(f"{bad!r} is not", cause(expected_ms=bad) != [], bad)
+    for level in ("high", "medium", "low"):
+        check(level, cause(confidence=level) == [])
+    check("where is a list of places", cause(where="store.kt") != [] and cause(where=[]) != []
+          and cause(where=["a", ""]) != [])
+
+
+def test_an_estimate_and_a_row_read_as_text_whatever_their_shape() -> None:
+    cause = {"title": "t", "where": ["w"], "expected_ms": 350, "evidence": ["loose text"]}
+    text = "\n".join(verdict_mod.lines({"summary": "s", "causes": [cause]}))
+    check("a single number is 'about'", "expected:   about 350 ms" in text, text)
+    check("a row that is not an object is shown as it is", "loose text" in text, text)
+    found = {"cleanup": {"found": {"markers": 0, "lines": 2, "files": ["a.kt"]}}}
+    text = "\n".join(verdict_mod.lines({"summary": "s", "cleanup": "removed"}, found))
+    check("a tagged line with no prefix is counted as what it is",
+          "2 line(s) tagged `// echolot:mark`" in text, text)
+
+
+def test_a_detector_that_stayed_silent_is_named_as_that() -> None:
+    quiet = report(gc_pressure=[])
+    why = problems({"summary": "s", "causes": [{
+        "title": "t", "where": ["w"],
+        "evidence": [{"report": 1, "detector": "gc_pressure", "location": "x"}]}]}, quiet)
+    check("silent, rather than a list of nothing", "it is silent in that report" in why[0], why)
