@@ -983,6 +983,28 @@ def _same_scenario(before: dict, after: dict, before_path: Path, after_path: Pat
             f"against its own; `--scenario` picks which latest report to use")
 
 
+def _same_window(before: dict, after: dict, before_path: Path, after_path: Path) -> None:
+    """Refuse two reports whose windows were not defined the same way.
+
+    The way two scenarios are refused, and for the same reason: every row
+    moves, and none of it is the change being looked for. Nothing else would
+    say so. A launch that closed at its end and one that ran on to
+    `reportFullyDrawn` carry the same scenario name, and so do a window cut
+    by anchors and the launch window the config was changed to; the config's
+    hash only warns. A report written before windows said how they were
+    defined was cut by anchors.
+    """
+    apart = launch_mod.differ(before, after)
+    if apart:
+        raise ConfigError(
+            f"these two reports cannot be compared: {apart} ({before_path} "
+            f"against {after_path}). To compare them, analyze both sets of "
+            f"traces with one config. A launch window closes on "
+            f"`reportFullyDrawn` only where the app calls it after its first "
+            f"frame: if a change added or removed that call, name `start` "
+            f"and `end` in the scenario to cut both sides the same way")
+
+
 def _scenario_of(path: Path) -> str | None:
     """The scenario a report says it measured, or None when it says none or
     does not read: `_load_report` says why when it is read for real."""
@@ -1117,6 +1139,7 @@ def cmd_compare(args) -> int:
         before_path, after_path = _compare_pair(args, project)
         before, after = _load_report(before_path), _load_report(after_path)
         _same_scenario(before, after, before_path, after_path)
+        _same_window(before, after, before_path, after_path)
         # The comparison goes beside the scenario's own report.
         scenario = before.get("scenario") or after.get("scenario")
         if args.cfg is not None and not args.scenario and scenario in args.cfg.scenarios:

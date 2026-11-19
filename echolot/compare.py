@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
+from . import launch as launch_mod
 from . import needs as needs_mod
 from . import stats, table
 from .report import family, identity_of, metric_of, short_runs
@@ -249,6 +250,20 @@ def _check(before: dict, after: dict,
             "text": f"Different processes: `{wb['process']}` before, "
                     f"`{wa['process']}` after. These are two apps, and nothing "
                     f"below is a comparison.",
+        })
+        comparable = False
+
+    # Two windows that were not defined the same way: anchors against the
+    # launch, or a launch closed at its end against one that ran on to
+    # `reportFullyDrawn`. The command refuses the pair before it gets here;
+    # for any other caller the reason is at the top, as for two processes.
+    apart = launch_mod.differ(before, after)
+    if apart:
+        out.append({
+            "id": "window",
+            "text": f"Not one window: {apart}. The two cover different "
+                    f"stretches, every row moves for that reason alone, and "
+                    f"nothing below is a comparison.",
         })
         comparable = False
 

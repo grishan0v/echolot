@@ -221,3 +221,53 @@ def lines(window: dict[str, Any]) -> list[str]:
     return [head + "the launch's end, its first frame. The trace holds no "
                    "`reportFullyDrawn` call after the launch began."]
 
+
+# --- whether two reports measured one window ---------------------------------------
+
+# A window cut by the config's anchors carries no `defined_by`: a report from
+# such a scenario is what it always was, and one written before the key
+# existed reads the same way.
+ANCHORS = "anchors"
+
+# How each definition is said in a sentence.
+_IN_WORDS = {
+    ANCHORS: "by the config's start and end anchors",
+    LAUNCH: "as the launch, closed at its end",
+    FULLY_DRAWN: "as the launch, closed on `reportFullyDrawn`",
+}
+
+
+def definition(report: dict[str, Any]) -> str:
+    """How a report's window was defined: `anchors`, or its `window.defined_by`."""
+    return (report.get("window") or {}).get("defined_by") or ANCHORS
+
+
+def differ(before: dict[str, Any], after: dict[str, Any]) -> str | None:
+    """Why two reports' windows cannot be held against each other, or None.
+
+    Two definitions cover two stretches of the launch. Against today's
+    anchors, a launch window starts a median 137 ms earlier, at the intent
+    and not at `bindApplication`; a launch that ran on to `reportFullyDrawn`
+    is a median 56 ms longer than one closed at its end, with a row of its
+    own in 15 traces of 35. Every row moves for that reason alone, and
+    nothing else in two such reports says so: the scenario's name is the
+    same, and a changed config only warns.
+
+    A set whose repeats did not agree among themselves is no single
+    definition, and is refused against anything.
+    """
+    sides = [(side, definition(r), (r.get("window") or {}).get("defined_by_runs"))
+             for side, r in (("before", before), ("after", after))]
+    mixed = [side for side, _, runs in sides if runs]
+    if mixed:
+        return (f"the {' and the '.join(mixed)} report's repeats did not close "
+                f"their launch windows the same way ("
+                + "; ".join(", ".join(f"`{k}` in {v}" for k, v in runs.items())
+                            for _, _, runs in sides if runs)
+                + "), so its medians mix two windows")
+    (_, b, _), (_, a, _) = sides
+    if b == a:
+        return None
+    return (f"the windows were defined differently: "
+            f"{_IN_WORDS.get(b, f'`{b}`')} before, "
+            f"{_IN_WORDS.get(a, f'`{a}`')} after")
