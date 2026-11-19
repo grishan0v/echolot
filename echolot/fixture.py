@@ -1106,6 +1106,42 @@ LAUNCH_ID = 1
 LAUNCH_AT_MS = 40
 LAUNCH_DRAWN_MS = 1105
 
+# --- `reportFullyDrawn()`, for a window that is the launch ----------------------
+#
+# `build(fully_drawn=...)` only: the default trace is a launch whose app never
+# says when its content is there, and a launch window closes at the launch's
+# end.
+#
+# What an Android 13 phone wrote for an app that calls it through androidx,
+# after the first frame: two nested slices on the main thread, androidx's and
+# the framework's inside it, and ActivityManager's own slice in system_server
+# as it takes the call, a little later. `"app"` plants all three, as that
+# phone did; `"system_server"` leaves out the app's two, for an Activity that
+# writes none; `"early"` is the app's call made before the first frame, which
+# must not close the window before the launch has ended. Both moments are
+# ones where the main thread is on a CPU with nothing else open: 1099 inside
+# `AppStart`, a millisecond before `Screen.firstFrame`, and 1160 between
+# `AppStart` and `After_OUTSIDE`.
+FULLY_DRAWN_AT_MS = 1160
+FULLY_DRAWN_EARLY_MS = 1099
+FULLY_DRAWN_MS = 0.4
+FULLY_DRAWN_SEEN_AT_MS = 1162.5
+FULLY_DRAWN_SEEN_MS = 0.3
+
+
+def _fully_drawn(kind: str) -> tuple[list, list]:
+    """The slices of one `reportFullyDrawn()` call: the app's, and system_server's."""
+    at = FULLY_DRAWN_EARLY_MS if kind == "early" else FULLY_DRAWN_AT_MS
+    app = [] if kind == "system_server" else [
+        ("reportFullyDrawn() for ComponentActivity", at, FULLY_DRAWN_MS, [
+            (f"reportFullyDrawn() for {{{APP_NAME}/{APP_NAME}.MainActivity}}",
+             at + 0.1, 0.2, []),
+        ]),
+    ]
+    seen = [(f"ActivityManager:ReportingFullyDrawn {APP_NAME}",
+             at + FULLY_DRAWN_SEEN_AT_MS - FULLY_DRAWN_AT_MS, FULLY_DRAWN_SEEN_MS, [])]
+    return app, seen
+
 ANR_UUID = "0123abcd-1111-2222-3333-444455556666"
 ANR_SUBJECT = "Input dispatching timed out (fixture)"
 ANR_AT_MS = 1300
@@ -1228,7 +1264,8 @@ def config(builder, *, categories=RECORDED_CATEGORIES, environment: bool = True,
 
 def build(frames: bool = True, environment: bool = True,
           sampling: str | None = None, names: bool = False,
-          crowded: bool = False, categories=None, composables: bool = True) -> bytes:
+          crowded: bool = False, categories=None, composables: bool = True,
+          fully_drawn: str | None = None) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1263,6 +1300,10 @@ def build(frames: bool = True, environment: bool = True,
     `crowded=True` puts the main thread in the CPU queue behind the app's own
     thread and another process's, and more of the app's threads in the
     queue at once than there are cores (see `_crowded`).
+
+    `fully_drawn` plants a `reportFullyDrawn()` call: `"app"`, `"system_server"`
+    or `"early"` (see `_fully_drawn`). `None` by default: the app never calls
+    it.
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -1311,7 +1352,12 @@ def build(frames: bool = True, environment: bool = True,
     if not composables:
         all_slices = {tid: _without_composables(tree) for tid, tree in all_slices.items()}
     all_slices.update(OTHER_SLICES)
+    drawn_app, drawn_seen = _fully_drawn(fully_drawn) if fully_drawn else ([], [])
     for tid, tree_slices in all_slices.items():
+        if tid == TID_MAIN:
+            # After the thread's own: atrace nests by time, so an early call
+            # lands inside `AppStart` wherever it is written here.
+            tree_slices = [*tree_slices, *drawn_app]
         events = _flatten(tree_slices, [], seq)
         cpu = tid_to_cpu[tid]
         tgid = tid_to_tgid[tid]
@@ -1337,6 +1383,11 @@ def build(frames: bool = True, environment: bool = True,
         by_cpu.setdefault(0, []).append(
             (ms(at), next(seq), "print", SS_PID, f"C|{SS_PID}|{name}|1\n")
         )
+
+    # system_server's record of `reportFullyDrawn()`, on its own thread.
+    for at, order, kind, name in _flatten(drawn_seen, [], seq):
+        buf = f"B|{SS_PID}|{name}\n" if kind == "B" else f"E|{SS_PID}\n"
+        by_cpu.setdefault(0, []).append((at, order, "print", SS_PID, buf))
 
     # The launch, from system_server too. The completion is an instant: a
     # begin and an end at one timestamp, which is a slice of no length.
