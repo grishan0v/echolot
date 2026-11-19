@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import verdict as verdict_mod
 from .when import ago as _ago
 from .when import iso_epoch as _epoch
 
@@ -312,11 +313,41 @@ def touch(project: Path, *, collect: bool = False, analyze: bool = False) -> Non
         pass
 
 
-def conclude(project: Path, conclusion: str) -> dict[str, Any] | None:
+def archived_reports(project: Path, hunt: dict[str, Any] | None) -> verdict_mod.Reports:
+    """The reports an investigation filed, by the number they are filed under.
+
+    `reports/003.json` is report 3 — the number `record_report` gave it, which
+    is what a verdict cites. One that is there and does not read as a report
+    is None, so that a citation of it says so rather than that it is missing.
+    """
+    own = home(project, hunt)
+    out: verdict_mod.Reports = {}
+    if own is None:
+        return out
+    for p in sorted((own / "reports").glob("*.json")):
+        if not (p.stem.isascii() and p.stem.isdigit()):
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        out[int(p.stem)] = data if isinstance(data, dict) else None
+    return out
+
+
+def conclude(project: Path, conclusion: str, verdict: dict[str, Any] | None = None,
+             reports: verdict_mod.Reports | None = None,
+             left: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Mark the open investigation answered. It stays in place, readable.
 
     None when none is open: a concluded one keeps the conclusion it has, and
     a second one written over it was lost without a word.
+
+    With a `verdict`, already checked by the caller, it is kept as it came
+    under `verdict`, and what echolot found under `verdict_check`: the
+    reports it was held against and the markers still in the sources, which
+    `left` is the count of. `conclusion` stays a string either way, because
+    `--list`, `status` and the recap read that one.
     """
     hunt = load(project)
     if not hunt or hunt.get("status", "open") != "open":
@@ -324,6 +355,10 @@ def conclude(project: Path, conclusion: str) -> dict[str, Any] | None:
     hunt["status"] = "concluded"
     hunt["conclusion"] = conclusion
     hunt["closed_at"] = _now()
+    if verdict is not None:
+        hunt["verdict"] = verdict
+        hunt["verdict_check"] = verdict_mod.record(verdict, reports or {}, left or {},
+                                                   hunt["closed_at"])
     save(project, hunt)
     return hunt
 
@@ -576,19 +611,26 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
         out.append(f"  ! {d}")
 
     if root is not None:
-        left = leftovers(root, (st.get("config") or {}).get("temp_prefix"))
-        if left["markers"]:
-            hand = left["markers"] - left["removable"]
-            how = f"`echolot mark --remove` takes out {left['removable']}"
-            if hand:
-                how += f", {hand} were added by hand and need removing by hand"
-            out.append(f"  ! {left['markers']} {left['prefix']} marker(s) still in "
-                       f"{len(left['files'])} file(s) — {how}")
-        elif left["lines"]:
-            out.append(f"  ! {left['lines']} line(s) tagged `// echolot:mark` still in "
-                       f"{len(left['files'])} file(s), with no {left['prefix']} marker "
-                       f"beside them — `echolot mark --remove` takes them out")
+        note = leftover_line(leftovers(root, (st.get("config") or {}).get("temp_prefix")))
+        if note:
+            out.append(f"  ! {note}")
     return out
+
+
+def leftover_line(left: dict[str, Any]) -> str | None:
+    """What `leftovers` found, as a sentence; None when the sources are clean."""
+    if left["markers"]:
+        hand = left["markers"] - left["removable"]
+        how = f"`echolot mark --remove` takes out {left['removable']}"
+        if hand:
+            how += f", {hand} were added by hand and need removing by hand"
+        return (f"{left['markers']} {left['prefix']} marker(s) still in "
+                f"{len(left['files'])} file(s) — {how}")
+    if left["lines"]:
+        return (f"{left['lines']} line(s) tagged `// echolot:mark` still in "
+                f"{len(left['files'])} file(s), with no {left['prefix']} marker "
+                f"beside them — `echolot mark --remove` takes them out")
+    return None
 
 
 def _when(ts: str | None) -> str:
@@ -633,6 +675,11 @@ def _did(hunt: dict[str, Any]) -> list[str]:
         bits.append(f"{len(traces)} trace set(s)")
     if hunt.get("reports"):
         bits.append(f"{hunt['reports']} report(s) kept")
+    verdict = hunt.get("verdict")
+    if isinstance(verdict, dict):
+        causes = [c for c in verdict.get("causes") or [] if isinstance(c, dict)] \
+            if isinstance(verdict.get("causes"), list) else []
+        bits.append(f"verdict: {len(causes)} cause(s)")
     return bits
 
 
@@ -662,8 +709,16 @@ def detail(hunt: dict[str, Any], project: Path) -> list[str]:
     out = [f'#{hunt.get("n") or "?"}  "{hunt.get("question") or "—"}"']
     if hunt.get("since"):
         out.append(f"  after: {hunt['since']}")
+    verdict = hunt.get("verdict")
+    conclusion = hunt.get("conclusion")
+    # A verdict's summary is what the conclusion line holds, and the verdict
+    # below says it in full: once is enough.
+    if isinstance(verdict, dict) and conclusion == verdict.get("summary"):
+        conclusion = None
     out.append(f"  status: {hunt.get('status') or 'open'}"
-               + (f" · {hunt['conclusion']}" if hunt.get("conclusion") else ""))
+               + (f" · {conclusion}" if conclusion else ""))
+    if isinstance(verdict, dict):
+        out.extend(verdict_mod.lines(verdict, hunt.get("verdict_check")))
     out.append(f"  opened: {_when(hunt.get('opened_at'))}"
                + (f" · closed {_when(hunt['closed_at'])}" if hunt.get("closed_at")
                   else f" · last worked on {_ago(_epoch(hunt.get('touched_at')))}"))
