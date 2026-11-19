@@ -1,0 +1,35 @@
+/* The report: its table's columns at the three widths, and the technical report
+   written out under the fold. */
+
+/* tick box, Check (title, then what was found), How it touches the app, Level, Details */
+.tb.report { --cols: 44px minmax(0, 1.25fr) minmax(0, 1fr) 10.5rem 6rem; --areas: "ck t w l go"; }
+@container (max-width: 899px) {
+  .tb.report { --cols: 44px minmax(0, 1fr) 10.5rem; --areas: "ck t l" "ck w go"; }
+  .tb.report .tb-h { --areas: "ck t l"; } .tb.report .tb-h .c-w, .tb.report .tb-h .c-go { display: none; }
+  .tb.report .c-w { margin-top: 4px; } .tb.report .c-go { align-self: end; }
+}
+@container (max-width: 559px) {
+  .tb.report { --cols: 36px minmax(0, 1fr); --areas: "ck l" "ck t" "ck w" "ck go"; }
+  .tb.report .tr.quiet { --cols: minmax(0, 1fr); --areas: "l" "t" "go"; }
+  .tb.report .tr.quiet .c-ck, .tb.report .tr.quiet .c-w { display: none; }
+  .tb.report .c-w { margin-top: 0; } .tb.report .c-go { align-self: auto; }
+}
+/* With script off there is nothing to tick and nothing to open: the list keeps its sentences. */
+@container (max-width: 559px) {
+  .no-js .tb.report, .no-js .tb.report .tr.quiet { --cols: minmax(0, 1fr); --areas: "l" "t" "w"; }
+  .no-js .tb.report .c-ck, .no-js .tb.report .c-go { display: none; }
+  .no-js .tb.report .tr.quiet .c-w { display: block; }
+}
+
+/* report.md, as it is written, under the fold */
+.md { display: grid; gap: var(--s3); font-size: var(--t-sm); line-height: 1.5; }
+.md > * { min-width: 0; }
+.md > p { max-width: 86ch; overflow-wrap: anywhere; }
+.md > .h3 { padding-top: var(--s3); }
+.md > .md-h { font-size: var(--t-md); font-weight: 600; padding-top: var(--s4); overflow-wrap: anywhere; }
+.md > .md-h + p { margin-top: calc(-1 * var(--s2)); }
+.md .callout { font-size: var(--t-sm); }
+.md .callout p { overflow-wrap: anywhere; }
+.md .tbl td { overflow-wrap: anywhere; min-width: 4.5rem; }
+.md .tbl td:first-child { min-width: 11rem; }
+.md .tbl td.long { min-width: 18rem; }
