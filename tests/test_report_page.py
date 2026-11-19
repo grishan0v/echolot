@@ -21,8 +21,10 @@ here the script is only held to parsing, where node is there to parse it.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import re
 import shutil
@@ -36,8 +38,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import echolot  # noqa: E402
-from echolot import plain, recorder, selftest  # noqa: E402
+from echolot import demo, plain, recorder, selftest  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot.main import main  # noqa: E402
 from echolot.pages import kit, md, report_page  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -899,3 +902,74 @@ def test_ids_are_unique_outside_the_templates(demo_report):
     check("no id twice", len(ids) == len(set(ids)), sorted(i for i in set(ids) if ids.count(i) > 1))
     opens = {b.attrs["data-open"] for b in page.all("button", "rowbtn")}
     check("every Details button has its panel", opens == {t.attrs["id"][5:] for t in page.all("template")})
+
+
+# --- the commands ---------------------------------------------------------------------------
+
+def run(*argv):
+    out, err = io.StringIO(), io.StringIO()
+    with recorder.isolated(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(list(argv))
+    return code, out.getvalue(), err.getvalue()
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    """The demo app with one recording, and a limit its launch runs far over."""
+    traces = demo.write(tmp_path)
+    cfg = tmp_path / "echolot.yml"
+    cfg.write_text(demo.CONFIG.replace("  name: coldStart\n", "  name: coldStart\n  budget_ms: 100\n"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    return tmp_path, str(traces[0])
+
+
+def test_analyze_html_writes_the_page_beside_the_report(project):
+    root, trace = project
+    code, _, err = run("analyze", trace, "--html")
+    out = root / ".echolot" / "out"
+    check("a launch far over its limit gates nothing", code == 0, err)
+    check("three files", sorted(p.name for p in out.iterdir()) == ["report.html", "report.json", "report.md"])
+    check("and the page is named with them", f"→ {out / 'report.html'}" in err, err[-400:])
+    rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    page = (out / "report.html").read_text(encoding="utf-8")
+    check("the page is that report's, and names it as the project does",
+          page == report_page.render(rep, where=".echolot/out/report.json", last=True))
+    check("red at the top", read(page).one("main").one("span", "lg").text == "Needs attention")
+    check("nothing in it points outside", not outside(page), outside(page))
+
+    code, text, err = run("report", "--html")
+    check("report --html writes the same page for the last report", code == 0 and text.strip() == f"→ {out / 'report.html'}"
+          and (out / "report.html").read_text(encoding="utf-8") == page, (code, text, err))
+
+    code, _, err = run("analyze", trace)
+    check("an analysis without --html does not leave the page of the one before",
+          code == 0 and not (out / "report.html").exists() and "removed" in err and "report --html" in err, err[-400:])
+
+
+def test_report_html_for_a_report_named_by_hand(project):
+    root, trace = project
+    code, _, err = run("analyze", trace, "-o", "elsewhere", "--html")
+    check("analysed into a directory of its own", code == 0, err)
+    page = read((root / "elsewhere" / "report.html").read_text(encoding="utf-8"))
+    check("which is not what `echolot report` calls the last report",
+          "of the report and" in page.one("dialog", "ask").attrs["data-one"]
+          and "behind elsewhere/report.json." in page.one("dialog", "ask").attrs["data-tail"])
+    kept = root / "kept" / "003.json"
+    kept.parent.mkdir()
+    shutil.copy(root / "elsewhere" / "report.json", kept)
+    code, text, _ = run("report", str(kept), "--html")
+    check("the page goes beside the report read, under its name",
+          code == 0 and text.strip() == f"→ {kept.with_suffix('.html')}" and kept.with_suffix(".html").is_file(), text)
+    check("and the request names that file",
+          "behind kept/003.json." in read(kept.with_suffix(".html").read_text(encoding="utf-8")).one("dialog", "ask").attrs["data-tail"])
+
+
+def test_html_is_a_view_of_its_own(project):
+    root, trace = project
+    run("analyze", trace)
+    for extra in (["--plain"], ["--json"], ["--detector", "frame_jank"], ["--window"]):
+        code, out, err = run("report", "--html", *extra)
+        check(f"refused with {extra[0]}", code == 2 and "is a view of its own" in err and not out, (code, err))
+    check("and nothing was written", not (root / ".echolot" / "out" / "report.html").exists())
+    code, _, err = run("report", "nowhere.json", "--html")
+    check("a report that is not there is an error, not a page", code == 2 and "report not found" in err, err)

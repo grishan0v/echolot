@@ -56,6 +56,7 @@ from . import report as report_mod
 from . import stacks as stacks_mod
 from . import verdict as verdict_mod
 from .config import NO_ANCHOR, Config, ConfigError
+from .pages import report_page
 from .reflect.cli import cmd_reflect
 from .sandbox import SandboxError
 from .tp import (
@@ -290,6 +291,15 @@ def _out_dir(out: str, cfg: Config) -> Path:
     if p.is_absolute() or cfg.path is None:
         return p
     return Path(cfg.path).resolve().parent / p
+
+
+def _shown_path(path: Path, root: Path) -> str:
+    """A file as a person in the project would name it: from the project's
+    root when it is inside, in full when it is not."""
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
 
 
 def _report_text(rep: dict | None, cfg: dict | None, project: Path,
@@ -821,6 +831,20 @@ def cmd_analyze(args) -> int:
         report_mod.to_markdown(rep), encoding="utf-8")
 
     root = _project_root(cfg)
+    # The page is of the report beside it, so it is written with it or not
+    # left there: one from the run before would read as this run's. "The last
+    # report" is what `echolot report` reads with no path, and an -o elsewhere
+    # is not that.
+    page = out_dir / "report.html"
+    stale = False
+    if args.html:
+        last = out_dir.resolve() == _out_dir(cfg.report_dir, cfg).resolve()
+        page.write_text(
+            report_page.render(rep, where=_shown_path(out_dir / "report.json", root), last=last),
+            encoding="utf-8")
+    elif page.is_file():
+        page.unlink()
+        stale = True
     # A value a person confirmed, changed since the investigation opened:
     # the report is about a window they did not agree to. Said before the
     # report, where a reader who stops at its first lines still sees it, and
@@ -829,6 +853,11 @@ def cmd_analyze(args) -> int:
     print(report_mod.to_markdown(rep))
     print(f"\n→ {out_dir/'report.md'}\n→ {out_dir/'report.json'}",
           file=sys.stderr)
+    if args.html:
+        print(f"→ {page}  (the same report as a page: open it in a browser)", file=sys.stderr)
+    elif stale:
+        print(f"[i] removed {page}: it was the page of the report before this one. "
+              f"`echolot report --html` writes it again.", file=sys.stderr)
     # `touched_at` has to mean work, not "when someone last typed echolot":
     # the freshness rule that decides whether to ask stands on it.
     hunt_mod.touch(root, analyze=True)
@@ -4503,7 +4532,8 @@ def cmd_report(args) -> int:
     short. Each is a view, and each one-liner put a window's worth of json
     into the context to get at a line. Reads and prints; the one thing
     written is its line in .echolot/log/runs.jsonl — the line `main` appends
-    for every command unless ECHOLOT_NO_RECORD is set.
+    for every command unless ECHOLOT_NO_RECORD is set. `--html` is the
+    exception: it writes the report as a page, beside the report it read.
     """
     _nearest_config(args)
     project = project_of(args)
@@ -4514,17 +4544,34 @@ def cmd_report(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
         return 2
-    if args.plain:
-        # A view of its own, for a person: the other views are for an agent.
+    if args.plain or args.html:
+        # Views of their own, for a person: the other views are for an agent.
+        mine = "--plain" if args.plain else "--html"
         others = [flag for flag, on in (
             ("--detector", args.detector), ("--top", args.top), ("--window", args.window),
-            ("--markers", args.markers), ("--wide", args.wide), ("--json", args.json)) if on]
+            ("--markers", args.markers), ("--wide", args.wide), ("--json", args.json),
+            ("--html", args.plain and args.html)) if on]
         if others:
-            print(f"error: --plain is a view of its own, it does not take {', '.join(others)}",
+            print(f"error: {mine} is a view of its own, it does not take {', '.join(others)}",
                   file=sys.stderr)
-            recorder.failed("--plain with another view")
+            recorder.failed(f"{mine} with another view")
             return 2
+    if args.plain:
         print(plain_mod.render(rep))
+        return 0
+    if args.html:
+        # Beside the report it is of, under its name: report.json gives
+        # report.html, and an investigation's 003.json gives 003.html.
+        page = path.with_suffix(".html")
+        try:
+            page.write_text(
+                report_page.render(rep, where=_shown_path(path, project), last=not args.report),
+                encoding="utf-8")
+        except OSError as e:
+            print(f"error: {page}: cannot be written: {e.strerror or e}", file=sys.stderr)
+            recorder.failed(f"report --html: {e.strerror or e}")
+            return 2
+        print(f"→ {page}")
         return 0
     detectors = list(args.detector or [])
     known = {d["id"] for d in rep.get("detectors") or []}
@@ -4957,6 +5004,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="ignore the config's detectors section: every detector, "
                          "built-in thresholds. To see what the shipped numbers "
                          "say without touching the config")
+    an.add_argument("--html", action="store_true",
+                    help="also write report.html beside report.json: the same report "
+                         "as a page for a person, one file that opens from disk")
     an.set_defaults(func=cmd_analyze)
 
     cp = add("compare", "pipeline", "[<before.json> [<after.json>]]",
@@ -5022,7 +5072,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "one view of it: an overview of what fired, one "
                          "detector's rows with the evidence kept short, the "
                          "window and the device, or the markers. Writes only its "
-                         "own line in .echolot/log/runs.jsonl. Default: "
+                         "own line in .echolot/log/runs.jsonl, and with --html the "
+                         "page beside the report. Default: "
                          ".echolot/out/report.json next to the config.")
     rp.add_argument("report", nargs="?", help="a report.json (default: the last one)")
     rp.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
@@ -5043,6 +5094,9 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--plain", action="store_true",
                     help="the report in plain words, for a person: one line per check, "
                          "marked by how much attention it needs")
+    rp.add_argument("--html", action="store_true",
+                    help="write the report as a page for a person, beside the report "
+                         "read (report.html): one file that opens from disk")
     rp.set_defaults(func=cmd_report)
 
     rf = add("reflect", "tool", "[--last|--all]", "the same kind of report over an agent session")
