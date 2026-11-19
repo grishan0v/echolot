@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
+from . import needs as needs_mod
 from . import stats, table
 
 COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
@@ -629,6 +630,10 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
         head["error"] = next((r["error"] for r in runs if r["error"]), None)
         if head["error"]:
             head["failed_runs"] = f"{len(runs) - len(ran)}/{len(runs)}"
+        # Did it look: checked only where every repeat held what it reads.
+        head.pop("checked", None)
+        head.pop("reason", None)
+        head.update(needs_mod.merged(runs))
         detectors.append(head)
 
     merged["detectors"] = detectors
@@ -1419,6 +1424,10 @@ def to_markdown(report: dict[str, Any]) -> str:
             f"`false` to bring one back, or run `--defaults` to ignore the "
             f"config's thresholds entirely."
         )
+    # Ran, and could not see: not silent either (#441).
+    unseen = needs_mod.line(report["detectors"])
+    if unseen:
+        out.append(unseen)
     line = _config_line(report)
     if line:
         out.append(line)
@@ -1473,7 +1482,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
 
     quiet = [d["id"] for d in report["detectors"]
-             if not d["rows"] and not d.get("error")]
+             if not d["rows"] and not d.get("error")
+             and d.get("checked") is not False]
     if quiet:
         out.append(f"**Silent:** {', '.join(quiet)}")
 
@@ -1586,7 +1596,9 @@ def overview(report: dict[str, Any]) -> str:
             "detector": d["id"],
             "rows": len(found) if found else "—",
             "thresholds": d.get("params_source") or "default",
-            "top row": clip(top.get("location"), 48) if top else ("failed" if d.get("error") else "silent"),
+            "top row": clip(top.get("location"), 48) if top else (
+                "failed" if d.get("error")
+                else "not checked" if d.get("checked") is False else "silent"),
             "metric": (f"{metric_of(top).replace('_ms', '')} {top.get(metric_of(top))} ms"
                        if top and top.get(metric_of(top)) is not None else ""),
         })
@@ -1595,6 +1607,10 @@ def overview(report: dict[str, Any]) -> str:
     if absent_ids:
         out.append("")
         out.append("Turned off in this config: " + ", ".join(f"`{a}`" for a in absent_ids))
+    unseen = needs_mod.line(report.get("detectors") or [])
+    if unseen:
+        out.append("")
+        out.append(unseen)
     out.append("")
     out.append("One detector's rows: `echolot report --detector <id> --top 5`; "
                "the window and the device: `--window`; the markers: `--markers`; "
@@ -1615,10 +1631,14 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
     out.append(f"params: {d.get('params')}{_source_note(d)}")
     if d.get("error"):
         out.append(f"⚠️ the detector failed: {d['error']}")
+    unseen = needs_mod.could_not_run(d)
+    if unseen:
+        out.append(f"⚠️ not checked: {d['reason']}")
     out.append("")
     rows = d.get("rows") or []
     if not rows:
-        out.append("_silent — no row cleared the thresholds_")
+        out.append("_no row, and that is not silence — the detector could not look_"
+                   if unseen else "_silent — no row cleared the thresholds_")
         return "\n".join(out)
     shown = []
     for r in rows[:top]:
@@ -1692,7 +1712,8 @@ def select(report: dict[str, Any], detectors: list[str], top: int | None,
                         **{k: m[k] for k in ("unbuilt", "removed") if m.get(k)}},
             "detectors": [{"id": d["id"], "rows": len(d.get("rows") or []),
                            "params_source": d.get("params_source"),
-                           "error": d.get("error")}
+                           "error": d.get("error"),
+                           "checked": d.get("checked")}
                           for d in report.get("detectors") or []],
         }
     out: dict[str, Any] = {}

@@ -1857,6 +1857,30 @@ def _(report):
                  {"binder_txn"}, "calls between processes")
 
 
+@check("needs: report.md names what could not run, and does not call it silent")
+def _(report):
+    from . import report as report_mod
+    assert "could not run" not in report_mod.to_markdown(report)
+    md = report_mod.to_markdown(_recorded(environment=False))
+    said = next(ln for ln in md.splitlines() if "could not run" in ln)
+    assert "`io_wait`, `main_thread_kernel_waits`" in said, said
+    silent = next(ln for ln in md.splitlines() if ln.startswith("**Silent:**"))
+    assert "io_wait" not in silent and "kernel_waits" not in silent, silent
+    assert "anr_risk" in silent, silent
+
+
+@check("needs: a set is checked only when every repeat was")
+def _(report):
+    from . import report as report_mod
+    bare = _recorded(environment=False)
+    merged = report_mod.aggregate([report, bare, report])
+    by_id = {d["id"]: d for d in merged["detectors"]}
+    assert by_id["io_wait"]["checked"] is False, by_id["io_wait"]
+    assert "1 of the 3 recordings" in by_id["io_wait"]["reason"], by_id["io_wait"]
+    assert by_id["gc_pressure"]["checked"] is True, by_id["gc_pressure"]
+    assert "reason" not in by_id["gc_pressure"], by_id["gc_pressure"]
+
+
 # --- the window opening inside a block --------------------------------------
 
 def _anchored_at(anchor: str):

@@ -281,5 +281,5 @@ def line(detectors: list[dict[str, Any]]) -> str | None:
     count, why = found
     return (f"> ⚠️ {count} detector(s) could not run, because the trace does not "
             f"hold what they read. Their silence says nothing about the app. "
-            f"{why} Record again with what they read, or take those checks as "
-            f"still open.")
+            f"{why} A recording that holds what they read lets them look; until "
+            f"then those checks are open.")

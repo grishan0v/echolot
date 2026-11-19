@@ -37,7 +37,7 @@ echolot doctor
   ok    the right process is picked, the foreign one is dropped
   ...
 
-All 175 checks passed — the pipeline computes correctly.
+All 177 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
@@ -51,7 +51,7 @@ again.
 ```
 echolot 0.17.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
 layer: current (10 files)
-self-check: 175 of 175 passed
+self-check: 177 of 177 passed
 ```
 
 Exit code 0/1, and 2 on a first run that could not download trace_processor
@@ -192,7 +192,7 @@ fixture only.
 
 ## What the detectors were checked against
 
-The detectors were validated against a synthetic trace — 175 checks inside
+The detectors were validated against a synthetic trace — 177 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.

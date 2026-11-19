@@ -73,6 +73,8 @@ def _cut(text: str) -> dict:
         "labels": [line.split(":", 1)[0] for line in header
                    if line.strip() and not line.startswith(">")],
         "fired": next((line for line in header if line.startswith("Detectors fired:")), ""),
+        # The line about detectors the trace did not give what they read (#441).
+        "unseen": next((line for line in header if "could not run" in line), ""),
         "sections": sections,
         "silent": next((line for line in lines if line.startswith("**Silent:**")), None),
         "last": lines[-1],
@@ -106,7 +108,17 @@ def test_the_readme_sample_accounts_for_every_detector():
           stated is not None and int(stated.group(1)) == len(fired),
           f"{sample['fired']!r} over {len(fired)} section(s)")
 
-    silent = [d.id for d in detectors if d.id not in fired]
+    # A detector that could not run is neither fired nor silent: the sample
+    # says so in a line of its own, naming each, and counts them.
+    unseen = [d.id for d in detectors if f"`{d.id}`" in sample["unseen"]]
+    counted = re.search(r"(\d+) detector\(s\) could not run", sample["unseen"])
+    check("the line about detectors that could not run counts the ones it names",
+          (counted is None and not unseen)
+          or (counted is not None and int(counted.group(1)) == len(unseen)),
+          f"{sample['unseen']!r} over {unseen}")
+    check("and none of them fired", not set(unseen) & set(fired), (unseen, fired))
+
+    silent = [d.id for d in detectors if d.id not in fired and d.id not in unseen]
     check("the Silent line names every other detector, in file order",
           sample["silent"] == "**Silent:** " + ", ".join(silent),
           f"README {sample['silent']!r}\nexpected **Silent:** {', '.join(silent)}")

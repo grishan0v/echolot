@@ -137,7 +137,10 @@ def test_select_returns_only_what_was_asked_for_and_cuts_the_rows():
     summary = report_mod.select(rep, [], None, False, False)
     check("no selection is a summary, rows counted not carried",
           summary["detectors"][0] == {"id": "monitor_contention", "rows": 8,
-                                      "params_source": "config", "error": None}, summary)
+                                      "params_source": "config", "error": None,
+                                      # A report built by hand carries no `checked`:
+                                      # unknown, which the summary says as it is.
+                                      "checked": None}, summary)
     one = report_mod.select(rep, ["monitor_contention"], 2, False, False)
     check("one detector, two rows, places intact",
           len(one["detectors"][0]["rows"]) == 2 and one["detectors"][0]["rows"][0]["places"], one)
