@@ -64,7 +64,14 @@ _SCENARIO_NAME = re.compile(r"[A-Za-z0-9][\w.-]*")
 # What a scenario under `scenarios:` may hold: what `scenario:` holds, less
 # the name its key already gives, and the runner keys and the thresholds it
 # changes.
-_SCENARIO_KEYS = ("start", "end", "budget_ms", "runner", "detectors")
+_SCENARIO_KEYS = ("start", "end", "window", "budget_ms", "runner", "detectors")
+
+# `scenario.window: launch`: the window is how the app opens, as the platform
+# records it, and the trace says where it ends (see launch.py). The one window
+# a scenario can name without an anchor; any other scenario says where it
+# starts and ends with `start` and `end`.
+LAUNCH = "launch"
+_WINDOWS = (LAUNCH,)
 
 
 def _detectors_section(node: Any, where: str) -> dict[str, Any]:
@@ -96,6 +103,47 @@ def _detectors_section(node: Any, where: str) -> dict[str, Any]:
             f"to tune it (`echolot explain` lists them), or `{name}: "
             f"false` to turn it off.")
     return node
+
+
+def _window_named(where: str, block: dict[str, Any]) -> str | None:
+    """A scenario's `window`, refused in a sentence when it cannot be meant.
+
+    `where` is the scenario's place in the file, `scenario` or
+    `scenarios.<name>`. A window and an anchor are two answers to one
+    question, where the scenario starts and ends, so a scenario holds one of
+    them: `window: launch` beside `end: Screen.loaded` would have to drop one
+    without saying which.
+    """
+    node = block.get("window")
+    if isinstance(node, dict):
+        if "name" not in node:
+            raise ConfigError(
+                f"{where}.window: the block has no `name`. Write `name: "
+                f"{LAUNCH}` there, or leave `window` out and name `start` and "
+                f"`end`")
+        node = node["name"]
+    if node is None or str(node).strip() == "":
+        return None
+    if node not in _WINDOWS:
+        raise ConfigError(
+            f"{where}.window: {node!r} is no window. It takes `{LAUNCH}`: how "
+            f"the app opens, from the launch the platform records. Any other "
+            f"scenario says where it starts and ends with `start` and `end`")
+    beside = [key for key in ("start", "end") if _anchor_named(block.get(key))]
+    if beside:
+        raise ConfigError(
+            f"{where}: `window: {node}` and "
+            + " and ".join(f"`{key}`" for key in beside)
+            + " are two ways to say where the window is: keep one. The launch "
+              "window takes its start and its end from the trace")
+    return str(node)
+
+
+def _anchor_named(node: Any) -> bool:
+    """Whether a scenario's `start` or `end` names an anchor at all."""
+    if isinstance(node, dict):
+        node = node.get("name")
+    return node is not None and str(node).strip() != ""
 
 
 class Config:
@@ -151,6 +199,8 @@ class Config:
         # not load. The scenarios too, for the same reason.
         cfg._detectors()
         cfg.select(scenario)
+        # And the window a single `scenario:` names, for the same reason.
+        _window_named(*cfg._scenario())
         return cfg
 
     @property
@@ -304,6 +354,17 @@ class Config:
         return float(value)
 
     @property
+    def scenario_window(self) -> str | None:
+        """The window the scenario names instead of two anchors: `launch`, or
+        None for a scenario that says where it starts and ends.
+
+        Written as the anchors are: the word itself, or a block with `name`
+        beside its `_source` and `_evidence`.
+        """
+        where, block = self._scenario()
+        return _window_named(where, block)
+
+    @property
     def scenarios(self) -> list[str]:
         """The scenarios this config names, in its order.
 
@@ -381,6 +442,10 @@ class Config:
                     f"scenarios.{name}.runner must be a mapping of the runner "
                     f"keys this scenario changes, got {block['runner']!r}")
             _detectors_section(block.get("detectors"), f"scenarios.{name}.detectors")
+            # Every scenario's, the ones not being measured included, as the
+            # thresholds are: a window this config cannot mean would wait for
+            # the day that scenario is measured.
+            _window_named(f"scenarios.{name}", block)
             out[name] = block
         return out
 

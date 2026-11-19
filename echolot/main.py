@@ -48,6 +48,7 @@ from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
 from . import compare as compare_mod
 from . import hunt as hunt_mod
 from . import codex, layer, plugin, recorder, sandbox, state, table, when
+from . import launch as launch_mod
 from . import mapping as mapping_mod
 from . import needs as needs_mod
 from . import place as place_mod
@@ -55,7 +56,7 @@ from . import plain as plain_mod
 from . import report as report_mod
 from . import stacks as stacks_mod
 from . import verdict as verdict_mod
-from .config import NO_ANCHOR, Config, ConfigError
+from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
 from .pages import report_page
 from .reflect.cli import cmd_reflect
 from .sandbox import SandboxError
@@ -550,9 +551,9 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         # The masks as this run has them: `--set` moves a boundary the same
         # way the config does, and `_claimed_name` is drawn from where they
         # stand rather than from where the file left them.
-        _setup_context(tp, cfg, procs[0]["upid"],
-                       {d.id: ov for d, ov, _ in plan if ov})
-        window = _window_info(tp, cfg, procs)
+        bounds = _setup_context(tp, cfg, procs[0]["upid"],
+                                {d.id: ov for d, ov, _ in plan if ov}, trace=str(trace))
+        window = _window_info(tp, cfg, procs, bounds if "defined_by" in bounds else None)
         environment = _environment_info(
             tp, package or str(procs[0].get("name") or "").split(":")[0],
             mapped=extra is not None)
@@ -1255,7 +1256,8 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
 
 
 def _setup_context(tp, cfg: Config, upid: int,
-                   mask_overrides: dict | None = None) -> dict:
+                   mask_overrides: dict | None = None, *,
+                   trace: str | None = None) -> dict:
     """Prepares the views in two passes and returns the window bounds.
 
     Between the passes the CLI grabs ts_start/ts_end and substitutes them into
@@ -1266,6 +1268,11 @@ def _setup_context(tp, cfg: Config, upid: int,
     `mask_overrides` is where the name masks stand for this run — the config's
     plus whatever `--set` moved. It reaches `_claimed_name`, and the default
     is the config alone, which is what a caller with no plan of its own has.
+
+    A scenario with `window: launch` has no anchors to read the two numbers
+    from: they come from the launch the platform records (launch.py), with
+    what closed the window beside them. `trace` names the file when that
+    launch is not there.
     """
     tp.exec_script(render_sql(
         (SQL_DIR / "context.sql").read_text(encoding="utf-8"),
@@ -1280,6 +1287,8 @@ def _setup_context(tp, cfg: Config, upid: int,
             "the process has no thread slices, so there is nothing to build a "
             "window from. Check project.process and that the app's atrace was "
             "recorded: echolot probe <trace>")
+    if cfg.scenario_window == LAUNCH:
+        bounds = launch_mod.find(tp, upid, trace)
     for phase in ("window.sql", "environment.sql"):
         tp.exec_script(render_sql(
             (SQL_DIR / phase).read_text(encoding="utf-8"),
@@ -1363,13 +1372,17 @@ def _claim_names(tp, overrides: dict) -> None:
     )
 
 
-def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
+def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None) -> dict:
     """Window bounds plus proof that the anchors matched anything at all.
 
     An anchor that never matched is the most common source of a garbage
     report: the window silently collapses onto the whole trace, every detector
     screams at once, and the agent goes off investigating the wrong thing. Let
     that be visible rather than guessed at.
+
+    `launch` is what `launch.find` returned for a scenario whose window is
+    the launch. Such a window has no anchors to prove; it says what closed it
+    (`defined_by`), and its startup block is that launch.
     """
     rows = tp.query(
         "SELECT ts_start, ts_end, "
@@ -1427,8 +1440,10 @@ def _window_info(tp, cfg: Config, procs: list[dict]) -> dict:
                 f"AND a.ts >= (SELECT ts_start FROM _window) ORDER BY a.ts LIMIT 1")
             if first and first[0]["open"]:
                 window[f"{key}_anchor"]["unfinished"] = True
+    if launch:
+        window.update(launch_mod.facts(tp, window, launch))
     window["opened_inside"] = _opened_inside(tp, window)
-    window["startup"] = _startup_info(tp, window, procs[0]["name"])
+    window["startup"] = _startup_info(tp, window, procs[0]["name"], launch)
     return window
 
 
@@ -1518,7 +1533,7 @@ def _opened_inside(tp, window: dict) -> dict | None:
     return found
 
 
-def _startup_info(tp, window: dict, process: str) -> dict | None:
+def _startup_info(tp, window: dict, process: str, launch: dict | None = None) -> dict | None:
     """The app's startup as Perfetto's standard library measures it.
 
     The budget says where the main thread's time went by thread state. A
@@ -1536,6 +1551,10 @@ def _startup_info(tp, window: dict, process: str) -> dict | None:
     them counted, and the one that shares the most time with the window is the
     one described.
 
+    A window that is the launch (`launch`, from `launch.find`) is described
+    by the launch it was built from. Picked by overlap, a later launch of the
+    same app could be described beside a window it did not build.
+
     None when the trace holds no startup of this app's package, and when the
     trace_processor has no such module; the second is said on stderr, the way
     a failed detector is.
@@ -1549,12 +1568,13 @@ def _startup_info(tp, window: dict, process: str) -> dict | None:
     if start is None or end is None:
         return None
     package = process.split(":", 1)[0]
+    own = f" OR startup_id = {int(launch['startup_id'])}" if launch else ""
     try:
         tp.exec_script("INCLUDE PERFETTO MODULE android.startup.startups;")
         startups = tp.query(f"""
             SELECT startup_id, ts, ts_end, dur, startup_type AS type
             FROM android_startups
-            WHERE package = '{sql_value(package)}' AND dur > 0
+            WHERE (package = '{sql_value(package)}'{own}) AND dur > 0
             ORDER BY ts
         """)
         if not startups:
@@ -1563,7 +1583,8 @@ def _startup_info(tp, window: dict, process: str) -> dict | None:
         def shared(s: dict) -> int:
             return max(0, min(s["ts_end"], end) - max(s["ts"], start))
 
-        chosen = max(startups, key=lambda s: (shared(s), -s["ts"]))
+        built = [s for s in startups if launch and s["startup_id"] == launch["startup_id"]]
+        chosen = built[0] if built else max(startups, key=lambda s: (shared(s), -s["ts"]))
         tp.exec_script("INCLUDE PERFETTO MODULE android.startup.startup_breakdowns;")
         reasons = tp.query(f"""
             SELECT reason, SUM(dur) AS ns
