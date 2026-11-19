@@ -76,6 +76,16 @@ def test_the_hunter_checks_its_file_and_never_closes_the_investigation() -> None
           and "`ruled_out` and `also_measured`" in flat, flat)
 
 
+def test_the_hunter_keeps_the_measured_cost_and_the_estimate_of_a_fix_apart() -> None:
+    flat = " ".join(AGENT.read_text(encoding="utf-8").split())
+    check("the measured cost of a cause has a field",
+          "`cost_ms` is what the cause costs, measured" in flat, flat)
+    check("and the estimate of the fix stays in its own",
+          "`expected_ms` is what your fix should win back, estimated" in flat, flat)
+    check("with neither going in the other, and the description only with the cost",
+          "neither in the other" in flat and "goes only with `cost_ms`" in flat, flat)
+
+
 def test_every_text_that_closes_a_hunt_gives_the_verdict_form() -> None:
     """The guide, the command and the plugin's skill say the same close."""
     plugin = Path(__file__).resolve().parent.parent / "plugins" / "echolot" / "skills" \

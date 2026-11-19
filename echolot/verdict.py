@@ -19,7 +19,11 @@ the verdict is stored as it came, and what echolot adds — what it found when
 it looked — goes beside it, in `hunt.json`'s `verdict_check`. Only the rows a
 verdict cites are checked against the reports; its lists of what was ruled
 out, what else was measured and what to change beyond any one cause are held
-to their shape and nothing more, because there is no row they point at.
+to their shape and nothing more, because there is no row they point at. So
+are a cause's `cost_ms`, what it costs as measured, and its `cost_of`, what
+that figure measures: the agent took the number from its rows, and echolot
+does not recompute it. The estimate of what a fix should win back stays in
+`expected_ms`, so a reader can tell a measurement from a guess.
 
 A citation is a `report` number, a `location`, and optionally a `detector`.
 The number is the one a report is filed under in the investigation
@@ -45,8 +49,8 @@ CLEANUP = ("removed", "none_added", "left")
 
 TOP_FIELDS = ("summary", "inside", "causes", "suggestions", "ruled_out",
               "also_measured", "cleanup")
-CAUSE_FIELDS = ("title", "where", "mechanism", "evidence", "fix", "expected_ms",
-                "confidence", "confidence_why")
+CAUSE_FIELDS = ("title", "where", "mechanism", "evidence", "cost_ms", "cost_of",
+                "fix", "expected_ms", "confidence", "confidence_why")
 CITATION_FIELDS = ("report", "detector", "location")
 SUGGESTION_FIELDS = ("fix", "expected_ms")
 
@@ -96,13 +100,22 @@ def _optional_text(obj: dict[str, Any], key: str, where: str, out: list[str]) ->
         out.append(f"{where}.{key}: has to be a non-empty string")
 
 
-def _expected(value: Any, where: str, out: list[str]) -> None:
+def _ms_field(obj: dict[str, Any], key: str, where: str, out: list[str]) -> None:
+    """An optional field in milliseconds: a number, or `[low, high]`.
+
+    One rule for every such field — a cause's `cost_ms` and `expected_ms`, a
+    suggestion's `expected_ms` — so the same figure reads the same wherever it
+    stands.
+    """
+    if key not in obj:
+        return
+    value = obj[key]
     if _ms(value):
         return
     if (isinstance(value, list) and len(value) == 2 and all(_ms(v) for v in value)
             and value[0] <= value[1]):
         return
-    out.append(f"{where}.expected_ms: a number of milliseconds, or [low, high] with "
+    out.append(f"{where}.{key}: a number of milliseconds, or [low, high] with "
                f"low not above high, neither negative")
 
 
@@ -122,9 +135,8 @@ def _strings(verdict: dict[str, Any], key: str, what: str, out: list[str]) -> No
 def _suggestions(verdict: dict[str, Any], out: list[str]) -> None:
     """Changes that belong to no one cause: a `fix`, and what it should save.
 
-    The shape of a cause's own `fix` and `expected_ms`, so the same estimate
-    reads the same wherever it stands. No row is cited, so there is nothing
-    to look up.
+    The shape of a cause's own `fix` and `expected_ms`. No row is cited, so
+    there is nothing to look up.
     """
     if "suggestions" not in verdict:
         return
@@ -141,8 +153,7 @@ def _suggestions(verdict: dict[str, Any], out: list[str]) -> None:
         _unknown(item, SUGGESTION_FIELDS, where, out)
         if not _text(item.get("fix")):
             out.append(f"{where}.fix: required, a non-empty string")
-        if "expected_ms" in item:
-            _expected(item["expected_ms"], where, out)
+        _ms_field(item, "expected_ms", where, out)
 
 
 # --- the citations -----------------------------------------------------------
@@ -294,8 +305,16 @@ def validate(verdict: Any, reports: Reports) -> list[str]:
                 _citation(entry, f"{where}.evidence[{j}]", index, out)
         for key in ("mechanism", "fix", "confidence_why"):
             _optional_text(cause, key, where, out)
-        if "expected_ms" in cause:
-            _expected(cause["expected_ms"], where, out)
+        # What the cause costs, as measured, and what the fix is expected to
+        # win back: two figures with two names, so they are never mixed. The
+        # check holds their shape; the agent took them from its rows, and
+        # echolot does not recompute them.
+        _ms_field(cause, "cost_ms", where, out)
+        _ms_field(cause, "expected_ms", where, out)
+        _optional_text(cause, "cost_of", where, out)
+        if "cost_of" in cause and "cost_ms" not in cause:
+            out.append(f"{where}.cost_of: goes with cost_ms — it says what that "
+                       f"number measures")
         if "confidence" in cause and cause["confidence"] not in CONFIDENCE:
             out.append(f"{where}.confidence: one of {', '.join(CONFIDENCE)}")
 
@@ -355,12 +374,32 @@ def _num(value: float) -> str:
     return f"{value:g}"
 
 
-def _expected_text(value: Any) -> str | None:
+def _ms_text(value: Any, about: str = "") -> str | None:
+    """A figure in milliseconds as text; `about` stands before a single number."""
     if _ms(value):
-        return f"about {_num(value)} ms"
+        return f"{about}{_num(value)} ms"
     if isinstance(value, list) and len(value) == 2 and all(_ms(v) for v in value):
         return f"{_num(value[0])}–{_num(value[1])} ms"
     return None
+
+
+def _expected_text(value: Any) -> str | None:
+    """What a fix should win back is the agent's estimate, and reads as one."""
+    return _ms_text(value, "about ")
+
+
+def _cost_text(cause: dict[str, Any], under: str) -> str | None:
+    """What a cause costs, as measured, and what that number measures.
+
+    No "about": it is a measurement. A `cost_of` with no readable `cost_ms`
+    says nothing, so it is left out with it. `under` indents a `cost_of` that
+    runs to several lines.
+    """
+    said = _ms_text(cause.get("cost_ms"))
+    if said is None:
+        return None
+    of = cause.get("cost_of")
+    return said + (f" — {_indented(of, under)}" if isinstance(of, str) and of.strip() else "")
 
 
 def _cite_text(entry: Any) -> str:
@@ -423,6 +462,7 @@ def lines(verdict: Any, check: Any = None) -> list[str]:
             ("mechanism", [_indented(c["mechanism"], pad + " " * 12)]
              if c.get("mechanism") else []),
             ("evidence", [_cite_text(e) for e in _list(c.get("evidence"))]),
+            ("cost", [t] if (t := _cost_text(c, pad + " " * 12)) else []),
             ("fix", [_indented(c["fix"], pad + " " * 12)] if c.get("fix") else []),
             ("expected", [t] if (t := _expected_text(c.get("expected_ms"))) else []),
             ("confidence", [f"{c['confidence']}" + (f" — {c['confidence_why']}"

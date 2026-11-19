@@ -413,6 +413,8 @@ things in a form that can be checked, and your `Ruled out` and
         {"report": 2, "detector": "uninstrumented_cpu", "location": "arch_disk_io_0"},
         {"report": 3, "location": "AGENTTMP_insert_cards"}
       ],
+      "cost_ms": 1150,
+      "cost_of": "wall time of the inserts, as the AGENTTMP_insert_cards marker measured it",
       "fix": "One transaction for the whole fill, lists inserted whole.",
       "expected_ms": [300, 400],
       "confidence": "high",
@@ -439,12 +441,19 @@ things in a form that can be checked, and your `Ruled out` and
   in each cause `title`, `where` (a list of places in the code) and
   `evidence`. One cause with no estimate is a verdict. Everything else is
   optional: `mechanism`, `fix`, `expected_ms`, `confidence` (`high`, `medium`
-  or `low`) with `confidence_why`, `inside`, `cleanup`, and the three lists
-  below. A field that is not listed here is refused.
-- **Causes in the order of what they cost**, the largest first. `expected_ms`
-  is yours rather than measured — a number, or `[low, high]` — and is left
-  out when you have none. In `mechanism` mark the steps you did not measure
-  with `(inferred)` and `(gap)`, as above.
+  or `low`) with `confidence_why`, `cost_ms` with `cost_of`, `inside`,
+  `cleanup`, and the three lists below. A field that is not listed here is
+  refused.
+- **Causes in the order of what they cost**, the largest first. In `mechanism`
+  mark the steps you did not measure with `(inferred)` and `(gap)`, as above.
+- **`cost_ms` is what the cause costs, measured, and `expected_ms` is what your
+  fix should win back, estimated.** Each goes in its own field and neither in
+  the other, so that a reader can tell a measurement from a guess. `cost_ms`
+  is a number of milliseconds taken from a report or one of your markers, or
+  `[low, high]` when the runs differ. `cost_of` says what that number
+  measures — `wall time of the inserts`, `processor time on the disk threads`,
+  `of the launch` — and goes only with `cost_ms`. `expected_ms` is yours, a
+  number or `[low, high]`. Leave either out when you have none.
 - **`ruled_out` and `also_measured`** are your `Ruled out` and `Also measured`
   lines, one string each, in the same order. Leave `ruled_out` out when
   nothing else was checked. They point at no row, so echolot holds them to

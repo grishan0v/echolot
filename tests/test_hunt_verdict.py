@@ -327,6 +327,8 @@ SHAPES = [
      "causes": [{"title": "t", "where": [], "evidence": [{"report": 1, "location": "q"}]}]},
     {"summary": "s", "causes": [], "suggestions": [{}, "x", {"fix": "f", "expected_ms": -1}],
      "ruled_out": "a", "also_measured": [1, ""]},
+    {"summary": "s", "causes": [{"title": "t", "where": ["w"], "cost_of": "x", "cost_ms": -1,
+                                 "evidence": [{"report": 1, "location": "q"}]}]},
     copy.deepcopy(VERDICT),
 ]
 
@@ -492,6 +494,8 @@ def test_list_and_the_recap_read_a_verdict_hunt_like_any_other(tmp_path: Path) -
      "suggestions": "x"},
     {"summary": "s", "ruled_out": [None, 3],
      "suggestions": [None, {"fix": ["a"], "expected_ms": []}]},
+    {"summary": "s", "causes": [{"title": "t", "cost_ms": "soon", "cost_of": 3},
+                                {"title": "u", "cost_of": "of the launch"}]},
 ])
 def test_a_record_edited_by_hand_still_lists_and_shows(tmp_path: Path, stored: Any) -> None:
     """`hunt.json` is a file people open. A field of the wrong kind is skipped."""
@@ -566,6 +570,8 @@ def test_a_detector_that_stayed_silent_is_named_as_that() -> None:
 
 FULL: dict[str, Any] = {
     **VERDICT,
+    "causes": [{**VERDICT["causes"][0], "cost_ms": 1150,
+                "cost_of": "wall time of the inserts, as the marker measured it"}],
     "suggestions": [
         {"fix": "Ship the rows in a prebuilt database.", "expected_ms": [1000, 1400]},
         {"fix": "Open the database once, before the first screen."},
@@ -598,11 +604,16 @@ def test_show_prints_the_three_lists_after_the_causes(tmp_path: Path) -> None:
                  "- Layout inflation: 41 ms in each of three runs, as before",
                  "- Garbage collection: no pause above 8 ms",
                  "also measured (2):",
-                 "- AGENTTMP_fill: 1,480 ms"):
+                 "- AGENTTMP_fill: 1,480 ms",
+                 "cost:       1150 ms — wall time of the inserts, as the marker measured it"):
         check(f"says: {want}", want in out, out)
     where = [out.index(s) for s in ("causes (1", "suggestions (2", "ruled out (2",
                                     "also measured (2", "cleanup:")]
     check("causes, suggestions, ruled out, also measured, then the cleanup",
+          where == sorted(where), where)
+    where = [out.index(s) for s in ("evidence:", "cost:       1150 ms", "fix:        One",
+                                    "expected:   300–400 ms")]
+    check("a cause reads evidence, its cost, then the fix and what it should win back",
           where == sorted(where), where)
 
 
@@ -687,3 +698,87 @@ def test_the_three_lists_read_back_whatever_their_shape() -> None:
           "suggestions (3, not tied to one cause):" in text and "(no fix)" in text, text)
     check("an estimate that is not one is left out and one that is is said",
           "expected:   about 350 ms" in text and "soon" not in text, text)
+
+
+# --- what a cause costs, as measured: cost_ms and cost_of --------------------
+
+def cause_problems(**fields: Any) -> list[str]:
+    return problems({"summary": "s", "causes": [
+        {"title": "t", "where": ["w"],
+         "evidence": [{"report": 1, "location": "Store.fill"}], **fields}]}, ROUND_1)
+
+
+def test_the_cost_of_a_cause_is_held_to_the_shape_of_an_estimate() -> None:
+    check("a number of milliseconds", cause_problems(cost_ms=1150) == [])
+    check("a range, when the runs differ", cause_problems(cost_ms=[1100, 1200]) == [])
+    check("nothing is a cost that was measured", cause_problems(cost_ms=0) == [])
+    for bad in (-1, [1200, 1100], [1], [1, 2, 3], ["a", "b"], True, float("nan"), "soon", None):
+        why = cause_problems(cost_ms=bad)
+        check(f"{bad!r} is not", len(why) == 1 and why[0].startswith("causes[0].cost_ms:"), why)
+    for value in (350, [300, 400], 0, -1, [400, 300], "soon", None, True, [1]):
+        a, b = cause_problems(cost_ms=value), cause_problems(expected_ms=value)
+        check(f"{value!r}: one rule for both figures",
+              [m.replace("cost_ms", "expected_ms") for m in a] == b, (a, b))
+
+
+def test_cost_of_says_what_the_number_measures_and_goes_only_with_it() -> None:
+    check("with it", cause_problems(cost_ms=5, cost_of="of the launch") == [])
+    check("the number alone is a cost", cause_problems(cost_ms=5) == [])
+    why = cause_problems(cost_of="of the launch")
+    check("the description alone is refused, and says why",
+          len(why) == 1 and why[0].startswith("causes[0].cost_of: goes with cost_ms"), why)
+    for bad in ("", "  ", 3, None, ["x"]):
+        why = cause_problems(cost_ms=5, cost_of=bad)
+        check(f"{bad!r} is not a description",
+              len(why) == 1 and why[0] == "causes[0].cost_of: has to be a non-empty string", why)
+    check("both wrong is two problems, each named",
+          [w.split(":")[0] for w in cause_problems(cost_ms=-1, cost_of="")]
+          == ["causes[0].cost_ms", "causes[0].cost_of"])
+    check("a bad description with no number is its shape and its pairing",
+          len(cause_problems(cost_of="")) == 2)
+
+
+def test_a_cost_is_not_held_to_the_rows_it_came_from() -> None:
+    """The agent took the number from its rows and echolot does not recompute
+    it: a cost larger than the whole window, or one that matches no row, is a
+    sound verdict. Only the shape is held."""
+    check("larger than the window of the report", cause_problems(cost_ms=50000) == []
+          and ROUND_1["window"]["duration_ms"] < 50000)
+    check("and the estimate beside it may be anything of the right shape",
+          cause_problems(cost_ms=100, expected_ms=[5000, 9000]) == [])
+
+
+def test_a_suggestion_has_no_cost_and_a_wrong_field_names_the_cost_ones() -> None:
+    why = problems({"summary": "s", "causes": [],
+                    "suggestions": [{"fix": "f", "cost_ms": 5}]}, ROUND_1)
+    check("a suggestion is a fix and its estimate",
+          len(why) == 1 and "suggestions[0]: no such field cost_ms" in why[0], why)
+    why = cause_problems(cost=5)
+    check("a misspelt cost is refused, with the right names given",
+          len(why) == 1 and "no such field cost" in why[0] and "cost_ms, cost_of" in why[0], why)
+
+
+def test_a_cost_reads_as_a_measurement_and_an_estimate_as_an_estimate() -> None:
+    def shown(**fields: Any) -> str:
+        return "\n".join(verdict_mod.lines({"summary": "s", "causes": [{"title": "t", **fields}]}))
+
+    def cost_line(text: str) -> list[str]:
+        return [ln for ln in text.splitlines() if "cost:" in ln]
+
+    text = shown(cost_ms=1150, expected_ms=350)
+    check("a single number is said as measured, with no 'about'",
+          cost_line(text) == ["       cost:       1150 ms"], text)
+    check("beside the estimate, which keeps its 'about'",
+          "expected:   about 350 ms" in text, text)
+    check("a range, with what it measures",
+          cost_line(shown(cost_ms=[1100, 1200], cost_of="of the launch"))
+          == ["       cost:       1100–1200 ms — of the launch"])
+    check("a description over several lines keeps its place",
+          "       cost:       5 ms — one\n" + " " * 19 + "two"
+          in shown(cost_ms=5, cost_of="one\ntwo"))
+    for odd in ({"cost_ms": "soon", "cost_of": "of the launch"}, {"cost_of": "of the launch"},
+                {"cost_ms": [2, "x"]}, {"cost_ms": None}):
+        check(f"{odd}: nothing to show, and nothing fails", cost_line(shown(**odd)) == [],
+              shown(**odd))
+    check("a description that is not text is left out",
+          cost_line(shown(cost_ms=5, cost_of=3)) == ["       cost:       5 ms"])
