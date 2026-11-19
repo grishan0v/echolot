@@ -99,7 +99,8 @@ something becomes a section of the report:
 
 `report.md` for you and `report.json` for the agent, in `.echolot/out/`.
 An 81 MB trace with 475k slices comes out as a 14 KB `report.json` in about
-five seconds.
+five seconds. `echolot analyze --html` adds `report.html`: the same report in
+plain words as a page, one file that opens from disk.
 
 <details>
 <summary><b>Example report</b></summary>

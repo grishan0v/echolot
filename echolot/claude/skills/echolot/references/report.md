@@ -128,6 +128,15 @@ when it found nothing; `reason` says why a `not_checked` one did not run (the
 entry's own, #441's). A report from before these keys has none of them, and
 `echolot report --plain` works them out from the rows.
 
+`echolot analyze --html` writes a third file, `report.html`, and
+`echolot report --html` writes it for a report already on disk: the same
+reading as a page for a person, one self-contained file. It holds nothing
+`report.json` does not, so do not read it; when a human asks to see the report
+as a page, write it and give them the path. A request that starts with
+`/echolot-hunt` and lists rows as `- location · detector · ms, runs · evidence`
+was copied from that page: the rows are the human's question, and the report
+named on its last line is where they are from.
+
 **`detectors[].identity`** — the columns that name a row of this detector:
 `location`, and for several of them `detail` too. Merging repeats and
 `compare` both pair rows on all of them, so two rows with one `location` and

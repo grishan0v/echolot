@@ -362,7 +362,8 @@ The Markers table folds nothing at all.
 
 `report.json` is the contract, and it is not the thing to read whole.
 `echolot report` prints one view of a report already on disk and writes
-nothing but its own line in `.echolot/log/runs.jsonl`:
+nothing but its own line in `.echolot/log/runs.jsonl`. `--html` is the one
+view that writes a file, the page beside the report:
 
 ```bash
 echolot report                                 # what fired: one line per detector
@@ -373,6 +374,7 @@ echolot report --markers                       # the Markers table, fifteen rows
 echolot report -d repeated_work --json         # the same selection as json, places included
 echolot report path/to/report.json --window    # another report, a round's own copy
 echolot report --plain                         # the report in plain words, one line per check
+echolot report --html                          # the same reading as a page, report.html
 ```
 
 Without a path it reads `.echolot/out/report.json` next to the config, or
@@ -490,6 +492,84 @@ to a quarter over is worth a look, more is needs attention. Nothing fails
 either way, since there is no gate. With no budget the verdict says how long the
 launch takes and that no limit is set, and its level is "not checked": green
 always means that something was looked at and found fine.
+
+## The report as a page
+
+`report.md` is a table for an agent and a terminal. For a person there is
+the same report as a page:
+
+```bash
+echolot analyze coldStart_*.perfetto-trace --html   # report.html beside report.json and report.md
+echolot report --html                               # the page of the last report
+echolot report path/to/003.json --html              # of another one: 003.html, beside it
+```
+
+It is the plain reading laid out as a document, for someone who has never
+opened a trace. From the top:
+
+- **The verdict**: the level, how long the launch takes against the limit,
+  and how many recordings that was measured on.
+- **A filter by level**, which is the counts as well: all, needs attention,
+  worth a look, fine, not checked.
+- **A table, one row per check**, the ones that need the reader first. A row
+  says what was checked and what was found, how that touches the app, and the
+  level. Nothing technical is in a row. A check that is fine carries its clean
+  result there, and one that could not run carries the reason.
+- **Details** on a row opens a panel with that check's measurements: the
+  detector's id and title, its thresholds and where they came from, and its
+  rows as bars on a millisecond axis, the median as a bar and each recording
+  as a dot. A line marks where the check fires for a detector whose one
+  threshold is a floor under the measure drawn (`main_thread_block`'s
+  `min_slice_ms`, say); a detector that fires on either of two thresholds
+  has no single line, and its numbers are in the text.
+- **How the colours are chosen**, in a sentence per level.
+- **The full technical report**: where the main thread was during the window,
+  every row of every detector on one axis, and then `report.md` itself as
+  HTML, line for line.
+
+A check that found something can be ticked. **Dig deeper** puts together the
+request for an agent from what is ticked, to copy and paste into an agent
+opened on the project:
+
+```text
+/echolot-hunt coldStart takes 1,136 ms. Find what is behind these rows of the last report and where it is in the code:
+- App Deadline Missed · frame_jank · 427.51 ms, 5/5 runs · Self Jank · 4 of 19 frames · longest 188.7 ms
+- inflate · main_thread_block · 222.68 ms, 5/5 runs · com.example.app
+- draw · main_thread_block · 120.8 ms, 5/5 runs · com.example.app
+- TextLayout:initLayout · main_thread_block · 73.95 ms, 5/5 runs · com.example.app
+- Lock contention on a monitor lock (owner tid: 12931) · main_thread_block · 61.6 ms, 5/5 runs · com.example.app
+Traces: the 5 behind .echolot/out/report.json. After which change: unknown.
+```
+
+That is the demo app with "Frames that came late" and "Heavy work on the main
+thread" ticked. The four largest rows of each ticked check go in, and a line
+saying how many more it has; the agent reads the rest from the report. With a
+limit set, the first line says it too ("against a limit of 500 ms"). The page
+starts nothing itself.
+
+What holds for the file:
+
+- **One file, nothing fetched.** The styles and the script are written into
+  it, the icons are inline SVG and the fonts are the system's. It names no
+  address, and it carries a Content-Security-Policy that refuses any, so it
+  opens from disk, from a CI artefact or from an attachment.
+- **The same report gives the same bytes.** No clock is read and nothing is
+  numbered at random.
+- **Every word about a check is the report's**: `plain`, `attention`,
+  `checked` and `reason` per detector, `verdict` at the top. The page adds
+  labels and works out no level of its own. A report from before those keys
+  is read the way `echolot report --plain` reads it, and the file is left as
+  it was.
+- **Light and dark** by the system's setting, and readable on a phone: the
+  table becomes a list and the panel a screen of its own.
+- **With script switched off** every row and its three sentences are there,
+  and the technical report opens with the measurements. The filter, the panel
+  and the request need script, and the page says so at the top.
+- **It gates nothing.** A red verdict is still exit 0.
+
+`analyze` without `--html` removes a `report.html` it finds in the output
+directory and says so: the page of the analysis before would read as this
+one's. `echolot report --html` writes it again.
 
 ## Where a cold start went
 

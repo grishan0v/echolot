@@ -691,6 +691,19 @@ def test_the_request_of_a_report_named_by_hand_and_of_one_with_no_budget():
           page_of(rep).one("dialog", "ask").attrs["data-one"].startswith("/echolot-hunt The window takes 2,000 ms."))
 
 
+def test_the_request_in_the_guide_is_the_demos(demo_report):
+    """docs/analysing.md shows the request for two ticked checks of the demo app."""
+    page = page_of(demo_report, where=".echolot/out/report.json")
+    ask, rows = page.one("dialog", "ask").attrs, rows_of(page)
+    request = "\n".join([ask["data-many"], rows["frame_jank"].one("input").attrs["data-req"],
+                         rows["main_thread_block"].one("input").attrs["data-req"], ask["data-tail"]])
+    guide = (ROOT / "docs" / "analysing.md").read_text(encoding="utf-8")
+    check("the sample in the guide is what the page puts together", f"```text\n{request}\n```" in guide, request)
+    check("and the two checks are called what the guide calls them",
+          rows["frame_jank"].one("h3").text == "Frames that came late"
+          and rows["main_thread_block"].one("h3").text == "Heavy work on the main thread")
+
+
 def test_the_request_dialog_says_what_an_agent_does_and_where_to_paste():
     ask = page_of(known()).one("dialog", "ask")
     check("its heading names it", ask.attrs["aria-labelledby"] == "ask-h" and ask.one("h2").text == "Dig deeper with an agent")

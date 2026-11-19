@@ -600,7 +600,12 @@ writes a config.
   `tests/test_plain.py` fails for a detector without any of the four. Write
   the template so that a sentence never claims more than its rows do, and
   decide in `_on_main` whether its rows are time of the main thread: only those
-  can need attention by their size.
+  can need attention by their size. The page (`echolot report --html`) draws
+  a line where the check fires for a detector with exactly one `@calibrate`,
+  on `self_ms` or `total_ms`: it takes that threshold for a floor under every
+  row. `tests/test_report_page.py` pins which detectors those are, so a new
+  one that joins them is looked at once: a row below the line would make the
+  line wrong.
 - **Only part of a row survives a merge.** Repeats are folded row by row, and
   a merged row keeps its `@identity` columns, `runs`, the numeric contract
   columns — `count`, `self_ms`, `total_ms`, `max_ms` and `covered_ms`, as
