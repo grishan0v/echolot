@@ -2490,6 +2490,117 @@ def _project_and_config(args) -> tuple[Path, str]:
     return Path.cwd(), config
 
 
+def _open_hunt(project: Path) -> dict[str, Any] | None:
+    """The open investigation; None, after saying on stderr why there is none.
+
+    A concluded one is named and left as it is: written over, the first
+    conclusion was lost without a word.
+    """
+    last = hunt_mod.load(project)
+    if last and last.get("status", "open") != "open":
+        print(f"#{last.get('n')} is already concluded — `echolot hunt --show "
+              f"{last.get('n')}` prints its conclusion; a new question opens "
+              f"the next one", file=sys.stderr)
+        return None
+    if not last:
+        print("no investigation is open", file=sys.stderr)
+        return None
+    return last
+
+
+def _held_verdict(project: Path, config: str, last: dict[str, Any], source: str,
+                  closing: bool) -> tuple[dict[str, Any], verdict_mod.Reports,
+                                          dict[str, Any]] | None:
+    """The verdict at `source` (`-` is stdin), held against `last`'s reports.
+
+    It comes back with those reports and the markers echolot counts in the
+    sources, or as None after saying on stderr why it was refused or could not
+    be read. Recording is the caller's and happens only after this: `closing`
+    picks the words, so that a check says what would happen.
+    """
+    try:
+        raw = sys.stdin.read() if source == "-" else \
+            Path(source).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"error: cannot read the verdict from {source}: {e}", file=sys.stderr)
+        print("Nothing was recorded; the investigation is still open.", file=sys.stderr)
+        recorder.failed(f"cannot read the verdict from {source}: {e}")
+        return None
+    verdict, why = verdict_mod.parse(raw)
+    reports = hunt_mod.archived_reports(project, last)
+    problems = [why] if why else verdict_mod.validate(verdict, reports)
+    if problems:
+        refused = "was refused" if closing else "would be refused"
+        print(f"error: the verdict {refused} — {len(problems)} problem(s):",
+              file=sys.stderr)
+        for problem in problems[:verdict_mod.SHOWN]:
+            print(f"  {problem}", file=sys.stderr)
+        if len(problems) > verdict_mod.SHOWN:
+            print(f"  … and {len(problems) - verdict_mod.SHOWN} more", file=sys.stderr)
+        print(f"Nothing was recorded; the investigation is still open. Put the "
+              f"verdict right and run it again — `echolot hunt --show "
+              f"{last.get('n')}` lists the reports and their numbers.",
+              file=sys.stderr)
+        recorder.failed(f"the verdict {refused}: {problems[0]}")
+        return None
+    # By the config's prefix, as `hunt "<question>"` counts them; a config
+    # that does not load counts by the default one, and the check goes on.
+    try:
+        cfg = _hunt_config(project, config)
+    except (ConfigError, OSError):
+        cfg = None
+    left = hunt_mod.leftovers(
+        project, cfg.get("instrumentation.temp_prefix") if cfg else None)
+    return verdict, reports, left
+
+
+def _say_cleanup(verdict: dict[str, Any], left: dict[str, Any], closing: bool) -> None:
+    """What echolot counted in the sources, beside what the verdict says of it.
+
+    The count is echolot's whatever the agent said, and never a reason to
+    refuse: a disagreement is said where the human reads, and both halves are
+    kept in the record.
+    """
+    note = hunt_mod.leftover_line(left)
+    if note is None:
+        print("  cleanup: no temporary markers in the sources")
+    else:
+        print(f"\n[!] {note}", file=sys.stderr)
+    said = verdict.get("cleanup")
+    if verdict_mod.cleanup_agrees(said, left) is False:
+        print(f"    the verdict says {said}; "
+              + ("the record holds both" if closing
+                 else "closing records both, so put one right first"),
+              file=sys.stderr)
+
+
+def _check_verdict(project: Path, config: str, source: str) -> int:
+    """`hunt --verdict <file>` with no `--done`: the check, and nothing else.
+
+    It makes the check `--done --verdict` makes before it closes — the shape,
+    and every row the verdict cites in a report this investigation filed —
+    and stops there: nothing is recorded and the investigation stays open.
+    It is for whoever wrote the file, who has the evidence in front of them,
+    to find a refusal while it can still be put right.
+    """
+    last = _open_hunt(project)
+    if last is None:
+        return 1
+    held = _held_verdict(project, config, last, source, closing=False)
+    if held is None:
+        return 2
+    verdict, _reports, left = held
+    print(f"the verdict would be accepted: {len(verdict['causes'])} cause(s); the "
+          f"{verdict_mod.cited(verdict)} row(s) it cites are all in this "
+          f"investigation's reports")
+    _say_cleanup(verdict, left, closing=False)
+    # Closing is not said here: the one who reads this may be the agent that
+    # wrote the file, and closing the investigation is not its to do.
+    print("Nothing was recorded; the investigation is still open.")
+    recorder.note(hunt="verdict_checked", verdict=len(verdict["causes"]))
+    return 0
+
+
 def _close_hunt(project: Path, config: str, text: Any, source: str | None) -> int:
     """`hunt --done`: record what the investigation came to, and close it.
 
@@ -2499,60 +2610,21 @@ def _close_hunt(project: Path, config: str, text: Any, source: str | None) -> in
     row it cites is not in any of them — nothing is recorded then, and the
     investigation stays open for the answer to be put right.
     """
-    if source is not None and text is None:
-        print("error: --verdict closes the investigation, so it goes with --done: "
-              "echolot hunt --done --verdict <file, or - for stdin>", file=sys.stderr)
-        return 2
     words = text if isinstance(text, str) else ""
     if source is None and not words.strip():
         print("error: --done needs what the investigation came to: the conclusion "
               "as text, or --verdict <file>", file=sys.stderr)
         return 2
-    last = hunt_mod.load(project)
-    if last and last.get("status", "open") != "open":
-        # Written over, the first conclusion was lost without a word.
-        print(f"#{last.get('n')} is already concluded — `echolot hunt --show "
-              f"{last.get('n')}` prints its conclusion; a new question opens "
-              f"the next one", file=sys.stderr)
-        return 1
-    if not last:
-        print("no investigation is open", file=sys.stderr)
+    last = _open_hunt(project)
+    if last is None:
         return 1
 
     verdict = reports = left = None
     if source is not None:
-        try:
-            raw = sys.stdin.read() if source == "-" else \
-                Path(source).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as e:
-            print(f"error: cannot read the verdict from {source}: {e}", file=sys.stderr)
-            print("Nothing was recorded; the investigation is still open.", file=sys.stderr)
-            recorder.failed(f"cannot read the verdict from {source}: {e}")
+        held = _held_verdict(project, config, last, source, closing=True)
+        if held is None:
             return 2
-        verdict, why = verdict_mod.parse(raw)
-        reports = hunt_mod.archived_reports(project, last)
-        problems = [why] if why else verdict_mod.validate(verdict, reports)
-        if problems:
-            print(f"error: the verdict was refused — {len(problems)} problem(s):",
-                  file=sys.stderr)
-            for problem in problems[:verdict_mod.SHOWN]:
-                print(f"  {problem}", file=sys.stderr)
-            if len(problems) > verdict_mod.SHOWN:
-                print(f"  … and {len(problems) - verdict_mod.SHOWN} more", file=sys.stderr)
-            print(f"Nothing was recorded; the investigation is still open. Put the "
-                  f"verdict right and run it again — `echolot hunt --show "
-                  f"{last.get('n')}` lists the reports and their numbers.",
-                  file=sys.stderr)
-            recorder.failed(f"the verdict was refused: {problems[0]}")
-            return 2
-        # By the config's prefix, as `hunt "<question>"` counts them; a config
-        # that does not load counts by the default one, and closing goes on.
-        try:
-            cfg = _hunt_config(project, config)
-        except (ConfigError, OSError):
-            cfg = None
-        left = hunt_mod.leftovers(
-            project, cfg.get("instrumentation.temp_prefix") if cfg else None)
+        verdict, reports, left = held
 
     conclusion = words if words.strip() else (verdict or {}).get("summary") or ""
     h = hunt_mod.conclude(project, conclusion, verdict=verdict, reports=reports, left=left)
@@ -2566,15 +2638,7 @@ def _close_hunt(project: Path, config: str, text: Any, source: str | None) -> in
     check = h["verdict_check"]
     print(f"  verdict recorded: {len(verdict['causes'])} cause(s); the "
           f"{check['cited']} row(s) it cites are all in this investigation's reports")
-    note = hunt_mod.leftover_line(left)
-    if note is None:
-        print("  cleanup: no temporary markers in the sources")
-    else:
-        # The count is the record's, whatever the agent said: both are kept.
-        print(f"\n[!] {note}", file=sys.stderr)
-        if check["cleanup"]["agrees"] is False:
-            print(f"    the verdict says {verdict['cleanup']}; the record holds both",
-                  file=sys.stderr)
+    _say_cleanup(verdict, left, closing=True)
     recorder.note(hunt="concluded", verdict=len(verdict["causes"]))
     return 0
 
@@ -2707,8 +2771,10 @@ def cmd_hunt(args) -> int:
               file=sys.stderr)
         return 0
 
-    if conclusion is not None or args.verdict is not None:
+    if conclusion is not None:
         return _close_hunt(project, config, conclusion, args.verdict)
+    if args.verdict is not None:
+        return _check_verdict(project, config, args.verdict)
 
     if args.resume:
         last = hunt_mod.load(project)
@@ -4638,9 +4704,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="record what it came to, and close it: the conclusion as "
                          "text, or with --verdict as a structured verdict")
     hn.add_argument("--verdict", metavar="FILE",
-                    help="with --done: the conclusion as a JSON verdict (a file, "
-                         "or - for stdin), checked against this investigation's "
-                         "reports before anything is recorded")
+                    help="the conclusion as a JSON verdict (a file, or - for "
+                         "stdin), checked against this investigation's reports: "
+                         "with --done it closes the investigation with it, "
+                         "without --done it only checks and records nothing")
     hn.add_argument("--list", action="store_true",
                     help="every investigation this project has had")
     hn.add_argument("--show", metavar="N|WORDS",
