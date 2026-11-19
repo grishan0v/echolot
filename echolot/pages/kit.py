@@ -213,6 +213,12 @@ def chart(rows: Sequence[dict[str, Any]], top: float, *, mark: float | None = No
     `figure`, the bold text at the right, and `notes`, the lines under it;
     `tip`, the exact figures for the tooltip (a row with one can take focus).
     `mark` is where the check fires on the same axis, or None.
+
+    A row with `quiet` is drawn in the chart's soft neutral: it stands beside
+    the others to make up the whole and is no measure of what they measure.
+    The colour is set on that bar alone and not by a class, because the
+    stylesheet is written into every page: a page with no such row keeps the
+    bytes it had.
     """
     out = [f'<p class="chart-h">{e(title)}</p>' if title else "",
            '<div class="cr ax" aria-hidden="true"><span></span><div class="ticks">'
@@ -226,8 +232,9 @@ def chart(rows: Sequence[dict[str, Any]], top: float, *, mark: float | None = No
         notes = "".join(f"<span>{e(n)}</span>" for n in r.get("notes") or () if n)
         tip = r.get("tip")
         focus = f' tabindex="0" data-tip="{e(chr(10).join(tip))}"' if tip else ""
+        fill = ";background:var(--data-soft)" if r.get("quiet") else ""
         out.append(f'<div class="cr"{focus}><div class="cr-n">{name}{subs}</div>'
-                   f'<div class="cr-p">{line}<i class="bar" style="width:{_pct(r["value"], top)}"></i>{dots}</div>'
+                   f'<div class="cr-p">{line}<i class="bar" style="width:{_pct(r["value"], top)}{fill}"></i>{dots}</div>'
                    f'<div class="cr-v"><b>{e(r["figure"])}</b>{notes}</div></div>')
     return f'<div class="chart">{"".join(out)}</div>'
 

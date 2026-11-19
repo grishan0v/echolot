@@ -403,6 +403,11 @@ def _request(report: dict[str, Any], where: str | None, last: bool) -> tuple[str
     return one, many, tail
 
 
+# The stretch of a launch window before the app's process existed, as the
+# budget line of report.md calls it.
+_BEFORE_PROCESS = "before the process started"
+
+
 def _technical(report: dict[str, Any], ctx: Any, several: bool) -> str:
     """The fold at the end: where the main thread was, every row of every
     detector on one axis, and report.md as it is written."""
@@ -413,12 +418,27 @@ def _technical(report: dict[str, Any], ctx: Any, several: bool) -> str:
     if window:
         states = [(label, float(budget.get(key) or 0)) for key, label in report_mod.BUDGET_LABELS]
         states = [(label, v) for label, v in states if v / window * 100 >= 1]
-        if states:
-            marks = [{"name": label, "mono": False, "value": v, "figure": f"{kit.ms(v)} ms",
-                      "notes": [f"{v / window * 100:.0f}% of the window"],
-                      "tip": [label, f"{kit.exact(v)} ms", f"{v / window * 100:.1f}% of {kit.exact(window)} ms"]}
-                     for label, v in states]
-            parts.append("<div>" + kit.chart(marks, kit.nice_top(max(v for _, v in states)), unit=unit,
+        marks = [{"name": label, "mono": False, "value": v, "figure": f"{kit.ms(v)} ms",
+                  "notes": [f"{v / window * 100:.0f}% of the window"],
+                  "tip": [label, f"{kit.exact(v)} ms", f"{v / window * 100:.1f}% of {kit.exact(window)} ms"]}
+                 for label, v in states]
+        # A window that is the launch opens before the app's process exists,
+        # and the main thread has no state until it does (launch.py). Without
+        # this bar the chart stops short of such a window by a tenth of it,
+        # which reads as a hole in the recording. It is no state of the
+        # thread, so it is drawn quiet, says what it is, and comes last, in
+        # the words of the line under the chart. Only a launch window has
+        # the key.
+        late = float(budget.get("before_process_ms") or 0)
+        if late / window * 100 >= 1:
+            marks.append({"name": _BEFORE_PROCESS, "mono": False, "value": late, "quiet": True,
+                          "subs": ["no state of the main thread: its process did not exist yet"],
+                          "figure": f"{kit.ms(late)} ms",
+                          "notes": [f"{late / window * 100:.0f}% of the window"],
+                          "tip": [_BEFORE_PROCESS, f"{kit.exact(late)} ms",
+                                  f"{late / window * 100:.1f}% of {kit.exact(window)} ms"]})
+        if marks:
+            parts.append("<div>" + kit.chart(marks, kit.nice_top(max(m["value"] for m in marks)), unit=unit,
                                              title="Where the main thread was during the window") + "</div>")
     marks, values = [], []
     for det in report.get("detectors") or []:

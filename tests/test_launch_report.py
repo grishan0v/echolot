@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 import sys
 from pathlib import Path
 
@@ -20,10 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.support import check  # noqa: E402
 from tests.test_launch_window import (  # noqa: E402
     APP, LAUNCH, MS, _fixture, _startup, _Startups, _two_launches)
+from tests.test_report_page import read  # noqa: E402
 
 from echolot import fixture, recorder, selftest  # noqa: E402
+from echolot.config import Config  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
-from echolot.main import _startup_info, main  # noqa: E402
+from echolot.main import _startup_info, analyze_trace, main  # noqa: E402
+from echolot.pages import report_page  # noqa: E402
 
 
 def _cli(*argv: str) -> tuple[int, str, str]:
@@ -260,3 +264,81 @@ def test_the_plain_readings_shares_are_of_the_launch_window(tmp_path: Path) -> N
     check("and both still need attention: over 15% and over 0.15 s in each window",
           all(levels == ("needs_attention", "needs_attention")
               for levels in (f[2:] for f in found.values())), found)
+
+
+# --- the page (#443): its chart of the main thread adds up to a launch window ---------------
+
+CHART = "Where the main thread was during the window"
+
+
+def _main_thread_chart(report: dict) -> tuple[list, str]:
+    """The rows of the page's main-thread chart, and the page itself."""
+    page = report_page.render(report)
+    fold = [d for d in read(page).all("details")
+            if d.one("summary").text == "The full technical report"][0]
+    chart = [c for c in fold.all("div", "chart") if c.one("p", "chart-h").text == CHART][0]
+    return [r for r in chart.all("div", "cr") if "ax" not in r.attrs["class"].split()], page
+
+
+def _tip_ms(row) -> float:
+    """A row's exact milliseconds, from its tooltip."""
+    return float(row.attrs["data-tip"].split("\n")[1].removesuffix(" ms").replace(",", ""))
+
+
+def test_the_pages_chart_of_a_launch_window_adds_up_to_the_window(tmp_path: Path) -> None:
+    """A process started 30 ms into a launch of 200: the main thread has a
+    state for 170 of them. With only the states drawn, the chart stopped at
+    85% of the window."""
+    with contextlib.redirect_stderr(io.StringIO()):
+        rep = report_mod.aggregate([analyze_trace(
+            _two_launches(tmp_path / "two.perfetto-trace"), Config(LAUNCH))])
+    rows, page = _main_thread_chart(rep)
+    names = [r.one("div", "cr-n").all("span")[0].text for r in rows]
+    check("the thread's states, then the stretch before its process, in report.md's words",
+          names == ["on a CPU", "before the process started"]
+          and "15% before the process started" in report_mod.to_markdown(rep), names)
+    check("the bars add up to the window", sum(_tip_ms(r) for r in rows)
+          == rep["window"]["duration_ms"] == 200.0, [r.attrs["data-tip"] for r in rows])
+    late = rows[-1]
+    check("with its own figures", late.attrs["data-tip"].split("\n")
+          == ["before the process started", "30.00 ms", "15.0% of 200.00 ms"]
+          and late.one("div", "cr-v").text == "30 ms15% of the window", late.attrs["data-tip"])
+    check("it says that it is no state of the main thread",
+          late.one("span", "cr-s").text == "no state of the main thread: its process did not "
+                                           "exist yet", late.one("div", "cr-n").text)
+    styles = [r.one("i", "bar").attrs["style"] for r in rows]
+    check("and is drawn in the chart's quiet neutral, the states in the data colour",
+          styles == ["width:85.00%", "width:15.00%;background:var(--data-soft)"]
+          and page.count("background:var(--data-soft)") == 1, styles)
+
+
+def test_a_stretch_under_a_percent_is_drawn_in_neither_the_chart_nor_the_line(
+        tmp_path: Path) -> None:
+    rep = _plain(tmp_path, LAUNCH, fully_drawn="app")
+    rows, page = _main_thread_chart(rep)
+    check("the fixture's 10 ms of 1120: under a percent, as in the budget line",
+          rep["window"]["main_thread"]["before_process_ms"] == 10.0
+          and "before the process started" not in page
+          and len(rows) == 3, [r.one("div", "cr-n").text for r in rows])
+
+
+def test_the_page_of_an_anchored_report_has_no_such_bar(tmp_path: Path) -> None:
+    """An anchored window carries no `before_process_ms`, and its page is
+    what it was: the same rows, and no bar in the soft colour. (Held byte for
+    byte against the page before this bar by hand; here, by its parts.)"""
+    rep = _plain(tmp_path, selftest.FIXTURE_CONFIG)
+    rows, page = _main_thread_chart(rep)
+    check("the three states the fixture's main thread was in, as before",
+          [r.one("div", "cr-n").text for r in rows]
+          == ["on a CPU", "blocked in the kernel", "sleeping"],
+          [r.one("div", "cr-n").text for r in rows])
+    check("each bar a width and nothing else",
+          all(re.fullmatch(r"width:[\d.]+%", r.one("i", "bar").attrs["style"]) for r in rows),
+          [r.one("i", "bar").attrs["style"] for r in rows])
+    check("and the stretch is nowhere on the page", "before the process started" not in page
+          and "background:var(--data-soft)" not in page)
+    # A report by hand whose budget names the stretch as nothing draws none.
+    bare = {"detectors": [], "window": {"duration_ms": 100.0, "main_thread": {
+        "on_cpu": 100.0, "window_ms": 100.0, "before_process_ms": None}}}
+    check("nor does a budget that holds the key with nothing in it",
+          "before the process started" not in report_page.render(bare))
