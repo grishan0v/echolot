@@ -1,0 +1,41 @@
+/* Ticking rows and asking an agent about them: the tick box, the bar at the
+   bottom that leads to the agent, and the request to copy. */
+
+/* a box to tick: 18 px to look at, 44 px to hit */
+.ck { position: relative; display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; }
+.ck input { position: absolute; inset: -8px; width: calc(100% + 16px); height: calc(100% + 16px); margin: 0; opacity: 0; cursor: pointer; }
+.ck-box { width: 18px; height: 18px; display: grid; place-items: center; border: 1.5px solid var(--control); border-radius: var(--r1); background: var(--bg); }
+.ck-box svg { width: 14px; height: 14px; fill: none; stroke: var(--on-accent); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+.ck input:checked + .ck-box { background: var(--accent); border-color: var(--accent); }
+.ck input:checked + .ck-box svg { opacity: 1; }
+.ck input:focus-visible + .ck-box { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ck:hover .ck-box { border-color: var(--ink-2); }
+
+/* the bar that leads to the agent: on the screen before anything is ticked */
+.dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; pointer-events: none;
+  padding: 0 var(--gutter-r) calc(16px + env(safe-area-inset-bottom, 0px)) var(--gutter-l); }
+.dock-in { pointer-events: auto; max-width: var(--col); margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+  padding: 8px 8px 8px 16px; background: var(--float); border-radius: var(--r3); box-shadow: var(--shadow); }
+.dock-t { flex: 1 1 8rem; font-size: var(--t-sm); font-weight: 600; }
+.dock-b { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-left: auto; }
+@media (max-width: 560px) {
+  .dock-in { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 8px 8px 4px 16px; }
+  .dock-b { grid-column: 1 / -1; grid-row: 2; margin-left: -12px; }
+  .dock-b:not(:has(button:not([hidden]))) { display: none; }
+  #dock-go { grid-column: 2; grid-row: 1; }
+}
+
+/* the request to the agent */
+dialog.ask { border: 0; padding: 0; width: min(640px, calc(100vw - 32px)); max-width: none; max-height: min(88vh, 780px); overflow: auto;
+  background: var(--float); color: var(--ink); border-radius: var(--r3); box-shadow: var(--shadow); }
+dialog.ask::backdrop { background: var(--scrim); }
+.ask-in { display: grid; gap: var(--s4); padding: var(--s5); }
+.ask-in > * { min-width: 0; }
+.ask-list { display: grid; gap: 6px; }
+.ask-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 10px; }
+.ask-list .ico { margin-top: 4px; }
+pre.req { margin: 0; padding: 12px 14px; border-radius: var(--r2); background: var(--surface); font: 400 var(--t-xs)/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  dialog.ask { width: 100vw; margin: auto 0 0; border-radius: var(--r3) var(--r3) 0 0; max-height: 88vh; }
+  .ask-in { padding: var(--s5) var(--gutter-r) calc(var(--s5) + env(safe-area-inset-bottom, 0px)) var(--gutter-l); }
+}

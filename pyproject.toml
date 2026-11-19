@@ -176,4 +176,8 @@ echolot = [
     # Printed by `echolot guide`: the same knowledge, for clients that have no
     # skill mechanism to install it into.
     "guide/*.md",
+    # What a page for a person is made of (`echolot/pages`): the styles and
+    # the scripts written into every report.html.
+    "pages/*.css",
+    "pages/*.js",
 ]
