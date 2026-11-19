@@ -203,6 +203,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `few` | too few repeats to be 95% sure of any move, so the Holds column is empty throughout. How many are enough is under [the Holds column](#the-holds-column) |
 | `detectors` | the two runs did not use the same set of detectors |
 | `detector-failed` | a detector failed on that side, with its error. It did not look there, so its rows on the other side are left out of the table rather than listed as gone or new, its params stay out of `thresholds`, and "Detectors that changed state" says `failed` |
+| `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording does not hold what they read, named with their reasons (see [When a detector could not look](analysing.md#when-a-detector-could-not-look)). Their rows are left out of the table on both sides rather than listed as gone or new, and "Detectors that changed state" says `not checked` |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. Only with that key in the config — without it they are ordinary appeared rows |
 | `environment` | the clock the two rounds ran at differs by the floor or more, 10% unless `--floor-pct` says otherwise, either way, or a side carries no clock at all, or a side read its clock or thermal state in only some of its repeats. Two rounds that recorded no platform state get no warning — see below |
 | `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
@@ -262,6 +263,18 @@ filter from a profile background dexopt widened (`bg-dexopt`) is not the build
 the install brought (`install-dm`). A side whose traces held no state — the
 process was already running when the recording began — and a report from
 before the field get no warning.
+
+`not-checked-before` and `not-checked-after` are about a detector rather than
+a number. `io_wait` reads why the kernel put a thread to sleep, and a round
+recorded with `runner.environment: false` has none of it, so `io_wait` is
+silent there for a reason that has nothing to do with the app. Against a round
+that recorded it, its rows would read as gone. A detector whose report says
+`checked: false` is left out of the table on both sides, and the warning names
+it with the reason from each side that could not look. One that could not run
+is not silent in both either, and a report written before `checked` existed is
+unknown and is compared as it always was. A detector that failed keeps its own
+warning, `detector-failed`, and a set that failed in some repeats is still
+compared on the rest.
 
 Then `thresholds`. After `echolot calibrate` the numbers in
 `echolot.yml` are derived from particular runs, and comparing a calibrated
@@ -329,6 +342,8 @@ goes away. Absent below four runs.
                "fired_before": [ … ], "fired_after": [ … ],
                "state_changed": [ { "id": "binder_txn",
                                     "before": "silent", "after": "1 row(s)" } ],
+               "not_compared": [ { "id": "io_wait", "before": null,
+                                   "after": "The recording does not carry the phone's own state, …" } ],
                "silent_both": [ "gc_pressure", … ] },
   "rows": [
     { "location": "TeamRepository.loadAll", "detector": "main_thread_block",
@@ -346,6 +361,10 @@ goes away. Absent below four runs.
   ]
 }
 ```
+
+`summary.not_compared` lists the detectors one side or both could not run,
+with each side's reason, `null` for a side that could. Their rows are not in
+`rows`, and `silent_both` does not name them.
 
 `change` is one of `appeared`, `grew`, `shrank`, `vanished`, `steady`, so an
 agent can take the rows worth looking at without parsing any numbers. As a

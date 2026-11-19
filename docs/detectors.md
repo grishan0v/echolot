@@ -52,6 +52,20 @@ evidence in `detail`.
 Which functions those are, and in what order, changes between repeats, and
 with them in the name one thread became a row per variant, each seen once.
 
+`@needs` names what the trace has to hold for the detector's silence to mean
+anything, and stands straight after the `@why` block:
+
+```sql
+-- @why: the thread is neither running nor runnable…
+-- @needs: platform_state
+-- @param: min_io_wait_ms = 20
+```
+
+A detector that reads only what every recording `collect` makes holds — the
+app's slices, its threads' states, who woke whom — declares nothing. The
+sources, and what `analyze` does with them, are
+[below](#when-the-trace-does-not-hold-what-a-detector-reads).
+
 ## The context views
 
 They are already narrowed to our process and the scenario window, so nothing
@@ -477,11 +491,68 @@ explicit `DROP TABLE IF EXISTS` shown above.
 The symptom is a detector that works alone and fails in a full run, which
 sends you reading the query instead of the session.
 
+## When the trace does not hold what a detector reads
+
+A detector with no rows says it ran and nothing cleared its bar. Some are
+silent for another reason: the trace does not hold what they read. `io_wait`
+reads the kernel's reason for a thread's sleep, which a recording made with
+`runner.environment: false` leaves out; `composables` reads names the app
+writes only when the recording asked for them; `frame_jank` reads a frame
+timeline that phones older than Android 12 do not write. Left alone, the two
+silences read alike.
+
+So each detector's header says what it reads, in `-- @needs:`, and `analyze`
+asks each trace once for each source a detector in the run names. Every entry
+of `detectors[]` in `report.json` carries `checked`, and `reason` when it is
+false: one sentence a person can read, naming what the trace lacks. Where the
+trace itself cannot say — no composable names might be an app that writes
+none, or a recording that never asked — the recording's own account is used:
+the config the tracing service writes into the trace, or what the report's
+`environment` already holds.
+
+| source | what it is | how the trace says it holds it | what changes the recording |
+|---|---|---|---|
+| `platform_state` | why a thread went to sleep in the kernel: the `sched/sched_blocked_reason` event, which fills `io_wait` | a thread state with `io_wait` set, anywhere in the trace | `runner.environment: true`, which is the default |
+| `frame_timeline` | SurfaceFlinger's record of every frame, its deadline and what it took | a row of the frame timeline, the app's or SurfaceFlinger's own | Android 12 or newer; `collect` asks for it |
+| `composable_names` | the names `runtime-tracing` writes, with the Perfetto SDK switched on | `environment.compose_names.calls`: composable calls on the main thread in the window | `runner.compose_names: true`, for an app that carries `runtime-tracing` |
+| `atrace:am` | the activity manager's category: the ANR records, `bindApplication` | the recording's own config lists it | `am` in `runner.atrace_categories`, which is in the default list |
+| `atrace:dalvik` | ART's category: collections and lock waits | the config lists it | `dalvik`, likewise |
+| `atrace:binder_driver` | calls between processes | the config lists it | `binder_driver`, likewise |
+
+Seven shipped detectors declare nothing: `anr_risk`, `main_thread_block`,
+`main_thread_outlier`, `main_thread_waits`, `repeated_work`,
+`runnable_starvation` and `uninstrumented_cpu`. `io_wait` and
+`main_thread_kernel_waits` need `platform_state`; `frame_jank`,
+`frame_timeline`; `composables`, `composable_names`; `anr` and `app_init`,
+`atrace:am`; `gc_pressure` and `monitor_contention`, `atrace:dalvik`;
+`binder_txn`, `atrace:binder_driver`.
+
+Presence is positive evidence only. A trace that carries no config says
+nothing of its categories, so a detector that reads one is not checked on it:
+a check marked "not checked" for nothing costs a re-recording, and one marked
+fine that never looked costs the answer. In gradle mode the macrobenchmark
+decides what to record, and the report says what it found the same way.
+
+What `checked` does not say is whether the checkout holds what a detector
+needs of it. `composables` ranks the app's own composables, which the project's
+package and the files beside the config name; a trace with composable names
+and no checkout to read them against still gives no row.
+
+A detector that failed is not checked either: its `reason` says to read its
+`error`. What the trace lacks comes first when both are true. For a set of
+repeats a detector counts as checked only when every repeat held what it
+reads, and its reason says in how many recordings it did not. A report written
+before the keys existed has neither, which means unknown, and never "checked".
+`report.md` names the detectors that could not run in one line beside the one
+for detectors a config turned off, `echolot report` says `not checked` where it
+said `silent`, and `compare` leaves such a detector out on both sides rather
+than calling its rows gone or new (see [Comparing](compare.md)).
+
 ## Adding a detector
 
 A file in `echolot/sql/detectors/` runs on the next `analyze`. Shipping it
 takes more. The first three things below fail the build until they are done.
-The other three decide what the tool does with the detector once it runs —
+The other four decide what the tool does with the detector once it runs —
 what survives a merge, which overrides it accepts, which masks `names` can
 see — and a mistake there fails nothing until somebody reads the report or
 writes a config.
@@ -527,6 +598,15 @@ writes a config.
   key the detector does not declare is refused. Both stop `analyze` with exit
   2 before a trace is opened, so the default decides: `16` makes a number of
   the parameter, `*GC` a string.
+- **What it reads says so in its header.** A query that reads something a
+  recording may lack — a data source, an atrace category, names the app writes
+  only when asked — says `-- @needs:` with the source it reads, from
+  `needs.SOURCES`, straight after `@why`. A name that is no source is refused
+  when the detector loads. `tests/test_needs.py` pins what every shipped
+  detector declares, so a change to it is a decision somebody made, and fails
+  for a source no detector reads. A new source is an entry in `needs.SOURCES`
+  — how the trace says it holds it, and the sentence for when it does not —
+  and a case in the self-check, the fixture recorded without it.
 - **A mask says so in its name.** A parameter with `name_glob` in its name is
   read as a mask over slice names — by `names`, and by `_claimed_name`, which
   keeps `repeated_work` and `app_init` off what another detector speaks for —

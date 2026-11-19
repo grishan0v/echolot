@@ -382,6 +382,46 @@ location at 60 characters and the evidence at 100; `--wide` keeps both
 whole. `--json` keeps everything and cuts only the rows, and only when
 `--top` says how many.
 
+## When a detector could not look
+
+A detector with no rows says it ran and nothing cleared its bar. Some are
+silent for another reason: the trace does not hold what they read. `io_wait`
+reads the kernel's reason for a thread's sleep, and a recording made with
+`runner.environment: false` has none; `composables` reads the names an app
+writes only when the recording asked for them; `frame_jank` reads a frame
+timeline that phones older than Android 12 do not write. Each detector says
+what it reads in its header, and `analyze` asks the trace
+([the sources](detectors.md#when-the-trace-does-not-hold-what-a-detector-reads)).
+
+Every entry of `detectors[]` in `report.json` carries two keys for it:
+
+```json
+{ "id": "io_wait", "rows": [], "error": null,
+  "checked": false,
+  "reason": "The recording does not carry the phone's own state, such as why a thread went to sleep, so there was nothing for this check to read." }
+```
+
+`checked` is true when the detector ran, to the end, on a trace that held what
+it reads. `reason` is there only when it is false: one sentence, in plain
+words, that names what is missing. A detector that failed is not checked
+either, and its reason says to read its `error`. A set of repeats is checked
+only when every repeat was, and the reason then says in how many recordings it
+was not. A report written before the keys existed carries neither, which means
+unknown, and never checked.
+
+`report.md` says it in one line beside the one for detectors a config turned
+off, grouped by what they lack, and the **Silent** line does not name them:
+
+```
+> ⚠️ 2 detector(s) could not run, because the trace does not hold what they read. Their silence says nothing about the app. `io_wait`, `main_thread_kernel_waits` — The recording does not carry the phone's own state, such as why a thread went to sleep, so there was nothing for this check to read. A recording that holds what they read lets them look; until then those checks are open.
+```
+
+`echolot report` says `not checked` in its table where it said `silent`, and
+`echolot report -d io_wait` gives the reason. The rows of such a detector are
+whatever the trace gave it; none is not the answer "clean". `compare` leaves a
+detector that could not run on either side out of its table, and says so (see
+[Comparing](compare.md#when-two-reports-may-not-be-compared)).
+
 ## Where a cold start went
 
 The header's budget says where the window went by thread state. When the

@@ -105,7 +105,8 @@ runner:
   # Turn it off if the buffer overflows on your device. What you lose is the
   # ability to tell a slower machine from a slower app: the report then says
   # the device state was not recorded, and never that it held steady. `io_wait`
-  # goes silent too, with no disk flag left to read.
+  # cannot look either, with no disk flag left to read, and the report names it
+  # as a detector that could not run rather than as a silent one.
   environment: true
   # What the recording asks for, with the defaults. The categories are atrace's.
   # atrace_categories: [am, wm, gfx, view, dalvik, binder_driver, res, database]

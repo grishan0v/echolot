@@ -80,7 +80,8 @@ produce. The keys only a merged report has are named under the block.
                   "self_ms": 125.4, "total_ms": 130.1, "max_ms": 61.2,
                   "spread": { "self_ms": { "min": …, "max": …, "values": [ … ] },
                               "total_ms": { … }, "max_ms": { … } } } ],
-      "error": null }
+      "error": null,
+      "checked": true }
   ]
 }
 ```
@@ -392,6 +393,19 @@ is version-fragile; report the error, but do not treat the absence of findings
 as an answer. report.md lists it under `Failed`, never under `Silent`. In a
 merged report, `failed_runs` says in how many repeats it failed; its rows come
 from the others, and their `runs` counts those.
+
+**`detectors[].checked: false`** — that detector could not look: the trace
+does not hold what it reads (the platform state, a frame timeline, composable
+names, an atrace category), and `reason` says which, in one sentence. Its empty
+`rows` are not silence, and not good news. report.md names it in a line beside
+the one for `absent_ids`, never under `Silent`; `echolot report` says `not
+checked`; `compare` leaves it out of its table on both sides, and
+`summary.not_compared` says why. To have it look, record again with what it
+reads — `reason` says what that is — rather than reading the report harder. A
+merged report is checked only when every repeat was, and `reason` says in how
+many recordings it was not. A detector that failed is `checked: false` too, with
+its `error`. A report with no `checked` at all is older than the key: unknown,
+which is neither checked nor not.
 
 **A merged report's window checks cover every repeat.** `start_anchor` and
 `end_anchor` carry the fewest `matches` any repeat had, and `missed: "1/3"`
@@ -776,7 +790,9 @@ echolot compare old.json new.json    # or name them
               "delta_ms": 1776.4, "ratio": 2.5 },
   "summary": { "moved": 4, "appeared": 2, "vanished": 1, "steady": 17,
                "state_changed": [ { "id": "binder_txn",
-                                    "before": "silent", "after": "1 row(s)" } ] },
+                                    "before": "silent", "after": "1 row(s)" } ],
+               "not_compared": [ { "id": "io_wait", "before": null,
+                                   "after": "The recording does not carry …" } ] },
   "rows": [
     { "location": "TeamRepository.loadAll", "detector": "main_thread_block",
       "metric": "self_ms", "change": "grew", "matched_by": "exact",
@@ -848,6 +864,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `few` | too few repeats to be 95% sure of any move — four a side is always enough — so every `holds` is `null`. Record another round rather than read the moves as settled |
 | `detectors` | the two runs did not use the same set of detectors |
 | `detector-failed` | a detector failed on that side. Its rows on the other side are left out rather than called gone or new; the failure is no answer about the app |
+| `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording does not hold what they read (`checked: false` in its report). Their rows are left out on both sides rather than called gone or new, and `summary.not_compared` gives each side's reason, `null` for a side that could look. Record that side again with what they read |
 
 A row is listed as moved when it changes by more than 5 ms or 10 %, whichever
 is larger — `--floor-ms` and `--floor-pct` change that. A row whose share of
