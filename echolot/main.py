@@ -831,20 +831,19 @@ def cmd_analyze(args) -> int:
         report_mod.to_markdown(rep), encoding="utf-8")
 
     root = _project_root(cfg)
-    # The page is of the report beside it, so it is written with it or not
-    # left there: one from the run before would read as this run's. "The last
-    # report" is what `echolot report` reads with no path, and an -o elsewhere
-    # is not that.
+    # The page is of the report beside it. Asked for, it is written. One that
+    # already stands there is written again from this report, flag or no flag:
+    # left as it was, the page of the run before would read as this run's.
+    # Nothing is taken away, and where there is no page, none is written. "The
+    # last report" is what `echolot report` reads with no path, and an -o
+    # elsewhere is not that.
     page = out_dir / "report.html"
-    stale = False
-    if args.html:
+    again = not args.html and page.is_file()
+    if args.html or again:
         last = out_dir.resolve() == _out_dir(cfg.report_dir, cfg).resolve()
         page.write_text(
             report_page.render(rep, where=_shown_path(out_dir / "report.json", root), last=last),
             encoding="utf-8")
-    elif page.is_file():
-        page.unlink()
-        stale = True
     # A value a person confirmed, changed since the investigation opened:
     # the report is about a window they did not agree to. Said before the
     # report, where a reader who stops at its first lines still sees it, and
@@ -855,9 +854,9 @@ def cmd_analyze(args) -> int:
           file=sys.stderr)
     if args.html:
         print(f"→ {page}  (the same report as a page: open it in a browser)", file=sys.stderr)
-    elif stale:
-        print(f"[i] removed {page}: it was the page of the report before this one. "
-              f"`echolot report --html` writes it again.", file=sys.stderr)
+    elif again:
+        print(f"→ {page}  (it stood there from an earlier report: written again from this one)",
+              file=sys.stderr)
     # `touched_at` has to mean work, not "when someone last typed echolot":
     # the freshness rule that decides whether to ask stands on it.
     hunt_mod.touch(root, analyze=True)
@@ -5006,7 +5005,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "say without touching the config")
     an.add_argument("--html", action="store_true",
                     help="also write report.html beside report.json: the same report "
-                         "as a page for a person, one file that opens from disk")
+                         "as a page for a person, one file that opens from disk. A "
+                         "report.html that is already there is written again without "
+                         "this flag too")
     an.set_defaults(func=cmd_analyze)
 
     cp = add("compare", "pipeline", "[<before.json> [<after.json>]]",

@@ -567,9 +567,12 @@ What holds for the file:
   and the request need script, and the page says so at the top.
 - **It gates nothing.** A red verdict is still exit 0.
 
-`analyze` without `--html` removes a `report.html` it finds in the output
-directory and says so: the page of the analysis before would read as this
-one's. `echolot report --html` writes it again.
+The page beside a report is always of that report. Once a `report.html`
+stands in the output directory, every later `analyze` there writes it again
+from the new report, with `--html` or without, and names it on stderr with the
+other files. Left as it was, the page of the analysis before would read as
+this one's. `analyze` removes nothing, and where there is no page it writes
+none unless `--html` asks for one.
 
 ## Where a cold start went
 

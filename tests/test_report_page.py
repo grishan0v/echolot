@@ -954,9 +954,34 @@ def test_analyze_html_writes_the_page_beside_the_report(project):
     check("report --html writes the same page for the last report", code == 0 and text.strip() == f"→ {out / 'report.html'}"
           and (out / "report.html").read_text(encoding="utf-8") == page, (code, text, err))
 
+
+def test_a_page_that_stands_there_is_written_again_and_none_is_written_unasked(project):
+    """The page beside a report is of that report, and `analyze` takes nothing away."""
+    root, trace = project
+    out = root / ".echolot" / "out"
     code, _, err = run("analyze", trace)
-    check("an analysis without --html does not leave the page of the one before",
-          code == 0 and not (out / "report.html").exists() and "removed" in err and "report --html" in err, err[-400:])
+    check("no page was asked for, and none is written", code == 0 and not (out / "report.html").exists()
+          and "report.html" not in err, err[-300:])
+    run("analyze", trace, "--html")
+    first = (out / "report.html").read_text(encoding="utf-8")
+
+    # Another analysis of the same recording, one detector's bar set where it finds nothing.
+    code, _, err = run("analyze", trace, "--set", "main_thread_block.min_slice_ms=100000")
+    page = (out / "report.html").read_text(encoding="utf-8")
+    rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    check("the page that stood there is written again, without --html", code == 0 and page != first, err[-300:])
+    check("from the report just written",
+          page == report_page.render(rep, where=".echolot/out/report.json", last=True)
+          and rows_of(read(page))["main_thread_block"].one("span", "st").text == "Fine"
+          and rows_of(read(first))["main_thread_block"].one("span", "st").text != "Fine")
+    check("and named on stderr with the other files",
+          f"→ {out / 'report.html'}  (it stood there from an earlier report: written again from this one)" in err
+          and "removed" not in err, err[-400:])
+
+    theirs = root / "elsewhere"
+    code, _, err = run("analyze", trace, "-o", str(theirs))
+    check("a directory with no page gets none", code == 0 and sorted(p.name for p in theirs.iterdir())
+          == ["report.json", "report.md"], sorted(p.name for p in theirs.iterdir()))
 
 
 def test_report_html_for_a_report_named_by_hand(project):
