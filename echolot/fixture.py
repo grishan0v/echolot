@@ -13,7 +13,8 @@ device into one second.
 
 The trace is real: Perfetto protobuf with ProcessTree (process names), ftrace
 sched_switch (which yields thread_state) and atrace print (which yields
-slices). The same format that arrives from a device.
+slices), and the recording's own config at its head. The same format that
+arrives from a device.
 
 One planted problem per detector plus negative controls — the things that must
 NOT fire. The expected answers live in echolot/selftest.py.
@@ -23,6 +24,7 @@ NOT fire. The expected answers live in echolot/selftest.py.
 
 from __future__ import annotations
 
+import fnmatch
 import sys
 from pathlib import Path
 
@@ -929,6 +931,24 @@ def _flatten(slices, out, seq):
     return out
 
 
+def _without_composables(slices):
+    """The slice tree with every composable's call left out, and what is under it.
+
+    The shape `runtime-tracing` writes — `Name (File.kt:line)`, under a
+    `Compose:recompose` — which is the `composables` detector's own mask.
+    What a recording without composable names looks like: the passes that
+    composed them stay, and nothing names what they composed.
+    """
+    return [(name, start, dur, _without_composables(children))
+            for name, start, dur, children in slices
+            if name != "Compose:recompose"
+            and not fnmatch.fnmatchcase(name, COMPOSABLE_MASK)]
+
+
+# The mask `composables` reads a composable's call by.
+COMPOSABLE_MASK = "* ([A-Za-z]*.kt:[0-9]*)"
+
+
 def _span(builder, cookies, kind, start_ms, dur_ms, **fields) -> None:
     """One timeline entry: a start event, then FrameEnd on the same cookie.
 
@@ -980,18 +1000,13 @@ def _frames(builder) -> None:
 
 
 def _samples(builder, arrived: bool = True, minified: bool = False) -> None:
-    """Callstack sampling: the config that asked for it, then what the sampler wrote.
+    """Callstack sampling: what the sampler wrote. The config that asked for it
+    is `config`'s.
 
-    `arrived=False` keeps the config and drops the rest — a recording that
-    asked for samples on a device whose sampler never ran. `minified` writes
-    the frames under the names R8 gave them, `MINIFIED`.
+    `arrived=False` writes nothing — a recording that asked for samples on a
+    device whose sampler never ran. `minified` writes the frames under the
+    names R8 gave them, `MINIFIED`.
     """
-    packet = builder.add_packet()
-    perf = packet.trace_config.data_sources.add().config
-    perf.name = "linux.perf"
-    perf.target_buffer = 1
-    perf.perf_event_config.timebase.frequency = SAMPLING_HZ
-    perf.perf_event_config.callstack_sampling.kernel_frames = False
     if not arrived:
         return
 
@@ -1157,9 +1172,63 @@ def _crowded(sched: list, threads: dict, other_threads: dict) -> tuple[list, dic
     return sched, threads, other_threads
 
 
+# --- the recording's own account of itself ---------------------------------------
+#
+# The tracing service writes the config a recording ran with at the head of
+# its trace, and trace_processor prints it back as `trace_config_pbtxt`. It is
+# the one place a trace says what it asked for: whether the atrace categories
+# a detector reads were among them, whether composable names were, whether a
+# sampler was. A trace with no such packet says nothing, and `needs` then
+# takes nothing it cannot see for granted.
+
+# What `collect` records by default, `DEFAULT_CATEGORIES` in runner.py.
+RECORDED_CATEGORIES = ("am", "wm", "gfx", "view", "dalvik", "binder_driver",
+                       "res", "database")
+SCHED_EVENTS = ("sched/sched_switch", "sched/sched_waking",
+                "sched/sched_process_exit", "sched/sched_process_free",
+                "task/task_newtask", "task/task_rename")
+# `ENVIRONMENT_EVENTS` in runner.py.
+STATE_EVENTS = ("power/cpu_frequency", "sched/sched_blocked_reason",
+                "thermal/thermal_temperature", "thermal/cdev_update")
+
+
+def config(builder, *, categories=RECORDED_CATEGORIES, environment: bool = True,
+           frames: bool = True, names: bool = False, sampling: bool = False,
+           package: str = APP_NAME) -> None:
+    """The config a recording like this one ran with, as one packet.
+
+    One, because trace_processor keeps the last it meets: a second packet
+    for the sampler, or for the track_event source, replaced the first and
+    left the recording saying less than it asked for.
+    """
+    asked = builder.add_packet().trace_config
+    ftrace_source = asked.data_sources.add().config
+    ftrace_source.name = "linux.ftrace"
+    ftrace_source.ftrace_config.ftrace_events.extend(
+        [*SCHED_EVENTS, *(STATE_EVENTS if environment else ())])
+    ftrace_source.ftrace_config.atrace_categories.extend(categories)
+    ftrace_source.ftrace_config.atrace_apps.append(package)
+    stats = asked.data_sources.add().config
+    stats.name = "linux.process_stats"
+    stats.process_stats_config.scan_all_processes_on_start = True
+    if frames:
+        asked.data_sources.add().config.name = "android.surfaceflinger.frametimeline"
+    if names:
+        source = asked.data_sources.add().config
+        source.name = "track_event"
+        source.track_event_config.disabled_categories.append("*")
+        source.track_event_config.enabled_categories.append("rendering")
+    if sampling:
+        perf = asked.data_sources.add().config
+        perf.name = "linux.perf"
+        perf.target_buffer = 1
+        perf.perf_event_config.timebase.frequency = SAMPLING_HZ
+        perf.perf_event_config.callstack_sampling.kernel_frames = False
+
+
 def build(frames: bool = True, environment: bool = True,
           sampling: str | None = None, names: bool = False,
-          crowded: bool = False) -> bytes:
+          crowded: bool = False, categories=None, composables: bool = True) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1182,7 +1251,14 @@ def build(frames: bool = True, environment: bool = True,
 
     `names=True` writes the config `runner.compose_names` records with, a
     `track_event` source for Compose's category. The composables themselves
-    are in the trace either way: they are slices like any other.
+    are in the trace either way: they are slices like any other. Unless
+    `composables=False`, a recording of an app that writes none, or whose
+    names nobody switched on.
+
+    `categories` is the atrace categories the recording's config asks for,
+    `RECORDED_CATEGORIES` — what `collect` records — by default. Only the
+    config changes: the slices a category writes stay, and what a detector
+    needs of the trace is the config's word on it (see needs.py).
 
     `crowded=True` puts the main thread in the CPU queue behind the app's own
     thread and another process's, and more of the app's threads in the
@@ -1192,6 +1268,8 @@ def build(frames: bool = True, environment: bool = True,
     if crowded:
         sched, threads, other_threads = _crowded(sched, threads, other_threads)
     builder = TraceProtoBuilder()
+    config(builder, categories=RECORDED_CATEGORIES if categories is None else categories,
+           environment=environment, frames=frames, names=names, sampling=bool(sampling))
     process_tree(builder, [(APP_PID, APP_NAME, threads),
                            (OTHER_PID, OTHER_NAME, other_threads),
                            (SF_PID, SF_NAME, SF_THREADS),
@@ -1202,11 +1280,6 @@ def build(frames: bool = True, environment: bool = True,
     if sampling:
         _samples(builder, arrived=sampling in ("arrived", "minified"),
                  minified=sampling == "minified")
-    if names:
-        source = builder.add_packet().trace_config.data_sources.add().config
-        source.name = "track_event"
-        source.track_event_config.disabled_categories.append("*")
-        source.track_event_config.enabled_categories.append("rendering")
 
     # Collect ftrace events per CPU.
     by_cpu: dict[int, list] = {}
@@ -1235,6 +1308,8 @@ def build(frames: bool = True, environment: bool = True,
 
     # atrace print: the slices.
     all_slices = dict(SLICES)
+    if not composables:
+        all_slices = {tid: _without_composables(tree) for tid, tree in all_slices.items()}
     all_slices.update(OTHER_SLICES)
     for tid, tree_slices in all_slices.items():
         events = _flatten(tree_slices, [], seq)

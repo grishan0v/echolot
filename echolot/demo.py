@@ -30,7 +30,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .fixture import FT, TraceProtoBuilder, _span, ftrace, ms, process_tree, sys_stats
+from .fixture import FT, TraceProtoBuilder, _span, config, ftrace, ms, process_tree, sys_stats
 
 APP_PID = 12903
 APP_NAME = "com.example.app"
@@ -335,6 +335,10 @@ def build(run: int = 0, changed: bool = False) -> bytes:
                [("collection_query", mapping_at, round(22.3 * pace, 2), [])])
 
     builder = TraceProtoBuilder()
+    # The recording as `collect` makes it: the categories and the platform
+    # state asked for, the frame timeline, and no composable names, because
+    # the app has no Compose.
+    config(builder, package=APP_NAME)
     process_tree(builder, [(APP_PID, APP_NAME, THREADS),
                            (SS_PID, "system_server", {SS_PID: "system_server"})])
 
@@ -361,6 +365,11 @@ def build(run: int = 0, changed: bool = False) -> bytes:
     for at, buf in ((start - 38.0, f"S|{SS_PID}|{launch}|7"), (end, f"F|{SS_PID}|{launch}|7"),
                     (end, f"B|{SS_PID}|{launch}:completed:{APP_NAME}"), (end, f"E|{SS_PID}")):
         by_cpu.setdefault(4, []).append((ms(at), next(seq), "print", SS_PID, buf + "\n"))
+    # Why the main thread slept in the kernel, as the kernel writes it where a
+    # thread leaves the CPU: not the disk, which `io_wait` would count.
+    for at, _, state in off:
+        if state == "D":
+            by_cpu[CPU[TID_MAIN]].append((ms(at), next(seq), "blocked", TID_MAIN, 0))
     # The device: its clock on the app's cores, its temperature, its memory.
     for cpu in CPU.values():
         by_cpu.setdefault(cpu, []).append((ms(50), next(seq), "freq", cpu, KHZ[run]))

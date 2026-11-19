@@ -48,6 +48,7 @@ from . import compare as compare_mod
 from . import hunt as hunt_mod
 from . import codex, layer, plugin, recorder, sandbox, state, table, when
 from . import mapping as mapping_mod
+from . import needs as needs_mod
 from . import place as place_mod
 from . import report as report_mod
 from . import stacks as stacks_mod
@@ -541,6 +542,11 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
             tp, package or str(procs[0].get("name") or "").split(":")[0],
             mapped=extra is not None)
         markers = _markers_info(tp, cfg)
+        # What each detector's silence can be taken to mean: whether the trace
+        # holds what it reads (#441). Asked once, of the sources the planned
+        # detectors name.
+        held = needs_mod.survey(tp, environment,
+                                {n for d, _, _ in plan for n in d.needs})
         # What ran behind a row is read only where a sampler ran: a trace
         # without samples gets the report it always got. The checkout, for
         # whose code is whose, is the config's directory, and there is none
@@ -601,6 +607,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 "identity": list(d.identity),
                 "rows": rows,
                 "error": err,
+                # Did it look: `checked`, and `reason` when it did not.
+                **needs_mod.verdict(d.needs, held, err),
             }
             if source != "default":
                 # What the shipped numbers would have been — the reader can
