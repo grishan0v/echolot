@@ -96,6 +96,13 @@ own: `not a cold start`, with the pid when the process was running again
 before the recording began. The line at the end counts those repeats, and the
 spread of `TotalTime` over a set that has them is not put down to the device.
 
+The scenario that needs nothing more is `scenario.window: launch`: its window
+is the launch this mode starts, and the trace says where it ends, so nobody
+picks an end anchor before the first recording. `echolot scan` drafts the
+two together, this runner and that window, for an app with a launcher
+Activity and no macrobenchmark. See
+[A window that is the launch](analysing.md#a-window-that-is-the-launch).
+
 `am start -W` prints `TotalTime`, which the runner reports — an independent
 check that the window in the report is plausible. `TotalTime: 0` is the
 system saying it timed no start, usually because the activity was already in

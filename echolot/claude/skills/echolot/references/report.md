@@ -274,6 +274,15 @@ window — the process started inside it, or the recording has a hole. The
 shares are then of what was seen rather than of the scenario. The report
 warns below 95%; a smaller shortfall passes without a word.
 
+A launch window (`window.defined_by`) always starts before the process does:
+it opens at the intent. That stretch is measured apart, as
+`before_process_ms`, from the window's start to the main thread's first
+state, and the header names it as a share: `13% before the process started`.
+It is the launch's own time and no hole, so the warning counts it as
+accounted for and fires only on what is still missing. It equals the
+startup's `launch_delay`. Zero when the process was already running, as on a
+warm or hot start.
+
 **`in_rows_pct`** — how much of the main thread's window the findings cover,
 each moment counted once however many rows describe it; `in_rows_ms` is the
 same in milliseconds. Read it instead of adding up `self_ms`. A disk wait
@@ -318,6 +327,12 @@ runs to the end of the recording holds seconds after the first frame. For a
 cold-start question, read the startup's reasons before the window's tables:
 they divide the time the user waited, and nothing else. Absent when the trace
 holds no launch of this app.
+
+With several launches in one trace, the one described is the one that shares
+the most time with the window. For a launch window it is the launch the
+window was built from, whatever came after it: the startup then begins with
+the window, and `from_window_end_ms` is how long before the window's end the
+first frame came, zero when no `reportFullyDrawn()` call moved the end.
 
 ## `markers` — your own names, measured every time
 
@@ -416,6 +431,26 @@ Sleeping is only counted when a message was open at the time. A main thread
 idle at the message queue looks identical in the state alone — on one real
 scenario it sat there for 1615 ms waiting for a finger — and that is the app
 working, not a stall.
+
+**`window.defined_by`** — only for a scenario with `window: launch`: what
+closed the window. `launch` is the launch's end, the first frame.
+`launch+reportFullyDrawn` is the end of the app's `reportFullyDrawn()` call,
+which came after that frame. `window.report_fully_drawn` says where the call
+was read: `app` for the app's own slice on its main thread, `system_server`
+for ActivityManager's record of it when the app's slice is missing, `null`
+when the trace holds no call after the launch began. `launch` beside `app`
+means the call came before the first frame and closed nothing. Such a window
+has no anchors: `start_anchor` and `end_anchor` are `null`. A window cut by
+anchors carries neither key.
+
+The two definitions are two windows. A launch that ran on to
+`reportFullyDrawn()` is longer and holds rows the other does not, so `compare`
+refuses one against the other, and either against a window cut by anchors.
+In a merged report, repeats that did not close the same way are named:
+`defined_by` joins the two, `defined_by_runs` counts each
+(`{"launch": "1/5", "launch+reportFullyDrawn": "4/5"}`), and the header
+warns. Find the repeat without the call and leave it out, or look at why the
+app did not make it.
 
 **`window.process_alternatives` present** — the mask matched several processes
 and the largest by slice count was taken. If you are analysing `:pushservice`
@@ -898,6 +933,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `compile` | the two rounds ran the app compiled differently — another `filter`, or the same filter from another profile (`reason`) — or one side's repeats did. Code compiled ahead of time runs faster than code the JIT compiles as the app runs, so a row can move for that reason alone. A side whose traces held no state, and a report from before the field, get no warning |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
 | `process` | two different apps. `comparable: false` |
+| `window` | the two windows were not defined the same way: anchors against a launch window, a launch closed at its end against one that ran on to `reportFullyDrawn()`, or a side whose repeats did not agree. `comparable: false`. The command refuses the pair before any table is made; the warning is what another caller of the comparison sees |
 | `defaults` / `config` | one side used `--defaults`, or the config's hash changed |
 | `anchor-before` / `anchor-after` | that side's start or end anchor never matched: its window runs to the edge of the trace |
 | `runs` / `single` | different repeat counts, or a single trace with no spread to test against |

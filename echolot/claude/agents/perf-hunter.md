@@ -144,6 +144,10 @@ waiting for one.
    window.start_anchor.matches == 0     → anchor missed, window is not the scenario
      (window.end_anchor the same; with `before_start` it is there, but only
      before the start: the anchors are swapped)
+   window.defined_by_runs present       → a launch window that closed two ways
+                                          across the repeats: two windows in one
+                                          set, and `compare` refuses it. Find the
+                                          repeat without `reportFullyDrawn`
    window.process_alternatives present  → possibly the wrong process
    config / params_source say calibrated on these very runs
                                         → analyze --defaults before believing silence

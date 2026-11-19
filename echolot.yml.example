@@ -48,6 +48,15 @@ scenario:
     name: "Choreographer#doFrame*"
     _source: confirmed_by_user
     _evidence: "probe: first frame after bindApplication"
+  # How the app opens needs no anchors at all. In place of `start` and `end`:
+  #
+  #   window: launch
+  #
+  # The window is then the launch as the platform records it, from the intent
+  # to its end, the first frame, or to the app's reportFullyDrawn() call when
+  # that comes later. The trace decides which, and the report says so in
+  # window.defined_by. A scenario holds a window or anchors, never both.
+
   # What the scenario may take, in milliseconds. `analyze` writes it into the
   # report, and the plain reading (`echolot report --plain`) sets the launch
   # against it: within it, a little over, far over. Nothing fails when it is

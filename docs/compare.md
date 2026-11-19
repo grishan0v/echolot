@@ -29,7 +29,8 @@ latest report of the scenario the named report measured, in
 `.echolot/out/<scenario>/`, and `--scenario` names another. Two reports of
 different scenarios are refused: a cold start against a feed scroll moves
 every row and means nothing. A report from before reports named their
-scenario is compared as it is. Run from a folder with no config, or with one
+scenario is compared as it is. Two reports whose windows were not defined the
+same way are refused too, under [Two windows](#two-windows) below. Run from a folder with no config, or with one
 that does not load, it writes to `-o` when one is given, taken from the working
 directory; with neither it prints the comparison, writes nothing, and says so
 on stderr, with the reason when the config is there and does not load.
@@ -194,6 +195,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | warning | why it matters |
 |---|---|
 | `process` | two different apps. `comparable: false`; nothing below is a comparison |
+| `window` | the windows were not defined the same way. `comparable: false`. `echolot compare` refuses such a pair outright, see [Two windows](#two-windows); the warning is for a caller that builds the comparison itself |
 | `thresholds` | detector parameters differ. **appeared** and **gone** mean "the bar moved", so they say nothing about the app. Named parameter by parameter, with both values |
 | `defaults` | one side ran with `--defaults` and the other did not |
 | `config` | the config's hash changed between the two: anchors, process mask and thresholds all live there |
@@ -210,6 +212,37 @@ top, the way the Marker Report already states an anchor that never matched.
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
 | `compose_names` | one round was recorded with composable names and the other not, or only some of its repeats were. The names come with the app's Perfetto SDK loaded at its start, which cost a cold start 67 ms on the device it was measured on |
 | `compile` | the app was compiled differently in the two rounds, or in the repeats of one — see below |
+
+### Two windows
+
+A report says how its window was defined when the scenario's window is the
+launch (`scenario.window: launch`): `window.defined_by` is `launch` for a
+window that closed at the launch's end, and `launch+reportFullyDrawn` for one
+that ran on to the app's `reportFullyDrawn()` call. A window cut by the
+config's anchors carries no such key.
+
+These are different stretches of the same launch. Against anchors from
+`bindApplication`, a launch window starts earlier, at the intent. A launch
+that ran on to `reportFullyDrawn()` is longer than one closed at its end, by
+a median 56 ms on the launches this was measured on, and held a
+`runnable_starvation` row the shorter window did not in 15 traces of 35.
+Every row moves for that reason alone. Nothing else in the two reports says
+so: the scenario's name is the same, and a changed config only warns.
+
+So `echolot compare` refuses the pair, the way it refuses two scenarios, with
+exit code 2 and no table:
+
+```
+error: these two reports cannot be compared: the windows were defined differently: as the launch, closed at its end before, as the launch, closed on `reportFullyDrawn` after (…)
+```
+
+It refuses a merged report whose own repeats did not close the same way
+against anything, itself included: its medians mix two windows.
+
+To compare the two sides, analyze both sets of traces with one config. When
+the change under test adds or removes the `reportFullyDrawn()` call, a launch
+window cannot be the same on both sides: name `start` and `end` in the
+scenario for that comparison.
 
 The one to read first is `environment`, because it is the only one that can
 make the whole table say the opposite of what it looks like. A duration is the

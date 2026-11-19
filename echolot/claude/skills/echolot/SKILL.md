@@ -255,6 +255,9 @@ inside a slice is in both. How much of the window the findings cover is
 the numbers are about your scenario.
 Fix the config rather than hunting a problem. Same for `process_alternatives` —
 you may be analysing the wrong process.
+A scenario with `window: launch` has no anchors: `window.defined_by` says what
+closed it, the launch's end or the app's `reportFullyDrawn()`, and
+`defined_by_runs` in a merged report means the repeats did not agree.
 
 **`frame_jank` is about single frames, not totals.** Most of the others
 aggregate by name and gate on sums, which is right for "cold start got slower"

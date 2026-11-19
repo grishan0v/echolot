@@ -123,6 +123,46 @@ run to run. Such an anchor needs a wildcard.
 **An anchor that did not match makes the report lie silently**, which is why
 the CLI puts `matches` into `window`. Check it before drawing conclusions.
 
+### `scenario.window`
+
+How the app opens is the one scenario whose window nobody has to name:
+
+```yaml
+scenario:
+  name: coldStart
+  window: launch
+```
+
+The window is the launch as the platform records it. It starts at the intent,
+before the app's process exists. It ends at the later of two moments: the
+launch's end, which is the first frame, and the end of the app's first
+`reportFullyDrawn()` call on its main thread after the launch began. Where the
+app's own slice of that call is missing, system_server's record of it is read
+instead (`ActivityManager:ReportingFullyDrawn <package>`). An app that never
+makes the call gets a window that closes at the launch's end.
+
+Nobody chooses between the two ends. The trace decides, and the report says
+which it was: `window.defined_by` is `launch` or `launch+reportFullyDrawn`.
+
+`window` takes the place of `start` and `end`: a scenario holds a window or
+anchors, and one with both does not load. It is written as the word, or as a
+block with `name: launch` beside `_source` and `_evidence`, the way an anchor
+is. `launch` is the only window there is; any other scenario names its
+anchors. `echolot scan` drafts it for an app with a launcher Activity and no
+macrobenchmark, together with `runner.mode: launch`.
+
+The trace has to hold the launch, which it does when the app is started
+inside the recording: `launch` mode does that, and so does a startup
+macrobenchmark. `analyze` refuses a trace with no launch of the process, and
+names it. When the process was brought to the front more than once in one
+trace, the window is its first launch.
+
+Two launch windows that closed differently are two measurements, and so are a
+launch window and an anchored one, though the scenario's name is the same.
+`compare` refuses such a pair. When a change adds or removes the app's
+`reportFullyDrawn()` call, name `start` and `end` for that comparison, so that
+both sides are cut the same way.
+
 ### `scenario.budget_ms`
 
 What the scenario may take, in milliseconds. `analyze` writes it into
@@ -164,8 +204,8 @@ scenarios:
 
 Each key is the scenario's name, and its traces carry it:
 `feed_scroll_iter000.perfetto-trace`. A name is letters, digits, `_`, `.` and
-`-`. Under it goes what `scenario:` holds — `start`, `end`, `budget_ms` — less
-`name`, a `runner:` whose keys are laid over the top-level `runner:` for
+`-`. Under it goes what `scenario:` holds — `start` and `end` or `window`,
+`budget_ms` — less `name`, a `runner:` whose keys are laid over the top-level `runner:` for
 this scenario alone (a list such as `gradle_args` is replaced whole), and a
 `detectors:` of its own, laid over the top-level one the same way. Anything
 else under a scenario is refused.

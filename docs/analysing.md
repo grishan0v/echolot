@@ -369,7 +369,7 @@ view that writes a file, the page beside the report:
 echolot report                                 # what fired: one line per detector
 echolot report --detector monitor_contention   # its rows, longest first, five of them
 echolot report -d main_thread_block --top 12   # more rows; -d repeats for several detectors
-echolot report --window                        # the anchors, the main thread, the device
+echolot report --window                        # the anchors or the launch, the main thread, the device
 echolot report --markers                       # the Markers table, fifteen rows of it
 echolot report -d repeated_work --json         # the same selection as json, places included
 echolot report path/to/report.json --window    # another report, a round's own copy
@@ -601,6 +601,52 @@ runs on for seconds after the first frame, as it did above. The second line
 says how far apart they are, and warns when they do not overlap at all. For a
 cold-start question, the launch's reasons are the account of the time the
 user waited.
+
+## A window that is the launch
+
+A scenario can take the launch as its window and name no anchor at all:
+
+```yaml
+scenario:
+  name: coldStart
+  window: launch
+```
+
+The window then starts at the intent, as the platform records it, and ends
+at the later of the launch's end and the end of the app's first
+`reportFullyDrawn()` call. The report says in its header which the trace
+gave:
+
+```
+Scenario window: **696.31 ms**
+Window: the launch as the platform records it, from the intent to the end of the app's `reportFullyDrawn` call, which came after the first frame.
+Main thread: 61% on a CPU · 6% waiting for a CPU · 3% blocked in the kernel · 20% sleeping · 10% before the process started
+Startup: cold, **617 ms** from the launch to the first frame: …
+That is the platform's measure rather than the window: the startup began with the window, and ended 79 ms before it closed.
+```
+
+An app that does not call `reportFullyDrawn()` gets `from the intent to the
+launch's end, its first frame`, and `report.json` says `window.defined_by:
+"launch"` where the first says `"launch+reportFullyDrawn"`. When the app's own
+slice of the call is not in the trace, system_server's record of the same
+call closes the window, and the line says so.
+
+A launch ends when the first frame is drawn. That is the whole wait for an
+app that holds its splash screen until its content is ready. An app that
+draws a placeholder first is still loading after that frame, and only its
+`reportFullyDrawn()` call says when it is done: without the call, the work
+after the first frame is outside the window.
+
+Such a window opens before the app's process exists, so the main thread has
+no state for its first stretch: `10% before the process started` above. That
+is the launch's own time, named in the budget, and the warning about a
+window only partly accounted for does not fire on it.
+
+`analyze` refuses a trace that holds no launch of the process: the app has to
+be started inside the recording, as `launch` mode and a startup
+macrobenchmark do. The detectors read this window as they read any other.
+Reports of two launch windows that closed differently are not compared; see
+[compare](compare.md#two-windows).
 
 It costs time only on a trace that has a launch to break down: the breakdown's
 tables are computed when the module is included, which took 0.8 s on each of

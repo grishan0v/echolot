@@ -21,7 +21,9 @@ written as `null` and said out loud, never invented.
 Before calling the config done, `echolot analyze` the probe trace and read
 the window, not the findings: `start_anchor.matches` and
 `end_anchor.matches` above zero, a window
-that looks like the scenario, and not every detector firing at once. Then
+that looks like the scenario, and not every detector firing at once. A
+scenario with `window: launch` has no anchors to pick or to check: the trace
+says where the launch ends, and `window.defined_by` reports it. Then
 `echolot` should say `next: hunt`.
 
 A project with a config that wants another journey measured needs no new

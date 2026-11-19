@@ -12,6 +12,7 @@ nor in the trace. Of roughly 25 fields, four need a human decision.
 |---|---|
 | `project.process` | which process is measured; an app usually has several |
 | `scenario.start` / `end` | the window. Anchors are globs over slice names |
+| `scenario.window` | `launch`, in place of the two anchors: how the app opens, and the trace says where it ends |
 | `runner` | who drives the scenario: `launch`, `command` or `gradle` |
 | `domains` | slice name → module and file, for turning a finding into a place |
 | `instrumentation.allowed` | where the hunt may write its temporary markers, and nowhere else |
@@ -53,7 +54,11 @@ it came from:
   package and process, a minified build's mapping, an end anchor taken from
   a `TraceSectionMetric`);
   what it could not read is an engine default and says `_source: default`
-  (the start anchor, and an end it did not find, written `"?"`). The
+  (the start anchor, and an end it did not find, written `"?"`). For an app
+  with a launcher Activity and no macrobenchmark there is nothing to find:
+  the skeleton holds `window: launch` with `runner.mode: launch`, the
+  scenario that needs no end anchor, and its `_evidence` says the trace
+  decides the end. The
   `runner` section carries `_evidence` alone, and `instrumentation` neither
   — its `allowed` list is every module's `src/main` the scan found, test
   modules left out, for the human to confirm in question 4
@@ -120,7 +125,8 @@ start times, so the question names none.
 
 1. **Which scenario** are we analysing (from the benchmarks found, or cold start)
 2. **What counts as the end** of the scenario — the only genuinely semantic
-   question, not derivable from the trace
+   question, not derivable from the trace. For how the app opens it has a
+   default, and you do not ask it: see below
 3. **The budget** — `scenario.budget_ms`, the time the human expects the
    scenario to take. The report carries it and the plain reading says how the
    launch stands against it, but nothing fails over it, and one probe trace
@@ -134,6 +140,31 @@ question, asked only then.
 You **do not decide** — you present candidates and ask for confirmation. That
 makes it impossible to get wrong, and the decision is fixed in the config for
 good.
+
+### When the scenario is how the app opens
+
+Then question 2 is answered by the trace, and you do not pick an end anchor.
+Keep `scenario.window: launch` as `scan` wrote it, or write it yourself in
+place of `start` and `end` when the human names a launch as the scenario:
+
+```yaml
+scenario:
+  name: coldStart
+  window: {name: launch, _source: derived, _evidence: "launcher Activity in app/src/main/AndroidManifest.xml"}
+```
+
+The window starts at the intent and ends at the launch's end, the first
+frame, or at the app's `reportFullyDrawn()` call when that comes later. After
+the dry run below, read `window.defined_by` in the report and tell the human
+in one sentence what closed the window: `launch` is the first frame,
+`launch+reportFullyDrawn` the app's own call.
+
+Ask about the end only if the human says the app is not ready at that
+moment. That happens with an app that draws a placeholder first and never
+calls `reportFullyDrawn()`: its window closes at the first frame, and what
+loads after it is outside. The answer is then an end anchor from the probe,
+with `start` and `end` in place of `window`, or the call added to the app:
+their choice, not yours.
 
 ## Provenance
 
@@ -166,6 +197,10 @@ echolot analyze <trace> -c echolot.yml
 Look not at the findings but at `window`:
 
 - `start_anchor.matches == 0` — the anchor missed, the config is wrong
+- with `window: launch` there are no anchors to check: `defined_by` says what
+  closed the window, and the window is about as long as the startup line
+  says the launch was. `analyze` stopping at `no launch of <process>` means
+  the app was not started inside the recording: use `runner.mode: launch`
 - the window is nearly the whole trace — the anchors did not work
 - **every detector screaming at once** — almost certainly the process or the
   boundaries are off
@@ -224,8 +259,8 @@ as it was, and the new one gets a window and a runner of its own.
    ```
 
    The key is the name its traces and reports carry, so the scenario that was
-   there keeps them. A scenario takes `start`, `end`, `budget_ms`, `runner`
-   and `detectors`, and nothing else. The top-level `detectors:` stays where
+   there keeps them. A scenario takes `start` and `end` or `window`,
+   `budget_ms`, `runner` and `detectors`, and nothing else. The top-level `detectors:` stays where
    it is. Whatever was calibrated there was calibrated on the scenario that
    was there, and the new one runs on it until step 5.
 2. **What drives the new journey.** Its `runner:` holds only the keys that
