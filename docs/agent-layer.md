@@ -822,6 +822,8 @@ echolot hunt --verdict .echolot/verdict.json            # only checks it, record
         {"report": 2, "detector": "uninstrumented_cpu", "location": "arch_disk_io_0"},
         {"report": 3, "location": "AGENTTMP_insert_cards"}
       ],
+      "cost_ms": 1150,
+      "cost_of": "wall time of the inserts, as the AGENTTMP_insert_cards marker measured it",
       "fix": "One transaction for the whole fill.",
       "expected_ms": [300, 400],
       "confidence": "high",
@@ -847,8 +849,8 @@ echolot hunt --verdict .echolot/verdict.json            # only checks it, record
 Required: `summary`; `causes`, a list that is empty when nothing was found; and
 in each cause `title`, `where` (a list of places in the code) and `evidence`.
 A verdict with one cause and no estimate is a verdict. Optional: `mechanism`,
-`fix`, `expected_ms` (a number, or `[low, high]`), `confidence` (`high`,
-`medium` or `low`) with `confidence_why`, `inside` and `cleanup` (`removed`,
+`cost_ms` with `cost_of`, `fix`, `expected_ms`, `confidence` (`high`, `medium`
+or `low`) with `confidence_why`, `inside` and `cleanup` (`removed`,
 `none_added` or `left`) — and three lists at the top of the verdict.
 `ruled_out` and `also_measured` are the `Ruled out` and `Also measured` lines of
 the text conclusion, one string each. `suggestions` are changes that belong to
@@ -857,6 +859,17 @@ no one cause, such as one change that makes several go away: each is
 cause. None of the three points at a row, so only their shape is checked. A
 field outside these lists is refused, at any level, so a misspelt optional one
 does not vanish without a word.
+
+**Cost and estimate.** `cost_ms` is what a cause costs, as measured: a number of
+milliseconds, or `[low, high]` when the runs differ, which the agent took from
+its rows. `cost_of` says what that number measures ("wall time of the inserts",
+"processor time on the disk threads", "of the launch") and is allowed only with
+`cost_ms`. `expected_ms` is what the fix should win back, the agent's estimate,
+a number or `[low, high]` as well. They are two fields so that a measurement is
+never taken for a guess, by a reader of the verdict or by a page drawn from it.
+Only their shape is checked: echolot does not recompute a cost from the rows,
+and `hunt --show` says a single measured number as it is and a single estimate
+as "about".
 
 **What is checked.** Every `evidence` entry, and `inside`, has to be a row of a
 report this investigation filed. `report` is the number a report is filed
