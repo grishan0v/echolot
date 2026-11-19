@@ -114,14 +114,19 @@ compare with; `ratio` is window over budget, `text` the sentence. A detector's
 `attention` is one of `needs_attention`, `worth_a_look`, `fine` and
 `not_checked`: the first when one row that is main-thread time holds at least
 15% of the window and at least 150 ms in every run (and always for an `anr`
-row), the second for any other row, the third for a silent detector that ran,
-the last for one that did not (`checked: false` on the entry, or a failure).
+row), the second for any other row, the third for a silent detector whose entry
+says `checked: true`, the last for a silent one that did not look (`checked:
+false`, or a failure) or whose report is too old to say. A detector with rows
+reads its rows, whatever `checked` says. `analyze` always writes `checked`, so an
+entry without it is from before the key, and a silent one reads `not_checked`
+with the reason "This report was written before echolot recorded whether a check
+could run. Analyse the recordings again to find out."
 `plain` holds the detector's three fixed texts from its `.sql` header —
 `title` (what was checked), `why` (how it touches the app), `clean` (what a
 silent result says) — and `found`, one sentence built from its rows, `null`
-when it found nothing; `reason` says why a `not_checked` one did not run. A
-report from before these keys has none of them, and `echolot report --plain`
-works them out from the rows.
+when it found nothing; `reason` says why a `not_checked` one did not run (the
+entry's own, #441's). A report from before these keys has none of them, and
+`echolot report --plain` works them out from the rows.
 
 **`detectors[].identity`** — the columns that name a row of this detector:
 `location`, and for several of them `detail` too. Merging repeats and

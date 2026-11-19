@@ -21,7 +21,14 @@ The attention levels, one sentence each:
   worth a look      the check found something else: smaller, on another
                     thread, or not in every launch;
   fine              the check ran and found nothing above its limit;
-  not checked       the check could not run on these recordings.
+  not checked       the check could not run on these recordings, or the report
+                    is too old to say whether it could.
+
+A check with rows reads its rows, whatever `checked` says: some of a set's
+recordings may have lacked what it reads, and the rest have rows. Only an empty
+check can be "not checked", and an empty one is "fine" only when its entry says
+`checked: true`. An entry with no `checked` at all is from a report written
+before echolot recorded it (#441): `analyze` always writes the key now.
 
 A freeze the system itself recorded (`anr`) is always "needs attention".
 
@@ -80,6 +87,12 @@ DETECTOR_DIR = Path(__file__).parent / "sql" / "detectors"
 
 # The generic clean text, for a detector this version does not know.
 _CLEAN = "It found nothing above its limit."
+
+# Why an empty check did not look, when the entry has no reason of its own.
+_OLD_REPORT = ("This report was written before echolot recorded whether a check could "
+               "run. Analyse the recordings again to find out.")
+_FAILED = "It failed to run on these recordings."
+_COULD_NOT = "It could not run on these recordings."
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +176,14 @@ def _runs(row: dict[str, Any], ctx: _Ctx) -> str:
         return ""
     k, n = seen
     return f"in all {n} {ctx.plural}" if k == n else f"in {k} of {n} {ctx.plural}"
+
+
+def _reason(det: dict[str, Any]) -> str:
+    """Why an empty check did not look: its own reason, or that it failed, or that
+    the report is too old to say."""
+    if det.get("checked") is False:
+        return det.get("reason") or (_FAILED if det.get("error") else _COULD_NOT)
+    return _FAILED if det.get("error") else _OLD_REPORT
 
 
 def _clause(text: str, runs: str) -> str:
@@ -254,12 +275,13 @@ def _counts(det_id: str, row: dict[str, Any]) -> bool:
 def attention(det: dict[str, Any], report: dict[str, Any],
               ctx: _Ctx | None = None) -> str:
     """How much attention a detector's entry in a report needs. See the top."""
-    if det.get("checked") is False:
-        return NOT_CHECKED
     rows = det.get("rows") or []
     if not rows:
-        # A check that failed found nothing because it did not look.
-        return NOT_CHECKED if det.get("error") else FINE
+        # Nothing found says "fine" only when the check says it looked: not when
+        # it says it did not, nor when it failed, nor when the report is older
+        # than the key and cannot say.
+        looked = det.get("checked") is True and not det.get("error")
+        return FINE if looked else NOT_CHECKED
     did = det.get("id", "")
     if did == "anr":
         return NEEDS_ATTENTION
@@ -538,9 +560,9 @@ FOUND: dict[str, Callable[[list[dict[str, Any]], _Ctx], str]] = {
 def found(det: dict[str, Any], report: dict[str, Any],
           ctx: _Ctx | None = None) -> str | None:
     """One sentence on what a detector found, from its rows alone. None when it
-    found nothing, or did not look."""
+    found nothing."""
     rows = sorted(det.get("rows") or [], key=lambda r: -_value(r))
-    if not rows or det.get("checked") is False:
+    if not rows:
         return None
     return FOUND.get(det.get("id"), _f_generic)(rows, ctx or _Ctx(report))
 
@@ -573,16 +595,19 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
     if budget is None:
         return {"level": NOT_CHECKED, "budget_ms": None, "ratio": None,
                 "text": f"{lead} No time limit is set, so there is nothing to compare it with."}
-    ratio = ctx.window_ms / budget
+    # The key, and what is said from it: the sentence's ratio is `verdict.ratio`
+    # rounded to one decimal, never the rounded window over the rounded budget
+    # ("1.9 s" over "0.5 s" is 3.8 where 1919 ms over 520 ms is 3.7).
+    ratio = round(ctx.window_ms / budget, 3)
     allowed = f"You allowed {hum(budget)}, so"
     if ratio <= 1:
         level, rest = FINE, "it is within the limit."
     else:
         level = WORTH_A_LOOK if ratio <= OVER_BUDGET else NEEDS_ATTENTION
         over = round((ratio - 1) * 100)
-        rest = ("it takes {:.1f} times as long.".format(ratio) if ratio >= 2 else
+        rest = (f"it takes {ratio:.1f} times as long." if ratio >= 2 else
                 f"it runs {over}% over." if over >= 1 else "it is just over the limit.")
-    return {"level": level, "budget_ms": budget, "ratio": round(ratio, 3),
+    return {"level": level, "budget_ms": budget, "ratio": ratio,
             "text": f"{lead} {allowed} {rest}"}
 
 
@@ -599,9 +624,7 @@ def annotate(report: dict[str, Any]) -> dict[str, Any]:
     for det in report.get("detectors") or []:
         level = attention(det, report, ctx)
         title, why, clean = fixed_texts(det.get("id", ""), det.get("title", ""))
-        reason = det.get("reason") if level == NOT_CHECKED else None
-        if level == NOT_CHECKED and not reason and det.get("error"):
-            reason = "It failed to run on these recordings."
+        reason = _reason(det) if level == NOT_CHECKED else None
         try:
             text = found(det, report, ctx)
         except Exception as e:  # a sentence is never worth an analysis that failed
@@ -660,9 +683,13 @@ def render(report: dict[str, Any], width: int | None = None) -> str:
         parts.append(f"-  {len(blind)} could not be checked")
     if parts:
         lines += ["", " " + "     ".join(parts)]
+    # A reason shared by several is said once, with their titles: a report from
+    # before the `checked` key has one for every silent check.
+    reasons: dict[str, list[str]] = {}
     for d in blind:
-        lines += wrap(f"{d['plain']['title']}: {d['plain']['reason'] or 'it could not run.'}",
-                      "    ", "      ")
+        reasons.setdefault(d["plain"]["reason"] or _COULD_NOT, []).append(d["plain"]["title"])
+    for reason, titles in reasons.items():
+        lines += wrap(f"{', '.join(titles)}: {reason}", "    ", "      ")
     off = (report.get("summary") or {}).get("absent_ids") or []
     if off:
         lines += ["", f" {_count(len(off), 'more check is', 'more checks are')} "

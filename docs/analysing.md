@@ -457,7 +457,17 @@ How much attention a check needs:
 | needs attention | one thing the main thread spent or lost holds at least 15% of the launch and at least 0.15 s, in every launch. A freeze the system itself recorded (`anr`) is always here |
 | worth a look | the check found something else: smaller, on another thread, or not in every launch |
 | fine | the check ran and found nothing above its limit |
-| not checked | the check could not run on these recordings, and says why |
+| not checked | it found nothing, and it could not run on these recordings (it says why), or the report is too old to say whether it could |
+
+A check with rows reads its rows, whatever `checked` says: a set of recordings
+may have lacked what the check reads in some of them, and the rest have rows
+(see [When a detector could not look](#when-a-detector-could-not-look)). Only an
+empty check can be "not checked", and it is "fine" only when its entry says
+`checked: true`. `analyze` always writes that key, so an entry without it is from
+a report written before echolot recorded it, and says so: "This report was
+written before echolot recorded whether a check could run. Analyse the
+recordings again to find out." `echolot report --plain` says such a reason once
+for all the checks it covers.
 
 What the numbers rest on. The 15% is a share of the launch *as it is measured
 now*: after a fix has shortened the launch, a piece that did not change is a

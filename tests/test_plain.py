@@ -44,8 +44,20 @@ def row(location, total, runs="3/3", **kw):
 
 
 def entry(did, rows, **extra):
+    """An entry as `analyze` writes it: `checked` is always there."""
     return {"id": did, "title": did, "why": "", "params": {}, "params_source": "default",
-            "identity": ["location"], "rows": rows, "error": None, **extra}
+            "identity": ["location"], "rows": rows, "error": None, "checked": True, **extra}
+
+
+def old_entry(did, rows, **extra):
+    """An entry of a report written before `checked` existed (#441): no such key."""
+    out = entry(did, rows, **extra)
+    del out["checked"]
+    return out
+
+
+OLD_REPORT = ("This report was written before echolot recorded whether a check could run. "
+              "Analyse the recordings again to find out.")
 
 
 def make(detectors, duration=2000.0, budget=None, runs=3, startup=True, process=MAIN):
@@ -399,8 +411,56 @@ def test_silent_failed_and_not_checked():
     check("an entry that says it was not checked is not checked", level(
         "io_wait", [], checked=False, reason="Record with the phone's state switched on.")
         == "not_checked")
-    check("a missing `checked` means checked", level("io_wait", []) == "fine")
-    check("`checked: true` is the same", level("io_wait", [], checked=True) == "fine")
+    check("`checked: true` and nothing found is fine", level("io_wait", [], checked=True) == "fine")
+    old = old_entry("io_wait", [])
+    check("an entry with no `checked` at all is from before the key: not checked, never fine",
+          plain.attention(old, make([old])) == "not_checked")
+    failed_and_true = entry("io_wait", [], error="boom")
+    check("`checked: true` over an error is still a check that did not look",
+          plain.attention(failed_and_true, make([failed_and_true])) == "not_checked")
+
+
+def test_a_report_from_before_the_key_says_so_for_every_silent_check():
+    """`analyze` writes `checked` always, so an entry without it is older than #441."""
+    rep = make([old_entry("io_wait", []), old_entry("gc_pressure", []),
+                old_entry("main_thread_waits", SAMPLES["main_thread_waits"][0])])
+    plain.annotate(rep)
+    io_wait, gc, waits = rep["detectors"]
+    check("the silent ones are not checked", io_wait["attention"] == gc["attention"] == "not_checked",
+          (io_wait["attention"], gc["attention"]))
+    check("and say that the report is too old to tell",
+          io_wait["plain"]["reason"] == OLD_REPORT and gc["plain"]["reason"] == OLD_REPORT,
+          (io_wait["plain"], gc["plain"]))
+    check("one with rows reads its rows", waits["attention"] == "needs_attention", waits["attention"])
+    check("says what it found, and has no reason to give",
+          waits["plain"]["found"].startswith("The main thread waited 0.7 s")
+          and waits["plain"]["reason"] is None, waits["plain"])
+
+
+def test_rows_are_read_whatever_checked_says():
+    """Some of a set's recordings may have lacked what the check reads; the rest have rows."""
+    rows = SAMPLES["main_thread_waits"][0]
+    rep = make([entry("main_thread_waits", rows, checked=False,
+                      reason="The recording did not carry it (1 of the 3 recordings).")])
+    plain.annotate(rep)
+    det = rep["detectors"][0]
+    check("the rows set the level", det["attention"] == "needs_attention", det["attention"])
+    check("the sentence is there", det["plain"]["found"] == SAMPLES["main_thread_waits"][2],
+          det["plain"])
+    check("and the reason is only for a check that shows nothing", det["plain"]["reason"] is None)
+
+
+def test_a_check_that_did_not_look_always_has_a_reason():
+    gives = lambda det: plain.annotate(make([det]))["detectors"][0]["plain"]["reason"]  # noqa: E731
+    check("its own, when it has one",
+          gives(entry("io_wait", [], checked=False, reason="Because.")) == "Because.")
+    check("that it could not run, when it says so and no more",
+          gives(entry("io_wait", [], checked=False)) == "It could not run on these recordings.")
+    check("that it failed, when there is an error",
+          gives(entry("io_wait", [], checked=False, error="boom"))
+          == "It failed to run on these recordings.")
+    check("that it failed, in a report that has no `checked`",
+          gives(old_entry("io_wait", [], error="boom")) == "It failed to run on these recordings.")
 
 
 def test_not_checked_says_why_and_is_never_a_finding():
@@ -432,6 +492,9 @@ def verdict_of(duration, budget):
     (990.0, 500.0, "needs_attention", "The launch takes 1.0 s. You allowed 0.5 s, so it runs 98% over."),
     (1920.0, 500.0, "needs_attention",
      "The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.8 times as long."),
+    (1919.0, 520.0, "needs_attention",
+     "The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.7 times as long."),
+    (625.2, 500.0, "worth_a_look", "The launch takes 0.6 s. You allowed 0.5 s, so it runs 25% over."),
 ])
 def test_the_verdict_is_the_launch_against_the_budget(duration, budget, want_level, text):
     got = verdict_of(duration, budget)
@@ -439,6 +502,22 @@ def test_the_verdict_is_the_launch_against_the_budget(duration, budget, want_lev
     check("words", got["text"] == text, got["text"])
     check("budget and ratio are in it", got["budget_ms"] == budget
           and got["ratio"] == round(duration / budget, 3), got)
+
+
+def test_the_ratio_in_the_sentence_is_the_key_rounded_to_one_decimal():
+    """1919 ms against 520 ms is 3.7. The rounded 1.9 over the rounded 0.5 would say 3.8."""
+    got = verdict_of(1919.0, 520.0)
+    check("the key", got["ratio"] == 3.69, got)
+    check("the sentence says that key to one decimal, and not the other quotient",
+          "so it takes 3.7 times as long." in got["text"] and "3.8" not in got["text"], got["text"])
+    check("beside the rounded numbers it shows",
+          got["text"].startswith("The launch takes 1.9 s. You allowed 0.5 s, so"), got["text"])
+    for window in range(900, 9000, 41):
+        for budget in (300.0, 500.0, 520.0, 1234.0):
+            got = verdict_of(float(window), budget)
+            if got["ratio"] >= 2:
+                check(f"{window} ms against {budget}", f"it takes {got['ratio']:.1f} times as long."
+                      in got["text"], got)
 
 
 @pytest.mark.parametrize("budget", [None, 0, 0.0, -5, True, "2500", "fast", float("nan"), float("inf")])
@@ -558,6 +637,17 @@ def test_a_report_is_read_as_it_says_when_it_carries_the_reading():
     rep["verdict"]["text"] = "Written by another version."
     check("its words, not worked out again",
           plain.render(rep, width=100).startswith("NEEDS ATTENTION   Written by another version."))
+
+
+def test_a_report_from_before_the_key_says_why_once_for_all_the_silent_checks():
+    rep = make([old_entry("io_wait", []), old_entry("gc_pressure", []),
+                old_entry("main_thread_waits", SAMPLES["main_thread_waits"][0])], budget=500.0)
+    text = " ".join(plain.render(rep, width=100).split())
+    check("the count", "- 2 could not be checked" in text, text)
+    check("the reason once, with the titles of both",
+          text.count("This report was written before echolot recorded whether a check could run.") == 1
+          and "Waiting for the disk, Memory clean-up: This report was written before" in text, text)
+    check("and the finding is still there", "! The screen waits for background work" in text, text)
 
 
 def test_the_terminal_view_wraps_to_the_width_it_is_given():
