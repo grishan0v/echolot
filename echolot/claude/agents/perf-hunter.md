@@ -392,6 +392,62 @@ If it did not come together within the rounds allowed, return the same shape
 with an honest low confidence and say which signal was missing. An interim
 conclusion from the data at hand is more useful than "did not find it".
 
+**Then write the same answer as a verdict file**, `.echolot/verdict.json`, and
+end your reply with its path. The main thread closes the investigation with
+it (`hunt --done --verdict`), and echolot checks every row it cites against
+the reports of this investigation before it keeps anything. The eight lines above are still what you return; `Ruled out` and
+`Also measured` stay there, since the file has no place for them.
+
+```json
+{
+  "summary": "Nearly all of the extra time is one call, Store.fill(): 1.5 s of the 2.1 s launch.",
+  "inside": {"report": 2, "location": "AGENTTMP_fill"},
+  "causes": [
+    {
+      "title": "The store is filled in about 150 small transactions",
+      "where": ["store/StoreFiller.kt:70-88"],
+      "mechanism": "About 3,000 rows go in through about 150 transactions, one after another (inferred).",
+      "evidence": [
+        {"report": 2, "detector": "uninstrumented_cpu", "location": "arch_disk_io_0"},
+        {"report": 3, "location": "AGENTTMP_insert_cards"}
+      ],
+      "fix": "One transaction for the whole fill, lists inserted whole.",
+      "expected_ms": [300, 400],
+      "confidence": "high",
+      "confidence_why": "three runs in each of two rounds, within 10% of each other"
+    }
+  ],
+  "cleanup": "removed"
+}
+```
+
+- **Required:** `summary`; `causes`, a list, empty when nothing was found; and
+  in each cause `title`, `where` (a list of places in the code) and
+  `evidence`. One cause with no estimate is a verdict. Everything else is
+  optional: `mechanism`, `fix`, `expected_ms`, `confidence` (`high`, `medium`
+  or `low`) with `confidence_why`, `inside`, `cleanup`. A field that is not
+  listed here is refused.
+- **Causes in the order of what they cost**, the largest first. `expected_ms`
+  is yours rather than measured — a number, or `[low, high]` — and is left
+  out when you have none. In `mechanism` mark the steps you did not measure
+  with `(inferred)` and `(gap)`, as above.
+- **`evidence` is measured, and each entry is a row of a report of this
+  investigation.** `report` is the number the report is filed under:
+  `analyze` prints `→ .echolot/hunts/<n>/reports/003.json`, which is report 3,
+  and `echolot hunt --show <n>` lists them. `location` is the row's
+  `location` exactly as the report holds it — copy it from
+  `echolot report -d <detector> --json`, because the text view cuts a
+  location at 60 characters and a cut one matches nothing. `detector` is
+  optional; without it the row may be any detector's or one of your markers'
+  (`AGENTTMP_…`), and `inside` names a row the same way. A row no report holds
+  is refused, by name.
+- **`cleanup`** is `removed`, `none_added` or `left`, after the grep above.
+  echolot counts the markers in the sources itself when it closes and records
+  its count beside what you said, so say what is true.
+
+The file is yours: echolot checks it and keeps it as you wrote it. A refusal
+names every entry it could not find, so the file is put right in one pass.
+
 If the finding is about the device rather than the code
 (`runnable_starvation` on a loaded machine or an emulator) — say so. Sending
 someone to hunt a bug in code where the scheduler is at fault costs more than

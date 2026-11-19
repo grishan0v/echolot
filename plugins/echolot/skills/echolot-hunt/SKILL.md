@@ -10,7 +10,7 @@ a host that does not list this skill, and the loop's guide is the subagent's.
 
 1. `echolot doctor -q`, on its own. A non-zero exit: show what failed, and
    stop. If it says a sandbox refused a port, ask to run it outside the
-   sandbox, as the message says, before you stop.
+   sandbox before you stop.
 2. **Three facts, in the human's words**: what regressed against what ("it was
    3 s, now 7 s"), which traces show it, and **after which change**. Ask for
    the change even when the rest is clear. "Unknown" is an answer; not asking
@@ -24,9 +24,7 @@ a host that does not list this skill, and the loop's guide is the subagent's.
 
    Several scenarios in `echolot.yml`, as `echolot status` lists them: match
    the question to one, ask when you cannot tell, and add `--scenario <name>`.
-   Every later `collect` and `analyze` is filed under it, and `echolot compare`
-   reads from it. It moves the scenario's loose traces aside, and stderr
-   names the directory. Those traces are this question's evidence only if the human
+   It moves the scenario's loose traces aside, and stderr names the directory. Those traces are this question's evidence only if the human
    recorded them for it before asking; most often they are an earlier
    question's last round or setup's probe capture. Exit 2 means
    `echolot.yml` does not load: show the error and stop. Markers the previous
@@ -57,14 +55,17 @@ a host that does not list this skill, and the loop's guide is the subagent's.
    among those it lists on request, the loop is yours: `echolot guide loop`,
    in short passes.
 5. **When the conclusion comes back, close the investigation first**, every
-   time and whatever it came to, and only then answer the human. Left for
-   after the answer, it is the step that gets skipped:
+   time and whatever it came to, then answer the human. When it ends
+   with a verdict file:
 
    ```bash
-   echolot hunt --done "<place> — <what happens there>; confidence <high|medium|low>"
+   echolot hunt --done --verdict .echolot/verdict.json
    ```
+
+   Exit 2 is a refusal that records nothing: send its entries back to the
+   subagent and run it again. With no file:
+   `echolot hunt --done "<place> — <what happens there>; confidence <high|medium|low>"`.
 
    Then show the conclusion as it is. If it does not say the markers are
    gone, check, with the command `echolot guide hunt` gives. Say a low
-   confidence out loud, and a finding about the device is worth a run on
-   real hardware.
+   confidence out loud; a device finding is worth a run on real hardware.
