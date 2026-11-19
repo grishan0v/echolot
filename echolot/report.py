@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
+from . import launch as launch_mod
 from . import needs as needs_mod
 from . import stats, table
 
@@ -203,6 +204,11 @@ def _merge_budget(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     shares = [b["accounted_pct"] for b in budgets
               if b.get("accounted_pct") is not None]
     out["accounted_pct"] = round(median(shares), 1) if shares else None
+    # A launch window's stretch before the app's process existed (launch.py).
+    late = [b["before_process_ms"] for b in budgets
+            if b.get("before_process_ms") is not None]
+    if late:
+        out["before_process_ms"] = round(median(late), 2)
     covered = [b for b in budgets if b.get("in_rows_pct") is not None]
     if covered:
         out["in_rows_ms"] = round(median([b["in_rows_ms"] for b in covered]), 2)
@@ -569,6 +575,7 @@ def _merge_window_checks(reports: list[dict[str, Any]]) -> dict[str, Any]:
     if material:
         out["opened_inside"] = dict(max(material, key=lambda o: o.get("before_ms") or 0),
                                     runs=f"{len(material)}/{total}")
+    out.update(launch_mod.merged(windows, total))
     names = sorted({w["process"] for w in windows if w.get("process")})
     if len(names) > 1:
         out["processes"] = names
@@ -727,6 +734,14 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
         share = ms / window * 100
         if share >= 1:
             parts.append(f"{share:.0f}% {label}")
+    # A window that is the launch opens at the intent, before the app's
+    # process exists, and the main thread has no state until it does. That
+    # stretch is the launch's own and is named as a share of its own; it is
+    # no hole in the recording, which the warning below is about.
+    late = budget.get("before_process_ms") or 0
+    late_share = late / window * 100
+    if late_share >= 1:
+        parts.append(f"{late_share:.0f}% before the process started")
     if not parts:
         return []
 
@@ -736,7 +751,17 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
     # Anything much short of the whole window means the thread had no state
     # for part of it; a state still open when the recording stopped is counted
     # to the window's end. Silence would read as "the rest was nothing".
-    if accounted is not None and accounted < 95:
+    if accounted is None or accounted + late_share >= 95:
+        return out
+    if late:
+        out.append(
+            f"> ⚠️ Only {accounted + late_share:.0f}% of the window is accounted "
+            f"for on the main thread, the {late:.0f} ms before its process "
+            f"started included. It had no state for the rest of it — the "
+            f"recording has a hole there — so the shares above are of what "
+            f"was seen, not of the scenario."
+        )
+    else:
         out.append(
             f"> ⚠️ Only {accounted:.0f}% of the window is accounted for on the "
             f"main thread. It did not exist for the rest of it — the process "
@@ -802,7 +827,7 @@ STARTUP_STATES = {
 }
 
 
-def _startup_lines(startup: dict[str, Any] | None) -> list[str]:
+def _startup_lines(startup: dict[str, Any] | None, built: bool = False) -> list[str]:
     """The app's startup by Perfetto's own account, under the window's.
 
     The budget says where the window went by thread state. This says where
@@ -814,7 +839,8 @@ def _startup_lines(startup: dict[str, Any] | None) -> list[str]:
     first frame misses the end of the startup.
 
     Reasons under a percent are dropped from the line and kept in the JSON,
-    as in the budget.
+    as in the budget. `built` is for a window that is the launch: the
+    startup described is then the one the window was built from.
     """
     if not startup or not startup.get("dur_ms"):
         return []
@@ -827,7 +853,10 @@ def _startup_lines(startup: dict[str, Any] | None) -> list[str]:
              in sorted(shares.items(), key=lambda kv: (-kv[1], kv[0])) if share >= 1]
     kind = startup.get("type") or "of a kind Perfetto could not tell"
     line = f"Startup: {kind}, **{dur:.0f} ms** from the launch to the first frame"
-    if startup.get("startups"):
+    if startup.get("startups") and built:
+        line += (f" (one of {startup['startups']} in the trace: the launch the "
+                 f"window is built from)")
+    elif startup.get("startups"):
         line += (f" (the one of {startup['startups']} in the trace that shares "
                  f"the most with the window)")
     if parts:
@@ -1347,14 +1376,17 @@ def to_markdown(report: dict[str, Any]) -> str:
         if low and high and high > 2 * low:
             out.append(
                 f"> ⚠️ Repeat windows diverged {high / low:.1f}x. These are not "
-                f"repeats of one scenario: either the anchors did not match or "
-                f"the runs did different things. A median over such numbers is "
-                f"meaningless."
+                f"repeats of one scenario: "
+                + ("the launches did different things"
+                   if w.get("defined_by") else
+                   "either the anchors did not match or the runs did different things")
+                + ". A median over such numbers is meaningless."
             )
+    out.extend(launch_mod.lines(w))
 
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_crowding_lines(w.get("crowding")))
-    out.extend(_startup_lines(w.get("startup")))
+    out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
 
     # An anchor that never matched silently collapses the window onto the whole
     # trace. That has to be shouted, not hidden: otherwise the report looks
@@ -1403,7 +1435,17 @@ def to_markdown(report: dict[str, Any]) -> str:
     # boundary; thread states are clipped, so the beginning of a stall that
     # started before the anchor is simply not in the report.
     inside = w.get("opened_inside")
-    if inside and inside.get("material"):
+    if inside and inside.get("material") and w.get("defined_by"):
+        # A launch window has no anchor to move: the app was already running
+        # when it was brought to the front.
+        out.append(
+            f"> ⚠️ The window opened with the main thread already blocked: "
+            f"state `{inside['state']}` for {inside['total_ms']} ms, of which "
+            f"{inside['before_ms']} ms happened before the launch began. "
+            f"Whatever put it there is outside this window, so the waiting "
+            f"below is the tail of it rather than the whole."
+        )
+    elif inside and inside.get("material"):
         out.append(
             f"> ⚠️ The window opened with the main thread already blocked: "
             f"state `{inside['state']}` for {inside['total_ms']} ms, of which "
@@ -1469,8 +1511,9 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
         out.append(
             "Either the run is clean or the config is wrong — check that the "
-            "process name and the scenario anchors match the trace "
-            "(`echolot probe`)."
+            + ("process name matches" if w.get("defined_by") else
+               "process name and the scenario anchors match")
+            + " the trace (`echolot probe`)."
         )
         out.append("")
 
@@ -1576,13 +1619,14 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
                            + (", ⚠️ never closed" if a.get("unfinished") else ""))
     if anchors:
         out.append("Anchors: " + " · ".join(anchors))
+    out.extend(launch_mod.lines(w))
     alts = w.get("process_alternatives")
     if alts:
         out.append(f"⚠️ {w.get('process_alternatives_total') or len(alts)} other "
                    f"process(es) matched the mask; the largest was taken")
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_crowding_lines(w.get("crowding")))
-    out.extend(_startup_lines(w.get("startup")))
+    out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
@@ -1707,7 +1751,8 @@ def window_view(report: dict[str, Any]) -> str:
     inside = w.get("opened_inside")
     if inside and inside.get("material"):
         out.append(f"⚠️ opened with the main thread already blocked: `{inside['state']}` "
-                   f"for {inside['total_ms']} ms, {inside['before_ms']} ms of it before the anchor")
+                   f"for {inside['total_ms']} ms, {inside['before_ms']} ms of it before the "
+                   + ("launch" if w.get("defined_by") else "anchor"))
     return "\n".join(out)
 
 

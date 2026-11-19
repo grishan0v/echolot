@@ -163,3 +163,61 @@ def facts(tp, window: dict[str, Any], found: dict[str, Any]) -> dict[str, Any]:
     return {"defined_by": found["defined_by"],
             "report_fully_drawn": found["report_fully_drawn"]}
 
+
+# --- what the report says about it ------------------------------------------------
+
+def merged(windows: list[dict[str, Any]], total: int) -> dict[str, Any]:
+    """What closed the window, for every repeat at once.
+
+    A check like the anchors', so the worst case speaks. Repeats that did
+    not close the same way are two measurements in one set: `defined_by`
+    names both, joined, and `defined_by_runs` counts each, which is what the
+    report warns about and `compare` refuses. Where the call was read from
+    is the least any repeat had: none, then system_server's record, then the
+    app's own slice.
+    """
+    defined = [w["defined_by"] for w in windows if w.get("defined_by")]
+    if not defined:
+        return {}
+    kinds = sorted(set(defined))
+    out: dict[str, Any] = {"defined_by": " and ".join(kinds)}
+    if len(kinds) > 1:
+        out["defined_by_runs"] = {k: f"{defined.count(k)}/{total}" for k in kinds}
+    sources = [w.get("report_fully_drawn") for w in windows if w.get("defined_by")]
+    out["report_fully_drawn"] = min(sources, key=(None, SYSTEM_SERVER, APP).index)
+    return out
+
+
+def lines(window: dict[str, Any]) -> list[str]:
+    """What bounds a window that is the launch, where an anchored one names its anchors."""
+    by = window.get("defined_by")
+    if not by:
+        return []
+    mixed = window.get("defined_by_runs")
+    if mixed:
+        closed = {FULLY_DRAWN: "on `reportFullyDrawn`", LAUNCH: "at the launch's end"}
+        counted = " and ".join(
+            f"{closed.get(kind, f'`{kind}`')} in {runs.split('/')[0]}"
+            for kind, runs in sorted(mixed.items(), reverse=True))
+        total = next(iter(mixed.values())).split("/")[1]
+        return [
+            f"> ⚠️ The launch window did not close the same way in every repeat: "
+            f"{counted} of {total}. Those are two windows, the medians below "
+            f"mix them, and `compare` refuses this report. Look for the repeat "
+            f"where the app did not call `reportFullyDrawn`, or called it "
+            f"before its first frame."
+        ]
+    head = "Window: the launch as the platform records it, from the intent to "
+    source = window.get("report_fully_drawn")
+    if by == FULLY_DRAWN and source == SYSTEM_SERVER:
+        return [head + "`reportFullyDrawn` as system_server records it. The "
+                       "app's own slice of that call is not in the trace."]
+    if by == FULLY_DRAWN:
+        return [head + "the end of the app's `reportFullyDrawn` call, which "
+                       "came after the first frame."]
+    if source:
+        return [head + "the launch's end, its first frame. `reportFullyDrawn` "
+                       "was called before that frame, so it closes nothing."]
+    return [head + "the launch's end, its first frame. The trace holds no "
+                   "`reportFullyDrawn` call after the launch began."]
+
