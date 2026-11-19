@@ -1957,6 +1957,118 @@ def _(report):
     assert report["window"]["opened_inside"] is None, report["window"]
 
 
+# --- a window that is the launch ---------------------------------------------
+#
+# `scenario.window: launch` (launch.py): no anchor, the bounds come from the
+# launch system_server recorded, 40..1105 here, and from the app's
+# `reportFullyDrawn()` when it calls it. The fixture's own launch has no
+# call; `fixture.build(fully_drawn=...)` plants one.
+
+LAUNCH_CONFIG = {
+    "project": FIXTURE_CONFIG["project"],
+    "scenario": {"name": "fixture", "window": "launch"},
+}
+
+
+def _launched(**build) -> dict:
+    """The fixture analysed with the window taken from its launch."""
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "launch.perfetto-trace"
+        trace.write_bytes(fixture.build(**build))
+        return _analyze(trace, Config(LAUNCH_CONFIG))
+
+
+def _window_ms(report) -> tuple[float, float]:
+    w = report["window"]
+    return ((w["ts_start"] - fixture.BASE_NS) / 1e6, (w["ts_end"] - fixture.BASE_NS) / 1e6)
+
+
+@check("launch window: the launch as the platform records it, with no anchor")
+def _(report):
+    got = _launched()
+    w = got["window"]
+    # From the intent to the first frame, 60 ms earlier than the anchored
+    # window opens: the app said nothing, so the launch's end closes it.
+    assert _window_ms(got) == (fixture.LAUNCH_AT_MS, fixture.LAUNCH_DRAWN_MS), _window_ms(got)
+    assert (w["defined_by"], w["report_fully_drawn"]) == ("launch", None), w
+    assert w["start_anchor"] is None and w["end_anchor"] is None, w
+    # The startup block is the launch the window was built from: the two
+    # coincide, where the anchored report has the startup begin 60 ms early.
+    s = w["startup"]
+    assert (s["dur_ms"], s["from_window_start_ms"], s["from_window_end_ms"]) \
+        == (1065.0, 0.0, 0.0), s
+    # The window opens before the process exists. The main thread's first
+    # state is at 50, and those 10 ms are named, not missing: with them the
+    # budget accounts for the whole window, and nothing warns of a hole.
+    b = w["main_thread"]
+    assert b["before_process_ms"] == s["reasons"]["launch_delay"] == 10.0, b
+    assert round(b["accounted_ms"] + b["before_process_ms"], 2) == b["window_ms"], b
+    from . import report as report_mod
+    text = report_mod.to_markdown(got)
+    assert "of the window is accounted for" not in text, text[:900]
+    # Every detector ran on it: none reads an anchor.
+    assert [d["id"] for d in got["detectors"] if d["error"]] == [], got["detectors"]
+    # And the anchored report says none of this: it is what it was.
+    assert "defined_by" not in report["window"], report["window"]
+    assert "before_process_ms" not in report["window"]["main_thread"], report["window"]
+
+
+@check("launch window: runs on to reportFullyDrawn when the app calls it")
+def _(report):
+    # The app's call at 1160, 55 ms after the first frame: two nested slices
+    # on the main thread, and the window closes with the outer one.
+    got = _launched(fully_drawn="app")
+    w = got["window"]
+    end = fixture.FULLY_DRAWN_AT_MS + fixture.FULLY_DRAWN_MS
+    assert _window_ms(got) == (fixture.LAUNCH_AT_MS, end), _window_ms(got)
+    assert (w["defined_by"], w["report_fully_drawn"]) == ("launch+reportFullyDrawn", "app"), w
+    # The launch is still the platform's 1065 ms, and ended before the window.
+    assert (w["startup"]["dur_ms"], w["startup"]["from_window_end_ms"]) == (1065.0, -55.4), \
+        w["startup"]
+    # Without the app's own slices, system_server's record of the same call
+    # closes it, 2.4 ms later.
+    seen = _launched(fully_drawn="system_server")
+    assert _window_ms(seen) == (
+        fixture.LAUNCH_AT_MS, fixture.FULLY_DRAWN_SEEN_AT_MS + fixture.FULLY_DRAWN_SEEN_MS), \
+        _window_ms(seen)
+    assert (seen["window"]["defined_by"], seen["window"]["report_fully_drawn"]) \
+        == ("launch+reportFullyDrawn", "system_server"), seen["window"]
+
+
+@check("launch window: a call before the first frame does not close it")
+def _(report):
+    # Called at 1099, six milliseconds before the launch ended. The window
+    # ends at the later of the two, so a claim made early cannot cut the
+    # launch short.
+    got = _launched(fully_drawn="early")
+    assert _window_ms(got) == (fixture.LAUNCH_AT_MS, fixture.LAUNCH_DRAWN_MS), _window_ms(got)
+    assert (got["window"]["defined_by"], got["window"]["report_fully_drawn"]) \
+        == ("launch", "app"), got["window"]
+
+
+@check("compare refuses two reports whose windows were defined differently")
+def _(report):
+    from . import compare as cmp_mod
+    plain, drawn = _launched(), _launched(fully_drawn="app")
+
+    def compared(before, after):
+        cmp = cmp_mod.build(before, after, before_path="b.json", after_path="a.json")
+        return cmp["comparable"], [w["text"] for w in cmp["warnings"] if w["id"] == "window"]
+
+    # A launch against a launch that ran on to reportFullyDrawn: one scenario
+    # name, one config, two windows.
+    comparable, said = compared(plain, drawn)
+    assert comparable is False and said, said
+    assert "closed at its end before" in said[0] \
+        and "closed on `reportFullyDrawn` after" in said[0], said
+    # The anchored report against the launch window of the same trace.
+    comparable, said = compared(report, plain)
+    assert comparable is False and "by the config's start and end anchors before" in said[0], said
+    # One definition on both sides is compared as ever.
+    for same in (plain, drawn, report):
+        assert compared(same, same) == (True, []), compared(same, same)
+
+
 # --- anr, anr_risk ---------------------------------------------------------
 
 def _lowered_bar():
