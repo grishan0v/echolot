@@ -21,7 +21,7 @@ from tests.support import check  # noqa: E402
 from tests.test_launch_window import (  # noqa: E402
     APP, LAUNCH, MS, _fixture, _startup, _Startups, _two_launches)
 
-from echolot import fixture, recorder  # noqa: E402
+from echolot import fixture, recorder, selftest  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.main import _startup_info, main  # noqa: E402
 
@@ -204,3 +204,59 @@ def test_calibrate_and_analyze_take_the_launch_window_from_the_command_line(
     code, _, err = _cli("calibrate", str(none))
     check("the same from calibrate", code == 2 and "no launch of com.example.app" in err
           and "Traceback" not in err, err[-500:])
+
+
+# --- the plain reading of it (#442) -----------------------------------------------------
+
+def _plain(tmp_path: Path, config: dict, **build) -> dict:
+    """The fixture's report with its plain reading in it, as `analyze` writes it."""
+    with contextlib.redirect_stderr(io.StringIO()):
+        return report_mod.aggregate([_fixture(tmp_path, config, **build)])
+
+
+def _with_budget(config: dict, ms: float) -> dict:
+    return {**config, "scenario": {**config["scenario"], "budget_ms": ms}}
+
+
+def test_the_plain_reading_calls_a_launch_window_a_launch(tmp_path: Path) -> None:
+    rep = _plain(tmp_path, _with_budget(LAUNCH, 1000), fully_drawn="app")
+    check("the verdict is the window against the limit, in the launch's words",
+          rep["verdict"]["text"] == "The launch takes 1.1 s. You allowed 1.0 s, so it runs "
+                                    "12% over.", rep["verdict"])
+    check("the window being the 1120.4 ms from the intent to the app's call",
+          (rep["window"]["duration_ms"], rep["verdict"]["ratio"]) == (1120.4, 1.12), rep["verdict"])
+    said = [d["plain"]["found"] for d in rep["detectors"] if d["plain"]["found"]]
+    check("every sentence that names a share names it of the launch",
+          sum("of the launch" in s for s in said) >= 8
+          and not [s for s in said if "of the run" in s or "the whole run" in s], said)
+    plain_end = _plain(tmp_path, _with_budget(LAUNCH, 1000))
+    check("a launch that closed at its end reads the same way",
+          plain_end["verdict"]["text"] == "The launch takes 1.1 s. You allowed 1.0 s, so it "
+                                          "runs 6% over.", plain_end["verdict"])
+
+
+def test_the_plain_readings_shares_are_of_the_launch_window(tmp_path: Path) -> None:
+    """The same 0.2 s of late frames and the same 0.2 s of work, against three
+    windows of one trace: the anchored 1005 ms, the launch's 1065, and the
+    1120.4 that runs on to the app's call. The stretch before the process
+    started and the one after the first frame are part of what is divided."""
+    found = {}
+    for name, config, build in (("anchors", selftest.FIXTURE_CONFIG, {}),
+                                ("launch", LAUNCH, {}),
+                                ("call", LAUNCH, {"fully_drawn": "app"})):
+        rep = _plain(tmp_path, config, **build)
+        by_id = {d["id"]: d for d in rep["detectors"]}
+        found[name] = (by_id["frame_jank"]["plain"]["found"],
+                       by_id["main_thread_block"]["plain"]["found"],
+                       by_id["frame_jank"]["attention"], by_id["main_thread_block"]["attention"])
+    check("late frames: 21%, 20% and 19% of the launch",
+          ["Together that is 21% of the launch" in found["anchors"][0],
+           "Together that is 20% of the launch" in found["launch"][0],
+           "Together that is 19% of the launch" in found["call"][0]] == [True] * 3, found)
+    check("the heaviest piece of work: 17%, then 16% and 16%",
+          ["That is 17% of the launch" in found["anchors"][1],
+           "That is 16% of the launch" in found["launch"][1],
+           "That is 16% of the launch" in found["call"][1]] == [True] * 3, found)
+    check("and both still need attention: over 15% and over 0.15 s in each window",
+          all(levels == ("needs_attention", "needs_attention")
+              for levels in (f[2:] for f in found.values())), found)
