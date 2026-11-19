@@ -7,6 +7,10 @@
 -- @needs: atrace:am
 -- @module: android.anrs
 -- @identity: location, detail
+-- @plain_title: Freezes the system recorded
+-- @plain_why: When an app stops answering for several seconds, the system
+--       shows a message that offers to close it.
+-- @plain_clean: The system recorded no freeze in this recording.
 --
 -- Written by system_server, not by the app: when ActivityManager declares an
 -- ANR it emits counter tracks named `ErrorId:<process> <pid>#<uuid>` and

@@ -8,6 +8,10 @@
 -- @param: min_frames = 3
 -- @param: min_overrun_ms = 4
 -- @calibrate: min_frames = top10(count) * 1.5
+-- @plain_title: Frames that came late
+-- @plain_why: The screen is redrawn many times a second. A frame that is not
+--       ready in time makes the picture stutter.
+-- @plain_clean: Hardly any frame came late.
 --
 -- Most of the others aggregate by slice name and gate on accumulated sums. That
 -- is the right shape for "cold start got slower" and the wrong one for a heavy

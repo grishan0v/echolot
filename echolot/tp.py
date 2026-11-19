@@ -20,6 +20,11 @@ anything: `-- @needs: platform_state`, straight after `@why`. A detector that
 reads only what every recording `collect` makes holds says nothing. See
 needs.py for the sources and for what `analyze` does with them.
 
+@plain_title, @plain_why and @plain_clean are the detector in words for
+someone who has never opened a trace: what was checked, how it touches the
+app, and what a clean result says. Fixed text, read by plain.py; the header
+ends with them, after the last of the keys above.
+
 A line reading `-- @intervals` after the query starts a second one, which
 says what stretches of the main thread's time the rows of the first stand
 for; see Detector.render_intervals. A line reading `-- @samples` starts a
@@ -216,6 +221,12 @@ class Detector:
     # from needs.SOURCES, `()` for a detector that reads only what every
     # recording `collect` makes holds.
     needs: tuple[str, ...] = ()
+    # The three fixed texts of the plain reading (plain.py), from
+    # `@plain_title`, `@plain_why` and `@plain_clean`. Empty for a detector
+    # that has not written them, which a test refuses for every shipped one.
+    plain_title: str = ""
+    plain_why: str = ""
+    plain_clean: str = ""
 
     @classmethod
     def from_file(cls, path: Path) -> "Detector":
@@ -247,6 +258,9 @@ class Detector:
             intervals_sql=sections.get("intervals", ""),
             samples_sql=sections.get("samples", ""),
             needs=needs,
+            plain_title=meta.get("plain_title", ""),
+            plain_why=meta.get("plain_why", ""),
+            plain_clean=meta.get("plain_clean", ""),
         )
 
     def render_open(self, overrides: dict[str, Any] | None = None) -> str:

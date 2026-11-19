@@ -104,12 +104,18 @@ def build(
     environment: dict[str, Any] | None = None,
     markers: dict[str, Any] | None = None,
     scenario: str | None = None,
+    budget_ms: float | None = None,
 ) -> dict[str, Any]:
     """`absent` — shipped detectors this config left out. See `to_markdown`.
 
     `scenario` — which of the config's scenarios the window is, so that a
     report says what it measured and `compare` can refuse two of them. A
     report written before it existed has none.
+
+    `budget_ms` — what that scenario is allowed to take, from the config's
+    `scenario.budget_ms`, so that a reader of the report alone can set the
+    window against it (`plain.verdict`). None when the config sets none; a
+    report written before it existed has no such key, which reads the same.
 
     `environment` — the platform state every duration below is conditional on.
     Optional because a report can be built from a trace recorded before those
@@ -126,6 +132,7 @@ def build(
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "trace": trace,
         "scenario": scenario,
+        "budget_ms": budget_ms,
         "toolchain": toolchain or {},
         "window": window,
         "environment": environment or {},
@@ -573,6 +580,12 @@ def _merge_window_checks(reports: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """The merged report (see `_merge_runs`), with its plain reading in it."""
+    from . import plain  # plain takes `metric_of` from this module
+    return plain.annotate(_merge_runs(reports))
+
+
+def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     """Merges N repeats into a single report using the median.
 
     Median rather than mean: one outlier must not drag the conclusion along.

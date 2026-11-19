@@ -9,6 +9,12 @@
 -- @param: name_glob_alt = monitor contention with owner*
 -- @calibrate: min_block_ms = top10(max_ms) * 1.5
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
+-- @plain_title: Threads waiting for each other
+-- @plain_why: Threads protect what they share with a lock, so that only one
+--       uses it at a time. A thread that needs it while another holds it
+--       stands still until it is free.
+-- @plain_clean: No thread waited long for another thread to let go of
+--       something they share.
 --
 -- Two conditions, like binder_txn and for the same reason. On the gameplay
 -- scenario there were 200 blocks totalling 49.7 ms and 190 totalling 63.7 ms —

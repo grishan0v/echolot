@@ -7,6 +7,11 @@
 -- @param: min_stall_ms = 5000
 -- @param: max_gap_ms = 2
 -- @identity: location
+-- @plain_title: Stretches where the app could not answer
+-- @plain_why: The main thread draws the screen and answers taps. If it does
+--       not get back to its work for several seconds, the app cannot answer,
+--       and that is how a freeze begins.
+-- @plain_clean: The main thread never went for long without answering.
 --
 -- ## Why a sum cannot answer this
 --

@@ -7,6 +7,11 @@
 -- @param: min_total_ms = 16
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location
+-- @plain_title: The main thread held up inside the system
+-- @plain_why: Sometimes the phone's operating system puts the main thread, the
+--       one that draws the screen, to sleep until another thread of the app
+--       lets it go, and no code of the app shows why.
+-- @plain_clean: The main thread was not held up this way for long.
 --
 -- The main thread in `D` with `io_wait = 0`: uninterruptible, and the kernel
 -- says it is not the disk. Each such sleep ends with a wakeup, and the thread

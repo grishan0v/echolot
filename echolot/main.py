@@ -50,6 +50,7 @@ from . import codex, layer, plugin, recorder, sandbox, state, table, when
 from . import mapping as mapping_mod
 from . import needs as needs_mod
 from . import place as place_mod
+from . import plain as plain_mod
 from . import report as report_mod
 from . import stacks as stacks_mod
 from .config import NO_ANCHOR, Config, ConfigError
@@ -523,6 +524,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     shipped ones, and a scenario's from the config's, without opening it.
     """
     plan = plan_detectors(cfg, cli_overrides=cli_overrides, use_defaults=use_defaults)
+    # Refused here, like a threshold of the wrong kind: before a trace is opened.
+    budget_ms = cfg.scenario_budget_ms
     results = []
     package = str(cfg.get("project.package") or "")
     # The build's R8 mapping, read before the trace is opened: a path that is
@@ -630,7 +633,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     return report_mod.build(str(trace), window, results,
                             toolchain=toolchain_info(tp_binary, tp_source),
                             absent=absent, environment=environment,
-                            markers=markers, scenario=cfg.scenario_name)
+                            markers=markers, scenario=cfg.scenario_name,
+                            budget_ms=budget_ms)
 
 
 def _markers_info(tp, cfg: Config) -> dict:
@@ -4366,6 +4370,18 @@ def cmd_report(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
         return 2
+    if args.plain:
+        # A view of its own, for a person: the other views are for an agent.
+        others = [flag for flag, on in (
+            ("--detector", args.detector), ("--top", args.top), ("--window", args.window),
+            ("--markers", args.markers), ("--wide", args.wide), ("--json", args.json)) if on]
+        if others:
+            print(f"error: --plain is a view of its own, it does not take {', '.join(others)}",
+                  file=sys.stderr)
+            recorder.failed("--plain with another view")
+            return 2
+        print(plain_mod.render(rep))
+        return 0
     detectors = list(args.detector or [])
     known = {d["id"] for d in rep.get("detectors") or []}
     unknown = [d for d in detectors if d not in known]
@@ -4874,6 +4890,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="do not cut the location and evidence columns")
     rp.add_argument("--json", action="store_true",
                     help="the same selection as json, rows cut to --top")
+    rp.add_argument("--plain", action="store_true",
+                    help="the report in plain words, for a person: one line per check, "
+                         "marked by how much attention it needs")
     rp.set_defaults(func=cmd_report)
 
     rf = add("reflect", "tool", "[--last|--all]", "the same kind of report over an agent session")

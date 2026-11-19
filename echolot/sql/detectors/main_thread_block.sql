@@ -6,6 +6,11 @@
 -- @param: min_slice_ms = 16
 -- @calibrate: min_slice_ms = top10(self_ms) * 1.5
 -- @identity: location, detail
+-- @plain_title: Heavy work on the main thread
+-- @plain_why: The main thread draws the screen and answers taps, so while it
+--       is busy with one piece of work it can do neither. Work that does not
+--       have to run there can run on another thread.
+-- @plain_clean: No single piece of work held the main thread for long.
 --
 -- On a live cold start, sorting by total duration produced:
 --   d0  355.4 ms  Choreographer#doFrame 55112

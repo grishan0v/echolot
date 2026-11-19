@@ -10,6 +10,11 @@
 -- @param: marker_prefix = AGENTTMP_
 -- @calibrate: min_total_ms = top5(total_ms) * 1.5
 -- @identity: location, detail
+-- @plain_title: The same work done twice
+-- @plain_why: When the same piece of work runs from two different places and
+--       costs about the same each time, one of them may be doing it again for
+--       nothing.
+-- @plain_clean: Among the work that has a name, nothing ran twice.
 --
 -- ## Why the set needed one of these
 --

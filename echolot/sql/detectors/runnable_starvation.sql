@@ -6,6 +6,11 @@
 -- @param: min_runnable_ms = 20
 -- @calibrate: min_runnable_ms = top10(total_ms) * 1.5
 -- @identity: location, state
+-- @plain_title: Waiting for a free processor core
+-- @plain_why: A thread that is ready to work but finds no free processor core
+--       has to stand still. That wait comes from how busy the phone is, not
+--       from the thread's own code.
+-- @plain_clean: No thread had to wait long for a free processor core.
 --
 -- One row per thread and state, `R` (preempted) apart from `R+` (woken and
 -- not yet run). The state is a column of its own and part of the row's name;

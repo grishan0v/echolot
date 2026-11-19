@@ -10,6 +10,10 @@
 -- @param: name_glob = * ([A-Za-z]*.kt:[0-9]*)
 -- @calibrate: min_self_ms = top10(self_ms) * 1.5
 -- @identity: location
+-- @plain_title: Parts of the screen that take long to build
+-- @plain_why: When a screen is built, some of its parts can take much longer
+--       than the rest. This shows which of the app's own parts take the time.
+-- @plain_clean: None of the app's own screen parts took long to build.
 --
 -- `androidx.compose.runtime:runtime-tracing` names every composable call, on
 -- the main thread, `fully.qualified.Name (File.kt:line)`. The mask wants a

@@ -9,6 +9,10 @@
 -- @param: min_io_wait_ms = 20
 -- @calibrate: min_io_wait_ms = top10(total_ms) * 1.5
 -- @identity: location, thread
+-- @plain_title: Waiting for the disk
+-- @plain_why: Reading or writing a file can put a thread to sleep until the
+--       phone's storage answers.
+-- @plain_clean: No thread slept long waiting for the disk.
 --
 -- The state is `D` — uninterruptible sleep — and `io_wait` is the kernel
 -- saying that this particular sleep was block I/O rather than one of the

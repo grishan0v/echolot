@@ -6,6 +6,12 @@
 -- @param: min_running_ms = 50
 -- @param: max_covered_pct = 50
 -- @calibrate: min_running_ms = top10(total_ms) * 1.5
+-- @plain_title: Work nobody can name
+-- @plain_why: Some threads keep the processor busy, but nothing in the
+--       recording says what for. When the app is slow because of them, the
+--       recording cannot tell why.
+-- @plain_clean: No thread spent long on the processor doing work that nothing
+--       in the recording names.
 --
 -- Coverage is the INTERSECTION of on-CPU time with slices, not slice duration.
 -- Those are different quantities: a thread can sleep inside a slice, and then

@@ -7,6 +7,11 @@
 -- @needs: atrace:am
 -- @param: min_stretch_ms = 80
 -- @identity: location
+-- @plain_title: What runs before the first screen is created
+-- @plain_why: Libraries and the app's own setup code run before anything can
+--       be shown, so the time they take is added to the time until the first
+--       screen.
+-- @plain_clean: Nothing took long before the first screen was created.
 --
 -- ## The stretch
 --

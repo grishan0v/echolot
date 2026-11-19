@@ -7,6 +7,12 @@
 -- @param: min_abs_ms = 40
 -- @param: min_occurrences = 5
 -- @calibrate: min_abs_ms = top10(max_ms) * 1.5
+-- @plain_title: Single moments that took far too long
+-- @plain_why: A step that usually takes a moment but once takes many times
+--       longer is a hitch the user can see, even when the overall numbers look
+--       fine.
+-- @plain_clean: No step that repeats on the main thread took far longer than
+--       it usually does.
 --
 -- Found on a live hunt and not by design. ManageTeamBenchmark on an SM-A515F,
 -- ten iterations over a 48-second window, reported P50 14.7 ms and P99 86 ms.

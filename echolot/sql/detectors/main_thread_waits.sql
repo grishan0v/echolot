@@ -7,6 +7,10 @@
 -- @param: lock_glob = *contention*
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location
+-- @plain_title: The screen waits for background work
+-- @plain_why: The main thread draws the screen and answers taps. While it
+--       waits for another thread of the app, it can do neither.
+-- @plain_clean: The main thread did not wait long for the app's other threads.
 --
 -- Every sleep of the main thread ends with a wakeup, and `sched_waking`
 -- names the thread that sent it. trace_processor keeps it as `waker_utid`

@@ -8,6 +8,7 @@ default declared in the detector's own .sql file.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -279,6 +280,28 @@ class Config:
     @property
     def scenario_end(self) -> str:
         return self._anchor("end")
+
+    @property
+    def scenario_budget_ms(self) -> float | None:
+        """What the scenario may take, in milliseconds, or None when it says
+        nothing. The report carries it and the verdict is the window against
+        it; nothing fails when it is exceeded, because there is no gate (see
+        docs/compare.md).
+
+        A value that is no positive number is refused in a sentence rather
+        than read as "no budget": `budget_ms: 2.5s` would otherwise leave a
+        verdict that says no limit was set, over a limit somebody wrote down.
+        """
+        where, block = self._scenario()
+        value = block.get("budget_ms")
+        if value is None:
+            return None
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0):
+            raise ConfigError(
+                f"{where}.budget_ms must be a number of milliseconds above zero, "
+                f"like `budget_ms: 2500` for 2.5 s, got {value!r}")
+        return float(value)
 
     @property
     def scenarios(self) -> list[str]:

@@ -10,6 +10,11 @@
 -- @calibrate: max_events = top10(count) * 1.5
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
 -- @identity: location, detail
+-- @plain_title: Memory clean-up
+-- @plain_why: When the app creates many short-lived objects, the system has to
+--       clean them up often. That takes processor time and can stop the app
+--       for a moment.
+-- @plain_clean: Memory clean-up ran rarely and did not take long.
 --
 -- Masks verified against a live Android 14 trace (ART, concurrent copying).
 --
