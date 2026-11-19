@@ -10,7 +10,7 @@ take work out of.
 The output is one table, sorted by how much each row moved. The top row is
 usually the answer.
 
-Two things it refuses to do quietly:
+Three things it refuses to do quietly:
 
   * compare across a moved bar. Thresholds decide which rows appear at all, so
     "appeared" against different thresholds means "the bar dropped below it",
@@ -25,6 +25,13 @@ Two things it refuses to do quietly:
     which `analyze` writes for two repeats or more — with a single trace on
     either side the column reads `—`.
 
+  * call a row gone, or new, because one of the recordings could not look for
+    it. A detector the trace did not give what it reads (`checked: false` in
+    the report, with its reason) says nothing on that side, so its rows are
+    left out of the table on both, and the comparison names the detector and
+    the reason from each side that could not look. A report written before
+    `checked` existed is unknown, and is compared as it always was.
+
 Rows are paired on everything the detector declared in `@identity`, which the
 report carries. Seven of the fifteen shipped detectors name a second column
 there, and one location legitimately holding several rows is what that field
@@ -38,6 +45,7 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
+from . import needs as needs_mod
 from . import stats, table
 from .report import family, identity_of, metric_of, short_runs
 
@@ -60,6 +68,7 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
 
     rows: list[dict[str, Any]] = []
     state_changed: list[dict[str, Any]] = []
+    not_compared: list[dict[str, Any]] = []
 
     by_id_before = {d["id"]: _upgraded(d) for d in before.get("detectors", [])}
     by_id_after = {d["id"]: _upgraded(d) for d in after.get("detectors", [])}
@@ -92,6 +101,26 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
                 })
             continue
 
+        # A detector whose trace did not hold what it reads is as blind as one
+        # that failed, on its side: silent there says nothing, so the other
+        # side's rows are not gone and its own are not new (#441). A report
+        # from before `checked` existed is unknown, and is compared as it was.
+        if needs_mod.could_not_run(db) or needs_mod.could_not_run(da):
+            not_compared.append({
+                "id": det_id,
+                "before": db["reason"] if needs_mod.could_not_run(db) else None,
+                "after": da["reason"] if needs_mod.could_not_run(da) else None,
+            })
+            if db is not None and da is not None:
+                state_changed.append({
+                    "id": det_id,
+                    "before": "not checked" if needs_mod.could_not_run(db)
+                    else _state(rows_b),
+                    "after": "not checked" if needs_mod.could_not_run(da)
+                    else _state(rows_a),
+                })
+            continue
+
         if db is not None and da is not None and bool(rows_b) != bool(rows_a):
             state_changed.append({
                 "id": det_id,
@@ -106,6 +135,8 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
                      temp_prefix))
 
     rows.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
+
+    warnings.extend(_not_compared_warnings(before, after))
 
     planted = _planted(rows, temp_prefix)
     if planted:
@@ -145,10 +176,38 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
             "fired_before": (before.get("summary") or {}).get("fired_ids") or [],
             "fired_after": (after.get("summary") or {}).get("fired_ids") or [],
             "state_changed": state_changed,
+            # Detectors one side or both could not run: out of the table, and
+            # why, from each side that could not (null where it could).
+            "not_compared": not_compared,
             "silent_both": _silent_both(before, after),
         },
         "rows": rows,
     }
+
+
+def _not_compared_warnings(before: dict, after: dict) -> list[dict[str, str]]:
+    """One warning for each side that holds detectors which could not run.
+
+    The detectors' own reasons, as the report says them. Not one warning per
+    detector: a recording made without the platform's state loses two, and a
+    comparison of such a recording with a full one would open with a screen of
+    them.
+    """
+    out = []
+    for side, report in (("before", before), ("after", after)):
+        found = needs_mod.said(report.get("detectors") or [])
+        if found is None:
+            continue
+        count, why = found
+        out.append({
+            "id": f"not-checked-{side}",
+            "text": f"{count} detector(s) could not run on the {side} side, "
+                    f"because that recording does not hold what they read. "
+                    f"{why} Their rows are left out of the table rather than "
+                    f"called gone or new, and a detector that could not run on "
+                    f"one side is not compared on the other.",
+        })
+    return out
 
 
 def _planted(rows: list[dict], temp_prefix: str | None) -> list[str]:
@@ -1031,7 +1090,8 @@ def _silent_both(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     """
     def quiet(rep: dict[str, Any]) -> set[str]:
         return {d["id"] for d in rep.get("detectors") or []
-                if not d.get("rows") and not d.get("error")}
+                if not d.get("rows") and not d.get("error")
+                and d.get("checked") is not False}
     fired = set((before.get("summary") or {}).get("fired_ids") or []) \
         | set((after.get("summary") or {}).get("fired_ids") or [])
     return sorted((quiet(before) & quiet(after)) - fired)

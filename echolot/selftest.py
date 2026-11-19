@@ -1881,6 +1881,24 @@ def _(report):
     assert "reason" not in by_id["gc_pressure"], by_id["gc_pressure"]
 
 
+@check("needs: compare does not call what one side could not look at gone")
+def _(report):
+    from . import compare as compare_mod
+    bare = _recorded(environment=False)
+    cmp = compare_mod.build(report, bare, before_path="a.json", after_path="b.json")
+    # `io_wait` has rows on the full recording and none on the bare one. That
+    # is not a row that went away.
+    assert not [r for r in cmp["rows"]
+                if r["detector"] in ("io_wait", "main_thread_kernel_waits")], cmp["rows"]
+    assert cmp["summary"]["vanished"] == 0, cmp["summary"]
+    not_compared = {c["id"]: c for c in cmp["summary"]["not_compared"]}
+    assert set(not_compared) == {"io_wait", "main_thread_kernel_waits"}, not_compared
+    assert not_compared["io_wait"]["before"] is None and not_compared["io_wait"]["after"], \
+        not_compared["io_wait"]
+    assert "not-checked-after" in {w["id"] for w in cmp["warnings"]}, cmp["warnings"]
+    assert "io_wait" not in cmp["summary"]["silent_both"], cmp["summary"]
+
+
 # --- the window opening inside a block --------------------------------------
 
 def _anchored_at(anchor: str):

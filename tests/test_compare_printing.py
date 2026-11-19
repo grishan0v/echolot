@@ -47,9 +47,15 @@ def test_the_floor_s_percentage_is_rounded(demo_report) -> None:
 
 def test_silent_in_both_names_the_quiet_detectors(demo_report) -> None:
     cmp = _build(demo_report, demo_report)
-    quiet = [d["id"] for d in demo_report["detectors"] if not d.get("rows") and not d.get("error")]
+    # The demo has no Compose, so `composables` could not look on either side:
+    # that is not silence in both, and the comparison says it was left out.
+    quiet = [d["id"] for d in demo_report["detectors"]
+             if not d.get("rows") and not d.get("error") and d.get("checked") is not False]
     check("in the json", quiet and cmp["summary"]["silent_both"] == sorted(quiet),
           cmp["summary"]["silent_both"])
+    check("without the detector that could not run", "composables" not in quiet
+          and [c["id"] for c in cmp["summary"]["not_compared"]] == ["composables"],
+          cmp["summary"])
     check("and printed", "**Silent in both:**" in compare_mod.to_markdown(cmp))
 
 
