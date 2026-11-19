@@ -151,6 +151,11 @@ is. `launch` is the only window there is; any other scenario names its
 anchors. `echolot scan` drafts it for an app with a launcher Activity and no
 macrobenchmark, together with `runner.mode: launch`.
 
+`budget_ms` is held against this window as against any other. It starts at
+the intent, about 0.14 s before `bindApplication` on the launches it was
+measured on, so a limit chosen for a window cut from `bindApplication` is a
+limit for a shorter stretch.
+
 The trace has to hold the launch, which it does when the app is started
 inside the recording: `launch` mode does that, and so does a startup
 macrobenchmark. `analyze` refuses a trace with no launch of the process, and

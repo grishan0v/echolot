@@ -642,6 +642,15 @@ no state for its first stretch: `10% before the process started` above. That
 is the launch's own time, named in the budget, and the warning about a
 window only partly accounted for does not fire on it.
 
+The [plain reading](#a-plain-reading) calls this window the launch. Its
+shares are of the window's length, with the stretch before the process
+started and whatever follows the first frame in it, and its verdict holds
+that length against `scenario.budget_ms`. The launch window is longer than a
+window cut from `bindApplication` to the same call, by about 0.14 s on the
+launches this was measured on. So a limit chosen for an anchored window is a
+limit for a shorter stretch, and a share read under one window is a point or
+two lower under the other for the same milliseconds.
+
 `analyze` refuses a trace that holds no launch of the process: the app has to
 be started inside the recording, as `launch` mode and a startup
 macrobenchmark do. The detectors read this window as they read any other.
