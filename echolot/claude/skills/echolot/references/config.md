@@ -149,7 +149,11 @@ anchors, and one with both does not load. It is written as the word, or as a
 block with `name: launch` beside `_source` and `_evidence`, the way an anchor
 is. `launch` is the only window there is; any other scenario names its
 anchors. `echolot scan` drafts it for an app with a launcher Activity and no
-macrobenchmark, together with `runner.mode: launch`.
+macrobenchmark, together with `runner.mode: launch`. It drafts it too, with
+`runner.mode: gradle`, for a macrobenchmark class that measures the launch:
+one that constructs `StartupTimingMetric` and names no `TraceSectionMetric`.
+A class that names a section keeps the section as its `end`, and one that
+only sets `StartupMode` keeps an `end` to pick.
 
 `budget_ms` is held against this window as against any other. It starts at
 the intent, about 0.14 s before `bindApplication` on the launches it was

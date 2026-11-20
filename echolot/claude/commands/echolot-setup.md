@@ -47,7 +47,9 @@ it came from:
 - the module with `MacrobenchmarkRule`, its test classes and methods, the
   package it drives, the `TraceSectionMetric` names it measures (anchor
   candidates, and `domains` entries), its runner arguments, and the gradle
-  tasks by variant
+  tasks by variant. Each class says which kind it is: it measures the launch
+  (`StartupTimingMetric`), it measures a section (`TraceSectionMetric`), it
+  only sets `StartupMode`, or its own file names none of the three
 - the devices attached
 - a config to start from — the skeleton the questions below refine. What
   it read off the tree says `_source: derived` with its `_evidence` (the
@@ -58,7 +60,10 @@ it came from:
   with a launcher Activity and no macrobenchmark there is nothing to find:
   the skeleton holds `window: launch` with `runner.mode: launch`, the
   scenario that needs no end anchor, and its `_evidence` says the trace
-  decides the end. The
+  decides the end. A benchmark class that measures the launch and names no
+  section gets the same window with `runner.mode: gradle`; one that only
+  sets `StartupMode` may be a scroll that starts cold, and keeps the `"?"`.
+  The
   `runner` section carries `_evidence` alone, and `instrumentation` neither
   — its `allowed` list is every module's `src/main` the scan found, test
   modules left out, for the human to confirm in question 4
@@ -152,6 +157,11 @@ scenario:
   name: coldStart
   window: {name: launch, _source: derived, _evidence: "launcher Activity in app/src/main/AndroidManifest.xml"}
 ```
+
+A startup macrobenchmark records this scenario as `launch` mode does: every
+trace it writes holds the launch it drove. `scan` writes the window for a
+class that measures the launch, with `StartupTimingMetric in <file>` as its
+evidence, and the `gradle` runner stays.
 
 The window starts at the intent and ends at the launch's end, the first
 frame, or at the app's `reportFullyDrawn()` call when that comes later. After

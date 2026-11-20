@@ -102,6 +102,9 @@ picks an end anchor before the first recording. `echolot scan` drafts the
 two together, this runner and that window, for an app with a launcher
 Activity and no macrobenchmark. See
 [A window that is the launch](analysing.md#a-window-that-is-the-launch).
+For a project whose macrobenchmark measures the launch, `scan` drafts the
+same window with the [`gradle`](#gradle--the-macrobenchmark-writes-its-own)
+runner.
 
 `am start -W` prints `TotalTime`, which the runner reports — an independent
 check that the window in the report is plausible. `TotalTime: 0` is the
@@ -175,6 +178,31 @@ whole process tree. `gradle` is the command in front of the task, run from
 A task that fails harvests nothing, whatever the benchmark wrote before it
 failed: the traces of a half-finished run stay in the module's output
 directory, and the previous set stays in `.echolot/traces`.
+
+A startup macrobenchmark needs no end anchor. Every trace it writes holds
+the launch it drove, so its scenario can be `scenario.window: launch`, as in
+`launch` mode: see
+[A window that is the launch](analysing.md#a-window-that-is-the-launch).
+`echolot scan` drafts that window with this runner for a benchmark class
+that measures the launch: one that constructs `StartupTimingMetric` and
+names no `TraceSectionMetric`. The other classes keep the draft they had:
+
+| the class | what `scan` drafts for its window |
+|---|---|
+| measures the launch (`StartupTimingMetric`) and names no section | `window: launch` |
+| names a section (`TraceSectionMetric`) | `start: bindApplication` and the section as `end`: it is the developer's own statement of where "ready" is, so it comes before the launch |
+| only sets `StartupMode` | `start: bindApplication` and an `end` to pick from a probe: a scroll benchmark starts cold too, and measures no launch |
+
+`scan` says which of the three each class is, and takes one that measures
+the launch before one that only sets `StartupMode`. It reads the class's own
+file: a benchmark whose metrics are listed in a shared helper names none of
+the three there, and keeps an `end` to pick.
+
+The class filter in `gradle_args` runs every test of the class. A test that
+starts no launch inside its recording writes a trace with no launch in it,
+and `analyze` refuses such a trace under this window, naming it. One refused
+trace stops `analyze` for the whole set: move the trace it names out of
+`.echolot/traces` and run it again.
 
 The macrobenchmark chose what to record, so this mode builds no trace config
 of its own. `environment`, `atrace_categories`, `buffer_kb`, `duration_ms`,
