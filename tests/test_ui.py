@@ -26,6 +26,7 @@ the self-check is a line in the run log. Nothing needs a phone or the network.
 from __future__ import annotations
 
 import contextlib
+import errno
 import http.client
 import io
 import json
@@ -516,6 +517,82 @@ def test_a_page_that_cannot_be_drawn_says_so_and_the_server_goes_on(project, mon
     err = capsys.readouterr().err
     check("the terminal hears of it once, without the address", "could not draw the page `start`" in err
           and server.site.token not in err, err)
+
+
+@contextlib.contextmanager
+def bound(project: Project):
+    """A server that listens and does not serve: the test takes each step of a
+    request itself, so nothing depends on which thread gets there first."""
+    config = project.root / "echolot.yml"
+    server = ui.make_server(project.root, str(config) if config.is_file() else "echolot.yml")
+    try:
+        yield server
+    finally:
+        server.server_close()
+
+
+def one_request(server, answer=None, monkeypatch=None) -> None:
+    """A request for the start page, taken through the server's own steps in
+    this thread: accepted, then handled as the thread it is given to handles it."""
+    if answer is not None:
+        monkeypatch.setattr(ui, "answer", answer)
+    with socket.create_connection((ui.HOST, server.site.port)) as browser:
+        browser.sendall(f"GET /{server.site.token}/ HTTP/1.0\r\nHost: {server.site.host}\r\n\r\n".encode())
+        request, client = server.get_request()
+        server.process_request_thread(request, client)
+
+
+def test_a_connection_closed_under_its_thread_is_not_news(project, capsys):
+    """Ctrl-C can land while the server hands a connection it has just accepted
+    to its thread. The standard library then closes the request in the main
+    thread, and the thread finds a closed socket a moment later (#472). The
+    same steps here, one after another, with no timing in them."""
+    project.ready()
+    with bound(project) as server, socket.create_connection((ui.HOST, server.site.port)):  # a spare connection
+        request, client = server.get_request()
+        server.shutdown_request(request)                    # what the interrupt does to it
+        server.process_request_thread(request, client)      # the thread's own work, on what is left
+    err = capsys.readouterr().err
+    check("the terminal hears nothing of it", err == "", err)
+
+
+@pytest.mark.parametrize("gone", [
+    BrokenPipeError(errno.EPIPE, "Broken pipe"),
+    ConnectionResetError(errno.ECONNRESET, "Connection reset by peer"),
+    ConnectionAbortedError(errno.ECONNABORTED, "Software caused connection abort"),
+    TimeoutError("timed out"),
+    OSError(errno.EBADF, "Bad file descriptor"),
+    OSError(errno.ENOTSOCK, "Socket operation on non-socket"),
+], ids=lambda e: type(e).__name__ + (f" {errno.errorcode[e.errno]}" if e.errno else ""))
+def test_a_connection_that_went_away_is_not_news(project, monkeypatch, capsys, gone):
+    project.ready()
+
+    def leaves(*args, **kwargs):
+        raise gone
+    with bound(project) as server:
+        one_request(server, leaves, monkeypatch)
+    err = capsys.readouterr().err
+    check("the terminal hears nothing of it", err == "", err)
+
+
+@pytest.mark.parametrize("failure", [
+    RuntimeError("the answer fell over"),
+    PermissionError(errno.EACCES, "Permission denied"),
+], ids=lambda e: type(e).__name__)
+def test_a_request_that_fails_otherwise_is_one_line_in_the_terminal(project, monkeypatch, capsys, failure):
+    """Not every `OSError` is a connection: a file that cannot be read is still said."""
+    project.ready()
+
+    def falls(*args, **kwargs):
+        raise failure
+    with bound(project) as server:
+        one_request(server, falls, monkeypatch)
+        token = server.site.token
+    err = capsys.readouterr().err
+    check("one line, saying what it was", err.count("\n") == 1 and err.startswith(
+        f"echolot ui: a request could not be answered: {type(failure).__name__}: "), err)
+    check("no traceback, no token, nobody's address", "Traceback" not in err and token not in err
+          and ui.HOST not in err, err)
 
 
 def test_requests_are_not_logged_with_their_token(project, capfd):

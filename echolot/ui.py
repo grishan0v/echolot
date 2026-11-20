@@ -384,6 +384,17 @@ class _Handler(BaseHTTPRequestHandler):
         self._handle("OPTIONS")
 
 
+# What a socket says once its connection has been let go under the thread that
+# holds it: a closed descriptor on POSIX, "not a socket" on Windows.
+_LET_GO = (errno.EBADF, errno.ENOTSOCK)
+
+
+def _hung_up(e: BaseException | None) -> bool:
+    """Whether a request fell over because its connection went away: the other
+    end left, said nothing for too long, or the server closed it as it stopped."""
+    return isinstance(e, (ConnectionError, TimeoutError)) or (isinstance(e, OSError) and e.errno in _LET_GO)
+
+
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     # A port just let go may be taken again at once; one that is held may
@@ -395,6 +406,22 @@ class Server(ThreadingHTTPServer):
         super().__init__((HOST, port), _Handler)
         self.site = site
         site.port = self.server_address[1]
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """What a request that fell over leaves in the terminal.
+
+        The standard library prints a traceback here, headed by the address
+        of whoever asked. A connection that went away is not news: a browser
+        drops its spare connection, a page is left while it loads, and Ctrl-C
+        can land while a connection accepted a moment before is handed to its
+        thread, which then finds the socket closed under it (#472). Of those
+        the server says nothing. Anything else is one line, as for a page
+        that cannot be drawn.
+        """
+        e = sys.exc_info()[1]
+        if _hung_up(e):
+            return
+        print(f"echolot ui: a request could not be answered: {type(e).__name__}: {e}", file=sys.stderr)
 
 
 def make_server(project: Path, config: str, *, port: int = 0, src: ready.Sources | None = None,
