@@ -43,15 +43,17 @@ def ago(epoch: float | None) -> str:
     return f"{delta / 86400:.0f}d ago"
 
 
-def iso_epoch(ts: str | None) -> float | None:
+def iso_epoch(ts: object) -> float | None:
     """An ISO-8601 stamp as epoch seconds. None when there is nothing to read.
 
     Every timestamp echolot writes is its own — `datetime.now(timezone.utc)`
     through `isoformat` — but they are read back out of files a person may
     have edited, so a stamp that does not parse is an absent one rather than
-    a crash.
+    a crash. So is one that is not text: a number in a report's
+    `generated_at` ended `echolot` in an AttributeError (#470), and the
+    stamps of `hunt.json` and the run log are read through here too.
     """
-    if not ts:
+    if not isinstance(ts, str) or not ts:
         return None
     try:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()

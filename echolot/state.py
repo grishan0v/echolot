@@ -137,26 +137,61 @@ def _report(rep: Path) -> dict | None:
     """What `status` says of a report.json: when, how many runs, what fired.
 
     None when there is none; `error` when it is there and does not read.
-    That is a file that is no JSON, and one that is JSON and no object: a
-    list, a number or a string parsed, and the first key read off it ended
-    `echolot` in a traceback (#460).
+    That is a file that is no JSON; one that is JSON and no object, where
+    the first key read off a list, a number or a string ended `echolot` in a
+    traceback (#460); and one that holds, in a field read here, what
+    `analyze` never writes there (`_as_written`).
     """
     if not rep.exists():
         return None
     try:
         r = json.loads(rep.read_text(encoding="utf-8"))
-        if not isinstance(r, dict):
-            return {"path": rep, "error": "unreadable"}
-        s = r.get("summary") or {}
-        c = r.get("config") or {}
-        return {
-            "path": rep, "generated_at": r.get("generated_at"),
-            "fired": s.get("detectors_fired"), "run": s.get("detectors_run"),
-            "runs": len(r.get("traces") or []) or 1,
-            "config_sha": c.get("sha"), "defaults": c.get("defaults"),
-        }
     except (OSError, ValueError):
+        r = None
+    if not isinstance(r, dict) or not _as_written(r):
         return {"path": rep, "error": "unreadable"}
+    s, c = r.get("summary") or {}, r.get("config") or {}
+    return {
+        "path": rep, "generated_at": r.get("generated_at"),
+        "fired": s.get("detectors_fired"), "run": s.get("detectors_run"),
+        "runs": len(r.get("traces") or []) or 1,
+        "config_sha": c.get("sha"), "defaults": c.get("defaults"),
+    }
+
+
+def _as_written(r: dict) -> bool:
+    """Whether each field `_report` reads holds what `analyze` writes there,
+    or nothing: an object for `summary` and `config`, a list for `traces`,
+    text for `generated_at` and `config.sha`, a whole number for each count
+    of detectors, and true or false for `config.defaults`. Those are the
+    types it has written since the first release.
+
+    A summary that is a list, a count that is text, a `generated_at` that
+    is a number: each ended `echolot`, `status --next` or the start page of
+    `echolot ui` in a traceback (#470), and a file that got through printed
+    runs no analysis made: `"traces": "ab"` read as two. Such a file was
+    edited by hand or written by another tool under this name, and it is
+    said the way a file that is no JSON is: it does not read, run analyze
+    again. Nothing in it is shown, since what still reads describes no
+    analysis either.
+    """
+    s, c = r.get("summary"), r.get("config")
+    return (_holds(s, dict) and _holds(c, dict) and _holds(r.get("traces"), list)
+            and _holds(r.get("generated_at"), str)
+            and _holds((s or {}).get("detectors_fired"), int)
+            and _holds((s or {}).get("detectors_run"), int)
+            and _holds((c or {}).get("sha"), str)
+            and _holds((c or {}).get("defaults"), bool))
+
+
+def _holds(value: object, kind: type) -> bool:
+    """`value` is a `kind`, or there is none. True and false are no count,
+    though Python takes a bool for an int."""
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return kind is bool
+    return isinstance(value, kind)
 
 
 def collect_state(project: Path) -> dict | None:

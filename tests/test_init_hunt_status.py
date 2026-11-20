@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import hunt as hunt_mod  # noqa: E402
 from echolot import main as main_mod  # noqa: E402
-from echolot import recorder, state  # noqa: E402
+from echolot import ready, recorder, state  # noqa: E402
 from tests.support import check  # noqa: E402
 
 CONFIG = ("project:\n  package: com.example.app\n  process: com.example.app\n"
@@ -155,21 +155,75 @@ def test_a_report_that_does_not_read_is_said(tmp_path: Path, monkeypatch) -> Non
     check("not none yet", "does not read" in out and "none yet" not in out, out)
 
 
-@pytest.mark.parametrize("text", ["[1, 2]", "[]", "5", '"a report"', "null", "true"])
-def test_a_report_that_is_json_and_no_object_does_not_read(tmp_path: Path, monkeypatch, text: str) -> None:
-    """#460: such a file parsed, and the first key read off it was a traceback."""
+def _report_reads_as(tmp_path: Path, monkeypatch, text: str) -> str:
+    """`status` over a project whose report.json holds `text`: its exit code
+    checked, its output returned."""
     _project(tmp_path)
     out_dir = tmp_path / ".echolot" / "out"
     out_dir.mkdir(parents=True)
     (out_dir / "report.json").write_text(text, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     code, out, _ = _run("status")
-    check("said in the report's line", code == 0 and "report  .echolot/out/report.json does not read" in out, out)
+    check("status ends as it should", code == 0, out)
+    return out
+
+
+def _does_not_read(tmp_path: Path, monkeypatch, text: str) -> None:
+    """What `echolot`, `status --next` and the start page of `echolot ui`
+    say of a report.json that holds `text`: that it does not read, and the
+    rest of what each of them says."""
+    out = _report_reads_as(tmp_path, monkeypatch, text)
+    check("said in the report's line", "report  .echolot/out/report.json does not read" in out, out)
     check("and the rest of the status is printed", "\ntraces  2 in .echolot/traces" in out and "\nnext  " in out, out)
     code, out, _ = _run("status", "--next")
     check("the next step is still one word", code == 0 and out.strip() in state.NEXT_KINDS, out)
+    st = state.project_state(tmp_path)
     check("the state names it as one that does not read",
-          state.project_state(tmp_path)["report"] == {"path": out_dir / "report.json", "error": "unreadable"})
+          st["report"] == {"path": tmp_path / ".echolot" / "out" / "report.json", "error": "unreadable"},
+          st["report"])
+    listed = ready.latest(st)
+    check("and the start page lists it as one", "does not read" in listed[0]["plain"], listed)
+
+
+@pytest.mark.parametrize("text", ["[1, 2]", "[]", "5", '"a report"', "null", "true"])
+def test_a_report_that_is_json_and_no_object_does_not_read(tmp_path: Path, monkeypatch, text: str) -> None:
+    """#460: such a file parsed, and the first key read off it was a traceback."""
+    _does_not_read(tmp_path, monkeypatch, text)
+
+
+@pytest.mark.parametrize("text", [
+    '{"summary": [1]}', '{"summary": "x"}', '{"summary": 5}', '{"summary": true}',
+    '{"config": 5}', '{"config": "abc"}', '{"config": [1]}', '{"config": true}',
+    '{"traces": 5}', '{"traces": true}', '{"traces": 1.5}',
+    '{"generated_at": 5}', '{"generated_at": [1]}', '{"generated_at": {"a": 1}}', '{"generated_at": true}',
+    # A file that ended nothing and said what is not there: two runs.
+    '{"traces": "ab"}',
+    # With the section every report has, the start page reads the counts as numbers.
+    '{"detectors": [], "summary": {"detectors_fired": "x", "detectors_run": 3}}',
+    '{"detectors": [], "summary": {"detectors_fired": [1], "detectors_run": 3}}',
+    '{"detectors": [], "summary": {"detectors_fired": true, "detectors_run": 3}}',
+    '{"detectors": [], "summary": {"detectors_fired": 1, "detectors_run": "3"}}',
+    '{"detectors": [], "config": {"sha": 5}}', '{"detectors": [], "config": {"defaults": "no"}}',
+])
+def test_a_report_with_a_field_of_the_wrong_type_does_not_read(tmp_path: Path, monkeypatch, text: str) -> None:
+    """#470: an object, and a field read off it as what `analyze` writes there
+    was a traceback in `echolot`, in `status --next` or on the start page."""
+    _does_not_read(tmp_path, monkeypatch, text)
+
+
+@pytest.mark.parametrize("text, said", [
+    ("{}", "never · 1 run(s)"),
+    ('{"generated_at": "yesterday"}', "never · 1 run(s)"),
+    ('{"detectors": [], "generated_at": null, "traces": ["a", "b"], "summary": {"detectors_run": 3, '
+     '"detectors_fired": 0}, "config": {"sha": null, "defaults": false}}', "never · 2 run(s) · 0 of 3 detectors fired"),
+    ('{"config": {"sha": "0123456789ab", "defaults": true}}', "made with --defaults"),
+])
+def test_a_report_as_analyze_writes_it_still_reads(tmp_path: Path, monkeypatch, text: str, said: str) -> None:
+    """The other side of #470: a field that is not there, is null, or holds
+    what `analyze` writes there is read as it was."""
+    out = _report_reads_as(tmp_path, monkeypatch, text)
+    line = next((ln for ln in out.splitlines() if ln.startswith("report  ")), "")
+    check("read", line.startswith("report  .echolot/out/report.json, ") and said in line, out)
 
 
 def test_files_equal_to_the_template_are_current_without_skill_md(tmp_path: Path) -> None:

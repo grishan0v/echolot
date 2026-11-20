@@ -107,6 +107,27 @@ def test_iso_epoch_of_none_is_none():
     assert iso_epoch(None) is None
 
 
+# What a JSON file can hold where a stamp belongs, other than text: a hand
+# edit puts a number there as easily as a string.
+not_text = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats(),
+    lambda inner: st.lists(inner, max_size=3) | st.dictionaries(st.text(max_size=5), inner, max_size=3),
+    max_leaves=8,
+)
+
+
+@given(not_text)
+@example(5)
+@example(True)
+@example([1])
+@example({"a": 1})
+def test_iso_epoch_of_what_is_not_text_is_none(value):
+    """A stamp that is not text is an absent one too. A number in a report's
+    `generated_at` ended `echolot` in an AttributeError, and one in
+    hunt.json's `touched_at` ended `echolot hunt --show` (#470)."""
+    assert iso_epoch(value) is None
+
+
 @given(st.floats(min_value=1, max_value=10_000_000, allow_nan=False))
 def test_ago_never_raises_and_always_says_ago(delta_seconds):
     """Every branch ends in the same suffix, for any age this trace could be."""
