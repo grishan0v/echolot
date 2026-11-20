@@ -48,23 +48,35 @@ def prose(text: Any) -> str:
 # this policy an address that got into the page by any road is not loaded.
 _POLICY = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
            "base-uri 'none'; form-action 'none'")
+# A page that `echolot ui` serves may do two things more, both with the
+# server it came from and with no other: send it a form (a button that starts
+# a check is one), and ask it again how far a run is. A page written to disk
+# has no server, and keeps the policy above.
+SERVED = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+          "base-uri 'none'; form-action 'self'; connect-src 'self'")
 
 
-def document(title: str, body_html: str, *, css: Iterable[str], js: Iterable[str]) -> str:
+def document(title: str, body_html: str, *, css: Iterable[str], js: Iterable[str],
+             policy: str | None = None, head_html: str = "") -> str:
     """One self-contained file: the named stylesheets and scripts of the
     package are written into it, in the order given.
 
     The root carries `no-js` until the first script runs, so a style can tell
     a reader with script switched off (`.needs-js` is hidden for them).
+
+    `policy` is the content policy the page carries, the strict one unless a
+    served page names `SERVED`. `head_html` is markup for the head, for the
+    one page that needs it: a run in progress that refreshes itself where
+    script is off.
     """
     style = "\n".join(asset(name) for name in css)
     script = "\n".join(asset(name) for name in js)
     return (
         '<!doctype html>\n<html lang="en" class="no-js">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
-        f'<meta http-equiv="Content-Security-Policy" content="{_POLICY}">\n'
+        f'<meta http-equiv="Content-Security-Policy" content="{policy or _POLICY}">\n'
         '<meta name="color-scheme" content="light dark">\n'
-        f"<title>{e(title)}</title>\n"
+        f"<title>{e(title)}</title>\n{head_html}"
         '<script>document.documentElement.className = "js";</script>\n'
         f"<style>\n{style}\n</style>\n</head>\n<body>\n{body_html}\n"
         f"<script>\n{script}\n</script>\n</body>\n</html>\n")

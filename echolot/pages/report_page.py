@@ -467,7 +467,8 @@ def _technical(report: dict[str, Any], ctx: Any, several: bool) -> str:
 
 
 def render(report: dict[str, Any], where: str | None = None, last: bool = True, *,
-           steps: Sequence[tuple[str, str, bool]] = (), crumb: str | None = None) -> str:
+           steps: Sequence[tuple[str, str, bool]] = (), crumb: str | None = None,
+           policy: str | None = None) -> str:
     """The page for a report, as one self-contained HTML document.
 
     `where` is how the request for an agent names the report.json the page
@@ -477,6 +478,7 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
     `steps` is the path in the top bar, for a page that has others to go to
     (`echolot ui`); a page written to disk has none. `crumb` says which report
     this is when it is not the scenario's last: "investigation 3, report 2".
+    `policy` is the content policy of a page that is served (`kit.SERVED`).
     """
     report = _read(report)
     ctx = plain._Ctx(report)
@@ -492,4 +494,4 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
             + (kit.dock(hot) + kit.ask(*_request(report, where, last)) + kit.sprites() if hot else "")
             + kit.peek("check", "Back to the report"))
     title = "echolot report" + (f": {report['scenario']}" if report.get("scenario") else "")
-    return kit.document(title, body, css=CSS, js=JS)
+    return kit.document(title, body, css=CSS, js=JS, policy=policy)
