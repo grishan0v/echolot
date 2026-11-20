@@ -14,6 +14,7 @@ building a project on disk for every case.
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 from pathlib import Path
@@ -201,6 +202,10 @@ def collect_state(project: Path) -> dict | None:
     run whose process is gone and whose file says it never finished was
     interrupted — the terminal closed, the agent's harness killed it — and
     that reads differently from a failure that said why.
+
+    A file that does not parse, is no object, or holds in a field `status`
+    reads what `collect` never writes there (`_as_collect_writes`) is
+    nothing worth saying.
     """
     from .runner import PROGRESS_FILE
     path = project / PROGRESS_FILE
@@ -210,7 +215,7 @@ def collect_state(project: Path) -> dict | None:
         p = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(p, dict) or "started" not in p:
+    if not isinstance(p, dict) or not _as_collect_writes(p):
         return None
     if p.get("finished") is None:
         pid = p.get("pid")
@@ -219,6 +224,53 @@ def collect_state(project: Path) -> dict | None:
     else:
         p["status"] = "failed" if p.get("exit") else "done"
     return p
+
+
+# The largest process id `os.kill` takes: it hands the number on as a C int.
+_PID_MAX = 2**31 - 1
+
+
+def _as_collect_writes(p: dict) -> bool:
+    """Whether each field read off the progress file holds what `collect`
+    writes there, or nothing: a time for `started`, which it always writes,
+    and for `finished` once the run ended; a process id for `pid`; a whole
+    number for `done` and `exit`; text for `scenario`, `cooling` and
+    `error`. Every echolot that writes this file, 0.8.0 on, writes those:
+    the times from `time.time()`, the process id from `os.getpid()`.
+
+    Text in `started`, or in `finished` with `exit` set, ended `echolot` and
+    the start page of `echolot ui` in a traceback, and so did `Infinity`,
+    which Python's json reads and no clock writes. A pid past what `os.kill`
+    takes ended `status --next` as well, and 0 or -1 read as a collect still
+    running, since `os.kill` then asks the process's own group or every
+    process (#474). Such a file was edited by hand or written by another
+    tool under this name. It says nothing about a collect, and it reads as
+    a file that does not parse does: as none. The next `collect` writes it
+    anew.
+
+    `iterations` is not held to a type: `collect` writes the count it was
+    handed before it checks it, so `runner.iterations: five` leaves `"five"`
+    in a run that failed at once, and the failure's line says why.
+    """
+    pid = p.get("pid")
+    return (_moment(p.get("started"))
+            and (p.get("finished") is None or _moment(p["finished"]))
+            and (pid is None or (_holds(pid, int) and 0 < pid <= _PID_MAX))
+            and _holds(p.get("done"), int) and _holds(p.get("exit"), int)
+            and all(_holds(p.get(k), str) for k in ("scenario", "cooling", "error")))
+
+
+def _moment(value: object) -> bool:
+    """A time as `time.time()` gives it: a number of seconds a float holds.
+    Not true or false, which Python takes for numbers, nor what json reads
+    and no clock writes: `Infinity` and `NaN`, and a whole number too long
+    to become a float, which `when.ago` subtracts from one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _alive(pid: int) -> bool:

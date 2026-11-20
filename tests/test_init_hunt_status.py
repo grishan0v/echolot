@@ -1,7 +1,8 @@
 """`init`, `hunt` and `status` in the cases they got wrong: `-c` from a
 subdirectory, `init` for the plugin and Codex, the self-check `init` just
 ran, the plugin's door, a second conclusion, the binary local.yml names, a
-report that does not read, and a layer whose SKILL.md is gone.
+report that does not read, a progress file `collect` did not write, and a
+layer whose SKILL.md is gone.
 """
 
 from __future__ import annotations
@@ -9,7 +10,10 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import re
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -18,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import hunt as hunt_mod  # noqa: E402
 from echolot import main as main_mod  # noqa: E402
-from echolot import ready, recorder, state  # noqa: E402
+from echolot import ready, recorder, runner, state  # noqa: E402
 from tests.support import check  # noqa: E402
 
 CONFIG = ("project:\n  package: com.example.app\n  process: com.example.app\n"
@@ -224,6 +228,108 @@ def test_a_report_as_analyze_writes_it_still_reads(tmp_path: Path, monkeypatch, 
     out = _report_reads_as(tmp_path, monkeypatch, text)
     line = next((ln for ln in out.splitlines() if ln.startswith("report  ")), "")
     check("read", line.startswith("report  .echolot/out/report.json, ") and said in line, out)
+
+
+def _running() -> dict:
+    """The progress file of a run in flight in this process, as `collect`
+    writes it."""
+    return {"scenario": "coldStart", "mode": "launch", "started": time.time() - 900,
+            "pid": os.getpid(), "iterations": 5, "done": 2,
+            "cooling": "battery 41.0 °C, waiting for 40"}
+
+
+def _failed() -> dict:
+    """The same run once it failed."""
+    return {**_running(), "cooling": None, "finished": time.time() - 600, "exit": 2,
+            "error": "collection error: no device"}
+
+
+PROGRESS = {"running": _running, "failed": _failed,
+            "started alone": lambda: {"started": time.time() - 900}}
+
+
+def _status_over_progress(tmp_path: Path, monkeypatch, text: str) -> str:
+    """`status` over a project whose progress file holds `text`, with traces
+    an hour older than the run in it: its exit code checked, its output
+    returned."""
+    _project(tmp_path)
+    hour_ago = time.time() - 3600
+    for trace in (tmp_path / ".echolot" / "traces").iterdir():
+        os.utime(trace, (hour_ago, hour_ago))
+    path = tmp_path / runner.PROGRESS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    code, out, _ = _run("status")
+    check("status ends as it should", code == 0, out)
+    return out
+
+
+def _said(out: str, key: str) -> str | None:
+    """What a line of `status` says after its key, or None without one."""
+    found = re.search(rf"^{key} +(.*)$", out, re.M)
+    return found.group(1) if found else None
+
+
+def _no_scan(root: Path):
+    raise OSError("no repository to scan here")
+
+
+@pytest.mark.parametrize("field, value", [
+    # Text, a list or an object where `collect` writes a time.
+    ("started", '"2026-11-21T10:00:00+00:00"'), ("started", "[1]"), ("started", '{"at": 1}'),
+    ("finished", '"2026-11-21T10:05:00+00:00"'), ("finished", "[1]"), ("finished", '{"at": 1}'),
+    # What json reads and no clock writes.
+    ("started", "Infinity"), ("started", "NaN"),
+    pytest.param("started", "1" + "0" * 400, id="started-a-401-digit-number"),
+    ("finished", "Infinity"), ("started", "true"), ("finished", "true"), ("started", "null"),
+    # No process id: past what `os.kill` takes, its own group, every process.
+    ("pid", str(2 ** 40)), ("pid", "0"), ("pid", "-1"), ("pid", '"1"'), ("pid", "true"), ("pid", "1.5"),
+    ("done", '"2"'), ("done", "[2]"), ("exit", '"2"'), ("exit", "true"),
+    ("scenario", '["coldStart"]'), ("cooling", '{"battery": 41}'), ("error", '["no device"]'),
+])
+def test_a_progress_file_collect_did_not_write_says_nothing(tmp_path: Path, monkeypatch,
+                                                            field: str, value: str) -> None:
+    """#474: a field of `.echolot/log/collect.json` holding what `collect`
+    never writes there ended `echolot`, `status --next` or the start page
+    in a traceback, or printed a run that is not there. Now the file reads
+    as one that does not parse: no `collect` line, and the rest as it was."""
+    fields = _failed() if field in ("finished", "exit", "error") else _running()
+    fields[field] = "<value>"
+    out = _status_over_progress(tmp_path, monkeypatch, json.dumps(fields).replace('"<value>"', value))
+    check("no collect line", _said(out, "collect") is None, out)
+    check("and the rest of the status is printed",
+          (_said(out, "traces") or "").startswith("2 in .echolot/traces") and _said(out, "next"), out)
+    code, out, _ = _run("status", "--next")
+    check("the next step is still one word", code == 0 and out.strip() in state.NEXT_KINDS, out)
+    st = state.project_state(tmp_path)
+    check("the state has no collect", st["collect"] is None, st["collect"])
+    page = ready.read(tmp_path, "echolot.yml", ready.Sources(scan=_no_scan, pick_device=lambda serial: "EXAMPLE0001"))
+    check("and the start page is read", page["next"]["kind"] in state.NEXT_KINDS, page["next"])
+
+
+@pytest.mark.parametrize("base, fields, said", [
+    ("running", {}, "running: coldStart, 2/5 iterations, cooling: battery 41.0 °C, waiting for 40, started 15m ago"),
+    ("running", {"mode": "gradle", "iterations": None, "done": 0, "cooling": None},
+     "running: coldStart, the macrobenchmark drives the iterations, started 15m ago"),
+    # Whole seconds are a time as well.
+    ("running", {"started": 1763719200}, "running: coldStart, 2/5 iterations, cooling: battery 41.0 °C"),
+    # A process that is gone: Linux and macOS hand out no pid this high.
+    ("running", {"pid": 2 ** 22}, "interrupted at 2/5, started 15m ago — the process is gone"),
+    ("started alone", {}, "interrupted, started 15m ago — the process is gone"),
+    ("failed", {}, "failed 10m ago: collection error: no device"),
+    # `collect` writes the count it was handed before it checks it, and a
+    # count that is none fails at once, saying why.
+    ("failed", {"iterations": "five", "done": 0,
+                "error": "-n / runner.iterations: 'five' is not a number of repeats. One or more, in digits."},
+     "failed 10m ago: -n / runner.iterations: 'five' is not a number of repeats."),
+])
+def test_a_progress_file_as_collect_writes_it_still_reads(tmp_path: Path, monkeypatch, base: str,
+                                                          fields: dict, said: str) -> None:
+    """The other side of #474: a field that is not there, is null, or holds
+    what `collect` writes there is read as it was."""
+    out = _status_over_progress(tmp_path, monkeypatch, json.dumps({**PROGRESS[base](), **fields}))
+    check("read", (_said(out, "collect") or "").startswith(said), out)
 
 
 def test_files_equal_to_the_template_are_current_without_skill_md(tmp_path: Path) -> None:

@@ -494,7 +494,9 @@ drives the iterations` in gradle mode. A run whose process is gone without
 finishing reads `interrupted`. One that failed reads `failed 2m ago:` followed
 by the line of the output that names the cause, such as the exception the
 benchmark threw, and the fix when the failure is a known one. That line stays
-until a newer set of traces exists.
+until a newer set of traces exists. A file that does not parse, or one that
+holds what `collect` never writes there, such as text where it writes a time,
+gives no line: it describes no run, and the next `collect` writes it anew.
 
 The run log, `.echolot/log/runs.jsonl`, keeps the same cause and fix at the
 head of the run's `error`, followed by as much of the full message as fits in
