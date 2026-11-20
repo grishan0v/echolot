@@ -131,6 +131,10 @@ def record(verdict: dict[str, Any] | None = None, status: str = "concluded", rep
     return hunt
 
 
+# The path a served page has in its top bar: (label, href, is this page).
+STEPS = [("Start", "#start", False), ("Report", "#report", False), ("Agent's answer", "#answer", True),
+         ("After the fix", "#after", False)]
+
 AGAIN = ("echolot collect && echolot analyze .echolot/traces/coldStart_iter*.perfetto-trace "
          f"&& echolot compare .echolot/hunts/{N}/reports/001.json")
 
@@ -179,6 +183,13 @@ def write(root: Path, demo_report: dict[str, Any]) -> list[Path]:
         page.write_text(answer_page.render(hunt, reports, again=AGAIN), encoding="utf-8")
         out.append(page)
     hunt, reports = states(demo_report)["many"]
+    # The same page as a server would hand it out: the steps to the other
+    # pages in the top bar, and a button in the place kept for one.
+    served = root / "answer-served.html"
+    served.write_text(answer_page.render(
+        hunt, reports, again=AGAIN, steps=STEPS,
+        action_html='<button type="button" class="btn primary">Check again</button>'), encoding="utf-8")
+    out.append(served)
     home = root / "project" / ".echolot" / "hunts" / str(N)
     (home / "reports").mkdir(parents=True, exist_ok=True)
     (home / "hunt.json").write_text(json.dumps(hunt, indent=2) + "\n", encoding="utf-8")

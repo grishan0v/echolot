@@ -33,7 +33,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Sequence
 
 from .. import plain
 from .. import report as report_mod
@@ -669,14 +669,20 @@ def _process(rounds: list[tuple[int, dict[str, Any] | None]]) -> Any:
 
 
 def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None = None,
-           action_html: str = "") -> str:
+           action_html: str = "", steps: Sequence[tuple[str, str, bool]] = (),
+           crumb: str | Sequence[str] | None = None) -> str:
     """The page for an investigation, as one self-contained HTML document.
 
     `hunt` is its record as `hunt.json` holds it and `reports` are the
     reports it filed, by number (`hunt.archived_reports`). `again` is the
     command that checks the app once more, for the reader to copy.
-    `action_html` goes into the one place kept for a page that is served
-    and can start that check itself; a file on disk leaves it empty.
+
+    The rest is for a page that is served, and a file on disk passes none of
+    it. `action_html` goes into the one place kept for a button that can
+    start that check itself. `steps` is the path in the top bar to the other
+    pages, each `(label, href, is_this_page)`, and `crumb` is what the bar
+    says the page is about in place of the process and the scenario: one
+    string, or several. Both go to `kit.topbar` as they are.
     """
     hunt = _dict(hunt)
     rounds = _rounds(reports)
@@ -744,7 +750,9 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
 
     main = ('<main><div class="wide stack gap-6">' + "".join(parts) + "<hr>"
             + f'<div>{"".join(folds)}</div>' + "".join(panels) + "</div></main>")
-    body = (f'<div class="page">{kit.topbar([_process(rounds), hunt.get("scenario")])}{main}</div>'
+    crumbs = [_process(rounds), hunt.get("scenario")] if crumb is None else \
+        [crumb] if isinstance(crumb, str) else list(crumb)
+    body = (f'<div class="page">{kit.topbar(crumbs, steps)}{main}</div>'
             + (kit.peek("row", "Back to the answer") if rows else ""))
     title = "echolot answer" + (f": {report_mod.clip(question, 80)}" if question else "")
     return kit.document(title, body, css=CSS, js=JS)

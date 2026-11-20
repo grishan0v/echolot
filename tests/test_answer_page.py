@@ -801,6 +801,29 @@ def test_check_again_is_a_sentence_a_command_to_copy_and_one_place_for_a_button(
           "more and compare it with the first round." and not bare.all("pre"))
 
 
+def test_the_top_bar_takes_the_steps_and_the_crumb_of_a_page_that_is_served(states):
+    plain_bytes = answer_page.render(*states["many"], again=fx.AGAIN)
+    check("a file on disk passes neither, and is the bytes it was",
+          plain_bytes == answer_page.render(*states["many"], again=fx.AGAIN, steps=(), crumb=None)
+          and not read(plain_bytes).all("nav"))
+    steps = [("Start", "/", False), ("Report", "/report", False), ("Agent's answer", "/answer", True)]
+    for name, state in states.items():
+        bar = page_of(state, steps=steps).one("header", "top")
+        links = bar.one("nav", "steps").all("a")
+        check(f"{name}: the steps are a path in the top bar, this page marked for a screen reader",
+              [(a.text, a.attrs["href"], a.attrs.get("aria-current")) for a in links]
+              == [("Start", "/", None), ("Report", "/report", None), ("Agent's answer", "/answer", "page")])
+    own = page_of(states["many"], steps=steps).one("span", "crumb").text
+    check("the crumb stays the page's own unless one is given", own == "com.example.appcoldStart")
+    check("one given as a string takes its place",
+          page_of(states["many"], crumb="My app").one("span", "crumb").text == "My app")
+    check("and so do several", page_of(states["many"], crumb=["My app", None, "First launch"]).one("span", "crumb").text
+          == "My appFirst launch")
+    check("an empty one leaves the bar without it", not page_of(states["many"], crumb="").all("span", "crumb"))
+    odd = page_of(states["many"], crumb="<b>x</b>").one("span", "crumb")
+    check("what is given is text, never markup", odd.text == "<b>x</b>" and not odd.all("b"))
+
+
 def test_what_a_reader_gets_with_script_switched_off(states):
     page = page_of(states["many"], again=fx.AGAIN)
     check("the root says so until a script runs", page.one("html").attrs["class"] == "no-js")
