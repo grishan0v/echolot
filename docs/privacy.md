@@ -101,6 +101,13 @@ Two connections stay on the machine: perfetto starts trace_processor and
 talks to it over HTTP on localhost, and `adb` talks to its server on
 localhost:5037, which reaches the phone over USB or your local network.
 
+`echolot ui` is a third, while it runs: a server on 127.0.0.1 that shows the
+project to your browser. It listens on no other address, answers only a
+request that carries the token made at that start, serves the pages it draws
+and no file, and its pages fetch nothing. [The page in the
+browser](ui.md#what-the-server-answers-and-what-it-refuses) says what it
+refuses.
+
 The agent you run reads echolot's output, and sends what it reads to its
 model as part of the session. That traffic is the agent's, under its
 provider's terms.

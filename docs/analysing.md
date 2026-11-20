@@ -496,7 +496,8 @@ always means that something was looked at and found fine.
 ## The report as a page
 
 `report.md` is a table for an agent and a terminal. For a person there is
-the same report as a page:
+the same report as a page (and [`echolot ui`](ui.md) opens it without writing
+a file):
 
 ```bash
 echolot analyze coldStart_*.perfetto-trace --html   # report.html beside report.json and report.md

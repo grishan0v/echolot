@@ -60,6 +60,7 @@ nav:
       - Collecting traces: collecting.md
       - ANRs: anr.md
       - Marking: mark.md
+      - The page in the browser: ui.md
       - Analysing: analysing.md
       - Comparing: compare.md
       - Calibrating: calibrate.md

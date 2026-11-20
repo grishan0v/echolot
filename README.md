@@ -102,6 +102,8 @@ An 81 MB trace with 475k slices comes out as a 14 KB `report.json` in about
 five seconds. `echolot analyze --html` adds `report.html`: the same report in
 plain words as a page, one file that opens from disk. `echolot hunt --show --html`
 writes an investigation the same way: what the agent found, where, and what to change.
+`echolot ui` opens a page on this machine with whether everything is ready, the
+next step, and the reports.
 
 <details>
 <summary><b>Example report</b></summary>
@@ -206,6 +208,7 @@ same pages [on GitHub](https://github.com/grishan0v/echolot/tree/main/docs):
 [Collecting](https://github.com/grishan0v/echolot/blob/main/docs/collecting.md) ·
 [ANRs](https://github.com/grishan0v/echolot/blob/main/docs/anr.md) ·
 [Marking](https://github.com/grishan0v/echolot/blob/main/docs/mark.md) ·
+[The page in the browser](https://github.com/grishan0v/echolot/blob/main/docs/ui.md) ·
 [Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md) ·
 [Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md) ·
 [Calibrating](https://github.com/grishan0v/echolot/blob/main/docs/calibrate.md) ·
