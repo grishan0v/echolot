@@ -257,6 +257,49 @@ def _citation(entry: Any, where: str, index: _Index, out: list[str]) -> None:
             out.append(f"{where}: {why}")
 
 
+def rows_at(reports: Reports, entry: Any) -> tuple[list[tuple[str | None, dict[str, Any]]],
+                                                   str | None]:
+    """The rows a citation points at, or why there are none.
+
+    For a page that shows the evidence. It asks what the check asks of a
+    citation, through `unresolved`, and answers with the rows themselves, so
+    a row is shown exactly when the check would accept it. Each row comes
+    with the id of the detector it is a row of, None for one of the markers'.
+
+    With a detector named, that detector's row. Without one the citation may
+    be any detector's or a marker's: the markers' row stands for it when
+    there is one, because that is where a marker's own numbers live, and
+    otherwise every detector's row at that location, in the report's order.
+
+    A verdict was checked when it was handed in; this is asked again later,
+    of whatever reports are still on disk, and nothing is stored.
+    """
+    if not isinstance(entry, dict):
+        return [], "it does not read as a citation"
+    report, location, detector = (entry.get("report"), entry.get("location"),
+                                  entry.get("detector"))
+    if (not _int(report) or report < 1 or not _text(location)
+            or (detector is not None and not _text(detector))):
+        return [], "it does not read as a citation: a report's number and a row's location"
+    why = unresolved(_Index(reports), report, location, detector)
+    if why:
+        return [], why
+    data = reports[report] or {}
+
+    def at(rows: Any) -> list[dict[str, Any]]:
+        return [r for r in _list(rows) if isinstance(r, dict) and r.get("location") == location]
+
+    by = [(d["id"], at(d.get("rows"))) for d in _list(data.get("detectors"))
+          if isinstance(d, dict) and isinstance(d.get("id"), str)]
+    if detector is not None:
+        return [(detector, r) for did, rows in by if did == detector for r in rows], None
+    markers = data.get("markers")
+    own = at(markers.get("rows")) if isinstance(markers, dict) else []
+    if own:
+        return [(None, r) for r in own], None
+    return [(did, r) for did, rows in by for r in rows], None
+
+
 # --- the check ---------------------------------------------------------------
 
 def validate(verdict: Any, reports: Reports) -> list[str]:
