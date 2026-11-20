@@ -418,7 +418,7 @@ def answer(site: Site, method: str, target: str, headers: Mapping[str, str], bod
         # 4. And carries a small form, or nothing.
         if body is None:
             return Reply(413, f"echolot ui: refused. A request may carry {BODY_CAP} bytes at most, "
-                         "and has to say how many it carries.\n", "text/plain; charset=utf-8")
+                         "and has to say how many it carries and carry them.\n", "text/plain; charset=utf-8")
     route, params, known = find("GET" if method in READS else method, rest)
     fields = {} if method in READS else _form(headers, body or b"")
     if fields is None:
@@ -437,10 +437,18 @@ def answer(site: Site, method: str, target: str, headers: Mapping[str, str], bod
             page = (route.draw(visit, params) if route else
                     _nothing(visit, "No such page", "This address is no page of `echolot ui`."))
     except Exception as e:  # a page that fails says so, and the server goes on
-        print(f"echolot ui: could not draw the page `{name}`: {type(e).__name__}: {e}", file=sys.stderr)
-        html = start_page.notice("This page could not be drawn",
-                                 f"echolot ran into an error while reading the project: {type(e).__name__}: {e}",
-                                 site.url("start"))
+        if method in READS:
+            print(f"echolot ui: could not draw the page `{name}`: {type(e).__name__}: {e}", file=sys.stderr)
+            html = start_page.notice("This page could not be drawn",
+                                     f"echolot ran into an error while reading the project: {type(e).__name__}: {e}",
+                                     site.url("start"))
+        else:
+            # A press that fell over may or may not have started something:
+            # the start page reads it from the files, and says.
+            print(f"echolot ui: could not answer `{name}`: {type(e).__name__}: {e}", file=sys.stderr)
+            html = start_page.notice("That did not work",
+                                     f"echolot ran into an error: {type(e).__name__}: {e}. The start page shows "
+                                     "whether a check is running.", site.url("start"))
         return Reply(500, html)
     if page.location:
         return Reply(page.status, "", "text/plain; charset=utf-8", (("Location", page.location),))
@@ -462,7 +470,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _body(self, method: str) -> bytes | None:
         """What the request carries: nothing for a read, at most `BODY_CAP`
         bytes otherwise. More than that, or a length that is no number, is
-        not read at all."""
+        not read at all; and a body that ends before the length it stated is
+        no body: half a form could be a whole one that says something else."""
         if method in READS:
             return b""
         if self.headers.get("Transfer-Encoding"):
@@ -475,7 +484,8 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         if not 0 <= length <= BODY_CAP:
             return None
-        return self.rfile.read(length)
+        body = self.rfile.read(length)
+        return body if len(body) == length else None
 
     def _handle(self, method: str) -> None:
         reply = answer(self.server.site, method, self.path, self.headers, self._body(method))  # type: ignore[attr-defined]

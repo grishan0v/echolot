@@ -219,7 +219,8 @@ the page it opened and by nothing else:
   else is refused. Two such requests exist, both a form of the start page or
   of the answer's page: the press of the button, and Stop.
 - Such a request may carry a form of at most 4096 bytes. One that carries
-  more, or does not say how much, is refused unread. Nothing in a form is
+  more, or does not say how much, is refused unread, and so is one that ends
+  before the length it stated. Nothing in a form is
   used as a path or as a command: a scenario has to be one the config names,
   a number of launches a whole number from 1 to 20, an investigation one the
   project has.

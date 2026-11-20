@@ -29,6 +29,7 @@ import io
 import json
 import os
 import re
+import socket
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -1049,6 +1050,25 @@ def test_a_process_that_does_not_start_is_said_and_nothing_is_left_running(proje
     check("and the start page has its button", button(page_of(site)).text == "Check the app")
 
 
+def test_a_press_that_falls_over_says_so_and_points_at_the_start_page(project, capsys):
+    site = site_of(project.ready())
+
+    def falls_over(root, name, plan):
+        raise RuntimeError("the disk is <full>")
+    site.spawn = falls_over
+    reply = press(site, fields={"what": "record:coldStart"})
+    page = read(reply.body)
+    check("a page of its own, not one about a page that could not be drawn", reply.status == 500
+          and page.one("h1").text == "That did not work", page.one("h1").text)
+    check("with the error as text, and where to see whether anything started", page.one("p", "lead").text == (
+        "echolot ran into an error: RuntimeError: the disk is <full>. The start page shows whether a check is running.")
+        and page.one("a", "btn").attrs["href"] == f"/{site.token}/")
+    err = capsys.readouterr().err
+    check("the terminal hears of it in one line, without the address", err.strip()
+          == "echolot ui: could not answer `check`: RuntimeError: the disk is <full>" and site.token not in err, err)
+    check("and the server goes on", page_of(site).all("button", id="check-go"))
+
+
 # --- what the server refuses --------------------------------------------------------------------
 
 def noting(started: list):
@@ -1128,6 +1148,14 @@ def test_a_body_over_the_cap_is_refused_unread(project):
         check("a body of no stated length", status == 413)
         status, _, _ = send(server, f"/{site.token}/check", big, Origin="https://evil.example")
         check("a stranger hears the same as with any body", status == 403)
+        with socket.create_connection((ui.HOST, site.port), timeout=10) as raw:
+            # Half a form: it says 40 bytes and ends after 22. "launches=12" cut to "launches=1" would be a form too.
+            raw.sendall((f"POST /{site.token}/check HTTP/1.0\r\nHost: {site.host}\r\nOrigin: {site.origin}\r\n"
+                         f"Content-Type: {ui.FORM}\r\nContent-Length: 40\r\n\r\nwhat=record%3AcoldStart").encode())
+            raw.shutdown(socket.SHUT_WR)
+            answered = raw.makefile("rb").read().decode()
+        check("a body that ends before the length it stated is no body", answered.startswith("HTTP/1.0 413")
+              and "and carry them" in answered and not started, answered[:200])
         exact = b"what=record%3AcoldStart&pad=" + b"x" * (ui.BODY_CAP - 28)
         status, _, _ = send(server, f"/{site.token}/check", exact, **own)
         check("at the cap it is read", len(exact) == ui.BODY_CAP and status == 303 and len(started) == 1, status)
