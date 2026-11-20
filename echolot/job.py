@@ -311,7 +311,7 @@ def run(project: Path, name: str, plan: dict[str, Any], *,
             break
         argv, missing = _expand(step["argv"])
         log = log_path(project, name, step["id"])
-        step.update(status=RUNNING, started=clock(), log=str(log.relative_to(project)))
+        step.update(status=RUNNING, started=clock(), log=log.relative_to(project).as_posix())
         _write(path, state)
         if missing is not None:
             log.write_text(f"no file matches {missing}\n", encoding="utf-8")
