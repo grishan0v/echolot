@@ -24,8 +24,10 @@ from __future__ import annotations
 import contextlib
 import copy
 import hashlib
+import importlib
 import io
 import json
+import pkgutil
 import re
 import shutil
 import subprocess
@@ -891,7 +893,13 @@ def test_the_pieces_ship_with_the_package():
     names = set(report_page.CSS) | set(report_page.JS)
     check("every stylesheet and script a page names is inside the package",
           all((PAGES / n).is_file() for n in names), sorted(n for n in names if not (PAGES / n).is_file()))
-    check("and nothing lies there unused", {p.name for p in PAGES.iterdir() if p.suffix in (".css", ".js")} == names)
+    # Every page of the package names what it is made of in its `CSS` and `JS`.
+    used = set()
+    for info in pkgutil.iter_modules([str(PAGES)]):
+        module = importlib.import_module(f"echolot.pages.{info.name}")
+        used |= set(getattr(module, "CSS", ())) | set(getattr(module, "JS", ()))
+    check("and nothing lies there unused by every page", {p.name for p in PAGES.iterdir() if p.suffix in (".css", ".js")} == used,
+          {p.name for p in PAGES.iterdir() if p.suffix in (".css", ".js")} ^ used)
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     check("the wheel is told to carry them", '"pages/*.css"' in pyproject and '"pages/*.js"' in pyproject)
 

@@ -1,0 +1,60 @@
+/* The agent's answer: its table's columns at the three widths, the rounds of
+   an investigation, and the command that checks the app again. */
+
+/* Cause (title, what it costs, what happens), Where, What to do, Expected back, Details */
+.c-wh { grid-area: wh; } .c-do { grid-area: do; } .c-bk { grid-area: bk; }
+.tb.causes { --cols: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1.15fr) 7.5rem 6rem; --areas: "t wh do bk go"; }
+.tb.causes .tr-t { font-size: var(--t-lg); line-height: 1.35; }
+.tr-m { margin: 4px 0 6px; font-size: var(--t-sm); line-height: 1.5; color: var(--ink-2); overflow-wrap: anywhere; }
+.tr-m b { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tr-s { font-size: var(--t-sm); line-height: 1.5; color: var(--ink-2); overflow-wrap: anywhere; }
+.tr-t + .tr-s { margin-top: 4px; }
+.c-wh { font-size: var(--t-sm); line-height: 1.7; }
+.at-l { display: block; }
+.c-do { overflow-wrap: anywhere; }
+.c-bk { font-size: var(--t-sm); line-height: 1.6; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+[data-label]::before { content: attr(data-label); display: none; color: var(--ink-2); font: 400 var(--t-sm)/1.4 var(--sans); }
+@container (max-width: 899px) {
+  .tb.causes { --cols: minmax(0, 1fr) 7.5rem; --areas: "t bk" "wh wh" "do do" "go go"; }
+  .tb.causes .tr.no-wh { --areas: "t bk" "do do" "go go"; }
+  .tb.causes .tr.no-do { --areas: "t bk" "wh wh" "go go"; }
+  .tb.causes .tr.no-wh.no-do { --areas: "t bk" "go go"; }
+  .tb.causes .tb-h { --areas: "t bk"; } .tb.causes .tb-h .c-wh, .tb.causes .tb-h .c-do, .tb.causes .tb-h .c-go { display: none; }
+  .tb.causes .tr { row-gap: var(--s3); } .tb.causes .c-go { justify-self: start; }
+  .tb.causes .tr .c-wh::before, .tb.causes .tr .c-do::before { display: block; }
+  .tb.causes .tr .c-wh.none, .tb.causes .tr .c-do.none { display: none; }
+}
+@container (max-width: 559px) {
+  /* A list: what a row lacks takes no room in it. */
+  .tb.causes .tr { display: flex; flex-direction: column; align-items: stretch; gap: var(--s3); }
+  .tb.causes .tr .c-bk::before { display: block; }
+  .tb.causes .tr .c-bk.none { display: none; }
+}
+/* With script off there is nothing to open. */
+.no-js .tb.causes .c-go { display: none; }
+
+/* what the agent wrote, a line to a line */
+.said { display: grid; gap: var(--s2); max-width: 68ch; }
+.said li { position: relative; padding-left: 18px; overflow-wrap: anywhere; }
+.said li::before { content: ""; position: absolute; left: 4px; top: .7em; width: 5px; height: 5px; border-radius: 50%; background: var(--ink-3); }
+.sure { display: grid; gap: var(--s3); max-width: 68ch; }
+.sure p { color: var(--ink-2); font-size: var(--t-sm); overflow-wrap: anywhere; }
+.gone { overflow-wrap: anywhere; }
+
+/* the rounds of an investigation, the oldest first */
+.timeline { display: grid; gap: var(--s4); max-width: var(--col); }
+.timeline > li { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: 4px 16px; }
+.timeline .when { color: var(--ink-2); font-size: var(--t-sm); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.repcard { margin-top: var(--s2); padding: 12px 14px; border-radius: var(--r2); background: var(--surface); display: grid; gap: 6px; font-size: var(--t-sm); }
+.repcard > * { min-width: 0; overflow-wrap: anywhere; }
+.repcard code { background: var(--hover); }
+.meter-h { justify-content: space-between; gap: 4px 12px; }
+.meter { height: 8px; border-radius: 4px; background: var(--hover); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--data); border-radius: 4px; }
+@media (max-width: 560px) { .timeline > li { grid-template-columns: minmax(0, 1fr); } .timeline .when:empty { display: none; } }
+
+/* the command that checks the app again, and the place for a button that can */
+.cmd { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--s2) var(--s3); max-width: var(--col); }
+.cmd-t { flex: 1 1 16rem; min-width: 0; margin: 0; padding: 10px 14px; border-radius: var(--r2); background: var(--surface);
+  font: 400 var(--t-sm)/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+#check-again-action:empty { display: none; }

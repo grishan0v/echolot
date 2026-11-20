@@ -18,6 +18,11 @@ arranged from the same pieces:
     report_page.py  the report: `echolot analyze --html`, `echolot report --html`
     md.py           the Markdown that report.md is written in, as HTML
 
+    answer.css/.js  what is the answer's alone: its columns, the rounds of an
+                    investigation, the command to copy
+    answer_page.py  an investigation and the agent's answer:
+                    `echolot hunt --show [n] --html`, `echolot hunt --done --html`
+
 A new page takes the `.css` and `.js` it needs by name in `kit.document`,
 adds a stylesheet for its own columns, and builds its body from `kit`.
 """
