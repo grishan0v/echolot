@@ -40,14 +40,17 @@ collect` while there are no recordings, `echolot analyze` over them once there
 are, and the agent's command where the step is an agent's (writing
 `echolot.yml`, resuming an investigation).
 
-**Reports** lists the last report of each scenario, with its first line and its
-level, and every investigation with what it did, what it came to and the
-reports it filed. A report opens as [the report page](analysing.md#the-report-as-a-page),
+**Reports** lists the last report of each scenario, with its level, its first
+line, when it was made and from how many launches, and how many checks found
+something. Then every investigation: what was asked, how many times the app
+was recorded, how long it has been open or when it ended, what it came to,
+and the reports it filed. A report opens as [the report page](analysing.md#the-report-as-a-page),
 drawn from its `report.json` at that moment; a file that does not read is
 said, not linked.
 
 **All settings** is a fold, read-only. It holds what the page reads for you,
-and under each row the words `echolot` and `echolot scan` say about it:
+and under each row the words `echolot` and `echolot scan` say about it. The
+page says things in sentences; the terminal's own lines are here:
 
 - the config, and the scenario the page is about (the open investigation's,
   else the first);
@@ -62,7 +65,10 @@ and under each row the words `echolot` and `echolot scan` say about it:
 - the thresholds: how many checks run on the config's, and each one with
   where it comes from: built-in, set in the config, set for this scenario,
   or switched off;
-- the versions of echolot and of trace_processor.
+- the versions of echolot and of trace_processor;
+- what `echolot` prints behind the sentences above the fold: of the
+  self-check, the devices, the next step, the recordings and the reports, and
+  what `echolot hunt --list` prints of the investigations.
 
 ## What the server answers, and what it refuses
 

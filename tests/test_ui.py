@@ -44,6 +44,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import echolot  # noqa: E402
+from echolot import hunt as hunt_mod  # noqa: E402
 from echolot import main as main_mod  # noqa: E402
 from echolot import ready, recorder, runner, ui  # noqa: E402
 from echolot import scan as scan_mod  # noqa: E402
@@ -762,11 +763,15 @@ def test_the_page_says_what_echolot_says(project, build):
     page = start(project)
     status = said_by(["status"] if (project.root / "echolot.yml").is_file() else [])
     scan = said_by(["scan"]).replace("**", "")
-    behind = [(p.one("span", "who").text, p.text.split(" ", 1 if " " not in p.one("span", "who").text else 2)[-1])
+    listed = said_by(["hunt", "--list"])
+    behind = [(p.one("span", "who").text, p.text[len(p.one("span", "who").text):].strip())
               for p in page.all("p", "says") if p.all("span", "who")]
     check("there are such lines", len(behind) >= 4, behind)
+    check("the report's and the investigation's among them", build != "open" or (
+        any(words.startswith("report: ") for _, words in behind)
+        and {"echolot hunt --list"} <= {who for who, _ in behind}), behind)
     for who, words in behind:
-        source = status if who == "echolot" else scan
+        source = {"echolot": status, "echolot scan": scan, "echolot hunt --list": listed}[who]
         key, _, value = words.partition(": ")
         flat = re.sub(r"\s+", " ", source).replace("`", "")
         check(f"`{who}` says it: {words[:60]}", value in flat or words in flat, source[-600:])
@@ -879,12 +884,13 @@ def test_a_project_with_several_scenarios(project):
     page = read(get(site).body)
     check("the page is about the first, and says so", "names 2 scenarios. This page is about coldStart"
           in setting(page, "Config").text and "feedScroll" in setting(page, "Config").text, setting(page, "Config").text)
-    check("status's line of each is behind it", "scenario: feedScroll · own thresholds · 3 trace(s)" in setting(page, "Config").text)
+    check("status's line of each is under All settings", "scenario: feedScroll · own thresholds · 3 trace(s)"
+          in setting(page, "Recordings and reports").text, setting(page, "Recordings and reports").text)
     _, command = next_of(page)
     check("the step names its scenario", command.endswith("--scenario coldStart"), command)
     reports = page.one("ul", "reps").all("li")
     check("each scenario's last report, or that it has none",
-          "coldStart no report yet" in reports[0].text and reports[1].one("a").attrs["href"].endswith("/report/feedScroll"),
+          reports[0].text.startswith("coldStart No report yet.") and reports[1].one("a").attrs["href"].endswith("/report/feedScroll"),
           [r.text for r in reports])
     check("the first scenario has no report, so Report is no step", not page.all("nav", "steps"))
     check("the other one's opens", get(site, "report/feedScroll").status == 200)
@@ -920,8 +926,11 @@ def test_the_report_is_drawn_from_the_file_when_it_is_asked_for(project):
     card = page.one("ul", "reps").one("li")
     check("the start page gives its first line and its level",
           card.one("span", "st").text == "Needs attention" and "The launch takes 1.9 s." in card.text, card.text)
-    check("and what status says of it", ".echolot/out/report.json" in card.one("p", "says").text
-          and "run(s)" in card.one("p", "says").text)
+    check("and how it was made, in sentences", "Made from 3 launches. 3 of the 6 checks found something." in card.text,
+          card.text)
+    check("status's line of it is under All settings", "report: .echolot/out/report.json" in
+          setting(page, "Recordings and reports").text and "3 of 6 detectors fired" in
+          setting(page, "Recordings and reports").text, setting(page, "Recordings and reports").text)
     body = get(site, "report").body
     check("the page is the report's, not the file beside it", "an old page on disk" not in body
           and "What echolot checked" in body and read(body).one("h1").text == "The launch takes 1.9 s")
@@ -932,6 +941,47 @@ def test_the_report_is_drawn_from_the_file_when_it_is_asked_for(project):
     del data["verdict"]
     project.report(data=data)
     check("a new report is a new page at once", read(get(site, "report").body).one("h1").text == "The launch takes 0.4 s")
+
+
+def test_how_a_report_was_made_is_said_in_sentences(project):
+    """The facts of status's line, `…, 2h ago · 3 run(s) · 3 of 6 detectors
+    fired · made with an older config`, as a beginner reads them."""
+    project.ready().traces()
+    made = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(timespec="seconds")
+
+    def card(**changes) -> str:
+        data = known()
+        data["generated_at"] = made
+        for key, value in changes.items():
+            if key == "window":
+                data["window"].update(value)
+            else:
+                data[key] = value
+        project.report(data=data)
+        page = start(project)
+        line = setting(page, "Recordings and reports").text
+        return page.one("ul", "reps").one("li").all("p")[1].text, line
+
+    text, line = card()
+    check("when, from how many launches, how many checks found something",
+          text == "Made 2 hours ago from 3 launches. 3 of the 6 checks found something.", text)
+    check("the same facts as status's line", "2h ago · 3 run(s) · 3 of 6 detectors fired" in line, line)
+    text, _ = card(traces=["one.perfetto-trace"])
+    check("one launch", text.startswith("Made 2 hours ago from one launch."), text)
+    text, _ = card(window={"startup": None})
+    check("a stretch that is no launch is a run", text.startswith("Made 2 hours ago from 3 runs."), text)
+    text, _ = card(summary={"detectors_run": 6, "detectors_fired": 0})
+    check("nothing found", text.endswith("None of the 6 checks found anything."), text)
+    text, _ = card(summary={"detectors_run": 6, "detectors_fired": 6})
+    check("everything found something", text.endswith("Each of the 6 checks found something."), text)
+    text, line = card(config={"sha": "0123456789ab"})
+    check("the config changed since", text.endswith("The settings have changed since.") and "made with an older config" in line,
+          (text, line))
+    text, line = card(config={"defaults": True})
+    check("made without the config's thresholds", text.endswith("It was made on the built-in thresholds, not the config's.")
+          and "made with --defaults" in line, (text, line))
+    text, _ = card(generated_at=None)
+    check("a report that does not say when", text.startswith("Made from 3 launches."), text)
 
 
 def test_a_report_from_before_the_plain_keys(project):
@@ -975,8 +1025,18 @@ def test_the_investigations_and_what_each_filed(project):
     items = page.one("ul", "invs").all("li")
     check("newest first, as hunt --list has them", [i.one("b").text for i in items] == ["#3", "#2", "#1"])
     check("the open one is said to be open", "open now" in items[0].one("p", "inv-h").text)
-    check("what it did and what it came to", "3 collect(s) · 3 analyze(s) · open for 2h · 3 report(s) kept" in items[2].text
-          and "the lock is held over a read" in items[2].text, items[2].text)
+    ended = hunt_mod._when("2026-11-11T11:00:00+00:00")
+    check("what it did, in sentences, and what it came to", (
+        f"The app was recorded 3 times and 3 reports were kept. It ended on {ended}, after 2 hours.") in items[2].text
+        and "the lock is held over a read" in items[2].text, items[2].text)
+    check("one that never recorded, and the open one", "The app was not recorded and no report was kept. It ended."
+          in items[1].text and "The app was recorded twice and 2 reports were kept. It is open." in items[0].text,
+          (items[1].text, items[0].text))
+    body = page.one("div", "start-body").text
+    check("the CLI's shorthand is not on the first screen", not re.search(r"\(s\)|detectors fired|\d+[smhd] ago", body), body)
+    behind = setting(page, "Investigations").text
+    check("it is under All settings, as hunt --list prints it", "3 collect(s) · 3 analyze(s) · open for 2h · 3 report(s) kept"
+          in behind and 'concluded "why is it <slow>"' in behind and "hunt: " in behind, behind)
     check("a question is text", "why is it <slow>" in items[2].text and not page.all("slow"))
     listed = said_by(["hunt", "--list"])
     check("every question and conclusion is one hunt --list prints",

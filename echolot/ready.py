@@ -23,19 +23,22 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from . import hunt as hunt_mod
-from . import layer, plain, runner, state
+from . import layer, plain, runner, state, when
 from . import main as cli
 from . import scan as scan_mod
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
 from .pages import report_page
 
 GREEN, RED, GREY = "green", "red", "grey"
+# A tone is never colour alone: what it means, in words.
+STATE = {GREEN: "ready", RED: "in the way", GREY: "not checked"}
 
 
 @dataclass
@@ -120,7 +123,7 @@ def _sentence(text: str) -> str:
 
 
 def _line(tone: str, lead: str, text: str, behind: list[tuple[str, str]]) -> dict[str, Any]:
-    return {"tone": tone, "lead": lead, "text": text, "behind": behind}
+    return {"tone": tone, "state": STATE[tone], "lead": lead, "text": text, "behind": behind}
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +338,7 @@ def settings(st: dict, head: str, says: dict[str, list[str]], cfg: Config | None
                     f"the open investigation's, else the first. The others: {others}.")
         if known.get("local"):
             text += " `local.yml` beside it is applied on top."
-        row("Config", text, status_config + [("echolot", f"scenario: {s}") for s in says.get("scenario", [])])
+        row("Config", text, status_config)
 
     # The build to measure, from the repository.
     found = facts.app if facts is not None else None
@@ -485,21 +488,76 @@ def _toolchain(head: str) -> str:
 # the reports there are
 
 
-def _verdict(path: Path) -> dict[str, Any] | None:
-    """The first line of a report's plain reading, or None for a file that is
-    no report. One written before those keys existed is read as `report
-    --plain` reads it."""
+_UNIT = {"s": "second", "m": "minute", "h": "hour", "d": "day"}
+
+
+def _spelled(short: str) -> str:
+    """A length of time as the CLI writes it (`20m`, `2h`, `96d`), in words:
+    20 minutes, 2 hours, 96 days. The number and the unit stay the CLI's."""
+    m = re.fullmatch(r"(\d+)([smhd])", str(short).strip())
+    if not m:
+        return str(short)
+    n = int(m.group(1))
+    return f"{n} {_UNIT[m.group(2)]}{'' if n == 1 else 's'}"
+
+
+def _ago(epoch: float | None) -> str | None:
+    """`when.ago` in words: "96 days ago". None for a time that is not known."""
+    said = when.ago(epoch)
+    return f"{_spelled(said[:-4])} ago" if said.endswith(" ago") else None
+
+
+def _counted(n: int, one: str, many: str) -> str:
+    return f"one {one}" if n == 1 else f"{n} {many}"
+
+
+def _times(n: int) -> str:
+    return {1: "once", 2: "twice"}.get(n) or f"{n} times"
+
+
+def _report(path: Path) -> dict[str, Any] | None:
+    """A report with its plain reading, or None for a file that is no report.
+    One written before those keys existed is read as `report --plain` reads it."""
     try:
         report = report_page._read(cli._load_report(path))
     except (ConfigError, OSError, ValueError, TypeError, KeyError, AttributeError):
         return None
-    verdict = report.get("verdict")
-    return verdict if isinstance(verdict, dict) else None
+    return report if isinstance(report.get("verdict"), dict) else None
+
+
+def report_words(rep: dict, report: dict[str, Any], said: str) -> str:
+    """What `echolot` says of a report in one line of shorthand, as sentences:
+    when it was made and from how many launches, how many checks found
+    something, and whether the settings changed since.
+
+    The facts are the ones that line is printed from (`state._report`), a
+    detector is a check and a recording a launch or a run, as in the plain
+    reading. Whether the config changed since is read off the line itself:
+    the rule is `status`'s.
+    """
+    ctx = plain._Ctx(report)
+    made = _ago(when.iso_epoch(rep.get("generated_at")))
+    runs = _counted(int(rep.get("runs") or 1), ctx.noun, ctx.plural)
+    out = [f"Made {made} from {runs}." if made else f"Made from {runs}."]
+    total, found = rep.get("run"), int(rep.get("fired") or 0)
+    if isinstance(total, int) and total > 0:
+        if found == 0:
+            out.append("The one check found nothing." if total == 1 else f"None of the {total} checks found anything.")
+        elif found >= total:
+            out.append("The one check found something." if total == 1 else f"Each of the {total} checks found something.")
+        else:
+            out.append(f"{found} of the {total} checks found something.")
+    if "made with --defaults" in said:
+        out.append("It was made on the built-in thresholds, not the config's.")
+    elif "made with an older config" in said:
+        out.append("The settings have changed since.")
+    return " ".join(out)
 
 
 def latest(st: dict) -> list[dict[str, Any]]:
-    """The last report of each scenario, as `echolot` names it: `key` is the
-    scenario when the config has several, None for the one report."""
+    """The last report of each scenario: `key` is the scenario when the config
+    has several, None for the one report. `plain` is what the page says of
+    it, `said` the line `echolot` prints, kept for "All settings"."""
     project, known = st["project"], st.get("config")
     usable = known if known and not known.get("error") else None
     each = ([(sc["name"], sc["report"]) for sc in st["scenarios"]] if st.get("scenarios")
@@ -508,13 +566,37 @@ def latest(st: dict) -> list[dict[str, Any]]:
     for name, rep in each:
         entry: dict[str, Any] = {"key": name, "scenario": name or (usable or {}).get("scenario"),
                                  "path": None, "verdict": None,
+                                 "plain": "No report yet. It appears here once its recordings are read.",
                                  "said": cli._report_text(rep, usable, project, "no report yet")}
-        if rep and not rep.get("error"):
-            entry["verdict"] = _verdict(rep["path"])
-            # A file that is there and is no report has no page to open.
-            entry["path"] = rep["path"] if entry["verdict"] is not None else None
+        if rep:
+            report = None if rep.get("error") else _report(rep["path"])
+            if report is None:
+                # A file that is there and is no report has no page to open.
+                entry["plain"] = ("A report file is there and does not read. Run `echolot analyze` again "
+                                  "to write it anew.")
+            else:
+                entry.update(verdict=report["verdict"], path=rep["path"],
+                             plain=report_words(rep, report, entry["said"]))
         out.append(entry)
     return out
+
+
+def hunt_words(h: dict[str, Any]) -> str:
+    """What `hunt --list` says an investigation did, as sentences: how many
+    times the app was recorded, how many reports it kept, and how long it has
+    been open or when it ended. The counts are the record's, the length of
+    time and the date are `hunt._ran_for` and `hunt._when`."""
+    recorded, kept = int(h.get("collects") or 0), int(h.get("reports") or 0)
+    first = f"The app was recorded {_times(recorded)}" if recorded else "The app was not recorded"
+    first += (" and no report was kept." if not kept else
+              " and one report was kept." if kept == 1 else f" and {kept} reports were kept.")
+    ran = hunt_mod._ran_for(h)
+    if (h.get("status") or "open") == "open":
+        second = f"It is open, with {_spelled(ran)} of work so far." if ran else "It is open."
+    else:
+        second = ("It ended" + (f" on {hunt_mod._when(h['closed_at'])}" if h.get("closed_at") else "")
+                  + (f", after {_spelled(ran)}" if ran else "") + ".")
+    return f"{first} {second}"
 
 
 def investigations(project: Path) -> list[dict[str, Any]]:
@@ -527,7 +609,7 @@ def investigations(project: Path) -> list[dict[str, Any]]:
         out.append({
             "n": h.get("n"), "current": bool(h.get("current")),
             "when": hunt_mod._when(h.get("opened_at")), "status": h.get("status") or "open",
-            "question": h.get("question") or "", "did": hunt_mod._did(h),
+            "question": h.get("question") or "", "plain": hunt_words(h),
             "conclusion": h.get("conclusion") if isinstance(h.get("conclusion"), str) else None,
             # A structured verdict was recorded: what a page of the agent's
             # answer is drawn from, once the server has one.
@@ -536,6 +618,26 @@ def investigations(project: Path) -> list[dict[str, Any]]:
             "unread": [k for k, data in sorted(filed.items()) if data is None or "detectors" not in data],
         })
     return out
+
+
+def behind(ready: list[dict[str, Any]], step: dict[str, Any], says: dict[str, list[str]],
+           project: Path, any_investigation: bool) -> list[dict[str, Any]]:
+    """The rows of "All settings" that are no setting: what `echolot` prints
+    behind each sentence the page says in its own words. The three ready
+    lines, the next step, the recordings and reports, the investigations."""
+    rows = [{"label": line["lead"], "text": line["state"].capitalize() + ".", "behind": line["behind"]}
+            for line in ready]
+    if step.get("behind"):
+        rows.append({"label": "The next step", "text": "", "behind": step["behind"]})
+    files = [("echolot", f"{key}: {said}") for key in ("traces", "report", "scenario") for said in says.get(key, [])]
+    if files:
+        rows.append({"label": "Recordings and reports", "text": "", "behind": files})
+    hunts = [("echolot", f"hunt: {said}") for said in says.get("hunt", [])]
+    if any_investigation:
+        hunts += [("echolot hunt --list", " ".join(line.split())) for line in hunt_mod.list_rows(project)]
+    if hunts:
+        rows.append({"label": "Investigations", "text": "", "behind": hunts})
+    return rows
 
 
 def archived(project: Path, n: int, k: int) -> tuple[dict[str, Any], Path] | None:
@@ -577,10 +679,12 @@ def read(project: Path, config: str, src: Sources, tp_binary: str | None = None,
         # `next` does not ask the phone or the repository. A recording does.
         step["note"] = " ".join(filter(None, [step.get("note"), "Fix what is marked red first: a recording "
                                               "needs the phone, and an app that can be measured."]))
+    past = investigations(project)
     return {
         "project": project, "name": app_name(cfg, facts),
         "scenario": (known or {}).get("scenario") if known and not known.get("error") else None,
         "ready": ready, "next": step,
         "settings": settings(st, head, says, cfg, facts, said),
-        "latest": latest(st), "investigations": investigations(project),
+        "behind": behind(ready, step, says, project, bool(past)),
+        "latest": latest(st), "investigations": past,
     }

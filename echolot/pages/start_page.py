@@ -24,15 +24,12 @@ JS = ("base.js", "start.js")
 Link = Callable[..., "str | None"]
 Steps = Sequence[tuple[str, str, bool]]
 
-_FIRST_OF = {"green": "ready", "red": "in the way", "grey": "not checked"}
-
-
 def _ready(view: dict[str, Any], again: str) -> str:
     """The three sentences, each after its icon, and Check again. The button
     is the screen's one next step while something is in the way."""
     lines = view["ready"]
     items = "".join(
-        f'<li>{kit.icon(line["tone"])}<span><span class="vh">{e(_FIRST_OF[line["tone"]])}: </span>'
+        f'<li>{kit.icon(line["tone"])}<span><span class="vh">{e(line["state"])}: </span>'
         f'<b>{e(line["lead"])}</b> {kit.prose(line["text"])}</span></li>' for line in lines)
     blocked = any(line["tone"] == "red" for line in lines)
     button = (f'<a class="btn {"primary" if blocked else "line"}" href="{e(again)}">Check again</a>')
@@ -66,19 +63,15 @@ def _reports(view: dict[str, Any], link: Link) -> str:
         href = link("report-of", scenario=rep["key"]) if rep["key"] else link("report")
         verdict = rep.get("verdict")
         if rep.get("path") is None or verdict is None or not href:
-            if several or rep["said"] not in ("none yet", "no report yet"):
-                name = f'<b>{e(rep["scenario"])}</b> ' if several and rep.get("scenario") else ""
-                cards.append(f'<li class="rep none"><p class="small sub">{name}{e(rep["said"])}</p></li>')
+            name = f'<b>{e(rep["scenario"])}</b> ' if several and rep.get("scenario") else ""
+            cards.append(f'<li class="rep none"><p class="sub">{name}{kit.prose(rep["plain"])}</p></li>')
             continue
         name = f'<span class="small sub">{e(rep["scenario"])}</span>' if rep.get("scenario") else ""
         cards.append(
             f'<li class="rep"><div class="rowf">{kit.pill(verdict.get("level"))}{name}</div>'
             f'<p class="measure">{e(verdict.get("text") or "")}</p>'
-            f'<p class="small sub says">{e(rep["said"])}</p>'
+            f'<p class="small sub measure">{kit.prose(rep["plain"])}</p>'
             f'<div class="rowf"><a class="btn primary" href="{e(href)}">See the report</a></div></li>')
-    if not cards:
-        cards.append('<li class="rep none"><p class="sub">No report yet. It appears here once the first '
-                     'recordings are read.</p></li>')
     past = "".join(_investigation(inv, link) for inv in view["investigations"])
     earlier = (f'<div class="stack gap-3"><h3 class="h3">Investigations</h3>'
                f'<p class="small sub measure">What an agent was asked to find, newest first, with the reports '
@@ -93,7 +86,7 @@ def _investigation(inv: dict[str, Any], link: Link) -> str:
     head = (f'<p class="inv-h"><b>{e("#" + str(n) if n else "An earlier one")}</b>'
             f'<span class="small sub">{e(inv["when"])} · {e(state)}</span></p>')
     question = f'<p>{e(inv["question"])}</p>' if inv["question"] else ""
-    did = f'<p class="small sub">{e(" · ".join(inv["did"]))}</p>' if inv["did"] else ""
+    did = f'<p class="small sub">{kit.prose(inv["plain"])}</p>'
     came = f'<p class="small">{e(inv["conclusion"])}</p>' if inv.get("conclusion") else ""
     opens = []
     for k in inv["reports"] if n else ():
@@ -119,10 +112,10 @@ def _behind(pairs: Sequence[tuple[str, str]]) -> str:
 
 
 def _settings(view: dict[str, Any]) -> str:
-    """The fold: every setting the page reads, then what stands behind the
-    three ready sentences and the next step. Read-only."""
+    """The fold: every setting the page reads, then what `echolot` prints
+    behind the sentences the page says in its own words. Read-only."""
     rows = []
-    for row in view["settings"]:
+    for row in [*view["settings"], *view["behind"]]:
         more = "".join(f'<pre class="yaml" tabindex="0">{e(text)}</pre>' if "\n" in text
                        else f"<p>{kit.prose(text)}</p>" for text in row.get("more") or ())
         each = ""
@@ -132,14 +125,9 @@ def _settings(view: dict[str, Any]) -> str:
                 + (f'<span>{e(t["numbers"])}</span> ' if t.get("numbers") else "")
                 + f'<span class="sub">{e(t["source"])}</span></li>' for t in row["each"])
             each = kit.fold("Each threshold", f'<ul class="each">{items}</ul>')
-        rows.append(f'<div><dt>{e(row["label"])}</dt><dd><p>{kit.prose(row["text"])}</p>{more}{each}'
+        said = f'<p>{kit.prose(row["text"])}</p>' if row.get("text") else ""
+        rows.append(f'<div><dt>{e(row["label"])}</dt><dd>{said}{more}{each}'
                     f'{_behind(row.get("behind") or ())}</dd></div>')
-    for line in view["ready"]:
-        rows.append(f'<div><dt>{e(line["lead"])}</dt><dd><p>{e(_FIRST_OF[line["tone"]].capitalize())}.</p>'
-                    f'{_behind(line["behind"])}</dd></div>')
-    step = view["next"]
-    if step.get("behind"):
-        rows.append(f'<div><dt>The next step</dt><dd>{_behind(step["behind"])}</dd></div>')
     intro = ('<p class="small sub measure">What this page reads, and what <code>echolot</code> and '
              '<code>echolot scan</code> say behind each line. Nothing here is changed from the page: '
              'the values live in <code>echolot.yml</code>.</p>')
