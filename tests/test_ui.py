@@ -27,8 +27,10 @@ import contextlib
 import http.client
 import io
 import json
+import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -49,6 +51,7 @@ from echolot.pages import kit, start_page  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_report_page import SCHEME, _blocks, known, outside, read  # noqa: E402
 
+ROOT = Path(__file__).resolve().parent.parent
 PAGES = Path(echolot.__file__).resolve().parent / "pages"
 APP = "com.example.app"
 
@@ -1186,6 +1189,36 @@ def test_the_command_through_main_runs_until_ctrl_c(project, monkeypatch, capsys
     check("exit 0, the address printed", code == 0 and re.fullmatch(r"http://127\.0\.0\.1:\d+/[\w-]+/\n", out), out)
     check("and while it ran, it served this project's report", asked["reply"].status == 200
           and "What echolot checked" in asked["reply"].body)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Ctrl-C is sent as SIGINT")
+def test_ctrl_c_ends_the_real_process_with_exit_0(project):
+    """The whole command as a process: it prints its address, answers, and
+    leaves on Ctrl-C with exit 0 while a connection is still held open."""
+    project.app().config().agents().doctor()
+    proc = subprocess.Popen([sys.executable, "-m", "echolot", "ui", "--no-open"], cwd=project.root,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            env={**os.environ, "ECHOLOT_NO_RECORD": "1", "PYTHONPATH": str(ROOT)})
+    try:
+        address = proc.stdout.readline().strip()
+        check("the first line of stdout is the address", re.fullmatch(r"http://127\.0\.0\.1:\d+/[\w-]{32,}/", address), address)
+        port = int(address.split(":")[2].split("/")[0])
+        conn = http.client.HTTPConnection(ui.HOST, port, timeout=10)
+        conn.request("GET", "/")
+        check("it answers, and refuses a request without the token", conn.getresponse().status == 403)
+        conn.close()
+        idle = socket.create_connection((ui.HOST, port))    # a browser's spare connection, saying nothing
+        proc.send_signal(signal.SIGINT)
+        code = proc.wait(timeout=30)
+        idle.close()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    err = proc.stderr.read()
+    check("exit 0", code == 0, (code, err[-300:]))
+    check("it said that it stopped, and no traceback", "echolot ui stopped." in err and "Traceback" not in err, err[-300:])
+    check("and wrote nothing", not (project.root / ".echolot" / "log" / "collect.json").exists()
+          and sorted(p.name for p in (project.root / ".echolot").iterdir()) == ["hosts.json", "log"])
 
 
 def test_it_is_among_the_commands_a_person_types():

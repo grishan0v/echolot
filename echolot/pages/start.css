@@ -62,3 +62,4 @@
 .each li { display: grid; gap: 0 var(--s2); padding: 6px 0; border-top: 1px solid var(--line); }
 .each li:last-child { border-bottom: 1px solid var(--line); }
 .each span { font-variant-numeric: tabular-nums; }
+.each code { justify-self: start; }
