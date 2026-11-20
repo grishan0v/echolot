@@ -42,10 +42,10 @@ Where things are looked for, when they are not where the defaults say:
 `.echolot/log/runs.jsonl`: what was asked (`argv`), where, when, exit code,
 duration, a hash of the config, a traceback if there was one, and a few facts
 the command chose to note — how many detectors fired, whether the anchor
-matched. This is the only source that does not depend on which agent was
-typing: transcripts differ between agents and lose the exit code the moment a
-call is wrapped in `2>&1 | tail`; this file does not. `ECHOLOT_NO_RECORD=1`
-switches it off.
+matched, what closed a window that is a launch. This is the only source that
+does not depend on which agent was typing: transcripts differ between agents
+and lose the exit code the moment a call is wrapped in `2>&1 | tail`; this
+file does not. `ECHOLOT_NO_RECORD=1` switches it off.
 
 **The agent's transcript.** Claude Code keeps every session under
 `~/.claude/projects/<slug>/`, the slug being the working directory with `/`

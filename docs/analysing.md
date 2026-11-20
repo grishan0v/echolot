@@ -636,6 +636,12 @@ launch's end, its first frame`, and `report.json` says `window.defined_by:
 slice of the call is not in the trace, system_server's record of the same
 call closes the window, and the line says so.
 
+The line this `analyze` leaves in the run log, `.echolot/log/runs.jsonl`,
+keeps the same value among its facts, as `window_defined_by`. The report is
+overwritten by the next `analyze` and the log is not, so a launch run can
+still be told later from an anchored one, whose line counts its two anchors
+and has no such key.
+
 A launch ends when the first frame is drawn. That is the whole wait for an
 app that holds its splash screen until its content is ready. An app that
 draws a placeholder first is still loading after that frame, and only its

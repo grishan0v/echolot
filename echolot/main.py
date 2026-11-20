@@ -820,6 +820,13 @@ def cmd_analyze(args) -> int:
         end_anchor_matches=(w.get("end_anchor") or {}).get("matches"),
         process_alternatives=len(w.get("process_alternatives") or []),
     )
+    # A launch window has no anchors, so both counts above are empty: this is
+    # what tells its line from one whose anchors were never looked up, and
+    # which of the two ends closed it. The report is overwritten by the next
+    # `analyze`; the log is the record that keeps every run. An anchored
+    # window has no `defined_by`, and its line stays as it always was.
+    if w.get("defined_by"):
+        recorder.note(window_defined_by=w["defined_by"])
     if args.defaults or cli_overrides:
         recorder.note(
             thresholds="defaults" if args.defaults else "config+cli",
