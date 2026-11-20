@@ -403,6 +403,15 @@ def pairs(rows: Sequence[tuple[str, str]], cls: str = "props") -> str:
 
 
 def place(text: Any) -> str:
-    """A place in the code. It may break after a slash, and a part longer
-    than its box breaks where it must."""
-    return f'<code class="at">{e(text).replace("/", "/<wbr>")}</code>'
+    """A place in the code, read file first: its last part, the file with its
+    lines, in ink, and the folders that file is in after it on a line of
+    their own, quieter and smaller. A path is long and the eye looks for the
+    file. Nothing is cut: the two parts are the whole place. The folders may
+    break after a slash, and a part longer than its box breaks where it must.
+    A place with no slash in it is one line."""
+    whole = "" if text is None else str(text)
+    folders, slash, name = whole.rpartition("/")
+    if not slash or not name:
+        return f'<code class="at">{e(whole).replace("/", "/<wbr>")}</code>'
+    return (f'<span class="at-p"><code class="at">{e(name)}</code><span class="vh"> in </span>'
+            f'<span class="at-in">{e(folders + slash).replace("/", "/<wbr>")}</span></span>')

@@ -248,5 +248,7 @@ details.tg.big > .tg-b { padding-top: var(--s3); gap: var(--s4); }
   .props dt, .do dt { line-height: 1.4; }
 }
 
-/* a place in the code: it breaks after a slash */
+/* a place in the code: the file first, the folders it is in under it, breaking after a slash */
 code.at { overflow-wrap: break-word; }
+.at-p { display: inline-block; max-width: 100%; vertical-align: top; }
+.at-in { display: block; font-family: var(--mono); font-size: var(--t-xs); line-height: 1.5; color: var(--ink-2); overflow-wrap: break-word; }

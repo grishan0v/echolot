@@ -11,6 +11,7 @@
 .tr-t + .tr-s { margin-top: 4px; }
 .c-wh { font-size: var(--t-sm); line-height: 1.7; }
 .at-l { display: block; }
+.at-l + .at-l { margin-top: 6px; }
 .c-do { overflow-wrap: anywhere; }
 .c-bk { font-size: var(--t-sm); line-height: 1.6; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 [data-label]::before { content: attr(data-label); display: none; color: var(--ink-2); font: 400 var(--t-sm)/1.4 var(--sans); }

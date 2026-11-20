@@ -81,6 +81,15 @@ def chart_rows(node):
     return out
 
 
+def place_of(node):
+    """A place as the page shows it, put back together: the folders it is in, then the file."""
+    return "".join(s.text for s in node.all("span", "at-in")) + node.one("code", "at").text
+
+
+def places_of(cell):
+    return [place_of(line) for line in cell.all("span", "at-l")]
+
+
 def top(page):
     """The line above the headline: the state, and beside it how many rounds."""
     return page.one("main").all("div", "rowf")[0]
@@ -177,7 +186,7 @@ def test_a_string_out_of_a_verdict_or_a_trace_cannot_become_markup(states):
     check("the title is there as text, whole", NASTY in row.one("h3").text)
     check("and so is the place, the change and the command",
           NASTY.replace("`", "") in row.one("div", "c-do").text.replace("`", "")
-          and row.one("code", "at").text == NASTY and page.one("pre", "cmd-t").text == NASTY)
+          and places_of(row.one("div", "c-wh")) == [NASTY] and page.one("pre", "cmd-t").text == NASTY)
     check("the row it cites is drawn under its own name", NASTY in chart_rows(panel_of(page, "cause-1")))
     check("the title of the document too", NASTY[:20] in page.one("title").text)
 
@@ -316,8 +325,15 @@ def test_a_cause_is_a_row_with_where_what_to_do_and_what_to_expect(states):
     check("what happens is its mechanism, a name in backticks as code",
           row.one("p", "tr-s").text == cause["mechanism"].replace("`", "")
           and [c.text for c in row.one("p", "tr-s").all("code")] == ["find", "update"])
-    check("every place in the code, each on a line of its own",
-          [c.text for c in row.one("div", "c-wh").all("code")] == cause["where"])
+    check("every place in the code, each on a line of its own, whole",
+          places_of(row.one("div", "c-wh")) == cause["where"])
+    check("read file first: the file with its lines in ink, then the folders it is in",
+          [c.text for c in row.one("div", "c-wh").all("code")] == ["StoreRepository.kt:30", "StoreRepository.kt:61"]
+          and [s.text for s in row.one("div", "c-wh").all("span", "at-in")]
+          == ["feature/collection/src/main/java/com/example/app/data/"] * 2)
+    check("the same in the panel", places_of(panel_of(page, "cause-2").one("dl", "do")) == cause["where"]
+          and [c.text for c in panel_of(page, "cause-2").one("dl", "do").all("code", "at")]
+          == ["StoreRepository.kt:30", "StoreRepository.kt:61"])
     check("what to do is its fix", row.one("div", "c-do").text == cause["fix"].replace("`", ""))
     check("every cell carries its column's name for the widths with no head",
           [c.attrs.get("data-label") for c in row.all("div", role="cell")]
@@ -591,9 +607,13 @@ def test_long_names_and_long_places_are_kept_whole(states):
     row = rows_of(page)["cause-1"]
     check("the title whole, in the row and in the panel",
           row.one("h3").text == cause["title"] == panel_of(page, "cause-1").one("h2").text)
-    places = row.one("div", "c-wh").all("code", "at")
-    check("each place whole", [c.text for c in places] == cause["where"])
-    check("and it may break after every slash", all(len(c.all("wbr")) == c.text.count("/") for c in places))
+    check("each place whole: nothing is cut", places_of(row.one("div", "c-wh")) == cause["where"])
+    lines = row.one("div", "c-wh").all("span", "at-l")
+    check("the file is what stands first, however long its name",
+          [line.one("code", "at").text for line in lines]
+          == ["CollectionItemCardAdapterWithAVeryLongNameThatHasNoSlashToBreakAt.kt:41-58", "CollectionAdapter.kt:41-58"])
+    check("the folders may break after every slash",
+          all(len(line.one("span", "at-in").all("wbr")) == line.one("span", "at-in").text.count("/") for line in lines))
     check("a break is offered after the slash, not before it", "main/<wbr>java/<wbr>com" in text)
 
 
@@ -808,9 +828,17 @@ def test_label_and_value_and_a_place_in_the_code():
     check("rows of a label and a value", block.attrs["class"] == "do"
           and [(d.one("dt").text, d.one("dd").text) for d in block.all("div")] == [("Where", "a"), ("What <to> do", "it")])
     check("a list of facts by default", read(kit.pairs([("a", "b")])).one("dl").attrs["class"] == "props")
-    place = read(kit.place("a/b<c>/d.kt:1")).one("code")
-    check("a place is code, whole, with a break offered after each slash",
-          place.text == "a/b<c>/d.kt:1" and len(place.all("wbr")) == 2 and place.attrs["class"] == "at")
+    place = read(kit.place("a/b<c>/d.kt:1")).one("span", "at-p")
+    check("a place reads file first: the file with its lines as code",
+          place.kids[0].tag == "code" and place.one("code", "at").text == "d.kt:1")
+    check("then the folders it is in, with a break offered after each slash",
+          place.one("span", "at-in").text == "a/b<c>/" and len(place.one("span", "at-in").all("wbr")) == 2)
+    check("nothing is cut, and read aloud it is the file in its folders",
+          place_of(place) == "a/b<c>/d.kt:1" and place.text == "d.kt:1 in a/b<c>/")
+    for bare in ("Store.kt:12", "the database builder", "a/b/"):
+        one = read(kit.place(bare))
+        check(f"{bare!r} has no file to put first and is one line, as code",
+              one.one("code", "at").text == bare and not one.all("span", "at-in"))
 
 
 def test_every_colour_is_a_token():
