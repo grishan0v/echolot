@@ -3,7 +3,7 @@
    One column below 900 px, in the order headline, ready, next, reports, settings. */
 
 /* a page with no bar at the bottom needs no room for one */
-.page.plain { padding-bottom: var(--s8); }
+.page.no-dock { padding-bottom: var(--s8); }
 
 /* Ready may be taller than the headline: it runs on beside the next step, and
    the settings follow it, so no gap opens under the headline. */
@@ -26,16 +26,16 @@
 .ready code { background: var(--hover); }
 
 /* the command to copy */
-.cmd { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--s2) var(--s3); max-width: var(--col); }
-.cmd code { flex: 1 1 16rem; min-width: 0; padding: 9px 12px; border-radius: var(--r2); font-size: var(--t-sm); line-height: 22px;
+.command { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--s2) var(--s3); max-width: var(--col); }
+.command code { flex: 1 1 16rem; min-width: 0; padding: 9px 12px; border-radius: var(--r2); font-size: var(--t-sm); line-height: 22px;
   white-space: pre-wrap; overflow-wrap: anywhere; }
-.cmd .w { display: inline-block; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.command .w { display: inline-block; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* the last reports, and the investigations with what each filed */
 .reps, .invs { display: grid; }
 .rep { display: grid; gap: var(--s2); padding: var(--s4) 0; border-top: 1px solid var(--line); }
 .rep:last-child { border-bottom: 1px solid var(--line); }
-.rep.none { padding: var(--s3) 0; }
+.rep.empty { padding: var(--s3) 0; }
 .rep > .rowf { gap: var(--s2) var(--s3); }
 .rep > .rowf:last-child { padding-top: var(--s1); }
 .says { overflow-wrap: anywhere; }
@@ -47,15 +47,12 @@
 .inv-r a { display: inline-flex; align-items: center; min-height: 32px; color: var(--accent-ink); font-weight: 600; }
 @media (pointer: coarse) { .inv-r a { min-height: 44px; } }
 
-/* all settings: a name above what it is, and the CLI's own words behind it */
-.props { display: grid; font-size: var(--t-sm); line-height: 1.5; }
-.props > div { display: grid; gap: 2px; padding: 10px 0; border-top: 1px solid var(--line); min-width: 0; }
-.props > div:last-child { border-bottom: 1px solid var(--line); }
-.props dt { color: var(--ink-2); line-height: 1.4; }
-.props dd { display: grid; gap: var(--s1); min-width: 0; overflow-wrap: anywhere; }
-.props dd > * { min-width: 0; }
-.props .says { color: var(--ink-2); font-size: var(--t-xs); line-height: 1.5; }
-.props .who { font-family: var(--mono); padding: 0 4px; border-radius: var(--r1); background: var(--surface); white-space: nowrap; }
+/* all settings: the shared list of a label and its value, and under a value
+   the CLI's own words behind it */
+.settings dd { display: grid; gap: var(--s1); line-height: 1.5; }
+.settings dd > * { min-width: 0; }
+.settings .says { color: var(--ink-2); font-size: var(--t-xs); line-height: 1.5; }
+.settings .who { font-family: var(--mono); padding: 0 4px; border-radius: var(--r1); background: var(--surface); white-space: nowrap; }
 .yaml { margin: 0; padding: 10px 12px; border-radius: var(--r2); background: var(--surface); font: 400 var(--t-xs)/1.6 var(--mono);
   white-space: pre-wrap; overflow-wrap: anywhere; }
 .each { display: grid; font-size: var(--t-xs); line-height: 1.5; }

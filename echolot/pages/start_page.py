@@ -46,7 +46,7 @@ def _next(step: dict[str, Any]) -> str:
         # A word of the command stays whole where it fits: a line never ends
         # inside `--scenario`. The text itself is the command, to the letter.
         words = " ".join(f'<span class="w">{e(word)}</span>' for word in step["command"].split(" "))
-        command = ('<div class="cmd"><code id="next-cmd" tabindex="0">' + words + "</code>"
+        command = ('<div class="command"><code id="next-cmd" tabindex="0">' + words + "</code>"
                    '<button type="button" class="btn line needs-js" data-copy="next-cmd">Copy</button>'
                    '<span class="vh" role="status" id="next-said"></span></div>')
     how = f'<p class="small sub measure">{kit.prose(step["how"])}</p>' if step.get("how") and command else ""
@@ -64,7 +64,7 @@ def _reports(view: dict[str, Any], link: Link) -> str:
         verdict = rep.get("verdict")
         if rep.get("path") is None or verdict is None or not href:
             name = f'<b>{e(rep["scenario"])}</b> ' if several and rep.get("scenario") else ""
-            cards.append(f'<li class="rep none"><p class="sub">{name}{kit.prose(rep["plain"])}</p></li>')
+            cards.append(f'<li class="rep empty"><p class="sub">{name}{kit.prose(rep["plain"])}</p></li>')
             continue
         name = f'<span class="small sub">{e(rep["scenario"])}</span>' if rep.get("scenario") else ""
         cards.append(
@@ -126,14 +126,13 @@ def _settings(view: dict[str, Any]) -> str:
                 + f'<span class="sub">{e(t["source"])}</span></li>' for t in row["each"])
             each = kit.fold("Each threshold", f'<ul class="each">{items}</ul>')
         said = f'<p>{kit.prose(row["text"])}</p>' if row.get("text") else ""
-        rows.append(f'<div><dt>{e(row["label"])}</dt><dd>{said}{more}{each}'
-                    f'{_behind(row.get("behind") or ())}</dd></div>')
+        rows.append((row["label"], f'{said}{more}{each}{_behind(row.get("behind") or ())}'))
     intro = ('<p class="small sub measure">What this page reads, and what <code>echolot</code> and '
              '<code>echolot scan</code> say behind each line. Nothing here is changed from the page: '
              'the values live in <code>echolot.yml</code>.</p>')
     folder = f'<p class="small sub">Read from <code>{e(view["project"])}</code>.</p>'
     return ('<div class="start-set"><details class="tg big" id="settings"><summary>' + kit.TW
-            + f'<span>All settings</span></summary><div class="tg-b">{intro}<dl class="props">{"".join(rows)}</dl>'
+            + f'<span>All settings</span></summary><div class="tg-b">{intro}{kit.pairs(rows, "props settings")}'
             f'{folder}</div></details></div>')
 
 
@@ -146,7 +145,7 @@ def render(view: dict[str, Any], link: Link, steps: Steps = ()) -> str:
     body = f'<div class="start-body stack gap-6">{_next(view["next"])}{_reports(view, link)}</div>'
     main = (f'<main><div class="wide start">{head}{_ready(view, link("start") or "")}{body}{_settings(view)}'
             "</div></main>")
-    page = f'<div class="page plain">{kit.topbar([name, view.get("scenario")], steps)}{main}</div>'
+    page = f'<div class="page no-dock">{kit.topbar([name, view.get("scenario")], steps)}{main}</div>'
     return kit.document("echolot" + (f": {name}" if name else ""), page, css=CSS, js=JS)
 
 
@@ -156,5 +155,5 @@ def notice(title: str, text: str, back: str | None = None, steps: Steps = ()) ->
     way = f'<div class="rowf"><a class="btn line" href="{e(back)}">Back to the start</a></div>' if back else ""
     main = (f'<main><div class="col stack gap-5"><div class="stack gap-3"><h1 class="h1">{e(title)}</h1>'
             f'<p class="lead">{kit.prose(text)}</p></div>{way}</div></main>')
-    return kit.document(f"echolot: {title}", f'<div class="page plain">{kit.topbar([], steps)}{main}</div>',
+    return kit.document(f"echolot: {title}", f'<div class="page no-dock">{kit.topbar([], steps)}{main}</div>',
                         css=CSS, js=JS)

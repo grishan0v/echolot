@@ -1090,10 +1090,12 @@ def test_the_start_pages_own_styles_keep_to_the_tokens_and_to_themselves():
     check("no colour of its own", not literal.search(css), literal.findall(css))
     check("nothing is fetched by it", not any(word in css for word in ("url(", "@import", "@font-face")))
     mine = set(re.findall(r"\.([a-z][a-z0-9-]*)", re.sub(r"/\*.*?\*/", "", css, flags=re.S)))
-    shared = "".join(kit.asset(n) for n in ("base.css", "table.css", "picks.css", "report.css"))
+    shared = "".join(kit.asset(n) for n in ("base.css", "table.css", "picks.css", "report.css", "answer.css"))
     theirs = set(re.findall(r"\.([a-z][a-z0-9-]*)", re.sub(r"/\*.*?\*/", "", shared, flags=re.S)))
-    # A class the start page styles and a shared sheet styles too is one it
-    # means to build on; any other meeting of the two is an accident.
+    # A class the start page styles and another sheet styles too is one it
+    # means to build on; any other meeting of the two is an accident. The
+    # answer's own sheet is never in the same page, and is held to the same:
+    # a name means one thing in the package.
     meant = {"page", "ico", "rowf"} & mine
     check("no class of it is another sheet's by accident", not (mine & theirs) - meant, sorted((mine & theirs) - meant))
     check("the tokens are the shared ones", not _blocks(css, ":root {"))
