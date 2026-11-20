@@ -151,6 +151,24 @@ def home(project: Path, hunt: dict[str, Any] | None) -> Path | None:
     return project / ARCHIVE_DIR / str(n) if n else None
 
 
+# The investigation as a page for a person, in its own directory beside its
+# record and its reports (`pages/answer_page.py`).
+ANSWER_PAGE = "answer.html"
+
+
+def page_path(project: Path, hunt: dict[str, Any] | None) -> Path | None:
+    """Where an investigation's page stands, or would. None for a record with
+    no number: it has no directory of its own to put one in."""
+    own = home(project, hunt)
+    return own / ANSWER_PAGE if own is not None else None
+
+
+def last(project: Path) -> dict[str, Any] | None:
+    """The newest investigation, open or not; None when there has been none."""
+    past = history(project)
+    return past[0] if past else None
+
+
 def _rel(project: Path, p: Path) -> str:
     """Stored relative to the project, so a record survives a move or a clone."""
     try:

@@ -57,7 +57,7 @@ from . import report as report_mod
 from . import stacks as stacks_mod
 from . import verdict as verdict_mod
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
-from .pages import report_page
+from .pages import answer_page, report_page
 from .reflect.cli import cmd_reflect
 from .sandbox import SandboxError
 from .tp import (
@@ -867,6 +867,10 @@ def cmd_analyze(args) -> int:
     kept = hunt_mod.record_report(root, out_dir)
     if kept is not None:
         print(f"→ {kept}  (this investigation's copy)", file=sys.stderr)
+        again = _answer_again(root, args.config, hunt_mod.load(root))
+        if again is not None:
+            print(f"→ {again}  (this investigation's page stood there: written again "
+                  f"with this round)", file=sys.stderr)
     return 0
 
 
@@ -2727,6 +2731,106 @@ def _close_hunt(project: Path, config: str, text: Any, source: str | None) -> in
     return 0
 
 
+def _check_again_line(project: Path, config: str, hunt: dict[str, Any],
+                      reports: verdict_mod.Reports) -> str:
+    """What a person runs once the code is changed, for the page to offer.
+
+    Record, analyse, and set the new report against the investigation's
+    first one, which is the app as it was before anyone touched it. One line
+    to copy. The traces are named by a pattern here, where the guides name
+    each file: this line is pasted into a person's shell, which expands it.
+    """
+    scenario = hunt.get("scenario")
+    plain_name = isinstance(scenario, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", scenario)
+    try:
+        cfg = _hunt_config(project, config)
+    except (ConfigError, OSError):
+        cfg = None
+    named = f" --scenario {scenario}" if plain_name and cfg is not None and len(cfg.scenarios) > 1 else ""
+    traces = f"{scenario}_iter*" if plain_name else "*"
+    steps = [f"echolot collect{named}",
+             f"echolot analyze .echolot/traces/{traces}.perfetto-trace{named}"]
+    first = min((n for n, rep in reports.items() if rep is not None), default=None)
+    own = hunt_mod.home(project, hunt)
+    if first is not None and own is not None:
+        steps.append(f"echolot compare {_shown_path(own / 'reports' / f'{first:03d}.json', project)}")
+    return " && ".join(steps)
+
+
+def _write_answer(project: Path, config: str, hunt: dict[str, Any]) -> Path:
+    """Write an investigation's page into its own directory; where it went.
+
+    Drawn from the record and from the reports it filed, as they are on disk
+    now. Raises OSError when it cannot be written, and ValueError for a
+    record with no number, which has no directory of its own.
+    """
+    page = hunt_mod.page_path(project, hunt)
+    if page is None:
+        raise ValueError("it has no number, and so no directory of its own to put a page in")
+    reports = hunt_mod.archived_reports(project, hunt)
+    text = answer_page.render(hunt, reports, again=_check_again_line(project, config, hunt, reports))
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(text, encoding="utf-8")
+    return page
+
+
+def _answer_again(project: Path, config: str, hunt: dict[str, Any] | None) -> Path | None:
+    """Write an investigation's page again where one already stands.
+
+    A page that stays as it was while its investigation moves on (a round
+    more, a verdict, another question opened) would read as the state now.
+    Where there is no page, none is written. The page gates nothing: one that
+    cannot be written again is left, and the command that called goes on.
+    """
+    page = hunt_mod.page_path(project, hunt) if hunt else None
+    if page is None or not page.is_file():
+        return None
+    try:
+        return _write_answer(project, config, hunt)
+    except (OSError, ValueError):
+        return None
+
+
+def _show_as_page(project: Path, config: str, hunt: dict[str, Any]) -> int:
+    """`hunt --show [n] --html`: the investigation as a page, and where it is."""
+    try:
+        page = _write_answer(project, config, hunt)
+    except (OSError, ValueError) as e:
+        why = getattr(e, "strerror", None) or e
+        print(f"error: the page of #{hunt.get('n') or '?'} cannot be written: {why}",
+              file=sys.stderr)
+        recorder.failed(f"hunt --html: {why}")
+        return 2
+    print(f"→ {page}")
+    return 0
+
+
+def _page_after_closing(project: Path, config: str, asked: bool) -> None:
+    """`hunt --done … --html`: the page of the investigation just closed.
+
+    Asked for, it is written and named. One that stood there from while the
+    investigation was open is written again either way. The investigation is
+    closed by now whatever happens here, so a page that cannot be written is
+    said and changes nothing.
+    """
+    hunt = hunt_mod.load(project)
+    if not hunt:
+        return
+    if not asked:
+        again = _answer_again(project, config, hunt)
+        if again is not None:
+            print(f"→ {again}  (the page stood there: written again with the conclusion)",
+                  file=sys.stderr)
+        return
+    try:
+        page = _write_answer(project, config, hunt)
+    except (OSError, ValueError) as e:
+        print(f"[!] the investigation is closed, and its page could not be written: "
+              f"{getattr(e, 'strerror', None) or e}", file=sys.stderr)
+        return
+    print(f"→ {page}  (the answer as a page: open it in a browser)")
+
+
 def cmd_hunt(args) -> int:
     """The investigation: which question the traces on disk are about.
 
@@ -2743,17 +2847,30 @@ def cmd_hunt(args) -> int:
     question = " ".join(args.question) if args.question else None
     conclusion = args.done
 
+    if args.html and not args.show and conclusion is None:
+        print("error: --html writes an investigation as a page: it goes with --show "
+              "(the last one, or the one named) or with --done", file=sys.stderr)
+        recorder.failed("hunt --html with nothing to show")
+        return 2
+
     if args.list:
         for line in hunt_mod.list_rows(project):
             print(line)
         return 0
 
     if args.show:
-        h = hunt_mod.find(project, args.show)
+        # With no number and no words, the last one.
+        h = hunt_mod.last(project) if args.show is True else hunt_mod.find(project, args.show)
+        if not h and args.show is True:
+            print('no investigations yet — `echolot hunt "<what regressed>"` opens one',
+                  file=sys.stderr)
+            return 1
         if not h:
             print(f"no investigation matches {args.show!r} — `echolot hunt --list` "
                   f"shows them all", file=sys.stderr)
             return 1
+        if args.html:
+            return _show_as_page(project, config, h)
         for line in hunt_mod.detail(h, project):
             print(line)
         return 0
@@ -2811,11 +2928,16 @@ def cmd_hunt(args) -> int:
                 # being moved or cloned somewhere else.
                 with contextlib.suppress(ValueError):
                     aside = aside.resolve().relative_to(project.resolve())
+        before = hunt_mod.load(project)
         h = hunt_mod.open_new(project, question,
                               since=getattr(args, "hunt_since", None),
                               scenario=scenario, config_sha=sha,
                               traces_aside=aside, confirmed=confirmed)
         print(f'opened #{h["n"]}: "{h["question"]}"')
+        # The one before it is closed by this, as abandoned when it was still
+        # open: a page of it that stands there is written again to say so.
+        if before and before.get("n"):
+            _answer_again(project, config, hunt_mod.find(project, str(before["n"])))
         if h.get("since"):
             print(f'  after: {h["since"]}')
         # Instrumentation the previous investigation never took out would
@@ -2856,7 +2978,10 @@ def cmd_hunt(args) -> int:
         return 0
 
     if conclusion is not None:
-        return _close_hunt(project, config, conclusion, args.verdict)
+        code = _close_hunt(project, config, conclusion, args.verdict)
+        if code == 0:
+            _page_after_closing(project, config, args.html)
+        return code
     if args.verdict is not None:
         return _check_verdict(project, config, args.verdict)
 
@@ -4824,8 +4949,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "without --done it only checks and records nothing")
     hn.add_argument("--list", action="store_true",
                     help="every investigation this project has had")
-    hn.add_argument("--show", metavar="N|WORDS",
-                    help="one of them in full, by number or by part of its question")
+    hn.add_argument("--show", metavar="N|WORDS", nargs="?", const=True,
+                    help="one of them in full, by number or by part of its question "
+                         "(with neither: the last one)")
+    hn.add_argument("--html", action="store_true",
+                    help="write the investigation as a page for a person, into its "
+                         "own directory (.echolot/hunts/<n>/answer.html): one file "
+                         "that opens from disk. With --show: the last one, or the "
+                         "one named. With --done: the one just closed")
     hn.set_defaults(func=cmd_hunt)
 
     # Ordered by the working flow rather than by when things were written:
