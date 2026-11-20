@@ -219,6 +219,8 @@ same pages [on GitHub](https://github.com/grishan0v/echolot/tree/main/docs):
 [Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md) ·
 [Reflect](https://github.com/grishan0v/echolot/blob/main/docs/reflect.md)
 
+Questions and ideas: [Discussions](https://github.com/grishan0v/echolot/discussions).
+
 ## License
 
 [MIT](https://github.com/grishan0v/echolot/blob/main/LICENSE)

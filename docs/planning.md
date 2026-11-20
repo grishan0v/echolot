@@ -12,11 +12,17 @@ fields below are set by whoever maintains the tool.
 
 ## Filing an issue
 
-Open it from a template: **Feature request** for an improvement, **Bug report**
-for a bug. The template sets the label; an issue about documentation alone
-takes `documentation`. The sections of the feature template — the problem, the
-proposal, the alternatives, the effect on determinism — are what the issue is
-sorted by later, so a filled template is most of the work.
+An idea that is still rough can start in
+[Discussions → Ideas](https://github.com/grishan0v/echolot/discussions/categories/ideas).
+Once it is clear what to build, it becomes an issue, and the thread gets a
+link to it.
+
+Open an issue from a template: **Feature request** for an improvement,
+**Bug report** for a bug. The template sets the label; an issue about
+documentation alone takes `documentation`. The sections of the feature
+template — the problem, the proposal, the alternatives, the effect on
+determinism — are what the issue is sorted by later, so a filled template is
+most of the work.
 
 Before filing:
 

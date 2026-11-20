@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ask a question
+    url: https://github.com/grishan0v/echolot/discussions/categories/q-a
+    about: How to do something, or why a report says what it says.
+  - name: Share an early idea
+    url: https://github.com/grishan0v/echolot/discussions/categories/ideas
+    about: An idea that is not ready to be an issue yet. Once it is concrete, it becomes one.
+  - name: Report a vulnerability
+    url: https://github.com/grishan0v/echolot/security/advisories/new
+    about: Privately, through the Security tab. Please do not open a public issue.

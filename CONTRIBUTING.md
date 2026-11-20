@@ -9,6 +9,9 @@ card on the [Echolot Roadmap](https://github.com/users/grishan0v/projects/1).
 [docs/planning.md](docs/planning.md) says how an issue is filed, how the board
 sorts it, and which decisions an idea is checked against first.
 
+Questions, and ideas that are not ready to be an issue yet, go to
+[Discussions](https://github.com/grishan0v/echolot/discussions).
+
 ## Working on the tool
 
 ```bash
