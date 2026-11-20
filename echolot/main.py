@@ -4793,6 +4793,34 @@ def _dump(tp, sql: str) -> None:
 
 
 # Who each verb is for. Three audiences share one CLI, and until this was
+def _port(text: str) -> int:
+    """`--port`: a port a program may listen on."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a port number") from None
+    if not 1 <= value <= 65535:
+        raise argparse.ArgumentTypeError(f"{value} is not a port: give one from 1 to 65535")
+    return value
+
+
+def cmd_ui(args) -> int:
+    """A local page for a person: is the setup ready, what is next, the reports.
+
+    A face over the same commands and files, for someone who does not read
+    terminals: it draws what `status`, `doctor`, `scan` and `hunt --list`
+    say, and opens the reports as pages. It changes nothing and starts no
+    command; the one thing written is its line in .echolot/log/runs.jsonl,
+    the line `main` appends for every command unless ECHOLOT_NO_RECORD is
+    set. The server and what it refuses are in `ui.py`.
+    """
+    from . import ui
+
+    project, config = _project_and_config(args)
+    return ui.serve(project, config, port=args.port, open_browser=not args.no_open,
+                    tp_binary=getattr(args, "tp_binary", None))
+
+
 # structural the split lived only in prose: `echolot --help` showed twelve
 # equal verbs, and a person reasonably tried `probe` and got a wall of
 # reconnaissance meant for an agent.
@@ -4800,7 +4828,7 @@ def _dump(tp, sql: str) -> None:
 # alphabetical. A verb missing from here is caught by the self-check.
 # The agent's half is ordered by the working flow. `anr` comes before `probe`
 # because a report from the field arrives before there is a trace to probe.
-ORDER = ("status", "init", "plugin", "hunt", "doctor", "collect", "analyze", "compare",
+ORDER = ("status", "ui", "init", "plugin", "hunt", "doctor", "collect", "analyze", "compare",
          "guide", "report", "scan", "anr", "probe", "names", "domains", "mark",
          "calibrate", "explain", "reflect")
 
@@ -5315,6 +5343,24 @@ def build_parser() -> argparse.ArgumentParser:
     rf.add_argument("--local", help="path to local.yml (defaults to alongside)")
     rf.add_argument("-o", "--out", default=".echolot/reflect")
     rf.set_defaults(func=cmd_reflect)
+
+    web = add("ui", "yours", "", "a page in the browser: is the setup ready, the next step, the reports",
+              description="Starts a small server on 127.0.0.1, opens the browser on it and "
+                          "runs until Ctrl-C. The page shows whether this computer, the "
+                          "phone and the app are ready, the next step with the command to "
+                          "copy, the reports and investigations there are, and every "
+                          "setting with what `echolot` and `echolot scan` say behind it. "
+                          "It reads the project anew for every page, changes nothing and "
+                          "starts no command; the address carries a token made at every "
+                          "start, and a request without it is refused. Writes only its "
+                          "own line in .echolot/log/runs.jsonl.")
+    web.add_argument("-c", "--config", default="echolot.yml",
+                     help="the project config (default: echolot.yml here)")
+    web.add_argument("--port", type=_port, metavar="N",
+                     help="listen on this port of 127.0.0.1 (default: a free one)")
+    web.add_argument("--no-open", action="store_true",
+                     help="do not open the browser: print the address and wait")
+    web.set_defaults(func=cmd_ui)
 
     p.description = _describe(entries)
     return p
