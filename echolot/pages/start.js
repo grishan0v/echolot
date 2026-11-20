@@ -27,3 +27,66 @@
     });
   });
 })();
+
+// The button that checks the app. It is a form and works without any of
+// this; with script on, the button and the line beside it follow the choice
+// of a scenario and the number of launches, and the list of a run is redrawn
+// in place instead of the whole page being loaded again.
+(function () {
+  var E = window.echolot, form = E.$('check-form'), go = E.$('check-go'), hint = E.$('check-hint');
+  // A sentence of the page's, with a name written in backticks as code.
+  function say(el, text) {
+    el.textContent = '';
+    String(text).split('`').forEach(function (part, i) {
+      var node = i % 2 ? document.createElement('code') : document.createTextNode('');
+      node.textContent = part; el.appendChild(node);
+    });
+  }
+  if (form && go && hint) {
+    var offers = {};
+    try { offers = JSON.parse(form.getAttribute('data-offers') || '{}'); } catch (err) { offers = {}; }
+    var count = E.$('launches'), anew = E.$('check-anew');
+    function picked() {
+      var one = E.all('input[name="what"]').filter(function (el) { return el.type !== 'radio' || el.checked; })[0];
+      return one ? offers[one.value] : null;
+    }
+    function show() {
+      var offer = picked(); if (!offer) return;
+      var n = count && /^[0-9]+$/.test(count.value) ? String(parseInt(count.value, 10)) : '';
+      go.textContent = offer.label;
+      go.disabled = !!offer.why;
+      say(hint, offer.why || (offer.hints && offer.hints[n]) || offer.hint);
+      if (anew) anew.hidden = !offer.anew;
+    }
+    E.all('input[name="what"]').forEach(function (el) { el.addEventListener('change', show); });
+    if (count) count.addEventListener('input', show);
+    // A browser may bring the page back with another choice than it was drawn with.
+    show();
+  }
+
+  var run = E.$('run'), url = run && run.getAttribute('data-poll'), rows = E.$('run-rows'), said = E.$('run-said');
+  if (!url || !rows || !window.fetch || !window.DOMParser) return;
+  var last = null;
+  function later() { setTimeout(ask, 1000); }
+  function ask() {
+    fetch(url, { cache: 'no-store', credentials: 'same-origin' }).then(function (reply) {
+      if (!reply.ok) throw new Error('refused');
+      return reply.text();
+    }).then(function (text) {
+      var now = new DOMParser().parseFromString(text, 'text/html').getElementById('run-now');
+      // It ended, one way or another: the page that says how is this one, drawn anew.
+      if (!now || now.getAttribute('data-state') !== 'running') { location.replace(location.pathname); return; }
+      var list = now.querySelector('ol');
+      if (list && text !== last) {
+        var fresh = document.importNode(list, true);
+        rows.textContent = '';
+        while (fresh.firstChild) rows.appendChild(fresh.firstChild);
+        last = text;
+      }
+      var words = now.getAttribute('data-said') || '';
+      if (said && said.textContent !== words) said.textContent = words;
+      later();
+    }).catch(later);
+  }
+  later();
+})();

@@ -4812,14 +4812,15 @@ def _port(text: str) -> int:
 
 
 def cmd_ui(args) -> int:
-    """A local page for a person: is the setup ready, what is next, the reports.
+    """A local page for a person: is the setup ready, check the app, the reports.
 
     A face over the same commands and files, for someone who does not read
     terminals: it draws what `status`, `doctor`, `scan` and `hunt --list`
-    say, and opens the reports as pages. It changes nothing and starts no
-    command; the one thing written is its line in .echolot/log/runs.jsonl,
-    the line `main` appends for every command unless ECHOLOT_NO_RECORD is
-    set. The server and what it refuses are in `ui.py`.
+    say, and opens the reports as pages. Reading a page changes nothing. Its
+    one button runs `collect`, `analyze --html` and `compare` as the commands
+    they are, in a process of their own (`check.py`, `job.py`), and what those
+    write is all that is written, beside this command's own line in
+    .echolot/log/runs.jsonl. The server and what it refuses are in `ui.py`.
     """
     from . import ui
 
@@ -5351,16 +5352,17 @@ def build_parser() -> argparse.ArgumentParser:
     rf.add_argument("-o", "--out", default=".echolot/reflect")
     rf.set_defaults(func=cmd_reflect)
 
-    web = add("ui", "yours", "", "a page in the browser: is the setup ready, the next step, the reports",
+    web = add("ui", "yours", "", "a page in the browser: is the setup ready, check the app, the reports",
               description="Starts a small server on 127.0.0.1, opens the browser on it and "
                           "runs until Ctrl-C. The page shows whether this computer, the "
-                          "phone and the app are ready, the next step with the command to "
-                          "copy, the reports and investigations there are, and every "
-                          "setting with what `echolot` and `echolot scan` say behind it. "
-                          "It reads the project anew for every page, changes nothing and "
-                          "starts no command; the address carries a token made at every "
-                          "start, and a request without it is refused. Writes only its "
-                          "own line in .echolot/log/runs.jsonl.")
+                          "phone and the app are ready, the reports and investigations "
+                          "there are, and every setting with what `echolot` and `echolot "
+                          "scan` say behind it. Its button checks the app: it runs "
+                          "`collect`, `analyze --html` and, once a report was there "
+                          "before, `compare`, as the commands they are, and shows how far "
+                          "the run is. The project is read anew for every page; the "
+                          "address carries a token made at every start, and a request "
+                          "without it is refused. Reading a page writes nothing.")
     web.add_argument("-c", "--config", default="echolot.yml",
                      help="the project config (default: echolot.yml here)")
     web.add_argument("--port", type=_port, metavar="N",

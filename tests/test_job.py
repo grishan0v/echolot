@@ -359,3 +359,16 @@ def test_the_module_run_by_hand_says_how_it_is_run(tmp_path, monkeypatch, capsys
     check("no arguments", job.main([]) == 2 and "usage: python -m echolot.job" in capsys.readouterr().err)
     monkeypatch.setattr(sys, "stdin", io.StringIO("{ cut short"))
     check("a plan that is no JSON", job.main([str(tmp_path), "check"]) == 2 and "not JSON" in capsys.readouterr().err)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Ctrl-C to one process is POSIX")
+def test_a_command_that_ended_just_as_it_was_asked_to(tmp_path):
+    class Gone(Command):
+        def send_signal(self, signum):
+            self.signals.append(signum)
+            raise ProcessLookupError(3, "No such process")
+
+    def popen(argv, **kw):
+        return Gone(argv, kw["stdout"], waits=1, on_wait=lambda c: job.stop(tmp_path, "check"))
+    job.run(tmp_path, "check", {"steps": steps("collect")}, popen=popen, signals=False)
+    check("nothing to signal is no failure of the job: it reads as stopped", job.read(tmp_path, "check")["status"] == job.STOPPED)

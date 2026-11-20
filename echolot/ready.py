@@ -218,7 +218,7 @@ _AGENT = {
     "plugin": (None, "Ask the agent that has echolot's plugin: its echolot skill takes this step."),
     "any": ("echolot guide", "Run it for your agent: it prints how the agent takes this step."),
 }
-_TERMINAL = "Run it in a terminal opened in the project's folder, then press Check again."
+_TERMINAL = "Run it in a terminal opened in the project's folder, then press Refresh."
 
 
 def next_step(st: dict, says: dict[str, list[str]], cfg: Config | None) -> dict[str, Any]:
@@ -229,12 +229,12 @@ def next_step(st: dict, says: dict[str, list[str]], cfg: Config | None) -> dict[
     them: the page says the step in plain words and shows the CLI's.
     """
     kind = state.next_kind(st)
-    step: dict[str, Any] = {"kind": kind, "text": "", "command": None, "how": _TERMINAL, "note": None,
+    step: dict[str, Any] = {"kind": kind, "text": "", "command": None, "how": _TERMINAL, "note": None, "red": None,
                             "behind": [("echolot", f"next: {said}") for said in says.get("next", [])]}
     ask, how_agent = _AGENT[state.door(st)]
     if kind == "upgrade":
         step.update(text="This project's files for the agent were written by a newer echolot than the "
-                         f"one running here. Upgrade it: {layer.UPGRADE}. Then press Check again.",
+                         f"one running here. Upgrade it: {layer.UPGRADE}. Then press Refresh.",
                     how=None)
     elif kind == "init":
         fresh = st.get("layer_verdict") == "absent"
@@ -253,7 +253,7 @@ def next_step(st: dict, says: dict[str, list[str]], cfg: Config | None) -> dict[
                     command=ask if ask != "echolot guide" else "echolot guide setup", how=how_agent)
     elif kind == "fix-config":
         step.update(text="`echolot.yml` is there and does not load, so nothing can be read from it. "
-                         "Fix what the line below names, then press Check again.",
+                         "Fix what the line below names, then press Refresh.",
                     how=None)
     elif kind == "resume-or-new":
         question = (st.get("hunt") or {}).get("question") or "the earlier question"
@@ -659,6 +659,13 @@ def archived(project: Path, n: int, k: int) -> tuple[dict[str, Any], Path] | Non
 # everything the start page shows
 
 
+def lines(project: Path, config: str, src: Sources, st: dict | None = None,
+          tp_binary: str | None = None) -> list[dict[str, Any]]:
+    """The three ready lines alone (this computer, the phone, the app), for
+    whoever has to know whether a recording can start and draws no start page."""
+    return read(project, config, src, tp_binary, st)["ready"]
+
+
 def read(project: Path, config: str, src: Sources, tp_binary: str | None = None,
          st: dict | None = None) -> dict[str, Any]:
     """The start page's whole reading, taken anew every time it is asked for.
@@ -679,8 +686,9 @@ def read(project: Path, config: str, src: Sources, tp_binary: str | None = None,
     step = next_step(st, says, cfg)
     if step.get("what") == "collect" and any(line["tone"] == RED for line in ready[1:]):
         # `next` does not ask the phone or the repository. A recording does.
-        step["note"] = " ".join(filter(None, [step.get("note"), "Fix what is marked red first: a recording "
-                                              "needs the phone, and an app that can be measured."]))
+        # Kept apart from the step's own note: a page with the button says
+        # this beside the button instead.
+        step["red"] = "Fix what is marked red first: a recording needs the phone, and an app that can be measured."
     past = investigations(project)
     return {
         "project": project, "name": app_name(cfg, facts),
