@@ -23,7 +23,7 @@ from __future__ import annotations
 import copy
 import functools
 import re
-from typing import Any
+from typing import Any, Sequence
 
 from .. import plain
 from .. import report as report_mod
@@ -466,12 +466,17 @@ def _technical(report: dict[str, Any], ctx: Any, several: bool) -> str:
     return kit.fold("The full technical report", "".join(parts), "big")
 
 
-def render(report: dict[str, Any], where: str | None = None, last: bool = True) -> str:
+def render(report: dict[str, Any], where: str | None = None, last: bool = True, *,
+           steps: Sequence[tuple[str, str, bool]] = (), crumb: str | None = None) -> str:
     """The page for a report, as one self-contained HTML document.
 
     `where` is how the request for an agent names the report.json the page
     was written from, and `last` says whether that is the scenario's last
     report or one named by hand. Neither changes anything else.
+
+    `steps` is the path in the top bar, for a page that has others to go to
+    (`echolot ui`); a page written to disk has none. `crumb` says which report
+    this is when it is not the scenario's last: "investigation 3, report 2".
     """
     report = _read(report)
     ctx = plain._Ctx(report)
@@ -483,7 +488,7 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True) 
             + _verdict(report, ctx) + _NO_SCRIPT + _table(checks, report, ctx) + _next_step(checks)
             + "<hr>" + _technical(report, ctx, several)
             + "".join(_panel(c, ctx, several) for c in checks) + "</div></main>")
-    body = (f'<div class="page">{kit.topbar([w.get("process"), report.get("scenario")])}{main}</div>'
+    body = (f'<div class="page">{kit.topbar([w.get("process"), report.get("scenario"), crumb], steps)}{main}</div>'
             + (kit.dock(hot) + kit.ask(*_request(report, where, last)) + kit.sprites() if hot else "")
             + kit.peek("check", "Back to the report"))
     title = "echolot report" + (f": {report['scenario']}" if report.get("scenario") else "")

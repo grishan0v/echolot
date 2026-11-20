@@ -14,9 +14,12 @@ arranged from the same pieces:
     table.css/.js   the filter by level, the table as a grid, the panel
     picks.css/.js   the tick box, the selection bar, the request to copy
     report.css      what is the report's alone: its columns, report.md as HTML
+    start.css/.js   what is the start page's alone: ready, the command to copy,
+                    the reports there are, all settings
 
     report_page.py  the report: `echolot analyze --html`, `echolot report --html`
     md.py           the Markdown that report.md is written in, as HTML
+    start_page.py   the start page of `echolot ui`, and a page with one thing to say
 
     answer.css/.js  what is the answer's alone: its columns, the rounds of an
                     investigation, the command to copy
