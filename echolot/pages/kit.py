@@ -336,3 +336,73 @@ def ask(one: str, many: str, tail: str) -> str:
         '<div class="rowf"><button type="button" class="btn primary" id="ask-copy" autofocus>Copy the request</button>'
         '<button type="button" class="btn quiet" id="ask-close">Close</button></div>'
         '<p class="vh" id="ask-said" role="status"></p></div></dialog>')
+
+
+# ---------------------------------------------------------------------------
+# what the pages after the report add: a state that is no level, a whole cut
+# in parts, label and value, a place in the code
+
+
+_STATE = {
+    "found": ('<circle cx="8" cy="8" r="7" fill="var(--ink)"/>'
+              '<circle cx="8" cy="8" r="3.9" fill="none" stroke="var(--bg)" stroke-width="1.5"/>'
+              '<circle cx="8" cy="8" r="1.4" fill="var(--bg)"/>'),
+    "open": ('<circle cx="8" cy="8" r="6.2" fill="none" stroke="var(--ink-2)" stroke-width="1.6"/>'
+             '<circle cx="8" cy="8" r="2.2" fill="var(--ink-2)"/>'),
+    "left": ('<circle cx="8" cy="8" r="6.2" fill="none" stroke="var(--ink-2)" stroke-width="1.6"/>'
+             '<path d="M5.2 8h5.6" stroke="var(--ink-2)" stroke-width="1.6" stroke-linecap="round"/>'),
+}
+STATES = tuple(_STATE)
+
+
+def state(text: str, kind: str = "found", large: bool = False) -> str:
+    """A state said the way a level is, an icon and a word on a ground, in ink
+    and in no status colour: it is no level. `found` is something that came to
+    an end, `open` something still going, `left` something given up."""
+    return (f'<span class="st plain{" lg" if large else ""}">'
+            f'<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">{_STATE[kind]}</svg>{e(text)}</span>')
+
+
+# A part narrower than this share of the whole has no room for its figure.
+SPLIT_ROOM = 0.12
+
+
+def split(parts: Sequence[dict[str, Any]], note: str = "") -> str:
+    """One bar cut in parts that make up a whole: the piece that was found
+    against the rest. The first part is drawn in the colour of measured time,
+    the others in its soft neutral.
+
+    A part is a dict: `value`, its share of the bar; `figure`, printed inside
+    it where it has the room; `name_html`, what it is in the key under the
+    bar, already markup; `tip`, the exact figures for the tooltip. `note` is
+    one more thing the key says, where the bar was measured.
+    """
+    total = sum(max(float(p["value"]), 0.0) for p in parts) or 1.0
+    bar, key = [], []
+    for i, p in enumerate(parts):
+        share = max(float(p["value"]), 0.0) / total
+        look = "s-a" if i == 0 else "s-b"
+        tip = p.get("tip")
+        focus = f' tabindex="0" data-tip="{e(chr(10).join(tip))}"' if tip else ""
+        room = share >= SPLIT_ROOM
+        bar.append(f'<i class="{look}{"" if room else " s-t"}" style="flex:{max(float(p["value"]), 0.0):g} 1 0"{focus}>'
+                   f'{e(p["figure"]) if room else ""}</i>')
+        key.append(f'<span><i class="sw {look}"></i><span>{p["name_html"]}, {e(p["figure"])}, {share * 100:.0f}%</span></span>')
+    if note:
+        key.append(f"<span>{e(note)}</span>")
+    return f'<div><div class="split">{"".join(bar)}</div><p class="split-k">{"".join(key)}</p></div>'
+
+
+def pairs(rows: Sequence[tuple[str, str]], cls: str = "props") -> str:
+    """Rows of a label and its value between hairlines: `(label, value)`, the
+    value already markup. `props` is a list of facts; `do` is the "Where /
+    What to do" block, with a narrow label and text of the size of a
+    sentence. In a narrow box the label stands above its value."""
+    return f'<dl class="{cls}">' + "".join(
+        f"<div><dt>{e(label)}</dt><dd>{value}</dd></div>" for label, value in rows) + "</dl>"
+
+
+def place(text: Any) -> str:
+    """A place in the code. It may break after a slash, and a part longer
+    than its box breaks where it must."""
+    return f'<code class="at">{e(text).replace("/", "/<wbr>")}</code>'

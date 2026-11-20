@@ -216,3 +216,37 @@ details.tg.big > .tg-b { padding-top: var(--s3); gap: var(--s4); }
 #tip { position: fixed; z-index: 60; max-width: min(340px, calc(100vw - 16px)); padding: 8px 10px; border-radius: var(--r2);
   background: var(--ink); color: var(--bg); font-size: var(--t-xs); line-height: 1.5; pointer-events: none; font-variant-numeric: tabular-nums; }
 #tip strong { display: block; font-family: var(--mono); font-weight: 600; overflow-wrap: anywhere; }
+
+/* a state that is no level: the same shape, in ink */
+.st.plain { color: var(--ink-2); background: var(--surface); }
+
+/* a whole cut in parts: the piece that was found against the rest */
+.split { display: flex; gap: 2px; height: 28px; }
+.split i { display: flex; align-items: center; min-width: 0; padding: 0 8px; border-radius: var(--r1); overflow: hidden;
+  font-style: normal; font-size: var(--t-sm); font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.split i.s-t { padding: 0; min-width: 4px; }
+.split .s-a { background: var(--data); color: var(--on-data); }
+.split .s-b { background: var(--data-soft); color: var(--on-data-soft); }
+.split-k { display: flex; flex-wrap: wrap; gap: 4px 20px; padding-top: var(--s2); font-size: var(--t-sm); color: var(--ink-2); }
+.split-k > span { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.split-k > span > span { min-width: 0; overflow-wrap: anywhere; }
+.sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.sw.s-a { background: var(--data); } .sw.s-b { background: var(--data-soft); }
+
+/* label and value, between hairlines */
+.props, .do { display: grid; container-type: inline-size; }
+.props > div, .do > div { display: grid; grid-template-columns: var(--label, 11rem) minmax(0, 1fr); gap: 0 var(--s4); padding: 8px 0; border-top: 1px solid var(--line); }
+.props > div:last-child, .do > div:last-child { border-bottom: 1px solid var(--line); }
+.props { font-size: var(--t-sm); }
+.props dt, .do dt { color: var(--ink-2); }
+.props dd, .do dd { min-width: 0; overflow-wrap: anywhere; }
+.do { --label: 6.5rem; }
+.do > div { padding: 10px 0; }
+.do dt { font-size: var(--t-sm); line-height: 1.75; }
+@container (max-width: 460px) {
+  .props > div, .do > div { grid-template-columns: minmax(0, 1fr); }
+  .props dt, .do dt { line-height: 1.4; }
+}
+
+/* a place in the code: it breaks after a slash */
+code.at { overflow-wrap: break-word; }
