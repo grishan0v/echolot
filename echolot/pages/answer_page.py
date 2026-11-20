@@ -422,18 +422,6 @@ def _headline(text: str, own: str) -> tuple[str, str]:
     return head.rstrip("."), rest
 
 
-def _names(causes: list[dict[str, Any]]) -> str:
-    """What the answer holds, in the page's own sentence after the summary."""
-    if not causes:
-        return "The agent found no cause."
-    n = len(causes)
-    fixes = sum(1 for c in causes if c["fix"])
-    said = f"The agent names {_count(n, 'cause')}"
-    if fixes == n:
-        said += " and says what to change" + (" for each" if n > 1 else "")
-    return said + "."
-
-
 def _head(state: str, beside: str, headline: str, lead: str, more: str = "") -> str:
     return (f'<div class="stack gap-3"><div class="rowf">{state}<span class="small sub">{e(beside)}</span></div>'
             f'<h1 class="h1">{e(headline)}</h1>'
@@ -705,7 +693,9 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
         causes, more = _causes(verdict), _suggestions(verdict)
         rows = bool(causes or more)
         headline, rest = _headline(_str(verdict.get("summary")), "What the investigation found")
-        lead = " ".join(part for part in (_said(rest), e(_names(causes))) if part)
+        # The summary is the agent's and stands alone: a sentence of the
+        # page's after it said again what a summary says already.
+        lead = _said(rest)
         # `--done "<text>" --verdict <file>` keeps both: the text is said too.
         words = f'<p class="measure">{_said(conclusion)}</p>' \
             if conclusion and conclusion != _str(verdict.get("summary")) else ""

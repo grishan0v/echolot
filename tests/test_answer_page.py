@@ -235,8 +235,8 @@ def test_the_verdict_is_the_summarys_first_sentence_and_how_many_rounds(states):
     check("how many rounds, and how long it took", state.one("span", "sub").text == "2 rounds · 18 min 35 s")
     check("the first sentence of the summary is the headline, without its full stop",
           page.one("h1").text == "Most of the launch is one screen being built: collection_load takes 0.9 s of the 1.1 s launch")
-    check("the rest of it follows, then what the answer holds, in the page's words",
-          page.one("p", "lead").text == "Three things inside it cost the most. The agent names 3 causes.")
+    check("the rest of it follows, and the page adds no sentence of its own to it",
+          page.one("p", "lead").text == "Three things inside it cost the most.")
     check("the title of the file is the question", page.one("title").text == f"echolot answer: {fx.QUESTION}")
     check("the top bar says the app and the scenario, and has no steps",
           page.one("span", "crumb").text == "com.example.appcoldStart" and not page.all("nav"))
@@ -493,8 +493,8 @@ def test_one_cause(states):
     page = page_of(states["one"], again=fx.AGAIN)
     check("one row", list(rows_of(page)) == ["cause-1"])
     check("said as one", page.one("section").one("p", "sub").text.startswith("One cause. A figure in bold was measured."))
-    check("the verdict says the answer holds a change too",
-          page.one("p", "lead").text.endswith("The agent names 1 cause and says what to change."))
+    check("the rest of the summary stands under the headline as the agent wrote it",
+          page.one("p", "lead").text == "Three things inside it cost the most.")
     check("no fold for lists the verdict does not have",
           [d.one("summary").text for d in page.all("details")]
           == ["How sure the agent is", "How it got there, round by round", "About this investigation"])
@@ -504,9 +504,9 @@ def test_one_cause(states):
 def test_a_verdict_with_no_cause_is_a_result_and_is_said_plainly(states):
     page = page_of(states["nothing"], again=fx.AGAIN)
     main_text = page.one("main").text
-    check("the summary is the headline, and the page says what the answer holds",
+    check("the summary is the headline, and a summary of one sentence has nothing under it",
           page.one("h1").text == "Nothing stands out: the launch is spread thin over many small pieces of work"
-          and page.one("p", "lead").text == "The agent found no cause.")
+          and not page.all("p", "lead"))
     check("it is finished, like any other", page.one("span", "st").text == "Investigation finished")
     check("said plainly, as a result", page.one("section").one("h2").text == "No cause found"
           and "That is a result, not a failure" in main_text)
