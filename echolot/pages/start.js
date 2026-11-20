@@ -60,6 +60,11 @@
     }
     E.all('input[name="what"]').forEach(function (el) { el.addEventListener('change', show); });
     if (count) count.addEventListener('input', show);
+    // One press is one press: a second click while the first is on its way
+    // would be answered "a check is already running" in place of the run.
+    var sent = false;
+    form.addEventListener('submit', function (ev) { if (sent) ev.preventDefault(); sent = true; });
+    window.addEventListener('pageshow', function () { sent = false; });
     // A browser may bring the page back with another choice than it was drawn with.
     show();
   }

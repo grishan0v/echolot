@@ -131,6 +131,9 @@ def test_what_a_command_said_is_cut_to_its_last_lines(tmp_path):
     check("the last lines, blank ones left out", said[:2] == ["line 38", "line 39"], said)
     check("a long line is cut, and says so", said[2] == "x" * 20 + " …")
     check("no file, no words", job.said(tmp_path, "check", "analyze") == [])
+    log.write_text("the first megabytes\n" + "y" * job.TAIL_BYTES + "\nBUILD FAILED\nthe line that says why\n", encoding="utf-8")
+    check("of a long file only the end is read, from a whole line on", job.said(tmp_path, "check", "collect")
+          == ["BUILD FAILED", "the line that says why"], job.said(tmp_path, "check", "collect")[:1])
 
 
 def test_a_pattern_stands_for_the_files_that_match_when_its_step_starts(tmp_path):

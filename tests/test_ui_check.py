@@ -317,7 +317,9 @@ def test_the_number_of_launches_is_under_all_settings_with_what_compare_needs(pr
     row = setting(page, "Launches in one check")
     field = row.one("input")
     check("three, unless it is changed", field.attrs["value"] == "3" and field.attrs["name"] == "launches"
-          and field.attrs["inputmode"] == "numeric" and "required" in field.attrs, field.attrs)
+          and field.attrs["inputmode"] == "numeric", field.attrs)
+    check("nothing the browser would hold a press back for while the fold is closed",
+          "required" not in field.attrs and "pattern" not in field.attrs and field.attrs.get("type") == "text")
     check("with what a comparison needs, in compare's own numbers",
           "a comparison needs four a side, or three against five" in row.text, row.text)
     check("and that nothing saves it", "Nothing saves this number" in row.text and "runner.iterations" in row.text)
@@ -535,10 +537,16 @@ def test_a_run_that_ended_is_history_once_something_newer_happened(project):
     check("a report written since: the run is not shown as the state of things", not page.all("ol", "run")
           and button(page).text == "Check again" and "primary" in button(page).attrs["class"])
     os.utime(report, (later - 3600, later - 3600))
+    kept = (project.root / ".echolot" / "log" / "collect.json").read_bytes()
     (project.root / ".echolot" / "log" / "collect.json").write_text(json.dumps({
         "scenario": "coldStart", "started": later, "pid": 1, "iterations": 5, "done": 5, "finished": later + 9,
         "exit": 0}), encoding="utf-8")
     check("a recording made elsewhere since: the same", not page_of(site).all("ol", "run"))
+    (project.root / ".echolot" / "log" / "collect.json").write_bytes(kept)
+    run = job.read(project.root, "check")
+    st = state.project_state(project.root, str(project.root / "echolot.yml"))
+    check("with nothing newer it is news for a day", check_mod.reading(project.root, st, run, now=run["finished"] + 3600)
+          and check_mod.reading(project.root, st, run, now=run["finished"] + check_mod.NEWS_S + 1) is None)
 
 
 # --- a run in progress --------------------------------------------------------------------------
@@ -876,7 +884,11 @@ def test_recordings_newer_than_the_report_wait_to_be_read_and_can_be_left(projec
     anew = page.one("button", id="check-anew")
     check("or left: Record again is the second choice", anew.text == "Record again" and "line" in anew.attrs["class"]
           and anew.attrs["name"] == "anew" and "hidden" not in anew.attrs)
-    check("pressed", press(site, fields={"what": "read:coldStart", "anew": "1"}).status == 303)
+    check("pressed", press(site, fields={"what": "read:coldStart"}).status == 303)
+    check("reading reads, then compares with the report that was there", [r[0] for r in echolot.ran] == ["analyze", "compare"]
+          and (project.root / ".echolot" / "out" / "before.json").is_file(), echolot.ran)
+    echolot.ran.clear()
+    check("pressed again, to record anew", press(site, fields={"what": "read:coldStart", "anew": "1"}).status == 303)
     check("recording anew records, three launches, then reads and compares",
           [r[0] for r in echolot.ran] == ["collect", "analyze", "compare"] and "-n" in echolot.ran[0])
 

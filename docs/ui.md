@@ -85,8 +85,8 @@ Ctrl-C in the terminal of `echolot ui` ends a check that is running, the way
 **Stop** does, and the page of the next start says that it was cut short.
 
 A run's last word stays on the start page while it is the latest thing that
-happened. Once a recording is made or a report written some other way, the
-page shows the project as it stands.
+happened, for a day at most. Once a recording is made or a report written
+some other way, or the day is over, the page shows the project as it stands.
 
 **Check again** is the button once a report exists. It does the same and then
 compares the new report with the one before it:

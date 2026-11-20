@@ -106,13 +106,25 @@ def read(project: Path, name: str, alive: Callable[[int], bool] | None = None) -
     return state
 
 
+# How much of the end of a command's output is read to find its last lines.
+TAIL_BYTES = 64 * 1024
+
+
 def said(project: Path, name: str, step: str, lines: int = 12, width: int = 400) -> list[str]:
     """The last lines a command printed, as it printed them: what a page shows
-    under its own sentence when the command failed. Long lines are cut."""
+    under its own sentence when the command failed. Long lines are cut, and
+    of a long file only the end is read: a build that failed can print
+    megabytes before the line that says why."""
     try:
-        text = log_path(project, name, step).read_text(encoding="utf-8", errors="replace")
+        with open(log_path(project, name, step), "rb") as log:
+            log.seek(0, os.SEEK_END)
+            size = log.tell()
+            log.seek(max(0, size - TAIL_BYTES))
+            text = log.read().decode("utf-8", errors="replace")
     except OSError:
         return []
+    if size > TAIL_BYTES:
+        text = text.split("\n", 1)[-1]      # the first line read is the end of a longer one
     kept = [line.rstrip() for line in text.splitlines() if line.strip()]
     return [line if len(line) <= width else line[:width] + " …" for line in kept[-lines:]]
 

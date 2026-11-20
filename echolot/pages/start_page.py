@@ -226,8 +226,11 @@ def _launches(offer: dict[str, Any], frozen: bool) -> tuple[str, str] | None:
     It belongs to the button's form and is sent with it; nothing keeps it."""
     if not any(c.get("counted") for c in offer["choices"]):
         return None
-    field = (f'<label class="field" for="launches">Record <input type="text" inputmode="numeric" '
-             f'pattern="[0-9]{{1,2}}" required id="launches" name="launches" form="check-form" value="{offer["launches"]}" '
+    # No `required` and no `pattern`: a field inside a fold that is closed
+    # cannot be shown as wrong by the browser, and the button would do
+    # nothing. A number that is none is answered by the server, in a sentence.
+    field = (f'<label class="field" for="launches">Record <input type="text" inputmode="numeric" maxlength="2" '
+             f'id="launches" name="launches" form="check-form" value="{offer["launches"]}" '
              f'autocomplete="off" aria-describedby="launches-h"{" disabled" if frozen else ""}> launches at each press</label>')
     says = (f'<p class="small sub" id="launches-h">From 1 to {offer["most"]}. Three is quick and already shows how much '
             'the launches differ. To be sure which changes hold, a comparison needs four a side, or three against '

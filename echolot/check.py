@@ -38,6 +38,7 @@ import re
 import shlex
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -60,6 +61,9 @@ MOST = 20
 # and five of them.
 AROUND_S = 4.0
 READ_S = 2.5
+# How long a run that ended stays on the start page as the last thing that
+# happened. After a day it is no news: the page shows the project as it stands.
+NEWS_S = 24 * 3600.0
 
 LABEL = {"first": "Check the app", "again": "Check again", READ: "Read the recordings"}
 
@@ -546,10 +550,11 @@ def _tally(report_path: Path) -> list[tuple[str, int, str]] | None:
             for kind, one, many in words if found.count(kind)]
 
 
-def _newer(run: dict[str, Any], st: dict[str, Any]) -> bool:
-    """Whether something happened in the project after this run that makes
-    what it says history: a recording started elsewhere, or a report written
-    since. A run's last word is shown while it is the latest."""
+def _newer(run: dict[str, Any], st: dict[str, Any], now: float) -> bool:
+    """Whether what this run says is history: something happened in the
+    project after it (a recording started elsewhere, a report written since),
+    or it ended more than a day ago. A run's last word is shown while it is
+    the latest, and while it is news."""
     collect = st.get("collect")
     if collect and not _own(run, collect) and (collect.get("started") or 0) > run.get("started", 0):
         return True
@@ -558,11 +563,14 @@ def _newer(run: dict[str, Any], st: dict[str, Any]) -> bool:
     else:
         going = next((s for s in run.get("steps") or [] if s.get("status") == job.RUNNING), None)
         mark = (going or {}).get("started") or run.get("started", 0)
+    if now - mark > NEWS_S:
+        return True
     report = (run.get("what") or {}).get("report")
     return bool(report) and _newest([Path(report)]) > mark + 1
 
 
-def reading(project: Path, st: dict[str, Any], run: dict[str, Any] | None) -> dict[str, Any] | None:
+def reading(project: Path, st: dict[str, Any], run: dict[str, Any] | None,
+            now: float | None = None) -> dict[str, Any] | None:
     """The last run as the start page shows it, or None when there is none to
     show: none was started here, or what it would say is history.
 
@@ -575,7 +583,7 @@ def reading(project: Path, st: dict[str, Any], run: dict[str, Any] | None) -> di
         return None
     collect = st.get("collect")
     status = run["status"]
-    if status != job.RUNNING and _newer(run, st):
+    if status != job.RUNNING and _newer(run, st, time.time() if now is None else now):
         return None
     what = run.get("what") or {}
     view: dict[str, Any] = {"status": status, "scenario": what.get("scenario"), "do": what.get("do"),
