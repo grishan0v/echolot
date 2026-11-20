@@ -13,6 +13,8 @@ What is pinned here:
     phone that has not allowed debugging, an app that cannot be measured, no
     report, a report from before the plain keys, a macrobenchmark, several
     scenarios;
+  - an investigation's page in each state it can be in: an answer with its
+    causes, a text, still open, left unfinished;
   - the edges of the command: a port that is taken, a browser that does not
     open, Ctrl-C, two servers at once.
 
@@ -48,7 +50,8 @@ from echolot import hunt as hunt_mod  # noqa: E402
 from echolot import main as main_mod  # noqa: E402
 from echolot import ready, recorder, runner, ui  # noqa: E402
 from echolot import scan as scan_mod  # noqa: E402
-from echolot.pages import kit, start_page  # noqa: E402
+from echolot.pages import answer_page, kit, start_page  # noqa: E402
+from tests import answer_fixture as fx  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_report_page import SCHEME, _blocks, known, outside, read  # noqa: E402
 
@@ -213,6 +216,17 @@ class Project:
         record = {"n": n, "question": question, "status": status, "scenario": "coldStart",
                   "opened_at": f"2026-11-1{n}T09:00:00+00:00", "collects": reports, "analyzes": reports,
                   "reports": reports, **more}
+        where = self.root / ".echolot" / "hunt.json" if current else home / "hunt.json"
+        where.write_text(json.dumps(record), encoding="utf-8")
+        return self
+
+    def investigation(self, record: dict, reports: dict, current: bool = True) -> "Project":
+        """An investigation as its record and the reports it filed (`tests/answer_fixture.py`):
+        the last one, in `hunt.json`, or one archived under its number."""
+        home = self.root / ".echolot" / "hunts" / str(record["n"])
+        (home / "reports").mkdir(parents=True, exist_ok=True)
+        for k, report in reports.items():
+            (home / "reports" / f"{k:03d}.json").write_text(json.dumps(report), encoding="utf-8")
         where = self.root / ".echolot" / "hunt.json" if current else home / "hunt.json"
         where.write_text(json.dumps(record), encoding="utf-8")
         return self
@@ -415,9 +429,11 @@ SECRET = "what-a-file-of-the-project-holds"
                                   "%2e%2e/echolot.yml", "..%2fecholot.yml", "hunt/1/report/../../../echolot.yml",
                                   "hunt/1/report/001.json", "hunt/1/reports/001.json", "report.json",
                                   "app/build.gradle.kts", ".echolot/log/runs.jsonl", "report/", "hunt/x/report/1",
-                                  "hunt/1/report/-1", "hunt/1/report/1/", "report/coldStart/extra"])
+                                  "hunt/1/report/-1", "hunt/1/report/1/", "report/coldStart/extra",
+                                  "hunt/1/answer.html", "answer.html", "hunt/1/answer/", "hunt/x/answer", "answer/1"])
 def test_no_file_is_served_by_its_path(project, path):
     project.ready().report().hunt(1, "why is it slow")
+    (project.root / ".echolot" / "hunts" / "1" / "answer.html").write_text(SECRET, encoding="utf-8")
     (project.root / "local.yml").write_text(f"runner:\n  device: {SECRET}\n", encoding="utf-8")
     (project.root / "echolot.yml").write_text(LAUNCH + f"# {SECRET}\n", encoding="utf-8")
     with running(project) as server:
@@ -432,6 +448,7 @@ def test_the_pages_fetch_nothing_and_the_browser_is_told_so(project):
     with running(project) as server:
         site = server.site
         for name, path in (("start", ""), ("report", "report"), ("an archived report", "hunt/1/report/2"),
+                           ("the last investigation", "answer"), ("an investigation", "hunt/1/answer"),
                            ("no page", "nowhere")):
             _, headers, body = ask(server, f"/{site.token}/{path}")
             own = f"/{site.token}/"
@@ -460,7 +477,7 @@ def test_the_server_writes_nothing(project, monkeypatch):
     monkeypatch.delenv("ECHOLOT_NO_RECORD")
     before = snapshot(project.root)
     with running(project) as server:
-        for path in ("", "report", "hunt/1/report/1", "hunt/9/report/1", "nowhere"):
+        for path in ("", "report", "hunt/1/report/1", "hunt/9/report/1", "answer", "hunt/1/answer", "nowhere"):
             ask(server, f"/{server.site.token}/{path}")
             ask(server, f"/{server.site.token}/{path}", method="POST", Origin=server.site.origin)
     check("every file is as it was, and none is new", snapshot(project.root) == before,
@@ -513,20 +530,27 @@ def test_requests_are_not_logged_with_their_token(project, capfd):
 # --- the routes -------------------------------------------------------------------------------
 
 def test_a_page_is_one_entry_and_its_link_appears_with_it(project, monkeypatch):
-    """The agent's answer and the comparison are not built: no link leads to
-    them. Adding the page is adding its route, and the link is there."""
-    project.ready().hunt(1, "why is it slow", verdict={"causes": []})
-    page = start(project)
-    check("no link to an answer while there is no such page",
-          not [a for a in page.all("a") if "answer" in a.attrs["href"]], [a.attrs["href"] for a in page.all("a")])
-    monkeypatch.setattr(ui, "ROUTES", [*ui.ROUTES, ui.Route(
-        "answer", "hunt/{n}/answer", lambda visit, params: ui.Page(f"<p>answer {params['n']}</p>"),
-        step="Agent's answer")])
+    """A page of the server is one entry in its table of routes: with the
+    entry come its step in the top bar and the links to it, and without it
+    there is neither. No link leads nowhere."""
+    project.ready().report().hunt(1, "why is it slow", verdict={"causes": []})
     site = site_of(project)
     page = read(get(site).body)
-    link = [a for a in page.all("a") if a.attrs["href"].endswith("/hunt/1/answer")]
-    check("with the route, the investigation that has a verdict links to it", len(link) == 1 and link[0].text == "Agent's answer")
-    check("and the page opens", get(site, "hunt/1/answer").body == "<p>answer 1</p>")
+    check("the answer is a step", [a.text for a in page.one("nav", "steps").all("a")] == ["Start", "Report", "Agent's answer"])
+    check("and the investigation links to it", [a.text for a in page.one("ul", "invs").all("a")] == ["Agent's answer", "Report 1"])
+    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith("answer")])
+    page = read(get(site).body)
+    check("without its routes: no step", [a.text for a in page.one("nav", "steps").all("a")] == ["Start", "Report"])
+    check("no link", [a.text for a in page.one("ul", "invs").all("a")] == ["Report 1"]
+          and not [a for a in page.all("a") if "answer" in a.attrs["href"]])
+    check("and no page", get(site, "answer").status == 404 and get(site, "hunt/1/answer").status == 404)
+    # The comparison is not built. When it is, this is all the server needs.
+    monkeypatch.setattr(ui, "ROUTES", [*ui.ROUTES, ui.Route(
+        "after", "after", lambda visit, params: ui.Page("<p>after the fix</p>"), step="After the fix")])
+    page = read(get(site).body)
+    check("a page to come is one entry: its step", [a.text for a in page.one("nav", "steps").all("a")]
+          == ["Start", "Report", "After the fix"])
+    check("and the page", get(site, "after").body == "<p>after the fix</p>")
 
 
 def test_every_link_of_every_page_leads_to_a_page(project):
@@ -544,9 +568,9 @@ def test_every_link_of_every_page_leads_to_a_page(project):
         check(f"{href.replace(site.token, 'T')} opens", reply.status == 200, reply.status)
         queue += [a.attrs["href"] for a in read(reply.body).all("a") if not a.attrs["href"].startswith("#")]
     opened = {href.replace(f"/{site.token}/", "") for href in seen}
-    check("the start, each scenario's report and every report an investigation filed",
-          opened == {"", "report", "report/coldStart", "report/feedScroll", "hunt/1/report/1", "hunt/1/report/2",
-                     "hunt/2/report/1"}, sorted(opened))
+    check("the start, each scenario's report, and every investigation's page and reports",
+          opened == {"", "report", "report/coldStart", "report/feedScroll", "answer", "hunt/1/answer", "hunt/2/answer",
+                     "hunt/1/report/1", "hunt/1/report/2", "hunt/2/report/1"}, sorted(opened))
 
 
 def test_the_steps_are_a_path_once_there_are_two(project):
@@ -1041,20 +1065,104 @@ def test_the_investigations_and_what_each_filed(project):
     listed = said_by(["hunt", "--list"])
     check("every question and conclusion is one hunt --list prints",
           all(q in listed for q in ("why is it <slow>", "the list stutters", "over the limit", "the lock is held over a read")))
-    check("each report it filed opens", [a.attrs["href"].split("/hunt/")[1] for a in items[2].all("a")]
-          == ["1/report/1", "1/report/2", "1/report/3"])
-    check("one that does not read is said, not linked", [a.text for a in items[0].all("a")] == ["Report 1"]
+    check("its own page, then each report it filed", [a.attrs["href"].split("/hunt/")[1] for a in items[2].all("a")]
+          == ["1/answer", "1/report/1", "1/report/2", "1/report/3"])
+    check("the link says what the page shows: an answer, the rounds so far, the rounds of one that was left",
+          [i.all("a")[0].text for i in items] == ["The rounds so far", "Its rounds", "Agent's answer"])
+    check("a report that does not read is said, not linked", [a.text for a in items[0].all("a")] == ["The rounds so far", "Report 1"]
           and "Report 2 is there and does not read." in items[0].text, items[0].text)
-    check("an investigation with none has no link", not items[1].all("a"))
+    check("an investigation that filed none links to its page alone", [a.text for a in items[1].all("a")] == ["Its rounds"])
     archived = read(get(site, "hunt/1/report/2").body)
     check("an archived report is a report page", archived.one("h1").text == "The launch takes 1.9 s")
     check("that says which one it is", "investigation 1, report 2" in archived.one("span", "crumb").text)
     check("its request names the file, and not as the last report",
           ".echolot/hunts/1/reports/002.json" in archived.one("dialog", "ask").attrs["data-tail"]
           and "the last report" not in archived.one("dialog", "ask").attrs["data-one"])
-    check("neither step is this page", [a.attrs.get("aria-current") for a in archived.one("nav", "steps").all("a")] == [None, None])
+    check("no step is this page", [a.attrs.get("aria-current") for a in archived.one("nav", "steps").all("a")] == [None, None, None])
     for path in ("hunt/3/report/2", "hunt/2/report/1", "hunt/9/report/1", "hunt/1/report/4", "hunt/0/report/1"):
         check(f"{path} is no page", get(site, path).status == 404)
+
+
+# --- an investigation's page ------------------------------------------------------------------
+
+STATES = {
+    # the state of the fixture: what the page's first word is, and what the start page calls the link
+    "many": ("Investigation finished", "Agent's answer"),
+    "one": ("Investigation finished", "Agent's answer"),
+    "nothing": ("Investigation finished", "Agent's answer"),
+    "gone": ("Investigation finished", "Agent's answer"),
+    "text": ("Investigation finished", "Agent's answer"),
+    "open": ("Investigation in progress", "The rounds so far"),
+    "open-empty": ("Investigation in progress", "The rounds so far"),
+    "left": ("Investigation left unfinished", "Its rounds"),
+}
+STEPS_NAV = re.compile(r'<nav class="steps".*?</nav>', re.S)
+
+
+@pytest.mark.parametrize("state", sorted(STATES))
+def test_an_investigations_page_in_each_state(project, demo_report, state):
+    """Every investigation has a page, whatever it came to: the answer with
+    its causes, the text it was closed with, the rounds so far of one still
+    open, the rounds of one that was left."""
+    says, link = STATES[state]
+    hunt, reports = fx.states(demo_report)[state]
+    project.ready().investigation(hunt, reports)
+    site = site_of(project)
+    last, numbered = get(site, "answer"), get(site, f"hunt/{fx.N}/answer")
+    check("the last one and the one by its number are the same page", last.status == 200 and last.body == numbered.body,
+          (last.status, numbered.status))
+    page = read(last.body)
+    check("it says its state first", page.all("span", "st")[0].text == says, page.all("span", "st")[0].text)
+    steps = page.one("nav", "steps").all("a")
+    check("the answer is a step of the path, and this page is it", [a.text for a in steps] == ["Start", "Agent's answer"]
+          and [a.attrs.get("aria-current") for a in steps] == [None, "page"], [a.text for a in steps])
+    # What `echolot hunt --show --html` writes, and the path to the other pages.
+    on_disk = answer_page.render(hunt, reports, again=main_mod._check_again_line(project.root, site.config, hunt, reports))
+    check("but for the path it is the page hunt --show --html writes", STEPS_NAV.sub("", last.body) == on_disk)
+    start_links = read(get(site).body).one("ul", "invs").one("li").all("a")
+    check("the start page's link says what it leads to", start_links[0].text == link
+          and start_links[0].attrs["href"] == f"/{site.token}/hunt/{fx.N}/answer", [a.text for a in start_links])
+    if state in ("many", "one", "text"):
+        check("with the line that checks the app again", fx.AGAIN in page.text, page.text[-400:])
+
+
+def test_the_answer_is_drawn_when_asked_for_and_not_read_from_disk(project, demo_report):
+    states = fx.states(demo_report)
+    hunt, reports = states["open"]
+    project.ready().investigation(hunt, reports)
+    stale = project.root / ".echolot" / "hunts" / str(fx.N) / "answer.html"
+    stale.write_text("<p>a page written while it was open</p>", encoding="utf-8")
+    site = site_of(project)
+    body = get(site, "answer").body
+    check("the page is drawn, not the file", "a page written while it was open" not in body and "Investigation in progress" in body)
+    project.investigation(*states["many"])
+    body = get(site, "answer").body
+    check("the investigation closed: the answer takes the page's place at once", "Investigation finished" in body
+          and read(body).all("div", "tr"), body[:200])
+    check("the file on disk is as it was", stale.read_text(encoding="utf-8") == "<p>a page written while it was open</p>")
+
+
+def test_which_investigation_the_step_leads_to(project, demo_report):
+    states = fx.states(demo_report)
+    project.ready()
+    site = site_of(project)
+    check("no investigation: no step, and the address says there is none", not read(get(site).body).all("nav", "steps")
+          and get(site, "answer").status == 404 and "No investigation yet" in get(site, "answer").body)
+    check("a number no investigation has", get(site, "hunt/7/answer").status == 404
+          and "No such investigation" in get(site, "hunt/7/answer").body)
+    old, old_reports = states["text"]
+    project.investigation({**old, "n": 1}, old_reports, current=False)
+    project.investigation(*states["open"]).report()
+    steps = read(get(site).body).one("nav", "steps").all("a")
+    check("Start, Report, Agent's answer", [a.text for a in steps] == ["Start", "Report", "Agent's answer"]
+          and steps[2].attrs["href"] == f"/{site.token}/answer")
+    newest = read(get(site, "answer").body)
+    check("the step is the newest investigation, open or not", newest.all("span", "st")[0].text == "Investigation in progress")
+    earlier = read(get(site, "hunt/1/answer").body)
+    check("an earlier one has its page, and no step is it", earlier.all("span", "st")[0].text == "Investigation finished"
+          and [a.attrs.get("aria-current") for a in earlier.one("nav", "steps").all("a")] == [None, None, None])
+    report = read(get(site, "report").body)
+    check("the report leads on to it", [a.text for a in report.one("nav", "steps").all("a")] == ["Start", "Report", "Agent's answer"])
 
 
 # --- the pages themselves ---------------------------------------------------------------------

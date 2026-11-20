@@ -103,7 +103,7 @@ five seconds. `echolot analyze --html` adds `report.html`: the same report in
 plain words as a page, one file that opens from disk. `echolot hunt --show --html`
 writes an investigation the same way: what the agent found, where, and what to change.
 `echolot ui` opens a page on this machine with whether everything is ready, the
-next step, and the reports.
+next step, the reports and the agent's answers.
 
 <details>
 <summary><b>Example report</b></summary>

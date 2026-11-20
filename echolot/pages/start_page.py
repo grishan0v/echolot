@@ -89,14 +89,14 @@ def _investigation(inv: dict[str, Any], link: Link) -> str:
     did = f'<p class="small sub">{kit.prose(inv["plain"])}</p>'
     came = f'<p class="small">{e(inv["conclusion"])}</p>' if inv.get("conclusion") else ""
     opens = []
+    # Its own page first: the agent's answer, or the rounds of one without.
+    own = link("answer-of", n=n) if n else None
+    if own:
+        opens.append(f'<a href="{e(own)}" aria-label="Investigation {e(n)}: {e(inv["page"])}">{e(inv["page"])}</a>')
     for k in inv["reports"] if n else ():
         href = link("hunt-report", n=n, k=k)
         if href:
             opens.append(f'<a href="{e(href)}" aria-label="Investigation {e(n)}, report {k}">Report {k}</a>')
-    # The agent's answer, once the server has a page for it.
-    answer = link("answer", n=n) if n and inv.get("answered") else None
-    if answer:
-        opens.append(f'<a href="{e(answer)}" aria-label="Investigation {e(n)}, the agent\'s answer">Agent\'s answer</a>')
     filed = f'<p class="inv-r small">{"".join(opens)}</p>' if opens else ""
     lost = ""
     if inv["unread"]:

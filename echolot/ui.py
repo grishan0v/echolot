@@ -44,10 +44,11 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import quote, unquote
 
+from . import hunt as hunt_mod
 from . import main as cli
 from . import ready, recorder, state
 from .config import ConfigError
-from .pages import kit, report_page, start_page
+from .pages import answer_page, kit, report_page, start_page
 
 HOST = "127.0.0.1"
 READS = ("GET", "HEAD")
@@ -109,17 +110,28 @@ class Site:
         return f"/{self.token}/{path}"
 
 
+_UNREAD = object()
+
+
 @dataclass
 class Visit:
-    """One request: the site, and the project's state read once for it."""
+    """One request: the site, and what is read of the project once for it."""
     site: Site
     _st: dict | None = None
+    _last: Any = _UNREAD
 
     @property
     def st(self) -> dict:
         if self._st is None:
             self._st = state.project_state(self.site.project, self.site.config)
         return self._st
+
+    @property
+    def last_hunt(self) -> dict | None:
+        """The newest investigation, open or not: the one `hunt --show` shows."""
+        if self._last is _UNREAD:
+            self._last = hunt_mod.last(self.site.project)
+        return self._last
 
     def steps(self, here: str | None) -> list[tuple[str, str, bool]]:
         """The path in the top bar: every page that is a step and has
@@ -186,6 +198,36 @@ def _hunt_report(visit: Visit, params: dict[str, str]) -> Page:
                                    steps=visit.steps(None), crumb=f"investigation {n}, report {k}"))
 
 
+def _has_hunt(visit: Visit) -> bool:
+    return visit.last_hunt is not None
+
+
+def _answer(visit: Visit, params: dict[str, str]) -> Page:
+    """An investigation as a page: the last one, or the one numbered. Drawn
+    from its record and the reports it filed as they are now, the way `hunt
+    --show --html` writes it, and not read from an `answer.html` on disk.
+
+    The page has a state for whatever the investigation is, so every one
+    that exists has something to show: the agent's answer with its causes,
+    the text one was closed with, the rounds so far of one still open, the
+    rounds of one that was left.
+    """
+    site, last = visit.site, visit.last_hunt
+    if "n" in params:
+        hunt = hunt_mod.find(site.project, params["n"])
+        if hunt is None:
+            return _nothing(visit, "No such investigation", f"This project has had no investigation {int(params['n'])}.")
+    else:
+        hunt = last
+        if hunt is None:
+            return _nothing(visit, "No investigation yet", "One opens when an agent is asked to dig deeper. "
+                            "Its rounds, and then its answer, appear here.")
+    reports = hunt_mod.archived_reports(site.project, hunt)
+    again = cli._check_again_line(site.project, site.config, hunt, reports)
+    mine = last is not None and hunt.get("n") == last.get("n")
+    return Page(answer_page.render(hunt, reports, again=again, steps=visit.steps("answer" if mine else None)))
+
+
 # ---------------------------------------------------------------------------
 # the routes: one table. A page is one entry here; a request that changes
 # something is one entry with another `method`.
@@ -210,6 +252,8 @@ ROUTES: list[Route] = [
     Route("report", "report", _report, step="Report", there=_has_report),
     Route("report-of", "report/{scenario}", _report),
     Route("hunt-report", "hunt/{n}/report/{k}", _hunt_report),
+    Route("answer", "answer", _answer, step="Agent's answer", there=_has_hunt),
+    Route("answer-of", "hunt/{n}/answer", _answer),
 ]
 
 # A part of an address that names something. Numbers are digits; a name is

@@ -4,7 +4,8 @@
 
 `echolot` says where a project stands in a terminal, to someone who reads
 terminals. `echolot ui` says the same on a page: whether everything is ready,
-what to do next, and the reports there are, each opened as a page.
+what to do next, and the reports and the agent's answers there are, each
+opened as a page.
 
 ```bash
 echolot ui              # starts it and opens the browser
@@ -47,6 +48,24 @@ was recorded, how long it has been open or when it ended, what it came to,
 and the reports it filed. A report opens as [the report page](analysing.md#the-report-as-a-page),
 drawn from its `report.json` at that moment; a file that does not read is
 said, not linked.
+
+## The other pages
+
+The top bar is a path through them: **Start**, **Report**, **Agent's answer**.
+A step is there once it has something to show.
+
+- **Report** is the last report of the scenario the start page is about.
+- **Agent's answer** is the newest investigation as
+  [a page](agent-layer.md#the-answer-as-a-page), the one
+  `echolot hunt --show --html` writes, drawn at that moment from the
+  investigation's record and the reports it filed. What it shows follows the
+  investigation: the answer with its causes once the agent closed it with one,
+  the text it was closed with, or, while it is still open, the rounds so far,
+  with the answer taking the page's place when it closes.
+- Every earlier investigation has the same page behind the first link of its
+  row on the start page. The link says what it leads to: "Agent's answer",
+  "The rounds so far" for one still open, "Its rounds" for one that was left
+  when the next question was asked.
 
 **All settings** is a fold, read-only. It holds what the page reads for you,
 and under each row the words `echolot` and `echolot scan` say about it. The

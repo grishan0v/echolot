@@ -611,9 +611,11 @@ def investigations(project: Path) -> list[dict[str, Any]]:
             "when": hunt_mod._when(h.get("opened_at")), "status": h.get("status") or "open",
             "question": h.get("question") or "", "plain": hunt_words(h),
             "conclusion": h.get("conclusion") if isinstance(h.get("conclusion"), str) else None,
-            # A structured verdict was recorded: what a page of the agent's
-            # answer is drawn from, once the server has one.
-            "answered": isinstance(h.get("verdict"), dict),
+            # What its own page shows, for the link to it: the agent's answer
+            # (a verdict, or the text it was closed with), the rounds so far
+            # of one still open, the rounds of one that was left.
+            "page": ("Agent's answer" if isinstance(h.get("verdict"), dict) or h.get("status") == "concluded"
+                     else "The rounds so far" if (h.get("status") or "open") == "open" else "Its rounds"),
             "reports": [k for k, data in sorted(filed.items()) if data is not None and "detectors" in data],
             "unread": [k for k, data in sorted(filed.items()) if data is None or "detectors" not in data],
         })
