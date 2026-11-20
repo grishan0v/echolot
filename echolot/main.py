@@ -35,6 +35,7 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from collections import defaultdict
@@ -867,7 +868,7 @@ def cmd_analyze(args) -> int:
     kept = hunt_mod.record_report(root, out_dir)
     if kept is not None:
         print(f"→ {kept}  (this investigation's copy)", file=sys.stderr)
-        again = _answer_again(root, args.config, hunt_mod.load(root))
+        again = _answer_again(root, str(cfg.path or args.config), hunt_mod.load(root))
         if again is not None:
             print(f"→ {again}  (this investigation's page stood there: written again "
                   f"with this round)", file=sys.stderr)
@@ -2747,6 +2748,9 @@ def _check_again_line(project: Path, config: str, hunt: dict[str, Any],
     except (ConfigError, OSError):
         cfg = None
     named = f" --scenario {scenario}" if plain_name and cfg is not None and len(cfg.scenarios) > 1 else ""
+    # A config under another name has to be named; the default one need not be.
+    if Path(config).name != "echolot.yml":
+        named = f" -c {shlex.quote(Path(config).name)}{named}"
     traces = f"{scenario}_iter*" if plain_name else "*"
     steps = [f"echolot collect{named}",
              f"echolot analyze .echolot/traces/{traces}.perfetto-trace{named}"]
@@ -2779,15 +2783,19 @@ def _answer_again(project: Path, config: str, hunt: dict[str, Any] | None) -> Pa
 
     A page that stays as it was while its investigation moves on (a round
     more, a verdict, another question opened) would read as the state now.
-    Where there is no page, none is written. The page gates nothing: one that
-    cannot be written again is left, and the command that called goes on.
+    Where there is no page, none is written. The page gates nothing: this is
+    a courtesy of a command whose work is something else, so whatever keeps
+    the page from being written again is said in a line, the page is left as
+    it was, and the command that called goes on.
     """
     page = hunt_mod.page_path(project, hunt) if hunt else None
     if page is None or not page.is_file():
         return None
     try:
         return _write_answer(project, config, hunt)
-    except (OSError, ValueError):
+    except Exception as e:  # a record or a report edited by hand, a full disk
+        print(f"[!] {page} was not written again and may show an earlier state: "
+              f"{getattr(e, 'strerror', None) or e or type(e).__name__}", file=sys.stderr)
         return None
 
 
@@ -2802,6 +2810,7 @@ def _show_as_page(project: Path, config: str, hunt: dict[str, Any]) -> int:
         recorder.failed(f"hunt --html: {why}")
         return 2
     print(f"→ {page}")
+    recorder.note(hunt="page")
     return 0
 
 
@@ -2829,6 +2838,7 @@ def _page_after_closing(project: Path, config: str, asked: bool) -> None:
               f"{getattr(e, 'strerror', None) or e}", file=sys.stderr)
         return
     print(f"→ {page}  (the answer as a page: open it in a browser)")
+    recorder.note(page="answer")
 
 
 def cmd_hunt(args) -> int:

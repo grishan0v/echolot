@@ -482,6 +482,13 @@ def test_a_report_that_does_not_read_and_a_citation_that_does_not(states):
           said == ["A measurement this cause cites cannot be shown: it does not read as a citation.",
                    'Cited from round 1, no such row, and it cannot be shown any more: report 1 has no row at "no such '
                    'row", in any detector or among its markers.'], said)
+    reports[1]["detectors"][8]["rows"][0]["spread"] = ["not", "a", "spread"]
+    hunt["verdict"]["causes"][2]["evidence"] = [{"report": 1, "detector": reports[1]["detectors"][8]["id"],
+                                                 "location": reports[1]["detectors"][8]["rows"][0]["location"]}]
+    said = [p.text for p in panel_of(read(answer_page.render(hunt, reports)), "cause-3").all("p", "gone")]
+    check("a row that is there and whose figures do not read is said as that",
+          len(said) == 1 and said[0].endswith("the row is in the report and its figures do not read."), said)
+    check("a detector the report does not list is named by its id", answer_page._source({}, "some_check", "x") == "some_check")
     hunt["verdict"]["causes"][2]["evidence"] = []
     check("a cause that cites nothing says so",
           "The answer cites no measurement for this cause." in panel_of(read(answer_page.render(hunt, reports)), "cause-3").text)

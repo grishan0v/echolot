@@ -210,6 +210,49 @@ def test_the_command_that_checks_again_names_the_scenario_where_there_are_severa
           ".echolot/traces/openList_iter*.perfetto-trace --scenario openList", page.one("pre", "cmd-t").text)
 
 
+def test_a_config_under_another_name_is_named_in_the_command(project, demo_report):
+    (project / "echolot.yml").rename(project / "perf.yml")
+    code, _, err = run("hunt", "-c", "perf.yml", fx.QUESTION)
+    assert code == 0, err
+    file_round(project, fx.rounds(demo_report)[1])
+    run("hunt", "-c", "perf.yml", "--done", "found it", "--html")
+    page = read((project / ".echolot" / "hunts" / "1" / "answer.html").read_text(encoding="utf-8"))
+    check("every step that reads the config names it, by its name and not by where this machine keeps it",
+          page.one("pre", "cmd-t").text == "echolot collect -c perf.yml && echolot analyze "
+          ".echolot/traces/coldStart_iter*.perfetto-trace -c perf.yml && echolot compare "
+          ".echolot/hunts/1/reports/001.json", page.one("pre", "cmd-t").text)
+
+
+def test_a_page_that_cannot_be_written_again_is_said_and_stops_nothing(project, demo_report, monkeypatch):
+    """Writing it again is a courtesy of a command whose work is something else."""
+    home = open_with_rounds(project, demo_report)
+    run("hunt", "--show", "--html")
+    before = (home / "answer.html").read_text(encoding="utf-8")
+
+    def broken(*args, **kw):
+        raise RuntimeError("a record nobody foresaw")
+    monkeypatch.setattr(answer_page, "render", broken)
+    code, out, err = run("hunt", "--done", "found it")
+    check("the investigation is closed and the exit code is the closing's",
+          code == 0 and hunt_mod.load(project)["status"] == "concluded", (code, err))
+    check("the page is left as it was, and said to be of an earlier state",
+          (home / "answer.html").read_text(encoding="utf-8") == before
+          and "was not written again and may show an earlier state: a record nobody foresaw" in err, err)
+
+
+def test_writing_the_page_is_in_the_run_log(project, demo_report):
+    open_with_rounds(project, demo_report)
+    out, err = io.StringIO(), io.StringIO()
+    with recorder.isolated(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        main(["hunt", "--show", "--html"])
+        shown = recorder.facts()
+    with recorder.isolated(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        main(["hunt", "--done", "found it", "--html"])
+        closed = recorder.facts()
+    check("shown as a page", shown.get("hunt") == "page", shown)
+    check("closed, with a page", closed.get("hunt") == "concluded" and closed.get("page") == "answer", closed)
+
+
 def test_a_record_with_no_number_has_no_folder_for_a_page(project):
     state = project / ".echolot"
     state.mkdir()
