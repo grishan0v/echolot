@@ -574,6 +574,10 @@ other files. Left as it was, the page of the analysis before would read as
 this one's. `analyze` removes nothing, and where there is no page it writes
 none unless `--html` asks for one.
 
+An investigation has a page of its own, with the agent's answer in the same
+shape: `echolot hunt --show --html`, described under
+[The answer as a page](agent-layer.md#the-answer-as-a-page).
+
 ## Where a cold start went
 
 The header's budget says where the window went by thread state. When the

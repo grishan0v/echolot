@@ -905,6 +905,69 @@ verdict's `summary`, or the text given beside it, so `--list`, `status` and the
 recap read a verdict hunt as they read any other. `echolot hunt --show <n>`
 prints the verdict as text.
 
+### The answer as a page
+
+A verdict in a terminal is for whoever ran the hunt. For the person who asked
+there is the same answer as a page, in the shape the
+[report's page](analysing.md#the-report-as-a-page) has:
+
+```bash
+echolot hunt --show --html                          # the last investigation: .echolot/hunts/<n>/answer.html
+echolot hunt --show 2 --html                        # the one named, by number or by part of its question
+echolot hunt --done --verdict verdict.json --html   # close, and write the page of what was just closed
+```
+
+The file goes into the investigation's own directory, beside its record and
+its reports, and the command prints where it is. It is one file that opens
+from disk: nothing is fetched, and the same record and reports give the same
+bytes. From the top:
+
+- **The verdict**: the first sentence of `summary` as the headline, the rest
+  under it, and how many rounds the investigation took. A round is one report
+  it filed.
+- **A split bar**, when the verdict names a piece with `inside` and that row
+  is still in its report: the piece against the rest of the window.
+- **A table of causes**, in the order the agent gave them: what happens, where
+  in the code, what to do, and what the change is expected to win back. A
+  change that belongs to no one cause (`suggestions`) is a row after them.
+- **Details**, per row, opens a panel with the rows the cause cites, as bars,
+  each from the round it was measured in. They are looked up in the filed
+  reports when the page is written, by the rule the check above uses, and
+  nothing is copied into `hunt.json`. A report deleted since leaves a sentence
+  where its rows were, and the page is written all the same.
+- **Checking again**: the command that records the app once more and compares
+  it with the investigation's first report, to copy.
+- **Folds**: how sure the agent is of each cause, with what echolot looked at
+  itself (the rows cited, the markers left in the sources); how it got there,
+  round by round; what was ruled out and what else was measured; and the
+  investigation's own facts.
+
+A cause has no level of attention. A level is worked out by echolot from
+measurements (`plain`), and a cause carries the figures the agent gave:
+`cost_ms` is shown in bold and said to be measured, `expected_ms` stands in a
+column of its own and reads as an estimate, and a cause with neither shows
+neither.
+
+Each round is read from its report and from nothing else: how long the window
+was and on how many recordings, how many checks found something, how much of
+the main thread's window the rows name, how many temporary markers were in
+the app, and when the report was written, counted from when the investigation
+opened.
+
+An investigation with no verdict has a page too. One closed with a text shows
+the text and its rounds. A verdict with `"causes": []` says plainly that no
+cause was found, which is a result, and shows what was ruled out at once. One
+that is still open shows the rounds so far, which is its progress, and one
+left unfinished says that it was.
+
+The page beside an investigation is always of that investigation as it stands.
+Once an `answer.html` is there, it is written again when a round is filed by
+`analyze`, when `hunt --done` closes the investigation, and when the next
+question is opened over an open one, with `--html` or without. Where there is
+no page, none is written unless `--html` asks. It gates nothing: asking for a
+page that cannot be written is exit 2, and at closing the investigation is
+closed either way.
+
 ### Filed under the investigation, without moving
 
 `.echolot/traces/` and `.echolot/out/report.json` stay exactly where they are:
@@ -923,7 +986,9 @@ would rewrite all three for tidiness. What changed is that each artefact is
 └── hunts/
     └── 1/
         ├── hunt.json            the record, archived when the next one opens
-        └── reports/001.json…    a copy per analyze, oldest first
+        ├── reports/001.json…    a copy per analyze, oldest first
+        └── answer.html          the investigation as a page, when one was
+                                 asked for (hunt --show --html)
 ```
 
 `echolot hunt --done` marks the record concluded where it is;
@@ -962,12 +1027,14 @@ sources. `echolot hunt` on its own says what is open.
 ```
 echolot hunt --list          every investigation, newest first
 echolot hunt --show 2        one of them in full — including where its traces went
+echolot hunt --show 2 --html the same one as a page; without the number, the last one
 echolot hunt --resume        carry on with the open one
 echolot hunt --done "..."    record what it came to
 echolot hunt --done --verdict verdict.json
                              the same as a structured verdict, checked first
 echolot hunt --verdict verdict.json
                              only check a verdict: records nothing, closes nothing
+echolot hunt --done … --html close as above, and write the answer as a page
 ```
 
 Each one is numbered, and everything it produces is filed under it: every

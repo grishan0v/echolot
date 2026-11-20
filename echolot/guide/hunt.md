@@ -159,7 +159,8 @@ echolot hunt --done "TextLayout:initLayout on the main thread, :feature:profile 
 
 Left open, a finished hunt stays the open one: every later `analyze` is filed
 under it, and the next visit is asked whether to carry on with work that is
-over. `echolot hunt --show <n>` prints a verdict as text.
+over. `echolot hunt --show <n>` prints a verdict as text, and with `--html`
+writes it as a page for a person.
 
 Then show the conclusion as it is: do not retell it, and do not pad it with
 guesses.
