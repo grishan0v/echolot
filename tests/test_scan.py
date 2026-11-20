@@ -282,10 +282,13 @@ def test_a_benchmark_keeps_its_anchors(tmp_path):
     check("a section metric is still the end, after bindApplication",
           'start: {name: "bindApplication", _source: default}' in text
           and 'end: {name: "home_shown"' in text and "window:" not in text, text)
+    # `StartupMode` says how each repeat begins, and not that the launch is
+    # what is measured. A class that measures it gets the launch window
+    # (#458, test_scan_startup_benchmark.py).
     for cls in facts.benchmarks[0]["classes"]:
-        cls["metrics"] = []
+        cls.update(metrics=[], measures_launch=False, kind=scan.STARTUP_MODE)
     text = "\n".join(scan.skeleton(facts))
-    check("and one that measures no section still asks for an end: what it drives may "
+    check("and one that only sets StartupMode still asks for an end: what it drives may "
           "be no launch", 'end: {name: "?", _source: default' in text and "window:" not in text,
           text)
 

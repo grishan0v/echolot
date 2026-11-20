@@ -734,6 +734,13 @@ def _cap(s: str) -> str:
     return s[:1].upper() + s[1:]
 
 
+# How a drafted launch window ends its evidence, whoever starts the launch:
+# nobody picks the end, and the report says which one the trace gave.
+_THE_TRACE_DECIDES = ("the trace decides the end: the launch's end as the platform records it, "
+                      "or the app's reportFullyDrawn when that comes later, and the report says "
+                      "which (window.defined_by)")
+
+
 def skeleton(facts: Facts) -> list[str]:
     """An echolot.yml to start from, every value with where it came from."""
     app = facts.app or {}
@@ -745,11 +752,14 @@ def skeleton(facts: Facts) -> list[str]:
     # One class for everything below: its test, its filter and its end
     # anchor. A cold start's first, for a window that opens at
     # bindApplication; then one that measures a section. The pieces used to
-    # come from different classes of one module.
+    # come from different classes of one module. Among those that name no
+    # section, one that measures the launch comes before one that only sets
+    # `StartupMode`: its window needs nothing picked (#458).
     pick = None
     if bench and bench["classes"]:
         pick = sorted(bench["classes"], key=lambda c: (not c.get("startup"),
-                                                       not c.get("metrics")))[0]
+                                                       not c.get("metrics"),
+                                                       c.get("kind") != LAUNCH))[0]
     # A minified variant's frames come back as R8 named them, and the first
     # round would go on reading `a.b.c`. So its mapping is named, built or
     # not: AGP writes the file when the variant is built, which in gradle
@@ -792,6 +802,18 @@ def skeleton(facts: Facts) -> list[str]:
                 f'  end: {{name: "{pick["metrics"][0]}", _source: derived, '
                 f'_evidence: "TraceSectionMetric in {pick["file"]}{pattern}; '
                 f'confirm against a probe"}}']
+    elif pick and pick.get("kind") == LAUNCH:
+        # A startup macrobenchmark, the project best prepared for the same
+        # scenario (#458): the benchmark drives the launch and writes one
+        # trace for each repeat, and the launch window reads such traces as
+        # it reads the ones `launch` mode records. Only for a class that
+        # measures the launch and names no section. `StartupMode` alone may
+        # be a scroll that starts cold, and a report about the launch would
+        # answer a person who asked about the scroll.
+        out.append(
+            '  window: {name: launch, _source: derived, _evidence: "StartupTimingMetric in '
+            f'{pick["file"]}: the benchmark measures the launch, and the runner below runs it; '
+            + _THE_TRACE_DECIDES + '"}')
     elif not bench and facts.app:
         # How the app opens, the one scenario whose window nobody has to
         # name (#446): the runner below starts the launcher Activity, and the
@@ -801,9 +823,7 @@ def skeleton(facts: Facts) -> list[str]:
         out.append(
             '  window: {name: launch, _source: derived, _evidence: "the launcher Activity '
             f'{facts.app["launcher"]} in {facts.app["manifest"]}, started by the runner below; '
-            'the trace decides the end: the launch\'s end as the platform records it, or the '
-            'app\'s reportFullyDrawn when that comes later, and the report says which '
-            '(window.defined_by)"}')
+            + _THE_TRACE_DECIDES + '"}')
     else:
         out += [start,
                 '  end: {name: "?", _source: default, _evidence: "pick from `echolot probe` — '
