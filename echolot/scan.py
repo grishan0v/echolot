@@ -434,6 +434,45 @@ _RUNNER_ARG = re.compile(
     r'testInstrumentationRunnerArguments\s*(?:\[\s*|\.put\s*\(\s*)["\']([\w.]+)["\']\s*(?:\]\s*=|,)\s*["\']([^"\']*)["\']')
 
 
+# What a benchmark class measures, by what its own file constructs: the
+# metric called, in the code. An import, or a line commented out, measures
+# nothing.
+_STARTUP_METRIC = re.compile(r"\bStartupTimingMetric\s*\(")
+_SECTION_METRIC = re.compile(r"\bTraceSectionMetric\s*\(")
+_STARTUP_MODE = re.compile(r"\bStartupMode\b")
+
+# The kinds of benchmark class the draft tells apart (#458), in `kind`.
+SECTION = "section"            # names a TraceSectionMetric: where "ready" is
+LAUNCH = "launch"              # measures the launch, and names no section
+STARTUP_MODE = "startup_mode"  # only sets StartupMode: may measure no launch
+
+
+def _kind(code: str, metrics: list[str]) -> str | None:
+    """Which kind of benchmark a class is, read off its own file.
+
+    A class was "startup" when its source had `StartupTimingMetric` or
+    `StartupMode`, and the two say different things. The metric says the
+    launch is what is measured. The mode says how each repeat begins: a
+    scroll benchmark passes `startupMode = StartupMode.COLD` to
+    `measureRepeated` and measures frames. So the draft could not tell the
+    project best prepared for a launch scenario from one that measures a
+    scroll, and left both with a question mark.
+
+    `section` comes first: a `TraceSectionMetric` is the developer's own
+    statement of where "ready" is, and it wins over the launch window, also
+    when its name could not be read here. None for a class that names none
+    of the three in its own file, as one whose metrics are listed in a
+    shared helper.
+    """
+    if metrics or _SECTION_METRIC.search(code):
+        return SECTION
+    if _STARTUP_METRIC.search(code):
+        return LAUNCH
+    if _STARTUP_MODE.search(code):
+        return STARTUP_MODE
+    return None
+
+
 def _as_glob(section: str) -> str:
     """A `TraceSectionMetric` name as the GLOB echolot matches anchors with.
 
@@ -465,7 +504,8 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
         # In the code, not in a comment: the KDoc Android Studio's template
         # puts above its benchmark says "This test class benchmarks…", and
         # `benchmarks` went into the skeleton's class filter.
-        cls = _CLASS.search(_strip(text))
+        code = _strip(text)
+        cls = _CLASS.search(code)
         metrics = []
         for lit, ident in _METRIC.findall(text):
             name = lit or consts.get(ident.rsplit(".", 1)[-1])
@@ -479,6 +519,10 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
             "tests": _TEST.findall(text),
             "metrics": metrics,
             "startup": "StartupTimingMetric" in text or "StartupMode" in text,
+            # `StartupTimingMetric` by itself, apart from `StartupMode`:
+            # whether the launch is what this class measures.
+            "measures_launch": bool(_STARTUP_METRIC.search(code)),
+            "kind": _kind(code, metrics),
         })
         for name in metrics:
             if name not in entry["metrics"]:
@@ -792,6 +836,34 @@ def skeleton(facts: Facts) -> list[str]:
     return out
 
 
+def _kind_words(cls: dict) -> str:
+    """Which kind a benchmark class is, in words, and what that leaves for its window.
+
+    Said for every class, so the draft below explains itself: why one class
+    got the launch as its window, another its section, and a third the
+    question mark. A class that names none of the three is said too. Its
+    metrics may be listed in a shared helper, which this did not read.
+    """
+    kind = cls.get("kind")
+    if kind == SECTION:
+        named = ", ".join(f"`{m}`" for m in cls.get("metrics") or [])
+        words = ("measures a section (`TraceSectionMetric`): "
+                 + (f"{named}, where its window can end" if named
+                    else "its name is set elsewhere and was not read"))
+        if cls.get("measures_launch"):
+            words += ("; it measures the launch too (`StartupTimingMetric`), and the "
+                      "section comes first")
+        return words
+    if kind == LAUNCH:
+        return ("measures the launch (`StartupTimingMetric`): its window can be the launch, "
+                "with no end to pick")
+    if kind == STARTUP_MODE:
+        return ("sets `StartupMode` and names no `StartupTimingMetric`: it may measure no "
+                "launch, so its window needs an end picked from a probe")
+    return ("names no `StartupTimingMetric`, `TraceSectionMetric` or `StartupMode` in its own "
+            "file: its window needs an end picked from a probe")
+
+
 def render(facts: Facts) -> str:
     out = ["# The repository", ""]
     app = facts.app
@@ -833,7 +905,8 @@ def render(facts: Facts) -> str:
         out.append(f"`{b['module']}` — drives `{b.get('package_name') or '?'}`"
                    + (", a cold start" if b.get("startup") else ""))
         for c in b["classes"]:
-            out.append(f"- `{c['name']}` ({c['file']}): " + (", ".join(c["tests"]) or "no @Test"))
+            out.append(f"- `{c['name']}` ({c['file']}): " + (", ".join(c["tests"]) or "no @Test")
+                       + " — " + _kind_words(c))
         if b["metrics"]:
             out.append("- measures the sections: " + ", ".join(f"`{m}`" for m in b["metrics"])
                        + " — anchor candidates, and `domains` entries")
