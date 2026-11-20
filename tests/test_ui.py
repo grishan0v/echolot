@@ -952,7 +952,7 @@ def test_a_report_from_before_the_plain_keys(project):
     check("the file is not touched", json.loads((project.root / ".echolot/out/report.json").read_text()) == old)
 
 
-@pytest.mark.parametrize("text", ["", "{ cut short", '{"kind": "comparison"}', '{"schema": 1}'])
+@pytest.mark.parametrize("text", ["", "{ cut short", "[1, 2]", "5", '{"kind": "comparison"}', '{"schema": 1}'])
 def test_a_file_that_is_no_report(project, text):
     project.ready().traces()
     (project.root / ".echolot" / "out").mkdir(parents=True)

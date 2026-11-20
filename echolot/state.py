@@ -137,11 +137,16 @@ def _report(rep: Path) -> dict | None:
     """What `status` says of a report.json: when, how many runs, what fired.
 
     None when there is none; `error` when it is there and does not read.
+    That is a file that is no JSON, and one that is JSON and no object: a
+    list, a number or a string parsed, and the first key read off it ended
+    `echolot` in a traceback (#460).
     """
     if not rep.exists():
         return None
     try:
         r = json.loads(rep.read_text(encoding="utf-8"))
+        if not isinstance(r, dict):
+            return {"path": rep, "error": "unreadable"}
         s = r.get("summary") or {}
         c = r.get("config") or {}
         return {

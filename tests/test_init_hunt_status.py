@@ -155,6 +155,23 @@ def test_a_report_that_does_not_read_is_said(tmp_path: Path, monkeypatch) -> Non
     check("not none yet", "does not read" in out and "none yet" not in out, out)
 
 
+@pytest.mark.parametrize("text", ["[1, 2]", "[]", "5", '"a report"', "null", "true"])
+def test_a_report_that_is_json_and_no_object_does_not_read(tmp_path: Path, monkeypatch, text: str) -> None:
+    """#460: such a file parsed, and the first key read off it was a traceback."""
+    _project(tmp_path)
+    out_dir = tmp_path / ".echolot" / "out"
+    out_dir.mkdir(parents=True)
+    (out_dir / "report.json").write_text(text, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    code, out, _ = _run("status")
+    check("said in the report's line", code == 0 and "report  .echolot/out/report.json does not read" in out, out)
+    check("and the rest of the status is printed", "\ntraces  2 in .echolot/traces" in out and "\nnext  " in out, out)
+    code, out, _ = _run("status", "--next")
+    check("the next step is still one word", code == 0 and out.strip() in state.NEXT_KINDS, out)
+    check("the state names it as one that does not read",
+          state.project_state(tmp_path)["report"] == {"path": out_dir / "report.json", "error": "unreadable"})
+
+
 def test_files_equal_to_the_template_are_current_without_skill_md(tmp_path: Path) -> None:
     _run("init", "--into", str(tmp_path), "--for", "claude", "--no-input", "--no-doctor")
     (tmp_path / ".claude" / "skills" / "echolot" / "SKILL.md").unlink()
