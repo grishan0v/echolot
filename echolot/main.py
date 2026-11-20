@@ -58,7 +58,8 @@ from . import report as report_mod
 from . import stacks as stacks_mod
 from . import verdict as verdict_mod
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
-from .pages import answer_page, report_page
+from .pages import answer_page
+from .pages import report_page
 from .reflect.cli import cmd_reflect
 from .sandbox import SandboxError
 from .tp import (
