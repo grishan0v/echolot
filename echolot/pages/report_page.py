@@ -213,6 +213,11 @@ def _mark(row: dict[str, Any], ctx: Any, subs: list[str], several: bool) -> tupl
     return mark, [value, *dots]
 
 
+# The same under a name another page can call: the answer draws the rows a
+# cause cites the way the report draws its own.
+chart_row = _mark
+
+
 def _measurements(c: dict[str, Any], ctx: Any, several: bool) -> str:
     """The technical layer of one check: its name in echolot, its thresholds,
     its rows as bars. For a check with no rows, that it has none and why."""

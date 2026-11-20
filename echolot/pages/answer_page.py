@@ -38,8 +38,7 @@ from typing import Any
 from .. import plain
 from .. import report as report_mod
 from .. import verdict as verdict_mod
-from . import kit
-from . import report_page as rp
+from . import kit, report_page
 from .kit import e
 
 CSS = ("base.css", "table.css", "answer.css")
@@ -163,8 +162,12 @@ def _ctx(report: dict[str, Any]) -> Any:
 
 
 def _runs(report: dict[str, Any]) -> int:
-    """How many recordings a report is of."""
-    return rp._runs({"runs": report.get("runs"), "traces": _list(report.get("traces"))})
+    """How many recordings a report is of: what it says, else the traces it
+    lists, else one."""
+    n = report.get("runs")
+    if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+        return n
+    return len(_list(report.get("traces"))) or 1
 
 
 def _rounds(reports: verdict_mod.Reports) -> list[tuple[int, dict[str, Any] | None]]:
@@ -264,7 +267,7 @@ def _evidence(c: dict[str, Any], cited: _Cited) -> str:
             if own is not None:
                 row = {k: v for k, v in row.items() if k != "self_ms"}
             try:
-                mark, seen = rp._mark(row, ctx, subs, many)
+                mark, seen = report_page.chart_row(row, ctx, subs, many)
             except (TypeError, ValueError, AttributeError, KeyError):
                 gone.append((entry, "the row is in the report and its figures do not read"))
                 continue

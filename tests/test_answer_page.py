@@ -883,6 +883,16 @@ def test_the_pieces_ship_with_the_package(states):
     check("the report's page is made of the same base", report_page.CSS[0] == answer_page.CSS[0])
 
 
+def test_a_cited_row_is_drawn_the_way_the_report_draws_its_own():
+    check("the report's page names its chart row for the other pages", report_page.chart_row is report_page._mark)
+    source = (PAGES / "answer_page.py").read_text(encoding="utf-8")
+    check("and the answer calls it by that name, and nothing of the report's page by a private one",
+          "report_page.chart_row(" in source and not re.search(r"\b(report_page|rp)\._", source))
+    check("how many recordings a report is of: what it says, else the traces it lists, else one",
+          [answer_page._runs(r) for r in ({"runs": 3, "traces": ["a"]}, {"traces": ["a", "b"]}, {},
+                                          {"runs": True, "traces": "ab"}, {"runs": 0})] == [3, 2, 1, 1, 1])
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not here to parse the scripts")
 @pytest.mark.parametrize("name", answer_page.JS)
 def test_the_scripts_parse(name):
