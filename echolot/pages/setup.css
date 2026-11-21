@@ -16,5 +16,8 @@
 #setup .callout .says code { background: var(--hover); }
 #setup .yaml { max-width: var(--col); }
 
+/* the other way, the agent's: under the button, behind a hairline */
+#setup .other { padding-top: var(--s4); border-top: 1px solid var(--line); max-width: var(--col); }
+
 /* the field of the limit takes a number with a decimal: a little wider than two digits */
 #setup .field input { width: 72px; }

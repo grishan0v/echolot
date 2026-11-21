@@ -51,7 +51,7 @@ from typing import Any, Callable
 
 import yaml
 
-from . import check, codex, hosts, ignore, job, layer, plain, recorder, report, state, when
+from . import check, codex, hosts, ignore, job, layer, plain, ready, recorder, state, when
 from . import scan as scan_mod
 from .config import LAUNCH as LAUNCH_WINDOW
 from .config import Config, ConfigError
@@ -99,7 +99,6 @@ def _unfilled(node: Any, where: str = "") -> list[str]:
 def _said(facts: scan_mod.Facts, *about: str) -> list[tuple[str, str]]:
     """What `echolot scan` prints of these facts, for the lines named
     (`ready.scan_says`): the page's own sentence stands over them."""
-    from . import ready
     says = ready.scan_says(_fresh(facts))
     return [("echolot scan", line) for key in about for line in says.get(key, [])]
 
@@ -290,16 +289,20 @@ def _loaded(st: dict[str, Any]) -> Config | None:
     return None
 
 
-def _other(step: dict[str, Any]) -> dict[str, Any]:
+def _other(st: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
     """Anything but the launch stays the agent's setup: one sentence, and the
-    command the next step already has."""
+    command that leads there. It is the one `next` names for a project with
+    no config, by the door this project chose; where echolot was never set
+    up, the way to an agent starts with `echolot init`."""
     if step.get("kind") == "init":
-        text = ("Something else, one screen or one action? An agent sets that up. It starts in a terminal: "
-                "run this in the project's folder, and `echolot` then says how to ask the agent.")
-        return {"text": text, "command": "echolot init", "how": None}
-    text = ("Something else, one screen or one action? An agent sets that up: it learns from the code how to "
-            "get there and where the wait begins and ends.")
-    return {"text": text, "command": step.get("command"), "how": step.get("how") if step.get("command") else None}
+        return {"text": "Something else, one screen or one action? An agent sets that up, and that way starts in a "
+                        "terminal, with this command.",
+                "command": "echolot init",
+                "how": "Run it in the project's folder. `echolot` then says how to ask the agent."}
+    ask, how = ready._AGENT[state.door(st)]
+    return {"text": "Something else, one screen or one action? An agent sets that up: it learns from the code how "
+                    "to get there and where the wait begins and ends.",
+            "command": "echolot guide setup" if ask == "echolot guide" else ask, "how": how}
 
 
 def offer(project: Path, config: str, st: dict[str, Any], facts: scan_mod.Facts | None,
@@ -326,7 +329,7 @@ def offer(project: Path, config: str, st: dict[str, Any], facts: scan_mod.Facts 
     return {
         "state": "offer", "init": runs_init, "package": drafted["package"], "variant": drafted["variant"],
         "script": drafted["script"], "noted": drafted["noted"], "writes": writes,
-        "config": config_text(drafted), "limit": (LIMIT_MIN_S, LIMIT_MAX_S), "other": _other(step),
+        "config": config_text(drafted), "limit": (LIMIT_MIN_S, LIMIT_MAX_S), "other": _other(st, step),
         "choices": [{
             "name": LAUNCH, "title": "How the app opens",
             "text": ("The project's own macrobenchmark opens the app, and echolot reads what it records."
@@ -359,7 +362,7 @@ def by_hand(st: dict[str, Any], facts: scan_mod.Facts | None, step: dict[str, An
                 blocks.append("")
         if keep and text:
             blocks.append(text)
-    return {"state": "by-hand", "lines": "\n".join(blocks) + "\n", "other": _other(step),
+    return {"state": "by-hand", "lines": "\n".join(blocks) + "\n", "other": _other(st, step),
             "sections": [key for key in wanted if key != "scenario"]}
 
 
@@ -385,11 +388,12 @@ def first_check(project: Path, st: dict[str, Any], lines: list[dict[str, Any]]) 
         tasks = scan_mod.install_tasks(project, package)
     except OSError:
         tasks = []
-    what = f"the build of `{package}` you want measured" if package else "the build you want measured"
-    how = ("Run it on the phone from Android Studio once, or install it with "
-           f"{report.install_command(tasks)} in a terminal." if tasks else
-           "Run it on the phone from Android Studio once.")
-    text = f"Before the first check, {what} has to be on the phone: echolot opens what is installed there. {how}"
+    what = f"`{package}`" if package else "the app"
+    # The first task is the build to measure on first, as `scan` ranks them.
+    how = (f"Run that build from Android Studio once, or install it with `./gradlew {tasks[0]}` in a terminal."
+           if tasks else "Run that build from Android Studio once.")
+    text = (f"Before the first check, {what} has to be on the phone as the build you want measured: echolot opens "
+            f"what is installed there, and installs nothing. {how}")
     if any(line["tone"] == "red" for line in lines[1:2]):
         text += " And the phone has to be connected: the line marked red says how."
     return text
@@ -435,6 +439,11 @@ def start(project: Path, config: str, st: dict[str, Any], facts: scan_mod.Facts 
         raise Refusal("Setting up is already under way", "This press started nothing. The start page shows how "
                       "far it is.")
     if (project / CONFIG).exists() or st.get("config") is not None:
+        drafted = draft(facts)
+        with contextlib.suppress(OSError, UnicodeDecodeError, ValueError):
+            if drafted["can"] and (project / CONFIG).read_text(encoding="utf-8") == config_text(drafted, press["limit_ms"]):
+                # The same press, sent twice: the file it asks for is there, to the letter.
+                return
         raise Refusal("echolot.yml is already there", "This project has an `echolot.yml`, and the page never "
                       "writes over one: it may hold what somebody set by hand. Nothing was written. Go back to "
                       "the start page: it reads the file that is there.")
@@ -541,7 +550,8 @@ def view(project: Path, config: str, st: dict[str, Any], facts: scan_mod.Facts |
     it has nothing to add to the page as it is."""
     found = (reading(project, st, job.read(project, JOB)) or offer(project, config, st, facts, step)
              or by_hand(st, facts, step))
-    first = first_check(project, st, lines)
+    # A config that waits for its scenario has its own thing to do first.
+    first = None if found is not None and found["state"] == "by-hand" else first_check(project, st, lines)
     if found is None and first is None:
         return None
     return {**(found or {"state": None}), "first": first}

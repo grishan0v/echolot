@@ -36,10 +36,11 @@ def _copy(ident: str, command: str) -> str:
 
 
 def _other(other: dict[str, Any]) -> str:
-    """Anything but the launch: one plain sentence, and the command to copy."""
+    """Anything but the launch: one plain sentence, and the command to copy.
+    It stands under the button, after the page's own way."""
     command = _copy("setup-agent", other["command"]) if other.get("command") else ""
     how = f'<p class="small sub measure">{kit.prose(other["how"])}</p>' if other.get("how") else ""
-    return (f'<div class="stack gap-2" id="setup-other"><p class="small sub measure">{kit.prose(other["text"])}</p>'
+    return (f'<div class="stack gap-2 other" id="setup-other"><p class="small sub measure">{kit.prose(other["text"])}</p>'
             f'{command}{how}</div>')
 
 
@@ -97,8 +98,8 @@ def _offer(found: dict[str, Any], action: str) -> str:
     return (f'<section class="stack gap-5" id="setup" aria-labelledby="q-what">'
             f'<form method="post" action="{e(action)}" id="setup-form" class="stack gap-5">'
             f'<div class="stack gap-3"><h2 class="h2" id="q-what">{QUESTION}</h2>'
-            f'<div class="opts" role="radiogroup" aria-labelledby="q-what">{cards}</div>{_other(found["other"])}</div>'
-            f'{app}{limit}{_writes(found)}{button}</form></section>')
+            f'<div class="opts" role="radiogroup" aria-labelledby="q-what">{cards}</div></div>'
+            f'{app}{limit}{_writes(found)}{button}{_other(found["other"])}</form></section>')
 
 
 def _cannot(found: dict[str, Any]) -> str:
@@ -106,7 +107,8 @@ def _cannot(found: dict[str, Any]) -> str:
     page's, `scan`'s own words under it, and where the agent's path is."""
     way = ("The file that is there stays as it is. An agent can write the scenario into it."
            if found.get("exists") else "An agent can set it up: the step under What to do next says how.")
-    return (f'<section class="stack gap-3" id="setup" aria-labelledby="q-what"><h2 class="h2" id="q-what">{QUESTION}</h2>'
+    return ('<section class="stack gap-3" id="setup" aria-labelledby="setup-h">'
+            '<h2 class="h2" id="setup-h">Setting this project up</h2>'
             f'<div class="callout" id="setup-cannot">{kit.icon("grey")}<div class="stack gap-2">'
             f'<p class="measure"><b>This page cannot set the project up by itself.</b> {kit.prose(found["plain"])}</p>'
             f'{_says(found["says"])}<p class="small sub measure">{e(way)}</p></div></div></section>')

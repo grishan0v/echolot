@@ -40,7 +40,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import job, recorder, state, ui  # noqa: E402
+from echolot import codex, hosts, job, ready, recorder, state, ui  # noqa: E402
 from echolot import main as main_mod  # noqa: E402
 from echolot import project_setup as setup_mod  # noqa: E402
 from echolot import scan as scan_mod  # noqa: E402
@@ -192,6 +192,9 @@ def test_anything_else_stays_the_agents_setup_in_one_line(project):
     other = page_of(site_of(project.app())).one("div", id="setup-other")
     check("where echolot was never here it starts with init, to copy", "An agent sets that up" in other.text
           and other.one("code", id="setup-agent").text == "echolot init", other.text)
+    form = page_of(site_of(project)).one("form", id="setup-form")
+    order = [n.attrs.get("id") for n in form.walk() if n.attrs.get("id") in ("q-what", "limit", "setup-go", "setup-other")]
+    check("it stands under the button: the page's own way comes first", order == ["q-what", "limit", "setup-go", "setup-other"], order)
     page = page_of(site_of(project.app().agents().doctor()))
     other = page.one("div", id="setup-other")
     check("then the agent's own way in, the one `next` names", other.one("code", id="setup-agent").text == "echolot guide setup"
@@ -248,6 +251,10 @@ LAYOUTS = {
     "an AGENTS.md of the project's": lambda root: (root / "AGENTS.md").write_text("# Ours\n", encoding="utf-8"),
     "Cursor is used here": lambda root: (root / ".cursor").mkdir(),
     "Gemini is used here": lambda root: (root / ".gemini").mkdir(),
+    "a GEMINI.md of the project's": lambda root: (root / "GEMINI.md").write_text("# Ours\n", encoding="utf-8"),
+    "Codex is used here": lambda root: (root / ".codex").mkdir(),
+    "instructions for Copilot of the project's": lambda root: (
+        (root / ".github").mkdir(), (root / ".github" / "copilot-instructions.md").write_text("# Ours\n", encoding="utf-8")),
     "settings for Claude Code of the project's": lambda root: (
         (root / ".claude").mkdir(), (root / ".claude" / "settings.json").write_text('{"hooks": {}}\n', encoding="utf-8")),
 }
@@ -325,11 +332,13 @@ def test_a_limit_is_written_as_the_scenarios_budget(project, typed, ms):
         check("the line says what it is, for whoever opens the file", line.startswith(f"  budget_ms: {ms}  # the time limit, ")
               and "change the number to change it" in line, line)
         said = setting(page_of(site), "Time limit").text
-        check("and the page shows it afterwards with the line it stands on", f"budget_ms: {ms}" in said, said)
+        check("and the page shows it afterwards with the line to edit, since it writes no config that exists",
+              f"budget_ms: {ms}" in said and said.endswith("To change it, edit that line under scenario: in echolot.yml."), said)
     else:
         check("with none the line is there as a comment, ready to be switched on", line.startswith("  # budget_ms: 2000  # "), line)
-        check("and the page says none is set, and which line sets one",
-              "None is set" in setting(page_of(site), "Time limit").text and "budget_ms" in setting(page_of(site), "Time limit").text)
+        said = setting(page_of(site), "Time limit").text
+        check("and the page says none is set, and which line sets one", said.startswith("None is set.") and said.endswith(
+            "A line under scenario: in echolot.yml sets one, in milliseconds: budget_ms: 2000 is 2 seconds."), said)
 
 
 @pytest.mark.parametrize("typed", ["fast", "0", "0.05", "61", "100", "-1", "+2", "1e3", "2.5s", "1.2345", "1 000", "2.5.1",
@@ -378,6 +387,18 @@ def test_a_config_that_appeared_between_the_page_and_the_press(project):
           and "the page never writes over one" in page.one("p", "lead").text
           and "Nothing was written" in page.one("p", "lead").text, reply.body[:300])
     check("the file is as it was, and nothing else was written or run", files(project.root) == before and not init.ran)
+
+
+def test_the_same_press_sent_twice_is_one_setup(project):
+    """A double click where no script guards it: the second finds the file the first wrote."""
+    site, init = serving(project.app().agents().doctor())
+    check("taken", set_up(site, limit="2").status == 303)
+    before = files(project.root)
+    reply = set_up(site, limit="2")
+    check("the second is answered as the first was, and writes nothing", reply.status == 303 and files(project.root) == before)
+    reply = set_up(site, limit="3")
+    check("a press that asks for another file is refused: the one that is there stays", reply.status == 409
+          and "echolot.yml is already there" in reply.body and files(project.root) == before, reply.status)
 
 
 def test_a_config_that_appears_in_the_instant_of_the_press(project, monkeypatch):
@@ -458,6 +479,35 @@ def test_a_macrobenchmark_that_measures_a_section_of_its_own(project):
     cannot(project.agents().doctor(), "This project has a macrobenchmark that measures something of its own", "FeedBenchmark")
 
 
+def test_a_repository_that_cannot_be_read(project):
+    def unreadable(root):
+        raise OSError("permission denied")
+    site = site_of(project.agents().doctor(), ready.Sources(scan=unreadable, pick_device=lambda serial: "EXAMPLE0001"))
+    box = page_of(site).one("div", id="setup-cannot")
+    check("said, with no words of a scan that said none", "echolot could not read this folder" in box.text
+          and not box.all("p", "says"), box.text)
+    check("and a press writes nothing", set_up(site).status == 409 and not (project.root / "echolot.yml").exists())
+
+
+def test_a_draft_with_a_value_scan_could_not_fill_in(project, monkeypatch):
+    """A startup macrobenchmark whose gradle task does not read from the build files."""
+    benchmark_project(project.root, StartupBenchmark=STARTUP_CLASS)
+    monkeypatch.setattr(scan_mod, "gradle_tasks", lambda bench, variants: [])
+    site, init = serving(project.agents().doctor())
+    box = page_of(site).one("div", id="setup-cannot")
+    check("the page names the value, and writes no question mark into a config", "a value echolot could not fill in "
+          "from the repository: runner.gradle_task." in box.text, box.text)
+    check("and a press writes nothing", set_up(site).status == 409 and not (project.root / "echolot.yml").exists() and not init.ran)
+
+
+def test_a_config_with_no_scenario_that_scan_cannot_draft_one_for(project):
+    page = page_of(site_of(project.app(gradle=UNREAD).config(HEAD).agents().doctor()))
+    box = page.one("div", id="setup-cannot")
+    check("why, and that the file stays as it is", "could not read its name from the build files" in box.text
+          and "The file that is there stays as it is. An agent can write the scenario into it." in box.text, box.text)
+    check("no lines to add that would hold a placeholder", not page.all("pre", id="setup-lines"))
+
+
 def test_a_draft_that_is_no_config_is_not_written(project):
     """A name in the build files that would be two lines of YAML."""
     nasty = GRADLE.replace('applicationId = "com.example.app"', 'applicationId = "com.example.app: [\n  evil"')
@@ -512,13 +562,22 @@ def test_several_apps_in_one_repository_are_said_beside_the_name(project):
 
 # --- other steps that come first -------------------------------------------------------------------
 
-@pytest.mark.parametrize("how", ["a self-check that did not pass", "agents chosen and no layer", "another config named"])
+@pytest.mark.parametrize("how", ["a self-check that did not pass", "agents chosen and no layer", "another config named",
+                                 "echolot's lines in AGENTS.md", "a rule for Codex of an earlier install"])
 def test_where_another_step_comes_first_the_page_is_as_it_was(project, monkeypatch, how):
+    """`init` writes new files only into a project echolot was never in.
+    Anywhere else it brings files up to date and says itself which, so it
+    stays the command to copy, and the page writes nothing."""
     project.app()
     if how == "a self-check that did not pass":
         project.agents().doctor(failed=("the launch window",))
     if how == "agents chosen and no layer":
         project.agents("claude")
+    if how == "echolot's lines in AGENTS.md":
+        (project.root / "AGENTS.md").write_text(hosts.BY_KEY["agents"].render() + "\n# Ours\n", encoding="utf-8")
+    if how == "a rule for Codex of an earlier install":
+        (project.root / ".codex" / "rules").mkdir(parents=True)
+        (project.root / codex.RULE_PATH).write_text("# an older rule\n", encoding="utf-8")
     site = site_of(project)
     if how == "another config named":
         site.config = "other.yml"
@@ -565,6 +624,9 @@ def test_a_config_with_no_scenario_gets_the_lines_to_add(project):
               "section", id="setup").text)
     check("there is no form of setup, and the button of the config that is there keeps its place",
           not page.all("form", id="setup-form") and page.one("button", id="check-go").text == "Check the app")
+    check("anything else is the agent's, by its own command and not the step's",
+          page.one("code", id="setup-agent").text == "echolot guide setup")
+    check("one thing to do first, not two", not page.all("aside", id="setup-first"))
     before = files(project.root)
     check("a press that reaches the server writes nothing", set_up(site).status == 409 and files(project.root) == before
           and not init.ran)
@@ -588,9 +650,11 @@ def test_what_comes_before_the_first_check(project, adb):
     site = site_of(project.ready())
     note = page_of(site).one("aside", id="setup-first").text
     check("the build that is measured has to be on the phone, and how it gets there", note == (
-        f"Before the first check, the build of {APP} you want measured has to be on the phone: echolot opens what is "
-        "installed there. Run it on the phone from Android Studio once, or install it with ./gradlew :app:installBenchmark "
-        "(or :app:installRelease, whichever is on the phone) in a terminal."), note)
+        f"Before the first check, {APP} has to be on the phone as the build you want measured: echolot opens what is "
+        "installed there, and installs nothing. Run that build from Android Studio once, or install it with "
+        "./gradlew :app:installBenchmark in a terminal."), note)
+    check("the task is the one that installs the build the page measures on",
+          "can be measured on the benchmark build" in lines(page_of(site))["The app"][1])
     check("the button is there and ready", "disabled" not in page_of(site).one("button", id="check-go").attrs)
     adb.listing = ""
     note = page_of(site).one("aside", id="setup-first").text
@@ -608,7 +672,7 @@ def test_a_macrobenchmark_installs_its_own_build(project):
 
 def test_a_config_whose_code_is_elsewhere_names_no_task(project):
     note = page_of(site_of(project.config().agents().doctor())).one("aside", id="setup-first").text
-    check("said without a task it cannot know", note.endswith("Run it on the phone from Android Studio once."), note)
+    check("said without a task it cannot know", note.endswith("Run that build from Android Studio once."), note)
 
 
 # --- a setup under way, and one that ended badly -------------------------------------------------------
