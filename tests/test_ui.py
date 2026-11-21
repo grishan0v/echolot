@@ -815,7 +815,7 @@ def test_the_self_check_never_ran_failed_and_passed(project):
 def reads_only(monkeypatch):
     """The server without the addresses that take a press: its start page
     reads only, and the step a person takes by hand is a command to copy."""
-    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith("check")])
+    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith(("check", "setup"))])
 
 
 def next_of(page) -> tuple[str, str | None]:
@@ -825,7 +825,7 @@ def next_of(page) -> tuple[str, str | None]:
         code[0].text if code else None)
 
 
-def test_a_first_visit(project, adb):
+def test_a_first_visit(project, adb, reads_only):
     adb.listing = ""
     page = start(project.app())
     text, command = next_of(page)
@@ -835,7 +835,7 @@ def test_a_first_visit(project, adb):
     check("no report, said once", "No report yet" in page.text and not page.all("nav", "steps"))
 
 
-def test_no_config_yet(project):
+def test_no_config_yet(project, reads_only):
     page = start(project.app().agents().doctor())
     text, command = next_of(page)
     check("an agent writes it", "no echolot.yml" in text and command == "echolot guide setup", (text, command))
@@ -871,7 +871,7 @@ def test_the_page_says_what_echolot_says(project, monkeypatch, build, press):
     print here, and the command to copy is in the `next` line. Where the
     button takes the step, there is no command to copy and the line is kept."""
     if not press:
-        monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith("check")])
+        monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith(("check", "setup"))])
     project.app()
     if build != "first":
         project.agents().doctor()
@@ -900,7 +900,9 @@ def test_the_page_says_what_echolot_says(project, monkeypatch, build, press):
         key, _, value = words.partition(": ")
         flat = re.sub(r"\s+", " ", source).replace("`", "")
         check(f"`{who}` says it: {words[:60]}", value in flat or words in flat, source[-600:])
-    by_hand = build in ("record", "analyze", "several")
+    # A step the page takes itself: the recording and the reading, and, where
+    # there is no config yet, setting the project up.
+    by_hand = build in ("record", "analyze", "several", "first", "setup")
     shown = [s for s in page.all("section") if s.attrs.get("aria-labelledby") == "next-h"]
     check("the step the button takes is not said twice", bool(shown) == (not press or not by_hand), build)
     check("and `next`'s own line is under All settings all the same", "next: " in setting(page, "The next step").text)

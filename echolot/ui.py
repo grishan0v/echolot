@@ -13,7 +13,10 @@ a form a page of this server sends: one starts a check (`echolot/check.py`:
 own so that pages go on being drawn), the other asks the check that is
 running to stop. What is running and how far is read from the files that
 process and `collect` write, so a reloaded page, a second tab and a server
-started again all show the same.
+started again all show the same. A third sets a project up
+(`echolot/project_setup.py`): it creates `echolot.yml` from the draft `scan`
+proposes, never over a file that is there, and where echolot was never set up
+it runs `echolot init` the same way, as a process of its own.
 
 What it will and will not answer:
 
@@ -32,7 +35,8 @@ What it will and will not answer:
   and its body is a form of at most `BODY_CAP` bytes. Nothing in a form is
   used as a path or as a command: a scenario is one the config names, a
   number of launches is a small whole number, an investigation is one the
-  project has.
+  project has, what to set up is one of the names the page offered, and a
+  time limit is a number of seconds in a stated range.
 - It serves the pages it draws and nothing else. There is one table of
   routes, no route reads a file by a path taken from the address, and no page
   fetches anything from elsewhere: a served page may send a form to this
@@ -56,10 +60,12 @@ from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, quote, unquote
 
 from . import check, job, ready, recorder, state
+from . import project_setup
 from . import hunt as hunt_mod
 from . import main as cli
 from .config import ConfigError
 from .pages import answer_page, kit, report_page, start_page
+from .pages import setup_page
 
 HOST = "127.0.0.1"
 READS = ("GET", "HEAD")
@@ -181,7 +187,13 @@ def _start(visit: Visit, params: dict[str, str]) -> Page:
     site = visit.site
     view = ready.read(site.project, site.config, site.src, site.tp_binary, st=visit.st)
     found = check.view(site.project, visit.st, view["ready"]) if site.url("check") else None
-    return Page(start_page.render(view, site.url, visit.steps("start"), check=found))
+    # Setting the project up, where the server takes that press: the question
+    # in place of a button that has nothing to press yet.
+    setup = setup_page.parts(project_setup.view(site.project, site.config, visit.st, view["facts"], view["next"],
+                                                view["ready"]), site.url) if site.url("setup") else None
+    if setup and setup.get("instead"):
+        found = None
+    return Page(start_page.render(view, site.url, visit.steps("start"), check=found, setup=setup))
 
 
 def _nothing(visit: Visit, title: str, text: str, status: int = 404) -> Page:
@@ -288,6 +300,9 @@ def _press(visit: Visit, params: dict[str, str]) -> Page:
     answers with a page that says why; started, it sends the browser to the
     start page, where the run is."""
     site = visit.site
+    if project_setup.busy(site.project):
+        return _nothing(visit, "Setting up is still under way", "echolot is checking this computer, which takes "
+                        "about a minute. The start page shows how far it is, and the button once it is done.", 409)
     try:
         press = check.asked(visit.form)
         lines = ready.lines(site.project, site.config, site.src, visit.st)
@@ -309,6 +324,28 @@ def _progress(visit: Visit, params: dict[str, str]) -> Page:
     """How far the run is: the rows of its list, for a page that shows a run
     and redraws them in place. Read from the run's two files alone."""
     return Page(start_page.progress(check.progress(visit.site.project)))
+
+
+def _set_up(visit: Visit, params: dict[str, str]) -> Page:
+    """Set the project up (`echolot/project_setup.py`): write the config
+    `scan` drafts and, where echolot was never here, run `echolot init`. The
+    press is held against the project as it is now: the repository is read
+    anew. Refused, it answers with a page that says why and that nothing was
+    written; taken, it sends the browser to the start page."""
+    site = visit.site
+    try:
+        press = project_setup.asked(visit.form)
+        view = ready.read(site.project, site.config, site.src, site.tp_binary, st=visit.st)
+        project_setup.start(site.project, site.config, visit.st, view["facts"], view["next"], press, spawn=site.spawn)
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    return Page("", 303, site.url("start"))
+
+
+def _setup_progress(visit: Visit, params: dict[str, str]) -> Page:
+    """How far a setup is, for the page that shows one and redraws its rows
+    in place. Read from the job's file alone."""
+    return Page(setup_page.progress(project_setup.progress(visit.site.project)))
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +377,8 @@ ROUTES: list[Route] = [
     Route("check", "check", _press, method="POST"),
     Route("check-stop", "check/stop", _stop, method="POST"),
     Route("check-state", "check/state", _progress),
+    Route("setup", "setup", _set_up, method="POST"),
+    Route("setup-state", "setup/state", _setup_progress),
 ]
 
 # A part of an address that names something. Numbers are digits; a name is

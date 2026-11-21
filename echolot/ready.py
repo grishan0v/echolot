@@ -697,4 +697,6 @@ def read(project: Path, config: str, src: Sources, tp_binary: str | None = None,
         "settings": settings(st, head, says, cfg, facts, said),
         "behind": behind(ready, step, says, project, bool(past)),
         "latest": latest(st), "investigations": past,
+        # What `scan` read, for whoever draws from it beside this reading.
+        "facts": facts,
     }

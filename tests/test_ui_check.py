@@ -351,6 +351,13 @@ def test_a_number_of_launches_that_is_none_starts_nothing(project, launches):
 
 # --- the reasons it is disabled -----------------------------------------------------------------
 
+@pytest.fixture
+def no_setup(monkeypatch):
+    """The server without the addresses that set a project up: where there is
+    no config its page keeps the button, disabled, beside the reason."""
+    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith("setup")])
+
+
 def blocked(project: Project, site: ui.Site | None = None, echolot: Echolot | None = None) -> str:
     """The reason beside a disabled button; and a press all the same starts nothing."""
     if site is None:
@@ -402,7 +409,7 @@ def test_an_app_with_debug_builds_only(project):
     check("said", "has only debuggable builds" in blocked(project.app(gradle=DEBUG_ONLY).config().agents().doctor()))
 
 
-def test_no_config(project):
+def test_no_config(project, no_setup):
     why = blocked(project.app().agents().doctor())
     check("the app is not known yet, and what comes first", why == (
         "Not yet: echolot does not know this app. It needs an echolot.yml, and the step under What to do next "
@@ -417,7 +424,7 @@ def test_a_config_that_does_not_load(project):
     check("said", why == "Not yet: echolot.yml does not load. What to do next names the line to fix.", why)
 
 
-def test_a_project_not_set_up(project):
+def test_a_project_not_set_up(project, no_setup):
     why = blocked(project.app())
     check("said", why.startswith("Not yet: echolot is not set up in this project."), why)
     check("and the step is init", page_of(site_of(project)).one("code", id="next-cmd").text == "echolot init")
