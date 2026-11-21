@@ -26,6 +26,11 @@ arranged from the same pieces:
     answer_page.py  an investigation and the agent's answer:
                     `echolot hunt --show [n] --html`, `echolot hunt --done --html`
 
+    setup.css/.js   what is setup's alone: the files a press writes, the words
+                    of `echolot scan` under a sentence of the page's
+    setup_page.py   the part of the start page that sets a project up: the
+                    question, the time limit, what a press writes, the button
+
 A new page takes the `.css` and `.js` it needs by name in `kit.document`,
 adds a stylesheet for its own columns, and builds its body from `kit`.
 """
