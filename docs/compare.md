@@ -448,9 +448,60 @@ no clear change. All of this is one app on one phone; the numbers are
 reasoning beside them.
 
 With the flag the reading is kept in `comparison.json` as well, under `plain`.
-`comparison.md` stays the table. Without the flag `compare` computes, prints
-and writes exactly what it did before the reading existed. Nothing fails over
-a movement: the exit code does not depend on one.
+`comparison.md` stays the table. Without `--plain` and `--html` `compare`
+computes, prints and writes exactly what it did before the reading existed.
+Nothing fails over a movement: the exit code does not depend on one.
+
+## The comparison as a page
+
+`echolot compare --html` writes one more file beside the comparison,
+`comparison.html`: the plain reading as a page for a person. One file that
+opens from disk, nothing fetched, and the same two reports give the same
+bytes.
+
+```bash
+echolot compare old.json new.json --html      # comparison.html beside comparison.json
+```
+
+Top to bottom:
+
+- the verdict, its notes, and one sentence on what a colour means here;
+- the whole window before and after as a chart, with the time limit as a line;
+- a filter by movement, which is the page's counts as well: all, got better,
+  did not change, got worse (when anything did), fine both times, not checked;
+- the table: one row per check, with what changed in a sentence, the movement,
+  and what the check found added up before and after. "nothing" is a side that
+  found none, "at times" one whose findings are in a minority of the launches,
+  and a dash a side with no figure to give;
+- **Details** on a row opens a panel: what each report said of that check, its
+  level in that report in words, and its rows as bars, before above after, with
+  a dot per launch;
+- three folds: how a movement is decided, every row of the comparison on one
+  axis, and `comparison.md` itself as HTML, every line of it.
+
+A colour on this page says which way something moved: green got better, grey
+did not change, red got worse. On [the report's page](analysing.md#the-report-as-a-page)
+the same colours say how much attention a check needs. The page says so in
+words under the verdict, and a movement is always an icon with a shape of its
+own and a word, never a colour alone.
+
+Everything the page says about a check is the reading's; it adds labels and
+judges nothing. `--html` keeps the reading in `comparison.json` under `plain`,
+as `--plain` does, so the page and the file beside it say the same. A
+`comparison.html` that already stands there is written again from the next
+comparison, flag or no flag, with the reading beside it: left as it was, the
+page of the comparison before would read as this one's. Where nothing is
+written to disk (no config and no `-o`), `--html` has nowhere to write and
+says so.
+
+`echolot ui` shows the same page as its step **After the fix** (see
+[The page in the browser](ui.md#the-other-pages)).
+
+What the page does not draw: a timeline of the window, and a flamegraph of the
+difference. A comparison holds rows, each a name and a time before and after;
+it does not hold when a row began, nor what was inside it. A timeline needs
+each row's start within the window, per launch, in the report; a flamegraph
+needs the slices under a row, or the sampled stacks, kept for both sides.
 
 ## The comparison JSON
 
@@ -516,8 +567,9 @@ a side would. `null` in both `shift` and `holds` means there was nothing to
 test: the row is on one side only — every `appeared` and `vanished` row — or
 there were too few runs. `confidence` is the level the ranges are drawn at.
 
-With `--plain` the file holds one more key, `plain`, after all the others:
-`verdict` (`movement`: `better`, `worse`, `no_change` or `not_compared`; a
+With `--plain` or `--html` the file holds one more key, `plain`, after all the
+others: `scenario` and `process`, what the two reports are of; `verdict`
+(`movement`: `better`, `worse`, `no_change` or `not_compared`; a
 `headline` and the sentence, `text`), `window` (each side's median, least and
 most launch, and the runs), `notes` (`id`: `budget`, `few_runs`, `unlike`;
 `attention`, a `title` and a `text`) and `checks`, one item per detector:
