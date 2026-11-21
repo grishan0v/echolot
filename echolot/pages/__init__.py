@@ -31,6 +31,11 @@ arranged from the same pieces:
     setup_page.py   the part of the start page that sets a project up: the
                     question, the time limit, what a press writes, the button
 
+    compare.css     what is the comparison's alone: the notes under its verdict,
+                    the two lanes of a before-and-after chart, its columns
+    compare_page.py two reports compared: `echolot compare --html`, and the
+                    page "After the fix" of `echolot ui`
+
 A new page takes the `.css` and `.js` it needs by name in `kit.document`,
 adds a stylesheet for its own columns, and builds its body from `kit`.
 """

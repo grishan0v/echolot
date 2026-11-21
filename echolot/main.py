@@ -60,6 +60,7 @@ from . import stacks as stacks_mod
 from . import verdict as verdict_mod
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
 from .pages import answer_page
+from .pages import compare_page
 from .pages import report_page
 from .reflect.cli import cmd_reflect
 from .sandbox import SandboxError
@@ -1179,17 +1180,6 @@ def cmd_compare(args) -> int:
                   warnings=[w["id"] for w in cmp["warnings"]])
 
     text = compare_mod.to_markdown(cmp)
-    # The same comparison for a person: asked for, it is worked out from the
-    # two reports, printed in place of the table and kept in comparison.json
-    # under `plain`. Without the flag nothing here is computed or written.
-    reading = None
-    if args.plain:
-        try:
-            reading = moves_mod.annotate(cmp, before, after)["plain"]
-        except Exception as e:  # a sentence is never worth a comparison that failed
-            print(f"[!] the plain reading could not be worked out, so the table is printed "
-                  f"instead: {type(e).__name__}: {e}", file=sys.stderr)
-    print(moves_mod.render(reading) if reading is not None else text)
 
     # Next to the report it is about, by the same rule: a relative path is
     # taken from the config's directory, so running this from wherever the
@@ -1197,15 +1187,41 @@ def cmd_compare(args) -> int:
     # config, an -o given is taken from the working directory: it used to be
     # accepted and ignored, and a CI script comparing two downloaded reports
     # got nothing on disk.
+    out_dir = None
     if args.cfg is not None or args.out is not None:
         out_dir = (_out_dir(args.out or args.cfg.report_dir, args.cfg) if args.cfg is not None
                    else Path(args.out))
+    # The same comparison for a person: `--plain` prints it in place of the
+    # table, `--html` writes it as a page beside the comparison, and either
+    # keeps the reading in comparison.json under `plain`. A page that already
+    # stands there is written again from this comparison, flag or no flag:
+    # left as it was, the page of the comparison before would read as this
+    # one's. Without the flags, and with no page there, nothing of this is
+    # computed or written.
+    page = out_dir / "comparison.html" if out_dir is not None else None
+    again = page is not None and not args.html and page.is_file()
+    reading = None
+    if args.plain or args.html or again:
+        try:
+            reading = moves_mod.annotate(cmp, before, after)["plain"]
+        except Exception as e:  # a sentence is never worth a comparison that failed
+            cmp.pop("plain", None)
+            print(f"[!] the plain reading could not be worked out, so the table is all there is: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+    print(moves_mod.render(reading) if args.plain and reading is not None else text)
+
+    if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "comparison.json").write_text(
             report_mod.to_json(cmp), encoding="utf-8")
         (out_dir / "comparison.md").write_text(text, encoding="utf-8")
         print(f"\n\u2192 {out_dir/'comparison.md'}\n\u2192 {out_dir/'comparison.json'}",
               file=sys.stderr)
+        if reading is not None and (args.html or again):
+            page.write_text(compare_page.render(cmp), encoding="utf-8")
+            print(f"\u2192 {page}  (" + ("the same comparison as a page: open it in a browser" if args.html else
+                                         "it stood there from an earlier comparison: written again from this one")
+                  + ")", file=sys.stderr)
     elif unloaded is not None and Path(args.config).exists():
         print(f"\n[!] {args.config} does not load, so nothing was written to "
               f"disk — the comparison above is the whole output: {unloaded}",
@@ -1213,6 +1229,9 @@ def cmd_compare(args) -> int:
     else:
         print("\n[i] no config found, so nothing was written to disk — "
               "the comparison above is the whole output", file=sys.stderr)
+    if args.html and out_dir is None:
+        print("[i] --html writes the page beside comparison.json: name a folder with -o",
+              file=sys.stderr)
     return 0
 
 
@@ -4828,7 +4847,7 @@ def cmd_ui(args) -> int:
     A face over the same commands and files, for someone who does not read
     terminals: it draws what `status`, `doctor`, `scan` and `hunt --list`
     say, and opens the reports as pages. Reading a page changes nothing. Its
-    one button runs `collect`, `analyze --html` and `compare` as the commands
+    one button runs `collect`, `analyze --html` and `compare --html` as the commands
     they are, in a process of their own (`check.py`, `job.py`), and what those
     write is all that is written, beside this command's own line in
     .echolot/log/runs.jsonl. In a project with no config, **Set it up** comes
@@ -5278,6 +5297,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the comparison in plain words, for a person: better, worse or no "
                          "clear change, and which way each check moved. It is kept in "
                          "comparison.json too, under `plain`")
+    cp.add_argument("--html", action="store_true",
+                    help="write the comparison as a page for a person, beside "
+                         "comparison.json (comparison.html): one file that opens from disk")
     cp.set_defaults(func=cmd_compare)
 
     gd = add("guide", "agent", "[<topic>]",
