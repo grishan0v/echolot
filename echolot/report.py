@@ -1348,6 +1348,10 @@ def to_markdown(report: dict[str, Any]) -> str:
     if traces:
         out.append(f"Runs: **{len(traces)}**, numbers are medians across them")
         out.append(_traces_line(traces))
+        skipped = report.get("skipped_traces")
+        if skipped:
+            names = ", ".join(f"`{s['trace']}`" for s in skipped)
+            out.append(f"> ⚠️ Skipped {len(skipped)} trace(s) with no launch window: {names}")
     else:
         out.append(f"Trace: `{report['trace']}`")
     if report.get("scenario"):

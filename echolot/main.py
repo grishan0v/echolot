@@ -775,10 +775,34 @@ def cmd_analyze(args) -> int:
         # Repeats are merged by median: one outlier must not drag the
         # conclusion along, and the "Runs" column separates the reproducible
         # from the one-off.
-        reports = [analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
-                                 use_defaults=args.defaults, tp_source=tp_source)
-                   for t in args.traces]
+        reports = []
+        skipped_traces: list[dict[str, str]] = []
+        if len(args.traces) > 1:
+            for t in args.traces:
+                try:
+                    reports.append(
+                        analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
+                                      use_defaults=args.defaults, tp_source=tp_source)
+                    )
+                except ConfigError as e:
+                    if "no launch of " not in str(e):
+                        raise
+                    skipped_traces.append({"trace": Path(t).name, "reason": str(e)})
+                    print(f"[!] skipping {Path(t).name}: {e}", file=sys.stderr)
+            if not reports:
+                raise ConfigError(skipped_traces[0]["reason"])
+            if len(reports) < 2:
+                raise ConfigError(
+                    f"too few traces with a launch window ({len(reports)} of "
+                    f"{len(args.traces)}); need at least 2"
+                )
+        else:
+            reports = [analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
+                                     use_defaults=args.defaults, tp_source=tp_source)
+                       for t in args.traces]
         rep = report_mod.aggregate(reports)
+        if skipped_traces:
+            rep["skipped_traces"] = skipped_traces
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
