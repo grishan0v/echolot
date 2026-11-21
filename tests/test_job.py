@@ -293,6 +293,33 @@ def test_a_file_that_is_no_state_is_no_job(tmp_path, text):
     check("and nothing to stop", job.stop(tmp_path, "check") is False)
 
 
+@pytest.mark.parametrize("change", [
+    {"started": "now"}, {"started": True}, {"started": float("inf")}, {"finished": "then"}, {"pid": 0}, {"pid": -1},
+    {"pid": "4242"}, {"pid": 2 ** 40}, {"what": []}, {"steps": [5]}, {"steps": [{"id": "collect"}]},
+    {"steps": [{"id": 1, "status": "done"}]}, {"steps": [{"id": "collect", "status": "running", "started": "now"}]},
+    {"steps": [{"id": "collect", "status": "failed", "exit": "2"}]}, {"steps": [{"id": "collect", "status": "done", "log": 5}]},
+], ids=lambda change: json.dumps(change)[:40])
+def test_a_file_with_a_field_of_the_wrong_type_is_no_job(tmp_path, change):
+    """What a job never writes: text for a time, a process id that names this
+    process's own group, a step that is no step. Whoever reads a job does
+    sums with its times and asks the system about its process."""
+    write(tmp_path, **change)
+    check("no job", job.read(tmp_path, "check", alive=lambda pid: True) is None)
+    check("so nothing to stop, and none that runs for ever", job.stop(tmp_path, "check") is False)
+    commands = Commands()
+    check("and the next one starts over it", run(tmp_path, commands, steps("collect")) == 0
+          and job.read(tmp_path, "check")["status"] == job.DONE)
+
+
+def test_what_a_job_writes_reads_back(tmp_path):
+    write(tmp_path, pid=4242, what={"scenario": "coldStart"}, steps=[
+        {"id": "collect", "argv": ["x"], "shown": "echolot collect", "status": "done", "started": 100.5, "finished": 130,
+         "exit": 0, "log": ".echolot/log/check.collect.log", "pid": 77},
+        {"id": "analyze", "argv": ["y"], "shown": "", "status": "waiting"}])
+    check("a file with every field as a job leaves it is a job", job.read(tmp_path, "check", alive=lambda pid: True)["status"]
+          == job.RUNNING)
+
+
 def test_no_job_was_ever_started(tmp_path):
     check("nothing", job.read(tmp_path, "check") is None and job.stop(tmp_path, "check") is False)
     check("and nothing was written to find that out", not (tmp_path / ".echolot").exists())

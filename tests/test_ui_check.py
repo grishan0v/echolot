@@ -1268,3 +1268,67 @@ def test_the_answers_page_without_a_button(project, demo_report, monkeypatch):
     monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith("check")])
     check("nor does any, on a server that takes no press", not read(get(site, "answer").body).one("div", id="check-again-action").kids)
     check("an address that needs a name is none without it", site.url("report-of") is None)
+
+
+# --- a file with a field of the wrong type -----------------------------------------------------
+
+def test_a_number_of_launches_in_the_config_that_is_no_number(project, demo_report):
+    """`runner.iterations: five` loads. The start page's button names its own
+    number; the answer's button runs `collect` with the config's, and `collect`
+    writes "five" into its progress file before it stops and says so."""
+    hunt, reports = fx.states(demo_report)["many"]
+    project.app().config(LAUNCH + "\nrunner:\n  iterations: five\n").agents().doctor().traces().report()
+    project.investigation(hunt, reports)
+    site = site_of(project)
+    check("the start page counts with its own three", hint(page_of(site)).startswith("3 launches, about a minute"))
+    reply = get(site, "answer")
+    place = read(reply.body).one("div", id="check-again-action")
+    check("the answer's page is drawn, and its button's line claims no number", reply.status == 200 and place.one("p").text
+          == "As many launches as runner.iterations in the config says. Nothing in your code changes.", reply.body[:200])
+    run = a_run(project, "collect", launches=None, end="failed")
+    log = project.root / ".echolot" / "log"
+    (log / "collect.json").write_text(json.dumps({
+        "scenario": "coldStart", "mode": "launch", "started": run["steps"][0]["started"] + 1, "pid": 7000,
+        "iterations": "five", "done": 0, "finished": time.time() - 2, "exit": 2,
+        "error": "-n / runner.iterations: 'five' is not a number of repeats."}), encoding="utf-8")
+    (log / "check.collect.log").write_text(
+        "collection error: -n / runner.iterations: 'five' is not a number of repeats. One or more, in digits.\n", encoding="utf-8")
+    page = page_of(site)
+    check("the run that collect stopped is shown: one row for the recording, no launches made up", rows(page) == [
+        ("failed", "The recording", "did not finish"), ("wait", "Reading the recordings", "")], rows(page))
+    check("with what collect said of the number", "'five' is not a number of repeats" in page.one("pre", "printed").raw())
+    check("and the page that asks how far a run is answers too", get(site, "check/state").status == 200)
+
+
+@pytest.mark.parametrize("change", [{"started": "yesterday"}, {"done": "one"}, {"pid": 0}, {"iterations": "five"}, None],
+                         ids=["a time that is text", "a count that is text", "a pid that is none", "launches that are text",
+                              "no object"])
+def test_a_progress_file_that_is_none_ticks_nothing_off(project, change):
+    a_run(project.ready(), "collect", done=1)
+    path = project.root / ".echolot" / "log" / "collect.json"
+    good = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**good, **change}) if change is not None else "[1, 2]", encoding="utf-8")
+    site = site_of(project)
+    page = page_of(site)
+    told = change == {"iterations": "five"}
+    check("the run is drawn all the same, three launches as the press asked", [r[1] for r in rows(page)][:3] == [
+        "Launch 1 of 3", "Launch 2 of 3", "Launch 3 of 3"], rows(page))
+    check("a file that says nothing of a collect ticks nothing off", rows(page)[0][0] == ("done" if told else "now"), rows(page))
+    check("and the page that asks how far a run is answers", get(site, "check/state").status == 200)
+
+
+@pytest.mark.parametrize("change", [{"steps": [5]}, {"started": "now"}, {"pid": 0}, {"what": []},
+                                    {"finished": 1.0, "end": "done", "what": {"report": 5}}],
+                         ids=["a step that is none", "a time that is text", "a pid that is none", "no object in what",
+                              "a report that is a number"])
+def test_a_run_file_that_is_none_is_no_run(project, change):
+    run = a_run(project.ready(), "collect", done=1)
+    if "finished" in change:
+        change = {**change, "finished": time.time()}        # it ended a moment ago: it is still news
+    (project.root / ".echolot" / "log" / "check.json").write_text(json.dumps({**run, **change}), encoding="utf-8")
+    (project.root / ".echolot" / "log" / "collect.json").unlink()
+    site, echolot = serving(project)
+    page = page_of(site)
+    check("the page is drawn, with its button", button(page).text == "Check the app", get(site).status)
+    check("nothing reads as a run that goes on for ever", not [b for b in page.all("button") if b.text == "Stop"])
+    check("and a press starts a check over it", press(site, fields={"what": "record:coldStart"}).status == 303 and echolot.ran)

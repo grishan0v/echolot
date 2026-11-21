@@ -97,6 +97,13 @@ def _counted(n: int, one: str, many: str) -> str:
     return f"{n} {one if n == 1 else many}"
 
 
+def _whole(value: Any) -> int | None:
+    """A number of launches: a whole number, one or more. None for anything
+    else. `runner.iterations: five` is a config that loads, and `collect`
+    writes "five" into its progress file before it stops and says so."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else None
+
+
 def _noun(mode: str) -> tuple[str, str]:
     """What one repeat is called: the app is launched by echolot itself, or a
     command of the project runs the scenario."""
@@ -120,10 +127,14 @@ def hint(do: str, mode: str, n: int | None, section: dict[str, Any], *, unread: 
     if do == READ:
         return (f"{_counted(unread, 'recording is', 'recordings are')} already here. Reading "
                 f"{'it' if unread == 1 else 'them'} takes {about(unread * READ_S)}{then}. The phone is not needed.")
-    if mode == "gradle" or not n:
+    if mode == "gradle":
         return ("This runs the project's macrobenchmark, which decides how many launches it takes: often a few "
                 f"minutes{then}. Nothing in your code changes.")
     one, many = _noun(mode)
+    if not n:
+        # No number to count with: the config's own does not read as one,
+        # and `collect` says so the moment it is started.
+        return f"As many {many} as `runner.iterations` in the config says{then}. Nothing in your code changes."
     text = f"{_counted(n, one, many)}, {about(_record_s(section, n) + n * READ_S)}{then}. Nothing in your code changes."
     if section.get("cooldown"):
         text += f" The phone may wait to cool down between {many}."
@@ -268,7 +279,7 @@ def offer(project: Path, st: dict[str, Any], lines: list[dict[str, Any]],
         out["choices"].append({
             "name": name, "chosen": focus, "do": do, "mode": mode, "unread": unread, "counted": counted,
             "runs": [step["shown"] for step in runs],
-            "section": section, "iterations": None if mode == "gradle" else section.get("iterations", 5),
+            "section": section, "iterations": None if mode == "gradle" else _whole(section.get("iterations", 5)),
             "label": LABEL[READ] if do == READ else LABEL["again" if before else "first"],
             "text": f"{_measures(cfg)} {_stands(unread, report)}",
             "hints": hints,
@@ -443,12 +454,12 @@ def _own(run: dict[str, Any], collect: dict[str, Any] | None) -> dict[str, Any]:
 
 def _recorded(run: dict[str, Any], collect: dict[str, Any] | None) -> tuple[int, int | None]:
     """How many launches of this run are recorded, and out of how many (None
-    where a macrobenchmark decides)."""
+    where a macrobenchmark decides, and where the number is no number)."""
     step = _step(run, "collect")
     if not step:
         return 0, None
     own = _own(run, collect)
-    total = own.get("iterations") or (run.get("what") or {}).get("launches")
+    total = _whole(own.get("iterations")) or _whole((run.get("what") or {}).get("launches"))
     if (run.get("what") or {}).get("mode") == "gradle":
         total = None
     done = int(own.get("done") or 0)
@@ -481,7 +492,8 @@ def rows(run: dict[str, Any], collect: dict[str, Any] | None) -> list[dict[str, 
         if total is None:
             got = _own(run, collect).get("traces")
             note = {"now": "running…", "done": f"{_counted(got, 'recording', 'recordings')} gathered" if got else "done"}
-            out.append({"state": how, "name": "The macrobenchmark", "note": note.get(how) or _ENDED.get(how, "")})
+            name = "The macrobenchmark" if what.get("mode") == "gradle" else "The recording"
+            out.append({"state": how, "name": name, "note": note.get(how) or _ENDED.get(how, "")})
         else:
             one = _noun(str(what.get("mode") or "launch"))[0].capitalize()
             cooling = _own(run, collect).get("cooling")
@@ -550,6 +562,12 @@ def _tally(report_path: Path) -> list[tuple[str, int, str]] | None:
             for kind, one, many in words if found.count(kind)]
 
 
+def _report_of(run: dict[str, Any]) -> Path | None:
+    """The report a run was to write, where its file names one."""
+    named = (run.get("what") or {}).get("report")
+    return Path(named) if isinstance(named, str) and named else None
+
+
 def _newer(run: dict[str, Any], st: dict[str, Any], now: float) -> bool:
     """Whether what this run says is history: something happened in the
     project after it (a recording started elsewhere, a report written since),
@@ -565,8 +583,8 @@ def _newer(run: dict[str, Any], st: dict[str, Any], now: float) -> bool:
         mark = (going or {}).get("started") or run.get("started", 0)
     if now - mark > NEWS_S:
         return True
-    report = (run.get("what") or {}).get("report")
-    return bool(report) and _newest([Path(report)]) > mark + 1
+    report = _report_of(run)
+    return report is not None and _newest([report]) > mark + 1
 
 
 def reading(project: Path, st: dict[str, Any], run: dict[str, Any] | None,
@@ -603,7 +621,7 @@ def reading(project: Path, st: dict[str, Any], run: dict[str, Any] | None,
     done, _ = _recorded(run, collect)
     ended = next((s for s in run.get("steps") or [] if s.get("status") in (job.RUNNING, job.FAILED, job.STOPPED)), None)
     where = (ended or {}).get("id")
-    report_path = Path(what["report"]) if what.get("report") else None
+    report_path = _report_of(run)
     compared = _step(run, "compare")
     read_step = _step(run, "analyze")
     if read_step and read_step.get("status") == job.DONE and report_path is not None:
