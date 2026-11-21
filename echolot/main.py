@@ -51,6 +51,7 @@ from . import hunt as hunt_mod
 from . import codex, layer, plugin, recorder, sandbox, state, table, when
 from . import launch as launch_mod
 from . import mapping as mapping_mod
+from . import moves as moves_mod
 from . import needs as needs_mod
 from . import place as place_mod
 from . import plain as plain_mod
@@ -1178,7 +1179,17 @@ def cmd_compare(args) -> int:
                   warnings=[w["id"] for w in cmp["warnings"]])
 
     text = compare_mod.to_markdown(cmp)
-    print(text)
+    # The same comparison for a person: asked for, it is worked out from the
+    # two reports, printed in place of the table and kept in comparison.json
+    # under `plain`. Without the flag nothing here is computed or written.
+    reading = None
+    if args.plain:
+        try:
+            reading = moves_mod.annotate(cmp, before, after)["plain"]
+        except Exception as e:  # a sentence is never worth a comparison that failed
+            print(f"[!] the plain reading could not be worked out, so the table is printed "
+                  f"instead: {type(e).__name__}: {e}", file=sys.stderr)
+    print(moves_mod.render(reading) if reading is not None else text)
 
     # Next to the report it is about, by the same rule: a relative path is
     # taken from the config's directory, so running this from wherever the
@@ -5263,6 +5274,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="or at or below this share of the earlier value; "
                          "the larger floor applies "
                          f"(default: {compare_mod.FLOOR_RATIO * 100:g})")
+    cp.add_argument("--plain", action="store_true",
+                    help="the comparison in plain words, for a person: better, worse or no "
+                         "clear change, and which way each check moved. It is kept in "
+                         "comparison.json too, under `plain`")
     cp.set_defaults(func=cmd_compare)
 
     gd = add("guide", "agent", "[<topic>]",
