@@ -64,7 +64,7 @@ from . import project_setup
 from . import hunt as hunt_mod
 from . import main as cli
 from .config import ConfigError
-from .pages import answer_page, kit, report_page, start_page
+from .pages import answer_page, compare_page, kit, report_page, start_page
 from .pages import setup_page
 
 HOST = "127.0.0.1"
@@ -270,6 +270,39 @@ def _answer(visit: Visit, params: dict[str, str]) -> Page:
                                    steps=visit.steps("answer" if mine else None), policy=kit.SERVED))
 
 
+def _comparison(visit: Visit, rep: dict | None = None) -> dict[str, Any] | None:
+    """The comparison beside a scenario's last report (the one this page is
+    about, unless another's is handed in), when it is of that report and
+    carries its plain reading: what `compare --html` wrote, as a check that
+    had a report before it does."""
+    rep = rep or visit.st.get("report")
+    return check.comparison(Path(rep["path"]).parent) if rep and not rep.get("error") else None
+
+
+def _has_after(visit: Visit) -> bool:
+    return _comparison(visit) is not None
+
+
+def _after(visit: Visit, params: dict[str, str]) -> Page:
+    """What changed between a scenario's last report and the one before it:
+    the page `compare --html` writes, drawn from comparison.json now and not
+    read from a `comparison.html` on disk. Of the scenario this page is
+    about, or of the one named."""
+    rep, mine = visit.st.get("report"), True
+    if "scenario" in params:
+        name = unquote(params["scenario"])
+        found = next((sc for sc in visit.st.get("scenarios") or [] if sc["name"] == name), None)
+        if found is None:
+            return _nothing(visit, "No such scenario", "The config names no scenario by that name.")
+        rep, mine = found["report"], bool(found.get("focus"))
+    found = _comparison(visit, rep) if rep else None
+    if found is None:
+        return _nothing(visit, "No comparison yet", "It appears here once the app has been checked a second time: "
+                        "the new report is then compared with the one before it. A comparison made in a terminal "
+                        "shows here when it is of the last report and was written with `echolot compare --html`.")
+    return Page(compare_page.render(found, steps=visit.steps("after" if mine else None), policy=kit.SERVED))
+
+
 def _again_button(visit: Visit, hunt: dict[str, Any]) -> str:
     """The button in the answer's own place for it: the line that page gives
     to copy, started from the page. Nothing where the server takes no press,
@@ -374,6 +407,8 @@ ROUTES: list[Route] = [
     Route("hunt-report", "hunt/{n}/report/{k}", _hunt_report),
     Route("answer", "answer", _answer, step="Agent's answer", there=_has_hunt),
     Route("answer-of", "hunt/{n}/answer", _answer),
+    Route("after", "after", _after, step="After the fix", there=_has_after),
+    Route("after-of", "after/{scenario}", _after),
     Route("check", "check", _press, method="POST"),
     Route("check-stop", "check/stop", _stop, method="POST"),
     Route("check-state", "check/state", _progress),

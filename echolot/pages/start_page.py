@@ -138,11 +138,15 @@ def _run(run: dict[str, Any], link: Link) -> str:
     if run["counts"]:
         parts.append(_counts(run["counts"]))
     if run["compare"]:
-        after = link("after")
+        after = link("after-of", scenario=run["compared_of"]) if run.get("compared_of") else link("after")
         more = (f' <a class="lnk" href="{e(after)}">See what changed</a>' if after else
                 " The whole comparison is in <code>comparison.md</code>, beside the report.")
+        # The comparison's own plain reading, where it carries one: a sentence
+        # for a person. Without one, the two lines `compare` printed.
+        said = (kit.prose(run["compare"]) if run.get("compared") == "reading" else
+                f'<code>echolot compare</code> says: {e(run["compare"])}.')
         parts.append(f'<p class="small sub measure" id="run-compare">It was compared with the report before it. '
-                     f'<code>echolot compare</code> says: {e(run["compare"])}.{more}</p>')
+                     f'{said}{more}</p>')
     parts.append(_said(run["said"]))
     if run["todo"]:
         parts.append(f'<p class="small sub measure">{kit.prose(run["todo"])}</p>')

@@ -5,7 +5,7 @@ A press runs what a person would run by hand, as the commands they are:
 
     echolot collect -c echolot.yml -n 3
     echolot analyze .echolot/traces/<scenario>_iter*.perfetto-trace -c echolot.yml --html
-    echolot compare .echolot/out/before.json        (once a report was there before)
+    echolot compare .echolot/out/before.json --html (once a report was there before)
 
 so the report is the one the terminal gives. They run as a job
 (`echolot/job.py`), a process beside the server, and nothing about a run is
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import contextlib
 import glob as glob_mod
+import json
 import re
 import shlex
 import shutil
@@ -45,7 +46,7 @@ from typing import Any, Callable
 from . import hunt as hunt_mod
 from . import job, ready, state, stats, when
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
-from .pages import report_page
+from .pages import compare_page, report_page
 
 JOB = "check"
 RECORD, READ = "record", "read"
@@ -360,8 +361,8 @@ def steps(project: Path, config: str, choice: dict[str, Any], do: str, launches:
                 "shown": " ".join(["echolot", "analyze", f".echolot/traces/{pattern}",
                                    shlex.join([*shown_c, *named, "--html"])])})
     if before is not None:
-        out.append({"id": "compare", "argv": [*echolot, "compare", str(before), "-c", config, *named],
-                    "shown": shlex.join(["echolot", "compare", _shown(project, before), *shown_c, *named])})
+        out.append({"id": "compare", "argv": [*echolot, "compare", str(before), "-c", config, *named, "--html"],
+                    "shown": shlex.join(["echolot", "compare", _shown(project, before), *shown_c, *named, "--html"])})
     return out
 
 
@@ -549,6 +550,44 @@ def compare_says(report_dir: Path, since: float) -> str | None:
     return "; ".join(kept) or None
 
 
+def comparison(report_dir: Path) -> dict[str, Any] | None:
+    """The comparison `compare` wrote there, when a page can be drawn from it
+    and it is of the report beside it. None for no file, for one that does
+    not read, for one written without its plain reading (`compare` with no
+    `--html` and no `--plain`), and for one older than the report: `analyze`
+    has written a new report since, and the comparison is of the one before."""
+    path = report_dir / "comparison.json"
+    try:
+        made = path.stat().st_mtime
+        found = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found):
+        return None
+    if made + 1 < _newest([report_dir / "report.json"]):
+        return None
+    return found
+
+
+def compare_reads(report_dir: Path, since: float) -> tuple[str, str] | None:
+    """What the comparison written there since says, and whose words they
+    are: `reading` for the verdict of its plain reading, `table` for the two
+    lines of `compare`'s own where the comparison carries no reading. None
+    when no comparison was written since."""
+    try:
+        fresh = (report_dir / "comparison.json").stat().st_mtime + 1 >= since
+    except OSError:
+        fresh = False
+    found = comparison(report_dir) if fresh else None
+    if found is not None:
+        verdict = found["plain"]["verdict"]
+        said = ". ".join(str(part).rstrip(".") for part in (verdict.get("headline"), verdict.get("text")) if part)
+        if said:
+            return said + ".", "reading"
+    said = compare_says(report_dir, since)
+    return (said, "table") if said else None
+
+
 def _tally(report_path: Path) -> list[tuple[str, int, str]] | None:
     """How many checks stand at each level in a report, as the report page
     counts them. None for a file that is no report."""
@@ -628,7 +667,11 @@ def reading(project: Path, st: dict[str, Any], run: dict[str, Any] | None,
         view["counts"] = _tally(report_path)
         view["report"] = view["counts"] is not None
     if compared and compared.get("status") == job.DONE and report_path is not None:
-        view["compare"] = compare_says(report_path.parent, compared.get("started") or 0)
+        said = compare_reads(report_path.parent, compared.get("started") or 0)
+        view["compare"], view["compared"] = said if said else (None, None)
+        # Whose comparison it is, where the config names several scenarios:
+        # a page links to that one's, as it does for the report.
+        view["compared_of"] = what.get("scenario") if len(st.get("scenarios") or []) > 1 else None
 
     if status == job.DONE:
         view["title"] = "Done. The short version:" if view["report"] else "Done."
