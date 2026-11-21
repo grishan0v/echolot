@@ -491,7 +491,8 @@ The verdict sets the launch against `scenario.budget_ms`: within it is fine, up
 to a quarter over is worth a look, more is needs attention. Nothing fails
 either way, since there is no gate. With no budget the verdict says how long the
 launch takes and that no limit is set, and its level is "not checked": green
-always means that something was looked at and found fine.
+always means that something was looked at and found fine. [`echolot ui`](ui.md#setting-a-project-up)
+takes the limit in a field when it writes a project's first config.
 
 ## The report as a page
 

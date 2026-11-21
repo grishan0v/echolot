@@ -22,6 +22,10 @@ Installs into the project the knowledge of how to use the tool:
 └── echolot-layer.json        what init installed, file by file — for doctor
 ```
 
+[`echolot ui`](ui.md#setting-a-project-up) runs the same command when its
+**Set it up** is pressed in a project echolot has never been set up in, and
+lists these files on the page before it does.
+
 `/echolot` is the one door. It runs `echolot` (the status command), shows
 it, and acts on the `next` line — `echolot status --next` gives it as one
 word: `upgrade`, `init`, `doctor`, `setup`, `fix-config`, `resume-or-new`,
