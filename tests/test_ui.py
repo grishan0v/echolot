@@ -419,7 +419,7 @@ def test_a_request_that_changes_something_is_one_entry_and_is_guarded(project, m
         check("and runs for the server's own page", status == 200 and done == [{}], (status, done))
         status, got, _ = ask(server, f"/{site.token}/record")
         check("a read of it is no request for it", status == 405 and got.get("Allow") == "POST" and len(done) == 1)
-        check("and no page links to it", site.url("record") is None)
+        check("and a form of a page is sent to it by that name", site.url("record") == f"/{site.token}/record")
 
 
 SECRET = "what-a-file-of-the-project-holds"
@@ -444,7 +444,12 @@ def test_no_file_is_served_by_its_path(project, path):
               and "No such" in body and SECRET not in body and "package:" not in body, body[:300])
 
 
-def test_the_pages_fetch_nothing_and_the_browser_is_told_so(project):
+# What the start page's script does beyond the page: it asks this server how
+# far a run is, and loads this same page again when the run ended.
+ASKS_ITS_SERVER = {"script: fetch(", "script: location.replace"}
+
+
+def test_the_pages_reach_this_server_and_nothing_else_and_the_browser_is_told_so(project):
     project.ready().traces().report().hunt(1, "why is it slow", reports=2)
     with running(project) as server:
         site = server.site
@@ -452,18 +457,24 @@ def test_the_pages_fetch_nothing_and_the_browser_is_told_so(project):
                            ("the last investigation", "answer"), ("an investigation", "hunt/1/answer"),
                            ("no page", "nowhere")):
             _, headers, body = ask(server, f"/{site.token}/{path}")
-            own = f"/{site.token}/"
-            strangers = [found for found in outside(body) if not re.fullmatch(rf"<a href='{re.escape(own)}[^']*'>", found)]
-            check(f"{name}: nothing loads and nothing reaches out", not strangers, strangers)
+            own = re.escape(f"/{site.token}/")
+            # A link and a form of the page lead to this server, by an address
+            # that begins with its token; a form is no more than that.
+            strangers = [found for found in outside(body)
+                         if not re.fullmatch(rf"<(a href|form action)='{own}[^']*'>", found) and found != "<form>"]
+            asks = ASKS_ITS_SERVER if name in ("start", "no page") else set()
+            check(f"{name}: nothing loads and nothing reaches out", set(strangers) <= asks, strangers)
             check(f"{name}: no address of another place anywhere in it", not SCHEME.search(body), SCHEME.findall(body)[:5])
             policy = headers["Content-Security-Policy"]
             check(f"{name}: the policy is sent, the page's own and no frame",
                   "default-src 'none'" in policy and "frame-ancestors 'none'" in policy and "http" not in policy, policy)
+            check(f"{name}: a form and a question go to this server alone",
+                  "form-action 'self'" in policy and "connect-src 'self'" in policy and "*" not in policy, policy)
             check(f"{name}: and is in the page as well",
                   read(body).one("meta", http_equiv="Content-Security-Policy").attrs["content"] in policy)
-            check(f"{name}: nothing is kept, sniffed or passed on",
+            check(f"{name}: nothing is kept, sniffed or passed on to another place",
                   headers["Cache-Control"] == "no-store" and headers["X-Content-Type-Options"] == "nosniff"
-                  and headers["Referrer-Policy"] == "no-referrer" and headers["X-Frame-Options"] == "DENY", headers)
+                  and headers["Referrer-Policy"] == "same-origin" and headers["X-Frame-Options"] == "DENY", headers)
             check(f"{name}: the server does not say what it runs on",
                   "Python" not in headers.get("Server", "") and "BaseHTTP" not in headers.get("Server", ""), headers)
 
@@ -673,8 +684,8 @@ def test_everything_ready(project):
     check("the phone, by the model adb gives", said["The phone"] == ("green", "ready: The phone is connected: Pixel_8."), said)
     check("the app, and which build", said["The app"] == ("green", f"ready: {APP} can be measured on the benchmark build."), said)
     check("the app is in the headline", page.one("h1").text == f"Let's see how fast {APP} is")
-    again = [a for a in page.all("a", "btn") if a.text == "Check again"]
-    check("Check again reads the page anew, and is not the screen's one step now",
+    again = [a for a in page.all("a", "btn") if a.text == "Refresh"]
+    check("Refresh reads the page anew, and is not the screen's one step now",
           len(again) == 1 and again[0].attrs["href"].endswith("/the-token-of-a-test/")
           and "line" in again[0].attrs["class"], [a.attrs for a in again])
 
@@ -694,10 +705,12 @@ def test_no_phone(project, adb):
     tone, text = lines(page)["The phone"]
     check("red, in the words collect stops with", tone == "red" and text == (
         "in the way: The phone is not ready: adb sees no devices at all. Plug in a phone or start an emulator."), text)
-    again = [a for a in page.all("a", "btn") if a.text == "Check again"][0]
-    check("Check again is the one step of the screen", "primary" in again.attrs["class"])
-    check("and the recording step says what it waits for",
-          "Fix what is marked red first" in page.one("div", "callout").text)
+    again = [a for a in page.all("a", "btn") if a.text == "Refresh"][0]
+    check("Refresh is the one step of the screen", "primary" in again.attrs["class"])
+    check("and the button waits for the phone, with the reason beside it",
+          "disabled" in page.one("button", id="check-go").attrs and page.one("p", id="check-hint").text
+          == "The phone is not ready: adb sees no devices at all. The line marked red says what to do.",
+          page.one("p", id="check-hint").text)
     check("what scan says of the devices is under All settings",
           "none attached" in setting(page, "The phone").text, setting(page, "The phone").text)
 
@@ -752,7 +765,7 @@ def test_a_config_whose_code_is_elsewhere(project):
     page = start(project.config().agents().doctor().report())
     tone, text = lines(page)["The app"]
     check("not known is grey, never red: the reports still open", tone == "grey" and "not in this folder" in text, text)
-    check("and the report is offered", [a.text for a in page.all("a", "btn")] == ["Check again", "See the report"])
+    check("and the report is offered", [a.text for a in page.all("a", "btn")] == ["Refresh", "See the report"])
 
 
 def test_no_app_and_no_config(project):
@@ -798,6 +811,13 @@ def test_the_self_check_never_ran_failed_and_passed(project):
 
 # --- the start page: the next step ------------------------------------------------------------
 
+@pytest.fixture
+def reads_only(monkeypatch):
+    """The server without the addresses that take a press: its start page
+    reads only, and the step a person takes by hand is a command to copy."""
+    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith("check")])
+
+
 def next_of(page) -> tuple[str, str | None]:
     section = next(s for s in page.all("section") if s.attrs.get("aria-labelledby") == "next-h")
     code = section.all("code", id="next-cmd")
@@ -833,7 +853,7 @@ def test_a_config_that_does_not_load(project):
     check("and status's line is behind the step", "fix echolot.yml" in setting(page, "The next step").text)
 
 
-def test_nothing_recorded_yet_then_recorded(project):
+def test_nothing_recorded_yet_then_recorded(project, reads_only):
     project.ready()
     text, command = next_of(start(project))
     check("record", command == "echolot collect -c echolot.yml -n 5" and "no recordings of coldStart yet" in text, (text, command))
@@ -844,10 +864,14 @@ def test_nothing_recorded_yet_then_recorded(project):
         ".echolot/traces/coldStart_iter001.perfetto-trace -c echolot.yml") and "2 of them" in text, (text, command))
 
 
+@pytest.mark.parametrize("press", [True, False], ids=["with the button", "reading only"])
 @pytest.mark.parametrize("build", ["first", "setup", "broken", "record", "analyze", "several", "open"])
-def test_the_page_says_what_echolot_says(project, build):
+def test_the_page_says_what_echolot_says(project, monkeypatch, build, press):
     """Every line shown as the CLI's is a line `echolot` and `echolot scan`
-    print here, and the command to copy is in the `next` line."""
+    print here, and the command to copy is in the `next` line. Where the
+    button takes the step, there is no command to copy and the line is kept."""
+    if not press:
+        monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith("check")])
     project.app()
     if build != "first":
         project.agents().doctor()
@@ -876,7 +900,11 @@ def test_the_page_says_what_echolot_says(project, build):
         key, _, value = words.partition(": ")
         flat = re.sub(r"\s+", " ", source).replace("`", "")
         check(f"`{who}` says it: {words[:60]}", value in flat or words in flat, source[-600:])
-    _, command = next_of(page)
+    by_hand = build in ("record", "analyze", "several")
+    shown = [s for s in page.all("section") if s.attrs.get("aria-labelledby") == "next-h"]
+    check("the step the button takes is not said twice", bool(shown) == (not press or not by_hand), build)
+    check("and `next`'s own line is under All settings all the same", "next: " in setting(page, "The next step").text)
+    _, command = next_of(page) if shown else (None, None)
     if command and command.startswith("echolot "):
         check("the command is the one `next` names", command in status.rsplit("\nnext", 1)[-1], status[-400:])
 
@@ -899,13 +927,14 @@ def test_a_layer_edited_here_does_not_stop_the_step(project):
     # With no record of what was installed, a file that differs may be an edit made here.
     (project.root / ".claude" / "echolot-layer.json").unlink()
     page = start(project)
-    text, command = next_of(page)
-    check("the step is still the recording", command == "echolot collect -c echolot.yml -n 5", (text, command))
+    go = page.one("button", id="check-go")
+    check("the step is still the recording, and the button takes it", go.text == "Check the app" and "disabled" not in go.attrs,
+          go.attrs)
     check("and what only a person can settle is said beside it", "may carry edits made here" in page.one("div", "callout").text
           and "echolot init --all" in page.one("div", "callout").text, page.one("div", "callout").text)
 
 
-def test_the_command_copies_as_it_is_written(project):
+def test_the_command_copies_as_it_is_written(project, reads_only):
     project.app().config(SEVERAL).agents().doctor()
     page = start(project)
     code = page.one("code", id="next-cmd")
@@ -920,8 +949,11 @@ def test_the_command_copies_as_it_is_written(project):
 def test_all_settings_of_a_launch_window(project):
     page = start(project.ready())
     check("it is a fold, closed", page.one("details", id="settings").attrs.get("open") is None)
-    check("nothing in it can be changed", not page.all("input") and not page.all("select") and not page.all("textarea")
-          and not page.all("form"))
+    fold = page.one("details", id="settings")
+    check("nothing in it can be changed but the number of launches, which belongs to the button",
+          [(i.attrs.get("name"), i.attrs.get("form"), i.attrs.get("value")) for i in fold.all("input")]
+          == [("launches", "check-form", "3")] and not fold.all("select") and not fold.all("textarea")
+          and not fold.all("button"), [i.attrs for i in fold.all("input")])
     check("the build, and whether to measure on it, in scan's words",
           "benchmark. Measure on it: yes — release-like and profileable. It installs as com.example.app."
           in setting(page, "Build to measure").text, setting(page, "Build to measure").text)
@@ -968,9 +1000,12 @@ def test_a_project_that_runs_a_macrobenchmark(project):
         "class StartupBenchmark {\n    @get:Rule val rule = MacrobenchmarkRule()\n    @Test\n    fun startup() = Unit\n}\n",
         encoding="utf-8")
     page = start(project.app().config(BENCHMARK).agents().doctor())
-    text, command = next_of(page)
-    check("the step runs the benchmark", "runs its macrobenchmark on the phone" in text
-          and command == "echolot collect -c echolot.yml -n 5", (text, command))
+    check("the button runs the benchmark, and says who decides how long", page.one("button", id="check-go").text == "Check the app"
+          and page.one("p", id="check-hint").text == (
+              "This runs the project's macrobenchmark, which decides how many launches it takes: often a few minutes. "
+              "Nothing in your code changes."), page.one("p", id="check-hint").text)
+    check("with no number of launches to set, and none sent", not page.all("input", name="launches")
+          and "echolot collect -c echolot.yml" in [pre.text for pre in setting(page, "What a press runs").all("pre")])
     check("how it runs is the gradle task", "./gradlew :benchmark:connectedBenchmarkAndroidTest"
           in setting(page, "How it runs on the phone").text, setting(page, "How it runs on the phone").text)
     check("the benchmark decides the runs", "The macrobenchmark decides" in setting(page, "Runs").text)
@@ -987,8 +1022,12 @@ def test_a_project_with_several_scenarios(project):
           in setting(page, "Config").text and "feedScroll" in setting(page, "Config").text, setting(page, "Config").text)
     check("status's line of each is under All settings", "scenario: feedScroll · own thresholds · 3 trace(s)"
           in setting(page, "Recordings and reports").text, setting(page, "Recordings and reports").text)
-    _, command = next_of(page)
-    check("the step names its scenario", command.endswith("--scenario coldStart"), command)
+    cards = page.one("div", "opts").all("input", type="radio")
+    check("each scenario is a choice, the one the page is about chosen",
+          [(c.attrs["value"], "checked" in c.attrs) for c in cards] == [("record:coldStart", True), ("record:feedScroll", False)],
+          [c.attrs for c in cards])
+    check("and what a press runs names its scenario",
+          setting(page, "What a press runs").all("pre")[0].text == "echolot collect -c echolot.yml -n 3 --scenario coldStart")
     reports = page.one("ul", "reps").all("li")
     check("each scenario's last report, or that it has none",
           reports[0].text.startswith("coldStart No report yet.") and reports[1].one("a").attrs["href"].endswith("/report/feedScroll"),
@@ -1013,7 +1052,7 @@ def test_no_report_yet(project):
     site = site_of(project.ready().traces())
     page = read(get(site).body)
     check("said once, with nothing to open", "No report yet" in page.one("ul", "reps").text
-          and [a.text for a in page.all("a", "btn")] == ["Check again"])
+          and [a.text for a in page.all("a", "btn")] == ["Refresh"])
     reply = get(site, "report")
     check("its address is a page that says so", reply.status == 404 and "No report yet" in reply.body)
     check("with the way back", read(reply.body).one("a", "btn").attrs["href"] == f"/{site.token}/")
@@ -1110,7 +1149,7 @@ def test_a_file_that_is_no_report(project, text):
     (project.root / ".echolot" / "out" / "report.json").write_text(text, encoding="utf-8")
     site = site_of(project)
     page = read(get(site).body)
-    check("the start page offers nothing to open", [a.text for a in page.all("a", "btn")] == ["Check again"])
+    check("the start page offers nothing to open", [a.text for a in page.all("a", "btn")] == ["Refresh"])
     reply = get(site, "report")
     check("and its address says why", reply.status == 404 and ("does not read" in reply.body or "No report yet" in reply.body))
 
@@ -1174,6 +1213,8 @@ STATES = {
     "left": ("Investigation left unfinished", "Its rounds"),
 }
 STEPS_NAV = re.compile(r'<nav class="steps".*?</nav>', re.S)
+# The place the answer's page keeps for a button, with whatever the server put there.
+BUTTON = re.compile(r'(<div class="rowf" id="check-again-action">).*?(</div>)', re.S)
 
 
 @pytest.mark.parametrize("state", sorted(STATES))
@@ -1195,7 +1236,9 @@ def test_an_investigations_page_in_each_state(project, demo_report, state):
           and [a.attrs.get("aria-current") for a in steps] == [None, "page"], [a.text for a in steps])
     # What `echolot hunt --show --html` writes, and the path to the other pages.
     on_disk = answer_page.render(hunt, reports, again=main_mod._check_again_line(project.root, site.config, hunt, reports))
-    check("but for the path it is the page hunt --show --html writes", STEPS_NAV.sub("", last.body) == on_disk)
+    served = BUTTON.sub(r"\1\2", STEPS_NAV.sub("", last.body)).replace(kit.SERVED, kit._POLICY)
+    check("but for the path, the button and what a served page may do, it is the page hunt --show --html writes",
+          served == on_disk)
     start_links = read(get(site).body).one("ul", "invs").one("li").all("a")
     check("the start page's link says what it leads to", start_links[0].text == link
           and start_links[0].attrs["href"] == f"/{site.token}/hunt/{fx.N}/answer", [a.text for a in start_links])
@@ -1300,12 +1343,19 @@ def test_the_script_parses():
 
 
 def test_what_a_reader_gets_with_script_switched_off(project):
-    page = start(project.ready().traces().report())
-    code = page.one("code", id="next-cmd")
-    check("the command is there to select", code.text.startswith("echolot analyze") and code.attrs.get("tabindex") == "0")
+    site = site_of(project.ready().traces().report())
+    page = read(get(site).body)
+    form = page.one("form", id="check-form")
+    check("the button is a form's: a press is sent as it is", form.attrs["method"] == "post"
+          and form.attrs["action"] == f"/{site.token}/check" and form.one("button", id="check-go").attrs["type"] == "submit")
+    check("with what it is about written into it", form.one("input", type="hidden").attrs == {
+        "type": "hidden", "name": "what", "value": "record:coldStart"})
+    check("and the number of launches is its field, wherever it stands on the page",
+          page.one("input", id="launches").attrs["form"] == "check-form")
     needs = [n for n in page.walk() if "needs-js" in (n.attrs.get("class") or "").split()]
-    check("only the Copy button needs script", [n.tag for n in needs] == ["button"])
-    check("Check again and See the report are links", {a.text for a in page.all("a", "btn")} == {"Check again", "See the report"})
+    check("nothing on the page needs script", not needs, [n.tag for n in needs])
+    check("Refresh and See the report are links", {a.text for a in page.all("a", "btn")} == {"Refresh", "See the report"})
+    check("a page that shows no run does not load itself again", "http-equiv=\"refresh\"" not in get(site).body)
     check("and All settings is a fold of the browser's own", page.one("details", id="settings").all("summary")[0].text == "All settings")
 
 
@@ -1418,8 +1468,10 @@ def test_the_command_line(project, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         main_mod.main(["ui", "--help"])
     said = capsys.readouterr().out
-    check("the help says what it is and what it will not do", "127.0.0.1" in said and "--no-open" in said
-          and "changes nothing" in said.replace("\n", " "), said)
+    flat = " ".join(said.split())
+    check("the help says what it is, what its button runs and what it will not do", "127.0.0.1" in said
+          and "--no-open" in said and "`collect`, `analyze --html`" in flat and "as the commands they are" in flat
+          and "Reading a page writes nothing" in flat, said)
 
 
 def test_the_command_through_main_runs_until_ctrl_c(project, monkeypatch, capsys):

@@ -1,14 +1,21 @@
-"""`echolot ui`: a local page that shows whether the setup is ready and opens
-the reports.
+"""`echolot ui`: a local page that shows whether the setup is ready, checks
+the app at the press of a button and opens the reports.
 
-A server from the standard library on 127.0.0.1. It keeps no state and writes
-nothing: every page is drawn when it is asked for, from the files under
-`.echolot/` and from the functions that stand behind `status`, `doctor`,
-`scan` and `hunt --list` (`echolot/ready.py`). It is a face for a person over
-the same commands and files; the agent's path stays the CLI.
+A server from the standard library on 127.0.0.1. It keeps no state: every
+page is drawn when it is asked for, from the files under `.echolot/` and from
+the functions that stand behind `status`, `doctor`, `scan` and `hunt --list`
+(`echolot/ready.py`). It is a face for a person over the same commands and
+files; the agent's path stays the CLI.
 
-What it will and will not answer, decided here before any request can start a
-command (the next step, a button that records, adds such requests):
+A page that is only read writes nothing. Two requests do more, and both are
+a form a page of this server sends: one starts a check (`echolot/check.py`:
+`collect`, then `analyze --html`, then `compare`, run as a process of their
+own so that pages go on being drawn), the other asks the check that is
+running to stop. What is running and how far is read from the files that
+process and `collect` write, so a reloaded page, a second tab and a server
+started again all show the same.
+
+What it will and will not answer:
 
 - It listens on 127.0.0.1 and nowhere else, and a request whose `Host` is not
   the server's own address is refused: a page of another site that got its
@@ -21,12 +28,16 @@ command (the next step, a button that records, adds such requests):
   over; an address has to be known to be asked for. The price is that the
   token is in the address bar and the history, where it stops meaning anything
   when the server stops.
-- Anything other than GET also has to come from the server's own origin. No
-  such request exists yet; the refusal does.
+- Anything other than GET also has to come from the server's own origin,
+  and its body is a form of at most `BODY_CAP` bytes. Nothing in a form is
+  used as a path or as a command: a scenario is one the config names, a
+  number of launches is a small whole number, an investigation is one the
+  project has.
 - It serves the pages it draws and nothing else. There is one table of
   routes, no route reads a file by a path taken from the address, and no page
-  fetches anything: the pages carry the report page's content policy, and the
-  server sends it as a header too.
+  fetches anything from elsewhere: a served page may send a form to this
+  server and ask it how far a run is (`kit.SERVED`), and the server sends
+  that policy as a header too. A page written to disk keeps the strict one.
 """
 
 from __future__ import annotations
@@ -42,25 +53,33 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Mapping
-from urllib.parse import quote, unquote
+from urllib.parse import parse_qs, quote, unquote
 
+from . import check, job, ready, recorder, state
 from . import hunt as hunt_mod
 from . import main as cli
-from . import ready, recorder, state
 from .config import ConfigError
 from .pages import answer_page, kit, report_page, start_page
 
 HOST = "127.0.0.1"
 READS = ("GET", "HEAD")
+# The most a request may carry in its body, in bytes, and the most fields a
+# form may have: a press sends a scenario's name and a number.
+BODY_CAP = 4096
+FIELDS = 16
+FORM = "application/x-www-form-urlencoded"
 
 # What the browser is told with every answer, beside the policy each page
-# carries in itself: nothing is fetched, framed, sniffed or kept, and no
-# address of the server (the token is in it) is passed on as a referrer.
+# carries in itself: nothing is fetched from elsewhere, framed, sniffed or
+# kept, and no address of the server (the token is in it) is passed on as a
+# referrer to any other origin. `same-origin` and not `no-referrer`: under
+# `no-referrer` a browser sends `Origin: null` with a form, and the form of
+# the server's own page would be refused with every other.
 HEADERS = (
-    ("Content-Security-Policy", kit._POLICY + "; frame-ancestors 'none'"),
+    ("Content-Security-Policy", kit.SERVED + "; frame-ancestors 'none'"),
     ("X-Content-Type-Options", "nosniff"),
     ("X-Frame-Options", "DENY"),
-    ("Referrer-Policy", "no-referrer"),
+    ("Referrer-Policy", "same-origin"),
     ("Cross-Origin-Opener-Policy", "same-origin"),
     ("Cross-Origin-Resource-Policy", "same-origin"),
     ("Cache-Control", "no-store"),
@@ -81,7 +100,11 @@ class Site:
     token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
     port: int = 0
     tp_binary: str | None = None
+    # How a check's process is started. A test hands in a double.
+    spawn: Callable[[Path, str, dict[str, Any]], Any] = job._spawn
     # Pages are drawn one at a time: reading `status` catches what it prints.
+    # A press is answered under the same lock, so two of them cannot both
+    # find nothing running.
     drawing: threading.Lock = field(default_factory=threading.Lock)
 
     @property
@@ -99,8 +122,9 @@ class Site:
 
     def url(self, name: str, **params: Any) -> str | None:
         """The address of a page by its route's name, or None when there is
-        no such page: whoever asked draws no link then."""
-        route = next((r for r in ROUTES if r.name == name and r.method == "GET"), None)
+        no such page: whoever asked draws no link then. The same for an
+        address a form is sent to: no route, no button."""
+        route = next((r for r in ROUTES if r.name == name), None)
         if route is None:
             return None
         try:
@@ -117,6 +141,7 @@ _UNREAD = object()
 class Visit:
     """One request: the site, and what is read of the project once for it."""
     site: Site
+    form: dict[str, str] = field(default_factory=dict)   # what a request that is no read sent
     _st: dict | None = None
     _last: Any = _UNREAD
 
@@ -145,6 +170,7 @@ class Visit:
 class Page:
     html: str
     status: int = 200
+    location: str | None = None     # where the browser is sent instead, after a form
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +180,8 @@ class Page:
 def _start(visit: Visit, params: dict[str, str]) -> Page:
     site = visit.site
     view = ready.read(site.project, site.config, site.src, site.tp_binary, st=visit.st)
-    return Page(start_page.render(view, site.url, visit.steps("start")))
+    found = check.view(site.project, visit.st, view["ready"]) if site.url("check") else None
+    return Page(start_page.render(view, site.url, visit.steps("start"), check=found))
 
 
 def _nothing(visit: Visit, title: str, text: str, status: int = 404) -> Page:
@@ -184,7 +211,8 @@ def _report(visit: Visit, params: dict[str, str]) -> Page:
     except ConfigError as e:
         return _nothing(visit, "The report does not read", f"{e}. Run `echolot analyze` again to write it anew.")
     where = cli._shown_path(rep["path"], visit.site.project)
-    return Page(report_page.render(data, where=where, last=True, steps=visit.steps("report" if mine else None)))
+    return Page(report_page.render(data, where=where, last=True, steps=visit.steps("report" if mine else None),
+                                   policy=kit.SERVED))
 
 
 def _hunt_report(visit: Visit, params: dict[str, str]) -> Page:
@@ -195,7 +223,8 @@ def _hunt_report(visit: Visit, params: dict[str, str]) -> Page:
         return _nothing(visit, "No such report", f"Investigation {n} filed no report {k} that reads.")
     data, path = found
     return Page(report_page.render(data, where=cli._shown_path(path, visit.site.project), last=False,
-                                   steps=visit.steps(None), crumb=f"investigation {n}, report {k}"))
+                                   steps=visit.steps(None), crumb=f"investigation {n}, report {k}",
+                                   policy=kit.SERVED))
 
 
 def _has_hunt(visit: Visit) -> bool:
@@ -225,7 +254,61 @@ def _answer(visit: Visit, params: dict[str, str]) -> Page:
     reports = hunt_mod.archived_reports(site.project, hunt)
     again = cli._check_again_line(site.project, site.config, hunt, reports)
     mine = last is not None and hunt.get("n") == last.get("n")
-    return Page(answer_page.render(hunt, reports, again=again, steps=visit.steps("answer" if mine else None)))
+    return Page(answer_page.render(hunt, reports, again=again, action_html=_again_button(visit, hunt),
+                                   steps=visit.steps("answer" if mine else None), policy=kit.SERVED))
+
+
+def _again_button(visit: Visit, hunt: dict[str, Any]) -> str:
+    """The button in the answer's own place for it: the line that page gives
+    to copy, started from the page. Nothing where the server takes no press,
+    for an investigation with no number, or for a scenario the config no
+    longer names."""
+    site = visit.site
+    if not site.url("check") or not hunt.get("n"):
+        return ""
+    lines = ready.lines(site.project, site.config, site.src, visit.st)
+    found = check.view(site.project, visit.st, lines)
+    choice = check.chosen(found["offer"], hunt.get("scenario"))
+    if choice is None:
+        return ""
+    run = found["job"]
+    running = check.running_words(run, visit.st.get("collect")) if run and run["status"] == job.RUNNING else None
+    why = found["offer"].get("why") or choice.get("why")
+    said = check.hint(check.RECORD, choice["mode"], choice.get("iterations"), choice.get("section") or {})
+    return start_page.again(choice, why, said, site.url, hunt["n"], running)
+
+
+# ---------------------------------------------------------------------------
+# what is no read: a press of the button, and Stop
+
+
+def _press(visit: Visit, params: dict[str, str]) -> Page:
+    """Start a check: the commands of `check.steps`, as a process of their
+    own. The press is held against the project as it is now. Refused, it
+    answers with a page that says why; started, it sends the browser to the
+    start page, where the run is."""
+    site = visit.site
+    try:
+        press = check.asked(visit.form)
+        lines = ready.lines(site.project, site.config, site.src, visit.st)
+        found = check.view(site.project, visit.st, lines)
+        check.start(site.project, site.config, found["offer"], found["job"], press, spawn=site.spawn)
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    return Page("", 303, site.url("start"))
+
+
+def _stop(visit: Visit, params: dict[str, str]) -> Page:
+    """Ask the running check to stop. With none running there is nothing to
+    ask; either way the start page says where things stand."""
+    check.stop(visit.site.project)
+    return Page("", 303, visit.site.url("start"))
+
+
+def _progress(visit: Visit, params: dict[str, str]) -> Page:
+    """How far the run is: the rows of its list, for a page that shows a run
+    and redraws them in place. Read from the run's two files alone."""
+    return Page(start_page.progress(check.progress(visit.site.project)))
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +337,9 @@ ROUTES: list[Route] = [
     Route("hunt-report", "hunt/{n}/report/{k}", _hunt_report),
     Route("answer", "answer", _answer, step="Agent's answer", there=_has_hunt),
     Route("answer-of", "hunt/{n}/answer", _answer),
+    Route("check", "check", _press, method="POST"),
+    Route("check-stop", "check/stop", _stop, method="POST"),
+    Route("check-state", "check/state", _progress),
 ]
 
 # A part of an address that names something. Numbers are digits; a name is
@@ -299,9 +385,23 @@ def _refused(why: str) -> Reply:
     return Reply(403, f"echolot ui: refused. {why}\n", "text/plain; charset=utf-8")
 
 
-def answer(site: Site, method: str, target: str, headers: Mapping[str, str]) -> Reply:
+def _form(headers: Mapping[str, str], body: bytes) -> dict[str, str] | None:
+    """The fields of a form, each once. None for one with too many fields or
+    one that is not text; a body that is no form has no fields."""
+    if (headers.get("Content-Type") or "").split(";", 1)[0].strip().lower() != FORM:
+        return {}
+    try:
+        fields = parse_qs(body.decode("utf-8"), keep_blank_values=True, max_num_fields=FIELDS)
+    except ValueError:
+        return None
+    return {name: values[0] for name, values in fields.items()}
+
+
+def answer(site: Site, method: str, target: str, headers: Mapping[str, str], body: bytes | None = b"") -> Reply:
     """What the server says to one request. Every check that guards the pages
-    is here, in the order a request has to pass them."""
+    is here, in the order a request has to pass them. `body` is what the
+    request carried, or None when that was more than `BODY_CAP` bytes or of
+    no stated length: it was not read then."""
     # 1. The request names this server and no other: a name that resolves
     #    here by somebody else's doing is not the server's own address.
     if headers.get("Host") != site.host:
@@ -315,8 +415,15 @@ def answer(site: Site, method: str, target: str, headers: Mapping[str, str]) -> 
     if method not in READS:
         if headers.get("Origin") != site.origin or headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
             return _refused("Only a page of echolot ui may ask for this.")
+        # 4. And carries a small form, or nothing.
+        if body is None:
+            return Reply(413, f"echolot ui: refused. A request may carry {BODY_CAP} bytes at most, "
+                         "and has to say how many it carries and carry them.\n", "text/plain; charset=utf-8")
     route, params, known = find("GET" if method in READS else method, rest)
-    visit = Visit(site)
+    fields = {} if method in READS else _form(headers, body or b"")
+    if fields is None:
+        return Reply(400, "echolot ui: refused. That is no form this server reads.\n", "text/plain; charset=utf-8")
+    visit = Visit(site, fields)
     if route is None:
         if known:
             allowed = sorted({r.method for r in ROUTES if _pattern(r.path).fullmatch(rest)})
@@ -330,11 +437,21 @@ def answer(site: Site, method: str, target: str, headers: Mapping[str, str]) -> 
             page = (route.draw(visit, params) if route else
                     _nothing(visit, "No such page", "This address is no page of `echolot ui`."))
     except Exception as e:  # a page that fails says so, and the server goes on
-        print(f"echolot ui: could not draw the page `{name}`: {type(e).__name__}: {e}", file=sys.stderr)
-        html = start_page.notice("This page could not be drawn",
-                                 f"echolot ran into an error while reading the project: {type(e).__name__}: {e}",
-                                 site.url("start"))
+        if method in READS:
+            print(f"echolot ui: could not draw the page `{name}`: {type(e).__name__}: {e}", file=sys.stderr)
+            html = start_page.notice("This page could not be drawn",
+                                     f"echolot ran into an error while reading the project: {type(e).__name__}: {e}",
+                                     site.url("start"))
+        else:
+            # A press that fell over may or may not have started something:
+            # the start page reads it from the files, and says.
+            print(f"echolot ui: could not answer `{name}`: {type(e).__name__}: {e}", file=sys.stderr)
+            html = start_page.notice("That did not work",
+                                     f"echolot ran into an error: {type(e).__name__}: {e}. The start page shows "
+                                     "whether a check is running.", site.url("start"))
         return Reply(500, html)
+    if page.location:
+        return Reply(page.status, "", "text/plain; charset=utf-8", (("Location", page.location),))
     return Reply(page.status, page.html)
 
 
@@ -350,8 +467,28 @@ class _Handler(BaseHTTPRequestHandler):
         """Quiet: a request line carries the token, and the terminal is not
         the place to repeat it at every click."""
 
+    def _body(self, method: str) -> bytes | None:
+        """What the request carries: nothing for a read, at most `BODY_CAP`
+        bytes otherwise. More than that, or a length that is no number, is
+        not read at all; and a body that ends before the length it stated is
+        no body: half a form could be a whole one that says something else."""
+        if method in READS:
+            return b""
+        if self.headers.get("Transfer-Encoding"):
+            return None
+        if self.headers.get("Content-Length") is None:
+            return b""
+        try:
+            length = int(self.headers["Content-Length"])
+        except ValueError:
+            return None
+        if not 0 <= length <= BODY_CAP:
+            return None
+        body = self.rfile.read(length)
+        return body if len(body) == length else None
+
     def _handle(self, method: str) -> None:
-        reply = answer(self.server.site, method, self.path, self.headers)  # type: ignore[attr-defined]
+        reply = answer(self.server.site, method, self.path, self.headers, self._body(method))  # type: ignore[attr-defined]
         body = reply.body.encode("utf-8")
         self.send_response(reply.status)
         self.send_header("Content-Type", reply.kind)
