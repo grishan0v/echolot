@@ -848,7 +848,9 @@ The second case is more common than the first.
 Two Marker Reports in, one table out, sorted by how far each row moved. Written
 to `comparison.json` and `comparison.md` beside the report when `echolot.yml`
 is found; run from a folder without one, it prints the table and writes
-nothing.
+nothing. `echolot compare --plain` prints the same comparison in plain words
+for a person and keeps that reading in `comparison.json` under `plain`; the
+table is still what an investigation reads.
 
 ```bash
 echolot compare                      # inside an investigation: previous round vs latest

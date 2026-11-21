@@ -356,6 +356,102 @@ leaves two of the pairs with it at each end, and the next comparison of this
 row will not see less than that unless there are more runs or the slow one
 goes away. Absent below four runs.
 
+## A plain reading
+
+`echolot compare --plain` says the same comparison to someone who has just
+changed their code: did it get better, is it enough, and which checks moved.
+
+```bash
+echolot compare old.json new.json --plain
+```
+
+```
+BETTER        Faster by 0.7 s. The launch went from 2.1 s to 1.4 s, 33% less. Measured on 3
+              launches before and 3 after.
+
+ !  Still over the limit. The launch takes 1.4 s. You allowed 0.5 s, so it takes 2.7 times as
+    long.
+ ~  Not certain check by check yet. 3 launches before and 3 after are too few to say which
+    single changes hold. It takes four a side, or three against five.
+
+ GONE       The screen waits for background work
+            This check finds nothing now. Before: The main thread waited 0.7 s for
+            `worker_pool_#`, in all 3 launches. That is 33% of the launch.
+ NO CHANGE  Heavy work on the main thread
+            Added up, what this check found was 0.5 s before and 0.5 s after.
+
+ ok 1 check is fine both times     -  1 could not be checked on one side or both
+```
+
+No model writes any of it: the same two reports give the same words. The
+verdict is by the scenario's window. Up to three notes follow it: whether the
+launch is within `scenario.budget_ms`, in the sentence the report's own
+[plain reading](analysing.md#a-plain-reading) has for it; that the repeats are
+too few for the Holds column, or, with fewer than three a side, for anything to
+be called a change, and then that note comes first; and that the two sides were
+not recorded alike,
+which is the warnings of
+[When two reports may not be compared](#when-two-reports-may-not-be-compared)
+said for a person. Then one item per check, with a sentence of what changed in
+the words that reading uses for the check.
+
+A movement is not a level. On a report a check has a level of attention: how
+much it needs you. Here it has a movement: which way it went.
+
+| movement | when |
+|---|---|
+| better, worse | what the check found, added up, clearly moved |
+| gone | it found something before and finds nothing now, and what it found was more than a small or occasional thing |
+| new | the same the other way round |
+| no change | it found something on a side, and no move can be called: the sentence says why |
+| fine both times | it looked both times and found nothing |
+| not checked | it could not look on one side or on both, or one of the reports is too old to say (it says why); `compare` leaves such a check out of its table too |
+
+**A check is judged by the sum of its rows**, not by its largest row. A fix
+can put five rows under one section: the largest row grows while the check as
+a whole shrinks, and judged by its largest row a fix reads as a regression.
+The sum is of a typical launch: each row's median over every launch of its
+side, a launch without the row counted as nothing. A row seen in one launch of
+three adds nothing, so one slow launch does not read as a move.
+
+**When a move is called**, for the window and for a check's sum alike:
+
+- there are at least three launches a side;
+- the two differ by a fifth of the larger one or more, and a check's sum also
+  by a twentieth of the launch;
+- the launches agree. For the window: more than half of the faster side's
+  launches beat the fastest launch of the slower side, so one slow launch does
+  not hide a change. For a check: the most its sum can have been in any launch
+  of the lower side is under the least it can have been in any launch of the
+  higher side.
+
+This is a coarser rule than [the Holds column](#the-holds-column), on purpose:
+it has to give an answer at three launches a side, where no row can be 95%
+sure, and it must not call the same app better or worse. It was measured on
+190 recordings of one app on one phone, each analysed on its own and merged
+the way `analyze` merges repeats. Pairs of sets with nothing changed between
+them, three to seven launches a side:
+
+| the two sets | pairs | the verdict moved | a check moved |
+|---|---|---|---|
+| drawn from one session | 1,300 | 0 | 0.1 to 0.2% of the checks that found something |
+| from sessions of one day | 139 | 0 | 0.2 to 0.4% |
+| from two days | 40 | 0 | 0.7 to 0.8% |
+
+A real fix that took a launch from 2.1 s to 1.4 s reads as better, and the
+checks it emptied read as gone. A fifth, because the same build recorded on
+two days differed by up to 18% with every launch of one day slower than every
+launch of the other: at 10%, the floor a row has, half of those pairs read as
+a change. A change smaller than a fifth is said with its two times and called
+no clear change. All of this is one app on one phone; the numbers are
+`SHARE`, `LAUNCH_SHARE` and `LEAST_RUNS` in `echolot/moves.py`, with the
+reasoning beside them.
+
+With the flag the reading is kept in `comparison.json` as well, under `plain`.
+`comparison.md` stays the table. Without the flag `compare` computes, prints
+and writes exactly what it did before the reading existed. Nothing fails over
+a movement: the exit code does not depend on one.
+
 ## The comparison JSON
 
 ```json
@@ -419,6 +515,17 @@ of the medians these runs could call real, in this move's direction, and
 a side would. `null` in both `shift` and `holds` means there was nothing to
 test: the row is on one side only — every `appeared` and `vanished` row — or
 there were too few runs. `confidence` is the level the ranges are drawn at.
+
+With `--plain` the file holds one more key, `plain`, after all the others:
+`verdict` (`movement`: `better`, `worse`, `no_change` or `not_compared`; a
+`headline` and the sentence, `text`), `window` (each side's median, least and
+most launch, and the runs), `notes` (`id`: `budget`, `few_runs`, `unlike`;
+`attention`, a `title` and a `text`) and `checks`, one item per detector:
+`movement`, `title`, `why`, the sentence `text`, how many `findings` went, came
+and stayed, and under `before` and `after` what that report said of the check:
+its `attention`, its findings added up for a typical launch (`ms`, `null` for
+none), and its own sentence (`found`). A movement is never under a key called
+`level` or `attention`: those are the reports' words for another thing.
 
 Schema 2 is this shape. Schema 1 carried `overlap` — whether the min–max
 ranges of the two sides touched — where `shift` and `holds` are now.
