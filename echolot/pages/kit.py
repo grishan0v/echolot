@@ -427,3 +427,93 @@ def place(text: Any) -> str:
         return f'<code class="at">{e(whole).replace("/", "/<wbr>")}</code>'
     return (f'<span class="at-p"><code class="at">{e(name)}</code><span class="vh"> in </span>'
             f'<span class="at-in">{e(folders + slash).replace("/", "/<wbr>")}</span></span>')
+
+
+# ---------------------------------------------------------------------------
+# what the comparison adds: which way something moved, said the way a level
+# is said; notes under a verdict; a chart with a lane before and a lane after.
+# The pills take their tints from `base.css`; the notes and the two lanes are
+# styled by `compare.css`, so a page without them keeps the bytes it had.
+
+# A movement's colour family and its icon. Green is a move for the better and
+# red one for the worse; grey is no move. On a report the same three colours
+# say how much attention a check needs, so a page that shows movements says
+# in words which of the two it means.
+MOVE_TONE = {"better": "green", "gone": "green", "worse": "red", "new": "red", "no_change": "grey",
+             "fine_both": "green", "not_checked": "grey", "not_compared": "grey"}
+MOVE_WORD = {"better": "Better", "gone": "Gone", "worse": "Worse", "new": "New", "no_change": "No change",
+             "fine_both": "Fine both times", "not_checked": "Not checked", "not_compared": "Not compared"}
+_ARROW = 'stroke="var(--glyph)" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"'
+_MOVE = {
+    # an arrow down: less time
+    "better": f'<circle cx="8" cy="8" r="7" fill="var(--green)"/><path d="M8 4.4v6.6M5.2 8.4 8 11.2l2.8-2.8" {_ARROW}/>',
+    # an arrow up: more time
+    "worse": f'<circle cx="8" cy="8" r="7" fill="var(--red)"/><path d="M8 11.6V5M5.2 7.6 8 4.8l2.8 2.8" {_ARROW}/>',
+    # an equals sign: no move
+    "no_change": ('<circle cx="8" cy="8" r="6.2" fill="none" stroke="var(--grey)" stroke-width="1.6"/>'
+                  '<path d="M5.4 6.6h5.2M5.4 9.4h5.2" stroke="var(--grey)" stroke-width="1.5" stroke-linecap="round"/>'),
+    # the rest are the shapes a level has: gone and fine are a tick, new is an
+    # exclamation mark, what could not be looked at is a dash
+    "gone": _SHAPE["green"], "fine_both": _SHAPE["green"], "new": _SHAPE["red"],
+    "not_checked": _SHAPE["grey"], "not_compared": _SHAPE["grey"],
+}
+MOVES = tuple(_MOVE)
+
+
+def move_icon(movement: Any) -> str:
+    """The icon of a movement. One this version does not know is a dash."""
+    return f'<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">{_MOVE.get(movement, _SHAPE["grey"])}</svg>'
+
+
+def move_pill(movement: Any, large: bool = False) -> str:
+    """Which way something moved, as a level is shown: the icon, the word and
+    the tint together. A movement this version does not know is grey."""
+    kind = MOVE_TONE.get(movement, "grey")
+    said = MOVE_WORD.get(movement) or str(movement or "unknown").replace("_", " ").capitalize()
+    return f'<span class="st {kind}{" lg" if large else ""}">{move_icon(movement)}{e(said)}</span>'
+
+
+def notes(items: Iterable[tuple[str, str, str]]) -> str:
+    """What follows a verdict in its own block: `(tone, title, sentence)`,
+    each an icon and a sentence whose first words are bold. Names written in
+    backticks become <code>. Nothing for no notes."""
+    rows = "".join(f"<li>{icon(k if k in _SHAPE else 'grey')}<p><b>{e(title)}</b> {prose(said)}</p></li>"
+                   for k, title, said in items)
+    return f'<ul class="notes">{rows}</ul>' if rows else ""
+
+
+def chart2(rows: Sequence[dict[str, Any]], top: float, *, unit: str = "ms, median", title: str = "") -> str:
+    """Before and after in one row: two lanes on one axis, before above in the
+    chart's soft neutral, after below in the colour of measured time.
+
+    A row is a dict as for `chart`, with a side in place of `value` and `dots`:
+    `before` and `after`, each `{"value": …, "dots": […]}` or None for a side
+    that has nothing. The side with nothing has no bar: its lane stays empty.
+    """
+    out = [f'<p class="chart-h">{e(title)}</p>' if title else "",
+           '<div class="cr ax" aria-hidden="true"><span></span><div class="ticks">'
+           + "".join(f'<span style="left:{i * 25}%">{_tick(top * i / 4)}</span>' for i in range(5))
+           + f'</div><span class="ax-u">{e(unit)}</span></div>']
+    for r in rows:
+        name = f'<span class="mono">{e(r["name"])}</span>' if r.get("mono", True) else f'<span>{e(r["name"])}</span>'
+        subs = "".join(f'<span class="cr-s">{e(s)}</span>' for s in r.get("subs") or () if s)
+        lanes = ""
+        for side, lane in (("before", "b"), ("after", "a")):
+            got = r.get(side)
+            if not got:
+                continue
+            lanes += f'<i class="bar {lane}" style="width:{_pct(got["value"], top)}"></i>' + "".join(
+                f'<i class="dot {lane}" style="left:{_pct(v, top)}"></i>' for v in got.get("dots") or ())
+        said = "".join(f"<span>{e(n)}</span>" for n in r.get("notes") or () if n)
+        tip = r.get("tip")
+        focus = f' tabindex="0" data-tip="{e(chr(10).join(tip))}"' if tip else ""
+        out.append(f'<div class="cr"{focus}><div class="cr-n">{name}{subs}</div>'
+                   f'<div class="cr-p two">{lanes}</div>'
+                   f'<div class="cr-v"><b>{e(r["figure"])}</b>{said}</div></div>')
+    return f'<div class="chart">{"".join(out)}</div>'
+
+
+def chart2_key(dot: str | None = None, before: str = "before", after: str = "after") -> str:
+    """What the marks of a two-lane chart are, under it."""
+    return (f'<p class="key"><span><i class="k-bar b"></i>{e(before)}</span><span><i class="k-bar"></i>{e(after)}</span>'
+            + (f'<span><i class="k-dot"></i>{e(dot)}</span>' if dot else "") + "</p>")
