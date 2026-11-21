@@ -69,6 +69,9 @@ LAUNCH = "launch"
 LIMIT_MIN_S, LIMIT_MAX_S = 0.1, 60.0
 _LIMIT = re.compile(r"[0-9]{1,2}(?:[.,][0-9]{1,3})?")
 
+# A line of `scan` about one benchmark class: its name, the file, what it measures.
+_CLASS_LINE = re.compile(r"`[\w.]+` \(")
+
 HEADER = ("# Written by `echolot ui` from what `echolot scan` read in this repository.\n"
           "# Every value says where it came from (`_source`, `_evidence`). The file is yours to edit.\n\n")
 
@@ -130,7 +133,10 @@ def draft(facts: scan_mod.Facts | None) -> dict[str, Any]:
                          "installs under on a phone. Without it a recording cannot be told from any other app's."}
     window = scenario.get("window")
     if (window.get("name") if isinstance(window, dict) else window) != LAUNCH_WINDOW:
-        return {"can": False, "says": _said(facts, "benchmarks"),
+        # Of what `scan` says of the benchmarks, the module and what each
+        # class measures: the lines that say why. The rest is for an agent.
+        said = _said(facts, "benchmarks")
+        return {"can": False, "says": said[:1] + [line for line in said[1:] if _CLASS_LINE.match(line[1])],
                 "plain": "This project has a macrobenchmark that measures something of its own, and where that "
                          "begins and ends has to be picked from a trial recording."}
     left = _unfilled(raw)
