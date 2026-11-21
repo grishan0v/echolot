@@ -5,7 +5,8 @@
 `echolot` says where a project stands in a terminal, to someone who reads
 terminals. `echolot ui` says the same on a page: whether everything is ready,
 a button that checks the app, and the reports and the agent's answers there
-are, each opened as a page.
+are, each opened as a page. In a project that has no config yet it sets one
+up first, for how the app opens.
 
 ```bash
 echolot ui              # starts it and opens the browser
@@ -19,6 +20,94 @@ is in or will be in; `-c` names a config elsewhere.
 The page is a face for a person over the same commands and files. It reads the
 project anew every time it is opened and keeps nothing in memory between two
 pages. An agent's path stays the command line.
+
+## Setting a project up
+
+On a project with no `echolot.yml` the start page asks **What do you want to
+check?** and has one answer: **How the app opens**, from the tap on its icon
+until the first screen is there. It is the one scenario nobody has to
+describe: its window is the launch as the phone records it
+([`scenario.window: launch`](analysing.md#a-window-that-is-the-launch)), and
+`echolot scan` drafts the whole config for it from the build files.
+
+**Set it up** writes that draft as `echolot.yml`: the text `echolot scan`
+prints under "A config to start from", with two lines of comment above it.
+Where echolot was never set up in the project it also runs `echolot init`:
+the files for an agent, the lines in `.gitignore`, and the self-check of this
+computer, which takes about a minute. That part runs as a process beside the
+server, so the page shows it under way and moves on to the button by itself.
+
+Before the press the page says two things.
+
+**Whose app it is**: the name the app installs under and the build that will
+be measured, as `scan` read them. This is what the page asks you to confirm,
+because it is what you can recognise, and the press is the answer. Nothing in
+the file is marked as confirmed by a person (`_source: confirmed_by_user`):
+every value keeps `scan`'s own mark and its evidence. You looked at two names,
+not at the process pattern or the runner's numbers, and an agent that later
+finds one of those wrong can still put it right.
+
+**What it writes**, under a fold: every file, by what it is for, and the text
+of the config. Every file is new, except a `.gitignore` or a
+`.claude/settings.json` of your own, which get lines added. `echolot.yml` is
+created or nothing is: one that exists, or that appears between the page and
+the press, stops the press, and the page says that nothing was written.
+
+**The time limit** is a sentence with a field in it, "It should take no
+longer than … seconds", from 0.1 to 60. It is optional, and it is written as
+`scenario.budget_ms`, in milliseconds. With a limit the report's first line
+says whether the app opens fast enough. Without one it says how long the
+launch takes and holds that against nothing: its level is "not checked".
+
+The limit is written when the file is created, and not after. `echolot.yml`
+is a file you edit and may hold your comments, and echolot has no writer that
+keeps them, so the page changes no config that exists. A limit kept anywhere
+else would be one that `echolot analyze` in a terminal and CI do not read. To
+change it later, edit the `budget_ms` line under the scenario. The file the
+page wrote holds that line with a comment (commented out when no limit was
+given), and **All settings** shows the line to write.
+
+**Something else**, one screen or one action, stays an agent's setup: it has
+to learn from the code how to get there and where the wait begins and ends.
+The page says so in one line under the button, with the command to copy.
+
+**Where the page cannot set a project up** it says why in a sentence of its
+own, with `echolot scan`'s words under it, and the step stays the one under
+**What to do next**:
+
+| what `scan` found | the page says |
+|---|---|
+| no module with a launcher Activity | that no Android app is in this folder |
+| an `applicationId` set through a constant or a convention plugin | that it could not read the app's name from the build files |
+| a macrobenchmark that measures a section of its own, or names no metric `scan` reads | that where it begins and ends has to be picked from a trial recording |
+
+A macrobenchmark that measures the launch (`StartupTimingMetric`) is set up
+like an app with none: the same window, run by the benchmark.
+
+Some steps come first, as before: files written by a newer echolot, a
+self-check that did not pass, and `echolot init` in a project that has an
+older echolot's files or has already chosen its agents. There `init` brings
+files up to date and says itself which, so it stays a command to copy; once
+it ran, the page offers the config. A server started with `-c` naming another
+file sets nothing up: the page creates `echolot.yml` and no file under a name
+somebody typed.
+
+**A config with no scenario** measures everything a recording holds. The page
+shows the lines that make the launch its scenario, to copy and add by hand.
+It writes into no file that is yours.
+
+**After setup** the page is the button's. Until the scenario has been
+recorded once it also says what stands between the two: the build you want
+measured has to be on the phone, because in `launch` mode echolot opens what
+is installed there and installs nothing. It names the gradle task that
+installs it where the build files say one. And the phone has to be connected,
+which its line under **Ready** says.
+
+**When setup does not finish**, `echolot.yml` is written already. If `echolot
+init` failed, the page shows the last lines it printed and the file with all
+of them; if it was cut short (`echolot ui` stopped, the terminal closed), the
+page says so. Either way the step under **What to do next** takes it from
+there.
 
 ## Check the app
 
@@ -44,7 +133,8 @@ the line says so.
 |---|---|
 | no phone, several, or one that has not allowed debugging | the sentence `collect` stops with; the phone's line under **Ready**, marked red, says what to do |
 | an app a recording would not show, or one with debuggable builds only | the same, from the app's line |
-| the project is not set up, has no `echolot.yml`, or the config does not load | that the step under **What to do next** comes first |
+| the project is not set up, the config does not load, or there is no `echolot.yml` and the page cannot [set one up](#setting-a-project-up) | that the step under **What to do next** comes first |
+| a setup is still under way | that echolot is checking this computer, and the button comes once it is done |
 | the last self-check did not pass | that no report made here could be trusted |
 | an investigation is open | that an agent works with the recordings, and its answer comes first |
 | a recording runs already, started from a terminal or by an agent | what it is and how far, and to wait for it |
@@ -140,11 +230,13 @@ Red is something in the way, and the sentence says what to do. Grey is
 something echolot cannot tell from here; it stops nothing. **Refresh**
 reads everything anew.
 
-**What to do next** is there when the next step is not the button's: `echolot
-init` in a project not set up yet, `echolot doctor` after a self-check that
-did not pass, and the agent's command where the step is an agent's (writing
-`echolot.yml`, resuming an investigation). It is the step `echolot` names,
-said in a plain sentence, with the command to copy.
+**What to do next** is there when the next step is neither the button's nor
+[a setup the page does itself](#setting-a-project-up): `echolot doctor` after
+a self-check that did not pass, `echolot init` where it brings an older
+install up to date, and the agent's command where the step is an agent's
+(writing an `echolot.yml` the page cannot draft, resuming an investigation).
+It is the step `echolot` names, said in a plain sentence, with the command to
+copy.
 
 **Reports** lists the last report of each scenario, with its level, its first
 line, when it was made and from how many launches, and how many checks found
@@ -192,7 +284,7 @@ things in sentences; the terminal's own lines are here:
   (`window: launch`);
 - how many runs, and for how long each records; with a macrobenchmark, that
   the benchmark decides;
-- the time limit, `budget_ms`;
+- the time limit, `budget_ms`, with the line that sets or changes it;
 - the thresholds: how many checks run on the config's, and each one with
   where it comes from: built-in, set in the config, set for this scenario,
   or switched off;
@@ -216,14 +308,16 @@ the page it opened and by nothing else:
   the server stops, the token means nothing.
 - Anything other than reading a page also has to come from the server's own
   pages: the browser says where a request comes from, and one from anywhere
-  else is refused. Two such requests exist, both a form of the start page or
-  of the answer's page: the press of the button, and Stop.
+  else is refused. Three such requests exist, each a form of the start page
+  or of the answer's page: the press of the button, Stop, and **Set it up**.
 - Such a request may carry a form of at most 4096 bytes. One that carries
   more, or does not say how much, is refused unread, and so is one that ends
   before the length it stated. Nothing in a form is
   used as a path or as a command: a scenario has to be one the config names,
   a number of launches a whole number from 1 to 20, an investigation one the
-  project has.
+  project has, what to set up one of the names the page offered, and a time
+  limit a number of seconds from 0.1 to 60. The one file a setup creates is
+  `echolot.yml` in the project's folder, whatever a form says.
 - It serves the pages it draws and no file. No address is turned into a path
   on disk.
 - A page fetches nothing from anywhere else: no font, no script, no image.
@@ -235,7 +329,8 @@ Two at once are fine: each has its own port and its own token.
 
 ## What it writes
 
-Reading a page writes nothing. A press does, all of it under `.echolot/`:
+Reading a page writes nothing. A press of the button does, all of it under
+`.echolot/`:
 
 | file | what it is |
 |---|---|
@@ -243,6 +338,15 @@ Reading a page writes nothing. A press does, all of it under `.echolot/`:
 | `.echolot/log/check.collect.log`, `check.analyze.log`, `check.compare.log` | what each command printed, as it printed it |
 | `.echolot/log/check.stop` | a request to stop, while one is pending |
 | `before.json` beside the report | the report before a **Check again**, for `compare` |
+
+**Set it up** writes into the project itself, once, and the page lists every
+file before the press:
+
+| file | what it is |
+|---|---|
+| `echolot.yml` | the config `echolot scan` drafts, created and never written over |
+| what `echolot init` writes | the files for an agent, lines in `.gitignore`, `.echolot/hosts.json`: only where echolot was never set up here |
+| `.echolot/log/setup.json`, `setup.init.log` | that run of `init`: its state, and what it printed |
 
 The commands themselves write what they always write: the recordings, the
 report, the comparison, their own lines in `.echolot/log/runs.jsonl`. The

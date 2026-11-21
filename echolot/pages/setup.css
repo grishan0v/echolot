@@ -1,0 +1,20 @@
+/* Setting a project up from the start page: what a press writes, file by
+   file, and the CLI's own words under a sentence of the page's. The cards, the
+   field in a sentence, the button and the list of a run are the start page's. */
+
+/* every file a press writes, in groups by what it is for */
+.writes { display: grid; gap: var(--s3); padding-left: 0; list-style: none; counter-reset: writes; max-width: var(--col); }
+.writes > li { display: grid; gap: var(--s1); padding-top: var(--s2); border-top: 1px solid var(--line); }
+.writes > li > p { color: var(--ink-2); }
+.files { display: grid; gap: 2px; list-style: none; padding-left: 0; }
+.files li { overflow-wrap: anywhere; }
+.files .sub { font-size: var(--t-xs); }
+
+/* what `echolot scan` says, under the page's own sentence */
+#setup .says { overflow-wrap: anywhere; max-width: 68ch; }
+#setup .who { font-family: var(--mono); padding: 0 4px; border-radius: var(--r1); background: var(--hover); white-space: nowrap; }
+#setup .callout .says code { background: var(--hover); }
+#setup .yaml { max-width: var(--col); }
+
+/* the other way, the agent's: under the button, behind a hairline */
+#setup .other { padding-top: var(--s4); border-top: 1px solid var(--line); max-width: var(--col); }

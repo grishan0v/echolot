@@ -104,6 +104,7 @@ plain words as a page, one file that opens from disk. `echolot hunt --show --htm
 writes an investigation the same way: what the agent found, where, and what to change.
 `echolot ui` opens a page on this machine with whether everything is ready, a
 button that records and analyses the app, the reports and the agent's answers.
+In a project with no config yet it writes the first one, for how the app opens.
 
 <details>
 <summary><b>Example report</b></summary>

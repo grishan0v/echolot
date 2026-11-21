@@ -38,14 +38,15 @@ _RING, _SPIN = '<i class="ring"></i>', '<i class="spin"></i>'
 _ROW_ICON = {"done": "green", "failed": "red", "stopped": "grey", "cut": "grey"}
 
 
-def _ready(view: dict[str, Any], again: str) -> str:
+def _ready(view: dict[str, Any], again: str, lead: bool = True) -> str:
     """The three sentences, each after its icon, and Refresh. The link is the
-    screen's one next step while something is in the way."""
+    screen's one next step while something is in the way, unless the page
+    has another (`lead` is off): a project is set up with no phone at hand."""
     lines = view["ready"]
     items = "".join(
         f'<li>{kit.icon(line["tone"])}<span><span class="vh">{e(line["state"])}: </span>'
         f'<b>{e(line["lead"])}</b> {kit.prose(line["text"])}</span></li>' for line in lines)
-    blocked = any(line["tone"] == "red" for line in lines)
+    blocked = lead and any(line["tone"] == "red" for line in lines)
     button = (f'<a class="btn {"primary" if blocked else "line"}" href="{e(again)}">Refresh</a>')
     return (f'<div class="start-ready stack gap-3"><ul class="ready" aria-label="Is everything ready">{items}</ul>'
             f'<div class="rowf">{button}<span class="small sub">Reads everything anew.</span></div></div>')
@@ -339,12 +340,17 @@ def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = ()) ->
             f'{folder}</div></details></div>')
 
 
-def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str, Any] | None = None) -> str:
+def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str, Any] | None = None,
+           setup: dict[str, Any] | None = None) -> str:
     """The start page for one reading of the project (`ready.read`).
 
     `check` is the button and the last run (`check.view`), for a server that
     takes a press. Without it the page reads only, and the next step is a
     command to copy.
+
+    `setup` is the part that sets a project up, already drawn
+    (`setup_page.parts`): what stands in place of the button and the next
+    step, or in front of them, with its own styles and script.
     """
     name = view.get("name")
     step = view["next"]
@@ -362,11 +368,18 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
         body = _check(check, step, link) + ("" if "what" in step else _next(step, red=False))
     else:
         body = _next(step)
+    css, js, lead = CSS, JS, True
+    if setup:
+        going = going or bool(setup.get("going"))
+        # Where setup has the screen's one next step, Refresh is not it.
+        lead = not setup.get("instead")
+        body = setup.get("instead") or (setup.get("before") or "") + body
+        css, js = CSS + tuple(setup.get("css") or ()), JS + tuple(setup.get("js") or ())
     body = f'<div class="start-body stack gap-6">{body}{_reports(view, link)}</div>'
-    main = (f'<main><div class="wide start">{head}{_ready(view, link("start") or "")}{body}'
+    main = (f'<main><div class="wide start">{head}{_ready(view, link("start") or "", lead)}{body}'
             f'{_settings(view, launches)}</div></main>')
     page = f'<div class="page no-dock">{kit.topbar([name, view.get("scenario")], steps)}{main}</div>'
-    return kit.document("echolot" + (f": {name}" if name else ""), page, css=CSS, js=JS, policy=kit.SERVED,
+    return kit.document("echolot" + (f": {name}" if name else ""), page, css=css, js=js, policy=kit.SERVED,
                         head_html=_REFRESH if going else "")
 
 

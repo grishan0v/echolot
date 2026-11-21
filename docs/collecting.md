@@ -100,7 +100,8 @@ The scenario that needs nothing more is `scenario.window: launch`: its window
 is the launch this mode starts, and the trace says where it ends, so nobody
 picks an end anchor before the first recording. `echolot scan` drafts the
 two together, this runner and that window, for an app with a launcher
-Activity and no macrobenchmark. See
+Activity and no macrobenchmark, and [`echolot ui`](ui.md#setting-a-project-up)
+writes that draft as `echolot.yml` at a press. See
 [A window that is the launch](analysing.md#a-window-that-is-the-launch).
 For a project whose macrobenchmark measures the launch, `scan` drafts the
 same window with the [`gradle`](#gradle--the-macrobenchmark-writes-its-own)

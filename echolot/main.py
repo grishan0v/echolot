@@ -4820,7 +4820,10 @@ def cmd_ui(args) -> int:
     one button runs `collect`, `analyze --html` and `compare` as the commands
     they are, in a process of their own (`check.py`, `job.py`), and what those
     write is all that is written, beside this command's own line in
-    .echolot/log/runs.jsonl. The server and what it refuses are in `ui.py`.
+    .echolot/log/runs.jsonl. In a project with no config, **Set it up** comes
+    first (`project_setup.py`): it creates `echolot.yml` from the draft
+    `scan` proposes, never over a file that is there, and runs `init` where
+    echolot was never set up. The server and what it refuses are in `ui.py`.
     """
     from . import ui
 
@@ -5360,7 +5363,11 @@ def build_parser() -> argparse.ArgumentParser:
                           "scan` say behind it. Its button checks the app: it runs "
                           "`collect`, `analyze --html` and, once a report was there "
                           "before, `compare`, as the commands they are, and shows how far "
-                          "the run is. The project is read anew for every page; the "
+                          "the run is. In a project with no config its first button sets "
+                          "one up: it writes the `echolot.yml` that `echolot scan` drafts "
+                          "for how the app opens, never over a file that is there, and "
+                          "runs `echolot init` where echolot was never set up. The project "
+                          "is read anew for every page; the "
                           "address carries a token made at every start, and a request "
                           "without it is refused. Reading a page writes nothing.")
     web.add_argument("-c", "--config", default="echolot.yml",
