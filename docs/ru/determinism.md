@@ -18,12 +18,12 @@ echolot doctor
 
   python           3.14.7
   platform         Darwin / x86_64
-  perfetto         0.57.2
+  perfetto         0.59.1
   PyYAML           6.0.3
   rich-argparse    1.8.0
-  trace_processor  v56.1
+  trace_processor  v59.1
 
-  binary: /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46
+  binary: /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-df38039845244c35
   (the name is a SHA-256 prefix: contents verified on download)
 
 ## The .claude/ layer in this project
@@ -49,7 +49,7 @@ echolot наружу. Это режим для субагента перед с�
 читателю в той же сессии пришлось бы платить контекстом снова.
 
 ```
-echolot 0.17.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
+echolot 0.17.0 · trace_processor v59.1 · perfetto 0.59.1 · python 3.14.7
 layer: current (10 files)
 self-check: 182 of 182 passed
 ```
@@ -192,7 +192,7 @@ Android 13 (Galaxy A51). Маски имён для GC, блокировок и 
 
 ## Почему версия `trace_processor` зафиксирована
 
-В `pyproject.toml` прописано `perfetto==0.57.2`, и это не формальность.
+В `pyproject.toml` прописано `perfetto==0.59.1`, и это не формальность.
 
 `trace_processor` — не просто утилита для выполнения SQL, это **словарь**.
 Строки, по которым фильтруют детекторы, придумывает он сам:
@@ -227,16 +227,16 @@ SHA-256 под каждую архитектуру; бинарник скачи�
 stderr:
 
 ```
-[i] trace_processor v56.1 is not on this machine yet — downloading it once, 13.4 MB, the build the perfetto package pins:
-      from https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v56.1/mac-amd64/trace_processor_shell
-      into /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46
+[i] trace_processor v59.1 is not on this machine yet — downloading it once, 15.7 MB, the build the perfetto package pins:
+      from https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v59.1/mac-amd64/trace_processor_shell
+      into /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-df38039845244c35
 ```
 
 Stdout остаётся чистым для результата команды, так что первый же
 `names --json` выведет валидный JSON. Загрузка идёт средствами `perfetto`:
 `curl` качает во временный файл, затем проверяется SHA-256 из манифеста и
 файл переименовывается в целевое имя (оно содержит первые 16 hex-символов
-хэша). Размер — 10–14 МБ в зависимости от платформы. `echolot --version`
+хэша). Размер — 11–16 МБ в зависимости от платформы. `echolot --version`
 печатает зафиксированную версию без загрузки.
 
 Если загрузка падает, временный файл удаляется, и команда выходит с кодом 2,

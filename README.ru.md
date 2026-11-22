@@ -175,7 +175,7 @@ _names a thread that burns CPU with no slice around it. The agent does not guess
 
 **Silent:** anr, anr_risk, app_init, binder_txn, gc_pressure, io_wait, main_thread_kernel_waits, main_thread_waits, repeated_work, runnable_starvation
 
-<sub>trace_processor v56.1</sub>
+<sub>trace_processor v59.1</sub>
 ```
 
 То, что `analyze` выводит для встроенного демо-приложения: пять холодных стартов несуществующего приложения, сгенерированных кодом.
@@ -188,7 +188,7 @@ _names a thread that burns CPU with no slice around it. The agent does not guess
 - телефон или эмулятор с включённой отладкой по USB; Android 12+ для `frame_jank`
 - git 2.36 или новее для установки плагина в Claude Code
 
-Первая команда, которой нужен `trace_processor`, скачает его один раз: 10–14 МБ с проверкой SHA-256. Для работы офлайн или за прокси см. [Детерминизм](https://github.com/grishan0v/echolot/blob/main/docs/ru/determinism.md).
+Первая команда, которой нужен `trace_processor`, скачает его один раз: 11–16 МБ с проверкой SHA-256. Для работы офлайн или за прокси см. [Детерминизм](https://github.com/grishan0v/echolot/blob/main/docs/ru/determinism.md).
 
 ## Документация
 
