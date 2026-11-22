@@ -742,3 +742,26 @@ def test_the_styles_and_scripts_ship_with_the_package():
     check("the form's script reaches out to nothing; the one that asks how far is the answer page's alone",
           "fetch(" not in (folder / "dig.js").read_text() and "fetch(" in (folder / "dig_poll.js").read_text()
           and dig_page.FORM_JS == ("dig.js",) and dig_page.POLL_JS == ("dig_poll.js",))
+
+
+def test_the_served_report_has_the_time_limit_and_dig_deeper(tmp_path, monkeypatch, adb):
+    """#485 puts the time limit beside the verdict of the same page: both are
+    there, the limit where #485 put it and Dig deeper where this puts it."""
+    from echolot.pages import limit_page
+    from tests.test_ui_limit import written
+    monkeypatch.chdir(tmp_path)
+    made = Project(tmp_path)
+    written(made)
+    made.traces().report()
+    for rel in dig.LAYER:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("the layer echolot init installs\n", encoding="utf-8")
+    site, _, _ = serving(made)
+    body = get(site, "report").body
+    shown = page(get(site, "report"))
+    check("the time limit beside the verdict", shown.all("section", id=limit_page.ID)
+          and body.index(f'id="{limit_page.ID}"') < body.index('class="tb report"'))
+    check("the way to the agent in the request dialog", shown.one("form", id="ask-start-form").attrs["action"]
+          == f"/{site.token}/dig/ask")
+    check("and the same as boxes where script is off", 'class="stack gap-3 dig-no-js"' in body)
+    check("each brings its own styles", "/* Dig deeper from the page" in body and "lim" in body)
