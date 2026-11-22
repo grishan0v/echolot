@@ -242,8 +242,8 @@ def _quiet(toolchain: dict) -> dict:
 @pytest.mark.parametrize("toolchain,footer", [
     ({"trace_processor": "v48.0", "source": "toolchain.tp_binary", "binary": CUSTOM},
      "trace_processor v48.0 (custom binary from toolchain.tp_binary, pin bypassed)"),
-    ({"trace_processor": "v56.1", "source": "pinned", "binary": None},
-     "trace_processor v56.1"),
+    ({"trace_processor": "v59.1", "source": "pinned", "binary": None},
+     "trace_processor v59.1"),
 ], ids=["custom", "pinned"])
 def test_a_report_where_nothing_fired_keeps_silent_and_the_footer(toolchain, footer):
     lines = report_mod.to_markdown(_quiet(toolchain)).splitlines()

@@ -41,7 +41,7 @@ Also `adb` on `PATH` and an Android phone or emulator with USB debugging on.
   sources that `instrumentation.allowed` permits, and `echolot mark --remove`
   takes them out.
 - **Fetches**, once: `trace_processor` from Perfetto's artifact storage,
-  checked against the SHA-256 the `perfetto` package pins, 10 to 14 MB. With
+  checked against the SHA-256 the `perfetto` package pins, 11 to 16 MB. With
   `runner.compose_names` on, the `tracing-perfetto-binary` library from
   Gradle's cache or Google's Maven, checked against its SHA-1.
 - **Sends** nothing anywhere.

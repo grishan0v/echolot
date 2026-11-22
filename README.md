@@ -190,7 +190,7 @@ _names a thread that burns CPU with no slice around it. The agent does not guess
 
 **Silent:** anr, anr_risk, app_init, binder_txn, gc_pressure, io_wait, main_thread_kernel_waits, main_thread_waits, repeated_work, runnable_starvation
 
-<sub>trace_processor v56.1</sub>
+<sub>trace_processor v59.1</sub>
 ```
 
 What `analyze` prints for the demo that comes with echolot: five cold starts
@@ -204,7 +204,7 @@ of an app that does not exist, built by code.
 - a phone or emulator with USB debugging on; Android 12+ for `frame_jank`
 - git 2.36 or newer, for Claude Code to install the plugin
 
-The first command that needs `trace_processor` downloads it once: 10–14 MB,
+The first command that needs `trace_processor` downloads it once: 11–16 MB,
 checked against its SHA-256. Offline or behind a proxy, see
 [Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md).
 

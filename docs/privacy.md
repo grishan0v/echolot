@@ -78,7 +78,7 @@ Two downloads, each once per version:
 - **trace_processor**, the program that reads a trace. The build the
   `perfetto` Python package pins, from Perfetto's artifact storage
   (`commondatastorage.googleapis.com/perfetto-luci-artifacts`), checked
-  against the SHA-256 in that package's manifest. 10 to 14 MB, the first
+  against the SHA-256 in that package's manifest. 11 to 16 MB, the first
   time a command needs it. `--tp-binary`, or `toolchain.tp_binary` in
   `local.yml`, names a binary of your own instead, and then nothing is
   downloaded. [The download](determinism.md#the-download) says more.

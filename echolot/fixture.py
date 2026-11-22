@@ -115,7 +115,93 @@ SF_THREADS = {SF_PID: "surfaceflinger"}
 # rate is deliberately ignored: what matters is which frames the detector
 # picks up, not that they form a plausible 60 Hz sequence.
 
-FT = pb.FrameTimelineEvent
+# Starting with Perfetto v58 (google/perfetto#6456), FrameTimelineEvent (field
+# 76 on TracePacket) moved out of perfetto_trace.proto into an out-of-tree
+# Android extension, so newer perfetto wheels omit pb.FrameTimelineEvent while
+# trace_processor still decodes field 76 on the wire. Register it on the
+# descriptor pool when the installed perfetto package no longer carries it.
+_FT_EXT_NAME = "com.android.internal.frame_timeline_event"
+
+
+def _frame_timeline_ext():
+    from google.protobuf import descriptor_pb2
+
+    pool = pb.DESCRIPTOR.pool
+    try:
+        return pool.FindExtensionByName(_FT_EXT_NAME)
+    except KeyError:
+        pass
+    T = descriptor_pb2.FieldDescriptorProto
+    fdp = descriptor_pb2.FileDescriptorProto(
+        name="echolot_frame_timeline_ext.proto",
+        package="com.android.internal",
+        dependency=[pb.DESCRIPTOR.name],
+    )
+    msg = fdp.message_type.add()
+    msg.name = "FrameTimelineEvent"
+    for mname, fields in (
+        ("ExpectedDisplayFrameStart", [
+            ("cookie", 1, T.TYPE_INT64), ("token", 2, T.TYPE_INT64), ("pid", 3, T.TYPE_INT32)]),
+        ("ActualDisplayFrameStart", [
+            ("cookie", 1, T.TYPE_INT64), ("token", 2, T.TYPE_INT64), ("pid", 3, T.TYPE_INT32),
+            ("present_type", 4, T.TYPE_INT32), ("on_time_finish", 5, T.TYPE_BOOL),
+            ("gpu_composition", 6, T.TYPE_BOOL), ("jank_type", 7, T.TYPE_INT32),
+            ("prediction_type", 8, T.TYPE_INT32)]),
+        ("ExpectedSurfaceFrameStart", [
+            ("cookie", 1, T.TYPE_INT64), ("token", 2, T.TYPE_INT64),
+            ("display_frame_token", 3, T.TYPE_INT64), ("pid", 4, T.TYPE_INT32),
+            ("layer_name", 5, T.TYPE_STRING)]),
+        ("ActualSurfaceFrameStart", [
+            ("cookie", 1, T.TYPE_INT64), ("token", 2, T.TYPE_INT64),
+            ("display_frame_token", 3, T.TYPE_INT64), ("pid", 4, T.TYPE_INT32),
+            ("layer_name", 5, T.TYPE_STRING), ("present_type", 6, T.TYPE_INT32),
+            ("on_time_finish", 7, T.TYPE_BOOL), ("gpu_composition", 8, T.TYPE_BOOL),
+            ("jank_type", 9, T.TYPE_INT32), ("prediction_type", 10, T.TYPE_INT32)]),
+        ("FrameEnd", [("cookie", 1, T.TYPE_INT64)]),
+    ):
+        nested = msg.nested_type.add()
+        nested.name = mname
+        for fname, num, ftype in fields:
+            f = nested.field.add()
+            f.name, f.number, f.label, f.type = fname, num, T.LABEL_OPTIONAL, ftype
+    for fname, num, tname in (
+        ("expected_display_frame_start", 1, "ExpectedDisplayFrameStart"),
+        ("actual_display_frame_start", 2, "ActualDisplayFrameStart"),
+        ("expected_surface_frame_start", 3, "ExpectedSurfaceFrameStart"),
+        ("actual_surface_frame_start", 4, "ActualSurfaceFrameStart"),
+        ("frame_end", 5, "FrameEnd"),
+    ):
+        f = msg.field.add()
+        f.name, f.number, f.label, f.type = fname, num, T.LABEL_OPTIONAL, T.TYPE_MESSAGE
+        f.type_name = f".com.android.internal.FrameTimelineEvent.{tname}"
+    ext = fdp.extension.add()
+    ext.name, ext.number, ext.label, ext.type = (
+        "frame_timeline_event", 76, T.LABEL_OPTIONAL, T.TYPE_MESSAGE)
+    ext.type_name = ".com.android.internal.FrameTimelineEvent"
+    ext.extendee = "." + pb.TracePacket.DESCRIPTOR.full_name
+    pool.AddSerializedFile(fdp.SerializeToString())
+    return pool.FindExtensionByName(_FT_EXT_NAME)
+
+
+class _FrameTimelineConstants:
+    JANK_NONE = 1
+    JANK_SF_CPU_DEADLINE_MISSED = 16
+    JANK_APP_DEADLINE_MISSED = 64
+    JANK_BUFFER_STUFFING = 128
+    PRESENT_ON_TIME = 1
+    PRESENT_LATE = 2
+    PREDICTION_VALID = 1
+
+
+FT = getattr(pb, "FrameTimelineEvent", _FrameTimelineConstants)
+_FT_EXT = (None if "frame_timeline_event" in pb.TracePacket.DESCRIPTOR.fields_by_name
+           else _frame_timeline_ext())
+
+
+def _frame_timeline(packet):
+    return packet.frame_timeline_event if _FT_EXT is None else packet.Extensions[_FT_EXT]
+
+
 LAYER = "com.example.app/com.example.app.MainActivity#0"
 
 APP_FRAMES = [
@@ -960,14 +1046,14 @@ def _span(builder, cookies, kind, start_ms, dur_ms, **fields) -> None:
     cookie = next(cookies)
     packet = builder.add_packet()
     packet.timestamp = ms(start_ms)
-    event = getattr(packet.frame_timeline_event, kind)
+    event = getattr(_frame_timeline(packet), kind)
     event.cookie = cookie
     for key, value in fields.items():
         setattr(event, key, value)
 
     packet = builder.add_packet()
     packet.timestamp = ms(start_ms + dur_ms)
-    packet.frame_timeline_event.frame_end.cookie = cookie
+    _frame_timeline(packet).frame_end.cookie = cookie
 
 
 def _frames(builder) -> None:
