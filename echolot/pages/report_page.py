@@ -468,7 +468,7 @@ def _technical(report: dict[str, Any], ctx: Any, several: bool) -> str:
 
 def render(report: dict[str, Any], where: str | None = None, last: bool = True, *,
            steps: Sequence[tuple[str, str, bool]] = (), crumb: str | None = None,
-           policy: str | None = None) -> str:
+           policy: str | None = None, limit: dict[str, Any] | None = None) -> str:
     """The page for a report, as one self-contained HTML document.
 
     `where` is how the request for an agent names the report.json the page
@@ -479,6 +479,9 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
     (`echolot ui`); a page written to disk has none. `crumb` says which report
     this is when it is not the scenario's last: "investigation 3, report 2".
     `policy` is the content policy of a page that is served (`kit.SERVED`).
+    `limit` is the time limit beside the verdict, already drawn, with its own
+    styles (`limit_page.beside`): only a served page has it, since a page on
+    disk cannot change a config.
     """
     report = _read(report)
     ctx = plain._Ctx(report)
@@ -487,11 +490,11 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
     hot = sum(1 for c in checks if c["hot"])
     w = report.get("window") or {}
     main = ('<main><div class="wide stack gap-6">'
-            + _verdict(report, ctx) + _NO_SCRIPT + _table(checks, report, ctx) + _next_step(checks)
+            + _verdict(report, ctx) + (limit or {}).get("html", "") + _NO_SCRIPT + _table(checks, report, ctx) + _next_step(checks)
             + "<hr>" + _technical(report, ctx, several)
             + "".join(_panel(c, ctx, several) for c in checks) + "</div></main>")
     body = (f'<div class="page">{kit.topbar([w.get("process"), report.get("scenario"), crumb], steps)}{main}</div>'
             + (kit.dock(hot) + kit.ask(*_request(report, where, last)) + kit.sprites() if hot else "")
             + kit.peek("check", "Back to the report"))
     title = "echolot report" + (f": {report['scenario']}" if report.get("scenario") else "")
-    return kit.document(title, body, css=CSS, js=JS, policy=policy)
+    return kit.document(title, body, css=CSS + tuple((limit or {}).get("css") or ()), js=JS, policy=policy)
