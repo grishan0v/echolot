@@ -313,6 +313,10 @@ def unattended(n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> s
         f"- You may run `echolot`, `./gradlew` and `adb` without asking, and edit files under {where}, and "
         f"`{VERDICT}`. Everything else is refused: git, any other program, any other file. Do not commit "
         "anything.",
+        # Both refusals of a real run were habitual compound commands, each
+        # a turn lost.
+        "- Run one command per call: a loop, or a chain with another program, is refused, and each refusal costs "
+        "a turn.",
         f"- Close the investigation with your verdict, as /echolot-hunt says: "
         f"`echolot hunt --done --verdict {VERDICT}`.",
     ])

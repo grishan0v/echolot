@@ -189,7 +189,10 @@ def test_the_request_of_an_agent_started_from_the_page():
     check("what it may do, and that the rest is refused", rest[4] == "- You may run `echolot`, `./gradlew` and `adb` "
           "without asking, and edit files under `app/src/main` and `feature/*/src/main`, and `.echolot/verdict.json`. "
           "Everything else is refused: git, any other program, any other file. Do not commit anything.")
-    check("and how it ends", rest[5] == "- Close the investigation with your verdict, as /echolot-hunt says: "
+    check("one command per call, since a loop or a chain with another program is refused",
+          rest[5] == "- Run one command per call: a loop, or a chain with another program, is refused, and each "
+                     "refusal costs a turn.")
+    check("and how it ends", rest[6] == "- Close the investigation with your verdict, as /echolot-hunt says: "
           "`echolot hunt --done --verdict .echolot/verdict.json`.")
     bare = dig.unattended(2, None, [""])
     check("with no recordings set aside, the first round records them; the whole project is named so",
