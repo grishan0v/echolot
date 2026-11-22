@@ -328,17 +328,17 @@ def test_a_limit_is_written_as_the_scenarios_budget(project, typed, ms):
           cfg.get("scenario"))
     text = (project.root / "echolot.yml").read_text(encoding="utf-8")
     line = next(row for row in text.splitlines() if "budget_ms" in row)
+    row = setting(page_of(site), "Time limit")
+    field = row.one("input", name="limit")
     if ms:
         check("the line says what it is, for whoever opens the file", line.startswith(f"  budget_ms: {ms}  # the time limit, ")
               and "change the number to change it" in line, line)
-        said = setting(page_of(site), "Time limit").text
-        check("and the page shows it afterwards with the line to edit, since it writes no config that exists",
-              f"budget_ms: {ms}" in said and said.endswith("To change it, edit that line under scenario: in echolot.yml."), said)
+        check("and the page shows it afterwards, in the field that changes it (#485)", f"budget_ms: {ms}" in row.text
+              and field.attrs.get("value") == f"{ms / 1000:g}" and "edit that line" not in row.text, (row.text, field.attrs))
     else:
         check("with none the line is there as a comment, ready to be switched on", line.startswith("  # budget_ms: 2000  # "), line)
-        said = setting(page_of(site), "Time limit").text
-        check("and the page says none is set, and which line sets one", said.startswith("None is set.") and said.endswith(
-            "A line under scenario: in echolot.yml sets one, in milliseconds: budget_ms: 2000 is 2 seconds."), said)
+        check("and the page says none is set, with the field that sets one (#485)", row.text.startswith("None is set.")
+              and "value" not in field.attrs and "A line under scenario:" not in row.text, (row.text, field.attrs))
 
 
 @pytest.mark.parametrize("typed", ["fast", "0", "0.05", "61", "100", "-1", "+2", "1e3", "2.5s", "1.2345", "1 000", "2.5.1",

@@ -32,11 +32,14 @@ marks (`_source: derived`, with the evidence), because the person saw two
 names and judged neither the process pattern nor the runner's numbers. An
 agent that later finds one of those wrong may still put it right.
 
-The time limit is written when the file is created, and never after. A config
+The time limit is written when the file is created, as one line with a comment
+of the page's own (`LIMIT_SET`, or `LIMIT_OFF` where none was given). A config
 is a file a person edits and may hold comments, and echolot has no writer that
 keeps them; a second place for the limit would be a second source of truth
 that neither `analyze` in a terminal nor CI reads. So afterwards the page
-shows the line to edit, and the file itself holds that line with a comment.
+changes that one line and nothing else, while it still reads as the page
+wrote it (`echolot/time_limit.py`), and shows the line to edit where it does
+not.
 """
 
 from __future__ import annotations
@@ -74,6 +77,16 @@ _CLASS_LINE = re.compile(r"`[\w.]+` \(")
 
 HEADER = ("# Written by `echolot ui` from what `echolot scan` read in this repository.\n"
           "# Every value says where it came from (`_source`, `_evidence`). The file is yours to edit.\n\n")
+
+# The line of the time limit, under the scenario's window: the number with a
+# comment of the page's own, or, with no limit, the same key commented out.
+# `echolot/time_limit.py` rewrites this one line later, and only while it
+# still reads so: other words here would make the page leave alone every file
+# it wrote before them.
+LIMIT_SET = "  budget_ms: {ms}  # the time limit, {words}: change the number to change it"
+LIMIT_OFF = ("  # budget_ms: {ms}  # a time limit in milliseconds: take the first `#` off, and the report holds "
+             "the launch against it")
+LIMIT_SHOWN = 2000
 
 Refusal = check.Refusal
 
@@ -175,14 +188,31 @@ def _reads(text: str) -> dict[str, Any] | None:
     return raw
 
 
+def limit_line(limit_ms: int | None) -> str:
+    """The line of the time limit as the page writes it, without its end."""
+    if limit_ms:
+        return LIMIT_SET.format(ms=limit_ms, words=plain.hum(limit_ms))
+    return LIMIT_OFF.format(ms=LIMIT_SHOWN)
+
+
+def limit_ms(text: str) -> int | None:
+    """A time limit as the field takes it, in whole milliseconds: seconds from
+    `LIMIT_MIN_S` to `LIMIT_MAX_S`, a point or a comma for the decimal, None
+    for an empty field. `ValueError` for anything else."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    seconds = float(text.replace(",", ".")) if _LIMIT.fullmatch(text) else None
+    if seconds is None or not LIMIT_MIN_S <= seconds <= LIMIT_MAX_S:
+        raise ValueError(text)
+    return int(round(seconds * 1000))
+
+
 def config_text(drafted: dict[str, Any], limit_ms: int | None = None) -> str:
     """The file a press writes: the draft, and under the scenario's window the
     time limit, as a line that says what it is. With no limit the line is
     there as a comment, for whoever sets one later."""
-    if limit_ms:
-        line = (f"  budget_ms: {limit_ms}  # the time limit, {plain.hum(limit_ms)}: change the number to change it")
-    else:
-        line = "  # budget_ms: 2000  # a time limit in milliseconds: take the first `#` off, and the report holds the launch against it"
+    line = limit_line(limit_ms)
     out, inside = [], False
     for text in drafted["text"].splitlines():
         out.append(text)
@@ -417,15 +447,12 @@ def asked(form: dict[str, str]) -> dict[str, Any]:
     if form.get("what") != LAUNCH:
         raise Refusal("This press cannot be read", "The page sent a choice echolot does not offer. Go back to the "
                       "start page and choose there.", 400)
-    text = (form.get("limit") or "").strip()
-    if not text:
-        return {"what": LAUNCH, "limit_ms": None}
-    seconds = float(text.replace(",", ".")) if _LIMIT.fullmatch(text) else None
-    if seconds is None or not LIMIT_MIN_S <= seconds <= LIMIT_MAX_S:
+    try:
+        return {"what": LAUNCH, "limit_ms": limit_ms(form.get("limit") or "")}
+    except ValueError:
         raise Refusal("That is not a time limit", f"The limit is a number of seconds from {LIMIT_MIN_S:g} to "
                       f"{LIMIT_MAX_S:g}, like 2 or 2.5. Leave the field empty to set none. Go back, put it right "
-                      "and press Set it up again. Nothing was written.", 400)
-    return {"what": LAUNCH, "limit_ms": int(round(seconds * 1000))}
+                      "and press Set it up again. Nothing was written.", 400) from None
 
 
 def steps(project: Path) -> list[dict[str, Any]]:

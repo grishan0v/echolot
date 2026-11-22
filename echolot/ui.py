@@ -16,7 +16,10 @@ process and `collect` write, so a reloaded page, a second tab and a server
 started again all show the same. A third sets a project up
 (`echolot/project_setup.py`): it creates `echolot.yml` from the draft `scan`
 proposes, never over a file that is there, and where echolot was never set up
-it runs `echolot init` the same way, as a process of its own.
+it runs `echolot init` the same way, as a process of its own. A fourth sets
+or changes the time limit afterwards (`echolot/time_limit.py`): it rewrites
+the one line of that `echolot.yml` the page wrote for the limit, while the
+line still reads as the page wrote it, and nothing else in the file.
 
 What it will and will not answer:
 
@@ -35,8 +38,9 @@ What it will and will not answer:
   and its body is a form of at most `BODY_CAP` bytes. Nothing in a form is
   used as a path or as a command: a scenario is one the config names, a
   number of launches is a small whole number, an investigation is one the
-  project has, what to set up is one of the names the page offered, and a
-  time limit is a number of seconds in a stated range.
+  project has, what to set up is one of the names the page offered, a time
+  limit is a number of seconds in a stated range, and the fingerprints of
+  the config a page saw are compared with the file's, never opened.
 - It serves the pages it draws and nothing else. There is one table of
   routes, no route reads a file by a path taken from the address, and no page
   fetches anything from elsewhere: a served page may send a form to this
@@ -61,11 +65,13 @@ from urllib.parse import parse_qs, quote, unquote
 
 from . import check, job, ready, recorder, state
 from . import project_setup
+from . import time_limit
 from . import hunt as hunt_mod
 from . import main as cli
 from .config import ConfigError
 from .pages import answer_page, compare_page, kit, report_page, start_page
 from .pages import setup_page
+from .pages import limit_page
 
 HOST = "127.0.0.1"
 READS = ("GET", "HEAD")
@@ -193,7 +199,9 @@ def _start(visit: Visit, params: dict[str, str]) -> Page:
                                                 view["ready"]), site.url) if site.url("setup") else None
     if setup and setup.get("instead"):
         found = None
-    return Page(start_page.render(view, site.url, visit.steps("start"), check=found, setup=setup))
+    # The time limit under All settings, where the server takes that press.
+    limit = limit_page.setting(time_limit.view(site.project, site.config, visit.st), site.url)
+    return Page(start_page.render(view, site.url, visit.steps("start"), check=found, setup=setup, limit=limit))
 
 
 def _nothing(visit: Visit, title: str, text: str, status: int = 404) -> Page:
@@ -209,6 +217,7 @@ def _report(visit: Visit, params: dict[str, str]) -> Page:
     """The last report: of the scenario this page is about, or of the one
     named, drawn from its report.json now and not read from a page on disk."""
     st, rep, mine = visit.st, visit.st.get("report"), True
+    name = None
     if "scenario" in params:
         name = unquote(params["scenario"])
         found = next((sc for sc in st.get("scenarios") or [] if sc["name"] == name), None)
@@ -223,8 +232,12 @@ def _report(visit: Visit, params: dict[str, str]) -> Page:
     except ConfigError as e:
         return _nothing(visit, "The report does not read", f"{e}. Run `echolot analyze` again to write it anew.")
     where = cli._shown_path(rep["path"], visit.site.project)
+    # The time limit beside the verdict: this is a scenario's last report,
+    # read with the limit the config had then.
+    limit = limit_page.beside(time_limit.view(visit.site.project, visit.site.config, st, report=data, scenario=name),
+                              visit.site.url)
     return Page(report_page.render(data, where=where, last=True, steps=visit.steps("report" if mine else None),
-                                   policy=kit.SERVED))
+                                   policy=kit.SERVED, limit=limit))
 
 
 def _hunt_report(visit: Visit, params: dict[str, str]) -> Page:
@@ -381,6 +394,20 @@ def _setup_progress(visit: Visit, params: dict[str, str]) -> Page:
     return Page(setup_page.progress(project_setup.progress(visit.site.project)))
 
 
+def _set_limit(visit: Visit, params: dict[str, str]) -> Page:
+    """Set or change the time limit (`echolot/time_limit.py`): rewrite the one
+    line of `echolot.yml` the page wrote for it, as the file is now. Refused,
+    it answers with a page that says why and that nothing was written; taken,
+    or the same press again, it sends the browser back to the limit."""
+    site = visit.site
+    try:
+        press = time_limit.asked(visit.form)
+        time_limit.write(site.project, site.config, press)
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    return Page("", 303, f"{site.url(press['back'])}#{limit_page.ID}")
+
+
 # ---------------------------------------------------------------------------
 # the routes: one table. A page is one entry here; a request that changes
 # something is one entry with another `method`.
@@ -414,6 +441,7 @@ ROUTES: list[Route] = [
     Route("check-state", "check/state", _progress),
     Route("setup", "setup", _set_up, method="POST"),
     Route("setup-state", "setup/state", _setup_progress),
+    Route("limit", "limit", _set_limit, method="POST"),
 ]
 
 # A part of an address that names something. Numbers are digits; a name is
