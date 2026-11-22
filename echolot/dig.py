@@ -9,10 +9,12 @@ would run by hand in a terminal:
 
 The first is run by the server, before anything else, and the second as a job
 (`echolot/job.py`), a process beside the server, so that pages go on being
-drawn for the tens of minutes it takes. Claude Code is the one client the
-page starts (#449): Codex is #454, and Cursor stays on the request to copy.
+drawn for the tens of minutes it takes. Two clients can be started (#449,
+#454), each through an adapter of the table at the end of this module:
+Claude Code, whose parts are the functions of this module, and Codex, whose
+parts are `echolot/dig_codex.py`. Cursor stays on the request to copy.
 
-What is decided here and nowhere else:
+What is decided here and nowhere else, for Claude Code:
 
 - whether Claude Code can be started from here (`find`): installed, new
   enough to be told that nobody can answer, and signed in;
@@ -28,6 +30,9 @@ What is decided here and nowhere else:
   round, and between rounds the phase, from what the agent is running (a
   build, a recording, the phone) and not from anything it printed; how long
   nothing has moved; and once it ended, how, with what it left in the code.
+
+And for every client: which ones the page offers, in which order (`offer`),
+and everything after a press that is the same for all of them.
 
 Nothing is written to Claude Code's own settings, and nothing to `echolot.yml`.
 """
@@ -106,12 +111,16 @@ _run: Callable[[list[str]], subprocess.CompletedProcess | None] = _ask
 
 @dataclass
 class Client:
-    """Claude Code as the page finds it on this computer. `why` is why it
-    cannot be started from here, in a sentence; None when it can."""
+    """A client as the page finds it on this computer: Claude Code unless
+    `key` names another of the table. `why` is why it cannot be started from
+    here, in a sentence; None when it can. `how` is how it is signed in, for
+    a client that names no account (Codex: "with ChatGPT")."""
     program: str | None = None
     version: str | None = None
     account: str | None = None
     why: str | None = None
+    key: str = PROGRAM
+    how: str | None = None
 
     @property
     def can(self) -> bool:
@@ -381,10 +390,11 @@ def why_not(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], clie
         return check_mod._stops_all(st)
     if not client.can:
         return client.why
-    gone = layer_missing(project)
-    if gone:
-        return (f"Not yet: this project does not have echolot's commands for {CLIENT} ({_listed(gone)}). "
-                "`echolot init` in the project's folder installs them.")
+    # What the project needs for this client: Claude Code's commands, or
+    # Codex's rules.
+    unready = adapter(client.key).ready(project)
+    if unready:
+        return unready
     hunt = st.get("hunt") or {}
     if hunt and (hunt.get("status") or "open") == "open":
         asked_ = f" (\"{hunt['question']}\")" if hunt.get("question") else ""
@@ -438,6 +448,7 @@ def start(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], report
     why = why_not(project, st, lines, client)
     if why:
         raise Refusal("The agent cannot start", why)
+    agent = adapter(client.key)
     known = st.get("config") or {}
     try:
         cfg = Config.load(known["path"], scenario=known.get("scenario"))
@@ -461,23 +472,29 @@ def start(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], report
         said = _last_line(done.stderr) or _last_line(done.stdout) or "it said nothing"
         raise Refusal("The investigation could not be opened", f"`echolot hunt` said: {said}", 500)
     n = int(opened["n"])
-    text = request(report, picks, where, n, _aside(project, name, began), paths)
-    grant = rules(paths)
-    step = {"id": STEP, "argv": command(str(client.program), text, grant), "shown": shown(grant),
-            "tree": True, "unset": list(UNSET)}
-    what = {"client": PROGRAM, "hunt": n, "question": question, "scenario": name,
-            "picks": [c["key"] for c in picks], "report": where, "budget_usd": BUDGET_USD}
+    aside = _aside(project, name, began)
+    text = report_page.request_text(report, picks, where, last=True) + "\n\n" + agent.unattended(n, aside, paths)
+    step = {"id": STEP, "argv": agent.argv(str(client.program), text, paths, project),
+            "shown": agent.shown(paths, project), "tree": True, "unset": list(agent.unset)}
+    idle = agent.idle(n)
+    if idle:
+        step["idle"] = idle
+    what = {"client": agent.key, "hunt": n, "question": question, "scenario": name,
+            "picks": [c["key"] for c in picks], "report": where, **agent.what()}
+    # What the project holds before it starts, for a client whose edits its
+    # grant cannot keep to the allowed folders.
+    agent.before(project, n, paths)
     try:
         return job.start(project, JOB, [step], what, spawn=spawn)
     except job.Refused as e:
         # Nobody will work in the investigation just opened: it is closed,
         # with that said, so that it holds nothing back.
         with contextlib.suppress(OSError, subprocess.SubprocessError):
-            run([*echolot, "hunt", "--done", f"Not started: echolot ui could not start {CLIENT} ({e}).",
+            run([*echolot, "hunt", "--done", f"Not started: echolot ui could not start {agent.name} ({e}).",
                  "-c", str(known["path"])], cwd=str(project), capture_output=True, text=True, timeout=120,
                 stdin=subprocess.DEVNULL, errors="replace")
-        raise Refusal(f"{CLIENT} did not start", f"echolot could not start it: {e}. The investigation it was to "
-                      "work in was closed again.", 500) from None
+        raise Refusal(f"{agent.name} did not start", f"echolot could not start it: {e}. The investigation it was "
+                      "to work in was closed again.", 500) from None
 
 
 def stop(project: Path) -> bool:
@@ -657,18 +674,24 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
     moved, and whether it was asked to stop. Once it ended: a sentence of
     the page's on how, the agent's last words and what it spent, and what is
     left in the code, with the presses that clear it up. `count` off leaves
-    out the count of markers in the sources, which walks every source file:
-    a page that only says which one is running needs none.
+    out the count of markers in the sources, which walks every source file,
+    and the files a client changed outside the allowed folders, which walks
+    the project: a page that only says which one is running needs neither.
     """
     run = run if run is not None else job.read(project, JOB)
     if run is None:
         return None
     now = time.time() if now is None else now
     what = run.get("what") or {}
+    agent = adapter(what.get("client"))
+    who = agent.name
     n = what.get("hunt") if isinstance(what.get("hunt"), int) else None
     hunt = hunt_mod.find(project, str(n)) if n else None
     step = next(iter(run.get("steps") or []), {})
     status = run["status"]
+    # Ended by the job because nothing had moved for as long as the client's
+    # adapter allows, or being ended so right now.
+    idle = run.get("why") == job.IDLE
     out: dict[str, Any] = {
         "status": status, "hunt": n, "question": what.get("question"), "scenario": what.get("scenario"),
         "hunt_status": (hunt or {}).get("status") or ("open" if hunt else None),
@@ -681,6 +704,7 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
         "phase": None, "quiet": None, "stuck": False, "stopping": False, "title": "", "text": "", "said": None,
         "cost": None, "denied": [], "left": None, "can_close": False, "can_unmark": False, "capped": False,
         "budget": what.get("budget_usd") if isinstance(what.get("budget_usd"), (int, float)) else BUDGET_USD,
+        "who": who, "client": agent.key, "idle": idle, "ends_idle": agent.idle_s, "outside": None,
     }
     if status == job.RUNNING:
         table = procs()
@@ -689,47 +713,55 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
         out["stuck"] = out["quiet"] >= QUIET_S
         with contextlib.suppress(OSError):
             out["stopping"] = job.stop_path(project, JOB).read_text(encoding="utf-8").strip() == str(run.get("pid"))
+        out["stopping"] = out["stopping"] or idle
         return out
 
-    found = result(project)
-    out["cost"], out["denied"], out["capped"] = cost(found), denied(found), capped(found)
+    found = agent.result(project)
+    out["cost"], out["denied"], out["capped"] = agent.cost(found), agent.denied(found), agent.capped(found)
     answered = out["hunt_status"] == "concluded"
-    words = last_words(found)
+    words = agent.last_words(found)
     if status == job.DONE and out["verdict"]:
-        out["title"] = f"{CLIENT} finished."
+        out["title"] = f"{who} finished."
         out["text"] = "Its answer is on this page."
     elif out["capped"] and status in (job.DONE, job.FAILED):
         # Whatever its exit code: the cap is the reason, and the page says so.
         out["title"] = f"It reached the spending cap of ${out['budget']:g}."
-        out["text"] = (f"{CLIENT} stopped by itself when its own estimate of what it had spent reached the cap the "
+        out["text"] = (f"{who} stopped by itself when its own estimate of what it had spent reached the cap the "
                        "page sets, before it had an answer"
                        + (". It closed the investigation before that." if answered else
                           ". The investigation is still open, with the rounds it has."))
     elif status == job.DONE and answered:
-        out["title"] = f"{CLIENT} finished."
+        out["title"] = f"{who} finished."
         out["text"] = ("It closed the investigation with a few words and no table of causes: they are this page's "
                        "headline.")
     elif status == job.DONE:
-        out["title"] = f"{CLIENT} finished, and wrote down no answer."
+        out["title"] = f"{who} finished, and wrote down no answer."
         out["text"] = "The investigation is still open, with the rounds it has. Its last words are below."
     elif status == job.FAILED:
-        out["title"] = f"{CLIENT} stopped with an error."
+        out["title"] = f"{who} stopped with an error."
         out["text"] = ("It ended before it had an answer. What it said is below: a sign-in that ran out, or a "
-                       "limit of your plan, is put right in Claude Code itself.") if not answered else \
+                       f"limit of your plan, is put right in {who} itself.") if not answered else \
             "It ended with an error after the investigation was closed. What it said is below."
+    elif status == job.STOPPED and idle:
+        out["title"] = f"Stopped: nothing had moved for {_minutes(agent.idle_s or QUIET_S)}."
+        out["text"] = (f"{who} had run nothing, written nothing and recorded nothing for that long. That is how it "
+                       "waits for an answer to a question, and nobody is here to give one, so the page ended it and "
+                       "everything it had started.")
     elif status == job.STOPPED:
         out["title"] = "Stopped."
-        out["text"] = f"{CLIENT} and everything it had started were ended."
+        out["text"] = f"{who} and everything it had started were ended."
     else:
         out["title"] = "This run was cut short."
-        out["text"] = (f"The process that ran {CLIENT} is gone: `echolot ui` was stopped, the terminal was closed, "
+        out["text"] = (f"The process that ran {who} is gone: `echolot ui` was stopped, the terminal was closed, "
                        "or the computer went to sleep.")
     if not (status == job.DONE and out["verdict"]):
-        lines = [line for line in words.splitlines() if line.strip()][-12:] if words else \
-            job.said(project, JOB, STEP)
+        lines = [line for line in words.splitlines() if line.strip()][-12:] if words else agent.tail(project)
         # Ended from outside, it printed nothing: nothing to show of it.
         if lines or status not in (job.STOPPED, job.INTERRUPTED):
-            out["said"] = {"who": CLIENT, "lines": lines, "log": out["log"]}
+            out["said"] = {"who": who, "lines": lines, "log": out["log"]}
+    if count:
+        # Whatever way it ended: what it changed where its grant did not keep it.
+        out["outside"] = agent.outside(project, run)
     if not out["verdict"]:
         out["can_close"] = out["hunt_status"] == "open"
         if count:
@@ -738,18 +770,27 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
     return out
 
 
+def _minutes(seconds: float) -> str:
+    whole = int(seconds // 60)
+    return "a minute" if whole == 1 else f"{whole} minutes"
+
+
 def closing_words(seen: dict[str, Any]) -> str:
     """What the investigation is closed with when the page closes it: what
     came of it, in a sentence, since no answer did."""
+    who = seen.get("who") or CLIENT
     rounds = seen.get("rounds") or 0
     after = f"after {rounds} round{'s' if rounds != 1 else ''}" if rounds else "before its first round"
     if seen.get("capped"):
-        return (f"{CLIENT} stopped at its spending cap of ${seen.get('budget') or BUDGET_USD:g}, {after}, with no "
+        return (f"{who} stopped at its spending cap of ${seen.get('budget') or BUDGET_USD:g}, {after}, with no "
                 "answer. Closed from echolot ui.")
+    if seen.get("idle") and seen.get("status") == job.STOPPED:
+        return (f"Stopped from echolot ui once {who} had done nothing for "
+                f"{_minutes(seen.get('ends_idle') or QUIET_S)}, {after}, with no answer. Closed from echolot ui.")
     how = {job.STOPPED: "Stopped from echolot ui",
-           job.FAILED: f"{CLIENT} ended with an error",
-           job.INTERRUPTED: f"Cut short, the process that ran {CLIENT} gone",
-           job.DONE: f"{CLIENT} finished and wrote down nothing"}.get(seen.get("status"), "Left")
+           job.FAILED: f"{who} ended with an error",
+           job.INTERRUPTED: f"Cut short, the process that ran {who} gone",
+           job.DONE: f"{who} finished and wrote down nothing"}.get(seen.get("status"), "Left")
     return f"{how}, {after}, with no answer. Closed from echolot ui."
 
 
@@ -791,3 +832,118 @@ def progress(project: Path, procs: Callable[[], list[dict[str, Any]]] = job.proc
     """The run alone, for a page that is already drawn and asks how far it
     is: no count of markers, which is drawn with the page."""
     return view(project, None, procs=procs, count=False)
+
+
+# ---------------------------------------------------------------------------
+# the clients the page starts: one adapter each, and the order it offers them
+
+
+class ClaudeCode:
+    """Claude Code (#449), whose parts are the functions above. Its grant is
+    its command line: what it may run, and edits limited to the allowed
+    folders by its own rules. It refuses a question rather than waits for
+    one, stops at a spending cap, and prints one JSON object at the end."""
+
+    key, name, program = PROGRAM, CLIENT, PROGRAM
+    unset = UNSET
+    # It refuses a question nobody can answer and goes on: nothing waits, and
+    # the job ends nothing for having been quiet.
+    idle_s: float | None = None
+
+    def find(self) -> Client:
+        return find()
+
+    def ready(self, project: Path) -> str | None:
+        """Why this project cannot have it now: the command that hunts and the
+        agent it hands the loop to, which `echolot init` installs."""
+        gone = layer_missing(project)
+        if gone:
+            return (f"Not yet: this project does not have echolot's commands for {CLIENT} ({_listed(gone)}). "
+                    "`echolot init` in the project's folder installs them.")
+        return None
+
+    def argv(self, program: str, text: str, paths: Sequence[str], project: Path) -> list[str]:
+        return command(program, text, rules(paths))
+
+    def shown(self, paths: Sequence[str], project: Path) -> str:
+        return shown(rules(paths))
+
+    def unattended(self, n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> str:
+        return unattended(n, aside, paths)
+
+    def idle(self, n: int) -> dict[str, Any] | None:
+        return None
+
+    def what(self) -> dict[str, Any]:
+        return {"budget_usd": BUDGET_USD}
+
+    def before(self, project: Path, n: int, paths: Sequence[str]) -> None:
+        """Nothing to note first: its own rules keep its edits to the allowed folders."""
+
+    def terms(self, project: Path) -> dict[str, Any]:
+        """What the screen before the start says of it besides the rest."""
+        return {"own_allow": own_allow(project), "budget": BUDGET_USD}
+
+    def result(self, project: Path) -> dict[str, Any] | None:
+        return result(project)
+
+    def cost(self, found: dict[str, Any] | None) -> str | None:
+        return cost(found)
+
+    def denied(self, found: dict[str, Any] | None) -> list[str]:
+        return denied(found)
+
+    def capped(self, found: dict[str, Any] | None) -> bool:
+        return capped(found)
+
+    def last_words(self, found: dict[str, Any] | None) -> str:
+        return last_words(found)
+
+    def tail(self, project: Path) -> list[str]:
+        return job.said(project, JOB, STEP)
+
+    def outside(self, project: Path, run: dict[str, Any]) -> dict[str, Any] | None:
+        return None
+
+
+CLAUDE = ClaudeCode()
+
+
+def clients() -> tuple[Any, ...]:
+    """The table: every client the page can start, in the order it offers
+    them when nothing says otherwise. Codex's adapter is a module of its own,
+    read when the table is."""
+    from . import dig_codex
+    return (CLAUDE, dig_codex.CODEX)
+
+
+def adapter(key: str | None) -> Any:
+    """A client's adapter by its key. A run that names none, or none of the
+    table, is Claude Code's: the runs #449 started name it."""
+    return next((a for a in clients() if a.key == key), CLAUDE)
+
+
+def find_all() -> list[Client]:
+    """Every client of the table as the page finds it on this computer."""
+    return [a.find() for a in clients()]
+
+
+def offer(project: Path, found: Sequence[Client], st: dict[str, Any],
+          lines: list[dict[str, Any]]) -> list[tuple[Client, str | None]]:
+    """The clients found, each with why a press would start nothing with it
+    now (None when it would), in the order the page offers them: the one the
+    last run started from here used first, since that is the person's own
+    choice, then the table's order, which puts the one whose edits its grant
+    keeps to the allowed folders first."""
+    last = ((job.read(project, JOB) or {}).get("what") or {}).get("client")
+    order = sorted(found, key=lambda c: c.key != last)
+    return [(c, why_not(project, st, lines, c)) for c in order]
+
+
+def pick(offered: Sequence[tuple[Client, str | None]], key: str | None = None) -> tuple[Client, str | None] | None:
+    """The client a press is about: the one its address names, or else the
+    first that can start, or else the first. None when the address names a
+    client the table does not have."""
+    if key is not None:
+        return next(((c, why) for c, why in offered if c.key == key), None)
+    return next(((c, why) for c, why in offered if why is None), offered[0] if offered else None)

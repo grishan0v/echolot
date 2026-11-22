@@ -5753,9 +5753,9 @@ def cmd_ui(args) -> int:
     first (`project_setup.py`): it creates `echolot.yml` from the draft
     `scan` proposes, never over a file that is there, and runs `init` where
     echolot was never set up. From a report it can start the person's own
-    Claude Code on the checks they tick, under their account and at its cost,
-    once a screen has said what it will do (`dig.py`). The server and what it
-    refuses are in `ui.py`.
+    Claude Code or Codex on the checks they tick, under their account and at
+    its cost, once a screen has said what it will do (`dig.py`,
+    `dig_codex.py`). The server and what it refuses are in `ui.py`.
     """
     from . import ui
 
@@ -6375,7 +6375,7 @@ def build_parser() -> argparse.ArgumentParser:
                           "one up: it writes the `echolot.yml` that `echolot scan` drafts "
                           "for how the app opens, never over a file that is there, and "
                           "runs `echolot init` where echolot was never set up. From a "
-                          "report it can start your own Claude Code on the checks you "
+                          "report it can start your own Claude Code or Codex on the checks you "
                           "tick, under your account and at its cost, once a screen has "
                           "said what it will do. The project "
                           "is read anew for every page; the "
