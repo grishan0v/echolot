@@ -102,6 +102,7 @@ An 81 MB trace with 475k slices comes out as a 14 KB `report.json` in about
 five seconds. `echolot analyze --html` adds `report.html`: the same report in
 plain words as a page, one file that opens from disk. `echolot hunt --show --html`
 writes an investigation the same way: what the agent found, where, and what to change.
+`echolot compare --html` does it for two reports: did it get better, and which checks moved.
 `echolot ui` opens a page on this machine with whether everything is ready, a
 button that records and analyses the app, the reports and the agent's answers.
 In a project with no config yet it writes the first one, for how the app opens.

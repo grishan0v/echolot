@@ -516,6 +516,9 @@ def read(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any]) -> 
     verdict = _verdict(before, after, cmp, ctx)
     budget = _number((after.get("verdict") or {}).get("budget_ms"))
     out: dict[str, Any] = {
+        # What the two reports are of, as they name it: a page's heading.
+        "scenario": after.get("scenario") or before.get("scenario"),
+        "process": (after.get("window") or {}).get("process") or (before.get("window") or {}).get("process"),
         "verdict": verdict,
         "window": {"noun": ctx.noun, "before": _window_side(before), "after": _window_side(after),
                    "budget_ms": budget},

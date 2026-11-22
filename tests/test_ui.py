@@ -632,13 +632,13 @@ def test_a_page_is_one_entry_and_its_link_appears_with_it(project, monkeypatch):
     check("no link", [a.text for a in page.one("ul", "invs").all("a")] == ["Report 1"]
           and not [a for a in page.all("a") if "answer" in a.attrs["href"]])
     check("and no page", get(site, "answer").status == 404 and get(site, "hunt/1/answer").status == 404)
-    # The comparison is not built. When it is, this is all the server needs.
+    # This is all the server needs for a page to come.
     monkeypatch.setattr(ui, "ROUTES", [*ui.ROUTES, ui.Route(
-        "after", "after", lambda visit, params: ui.Page("<p>after the fix</p>"), step="After the fix")])
+        "next", "next", lambda visit, params: ui.Page("<p>the next page</p>"), step="The next page")])
     page = read(get(site).body)
     check("a page to come is one entry: its step", [a.text for a in page.one("nav", "steps").all("a")]
-          == ["Start", "Report", "After the fix"])
-    check("and the page", get(site, "after").body == "<p>after the fix</p>")
+          == ["Start", "Report", "The next page"])
+    check("and the page", get(site, "next").body == "<p>the next page</p>")
 
 
 def test_every_link_of_every_page_leads_to_a_page(project):

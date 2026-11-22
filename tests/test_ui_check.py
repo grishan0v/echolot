@@ -28,7 +28,6 @@ import http.client
 import io
 import json
 import os
-import re
 import socket
 import sys
 import time
@@ -503,35 +502,43 @@ def test_check_again_compares_with_the_report_before_it(project):
         "To tell a change from chance it takes four launches a side: All settings has the number."),
         hint(page))
     check("what a press runs ends with compare", setting(page, "What a press runs").all("pre")[-1].text
-          == "echolot compare .echolot/out/before.json -c echolot.yml")
+          == "echolot compare .echolot/out/before.json -c echolot.yml --html")
     check("pressed", press(site, fields={"what": "record:coldStart"}).status == 303)
     before = project.root / ".echolot" / "out" / "before.json"
     check("the report before it was kept beside the new one", before.read_bytes() == earlier)
     check("and compare was given it, after the two others", [r[0] for r in echolot.ran] == ["collect", "analyze", "compare"]
-          and echolot.ran[2] == ["compare", str(before), "-c", str(project.root / "echolot.yml")], echolot.ran[2])
+          and echolot.ran[2] == ["compare", str(before), "-c", str(project.root / "echolot.yml"), "--html"], echolot.ran[2])
+    written = json.loads((project.root / ".echolot" / "out" / "comparison.json").read_text())
     check("what compare writes is kept where it writes it",
-          (project.root / ".echolot" / "out" / "comparison.md").is_file()
-          and json.loads((project.root / ".echolot" / "out" / "comparison.json").read_text())["kind"] == "comparison")
+          (project.root / ".echolot" / "out" / "comparison.md").is_file() and written["kind"] == "comparison")
+    check("with its plain reading and the page of it", "plain" in written
+          and (project.root / ".echolot" / "out" / "comparison.html").is_file())
     page = page_of(site)
     check("the comparison is a row of the run", rows(page)[-1] == ("done", "Comparing with the report before it", "done"))
     said = page.one("p", id="run-compare").text
-    check("one sentence says a comparison was made, in compare's own words", said.startswith(
-        "It was compared with the report before it. echolot compare says: Scenario window: 1920.0 → 1500.0 ms"), said)
-    printed = (project.root / ".echolot" / "out" / "comparison.md").read_text(encoding="utf-8").replace("**", "")
-    for line in re.search(r"says: (.*?)\. The whole", said).group(1).split("; "):
-        check(f"compare printed it: {line}", " ".join(line.split()) in " ".join(printed.split()), printed[:400])
+    verdict = written["plain"]["verdict"]
+    check("one sentence says a comparison was made, in the words of its plain reading", said
+          == f"It was compared with the report before it. {verdict['headline']}. {verdict['text']} See what changed"
+          and verdict["headline"] == "Faster by 0.4 s", said)
     check("the new report is the one on show", "The launch takes 1.5 s" in page.one("ul", "reps").text)
-    check("no page of the comparison yet, so no link: where the whole of it is", not page.one("p", id="run-compare").all("a")
-          and "comparison.md" in said)
+    link = page.one("p", id="run-compare").one("a")
+    check("and a link leads to the page of the comparison", link.attrs["href"] == f"/{site.token}/after")
+    after = read(get(site, "after").body)
+    check("which says the same, as a page", after.one("h1").text == "Faster by 0.4 s"
+          and [a.text for a in after.one("nav", "steps").all("a")] == ["Start", "Report", "After the fix"]
+          and after.one("nav", "steps").one("a", aria_current="page").text == "After the fix")
 
 
 def test_the_link_to_the_comparison_appears_with_its_page(project, monkeypatch):
     project.ready().traces().report()
     site, _ = serving(project, window=1500.0)
     press(site, fields={"what": "record:coldStart"})
-    monkeypatch.setattr(ui, "ROUTES", [*ui.ROUTES, ui.Route("after", "after", lambda visit, params: ui.Page("<p>after</p>"))])
     link = page_of(site).one("p", id="run-compare").one("a")
     check("a route named `after` is all it takes", link.attrs["href"] == f"/{site.token}/after" and link.text == "See what changed")
+    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if r.name != "after"])
+    said = page_of(site).one("p", id="run-compare")
+    check("without the route there is no link: where the whole of it is", not said.all("a") and "comparison.md" in said.text,
+          said.text)
 
 
 def test_a_run_that_ended_is_history_once_something_newer_happened(project):
@@ -957,7 +964,8 @@ def test_the_scenario_chosen_goes_to_the_commands_as_an_argument(project):
     check("the first one, checked again", press(site, fields={"what": "record:coldStart", "launches": "4"}).status == 303)
     check("named in every command, and compared with its own report before", echolot.ran[0] == [
         "collect", "-c", config, "-n", "4", "--scenario", "coldStart"] and echolot.ran[2] == [
-        "compare", str(project.root / ".echolot" / "out" / "coldStart" / "before.json"), "-c", config, "--scenario", "coldStart"],
+        "compare", str(project.root / ".echolot" / "out" / "coldStart" / "before.json"), "-c", config, "--scenario", "coldStart",
+        "--html"],
         echolot.ran)
     check("and nothing was written to the config", (project.root / "echolot.yml").read_bytes() == before)
 
@@ -1005,7 +1013,7 @@ def test_the_answers_page_has_the_button_in_its_place(project, demo_report):
     config = str(project.root / "echolot.yml")
     check("the line the page gives to copy, started from the page: collect as the config has it", echolot.ran[0] == [
         "collect", "-c", config], echolot.ran[0])
-    check("and compare against the first report the investigation filed", echolot.ran[2] == ["compare", str(first), "-c", config])
+    check("and compare against the first report the investigation filed", echolot.ran[2] == ["compare", str(first), "-c", config, "--html"])
     check("no copy of a report was needed", not (project.root / ".echolot" / "out" / "before.json").exists())
 
 

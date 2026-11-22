@@ -1,0 +1,44 @@
+/* The comparison: the notes under its verdict, the two lanes of a chart that
+   holds a before and an after, and its table's columns at the three widths. */
+
+/* under the verdict: an icon and a sentence whose first words are bold */
+.notes { display: grid; gap: var(--s2); max-width: 68ch; }
+.notes li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 10px; }
+.notes .ico { margin-top: 4px; }
+.notes p { overflow-wrap: anywhere; }
+
+/* the whole window before and after: a short name, the plot, the figure */
+.lead-chart .cr { grid-template-columns: 4.5rem minmax(0, 1fr) 6rem; }
+@container (max-width: 520px) { .lead-chart .cr { grid-template-columns: minmax(0, 1fr) auto; } }
+
+/* two lanes on one axis: before above, after below */
+.cr-p.two { height: 36px; }
+.two .bar.b { top: 6px; background: var(--data-soft); } .two .dot.b { top: 6px; background: var(--ink-2); }
+.two .bar.a, .two .dot.a { top: 22px; }
+.k-bar.b { background: var(--data-soft); }
+
+/* Check (title, then what changed), Change, Before, After, Details */
+.c-b { grid-area: b; } .c-a { grid-area: a; }
+.c-n { font-size: var(--t-sm); line-height: 1.6; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.c-b, .c-a { text-align: right; }
+.c-n[data-label]::before { content: attr(data-label); display: none; color: var(--ink-2); font: 400 var(--t-sm)/1.4 var(--sans); }
+.tb.moves { --cols: minmax(0, 1.6fr) 9.5rem 5.5rem 5.5rem 6rem; --areas: "t l b a go"; }
+@container (max-width: 899px) {
+  .tb.moves { --cols: minmax(0, 1fr) 9.5rem 4.5rem 4.5rem; --areas: "t l b a" "t go go go"; }
+  .tb.moves .tb-h { --areas: "t l b a"; } .tb.moves .tb-h .c-go { display: none; }
+  .tb.moves .c-go { align-self: end; }
+}
+@container (max-width: 559px) {
+  .tb.moves { --cols: auto auto minmax(0, 1fr); --areas: "l l l" "t t t" "b a ." "go go go"; }
+  .tb.moves .c-b, .tb.moves .c-a { text-align: left; }
+  .tb.moves .tr .c-b::before, .tb.moves .tr .c-a::before { display: inline; padding-right: 6px; }
+  .tb.moves .tr.quiet { --areas: "l l l" "t t t" "go go go"; }
+  .tb.moves .tr.quiet .c-b, .tb.moves .tr.quiet .c-a { display: none; }
+  .tb.moves .c-go { align-self: auto; }
+}
+/* With script off there is nothing to open. */
+.no-js .tb.moves .c-go { display: none; }
+
+/* a side of a check in the panel: what that report said, then its level in words */
+.side { display: grid; gap: 2px; }
+.side > * { min-width: 0; overflow-wrap: anywhere; }

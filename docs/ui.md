@@ -182,14 +182,17 @@ some other way, or the day is over, the page shows the project as it stands.
 compares the new report with the one before it:
 
 ```bash
-echolot compare .echolot/out/before.json -c echolot.yml
+echolot compare .echolot/out/before.json -c echolot.yml --html
 ```
 
 `analyze` writes the new report over the last one, so the last one is copied
 to `before.json` beside it first. What `compare` writes stays where it writes
-it, `comparison.md` and `comparison.json` beside the report, and the page says
-in `compare`'s own words that a comparison was made. A page for the comparison
-is not built yet.
+it, `comparison.md`, `comparison.json` and `comparison.html` beside the report.
+The start page says what came of it in the words of the comparison's
+[plain reading](compare.md#a-plain-reading), "Faster by 0.7 s. The launch went
+from 2.1 s to 1.4 s, 33% less. Measured on 3 launches before and 3 after.",
+and **See what changed** leads to the page of the comparison, **After the
+fix**.
 
 **Recordings that are already there** are read without the phone: when a
 scenario has recordings newer than its report, or recordings and no report,
@@ -248,8 +251,8 @@ said, not linked.
 
 ## The other pages
 
-The top bar is a path through them: **Start**, **Report**, **Agent's answer**.
-A step is there once it has something to show.
+The top bar is a path through them: **Start**, **Report**, **Agent's answer**,
+**After the fix**. A step is there once it has something to show.
 
 - **Report** is the last report of the scenario the start page is about.
 - **Agent's answer** is the newest investigation as
@@ -263,6 +266,16 @@ A step is there once it has something to show.
   row on the start page. The link says what it leads to: "Agent's answer",
   "The rounds so far" for one still open, "Its rounds" for one that was left
   when the next question was asked.
+
+- **After the fix** is [the comparison as a page](compare.md#the-comparison-as-a-page):
+  the last report against the one before it. It is there once a report has
+  been compared and the comparison is of the report the **Report** step shows:
+  a comparison older than that report is of the one before, and is not shown.
+  It is drawn from `comparison.json` at that moment, so it needs the plain
+  reading in it, which `compare --html` and `compare --plain` write; a
+  comparison made in a terminal with neither flag is a table for a terminal,
+  and the step stays away. With several scenarios each has its own, behind
+  the link of its own run.
 
 On the answer's page **Check again** stands beside the line that page gives to
 copy, and runs that line: `collect` with the config's own number of launches,
@@ -338,6 +351,7 @@ Reading a page writes nothing. A press of the button does, all of it under
 | `.echolot/log/check.collect.log`, `check.analyze.log`, `check.compare.log` | what each command printed, as it printed it |
 | `.echolot/log/check.stop` | a request to stop, while one is pending |
 | `before.json` beside the report | the report before a **Check again**, for `compare` |
+| `comparison.html` beside the report | the comparison as a page, the one **After the fix** shows; `compare --html` writes it with the comparison |
 
 **Set it up** writes into the project itself, once, and the page lists every
 file before the press:
