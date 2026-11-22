@@ -423,8 +423,9 @@ investigation with its verdict.
 rounds come in as they always do (each report it files, round by round), and
 above them a line says what the agent is doing, read from what runs under it
 and never from what it prints: building the app, putting it on the phone,
-recording, reading the recordings, putting markers in, writing down the
-answer, or, with none of those, reading the code and deciding. When nothing
+recording, reading the recordings, putting markers in, looking at the
+investigation, writing down the answer (only while it closes the
+investigation), or, with none of those, reading the code and deciding. When nothing
 has moved for about ten minutes (no round, no build, no recording), the page
 says so beside **Stop**. A build can take that long, and the page names it
 when one is still running.
