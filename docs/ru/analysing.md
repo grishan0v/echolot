@@ -188,6 +188,43 @@ LLM — по фиксированным шаблонам в заголовках
 `/echolot-hunt`). Если `report.html` уже существует в папке вывода, каждый
 последующий `analyze` автоматически обновляет его.
 
+Проверку, которая что-то нашла, можно отметить галочкой. **Dig deeper** собирает
+из отмеченного запрос для агента, чтобы скопировать его в агента, открытого на
+проекте:
+
+```text
+/echolot-hunt `coldStart` takes 1,136 ms, the median of 5 launches, and has no time limit set. Find what is behind the rows below, and where that is in the code.
+
+The report warns, and these come first:
+- 1 detector(s) could not run, because the trace does not hold what they read. Their silence says nothing about the app. `composables` — The recording does not carry the names of composables, which have to be switched on when recording. A recording that holds what they read lets them look; until then those checks are open.
+
+The rows of the report it stands on:
+- App Deadline Missed · frame_jank · 427.51 ms, 5/5 runs · Self Jank · 4 of 19 frames · longest 188.7 ms
+- inflate · main_thread_block · 222.68 ms, 5/5 runs · com.example.app
+- draw · main_thread_block · 120.8 ms, 5/5 runs · com.example.app
+- TextLayout:initLayout · main_thread_block · 73.95 ms, 5/5 runs · com.example.app
+- Lock contention on a monitor lock (owner tid: 12931) · main_thread_block · 61.6 ms, 5/5 runs · com.example.app
+
+Traces: the 5 behind .echolot/out/report.json (the last report). After which change: unknown.
+```
+
+Это демо-приложение с отмеченными «Frames that came late» и «Heavy work on the
+main thread». Одно расследование отвечает на один вопрос, поэтому запрос
+начинается с одного вопроса: сколько длится сценарий, при заданном лимите — по
+сравнению с ним («against a time limit of 500 ms. Find what makes it slower than
+the limit»), и что найти. Дальше идут предупреждения из верхней части отчёта,
+его же словами, и первым — якорь, который ничего не нашёл: они говорят, насколько
+можно доверять числам отчёта. Отмеченные проверки идут следом как то, на чём
+стоит вопрос: по четыре самые крупные строки каждой и строка о том, сколько ещё
+у неё есть; остальное агент прочитает в самом отчёте.
+
+Кнопка рядом с **Dig deeper** отмечает, с чего начать: проверки, которым нужно
+внимание, а если таких нет — две, нашедшие самое крупное. Если отмечено больше
+трёх, окно говорит, что одно расследование смотрит на один вопрос, и советует
+отметить меньше. Файл с диска сам ничего не запускает; тот же отчёт, открытый
+через `echolot ui`, может запустить Claude Code на этом запросе
+([Агент со страницы](ui.md#агент-со-страницы)).
+
 ## На что ушёл холодный старт
 
 Если в трейсе есть запуск приложения, `analyze` добавляет разбивку
