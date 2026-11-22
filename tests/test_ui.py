@@ -332,6 +332,25 @@ def test_it_listens_on_this_machine_only(project):
         check("and the start page answers there", status == 200 and "Let's see how fast" in body, status)
 
 
+def test_it_starts_without_asking_the_resolver_for_its_name(project, monkeypatch):
+    """A reverse lookup of 127.0.0.1 can take half a minute; the server must not wait on one (#489)."""
+    asked = []
+
+    def getfqdn(*args, **kwargs):
+        asked.append(args)
+        raise AssertionError("the server asked the resolver for its name")
+
+    monkeypatch.setattr(socket, "getfqdn", getfqdn)
+    project.ready()
+    with running(project) as server:
+        check("no name was looked up", asked == [], asked)
+        check("its name is the address it is bound to",
+              (server.server_name, server.server_port) == server.server_address[:2],
+              (server.server_name, server.server_port, server.server_address))
+        status, _, body = ask(server, f"/{server.site.token}/")
+        check("and the start page answers", status == 200 and "Let's see how fast" in body, status)
+
+
 @pytest.mark.parametrize("host", ["evil.example", "evil.example:{port}", "localhost:{port}", "127.0.0.1",
                                   "127.0.0.1:1", "[::1]:{port}", None])
 def test_a_request_under_another_name_is_refused(project, host):

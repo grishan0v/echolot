@@ -62,6 +62,7 @@ import os
 import re
 import secrets
 import shlex
+import socketserver
 import subprocess
 import sys
 import threading
@@ -840,6 +841,17 @@ class Server(ThreadingHTTPServer):
         super().__init__((HOST, port), _Handler)
         self.site = site
         site.port = self.server_address[1]
+
+    def server_bind(self) -> None:
+        """Bind as `HTTPServer` does, without asking the resolver for a name.
+
+        `HTTPServer.server_bind` sets `server_name` from `socket.getfqdn(host)`:
+        a reverse lookup of 127.0.0.1 that can take half a minute on a Mac with
+        mDNS or a VPN, before the address is printed (#489). Nothing here reads
+        `server_name`; the `Host` header is checked against the site's own host.
+        """
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         """What a request that fell over leaves in the terminal.
