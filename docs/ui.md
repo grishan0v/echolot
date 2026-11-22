@@ -443,6 +443,9 @@ keeps the markers until it is built and installed again.
   quiet line on how long it ran and what Claude Code says it spent;
 - closed with a few words and no verdict: those words head the page;
 - stopped: said so, with what it left in the code;
+- stopped at the spending cap: "It reached the spending cap of $10", with
+  what Claude Code reports it spent, which its own estimate can put past the
+  cap;
 - failed: "Claude Code stopped with an error", with what it said (a sign-in
   that ran out, a limit of your plan) and where all it printed is;
 - cut short, when `echolot ui` stopped or the computer slept: said so;
