@@ -268,8 +268,14 @@ def _request_lines(c: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+def _weight(c: dict[str, Any]) -> float:
+    """How large the largest thing a check found is: what "the largest"
+    means when the page suggests where to start."""
+    return max((_value(r) for r in c["rows"]), default=0.0)
+
+
 def _row(c: dict[str, Any]) -> str:
-    tick = kit.tick_box(c["key"], c["kind"], c["title"], _request_lines(c)) if c["hot"] else ""
+    tick = kit.tick_box(c["key"], c["kind"], c["title"], _request_lines(c), weight=_weight(c)) if c["hot"] else ""
     return (f'<div class="tr{"" if c["hot"] else " quiet"}" role="row" data-id="{e(c["key"])}" data-group="{c["kind"]}">'
             f'<div class="c-ck" role="cell">{tick}</div>'
             f'<div class="c-t" role="cell"><h3 class="tr-t">{e(c["title"])}</h3><p class="tr-f">{kit.prose(c["said"])}</p></div>'
@@ -283,7 +289,7 @@ def _panel(c: dict[str, Any], ctx: Any, several: bool) -> str:
     same tick, and under a hairline its measurements."""
     tick = ""
     if c["hot"]:
-        tick = (f'<div class="tickrow">{kit.tick_box(c["key"], c["kind"], c["title"], _request_lines(c), twin=True)}'
+        tick = (f'<div class="tickrow">{kit.tick_box(c["key"], c["kind"], c["title"], _request_lines(c), twin=True, weight=_weight(c))}'
                 '<span>Tick this check</span></div>')
     quiet = "" if c["hot"] else ' class="sub"'
     said = f'<p{quiet}>{kit.prose(c["said"])}</p>' if c["said"] else ""
@@ -369,43 +375,120 @@ def _rule(noun: str) -> str:
     ]))
 
 
+def where_to_start(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The checks to start from, as the button under the table ticks them:
+    the ones that need attention, or with none of those the one or two that
+    found the largest thing. One investigation answers one question, and
+    every yellow at once is no question."""
+    hot = [c for c in checks if c["hot"]]
+    red = [c for c in hot if c["kind"] == "red"]
+    return red or sorted(hot, key=lambda c: -_weight(c))[:2]
+
+
+def _start_words(checks: list[dict[str, Any]]) -> tuple[str, str]:
+    """Which checks the page suggests, in words: for the sentence under the
+    table, and for the button that ticks them."""
+    hot = [c for c in checks if c["hot"]]
+    red = [c for c in hot if c["kind"] == "red"]
+    if len(red) == 1:
+        return "the one that needs attention", "Tick the one that needs attention"
+    if red:
+        return f"the {len(red)} that need attention", "Tick the ones that need attention"
+    if len(hot) == 1:
+        return "the one that is worth a look", "Tick the one worth a look"
+    return "the two largest", "Tick the two largest"
+
+
 def _next_step(checks: list[dict[str, Any]]) -> str:
-    """What to do with the rows that found something: tick them, dig deeper."""
+    """What to do with the rows that found something: tick where to start,
+    dig deeper."""
     hot = [c for c in checks if c["hot"]]
     if not hot:
         return ""
     kind = "red" if any(c["kind"] == "red" for c in hot) else "yellow"
-    if len(hot) == 1:
-        text = ("<b>Not sure what to do with this?</b> Tick the one that is red or yellow and press <b>Dig deeper</b>. "
-                "An agent takes it into your code and comes back with the exact places and what to change.")
-    else:
-        text = (f"<b>Not sure what to do with these?</b> Tick the {len(hot)} that are red or yellow and press "
-                "<b>Dig deeper</b>. An agent takes them into your code and comes back with the exact places and "
-                "what to change.")
+    which, _ = _start_words(checks)
+    text = (f"<b>Not sure where to start?</b> Tick {e(which)} and press <b>Dig deeper</b>. One investigation "
+            "answers one question: an agent takes it into your code and comes back with the exact places and "
+            "what to change.")
     return f'<div class="callout fig needs-js">{kit.icon(kind)}<p>{text}</p></div>'
 
 
-def _request(report: dict[str, Any], where: str | None, last: bool) -> tuple[str, str, str]:
-    """The first line of the request, for one row and for several, and its
-    last: what takes how long, on which traces, after which change. The rows
-    between them are the ticked checks' own."""
+# The request's first words: the command that hunts, in an agent that has
+# echolot's layer. The blocks after the question are named in `kit`.
+REQUEST_LEAD = "/echolot-hunt "
+WARN_HEAD, ROWS_HEAD, FOCUS, MANY_NOTE = kit.WARN_HEAD, kit.ROWS_HEAD, kit.FOCUS, kit.MANY_NOTE
+
+
+def question(report: dict[str, Any]) -> str:
+    """The one question an investigation answers, in words: how long the
+    scenario takes, against its limit when one is set, and what to find."""
+    report = _read(report)
     w = report.get("window") or {}
-    lead = "/echolot-hunt "
-    if _is_number(w.get("duration_ms")) and w["duration_ms"] > 0:
-        lead += f"{report.get('scenario') or 'The window'} takes {w['duration_ms']:,.0f} ms"
-        budget = (report.get("verdict") or {}).get("budget_ms")
-        if _is_number(budget):
-            lead += f" against a limit of {budget:,.0f} ms"
-        lead += ". "
-    elif report.get("scenario"):
-        lead += f"Scenario {report['scenario']}. "
-    which = "the last report" if last else "the report"
-    one = f"{lead}Find what is behind this row of {which} and where it is in the code:"
-    many = f"{lead}Find what is behind these rows of {which} and where it is in the code:"
+    name = f"`{report['scenario']}`" if report.get("scenario") else "The window"
+    window = w.get("duration_ms")
+    if not (_is_number(window) and window > 0):
+        return f"{name} has no measured window. Find what is behind the rows below, and where that is in the code."
+    ctx = plain._Ctx(report)
+    n = _runs(report)
+    took = f"{name} takes {window:,.0f} ms" + (f", the median of {n} {ctx.plural}," if n > 1 else "")
+    budget = (report.get("verdict") or {}).get("budget_ms")
+    if _is_number(budget) and budget > 0 and window > budget:
+        return (f"{took} against a time limit of {budget:,.0f} ms. Find what makes it slower than the limit, "
+                "and where that is in the code.")
+    if _is_number(budget) and budget > 0:
+        return (f"{took} and stays within its time limit of {budget:,.0f} ms. Find what is behind the rows below, "
+                "and where that is in the code.")
+    return f"{took} and has no time limit set. Find what is behind the rows below, and where that is in the code."
+
+
+def warnings(report: dict[str, Any]) -> list[str]:
+    """What the report warns of at its top, in its own words: the lines
+    `report.md` marks with ⚠️ above the first check. A missed anchor first:
+    it says whether the window is the scenario's at all."""
+    try:
+        written = report_mod.to_markdown(report)
+    except (KeyError, TypeError, AttributeError):
+        return []
+    found = []
+    for line in written.splitlines():
+        if line.startswith("## "):
+            break
+        if line.startswith("> ⚠️"):
+            found.append(line[len("> ⚠️"):].strip())
+    return sorted(found, key=lambda said: 0 if " anchor `" in said else 1)
+
+
+def _request(report: dict[str, Any], where: str | None, last: bool) -> tuple[str, list[str], str]:
+    """The request's blocks that do not depend on what is ticked: the
+    question, the report's warnings, and the last line, which names the
+    report and its traces and says after which change. The rows between
+    them are the ticked checks' own."""
     n = _runs(report)
     traces = "the one" if n == 1 else f"the {n}"
-    tail = f"Traces: {traces} behind {where or 'that report'}. After which change: unknown."
-    return one, many, tail
+    which = " (the last report)" if last and where else ""
+    tail = f"Traces: {traces} behind {where or 'that report'}{which}. After which change: unknown."
+    return REQUEST_LEAD + question(report), warnings(_read(report)), tail
+
+
+def request_text(report: dict[str, Any], picked: Sequence[dict[str, Any]], where: str | None = None,
+                 last: bool = True) -> str:
+    """The request for the ticked checks, put together as the page's script
+    puts it together: the same blocks in the same order."""
+    lead, warned, tail = _request(report, where, last)
+    rows = [line for c in picked for line in _request_lines(c).split("\n")]
+    blocks = [lead]
+    if warned:
+        blocks.append("\n".join([WARN_HEAD, *(f"- {said}" for said in warned)]))
+    blocks.append("\n".join([ROWS_HEAD, *rows]))
+    blocks.append(tail)
+    return "\n\n".join(blocks)
+
+
+def checks(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """The checks of a report as the page lists them, for whoever matches
+    what was ticked against the report: each with its `key`, `hot`, `kind`,
+    `title` and rows."""
+    return _checks(_read(report))
 
 
 # The stretch of a launch window before the app's process existed, as the
@@ -466,9 +549,17 @@ def _technical(report: dict[str, Any], ctx: Any, several: bool) -> str:
     return kit.fold("The full technical report", "".join(parts), "big")
 
 
+_NO_SCRIPT_SERVED = ("<noscript><div class=\"callout fig\"><p><b>Script is switched off in this browser.</b> Every check, "
+                     "what it found and how that touches the app are in the table below, and the measurements are in "
+                     "the full technical report at the end. The filter by level and the panel with one check's "
+                     "measurements need script. To dig deeper, tick the checks in the list under the table.</p>"
+                     "</div></noscript>")
+
+
 def render(report: dict[str, Any], where: str | None = None, last: bool = True, *,
            steps: Sequence[tuple[str, str, bool]] = (), crumb: str | None = None,
-           policy: str | None = None, limit: dict[str, Any] | None = None) -> str:
+           policy: str | None = None, limit: dict[str, Any] | None = None,
+           dig: dict[str, Any] | None = None) -> str:
     """The page for a report, as one self-contained HTML document.
 
     `where` is how the request for an agent names the report.json the page
@@ -482,6 +573,11 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
     `limit` is the time limit beside the verdict, already drawn, with its own
     styles (`limit_page.beside`): only a served page has it, since a page on
     disk cannot change a config.
+
+    `dig` is what a served page adds to start an agent from it
+    (`pages/dig_page.report_parts`): `ask`, markup for the request dialog;
+    `noscript`, the same as a form for a browser with script off; and its
+    own `css` and `js`. A page written to disk has none.
     """
     report = _read(report)
     ctx = plain._Ctx(report)
@@ -489,13 +585,19 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
     checks = _checks(report)
     hot = sum(1 for c in checks if c["hot"])
     w = report.get("window") or {}
+    dig = dig if dig and hot else None
     main = ('<main><div class="wide stack gap-6">'
-            + _verdict(report, ctx) + (limit or {}).get("html", "") + _NO_SCRIPT + _table(checks, report, ctx) + _next_step(checks)
+            + _verdict(report, ctx) + (limit or {}).get("html", "") + (_NO_SCRIPT_SERVED if dig else _NO_SCRIPT)
+            + _table(checks, report, ctx) + _next_step(checks) + ((dig.get("noscript") or "") if dig else "")
             + "<hr>" + _technical(report, ctx, several)
             + "".join(_panel(c, ctx, several) for c in checks) + "</div></main>")
+    lead, warned, tail = _request(report, where, last)
     body = (f'<div class="page">{kit.topbar([w.get("process"), report.get("scenario"), crumb], steps)}{main}</div>'
-            + (kit.dock(hot) + kit.ask(*_request(report, where, last)) + kit.sprites() if hot else "")
+            + (kit.dock(hot, _start_words(checks)[1])
+               + kit.ask(lead, warned, tail, start_html=(dig or {}).get("ask") or "", starts=bool((dig or {}).get("starts")))
+               + kit.sprites() if hot else "")
             + kit.peek("check", "Back to the report"))
     title = "echolot report" + (f": {report['scenario']}" if report.get("scenario") else "")
-    return kit.document(title, body, css=CSS + tuple((limit or {}).get("css") or ()),
-                        js=JS + tuple((limit or {}).get("js") or ()), policy=policy)
+    extra = (limit or {}, dig or {})
+    return kit.document(title, body, css=CSS + tuple(c for part in extra for c in part.get("css") or ()),
+                        js=JS + tuple(j for part in extra for j in part.get("js") or ()), policy=policy)

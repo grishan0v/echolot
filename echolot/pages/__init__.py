@@ -36,6 +36,14 @@ arranged from the same pieces:
     compare_page.py two reports compared: `echolot compare --html`, and the
                     page "After the fix" of `echolot ui`
 
+    dig.css         what is Dig deeper's alone: the screen before an agent
+                    starts, the agent at work, the form where script is off
+    dig.js          the dialog's Start, the request to copy, one press
+    dig_poll.js     the agent's page asking how far it is, while it works
+    dig_page.py     an agent `echolot ui` starts from a report: the way to it,
+                    the screen before it starts, the agent on its
+                    investigation's page, which one runs on the start page
+
 A new page takes the `.css` and `.js` it needs by name in `kit.document`,
 adds a stylesheet for its own columns, and builds its body from `kit`.
 """

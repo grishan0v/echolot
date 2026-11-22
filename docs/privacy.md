@@ -110,7 +110,10 @@ refuses.
 
 The agent you run reads echolot's output, and sends what it reads to its
 model as part of the session. That traffic is the agent's, under its
-provider's terms.
+provider's terms. The same holds when `echolot ui` starts it for you
+([Dig deeper from the page](ui.md#dig-deeper-from-the-page)): it is your own
+Claude Code, under your own account, and echolot hands it the request and
+nothing else.
 
 ## Questions
 

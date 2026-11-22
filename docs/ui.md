@@ -6,7 +6,8 @@
 terminals. `echolot ui` says the same on a page: whether everything is ready,
 a button that checks the app, and the reports and the agent's answers there
 are, each opened as a page. In a project that has no config yet it sets one
-up first, for how the app opens.
+up first, for how the app opens. From a report it can start your own Claude
+Code on the checks you tick, and show its work as it goes.
 
 ```bash
 echolot ui              # starts it and opens the browser
@@ -351,6 +352,118 @@ things in sentences; the terminal's own lines are here:
   self-check, the devices, the next step, the recordings and the reports, and
   what `echolot hunt --list` prints of the investigations.
 
+## Dig deeper from the page
+
+A report says what is slow; an agent finds where in the code and what to
+change. On a report, tick the checks to start from and press **Dig deeper**.
+The button beside it ticks where to start: the checks that need attention, or
+with none of those the two that found the largest thing. One investigation
+answers one question, so the request
+([as the report puts it together](analysing.md#the-report-as-a-page)) leads
+with one, carries the report's warnings, and lists the ticked rows as its
+evidence. With more than three ticked, the page says that one investigation
+looks at one question and suggests ticking fewer.
+
+The dialog has **Copy the request**, for an agent of your own, and, where
+the page can start one, **Start it from here**. echolot has no model of its
+own: what it starts is Claude Code, the one installed on this computer, under
+your own account. The button is there when Claude Code is installed, is
+2.1.259 or newer, and says it is signed in (`claude auth status`); otherwise
+the dialog says which of the three is missing, and the request is to copy.
+Codex and Cursor are not started from the page yet: their request is copied.
+
+**Before anything starts**, one screen says what a press of **Start** agrees
+to, in plain words:
+
+- **Who does it**: Claude Code, its version and the account it is signed in
+  with. It counts against your plan or your API key like any session of
+  yours, and stops by itself at about $10 of usage by its own estimate.
+- **How long**: usually tens of minutes. `echolot ui` has to keep running, and
+  the phone connected and unlocked: closing `echolot ui` stops the agent too.
+- **What it does**: temporary markers into the folders `instrumentation.allowed`
+  names, a rebuild, the app put on the phone and recorded again, for up to
+  `loop.max_rounds` rounds; at the end the markers taken out and the answer
+  written down.
+- **What it may do without asking**, exactly: `echolot` (any command),
+  `./gradlew` (any task), `adb` (any command on the phone), editing files
+  under the allowed folders, and writing `.echolot/verdict.json`. It reads the
+  project and runs commands that only read. Everything else is refused
+  without asking anyone: git, downloads, any other program, any other file.
+  A question it wants to ask is refused the same way, and it goes on with
+  what it has. Allow rules in the project's own `.claude/settings.json` apply
+  too, and the screen names any beyond echolot's.
+- **What changes**: the code on disk while it works, with nothing committed
+  (and how many files were already changed); the phone keeps a build with
+  markers until the app is built again; Claude Code keeps its own record of
+  the session, as for every session.
+- **Stop**: ends Claude Code and everything it started.
+
+The same screen has the two commands that start, and the request in full,
+with **Copy the request** as the way out. A press of **Start** runs them one
+after the other, in the project's folder:
+
+```text
+echolot hunt "<the question>" --since unknown
+claude -p "<the request>" --output-format json --permission-mode dontAsk --permission-prompts none --setting-sources project --max-budget-usd 10 --allowedTools "Bash(echolot *)" "Bash(./gradlew *)" "Bash(adb *)" "Edit(/app/src/main/**)" "Edit(/.echolot/verdict.json)"
+```
+
+The server builds both from the config and the report on disk, never from
+what the browser sent: a press names ticked checks, and they are matched
+against the report as it is at that moment. There is one `Edit(…)` rule per
+entry of `instrumentation.allowed`, and with none listed the page starts
+nothing. No permission is bypassed: `dontAsk` refuses what no rule allows,
+`--permission-prompts none` refuses a prompt nobody is there to answer, and
+`--setting-sources project` leaves your own settings, hooks and plugins out
+while the project's commands for Claude Code, which `echolot init` installs,
+come in. The request says that nobody is at the keyboard, which investigation
+is open for it and on which recordings, what it may do, and to close the
+investigation with its verdict.
+
+**While it works**, its investigation's page is where the browser goes. The
+rounds come in as they always do (each report it files, round by round), and
+above them a line says what the agent is doing, read from what runs under it
+and never from what it prints: building the app, putting it on the phone,
+recording, reading the recordings, putting markers in, looking at the
+investigation, writing down the answer (only while it closes the
+investigation), or, with none of those, reading the code and deciding. When nothing
+has moved for about ten minutes (no round, no build, no recording), the page
+says so beside **Stop**. A build can take that long, and the page names it
+when one is still running.
+
+**Stop** sends Ctrl-C to Claude Code and to everything under it, as a
+terminal does to a whole job: a recording unwinds and puts the phone back. What
+is still there after 30 seconds is ended, then killed. The page then counts
+what `hunt` counts in the code: the temporary markers still there, how many
+`echolot mark --remove` takes out, and the files with markers added by hand.
+**Take the markers out** runs `echolot mark --remove`; the app on the phone
+keeps the markers until it is built and installed again.
+
+**When it ends**:
+
+- closed with a verdict: the investigation's page is the answer, with one
+  quiet line on how long it ran and what Claude Code says it spent;
+- closed with a few words and no verdict: those words head the page;
+- stopped: said so, with what it left in the code;
+- stopped at the spending cap: "It reached the spending cap of $10", with
+  what Claude Code reports it spent, which its own estimate can put past the
+  cap;
+- failed: "Claude Code stopped with an error", with what it said (a sign-in
+  that ran out, a limit of your plan) and where all it printed is;
+- cut short, when `echolot ui` stopped or the computer slept: said so;
+- finished with no answer written down: said so, with its last words.
+
+Unless the agent closed it, the investigation stays open, and **Check the
+app** waits while it is open: **Close the investigation** closes it with what
+came of it (`echolot hunt --done "Stopped from echolot ui, after 2 rounds, with
+no answer. …"`). What it tried and was refused is listed under the end.
+
+One thing runs at a time: a check and an agent do not run together, in either
+order. While an agent works, the start page says so above the button, and the
+button says why it waits; while a check runs, **Dig deeper** says that it
+does. With script switched off every step is a form: the report lists the
+checks as boxes to tick, and the agent's page loads itself again every five
+seconds.
+
 ## What the server answers, and what it refuses
 
 It is a server from Python's standard library, and it is built to be asked by
@@ -366,20 +479,24 @@ the page it opened and by nothing else:
   the server stops, the token means nothing.
 - Anything other than reading a page also has to come from the server's own
   pages: the browser says where a request comes from, and one from anywhere
-  else is refused. Four such requests exist, each a form of the start page,
-  the report's page or the answer's page: the press of the button, Stop,
-  **Set it up** and **Set the limit**.
+  else is refused. Such requests are each a form of the start page, the
+  report's page or the answer's page: the press of the button, Stop,
+  **Set it up**, **Set the limit**, and those of **Dig deeper**: the screen
+  before it starts, Start, its Stop, **Take the markers out** and **Close the
+  investigation**.
 - Such a request may carry a form of at most 4096 bytes. One that carries
   more, or does not say how much, is refused unread, and so is one that ends
   before the length it stated. Nothing in a form is
   used as a path or as a command: a scenario has to be one the config names,
   a number of launches a whole number from 1 to 20, an investigation one the
   project has, what to set up one of the names the page offered, and a time
-  limit a number of seconds from 0.1 to 60. The one file a setup creates is
+  limit a number of seconds from 0.1 to 60, a ticked check one the report on
+  disk has and that found something. The one file a setup creates is
   `echolot.yml` in the project's folder, whatever a form says, and the one
   file **Set the limit** changes is that same file, one line of it. What the
   page saw of it travels as two fingerprints, which are compared and never
-  opened.
+  opened. An agent's command line is built from the config and the report
+  alone.
 - It serves the pages it draws and no file. No address is turned into a path
   on disk.
 - A page fetches nothing from anywhere else: no font, no script, no image.
@@ -401,6 +518,17 @@ Reading a page writes nothing. A press of the button does, all of it under
 | `.echolot/log/check.stop` | a request to stop, while one is pending |
 | `before.json` beside the report | the report before a **Check again**, for `compare` |
 | `comparison.html` beside the report | the comparison as a page, the one **After the fix** shows; `compare --html` writes it with the comparison |
+
+**Dig deeper** writes what its two commands write: `echolot hunt` opens the
+investigation (`.echolot/hunt.json`, the recordings set aside under
+`.echolot/traces/`), and Claude Code changes the code under the allowed
+folders and writes `.echolot/verdict.json`. The page's own files are its run:
+
+| file | what it is |
+|---|---|
+| `.echolot/log/dig.json` | the last agent the page started: its process, its command line, the investigation it works in, how it ended |
+| `.echolot/log/dig.agent.log` | what Claude Code printed: the one JSON object it prints at the end |
+| `.echolot/log/dig.stop` | a request to stop, while one is pending |
 
 **Set it up** writes into the project itself, once, and the page lists every
 file before the press:

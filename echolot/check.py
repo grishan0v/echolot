@@ -216,9 +216,19 @@ def _stops_all(st: dict[str, Any], run: dict[str, Any] | None = None) -> str | N
                 "What to do next writes one.")
     if kind == "fix-config":
         return "Not yet: `echolot.yml` does not load. What to do next names the line to fix."
+    # An agent the page started (`echolot/dig.py`): one thing at a time,
+    # whether its investigation is still open or it is finishing after it.
+    from . import dig
+    digging = job.read(st["project"], dig.JOB) if st.get("project") else None
+    if digging is not None and digging["status"] == job.RUNNING:
+        return ("Not now: an agent is digging into this app, and a check from here would get in its way. Its "
+                "page, the agent's answer, shows how far it is.")
     hunt = st.get("hunt") or {}
     if hunt and (hunt.get("status") or "open") == "open":
         asked = f" (\"{hunt['question']}\")" if hunt.get("question") else ""
+        if digging is not None and (digging.get("what") or {}).get("hunt") == hunt.get("n"):
+            return (f"Not now: the investigation the page started is still open{asked}, and no agent works in it "
+                    "any more. A check from here would be filed as one of its rounds: close it on its page first.")
         return (f"Not now: an investigation is open{asked}, and an agent works with this app's recordings. "
                 "A check from here would be mixed into its rounds. Its answer comes first.")
     collect = st.get("collect") or {}
