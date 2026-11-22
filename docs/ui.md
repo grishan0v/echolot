@@ -95,8 +95,8 @@ the page changes nothing, says why in a sentence, and shows the line to edit:
   is never touched;
 - the config names several scenarios;
 - `local.yml` beside it sets the limit, which wins over `echolot.yml`;
-- `echolot.yml` is a link to another file, does not load, or `echolot ui` was
-  started with `-c` and reads another file;
+- `echolot.yml` is a link to another file or has a second name, does not
+  load, or `echolot ui` was started with `-c` and reads another file;
 - the file changed between the page and the press. The page knows which file
   it showed you, and a press that finds another one writes nothing. The same
   press sent twice is one press.
