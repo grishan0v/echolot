@@ -14,6 +14,9 @@
   <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Codex: plugin" src="https://img.shields.io/badge/Codex-plugin-brightgreen"></a>
   <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Cursor: plugin" src="https://img.shields.io/badge/Cursor-plugin-brightgreen?logo=cursor&logoColor=white"></a>
 </p>
+<p align="center">
+  <b>English</b> · <a href="https://github.com/grishan0v/echolot/blob/main/README.ru.md">Русский</a>
+</p>
 <br>
 
 - **Finds the line to fix.** From a slow screen to a file and line, with the

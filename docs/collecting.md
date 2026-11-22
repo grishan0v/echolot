@@ -1,6 +1,6 @@
 # Collecting traces
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/collecting.md)
 
 ```bash
 echolot collect -c echolot.yml -n 5

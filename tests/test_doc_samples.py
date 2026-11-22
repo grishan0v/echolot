@@ -24,6 +24,8 @@ import re
 import sys
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests.support import check  # noqa: E402
@@ -35,10 +37,10 @@ from echolot.tp import load_detectors  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _sample() -> str:
-    text = (ROOT / "README.md").read_text(encoding="utf-8")
+def _sample(readme_rel: str = "README.md") -> str:
+    text = (ROOT / readme_rel).read_text(encoding="utf-8")
     found = re.search(r"^```markdown\n(# Marker Report\n.*?)^```", text, re.S | re.M)
-    assert found, "README.md: no ```markdown block starting with `# Marker Report`"
+    assert found, f"{readme_rel}: no ```markdown block starting with `# Marker Report`"
     return found.group(1)
 
 
@@ -83,11 +85,16 @@ def _cut(text: str) -> dict:
 
 def test_the_readme_sample_is_what_analyze_prints_for_the_demo(demo_report):
     rendered = report_mod.to_markdown(demo_report).rstrip("\n")
-    sample = _sample().rstrip("\n")
-    diff = "\n".join(list(difflib.unified_diff(
-        sample.splitlines(), rendered.splitlines(), "README.md", "analyze", lineterm=""))[:40])
-    check("the README's sample is the demo's report: `python docs/assets/render.py` "
-          "writes it again", sample == rendered, diff)
+    langs = yaml.safe_load(
+        (ROOT / "docs" / "languages.yml").read_text(encoding="utf-8")
+    )["languages"]
+    for info in langs.values():
+        readme_rel = info["readme"]
+        sample = _sample(readme_rel).rstrip("\n")
+        diff = "\n".join(list(difflib.unified_diff(
+            sample.splitlines(), rendered.splitlines(), readme_rel, "analyze", lineterm=""))[:40])
+        check(f"{readme_rel}: sample is the demo's report: `python docs/assets/render.py` "
+              "writes it again", sample == rendered, diff)
 
 
 def test_the_readme_sample_accounts_for_every_detector():

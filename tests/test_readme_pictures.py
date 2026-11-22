@@ -34,13 +34,47 @@ def _readme() -> str:
 
 
 def test_the_committed_pictures_are_what_the_script_draws():
-    drawn = _render().pictures()
-    stale = sorted(name for name, body in drawn.items()
-                   if not (ASSETS / name).is_file()
-                   or (ASSETS / name).read_text(encoding="utf-8") != body)
-    assert not stale, (
-        f"out of date: {stale} — run `python docs/assets/render.py` and commit "
-        f"what it writes")
+    render = _render()
+    default, langs = render._load_languages()
+    for code, info in langs.items():
+        if code != default and "tables" not in info:
+            continue
+        out_dir = ASSETS if code == default else ASSETS / code
+        drawn = render.pictures(code)
+        stale = sorted(name for name, body in drawn.items()
+                       if not (out_dir / name).is_file()
+                       or (out_dir / name).read_text(encoding="utf-8") != body)
+        assert not stale, (
+            f"out of date ({code}): {stale} — run `python docs/assets/render.py` and commit "
+            f"what it writes")
+
+
+def test_translated_readmes_use_their_pictures_and_alts():
+    render = _render()
+    default, langs = render._load_languages()
+    for code, info in langs.items():
+        if code == default or "tables" not in info:
+            continue
+        readme = (ROOT / info["readme"]).read_text(encoding="utf-8")
+        assert render.with_alts(readme, lang=code) == readme, (
+            f"{info['readme']}: table alt text is out of date — run `python docs/assets/render.py`"
+        )
+        assert "prefers-color-scheme" not in readme
+        assert "#gh-dark-mode-only" not in readme and "#gh-light-mode-only" not in readme
+        prefix = f"{RAW}docs/assets/{code}/"
+        for name in render.tables(code):
+            assert re.search(
+                r'<source media="\(max-width: 767px\)" srcset="'
+                + re.escape(f"{prefix}{name}-narrow.svg") + '"',
+                readme,
+            ), (code, name)
+            assert re.search(
+                r'<img [^>]*src="' + re.escape(f"{prefix}{name}-wide.svg") + '"',
+                readme,
+            ), (code, name)
+        named = re.findall(re.escape(RAW) + r'([^"\s)]+)', readme)
+        missing = sorted(p for p in named if not (ROOT / p).is_file())
+        assert not missing, f"{info['readme']} names missing files: {missing}"
 
 
 def test_nothing_in_the_folder_is_left_over_from_an_older_script():

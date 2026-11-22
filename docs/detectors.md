@@ -1,6 +1,6 @@
 # Detectors
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/detectors.md)
 
 A detector is one self-contained `.sql` file. Metadata in the header,
 `{{param}}` placeholders substituted from the config:

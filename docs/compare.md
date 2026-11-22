@@ -1,6 +1,6 @@
 # Comparing two reports
 
-[← back to the documentation index](README.md)
+[← back to the documentation index](README.md) · **English** · [Русский](ru/compare.md)
 
 `echolot analyze` answers where the time went in one set of traces. The
 question people actually arrive with has two halves — *it was 3 s, now it is

@@ -1,6 +1,6 @@
 # ANRs
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/anr.md)
 
 A trace answers "where did the time go". An ANR is a different question: the
 app stopped answering, the system gave up waiting, and the report arrived from

@@ -17,6 +17,7 @@ site_dir: build/site
 
 theme:
   name: material
+  language: en
   features:
     - content.code.copy
     - navigation.sections
@@ -75,3 +76,12 @@ nav:
   - Maintaining it:
       - Publishing: publishing.md
       - Planning: planning.md
+
+extra:
+  alternate:
+    - name: English
+      link: /echolot/
+      lang: en
+    - name: Русский
+      link: /echolot/ru/
+      lang: ru

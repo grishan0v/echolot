@@ -1,6 +1,6 @@
 # Planning
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/planning.md)
 
 Every improvement and every bug is a GitHub issue, and every open issue is a
 card on the [Echolot Roadmap](https://github.com/users/grishan0v/projects/1)

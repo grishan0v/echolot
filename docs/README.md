@@ -1,6 +1,6 @@
 # echolot documentation
 
-[← back to the README](../README.md)
+[← back to the README](../README.md) · **English** · [Русский](ru/README.md)
 
 Fifteen documents. If you are here for the first time, read them in the order of
 the workflow: **collect → mark → analyse → compare → calibrate**. The rest

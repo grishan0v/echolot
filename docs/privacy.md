@@ -1,6 +1,6 @@
 # Privacy
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/privacy.md)
 
 echolot runs on your machine and keeps what it makes there. It has no
 account, no server of its own and no telemetry, and it sends nothing

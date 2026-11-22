@@ -1,6 +1,6 @@
 # The page in the browser
 
-[← back to the documentation index](README.md)
+[← back to the documentation index](README.md) · **English** · [Русский](ru/ui.md)
 
 `echolot` says where a project stands in a terminal, to someone who reads
 terminals. `echolot ui` says the same on a page: whether everything is ready,

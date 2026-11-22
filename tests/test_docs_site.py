@@ -65,6 +65,52 @@ def test_the_site_nav_is_the_index_groups_in_their_order() -> None:
           (sorted(written - on_site), sorted(on_site - written)))
 
 
+def test_mkdocs_alternate_languages_match_registry() -> None:
+    cfg = yaml.load((ROOT / "mkdocs.yml").read_text(encoding="utf-8"), Loader=_Loader)
+    default, langs = site.load_languages()
+    want = [
+        {
+            "name": info["name"],
+            "link": f"/echolot/{info['site_prefix'].strip('/')}/"
+            if info["site_prefix"].strip("/")
+            else "/echolot/",
+            "lang": code,
+        }
+        for code, info in langs.items()
+    ]
+    check("mkdocs.yml extra.alternate matches docs/languages.yml",
+          cfg.get("extra", {}).get("alternate") == want,
+          (cfg.get("extra", {}).get("alternate"), want))
+    check("mkdocs.yml theme.language matches default",
+          cfg["theme"]["language"] == default, cfg["theme"].get("language"))
+
+
+def test_translations_prepare_and_generate_site_configs(tmp_path: Path) -> None:
+    default, langs = site.load_languages()
+    expected_pages = {p.name for p in DOCS.glob("*.md") if p.name != "README.md"}
+    for code, info in langs.items():
+        if code == default:
+            continue
+        out = tmp_path / f"site-docs-{code}"
+        cfg_path = tmp_path / f"mkdocs-{code}.yml"
+        site_dir = tmp_path / "site" / info["site_prefix"].strip("/")
+        pages = site.prepare_language(code, out)
+        check(f"{code}: prepared all pages", pages == len(expected_pages) + 1, pages)
+        check(f"{code}: no navigation line remains",
+              not any(site._NAV.search(p.read_text(encoding="utf-8")) for p in out.glob("*.md")))
+        site.write_lang_config(code, cfg_path, out, site_dir)
+        cfg = yaml.load(cfg_path.read_text(encoding="utf-8"), Loader=_Loader)
+        check(f"{code}: theme language", cfg["theme"]["language"] == code, cfg["theme"])
+        nav = cfg["nav"]
+        check(f"{code}: home first", nav[0] == {info["nav_home"]: "index.md"}, nav[0])
+        groups = [(name, [tuple(*entry.items()) for entry in pages])
+                  for item in nav[1:] for name, pages in item.items()]
+        want_groups = site.index_groups(DOCS / info["docs_dir"] / "README.md")
+        check(f"{code}: nav matches translated index", groups == want_groups, (groups, want_groups))
+        on_site = {page for _, pages_list in groups for _, page in pages_list}
+        check(f"{code}: every page in nav", on_site == expected_pages, on_site ^ expected_pages)
+
+
 def test_a_page_reaches_the_site_without_what_belongs_to_github() -> None:
     page = DOCS / "compare.md"
     text = "\n".join([

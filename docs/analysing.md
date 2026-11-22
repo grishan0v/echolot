@@ -1,6 +1,6 @@
 # From a trace to a place in the code
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/analysing.md)
 
 Three commands sit between a trace you know nothing about and a finding you can
 act on: `probe` tells you what is inside, `names` tells you what the detectors
