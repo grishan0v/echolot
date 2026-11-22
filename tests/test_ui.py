@@ -1596,3 +1596,19 @@ def test_it_is_among_the_commands_a_person_types():
     yours = said.split("Yours:")[1].split("The pipeline:")[0]
     check("listed under Yours, after status", re.search(r"status\s.*\n\s+ui\s+a page in the browser", yours), yours)
     check("and it has its place in the order", "ui" in main_mod.ORDER)
+
+
+# --- the small things of #556 ------------------------------------------------------
+
+@pytest.mark.parametrize("command", [["ui", "--no-open"], ["status"], ["status", "--next"]])
+def test_a_config_named_and_not_there_stops_as_analyze_stops(command, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    served = []
+    monkeypatch.setattr(ui, "serve", lambda *a, **kw: served.append(a) or 0)
+    out, err = io.StringIO(), io.StringIO()
+    with recorder.isolated(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main_mod.main([*command, "-c", str(tmp_path / "nope" / "echolot.yml")])
+    check("exit 2, nothing served, nothing about the working directory",
+          code == 2 and not served and out.getvalue() == "", (code, served, out.getvalue()))
+    check("the error is analyze's", err.getvalue().strip()
+          == f"error: config not found: {(tmp_path / 'nope' / 'echolot.yml').resolve()}", err.getvalue())

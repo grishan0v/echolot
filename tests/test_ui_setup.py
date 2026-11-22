@@ -433,7 +433,7 @@ def test_a_config_that_cannot_be_written(project, monkeypatch):
 
 # --- where the page cannot set a project up ------------------------------------------------------
 
-def cannot(project: Project, said: str, *words: str):
+def cannot(project: Project, said: str, *words: str, no_app: bool = False):
     """The page of a project that cannot be set up from here: its own
     sentence, `scan`'s words under it, and a press that writes nothing."""
     site, init = serving(project)
@@ -449,8 +449,13 @@ def cannot(project: Project, said: str, *words: str):
     for word in words:
         check(f"which names the reason: {word}", any(word in line for line in behind), behind)
     check("there is no form to send and no button to press", not page.all("form", id="setup-form") and not page.all("button", id="setup-go"))
-    check("the agent's path is the step that is there already", page.all("section", aria_labelledby="next-h")
-          and "An agent can set it up: the step under What to do next says how." in box.text, box.text)
+    if no_app:
+        # Nothing for an agent to set up in a folder with no app (#556).
+        check("no agent's path where there is no app", page.all("section", aria_labelledby="next-h")
+              and "An agent can set it up" not in box.text, box.text)
+    else:
+        check("the agent's path is the step that is there already", page.all("section", aria_labelledby="next-h")
+              and "An agent can set it up: the step under What to do next says how." in box.text, box.text)
     before = files(project.root)
     reply = set_up(site)
     check("a press that reaches the server all the same is refused, and writes nothing",
@@ -459,14 +464,26 @@ def cannot(project: Project, said: str, *words: str):
     return page
 
 
+NO_APP_STEP = "echolot found no Android app in this folder. Start `echolot ui` in the folder of the app's project."
+
+
+def _next_text(page) -> str:
+    section = page.one("section", aria_labelledby="next-h")
+    return section.text
+
+
 def test_no_app_in_the_folder(project):
-    page = cannot(project.agents().doctor(), "echolot found no Android app in this folder", "declares a launcher Activity")
-    check("and the agent's command is there to copy", page.one("code", id="next-cmd").text == "echolot guide setup")
+    page = cannot(project.agents().doctor(), "echolot found no Android app in this folder", "declares a launcher Activity",
+                  no_app=True)
+    check("the next step says where to start, with nothing to copy", not page.all("code", id="next-cmd")
+          and NO_APP_STEP.replace("`", "") in _next_text(page), _next_text(page))
 
 
 def test_no_app_in_a_folder_echolot_has_never_seen(project):
-    page = cannot(project, "echolot found no Android app in this folder", "declares a launcher Activity")
-    check("the step is init, as it was", page.one("code", id="next-cmd").text == "echolot init")
+    """Followed, `echolot init` here wrote echolot's files into a folder with no app (#556)."""
+    page = cannot(project, "echolot found no Android app in this folder", "declares a launcher Activity", no_app=True)
+    check("no init to copy", not page.all("code", id="next-cmd") and "echolot init" not in _next_text(page)
+          and NO_APP_STEP.replace("`", "") in _next_text(page), _next_text(page))
 
 
 def test_a_package_the_build_files_do_not_say(project):

@@ -449,7 +449,7 @@ def test_only_the_main_threads_time_can_need_attention_by_its_size():
     check("on the main thread",
           big("repeated_work", detail=f"entered from 2: A,B — on {MAIN}") == "needs_attention")
     check("a near miss is a hint, never a finding",
-          big("repeated_work", detail=f"near miss: entered from 2: A,B — on {MAIN}; x") == "worth_a_look")
+          big("repeated_work", detail=f"near miss: entered from 2: A,B — on {MAIN}; x") == "move_marker")
     check("a detector this version does not know asks less", big("from_the_future") == "worth_a_look")
 
 
@@ -593,7 +593,7 @@ def test_the_ratio_in_the_sentence_is_the_key_rounded_to_one_decimal():
 @pytest.mark.parametrize("budget", [None, 0, 0.0, -5, True, "2500", "fast", float("nan"), float("inf")])
 def test_with_no_budget_the_verdict_says_so_instead_of_calling_the_launch_fine(budget):
     got = verdict_of(1920.0, budget)
-    check("not checked, not fine", got["level"] == "not_checked", got)
+    check("no time limit, not fine and not 'not checked'", got["level"] == "no_limit", got)
     check("it still says how long the launch takes, and that nothing was compared",
           got["text"] == "The launch takes 1.9 s. No time limit is set, so there is nothing to "
                          "compare it with.", got["text"])
@@ -921,3 +921,16 @@ def test_a_reading_from_before_the_warning_is_read_again():
     rep["verdict"]["text"] = "The launch takes 18.8 s."
     check("is_read says no", not plain.is_read(rep))
     check("and the list works it out anew", "The launch takes" not in plain.render(rep), plain.render(rep))
+
+
+# --- the small things of #556 ------------------------------------------------------
+
+def test_a_check_whose_only_row_is_a_near_miss_is_a_marker_to_move():
+    near = row("AGENTTMP_app_marker", 2442.48, runs="15/15", count=2,
+               detail="near miss: entered from 2: (top level),load_state — on DefaultDispatch")
+    check("its own level", level("repeated_work", [near], duration=5700.0) == "move_marker")
+    real = row("loadConfig", 400.0, detail="entered from 2: A,B — on worker_pool_0")
+    check("a near miss beside a real row is read as the real row",
+          level("repeated_work", [near, real], duration=5700.0) == "worth_a_look")
+    out = plain.render(make([entry("repeated_work", [near])], duration=5700.0))
+    check("the list leaves it out of what needs a look", "AGENTTMP" not in out, out)

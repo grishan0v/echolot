@@ -73,5 +73,7 @@ def show(rows: list[Row], **kw) -> None:
 
 
 def _escape(text: str) -> str:
-    """A pipe inside a cell ends the cell. It has to stop being a pipe."""
-    return str(text).replace("|", "\\|")
+    """A pipe inside a cell ends the cell, and so does a line break, which ends
+    the row with it: a slice name from the Perfetto SDK may carry one (#556).
+    The pipe stops being a pipe; a break becomes a space."""
+    return " ".join(str(text).replace("|", "\\|").splitlines())

@@ -352,7 +352,8 @@ def test_a_report_with_no_budget_is_grey_and_says_why():
     rep = plain.annotate(make([entry("gc_pressure", [])], duration=1136.0, budget=None, runs=5))
     main_ = page_of(rep).one("main")
     pill = main_.one("span", "lg")
-    check("not checked, never fine", pill.text == "Not checked" and "grey" in pill.attrs["class"], pill.attrs)
+    check("no time limit, grey, never fine", pill.text == "No time limit" and "grey" in pill.attrs["class"],
+          pill.attrs)
     check("the launch is still said", main_.one("h1").text == "The launch takes 1.1 s")
     check("and that there is nothing to hold it against",
           main_.one("p", "lead").text.startswith("No time limit is set, so there is nothing to compare it with. "
@@ -789,7 +790,8 @@ def test_the_request_dialog_says_what_an_agent_does_and_where_to_paste():
 def test_how_the_colours_are_chosen_says_the_rule_with_its_numbers():
     fold = [d for d in page_of(known()).all("details") if d.one("summary").text == "How the colours are chosen"][0]
     said = {li.one("b").text: li.one("p").text for li in fold.all("li")}
-    check("the four levels, in order", list(said) == ["Needs attention", "Worth a look", "Fine", "Not checked"])
+    check("the five levels, in order",
+          list(said) == ["Needs attention", "Worth a look", "A marker to move", "Fine", "Not checked"], list(said))
     check("the numbers are the rule's own", f"{plain.SHARE:.0%}" == "15%" and plain.FLOOR_MS == 150.0
           and said["Needs attention"] == "One thing the main thread spent or lost holds at least 15% of the launch "
                                          "and at least 0.15 s, in every launch.", said["Needs attention"])
@@ -1121,3 +1123,29 @@ def test_a_page_whose_anchors_matched_draws_no_warning():
 def test_the_request_does_not_lead_with_a_time_of_the_whole_recording():
     q = report_page.question(missed_report())
     check("no 'takes'", "takes" not in q and "no measured window" in q, q)
+
+
+# --- the small things of #556 ------------------------------------------------------
+
+def test_a_line_break_in_a_name_keeps_its_row_one_row():
+    rep = known()
+    rep["detectors"][-1]["rows"][0]["detail"] = "line\nbreak #7"
+    rep["detectors"][-1]["rows"][0]["location"] = "pipe | in\r\nname #4"
+    written = report_mod.to_markdown(plain.annotate(copy.deepcopy(rep)))
+    rows = [line for line in written.splitlines() if "break #7" in line]
+    check("report.md has the row on one line, and the name with it",
+          len(rows) == 1 and rows[0].startswith("|") and "pipe \\| in name #4" in rows[0], rows)
+    fold = [d for d in page_of(rep).all("details") if d.one("summary").text == "The full technical report"][0]
+    md_ = fold.one("div", "md")
+    check("the page draws no extra table from it", "break #7" not in "".join(p.text for p in md_.all("p"))
+          and not [th for th in md_.all("th") if "name #4" in th.text])
+
+
+def test_a_marker_to_move_is_grey_and_cannot_be_ticked():
+    near = row("AGENTTMP_app_marker", 2442.48, count=2,
+               detail="near miss: entered from 2: (top level),load_state — on DefaultDispatch")
+    rep = plain.annotate(make([entry("repeated_work", [near]), entry("gc_pressure", [])], duration=5700.0))
+    tr = rows_of(page_of(rep))["repeated_work"]
+    check("its own word, grey", tr.one("span", "st").text == "A marker to move" and tr.attrs["data-group"] == "grey",
+          tr.attrs)
+    check("nothing to tick", not tr.all("input"))

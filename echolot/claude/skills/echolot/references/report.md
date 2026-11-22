@@ -109,12 +109,15 @@ the report in plain words, for a person; a model writes none of it, and the
 same report gives the same words. `budget_ms` is the config's
 `scenario.budget_ms`, `null` when it sets none. `verdict` sets the window
 against it: `level` is `fine` (within it), `worth_a_look` (up to a quarter
-over), `needs_attention` (more), or `not_checked` when there is no budget to
-compare with; `ratio` is window over budget, `text` the sentence. A detector's
-`attention` is one of `needs_attention`, `worth_a_look`, `fine` and
-`not_checked`: the first when one row that is main-thread time holds at least
-15% of the window and at least 150 ms in every run (and always for an `anr`
-row), the second for any other row, the third for a silent detector whose entry
+over), `needs_attention` (more), `no_limit` when there is no budget to
+compare with, or `not_checked` when the window is not the scenario's (an
+anchor matched nothing, `warning` says which); `ratio` is window over budget,
+`text` the sentence. A detector's `attention` is one of `needs_attention`,
+`worth_a_look`, `move_marker`, `fine` and `not_checked`: the first when one row
+that is main-thread time holds at least 15% of the window and at least 150 ms in
+every run (and always for an `anr` row), the second for any other row, the
+third when the only rows are near misses of `repeated_work` (a marker one level
+off, not a finding), the fourth for a silent detector whose entry
 says `checked: true`, the last for a silent one that did not look (`checked:
 false`, or a failure) or whose report is too old to say. A detector with rows
 reads its rows, whatever `checked` says. `analyze` always writes `checked`, so an

@@ -355,7 +355,8 @@ def _again_button(visit: Visit, hunt: dict[str, Any]) -> str:
     run = found["job"]
     running = check.running_words(run, visit.st.get("collect")) if run and run["status"] == job.RUNNING else None
     why = found["offer"].get("why") or choice.get("why")
-    said = check.hint(check.RECORD, choice["mode"], choice.get("iterations"), choice.get("section") or {})
+    said = check.hint(check.RECORD, choice["mode"], choice.get("iterations"), choice.get("section") or {},
+                      each_s=check.read_s(site.project, choice.get("name")))
     return start_page.again(choice, why, said, site.url, hunt["n"], running)
 
 

@@ -22,6 +22,7 @@ The attention levels, one sentence each:
                     scenario does: see `_held`);
   worth a look      the check found something else: smaller, on another
                     thread, or not in every launch;
+  a marker to move  the check found only a marker put one level off;
   fine              the check ran and found nothing above its limit;
   not checked       the check could not run on these recordings, or the report
                     is too old to say whether it could.
@@ -62,7 +63,14 @@ NEEDS_ATTENTION = "needs_attention"
 WORTH_A_LOOK = "worth_a_look"
 FINE = "fine"
 NOT_CHECKED = "not_checked"
-LEVELS = (NEEDS_ATTENTION, WORTH_A_LOOK, FINE, NOT_CHECKED)
+# A check whose only rows are near misses of `repeated_work`: advice on where
+# a marker sits, not a finding, and not a reason to send it to an agent (#556).
+MOVE_MARKER = "move_marker"
+LEVELS = (NEEDS_ATTENTION, WORTH_A_LOOK, MOVE_MARKER, FINE, NOT_CHECKED)
+# The verdict of a report without a time limit: nothing to hold the window
+# against. Its own word, since "not checked" is what a check that could not
+# run says (#556).
+NO_LIMIT = "no_limit"
 
 # What a row has to hold to need attention: this share of the launch, and at
 # least this many milliseconds.
@@ -389,6 +397,8 @@ def attention(det: dict[str, Any], report: dict[str, Any],
     did = det.get("id", "")
     if did == "anr":
         return NEEDS_ATTENTION
+    if not any(_counts(did, row) for row in rows):
+        return MOVE_MARKER
     ctx = ctx or _Ctx(report)
     if ctx.window_ms > 0:
         for row in rows:
@@ -726,7 +736,7 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
                 "text": f"This recording has no measured {ctx.noun} to judge."}
     lead = f"The {ctx.noun} takes {hum(ctx.window_ms)}."
     if budget is None:
-        return {"level": NOT_CHECKED, "budget_ms": None, "ratio": None, "warning": None,
+        return {"level": NO_LIMIT, "budget_ms": None, "ratio": None, "warning": None,
                 "text": f"{lead} No time limit is set, so there is nothing to compare it with."}
     # The key, and what is said from it: the sentence's ratio is `verdict.ratio`
     # rounded to one decimal, never the rounded window over the rounded budget
@@ -785,6 +795,7 @@ def annotate(report: dict[str, Any]) -> dict[str, Any]:
 # for a terminal
 
 _LABEL = {NEEDS_ATTENTION: "NEEDS ATTENTION", WORTH_A_LOOK: "WORTH A LOOK",
+          MOVE_MARKER: "A MARKER TO MOVE", NO_LIMIT: "NO TIME LIMIT",
           FINE: "FINE", NOT_CHECKED: "NOT CHECKED"}
 _MARK = {NEEDS_ATTENTION: "!", WORTH_A_LOOK: "~"}
 

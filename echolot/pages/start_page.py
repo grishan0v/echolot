@@ -181,9 +181,10 @@ def _form(offer: dict[str, Any], run: dict[str, Any] | None, link: Link, report:
     why = _why(offer, choice)
     label = choice["label"] if choice else "Check the app"
     # With several scenarios and script off, the button cannot follow the
-    # choice: it says what holds for every card, or the plain name.
+    # choice: it says what holds for every card. "Check the app" is the label
+    # of a press that records, and a card may read instead (#556).
     if several and len({c["label"] for c in choices}) > 1:
-        label = "Check the app"
+        label = "Start"
     said = why or (choice["hint"] if choice else "")
     if several and not why and len({c["hint"] for c in choices}) > 1:
         said = "Each choice says where it stands. Nothing in your code changes."

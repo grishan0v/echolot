@@ -351,8 +351,14 @@ _NO_SCRIPT = ("<noscript><div class=\"callout fig\"><p><b>Script is switched off
 def _table(checks: list[dict[str, Any]], report: dict[str, Any], ctx: Any) -> str:
     total = len(checks)
     count = {k: sum(1 for c in checks if c["kind"] == k) for k in kit.TONES}
+    # One filter per colour. Grey holds the checks that could not run and the
+    # markers to move, and its name says both when both are there.
+    grey = (kit.word(plain.NOT_CHECKED) if not any(c["level"] == plain.MOVE_MARKER for c in checks)
+            else "Not checked, or a marker to move")
+    named = {"red": kit.word(plain.NEEDS_ATTENTION), "yellow": kit.word(plain.WORTH_A_LOOK),
+             "green": kit.word(plain.FINE), "grey": grey}
     views = kit.views([("all", "", "All", total)]
-                      + [(k, kit.icon(k), kit.word(level), count[k]) for level, k in kit.TONE.items()])
+                      + [(k, kit.icon(k), named[k], count[k]) for k in kit.TONES])
     said = (f"{total} {'check' if total == 1 else 'checks'}, the ones that need you first. "
             "Each says what it looked at, why that matters to the app, and what it found.")
     off = len((report.get("summary") or {}).get("absent_ids") or [])
@@ -375,6 +381,8 @@ def _rule(noun: str) -> str:
          f"One thing the main thread spent or lost holds at least {share} of the {noun} and at least {floor}, in every {noun}."),
         ("yellow", kit.WORD[plain.WORTH_A_LOOK],
          f"The check found something else: smaller, on another thread, or not in every {noun}."),
+        ("grey", kit.WORD[plain.MOVE_MARKER],
+         "The check found only a marker put one level off: advice on where it sits, not a finding."),
         ("green", kit.WORD[plain.FINE], "The check ran and found nothing above its limit."),
         ("grey", kit.WORD[plain.NOT_CHECKED],
          "The check could not run on these recordings. Green always means looked at and fine."),
