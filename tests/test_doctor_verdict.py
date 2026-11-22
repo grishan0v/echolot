@@ -250,8 +250,8 @@ def _fired(toolchain: dict) -> dict:
      "trace_processor v48.0 (custom binary from --tp-binary, pin bypassed)"),
     ({"trace_processor": None, "source": "toolchain.tp_binary", "binary": CUSTOM},
      "trace_processor unknown (custom binary from toolchain.tp_binary, pin bypassed)"),
-    ({"trace_processor": "v56.1", "source": "pinned", "binary": None},
-     "trace_processor v56.1"),
+    ({"trace_processor": "v59.1", "source": "pinned", "binary": None},
+     "trace_processor v59.1"),
 ], ids=["local.yml", "flag", "no version", "pinned"])
 def test_the_report_footer_names_whose_binary_ran(toolchain, footer):
     """Only `--tp-binary` was marked, so a local.yml binary read as the pin."""

@@ -17,12 +17,12 @@ echolot doctor
 
   python           3.14.7
   platform         Darwin / x86_64
-  perfetto         0.57.2
+  perfetto         0.59.1
   PyYAML           6.0.3
   rich-argparse    1.8.0
-  trace_processor  v56.1
+  trace_processor  v59.1
 
-  binary: /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46
+  binary: /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-df38039845244c35
   (the name is a SHA-256 prefix: contents verified on download)
 
 ## The .claude/ layer in this project
@@ -49,7 +49,7 @@ kilobytes of "ok" that a second reader in the same session would pay for
 again.
 
 ```
-echolot 0.17.0 · trace_processor v56.1 · perfetto 0.57.2 · python 3.14.7
+echolot 0.17.0 · trace_processor v59.1 · perfetto 0.59.1 · python 3.14.7
 layer: current (10 files)
 self-check: 182 of 182 passed
 ```
@@ -221,7 +221,7 @@ counted as warm. Both headers say what those starts showed.
 
 ## Why the trace_processor version is pinned
 
-`pyproject.toml` holds `perfetto==0.57.2`, and that is not hygiene.
+`pyproject.toml` holds `perfetto==0.59.1`, and that is not hygiene.
 
 `trace_processor` is not a utility you feed SQL to — it is a **vocabulary**.
 The strings the detectors match on are invented by it:
@@ -258,9 +258,9 @@ fetches the build the manifest names for this OS and CPU, once, and says so on
 stderr before it starts:
 
 ```
-[i] trace_processor v56.1 is not on this machine yet — downloading it once, 13.4 MB, the build the perfetto package pins:
-      from https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v56.1/mac-amd64/trace_processor_shell
-      into /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46
+[i] trace_processor v59.1 is not on this machine yet — downloading it once, 15.7 MB, the build the perfetto package pins:
+      from https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v59.1/mac-amd64/trace_processor_shell
+      into /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-df38039845244c35
 ```
 
 stdout stays the command's result, so the first `names --json` is JSON like
@@ -268,7 +268,7 @@ any other. The fetching is perfetto's own: `curl` downloads the file under a
 temporary name beside the pinned one, and perfetto checks it against the
 SHA-256 in the manifest before giving it the pinned name. That name ends in
 the first sixteen hex digits of the hash, and it is how the file is trusted
-from then on without being hashed again. The size is 10 to 14 MB, depending
+from then on without being hashed again. The size is 11 to 16 MB, depending
 on the platform. `echolot --version` names the pinned version without
 downloading anything.
 
@@ -277,11 +277,11 @@ temporary name is removed, and the command ends with exit 2 and one error that
 names the cause and the ways round it:
 
 ```
-error: trace_processor v56.1 could not be downloaded: curl exited with status 6 — the server's name did not resolve.
+error: trace_processor v59.1 could not be downloaded: curl exited with status 6 — the server's name did not resolve.
   Every trace is read with it, so nothing that opens one can run until it is here. Any one of these puts it in place:
   - a network that reaches commondatastorage.googleapis.com. Behind a proxy, export HTTPS_PROXY — curl honours it — and run this again;
   - curl, installed and on PATH: the download runs through it;
-  - offline, a copy of ~/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46 from a machine with the same OS and CPU (mac-amd64) that already has it, put at /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-99227035e8256d46. Keep the name: it carries the hash of the contents, and a file under any other name is not looked at.
+  - offline, a copy of ~/.local/share/perfetto/prebuilts/trace_processor_shell-df38039845244c35 from a machine with the same OS and CPU (mac-amd64) that already has it, put at /Users/you/.local/share/perfetto/prebuilts/trace_processor_shell-df38039845244c35. Keep the name: it carries the hash of the contents, and a file under any other name is not looked at.
 ```
 
 - **Behind a proxy.** curl takes `HTTPS_PROXY` from the environment. Export it

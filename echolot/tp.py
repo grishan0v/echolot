@@ -478,7 +478,7 @@ def _binary_version(bin_path: str) -> str | None:
 
 
 def _version_of(url: str) -> str | None:
-    """`v56.1` out of the manifest's URL, which is the only place it is said."""
+    """`v59.1` out of the manifest's URL, which is the only place it is said."""
     match = re.search(r"/v([\d.]+)/", url)
     return f"v{match.group(1)}" if match else None
 
@@ -514,7 +514,7 @@ class ToolchainError(ConfigError):
 @dataclass(frozen=True)
 class PinnedBuild:
     """The trace_processor the perfetto package pins, for this OS and CPU."""
-    version: str | None   # "v56.1"
+    version: str | None   # "v59.1"
     arch: str             # the manifest's name for the OS and CPU: "linux-amd64"
     file_name: str        # what perfetto calls the file: "trace_processor_shell"
     url: str

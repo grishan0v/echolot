@@ -12,13 +12,13 @@ name: pip-audit
 # by. It notifies whoever watches the repository and stops nobody. codeql.yml
 # gives the same reasoning for its own schedule.
 #
-# perfetto is pinned exactly (`==0.57.2`) for reasons pyproject.toml explains
+# perfetto is pinned exactly (`==0.59.1`) for reasons pyproject.toml explains
 # at length: the pin is a specific trace_processor_shell binary, and raising it
 # is a deliberate act with a doctor check attached. This workflow only reports;
 # it never runs with `--fix`, so it cannot touch that pin. dependabot.yml keeps
 # the pip ecosystem out for the same reason, and the split above is what keeps
 # this workflow on the same side of that decision: should an advisory ever land
-# against perfetto==0.57.2, it arrives as a Wednesday notification instead of a
+# against perfetto==0.59.1, it arrives as a Wednesday notification instead of a
 # wall across everyone's work. No `--ignore-vuln` is configured ahead of time.
 # If one is ever accepted as a deliberate exception, add it here with the
 # advisory ID and the reason.
