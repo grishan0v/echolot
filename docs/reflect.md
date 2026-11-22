@@ -1,6 +1,6 @@
 # Reflect: the report over the agent
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/reflect.md)
 
 `echolot analyze` stands between the trace and the agent. `echolot reflect`
 stands between the agent's session and the person maintaining the tool. Same

@@ -1,0 +1,64 @@
+# Language registry for README translations and the documentation site.
+#
+# English (`en`) is the default language and stays at the repository root and
+# directly under docs/. Each additional language mirrors docs/ under
+# docs/<lang>/ with the same filenames and adds README.<lang>.md at the root.
+#
+# Adding a new language:
+#   1. Add an entry under `languages:` below (and in mkdocs.yml `extra.alternate`).
+#   2. Add README.<lang>.md and docs/<lang>/*.md (same filenames as docs/*.md).
+#   3. Run `python docs/assets/render.py` to generate docs/assets/<lang>/*.svg
+#      and sync the sample report + alt texts in README.<lang>.md.
+#   4. Run `python docs/site.py` and `pytest`.
+
+default: en
+
+languages:
+  en:
+    name: English
+    readme: README.md
+    docs_dir: .
+    site_prefix: ""
+    site_description: Turns a huge Android trace into 20 rows of facts an AI agent can actually use.
+    nav_home: Home
+    toggle_light: Switch to light mode
+    toggle_dark: Switch to dark mode
+
+  ru:
+    name: Русский
+    readme: README.ru.md
+    docs_dir: ru
+    site_prefix: ru
+    site_description: Превращает огромный Android-трейс в 20 строк фактов, с которыми реально может работать AI-агент.
+    nav_home: Главная
+    toggle_light: Переключить на светлую тему
+    toggle_dark: Переключить на тёмную тему
+    tables:
+      ask:
+        title: Что написать агенту в зависимости от задачи
+        labels: ["КОГДА", "ЧТО НАПИСАТЬ"]
+        rows:
+          - ["Первый раз в проекте", "/echolot", "настраивает проект: echolot.yml из кода и пробный трейс"]
+          - ["Холодный старт замедлился", "/echolot почему холодный старт медленный", null]
+          - ["Подтормаживает прокрутка", "/echolot лента дёргается при прокрутке", "нужен сценарий прокрутки в echolot.yml и Android 12+"]
+          - ["«Приложение не отвечает»", "/echolot приложение зависло, см. anr.txt", "отчёт из Crashlytics, Play Console или dumpsys dropbox"]
+      detectors:
+        title: Детекторы и что находит каждый из них
+        labels: ["ДЕТЕКТОР", "ЧТО НАХОДИТ"]
+        descriptions:
+          main_thread_block: На что главный поток потратил время
+          main_thread_outlier: Единичные срабатывания намного дольше обычного
+          app_init: Что запускалось после Application и до первой Activity
+          anr_risk: Отрезки, где главный поток не возвращался в очередь
+          anr: ANR, которые система зафиксировала в этом трейсе
+          monitor_contention: Конкуренция за мониторы (блокировки)
+          binder_txn: Долгие binder-транзакции
+          io_wait: Потоки, усыплённые ядром в ожидании диска
+          runnable_starvation: Вытеснение CPU (готов к работе, но не выполняется)
+          main_thread_waits: Ожидания главного потока на потоках приложения
+          main_thread_kernel_waits: Главный поток, удержанный в ядре потоками приложения
+          gc_pressure: Нагрузка от сборщика мусора (GC)
+          frame_jank: Кадры, не уложившиеся в дедлайн
+          composables: Composable-функции приложения по времени композиции
+          uninstrumented_cpu: "Слепые зоны: потоки грузят CPU без инструментирования"
+          repeated_work: Одна и та же работа, вызываемая из разных мест

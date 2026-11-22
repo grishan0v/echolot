@@ -1,6 +1,6 @@
 # The `.claude/` layer
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/agent-layer.md)
 
 ```bash
 cd ~/StudioProjects/my-app

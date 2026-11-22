@@ -37,11 +37,15 @@ Pages from `main`: <https://grishan0v.github.io/echolot/>. The pages stay Markdo
 same there. On the way to the site, [docs/site.py](docs/site.py) rewrites the
 three things in them that are GitHub's: the navigation line under a title,
 links that leave `docs/`, and `README.md` as a folder's first page.
-[mkdocs.yml](mkdocs.yml) holds the site's configuration and its nav.
+[mkdocs.yml](mkdocs.yml) holds the default site's configuration and its nav;
+[docs/languages.yml](docs/languages.yml) registers all available translations
+(`docs/<lang>/` and `README.<lang>.md`), for which `docs/site.py` generates
+`build/site-docs-<lang>/` and `build/mkdocs-<lang>.yml`.
 
 ```bash
 pip install -e '.[docs]'
-python docs/site.py && zensical build --strict   # what CI runs on a pull request
+python docs/site.py && zensical build --strict   # default language (en)
+zensical build --config-file build/mkdocs-ru.yml --strict  # translation (ru)
 python docs/site.py && zensical serve            # to read it; run site.py again after an edit
 ```
 

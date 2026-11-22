@@ -31,9 +31,12 @@ import sys
 import textwrap
 from pathlib import Path
 
+import yaml
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 README = ROOT / "README.md"
+LANGUAGES_FILE = ROOT / "docs" / "languages.yml"
 DETECTORS = ROOT / "echolot" / "sql" / "detectors"
 # Where the README names every picture: PyPI resolves nothing relative.
 RAW = "https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/"
@@ -239,27 +242,63 @@ def narrow_table(rows, *, lead: Kind, rest: Kind, title, gid):
                style=follows_the_theme(THEMES["light"], THEMES["dark"]))
 
 
-def tables() -> dict[str, dict]:
+def _load_languages() -> tuple[str, dict[str, dict]]:
+    data = yaml.safe_load(LANGUAGES_FILE.read_text(encoding="utf-8"))
+    return data["default"], data["languages"]
+
+
+def tables(lang: str = "en") -> dict[str, dict]:
     """The README's tables, by the name their files start with: the words, and
     the type of each column at the README's width and at a phone's."""
+    default, langs = _load_languages()
+    if lang == default:
+        return {
+            "ask": dict(
+                title="What to type in the agent, by the problem you arrive with",
+                labels=("WHEN", "WHAT TO TYPE"), rows=ASK, split=300, row=58,
+                lead=(SANS, 16, "ink", 400), rest=(MONO, 14.5, "accent", 500),
+                narrow=((SANS, 16, "ink", 400), (MONO, 13.5, "accent", 500))),
+            "detectors": dict(
+                title="The detectors, and what each one catches",
+                labels=("DETECTOR", "WHAT IT CATCHES"), rows=detector_rows(), split=260, row=46,
+                lead=(MONO, 14.5, "accent", 500), rest=(SANS, 15.5, "ink", 400),
+                narrow=((MONO, 14, "accent", 500), (SANS, 14.5, "ink", 400))),
+        }
+
+    cfg = langs[lang]["tables"]
+    ask_cfg = cfg["ask"]
+    det_cfg = cfg["detectors"]
+    base_detectors = detector_rows()
+    desc_map = det_cfg["descriptions"]
+    missing = sorted({det_id for det_id, _, _ in base_detectors} - set(desc_map))
+    extra = sorted(set(desc_map) - {det_id for det_id, _, _ in base_detectors})
+    if missing or extra:
+        raise SystemExit(
+            f"docs/languages.yml ({lang}): detectors descriptions disagree with "
+            f"DETECTOR_ORDER — missing: {missing or 'none'}, extra: {extra or 'none'}"
+        )
     return {
         "ask": dict(
-            title="What to type in the agent, by the problem you arrive with",
-            labels=("WHEN", "WHAT TO TYPE"), rows=ASK, split=300, row=58,
+            title=ask_cfg["title"],
+            labels=tuple(ask_cfg["labels"]),
+            rows=[tuple(r) for r in ask_cfg["rows"]],
+            split=300, row=58,
             lead=(SANS, 16, "ink", 400), rest=(MONO, 14.5, "accent", 500),
             narrow=((SANS, 16, "ink", 400), (MONO, 13.5, "accent", 500))),
         "detectors": dict(
-            title="The detectors, and what each one catches",
-            labels=("DETECTOR", "WHAT IT CATCHES"), rows=detector_rows(), split=260, row=46,
+            title=det_cfg["title"],
+            labels=tuple(det_cfg["labels"]),
+            rows=[(det_id, desc_map[det_id], None) for det_id, _, _ in base_detectors],
+            split=260, row=46,
             lead=(MONO, 14.5, "accent", 500), rest=(SANS, 15.5, "ink", 400),
             narrow=((MONO, 14, "accent", 500), (SANS, 14.5, "ink", 400))),
     }
 
 
-def pictures() -> dict[str, str]:
-    """Every picture this script draws, by file name."""
+def pictures(lang: str = "en") -> dict[str, str]:
+    """Every picture this script draws for `lang`, by file name."""
     out = {}
-    for name, t in tables().items():
+    for name, t in tables(lang).items():
         out[f"{name}-wide.svg"] = wide_table(
             t["labels"], t["rows"], split=t["split"], lead=t["lead"], rest=t["rest"],
             title=t["title"], gid=name, row=t["row"])
@@ -277,12 +316,14 @@ def alt(table: dict) -> str:
     return f"{table['title']}. {rows}"
 
 
-_ALT = re.compile(r'(<img alt=")([^"]*)(" src="' + re.escape(RAW) + r'([a-z]+)-wide\.svg")')
-
-
-def with_alts(readme: str) -> str:
+def with_alts(readme: str, lang: str = "en") -> str:
     """The README with each table picture's alt text written from its rows."""
-    known, found = tables(), set()
+    default, _ = _load_languages()
+    prefix = RAW if lang == default else f"{RAW}{lang}/"
+    pattern = re.compile(
+        r'(<img alt=")([^"]*)(" src="' + re.escape(prefix) + r'([a-z]+)-wide\.svg")'
+    )
+    known, found = tables(lang), set()
 
     def words(match: re.Match) -> str:
         name = match.group(4)
@@ -294,9 +335,10 @@ def with_alts(readme: str) -> str:
             said = said.replace(raw, escaped)
         return match.group(1) + said + match.group(3)
 
-    new = _ALT.sub(words, readme)
+    new = pattern.sub(words, readme)
     if found != set(known):
-        raise SystemExit(f"README.md: no <img> shows the table {sorted(set(known) - found)}")
+        readme_name = "README.md" if lang == default else f"README.{lang}.md"
+        raise SystemExit(f"{readme_name}: no <img> shows the table {sorted(set(known) - found)}")
     return new
 
 
@@ -350,23 +392,39 @@ def write_preview(target: Path) -> list[Path]:
 SAMPLE = re.compile(r"^```markdown\n# Marker Report\n.*?^```", re.S | re.M)
 
 
-def write_readme() -> bool:
+def write_readme(lang: str | None = None) -> bool:
     """The README's parts this script writes: the sample report, rendered from
-    the demo app, and the alt text of each table. True when either changed."""
+    the demo app, and the alt text of each table. True when anything changed."""
     sys.path.insert(0, str(ROOT))
     from echolot import demo, recorder
     from echolot import report as report_mod
 
     with recorder.isolated():
         rendered = report_mod.to_markdown(demo.report()).rstrip("\n")
-    text_ = README.read_text(encoding="utf-8")
-    if not SAMPLE.search(text_):
-        raise SystemExit("README.md: the ```markdown block holding the sample report is gone")
-    new = with_alts(SAMPLE.sub(lambda _: f"```markdown\n{rendered}\n```", text_, count=1))
-    if new == text_:
-        return False
-    README.write_text(new, encoding="utf-8")
-    return True
+
+    default, langs = _load_languages()
+    targets = [lang] if lang is not None else list(langs)
+    changed = False
+    for code in targets:
+        info = langs[code]
+        readme_path = ROOT / info["readme"]
+        if not readme_path.is_file():
+            continue
+        if code != default and "tables" not in info:
+            continue
+        text_ = readme_path.read_text(encoding="utf-8")
+        if not SAMPLE.search(text_):
+            raise SystemExit(
+                f"{info['readme']}: the ```markdown block holding the sample report is gone"
+            )
+        new = with_alts(
+            SAMPLE.sub(lambda _: f"```markdown\n{rendered}\n```", text_, count=1),
+            lang=code,
+        )
+        if new != text_:
+            readme_path.write_text(new, encoding="utf-8")
+            changed = True
+    return changed
 
 
 def main(argv: list[str]) -> int:
@@ -377,10 +435,16 @@ def main(argv: list[str]) -> int:
                              "desktop and phone")
     args = parser.parse_args(argv)
     if write_readme():
-        print(f"→ {README} (the sample report, the tables' alt text)")
-    for name, body in pictures().items():
-        (HERE / name).write_text(body, encoding="utf-8")
-        print(f"→ {HERE / name}")
+        print("→ updated README sample report and tables' alt text")
+    default, langs = _load_languages()
+    for code, info in langs.items():
+        if code != default and "tables" not in info:
+            continue
+        out_dir = HERE if code == default else HERE / code
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for name, body in pictures(code).items():
+            (out_dir / name).write_text(body, encoding="utf-8")
+            print(f"→ {out_dir / name}")
     if args.preview is not None:
         for page in write_preview(args.preview):
             print(f"→ {page}")
