@@ -1,0 +1,751 @@
+"""Dig deeper from `echolot ui`: the person's own agent, started without a
+window on the checks they ticked, and read back from the files it leaves.
+
+echolot has no model and starts none of its own. A press runs what a person
+would run by hand in a terminal:
+
+    echolot hunt "<the question>" --since unknown       the investigation
+    claude -p "<the request>" --output-format json …    their own Claude Code
+
+The first is run by the server, before anything else, and the second as a job
+(`echolot/job.py`), a process beside the server, so that pages go on being
+drawn for the tens of minutes it takes. Claude Code is the one client the
+page starts (#449): Codex is #454, and Cursor stays on the request to copy.
+
+What is decided here and nowhere else:
+
+- whether Claude Code can be started from here (`find`): installed, new
+  enough to be told that nobody can answer, and signed in;
+- the grant (`rules`) and the command line (`command`), built by the server
+  from the config and never from what a browser sent. No permission is
+  bypassed: `dontAsk` refuses whatever the rules do not allow, edits are
+  limited to `instrumentation.allowed`, and a question with nobody there is
+  refused rather than waited on (`--permission-prompts none`);
+- the request the agent is handed (`request`): the report's question,
+  warnings and rows (`pages/report_page.request_text`) and what a run with
+  nobody at the keyboard has to know;
+- what a run looks like now (`view`): the investigation's own record round by
+  round, and between rounds the phase, from what the agent is running (a
+  build, a recording, the phone) and not from anything it printed; how long
+  nothing has moved; and once it ended, how, with what it left in the code.
+
+Nothing is written to Claude Code's own settings, and nothing to `echolot.yml`.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Sequence
+
+from . import check as check_mod
+from . import hunt as hunt_mod
+from . import job, state
+from .check import Refusal, _stops_recording
+from .config import Config, ConfigError
+from .pages import report_page
+
+JOB = "dig"
+STEP = "agent"
+PROGRAM = "claude"
+CLIENT = "Claude Code"
+
+# The first Claude Code that can be told nobody answers its prompts
+# (`--permission-prompts none`); before it, `-p` could start in auto mode.
+MIN_VERSION = (2, 1, 259)
+# Where Claude Code stops by itself, by its own estimate of what it spent.
+BUDGET_USD = 10
+# How long nothing may move before the page says so, beside Stop. A real hunt
+# was quiet for four and five minutes at a time (an edit, a build, an install,
+# the answer being written), and the page must not cry wolf over that.
+QUIET_S = 600.0
+# The one file outside the allowed paths the agent writes: its verdict.
+VERDICT = ".echolot/verdict.json"
+# What the agent is told it may run, as the rules hold it and as a person reads it.
+COMMANDS = (("echolot", "Bash(echolot *)", "any echolot command"),
+            ("./gradlew", "Bash(./gradlew *)", "any Gradle task of the project"),
+            ("adb", "Bash(adb *)", "any command on the phone"))
+# Names a nested Claude Code would read as "you are inside another session".
+UNSET = ("CLAUDECODE",)
+# Where Claude Code is told about the layer it needs: the command that hunts,
+# and the agent it hands the loop to, as `echolot init` installs them.
+LAYER = (Path(".claude") / "commands" / "echolot-hunt.md", Path(".claude") / "agents" / "perf-hunter.md")
+
+# How the page finds the client and asks it the two things it needs. A test
+# hands in its own: no test ever runs the real one.
+_which: Callable[[str], str | None] = shutil.which
+
+
+def _quiet_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in UNSET}
+
+
+def _ask(argv: list[str]) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL,
+                              env=_quiet_env(), errors="replace")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+_run: Callable[[list[str]], subprocess.CompletedProcess | None] = _ask
+
+
+# ---------------------------------------------------------------------------
+# the client: can it be started from here
+
+
+@dataclass
+class Client:
+    """Claude Code as the page finds it on this computer. `why` is why it
+    cannot be started from here, in a sentence; None when it can."""
+    program: str | None = None
+    version: str | None = None
+    account: str | None = None
+    why: str | None = None
+
+    @property
+    def can(self) -> bool:
+        return self.why is None and self.program is not None
+
+
+def _version(text: str) -> tuple[int, ...] | None:
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(part) for part in m.groups()) if m else None
+
+
+def find() -> Client:
+    """Claude Code on this computer: where it is, which version, whose
+    account. Asked anew every time, in a third of a second: the server keeps
+    nothing between two requests."""
+    program = _which(PROGRAM)
+    if not program:
+        return Client(why=f"{CLIENT} is not installed on this computer: there is no `{PROGRAM}` command here.")
+    said = _run([program, "--version"])
+    found = _version(said.stdout if said else "")
+    if found is None:
+        return Client(program=program, why=f"{CLIENT} did not say which version it is (`{PROGRAM} --version`), "
+                                           "so the page cannot tell whether it can be started without a window.")
+    version = ".".join(str(part) for part in found)
+    if found < MIN_VERSION:
+        least = ".".join(str(part) for part in MIN_VERSION)
+        return Client(program=program, version=version,
+                      why=f"{CLIENT} {version} is older than {least}, the first that can be told that nobody is "
+                          f"there to answer it. Update it, then come back.")
+    status = _run([program, "auth", "status"])
+    try:
+        known = json.loads(status.stdout) if status and status.stdout.strip() else None
+    except ValueError:
+        known = None
+    if not isinstance(known, dict):
+        return Client(program=program, version=version,
+                      why=f"{CLIENT} did not say whether it is signed in (`{PROGRAM} auth status`).")
+    if known.get("loggedIn") is not True:
+        return Client(program=program, version=version,
+                      why=f"{CLIENT} is installed and not signed in. Sign in once in a terminal "
+                          f"(`{PROGRAM} auth login`), then come back.")
+    account = next((str(known[key]) for key in ("email", "account", "orgName")
+                    if isinstance(known.get(key), str) and known[key].strip()), None)
+    return Client(program=program, version=version, account=account)
+
+
+# ---------------------------------------------------------------------------
+# what a press asks for: ticked checks of the report on disk
+
+_KEY = re.compile(r"[A-Za-z0-9_-]{1,64}")
+PICK = "pick."
+
+
+def asked(form: dict[str, str]) -> list[str]:
+    """The checks a press ticked, by their keys: a field `pick.<key>` each.
+    Nothing in them is a path or a command: a key is matched against the
+    report, and a key that is no such name is no press."""
+    keys = []
+    for name, value in form.items():
+        if not name.startswith(PICK):
+            continue
+        key = name[len(PICK):]
+        if not _KEY.fullmatch(key) or value not in ("1", "on"):
+            raise Refusal("This press cannot be read", "The page sent something echolot does not know. "
+                          "Go back to the report and tick the checks there.", 400)
+        keys.append(key)
+    if not keys:
+        raise Refusal("Nothing is ticked", "Tick at least one check that found something, then press Dig deeper.", 400)
+    return keys
+
+
+def picked(report: dict[str, Any], keys: Sequence[str]) -> list[dict[str, Any]]:
+    """The ticked checks, as the report on disk has them now and in its own
+    order. A key it does not have, or a check that found nothing, is refused:
+    the report was written anew since the page was drawn."""
+    checks = report_page.checks(report)
+    by_key = {c["key"]: c for c in checks}
+    for key in keys:
+        if key not in by_key or not by_key[key]["hot"]:
+            raise Refusal("The report changed", "It is not the one the page was drawn from: a check that was ticked "
+                          "has nothing to show in it now. Go back to the report: it shows the new one.")
+    wanted = set(keys)
+    return [c for c in checks if c["key"] in wanted]
+
+
+# ---------------------------------------------------------------------------
+# the grant and the command line, built here and nowhere else
+
+_SEGMENT = re.compile(r"[A-Za-z0-9_.@+*-]+")
+
+
+def allowed(cfg: Config) -> list[str]:
+    """`instrumentation.allowed` as paths an edit rule can name: relative,
+    in forward slashes, with no `..`. `""` is the whole project (`.`).
+    Refused with the entry named when one is none of those: the page puts
+    nothing it cannot read into a rule. An empty list allows every place to
+    `echolot mark`, and the page does not hand that to an agent."""
+    raw = cfg.get("instrumentation.allowed")
+    raw = [raw] if isinstance(raw, str) else raw
+    if not isinstance(raw, list) or not raw:
+        raise Refusal("Where may the agent put its markers?",
+                      "`instrumentation.allowed` in `echolot.yml` names no folder. The page lets an agent edit "
+                      "only the folders that list names: add the folders of your app's own code there, for "
+                      "example `app/src/main`, then come back.")
+    out = []
+    for entry in raw:
+        text = str(entry).strip().replace("\\", "/")
+        while text.startswith("./"):
+            text = text[2:]
+        text = text.rstrip("/")
+        if text in ("", "."):
+            out.append("")
+            continue
+        parts = text.split("/")
+        if text.startswith("/") or any(p in ("", ".", "..") for p in parts) \
+                or not all(_SEGMENT.fullmatch(p) for p in parts):
+            raise Refusal("A folder the page cannot hand on",
+                          f"`instrumentation.allowed` holds `{entry}`, which is not a folder inside the project "
+                          "written plainly. Write it relative to the project, with forward slashes, and "
+                          "without `..`, spaces or quotes; then come back.")
+        out.append(text)
+    return list(dict.fromkeys(out))
+
+
+def rules(paths: Sequence[str]) -> list[str]:
+    """What the agent may do without asking, as Claude Code's rules: the
+    three commands, and edits under each allowed path and of the verdict
+    file. A rule from the command line is anchored at the project's folder
+    (`/path`). Reading the project and the commands that only read need no
+    rule; everything else is refused."""
+    out = [rule for _, rule, _ in COMMANDS]
+    out += [f"Edit(/{path}/**)" if path else "Edit(/**)" for path in paths]
+    out.append(f"Edit(/{VERDICT})")
+    return out
+
+
+def command(program: str, request: str, grant: Sequence[str]) -> list[str]:
+    """Claude Code, once, without a window: the request, one JSON object at
+    the end, and the grant. The prompt comes before the list of rules, which
+    takes every word after it."""
+    return [program, "-p", request, "--output-format", "json",
+            "--permission-mode", "dontAsk", "--permission-prompts", "none",
+            "--setting-sources", "project", "--max-budget-usd", str(BUDGET_USD),
+            "--allowedTools", *grant]
+
+
+def shown(grant: Sequence[str]) -> str:
+    """The command line as a person would type it, with the request named
+    and not written out: it stands in full beside it."""
+    return shlex.join(command(PROGRAM, "<the request>", grant))
+
+
+# ---------------------------------------------------------------------------
+# the question and the request
+
+
+def hunt_question(report: dict[str, Any]) -> str:
+    """The investigation's question as its record keeps it, and as its page
+    says it in its headline: the request's question, asked in one line."""
+    data = report_page._read(report)
+    window = (data.get("window") or {}).get("duration_ms")
+    name = data.get("scenario") or "the window"
+    budget = (data.get("verdict") or {}).get("budget_ms")
+    if not isinstance(window, (int, float)) or isinstance(window, bool) or window <= 0:
+        return f"What is behind what the report found in {name}?"
+    took = f"{window:,.0f} ms"
+    if isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0:
+        if window > budget:
+            return f"What makes {name} take {took} against a time limit of {budget:,.0f} ms?"
+        return f"What is behind the {took} {name} takes, within its time limit of {budget:,.0f} ms?"
+    return f"What is behind the {took} {name} takes?"
+
+
+def _listed(items: Sequence[str]) -> str:
+    items = [f"`{i}`" for i in items]
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def unattended(n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> str:
+    """What an agent started from the page is told beyond the request a
+    person would copy: that nobody can answer it, which investigation it
+    works in and on which recordings, what it may do, and how it ends."""
+    where = _listed([p or "." for p in paths])
+    if aside:
+        folder, count = aside
+        evidence = (f"- Its first evidence is the {count} recording{'s' if count != 1 else ''} behind the report, "
+                    f"moved aside when it opened, into `{folder}/`. Do not record {'them' if count != 1 else 'it'} "
+                    "again.")
+    else:
+        evidence = "- No recordings were set aside when it opened: record them in its first round."
+    return "\n".join([
+        "This run was started from echolot ui, and nobody is at the keyboard. Nothing you ask can be answered: "
+        "a question, or anything that needs a person's approval, is refused and the run goes on. So do not ask. "
+        "Decide with what you have, and say in your answer what you would have asked.",
+        f"- The investigation is open: #{n}, opened for this question by the page. Carry on in it, do not open "
+        "another, and close it at the end.",
+        evidence,
+        "- After which change: unknown.",
+        f"- You may run `echolot`, `./gradlew` and `adb` without asking, and edit files under {where}, and "
+        f"`{VERDICT}`. Everything else is refused: git, any other program, any other file. Do not commit "
+        "anything.",
+        f"- Close the investigation with your verdict, as /echolot-hunt says: "
+        f"`echolot hunt --done --verdict {VERDICT}`.",
+    ])
+
+
+def request(report: dict[str, Any], picks: Sequence[dict[str, Any]], where: str, n: int,
+            aside: tuple[str, int] | None, paths: Sequence[str]) -> str:
+    """The request the started agent is handed: the one a person would copy,
+    then what a run with nobody there has to know."""
+    return report_page.request_text(report, picks, where, last=True) + "\n\n" + unattended(n, aside, paths)
+
+
+# ---------------------------------------------------------------------------
+# whether it can start, and what it would do: one reading for the page
+# before the press and for the press itself
+
+
+def layer_missing(project: Path) -> list[str]:
+    return [p.as_posix() for p in LAYER if not (project / p).is_file()]
+
+
+def changed_files(project: Path) -> int | None:
+    """How many files of the working tree are changed and not committed, as
+    `git status` counts them; None where that cannot be told."""
+    try:
+        said = subprocess.run(["git", "-C", str(project), "status", "--porcelain"], capture_output=True, text=True,
+                              timeout=15, stdin=subprocess.DEVNULL, errors="replace")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if said.returncode != 0:
+        return None
+    return sum(1 for line in said.stdout.splitlines() if line.strip())
+
+
+def own_allow(project: Path) -> list[str]:
+    """What the project's own Claude Code settings allow (`.claude/settings.json`,
+    read with `--setting-sources project`) beyond the page's rules: Claude
+    Code adds those to the grant, so the page says them."""
+    try:
+        data = json.loads((project / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    allow = ((data.get("permissions") or {}).get("allow") if isinstance(data, dict) else None) or []
+    ours = {rule for _, rule, _ in COMMANDS} | {"Bash(echolot:*)"}
+    return [str(rule) for rule in allow if isinstance(rule, str) and rule not in ours]
+
+
+def why_not(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], client: Client) -> str | None:
+    """Why a press would start nothing now, in a sentence; None when it would
+    start. The same reading before the press, for the page, and at the
+    press, against the project as it is then."""
+    current = job.read(project, JOB)
+    if current is not None and current["status"] == job.RUNNING:
+        return "Not now: an agent is already digging into this app. Its page shows how far it is."
+    other = job.read(project, check_mod.JOB)
+    if other is not None and other["status"] == job.RUNNING:
+        return ("Not now: a check is running on the phone. One thing at a time: when it is done, press Dig "
+                "deeper again.")
+    kind = state.next_kind(st)
+    if kind in ("upgrade", "init", "doctor", "setup", "fix-config"):
+        return check_mod._stops_all(st)
+    if not client.can:
+        return client.why
+    gone = layer_missing(project)
+    if gone:
+        return (f"Not yet: this project does not have echolot's commands for {CLIENT} ({_listed(gone)}). "
+                "`echolot init` in the project's folder installs them.")
+    hunt = st.get("hunt") or {}
+    if hunt and (hunt.get("status") or "open") == "open":
+        asked_ = f" (\"{hunt['question']}\")" if hunt.get("question") else ""
+        return (f"Not now: an investigation is open{asked_}. One investigation at a time: its answer, or closing "
+                "it on its page, comes first.")
+    collect = st.get("collect") or {}
+    if collect.get("status") == "running":
+        return "Not now: a recording is running, started from a terminal or by an agent. Wait for it to end."
+    return _stops_recording(lines)
+
+
+# ---------------------------------------------------------------------------
+# a press
+
+
+def _aside(project: Path, scenario: str | None, since: float) -> tuple[str, int] | None:
+    """The folder `echolot hunt` moved the scenario's recordings into, and
+    how many there are: the newest `<scenario>-…` folder made since the press."""
+    if not scenario:
+        return None
+    root = project / ".echolot" / "traces"
+    found = []
+    with contextlib.suppress(OSError):
+        for d in root.iterdir():
+            if d.is_dir() and d.name.startswith(f"{scenario}-"):
+                with contextlib.suppress(OSError):
+                    if d.stat().st_mtime + 2 >= since:
+                        found.append((d.stat().st_mtime, d))
+    if not found:
+        return None
+    folder = max(found)[1]
+    count = sum(1 for p in folder.iterdir() if p.suffix in (".perfetto-trace", ".pftrace"))
+    return folder.relative_to(project).as_posix(), count
+
+
+def _last_line(text: str) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def start(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], report: dict[str, Any],
+          picks: Sequence[dict[str, Any]], where: str, client: Client, *,
+          run: Callable[..., Any] = subprocess.run,
+          spawn: Callable[[Path, str, dict[str, Any]], Any] = job._spawn) -> dict[str, Any]:
+    """Open the investigation and start the agent in it, or raise `Refusal`
+    with the reason. Held against the project as it is now.
+
+    `run` runs a command of echolot's and waits for it, `spawn` starts the
+    job's process: both are a test's to replace.
+    """
+    why = why_not(project, st, lines, client)
+    if why:
+        raise Refusal("The agent cannot start", why)
+    known = st.get("config") or {}
+    try:
+        cfg = Config.load(known["path"], scenario=known.get("scenario"))
+    except (ConfigError, KeyError, OSError) as e:
+        raise Refusal("The agent cannot start", f"`echolot.yml` does not load: {e}") from None
+    paths = allowed(cfg)
+    name = report.get("scenario") or cfg.scenario_name
+    several = len(cfg.scenarios) > 1
+    question = hunt_question(report)
+    echolot = [sys.executable, "-m", "echolot"]
+    opening = [*echolot, "hunt", question, "--since", "unknown", "-c", str(known["path"]),
+               *(["--scenario", name] if several else [])]
+    began = time.time()
+    try:
+        done = run(opening, cwd=str(project), capture_output=True, text=True, timeout=120,
+                   stdin=subprocess.DEVNULL, errors="replace")
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Refusal("The investigation could not be opened", f"`echolot hunt` did not run: {e}.", 500) from None
+    opened = hunt_mod.load(project)
+    if done.returncode != 0 or not opened or opened.get("question") != question or opened.get("status") != "open":
+        said = _last_line(done.stderr) or _last_line(done.stdout) or "it said nothing"
+        raise Refusal("The investigation could not be opened", f"`echolot hunt` said: {said}", 500)
+    n = int(opened["n"])
+    text = request(report, picks, where, n, _aside(project, name, began), paths)
+    grant = rules(paths)
+    step = {"id": STEP, "argv": command(str(client.program), text, grant), "shown": shown(grant),
+            "tree": True, "unset": list(UNSET)}
+    what = {"client": PROGRAM, "hunt": n, "question": question, "scenario": name,
+            "picks": [c["key"] for c in picks], "report": where, "budget_usd": BUDGET_USD}
+    try:
+        return job.start(project, JOB, [step], what, spawn=spawn)
+    except job.Refused as e:
+        # Nobody will work in the investigation just opened: it is closed,
+        # with that said, so that it holds nothing back.
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            run([*echolot, "hunt", "--done", f"Not started: echolot ui could not start {CLIENT} ({e}).",
+                 "-c", str(known["path"])], cwd=str(project), capture_output=True, text=True, timeout=120,
+                stdin=subprocess.DEVNULL, errors="replace")
+        raise Refusal(f"{CLIENT} did not start", f"echolot could not start it: {e}. The investigation it was to "
+                      "work in was closed again.", 500) from None
+
+
+def stop(project: Path) -> bool:
+    """Ask the running agent to stop. False when none is running."""
+    return job.stop(project, JOB)
+
+
+# ---------------------------------------------------------------------------
+# a run, read back from its files
+
+
+def _echolot(args: str) -> str | None:
+    """Which echolot command a command line runs, or None for none."""
+    words = args.split()
+    for i, word in enumerate(words):
+        if os.path.basename(word) == "echolot" or (word == "-m" and i + 1 < len(words) and words[i + 1] == "echolot"):
+            rest = words[i + 2:] if word == "-m" else words[i + 1:]
+            return next((w for w in rest if not w.startswith("-")), "")
+    return None
+
+
+def _named(args: str, *names: str) -> bool:
+    return any(os.path.basename(word) in names for word in args.split())
+
+
+def _gradle(args: str) -> bool:
+    return _named(args, "gradlew", "gradle") or "GradleWrapperMain" in args or "org.gradle.launcher" in args
+
+
+# What the agent is doing, from what it runs: the first of these that a
+# process under it is, in this order, since one runs inside another (a
+# recording runs adb). Each says it in a few words.
+_PHASES: tuple[tuple[str, str, Callable[[str], bool]], ...] = (
+    ("record", "Recording the app on the phone", lambda a: _echolot(a) == "collect"),
+    ("install", "Building the app and putting it on the phone", lambda a: _gradle(a) and "install" in a.lower()),
+    ("build", "Building the app", _gradle),
+    ("put", "Putting the app on the phone", lambda a: _named(a, "adb") and " install" in a),
+    ("read", "Reading the recordings", lambda a: _echolot(a) == "analyze"),
+    ("compare", "Comparing with the round before", lambda a: _echolot(a) == "compare"),
+    ("unmark", "Taking the markers out of the code", lambda a: _echolot(a) == "mark" and "--remove" in a),
+    ("mark", "Putting markers into the code", lambda a: _echolot(a) == "mark"),
+    ("answer", "Writing down the answer", lambda a: _echolot(a) == "hunt"),
+    ("phone", "Working with the phone", lambda a: _named(a, "adb")),
+    ("echolot", "Running echolot", lambda a: _echolot(a) is not None),
+)
+THINKING = ("think", "Reading the report and the code, and deciding what to do next")
+
+
+def phase(pid: int | None, table: list[dict[str, Any]]) -> dict[str, Any]:
+    """What the agent is doing now, from the processes under it: the key,
+    the words, and how long that has run, in seconds, where it is known."""
+    under = job.descendants(pid, table) if isinstance(pid, int) else []
+    for key, words, test in _PHASES:
+        doing = [p for p in under if test(p.get("args") or "")]
+        if doing:
+            ages = [p["age"] for p in doing if isinstance(p.get("age"), (int, float))]
+            return {"key": key, "words": words, "for": max(ages) if ages else None}
+    return {"key": THINKING[0], "words": THINKING[1], "for": None}
+
+
+def _mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def moved(project: Path, run: dict[str, Any], table: list[dict[str, Any]], now: float) -> float:
+    """When anything last moved: the run or its step started, the
+    investigation's record or one of its reports was written, the agent
+    printed, or a process under it started. Read from files and from the
+    list of processes, never from what the agent said."""
+    step = next(iter(run.get("steps") or []), {})
+    stamps = [run.get("started") or 0, step.get("started") or 0]
+    n = (run.get("what") or {}).get("hunt")
+    stamps.append(_mtime(hunt_mod.path(project)) or 0)
+    if isinstance(n, int):
+        reports = project / hunt_mod.ARCHIVE_DIR / str(n) / "reports"
+        with contextlib.suppress(OSError):
+            stamps += [_mtime(p) or 0 for p in reports.iterdir()]
+    stamps.append(_mtime(job.log_path(project, JOB, STEP)) or 0)
+    pid = step.get("pid")
+    for p in job.descendants(pid, table) if isinstance(pid, int) else []:
+        if isinstance(p.get("age"), (int, float)):
+            stamps.append(now - p["age"])
+    return max(stamps)
+
+
+def result(project: Path) -> dict[str, Any] | None:
+    """The one JSON object Claude Code prints at the end of a run: its last
+    message, whether it ended in an error, what it spent, what it was
+    refused. None when it printed none (it was stopped, or never got there)."""
+    path = job.log_path(project, JOB, STEP)
+    try:
+        with open(path, "rb") as log:
+            log.seek(0, os.SEEK_END)
+            size = log.tell()
+            log.seek(max(0, size - 4 * 1024 * 1024))
+            text = log.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            found = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(found, dict) and ("result" in found or "is_error" in found):
+            return found
+    return None
+
+
+def cost(found: dict[str, Any] | None) -> str | None:
+    value = (found or {}).get("total_cost_usd")
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        return None
+    return f"${value:,.2f}"
+
+
+def denied(found: dict[str, Any] | None) -> list[str]:
+    """What the agent tried and was refused, as it tried it: a command, or
+    the file it meant to write."""
+    out = []
+    for item in (found or {}).get("permission_denials") or []:
+        if not isinstance(item, dict):
+            continue
+        given = item.get("tool_input") if isinstance(item.get("tool_input"), dict) else {}
+        said = given.get("command") or given.get("file_path") or given.get("path") or ""
+        tool = str(item.get("tool_name") or "a tool")
+        out.append(f"{tool}: {said}" if said else tool)
+    return out
+
+
+def _rounds(project: Path, hunt: dict[str, Any] | None) -> int:
+    return len(hunt_mod.archived_reports(project, hunt)) if hunt else 0
+
+
+def _left(project: Path, st: dict[str, Any] | None) -> dict[str, Any]:
+    prefix = ((st or {}).get("config") or {}).get("temp_prefix")
+    return hunt_mod.leftovers(project, prefix)
+
+
+def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | None = None, *,
+         procs: Callable[[], list[dict[str, Any]]] = job.processes, now: float | None = None,
+         count: bool = True) -> dict[str, Any] | None:
+    """The last run as a page shows it, or None when none was started here.
+
+    While it runs: the phase, how long it has run, how long nothing has
+    moved, and whether it was asked to stop. Once it ended: a sentence of
+    the page's on how, the agent's last words and what it spent, and what is
+    left in the code, with the presses that clear it up. `count` off leaves
+    out the count of markers in the sources, which walks every source file:
+    a page that only says which one is running needs none.
+    """
+    run = run if run is not None else job.read(project, JOB)
+    if run is None:
+        return None
+    now = time.time() if now is None else now
+    what = run.get("what") or {}
+    n = what.get("hunt") if isinstance(what.get("hunt"), int) else None
+    hunt = hunt_mod.find(project, str(n)) if n else None
+    step = next(iter(run.get("steps") or []), {})
+    status = run["status"]
+    out: dict[str, Any] = {
+        "status": status, "hunt": n, "question": what.get("question"), "scenario": what.get("scenario"),
+        "hunt_status": (hunt or {}).get("status") or ("open" if hunt else None),
+        "verdict": isinstance((hunt or {}).get("verdict"), dict), "rounds": _rounds(project, hunt),
+        # How long it ran: to its end, or to now while it runs. One cut short
+        # has no end on record, and is not said to have run until now.
+        "ran": (max(0.0, (run.get("finished") or now) - (run.get("started") or now))
+                if run.get("finished") or status == job.RUNNING else None),
+        "shown": step.get("shown") or "", "log": step.get("log") or "",
+        "phase": None, "quiet": None, "stuck": False, "stopping": False, "title": "", "text": "", "said": None,
+        "cost": None, "denied": [], "left": None, "can_close": False, "can_unmark": False,
+    }
+    if status == job.RUNNING:
+        table = procs()
+        out["phase"] = phase(step.get("pid"), table)
+        out["quiet"] = max(0.0, now - moved(project, run, table, now))
+        out["stuck"] = out["quiet"] >= QUIET_S
+        with contextlib.suppress(OSError):
+            out["stopping"] = job.stop_path(project, JOB).read_text(encoding="utf-8").strip() == str(run.get("pid"))
+        return out
+
+    found = result(project)
+    out["cost"], out["denied"] = cost(found), denied(found)
+    answered = out["hunt_status"] == "concluded"
+    words = str((found or {}).get("result") or "").strip()
+    if status == job.DONE and out["verdict"]:
+        out["title"] = f"{CLIENT} finished."
+        out["text"] = "Its answer is on this page."
+    elif status == job.DONE and answered:
+        out["title"] = f"{CLIENT} finished."
+        out["text"] = ("It closed the investigation with a few words and no table of causes: they are this page's "
+                       "headline.")
+    elif status == job.DONE:
+        out["title"] = f"{CLIENT} finished, and wrote down no answer."
+        out["text"] = "The investigation is still open, with the rounds it has. Its last words are below."
+    elif status == job.FAILED:
+        out["title"] = f"{CLIENT} stopped with an error."
+        out["text"] = ("It ended before it had an answer. What it said is below: a sign-in that ran out, or a "
+                       "limit of your plan, is put right in Claude Code itself.") if not answered else \
+            "It ended with an error after the investigation was closed. What it said is below."
+    elif status == job.STOPPED:
+        out["title"] = "Stopped."
+        out["text"] = f"{CLIENT} and everything it had started were ended."
+    else:
+        out["title"] = "This run was cut short."
+        out["text"] = (f"The process that ran {CLIENT} is gone: `echolot ui` was stopped, the terminal was closed, "
+                       "or the computer went to sleep.")
+    if not (status == job.DONE and out["verdict"]):
+        lines = [line for line in words.splitlines() if line.strip()][-12:] if words else \
+            job.said(project, JOB, STEP)
+        # Ended from outside, it printed nothing: nothing to show of it.
+        if lines or status not in (job.STOPPED, job.INTERRUPTED):
+            out["said"] = {"who": CLIENT, "lines": lines, "log": out["log"]}
+    if not out["verdict"]:
+        out["can_close"] = out["hunt_status"] == "open"
+        if count:
+            out["left"] = _left(project, st)
+            out["can_unmark"] = bool(out["left"]["removable"] or out["left"]["lines"])
+    return out
+
+
+def closing_words(seen: dict[str, Any]) -> str:
+    """What the investigation is closed with when the page closes it: what
+    came of it, in a sentence, since no answer did."""
+    rounds = seen.get("rounds") or 0
+    after = f"after {rounds} round{'s' if rounds != 1 else ''}" if rounds else "before its first round"
+    how = {job.STOPPED: "Stopped from echolot ui",
+           job.FAILED: f"{CLIENT} ended with an error",
+           job.INTERRUPTED: f"Cut short, the process that ran {CLIENT} gone",
+           job.DONE: f"{CLIENT} finished and wrote down nothing"}.get(seen.get("status"), "Left")
+    return f"{how}, {after}, with no answer. Closed from echolot ui."
+
+
+def close(project: Path, config: str, st: dict[str, Any] | None, *,
+          run: Callable[..., Any] = subprocess.run) -> None:
+    """Close the investigation an agent of the page left open, with what came
+    of it: `echolot hunt --done "<sentence>"`, as a person would. Refused
+    while the agent runs, and for an investigation it did not work in."""
+    seen = view(project, st, procs=lambda: [], count=False)
+    if seen is None or seen["status"] == job.RUNNING or not seen["can_close"]:
+        raise Refusal("Nothing to close", "No investigation of an agent the page started is open and idle. "
+                      "Its page shows where it stands.")
+    current = hunt_mod.load(project) or {}
+    if current.get("n") != seen["hunt"] or (current.get("status") or "open") != "open":
+        raise Refusal("Nothing to close", "The investigation open now is not the one the agent worked in.")
+    done = run([sys.executable, "-m", "echolot", "hunt", "--done", closing_words(seen), "-c", config],
+               cwd=str(project), capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL,
+               errors="replace")
+    if done.returncode != 0:
+        raise Refusal("The investigation was not closed",
+                      f"`echolot hunt --done` said: {_last_line(done.stderr) or _last_line(done.stdout)}", 500)
+
+
+def unmark(project: Path, config: str, *, run: Callable[..., Any] = subprocess.run) -> None:
+    """Take the temporary markers out: `echolot mark --remove`, as a person
+    would. Refused while the agent runs: it may be putting them in."""
+    current = job.read(project, JOB)
+    if current is not None and current["status"] == job.RUNNING:
+        raise Refusal("Not while the agent works", "It may be putting markers in right now. Stop it first, or "
+                      "wait for it to end.")
+    done = run([sys.executable, "-m", "echolot", "mark", "--remove", "-c", config], cwd=str(project),
+               capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, errors="replace")
+    if done.returncode != 0:
+        raise Refusal("The markers were not taken out",
+                      f"`echolot mark --remove` said: {_last_line(done.stderr) or _last_line(done.stdout)}", 500)
+
+
+def progress(project: Path, procs: Callable[[], list[dict[str, Any]]] = job.processes) -> dict[str, Any] | None:
+    """The run alone, for a page that is already drawn and asks how far it
+    is: no count of markers, which is drawn with the page."""
+    return view(project, None, procs=procs, count=False)

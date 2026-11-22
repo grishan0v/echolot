@@ -351,17 +351,18 @@ MANY_NOTE = ("One investigation looks at one question. With {n} checks ticked, t
              "one or two that matter most.")
 
 
-def ask(question: str, warnings: Sequence[str], tail: str, *, start_html: str = "") -> str:
+def ask(question: str, warnings: Sequence[str], tail: str, *, start_html: str = "", starts: bool = False) -> str:
     """The request for an agent, to copy. The text is put together in the
     page from the rows of what is ticked, in blocks: the question, the
     report's warnings, the rows, and the last line (`tail`), as
     `report_page.request_text` does it.
 
-    `start_html` is what a served page adds: the way to have the agent
-    started from the page. It stands before the buttons, which then are
-    Copy the request beside it."""
+    `start_html` is what a served page adds in place of the line on where
+    to paste: the way to have the agent started from the page, which
+    `starts` says it holds (Copy the request is then the second choice), or
+    why the page cannot start one."""
     warned = "\n".join(f"- {said}" for said in warnings)
-    copy_look = "line" if start_html else "primary"
+    copy_look = "line" if starts else "primary"
     return (
         f'<dialog class="ask" id="ask" aria-labelledby="ask-h" data-question="{e(question)}" '
         f'data-warn-head="{e(WARN_HEAD)}" data-warn="{e(warned)}" data-rows-head="{e(ROWS_HEAD)}" '
@@ -374,7 +375,7 @@ def ask(question: str, warnings: Sequence[str], tail: str, *, start_html: str = 
         + (start_html or '<p class="small sub">Paste the request into Claude Code, Codex or Cursor opened on the project.</p>')
         + f'<details class="tg"><summary>{TW}<span>The request text</span></summary>'
         '<div class="tg-b"><pre class="req" id="ask-text" tabindex="0"></pre></div></details>'
-        f'<div class="rowf"><button type="button" class="btn {copy_look}" id="ask-copy"{"" if start_html else " autofocus"}>Copy the request</button>'
+        f'<div class="rowf"><button type="button" class="btn {copy_look}" id="ask-copy"{"" if starts else " autofocus"}>Copy the request</button>'
         '<button type="button" class="btn quiet" id="ask-close">Close</button></div>'
         '<p class="vh" id="ask-said" role="status"></p></div></dialog>')
 

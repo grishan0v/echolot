@@ -353,7 +353,8 @@ def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = (),
 
 
 def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str, Any] | None = None,
-           setup: dict[str, Any] | None = None, limit: dict[str, Any] | None = None) -> str:
+           setup: dict[str, Any] | None = None, limit: dict[str, Any] | None = None,
+           dig_html: str = "") -> str:
     """The start page for one reading of the project (`ready.read`).
 
     `check` is the button and the last run (`check.view`), for a server that
@@ -366,6 +367,11 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
 
     `limit` is the time limit under "All settings", already drawn
     (`limit_page.setting`), for a server that takes a press of it.
+
+    `dig_html` says that an agent the page started is at work, or left its
+    investigation open (`dig_page.on_start`): it stands first, above the
+    button, and in place of the next step, which would be about that
+    investigation too.
     """
     name = view.get("name")
     step = view["next"]
@@ -380,7 +386,7 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
         # The button takes the step a person would take by hand, so that
         # step is not said twice. A step that is not the button's (set the
         # project up, write a config) keeps its place, after the button.
-        body = _check(check, step, link) + ("" if "what" in step else _next(step, red=False))
+        body = _check(check, step, link) + ("" if "what" in step or dig_html else _next(step, red=False))
     else:
         body = _next(step)
     css, js, lead = CSS, JS, True
@@ -393,7 +399,7 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
     if limit:
         css += tuple(limit.get("css") or ())
         js += tuple(limit.get("js") or ())
-    body = f'<div class="start-body stack gap-6">{body}{_reports(view, link)}</div>'
+    body = f'<div class="start-body stack gap-6">{dig_html}{body}{_reports(view, link)}</div>'
     main = (f'<main><div class="wide start">{head}{_ready(view, link("start") or "", lead)}{body}'
             f'{_settings(view, launches, limit)}</div></main>')
     page = f'<div class="page no-dock">{kit.topbar([name, view.get("scenario")], steps)}{main}</div>'

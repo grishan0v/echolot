@@ -588,13 +588,14 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
     dig = dig if dig and hot else None
     main = ('<main><div class="wide stack gap-6">'
             + _verdict(report, ctx) + (limit or {}).get("html", "") + (_NO_SCRIPT_SERVED if dig else _NO_SCRIPT)
-            + _table(checks, report, ctx) + _next_step(checks) + (dig.get("noscript") or "" if dig else "")
+            + _table(checks, report, ctx) + _next_step(checks) + ((dig.get("noscript") or "") if dig else "")
             + "<hr>" + _technical(report, ctx, several)
             + "".join(_panel(c, ctx, several) for c in checks) + "</div></main>")
     lead, warned, tail = _request(report, where, last)
     body = (f'<div class="page">{kit.topbar([w.get("process"), report.get("scenario"), crumb], steps)}{main}</div>'
             + (kit.dock(hot, _start_words(checks)[1])
-               + kit.ask(lead, warned, tail, start_html=(dig or {}).get("ask") or "") + kit.sprites() if hot else "")
+               + kit.ask(lead, warned, tail, start_html=(dig or {}).get("ask") or "", starts=bool((dig or {}).get("starts")))
+               + kit.sprites() if hot else "")
             + kit.peek("check", "Back to the report"))
     title = "echolot report" + (f": {report['scenario']}" if report.get("scenario") else "")
     extra = (limit or {}, dig or {})
