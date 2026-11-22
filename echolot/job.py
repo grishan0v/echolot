@@ -34,11 +34,15 @@ sent, and Ctrl-C goes to each of them as well; whatever is still there after
 the grace is ended, then killed. When such a step ends by itself, what is
 left in its process group is ended too. Such a step may also say how long
 nothing may move under it (`idle`): no file it names written, no process
-under it started, nothing running under it but the client's own helpers. Once
-that long has passed, it is ended the same way, and the state says why
-(`"why": "idle"`): a client that waits for an answer nobody gives does not
-hold the page for hours. Where the processes cannot be listed (no `ps`),
-nothing reads as idle: a long build could not be told from a wait.
+under it started, nothing running under it but the client's own. Its own are
+its helpers, known by name, and whatever started under it in the first
+seconds of the step (`STARTUP_S`): the programs its own settings start with
+it, such as MCP servers, run the whole time and say nothing, while a command
+it runs starts after its first reply. Once that long has passed, it is ended
+the same way, and the state says why (`"why": "idle"`): a client that waits
+for an answer nobody gives does not hold the page for hours. Where the
+processes cannot be listed (no `ps`), nothing reads as idle: a long build
+could not be told from a wait.
 
 Only the standard library is imported here: the process starts fast, and the
 page that started it waits for its first word.
@@ -457,6 +461,11 @@ def _end_tree(proc: Any, clock: Callable[[], float], procs: Callable[[], list[di
 IDLE_EVERY_S = 15.0
 # What the state says of a run ended that way (`why`), beside `stopped`.
 IDLE = "idle"
+# How long after a step starts a process under it may start and still be the
+# client's own, in seconds: its helpers and the servers its settings start
+# (MCP servers) start with it, and a command it runs only after its first
+# reply. The plan's `idle` may say another number (`startup_s`).
+STARTUP_S = 30.0
 
 
 def _newest(path: Path) -> float:
@@ -490,8 +499,11 @@ class _Idle:
     of the client's own helper processes, which run the whole time and say
     nothing (`helpers`). Nothing moved means all three: no file it watches
     was written, no process under it started, and nothing runs under it but
-    those helpers. A build or a recording that runs long is something that
-    runs, and never reads as idle.
+    the client's own: those helpers, and any process that itself started in
+    the step's first `STARTUP_S` (MCP servers its settings start, and the
+    client's real program under a wrapper that starts it). A process that
+    started later is something that runs, however it is related to an early
+    one: a build or a recording that runs long never reads as idle.
     """
 
     def __init__(self, project: Path, step: dict[str, Any], clock: Callable[[], float]):
@@ -500,6 +512,7 @@ class _Idle:
         self.seconds = float(given["seconds"])
         self.watch = [str(w) for w in given.get("watch") or ()]
         self.helpers = tuple(str(h) for h in given.get("helpers") or ())
+        self.startup = float(given.get("startup_s", STARTUP_S))
         self.started = float(step.get("started") or clock())
         self.next = clock()
 
@@ -519,11 +532,20 @@ class _Idle:
             # long cannot be told from a wait, so nothing reads as idle.
             return False
         under = descendants(pid, table)
-        if any(not _helper(p.get("args") or "", self.helpers) for p in under):
+        if any(not self._own(p, now) for p in under):
             return False
         stamps = [self.started, *(_newest(self.project / rel) for rel in self.watch)]
         stamps += [now - p["age"] for p in under if isinstance(p.get("age"), (int, float))]
         return now - max(stamps) >= self.seconds
+
+    def _own(self, p: dict[str, Any], now: float) -> bool:
+        """Whether a process under the step is the client's own: a helper by
+        name, or one that itself started in the step's first seconds. One
+        whose age is not known is not: it may be a command that runs."""
+        if _helper(p.get("args") or "", self.helpers):
+            return True
+        age = p.get("age")
+        return isinstance(age, (int, float)) and not isinstance(age, bool) and now - age <= self.started + self.startup
 
 
 def _reap(proc: Any, kill: Callable[[int, int], None]) -> None:

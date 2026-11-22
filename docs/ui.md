@@ -518,10 +518,12 @@ then waits, for hours. The request says that nobody can answer. After ten
 minutes with nothing moving, the page says so, as for Claude Code, and that it
 will stop Codex at half an hour. After 30 minutes with no event printed, no
 round filed and nothing running under it, the page ends it as **Stop** does,
-says why, and shows the question it was waiting on as its last words. A build
-or a recording that runs long is something running, and is never ended this
-way; nor is anything where the processes cannot be listed (Windows), since a
-long build there could not be told from a wait.
+says why, and shows the question it was waiting on as its last words.
+Programs your own Codex settings start with it, such as MCP servers, count as
+its own too: they run the whole time and say nothing. A build or a recording
+that runs long is something running, and is never ended this way; nor is
+anything where the processes cannot be listed (Windows), since a long build
+there could not be told from a wait.
 
 **Stop** sends Ctrl-C to everything under Codex, then to Codex, as for Claude
 Code. Codex starts each command in a process group of its own, which a signal

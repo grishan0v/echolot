@@ -25,7 +25,9 @@ Codex differs from Claude Code in four things, and each is decided here:
 - **It waits for an answer nobody gives.** Asked a question with nobody
   there, it accepts it and then sleeps for hours. The request says nobody can
   answer, and the job ends a run under which nothing has moved for
-  `IDLE_S` (`idle`): no event printed, no round filed, no command running.
+  `IDLE_S` (`idle`): no event printed, no round filed, nothing running under
+  it but what started with it (its helpers, and the MCP servers the person's
+  own settings start).
 - **What it says comes as events**, one JSON object a line (`result`): its
   last message, the tokens it used (no money figure exists), and what its
   sandbox refused, which shows only as a failed command, since the exit code
