@@ -540,10 +540,11 @@ Two more rules stand beside it, for `./gradlew` and for `adb`: an
 investigation rebuilds the app and puts it on the phone, Gradle needs the
 network and writes under `~/.gradle`, and adb needs its server on localhost.
 With them, Codex runs those two without asking in every session in this
-project, the way it runs `echolot`. A file an earlier echolot wrote, with
-the `echolot` rule alone, is known by its text: `echolot`, `status` and
-`doctor` say it is from an older echolot and name the `init` that brings it
-up to date, and `init` does, since nobody edited it.
+project, the way it runs `echolot`; [Dig deeper](ui.md#with-codex) grants a
+Codex it starts through them and nothing else. A file an earlier echolot
+wrote, with the `echolot` rule alone, is known by its text: `echolot`,
+`status` and `doctor` say it is from an older echolot and name the `init` that
+brings it up to date, and `init` does, since nobody edited it.
 
 Three things decide whether the rule works, and `doctor` and `status` say
 each of them on a `codex` line, shown wherever Codex is chosen, has a
@@ -872,7 +873,8 @@ question taken from the report. Then it starts Claude Code with
 `/echolot-hunt` and a request that says the investigation is open, its number,
 the folder the report's recordings were set aside into, that nobody is at the
 keyboard, and what it may run: the three facts are all in it, so the command
-carries on in the open investigation and asks nothing. It closes it as on
+carries on in the open investigation and asks nothing. Codex gets the same
+request, told that `echolot guide hunt` prints the steps `/echolot-hunt` would. It closes it as on
 every other route, with the verdict. When the agent ends without one, the
 investigation stays open, and the page's **Close the investigation** closes it
 with `echolot hunt --done` and a sentence on what came of it.

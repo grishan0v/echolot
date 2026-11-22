@@ -369,11 +369,14 @@ looks at one question and suggests ticking fewer.
 
 The dialog has **Copy the request**, for an agent of your own, and, where
 the page can start one, **Start it from here**. echolot has no model of its
-own: what it starts is Claude Code, the one installed on this computer, under
-your own account. The button is there when Claude Code is installed, is
-2.1.259 or newer, and says it is signed in (`claude auth status`); otherwise
-the dialog says which of the three is missing, and the request is to copy.
-Codex and Cursor are not started from the page yet: their request is copied.
+own: what it starts is Claude Code or Codex, the one installed on this
+computer, under your own account. The button is there when Claude Code is
+installed, is 2.1.259 or newer, and says it is signed in (`claude auth
+status`), or when Codex is installed, is 0.159 or newer, says it is signed in
+(`codex login status`) and the project has what it needs
+([below](#with-codex)); otherwise the dialog says what is missing, for each,
+and the request is to copy. Cursor is not started from the page yet: its
+request is copied.
 
 **Before anything starts**, one screen says what a press of **Start** agrees
 to, in plain words:
@@ -460,6 +463,79 @@ app** waits while it is open: **Close the investigation** closes it with what
 came of it (`echolot hunt --done "Stopped from echolot ui, after 2 rounds, with
 no answer. …"`). What it tried and was refused is listed under the end.
 
+### With Codex
+
+Codex is started the same way, from the same screen, and four things about it
+differ: where its grant is, what it may edit, what it does when nobody
+answers, and what it says at the end.
+
+**Which one.** Where both can start, the screen before the start shows one,
+and **Use Codex instead** (or **Use Claude Code instead**) leads to the
+other's screen. Each says what its own client may do, and **Start** starts the
+one on the screen. The first shown is the one the last run started from the
+page used, and otherwise Claude Code, whose own rules keep its edits to the
+allowed folders.
+
+**What the project needs**: a git repository, which Codex asks for so that
+what it changes can be told and undone; no mark of `untrusted` for it in your
+Codex settings; and `.codex/rules/echolot.rules` as this echolot writes it,
+with the rules that let `echolot`, `./gradlew` and `adb` out of Codex's
+sandbox ([Codex's rule, from `init`](agent-layer.md#codexs-rule-from-init)).
+`echolot init --for …,codex` writes that file. One an older echolot wrote,
+with the rule for `echolot` alone, is said to be older, with the `init` that
+brings it up to date.
+
+**What its screen says besides Claude Code's**:
+
+- Codex marks the project trusted in your own `~/.codex/config.toml`, as it
+  does the first time it works in a project. That is a change outside the
+  project, and it stays; where the file trusts the project already, the
+  screen says so.
+- Its edits cannot be kept to the allowed folders, so the page notes the
+  project's files when it starts and lists afterwards the ones changed
+  outside them.
+- There is no spending cap to set: the page shows the tokens Codex reports
+  at the end.
+- If nothing moves for 30 minutes, the page stops it.
+- Rules files of your own that Codex reads too, in `.codex/rules/` and
+  `~/.codex/rules/`, are named: what they allow applies too.
+
+```text
+echolot hunt "<the question>" --since unknown
+codex exec --json -s workspace-write -C /path/to/the/project "<the request>"
+```
+
+Under `exec` Codex asks nothing. A command runs in its sandbox, which has no
+network and writes only inside the project, and a command line a rule lets
+out runs outside it. No flag bypasses its approvals or its sandbox. The
+request is the same, with the lines Codex needs in place of Claude Code's:
+that `/echolot-hunt` is Claude Code's command and `echolot guide hunt` prints
+the same steps, and that a rule lets a command out only when it is that
+command alone, with no pipe or `&&`.
+
+**Nobody there.** Asked a question with nobody to answer, Codex takes it and
+then waits, for hours. The request says that nobody can answer. After ten
+minutes with nothing moving, the page says so, as for Claude Code, and that it
+will stop Codex at half an hour. After 30 minutes with no event printed, no
+round filed and nothing running under it, the page ends it as **Stop** does,
+says why, and shows the question it was waiting on as its last words. A build
+or a recording that runs long is something running, and is never ended this
+way.
+
+**Stop** sends Ctrl-C to everything under Codex, then to Codex, as for Claude
+Code. Codex starts each command in a process group of its own, which a signal
+to Codex's own group would not reach; the page finds each one by the process
+it was started from.
+
+**When it ends**, the page reads Codex's events: its last message, the tokens
+it used, and what its sandbox refused or Codex declined, which shows only as a
+failed command, since its exit code is 0 even then. Whichever way it ended,
+the page lists the files it changed outside the allowed folders, written, new
+or gone, or says that it changed none. `.echolot/` and the folders a build or
+the IDE writes (`build/`, `.gradle/`, `.idea/`) are not looked at. A file you
+change yourself while it works is listed too; one changed after it ended is
+not.
+
 One thing runs at a time: a check and an agent do not run together, in either
 order. While an agent works, the start page says so above the button, and the
 button says why it waits; while a check runs, **Dig deeper** says that it
@@ -485,8 +561,8 @@ the page it opened and by nothing else:
   else is refused. Such requests are each a form of the start page, the
   report's page or the answer's page: the press of the button, Stop,
   **Set it up**, **Set the limit**, and those of **Dig deeper**: the screen
-  before it starts, Start, its Stop, **Take the markers out** and **Close the
-  investigation**.
+  before it starts, for either client, Start, its Stop, **Take the markers
+  out** and **Close the investigation**.
 - Such a request may carry a form of at most 4096 bytes. One that carries
   more, or does not say how much, is refused unread, and so is one that ends
   before the length it stated. Nothing in a form is
@@ -498,7 +574,8 @@ the page it opened and by nothing else:
   `echolot.yml` in the project's folder, whatever a form says, and the one
   file **Set the limit** changes is that same file, one line of it. What the
   page saw of it travels as two fingerprints, which are compared and never
-  opened. An agent's command line is built from the config and the report
+  opened. A client named in an address is one the page starts, Claude Code
+  or Codex. An agent's command line is built from the config and the report
   alone.
 - It serves the pages it draws and no file. No address is turned into a path
   on disk.
@@ -524,13 +601,16 @@ Reading a page writes nothing. A press of the button does, all of it under
 
 **Dig deeper** writes what its two commands write: `echolot hunt` opens the
 investigation (`.echolot/hunt.json`, the recordings set aside under
-`.echolot/traces/`), and Claude Code changes the code under the allowed
-folders and writes `.echolot/verdict.json`. The page's own files are its run:
+`.echolot/traces/`), and the agent changes the code, Claude Code only under
+the allowed folders, and writes `.echolot/verdict.json`. Codex also marks the
+project trusted in your own `~/.codex/config.toml`, by itself. The page's own
+files are its run:
 
 | file | what it is |
 |---|---|
 | `.echolot/log/dig.json` | the last agent the page started: its process, its command line, the investigation it works in, how it ended |
-| `.echolot/log/dig.agent.log` | what Claude Code printed: the one JSON object it prints at the end |
+| `.echolot/log/dig.agent.log` | what the agent printed: Claude Code's one JSON object at the end, or Codex's events, one JSON object a line, as they come |
+| `.echolot/log/dig.files.json` | with Codex: the project's files when it started, a size and a time each, for the list of what it changed |
 | `.echolot/log/dig.stop` | a request to stop, while one is pending |
 
 **Set it up** writes into the project itself, once, and the page lists every
