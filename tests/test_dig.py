@@ -249,6 +249,10 @@ def test_ticked_checks_are_matched_against_the_report_on_disk():
     ("echolot mark --apply", "mark"),
     ("echolot mark --remove", "unmark"),
     ("echolot hunt --done --verdict .echolot/verdict.json", "answer"),
+    ("echolot hunt --verdict .echolot/verdict.json", "answer"),
+    ("/usr/bin/python3 /opt/example/bin/echolot hunt", "look"),
+    ("echolot hunt --show 1", "look"),
+    ("echolot hunt --list", "look"),
     ("echolot doctor -q", "echolot"),
     ("grep -rn AGENTTMP_ .", "think"),
 ])

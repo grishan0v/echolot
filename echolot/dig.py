@@ -514,7 +514,12 @@ _PHASES: tuple[tuple[str, str, Callable[[str], bool]], ...] = (
     ("compare", "Comparing with the round before", lambda a: _echolot(a) == "compare"),
     ("unmark", "Taking the markers out of the code", lambda a: _echolot(a) == "mark" and "--remove" in a),
     ("mark", "Putting markers into the code", lambda a: _echolot(a) == "mark"),
-    ("answer", "Writing down the answer", lambda a: _echolot(a) == "hunt"),
+    # Only closing it, or checking the verdict first, writes the answer down;
+    # any other `hunt` looks at the investigation.
+    ("answer", "Writing down the answer",
+     lambda a: _echolot(a) == "hunt" and any(w in ("--done", "--verdict") or w.startswith(("--done=", "--verdict="))
+                                             for w in a.split())),
+    ("look", "Looking at the investigation", lambda a: _echolot(a) == "hunt"),
     ("phone", "Working with the phone", lambda a: _named(a, "adb")),
     ("echolot", "Running echolot", lambda a: _echolot(a) is not None),
 )
