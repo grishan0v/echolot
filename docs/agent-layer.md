@@ -1,6 +1,6 @@
 # The `.claude/` layer
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/agent-layer.md)
 
 ```bash
 cd ~/StudioProjects/my-app
@@ -800,6 +800,17 @@ next visit was asked `resume-or-new` about work that was over.
 `perf-hunter` itself never opens or closes one. It is handed an open
 investigation in its prompt and works inside it, which is the same boundary
 as the question above: which investigation is settled before the loop starts.
+
+Started from `echolot ui` ([Dig deeper from the page](ui.md#dig-deeper-from-the-page)),
+the page opens it: `echolot hunt "<the question>" --since unknown`, the
+question taken from the report. Then it starts Claude Code with
+`/echolot-hunt` and a request that says the investigation is open, its number,
+the folder the report's recordings were set aside into, that nobody is at the
+keyboard, and what it may run: the three facts are all in it, so the command
+carries on in the open investigation and asks nothing. It closes it as on
+every other route, with the verdict. When the agent ends without one, the
+investigation stays open, and the page's **Close the investigation** closes it
+with `echolot hunt --done` and a sentence on what came of it.
 
 ### Closing with a verdict
 

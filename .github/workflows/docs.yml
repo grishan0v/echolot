@@ -56,6 +56,9 @@ jobs:
         run: |
           python docs/site.py
           zensical build --strict
+          for cfg in build/mkdocs-*.yml; do
+            [ -e "$cfg" ] && zensical build --config-file "$cfg" --strict
+          done
 
       - name: Keep the site for the deploy
         if: github.event_name != 'pull_request'

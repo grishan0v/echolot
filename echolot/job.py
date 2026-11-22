@@ -27,6 +27,13 @@ starts nothing more. A signal to the job itself (the terminal closed, the
 server's Ctrl-C reaching its children) ends it the same way and is recorded as
 `interrupted`.
 
+A step marked `tree` is a command that starts commands of its own, in groups
+of their own (an agent: its builds, its recordings). Ending it alone would
+leave them running, so the processes under it are listed before anything is
+sent, and Ctrl-C goes to each of them as well; whatever is still there after
+the grace is ended, then killed. When such a step ends by itself, what is
+left in its process group is ended too.
+
 Only the standard library is imported here: the process starts fast, and the
 page that started it waits for its first word.
 """
@@ -301,15 +308,167 @@ def _end(proc: Any, clock: Callable[[], float]) -> None:
                 return
 
 
+def _env(step: dict[str, Any]) -> dict[str, str]:
+    """What a command runs with: this process's environment, Python told to
+    say each line as it comes, and without the names the step asks to leave
+    out (`unset`)."""
+    gone = set(step.get("unset") or ())
+    return {**{k: v for k, v in os.environ.items() if k not in gone}, "PYTHONUNBUFFERED": "1"}
+
+
+# ---------------------------------------------------------------------------
+# the processes under a command
+
+
+# How long what is under a command has to end once it was told to, before it
+# is killed.
+TERM_S = 5.0
+
+
+def _etime(text: str) -> float | None:
+    """`ps`'s elapsed time, `[[dd-]hh:]mm:ss`, in seconds."""
+    days, _, rest = text.strip().rpartition("-")
+    try:
+        parts = [int(p) for p in rest.split(":")]
+        seconds = int(days) * 86400 if days else 0
+    except ValueError:
+        return None
+    if not 1 <= len(parts) <= 3:
+        return None
+    clock = 0
+    for part in parts:
+        clock = clock * 60 + part
+    return float(seconds + clock)
+
+
+def processes(run: Callable[..., Any] = subprocess.run) -> list[dict[str, Any]]:
+    """Every process of this computer as `ps` lists it: its id, its parent's,
+    how long it has run in seconds (`age`), and its command line. Empty where
+    there is no `ps` (Windows) or it says nothing."""
+    if os.name != "posix":
+        return []
+    try:
+        out = run(["ps", "-A", "-o", "pid=,ppid=,etime=,args="], capture_output=True, text=True,
+                  timeout=10, errors="replace").stdout or ""
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    table = []
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        table.append({"pid": pid, "ppid": ppid, "age": _etime(parts[2]), "args": parts[3] if len(parts) > 3 else ""})
+    return table
+
+
+def descendants(pid: int, table: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The processes under `pid`, children of children included, the deepest
+    first: the order to end them in, so that nothing is started anew by a
+    parent that is still there."""
+    children: dict[int, list[dict[str, Any]]] = {}
+    for p in table:
+        children.setdefault(p["ppid"], []).append(p)
+    out: list[tuple[int, dict[str, Any]]] = []
+    level, depth, seen = [pid], 0, {pid}
+    while level:
+        depth += 1
+        below = [kid for parent in level for kid in children.get(parent, ()) if kid["pid"] not in seen]
+        seen.update(kid["pid"] for kid in below)
+        out += [(depth, kid) for kid in below]
+        level = [kid["pid"] for kid in below]
+    return [p for _, p in sorted(out, key=lambda pair: -pair[0])]
+
+
+def _send(pids: list[int], signum: int, kill: Callable[[int, int], None]) -> None:
+    for pid in pids:
+        with contextlib.suppress(OSError):
+            kill(pid, signum)
+
+
+def _still(under: list[dict[str, Any]], procs: Callable[[], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Which of the processes listed before are still there: the same id with
+    the same command line. An id alone could by now be another process's."""
+    now = {(p["pid"], p["args"]) for p in procs()}
+    return [p for p in under if (p["pid"], p["args"]) in now]
+
+
+def _quiet(proc: Any, under: list[dict[str, Any]], clock: Callable[[], float], seconds: float,
+           procs: Callable[[], list[dict[str, Any]]]) -> list[dict[str, Any]] | None:
+    """Wait for the command and what was under it to be gone, for at most
+    `seconds`. None when they are, else what is still there."""
+    until = clock() + seconds
+    while True:
+        try:
+            proc.wait(timeout=POLL_S)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            under = _still(under, procs)
+            if not under:
+                return None
+            if clock() < until:
+                time.sleep(POLL_S)
+        if clock() >= until:
+            return _still(under, procs)
+
+
+def _end_tree(proc: Any, clock: Callable[[], float], procs: Callable[[], list[dict[str, Any]]],
+              kill: Callable[[int, int], None]) -> None:
+    """Ctrl-C to a command and to everything under it, as a terminal sends it
+    to a whole job: a recording unwinds and puts the phone back, a build is
+    cancelled. Whatever is still there after `GRACE_S` is ended, and after
+    `TERM_S` more, killed. The list is taken before anything is sent: a
+    process whose parent has gone is no longer found under it."""
+    under = descendants(proc.pid, procs())
+    signal_int = getattr(signal, "SIGINT", 2)
+    _send([p["pid"] for p in under], signal_int, kill)
+    with contextlib.suppress(OSError):
+        if os.name == "posix":
+            proc.send_signal(signal_int)
+        else:
+            proc.terminate()
+    left = _quiet(proc, under, clock, GRACE_S, procs)
+    if left is None:
+        return
+    _send([p["pid"] for p in left], getattr(signal, "SIGTERM", 15), kill)
+    with contextlib.suppress(OSError):
+        proc.terminate()
+    left = _quiet(proc, left, clock, TERM_S, procs)
+    if left is None:
+        return
+    _send([p["pid"] for p in left], getattr(signal, "SIGKILL", 9), kill)
+    with contextlib.suppress(OSError):
+        proc.kill()
+    proc.wait()
+
+
+def _reap(proc: Any, kill: Callable[[int, int], None]) -> None:
+    """What is left in the process group of a command that ended: it was
+    started in a session of its own, so the group is its own and nobody
+    else's. A process that made a session of its own (a daemon) is in
+    another group, and stays."""
+    if os.name != "posix" or not isinstance(getattr(proc, "pid", None), int):
+        return
+    with contextlib.suppress(OSError):
+        kill(-proc.pid, getattr(signal, "SIGTERM", 15))
+
+
 def run(project: Path, name: str, plan: dict[str, Any], *,
         popen: Callable[..., Any] = subprocess.Popen,
         clock: Callable[[], float] = time.time,
         ready: Callable[[], None] = lambda: None,
-        signals: bool = True) -> int:
+        signals: bool = True,
+        procs: Callable[[], list[dict[str, Any]]] | None = None,
+        kill: Callable[[int, int], None] | None = None) -> int:
     """Run the plan's commands in order and keep the state file current.
 
-    `ready` is called once the state is on disk. `popen`, `clock` and
-    `signals` are a test's to replace.
+    `ready` is called once the state is on disk. `popen`, `clock`,
+    `signals`, and for a step marked `tree` the list of processes (`procs`)
+    and the way a signal is sent (`kill`), are a test's to replace.
     """
     path, stopping = state_path(project, name), stop_path(project, name)
     current = read(project, name)
@@ -328,6 +487,11 @@ def run(project: Path, name: str, plan: dict[str, Any], *,
 
     steps = [{"id": str(s["id"]), "argv": list(s["argv"]), "shown": str(s.get("shown") or ""),
               "status": WAITING} for s in plan.get("steps") or []]
+    for step, given in zip(steps, plan.get("steps") or [], strict=True):
+        if given.get("tree"):
+            step["tree"] = True
+        if given.get("unset"):
+            step["unset"] = [str(v) for v in given["unset"]]
     state: dict[str, Any] = {"job": name, "pid": os.getpid(), "started": clock(), "finished": None,
                              "what": plan.get("what") or {}, "steps": steps}
     _write(path, state)
@@ -354,7 +518,7 @@ def run(project: Path, name: str, plan: dict[str, Any], *,
                 # server runs in reaches this process, and it is this process
                 # that asks the command to end, once.
                 proc = popen(argv, cwd=str(project), stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                             env={**os.environ, "PYTHONUNBUFFERED": "1"}, start_new_session=(os.name == "posix"))
+                             env=_env(step), start_new_session=(os.name == "posix"))
             except OSError as e:
                 out.write(f"could not be started: {e.strerror or e}\n".encode("utf-8"))
                 step.update(status=FAILED, finished=clock(), exit=None)
@@ -370,9 +534,14 @@ def run(project: Path, name: str, plan: dict[str, Any], *,
                 except subprocess.TimeoutExpired:
                     how = asked.how()
                     if how:
-                        _end(proc, clock)
+                        if step.get("tree"):
+                            _end_tree(proc, clock, procs or processes, kill or os.kill)
+                        else:
+                            _end(proc, clock)
                         code = proc.returncode
                         break
+            if step.get("tree"):
+                _reap(proc, kill or os.kill)
         step.update(finished=clock(), exit=code)
         if how:
             step["status"] = STOPPED

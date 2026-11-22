@@ -1,6 +1,6 @@
 # Terms of use
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/terms.md)
 
 echolot is free and open source. The CLI, the plugin for Claude Code, Codex
 and Cursor, and the GitHub Action are all released under the

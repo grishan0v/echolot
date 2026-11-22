@@ -670,7 +670,8 @@ def _process(rounds: list[tuple[int, dict[str, Any] | None]]) -> Any:
 
 def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None = None,
            action_html: str = "", steps: Sequence[tuple[str, str, bool]] = (),
-           crumb: str | Sequence[str] | None = None, policy: str | None = None) -> str:
+           crumb: str | Sequence[str] | None = None, policy: str | None = None,
+           agent: dict[str, Any] | None = None) -> str:
     """The page for an investigation, as one self-contained HTML document.
 
     `hunt` is its record as `hunt.json` holds it and `reports` are the
@@ -685,6 +686,12 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
     string, or several. Both go to `kit.topbar` as they are. `policy` is
     the content policy of a served page (`kit.SERVED`), which lets the button
     in `action_html` send its form.
+
+    `agent` is an agent the server started in this investigation
+    (`pages/dig_page.panel`): `html`, drawn under the page's headline, with
+    its own `css` and `js`, `head` for a page that loads itself again, and
+    `lead`, the line under the headline of an open investigation once no
+    agent works in it.
     """
     hunt = _dict(hunt)
     rounds = _rounds(reports)
@@ -726,6 +733,7 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
     elif is_open:
         parts.append(_head(kit.state("Investigation in progress", "open", large=True), beside,
                            question or "An investigation is open",
+                           (agent or {}).get("lead") or
                            "No answer yet. Each round the agent records appears below, and the answer takes "
                            "this page's place when the investigation closes."))
         parts.append('<section class="stack gap-3"><h2 class="h2">The rounds so far</h2>'
@@ -749,6 +757,8 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
         parts.append('<section class="stack gap-3"><h2 class="h2">The rounds it went through</h2>'
                      + _timeline(rounds, hunt, None) + "</section>")
     folds.append(_about(hunt, rounds, is_open))
+    if agent and agent.get("html"):
+        parts.insert(1, agent["html"])
 
     main = ('<main><div class="wide stack gap-6">' + "".join(parts) + "<hr>"
             + f'<div>{"".join(folds)}</div>' + "".join(panels) + "</div></main>")
@@ -757,4 +767,6 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
     body = (f'<div class="page">{kit.topbar(crumbs, steps)}{main}</div>'
             + (kit.peek("row", "Back to the answer") if rows else ""))
     title = "echolot answer" + (f": {report_mod.clip(question, 80)}" if question else "")
-    return kit.document(title, body, css=CSS, js=JS, policy=policy)
+    extra = agent or {}
+    return kit.document(title, body, css=CSS + tuple(extra.get("css") or ()), js=JS + tuple(extra.get("js") or ()),
+                        policy=policy, head_html=extra.get("head") or "")

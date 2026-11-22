@@ -315,15 +315,20 @@ def _behind(pairs: Sequence[tuple[str, str]]) -> str:
     return "".join(f'<p class="says"><span class="who">{e(who)}</span> {kit.prose(said)}</p>' for who, said in pairs)
 
 
-def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = ()) -> str:
+def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = (),
+              limit: dict[str, Any] | None = None) -> str:
     """The fold: the one number the button takes and the commands it runs
     (`launches`), every setting the page reads, then what `echolot` prints
     behind the sentences the page says in its own words. All but the number
-    is read-only."""
+    and the time limit (`limit`, `limit_page.setting`) is read-only."""
     rows = list(launches or ())
     for row in [*view["settings"], *view["behind"]]:
         more = "".join(f'<pre class="yaml" tabindex="0">{e(text)}</pre>' if "\n" in text
                        else f"<p>{kit.prose(text)}</p>" for text in row.get("more") or ())
+        if limit and row["label"] == "Time limit":
+            # The field stands in place of the line to edit; a reason not to
+            # change the file stands before it.
+            more = limit["html"] + (more if limit.get("keep") else "")
         each = ""
         if row.get("each"):
             items = "".join(
@@ -335,6 +340,9 @@ def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = ()) ->
         rows.append((row["label"], f'{said}{more}{each}{_behind(row.get("behind") or ())}'))
     one = (" but the number of launches, which is for the button and is not saved"
            if any(label == "Launches in one check" for label, _ in launches) else "")
+    if limit and not limit.get("keep"):
+        one += (", and" if one else " but") + (" the time limit, in the one line of <code>echolot.yml</code> "
+                                               "the page wrote for it")
     intro = ('<p class="small sub measure">What this page reads, and what <code>echolot</code> and '
              f'<code>echolot scan</code> say behind each line. Nothing here is changed from the page{one}: '
              'the values live in <code>echolot.yml</code>.</p>')
@@ -345,7 +353,8 @@ def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = ()) ->
 
 
 def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str, Any] | None = None,
-           setup: dict[str, Any] | None = None) -> str:
+           setup: dict[str, Any] | None = None, limit: dict[str, Any] | None = None,
+           dig_html: str = "") -> str:
     """The start page for one reading of the project (`ready.read`).
 
     `check` is the button and the last run (`check.view`), for a server that
@@ -355,6 +364,14 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
     `setup` is the part that sets a project up, already drawn
     (`setup_page.parts`): what stands in place of the button and the next
     step, or in front of them, with its own styles and script.
+
+    `limit` is the time limit under "All settings", already drawn
+    (`limit_page.setting`), for a server that takes a press of it.
+
+    `dig_html` says that an agent the page started is at work, or left its
+    investigation open (`dig_page.on_start`): it stands first, above the
+    button, and in place of the next step, which would be about that
+    investigation too.
     """
     name = view.get("name")
     step = view["next"]
@@ -369,7 +386,7 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
         # The button takes the step a person would take by hand, so that
         # step is not said twice. A step that is not the button's (set the
         # project up, write a config) keeps its place, after the button.
-        body = _check(check, step, link) + ("" if "what" in step else _next(step, red=False))
+        body = _check(check, step, link) + ("" if "what" in step or dig_html else _next(step, red=False))
     else:
         body = _next(step)
     css, js, lead = CSS, JS, True
@@ -379,9 +396,12 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
         lead = not setup.get("instead")
         body = setup.get("instead") or (setup.get("before") or "") + body
         css, js = CSS + tuple(setup.get("css") or ()), JS + tuple(setup.get("js") or ())
-    body = f'<div class="start-body stack gap-6">{body}{_reports(view, link)}</div>'
+    if limit:
+        css += tuple(limit.get("css") or ())
+        js += tuple(limit.get("js") or ())
+    body = f'<div class="start-body stack gap-6">{dig_html}{body}{_reports(view, link)}</div>'
     main = (f'<main><div class="wide start">{head}{_ready(view, link("start") or "", lead)}{body}'
-            f'{_settings(view, launches)}</div></main>')
+            f'{_settings(view, launches, limit)}</div></main>')
     page = f'<div class="page no-dock">{kit.topbar([name, view.get("scenario")], steps)}{main}</div>'
     return kit.document("echolot" + (f": {name}" if name else ""), page, css=css, js=js, policy=kit.SERVED,
                         head_html=_REFRESH if going else "")

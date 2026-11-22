@@ -20,10 +20,23 @@
     $('dock-t').textContent = n === 0 ? 'Nothing ticked yet' : n + (n === 1 ? ' item' : ' items') + ' selected';
     $('dock-go').disabled = n === 0;
     $('dock-clear').hidden = n === 0;
-    $('dock-all').hidden = n >= total;
+    $('dock-all').hidden = n >= total || (n > 0 && startTicked());
     E.onPick.forEach(function (f) { f(); });
   }
   function setPick(id, on) { picks().forEach(function (c) { if (c.dataset.id === id) c.checked = on; }); }
+  // Where to start: the checks that need attention, or with none of those
+  // the two that found the largest thing. One investigation, one question.
+  function toStart() {
+    var seen = {}, own = picks().filter(function (c) { if (seen[c.dataset.id]) return false; seen[c.dataset.id] = 1; return true; });
+    var red = own.filter(function (c) { return c.dataset.level === 'red'; });
+    if (red.length) return red;
+    return own.sort(function (a, b) { return (+b.dataset.weight || 0) - (+a.dataset.weight || 0); }).slice(0, 2);
+  }
+  function startTicked() {
+    var on = {}; ticked().forEach(function (c) { on[c.dataset.id] = 1; });
+    var want = toStart();
+    return want.length === ticked().length && want.every(function (c) { return on[c.dataset.id]; });
+  }
   document.addEventListener('change', function (ev) {
     var c = ev.target;
     if (!c.classList || !c.classList.contains('pick')) return;
@@ -31,15 +44,29 @@
     refresh();
   });
   // Emptying the bar takes its buttons away, and focus must not go with them.
-  $('dock-all').addEventListener('click', function () { picks().forEach(function (c) { c.checked = true; }); refresh(); $('dock-go').focus(); });
+  $('dock-all').addEventListener('click', function () {
+    var want = {}; toStart().forEach(function (c) { want[c.dataset.id] = 1; });
+    picks().forEach(function (c) { c.checked = !!want[c.dataset.id]; }); refresh(); $('dock-go').focus();
+  });
   $('dock-clear').addEventListener('click', function () { picks().forEach(function (c) { c.checked = false; }); refresh(); $('dock-all').focus(); });
 
+  // The request, block by block, as report_page.request_text puts it together.
   function request() {
-    var rows = [], d = ask.dataset;
+    var rows = [], d = ask.dataset, blocks = [d.question];
     ticked().forEach(function (c) { rows = rows.concat(c.dataset.req.split('\n')); });
-    return [rows.length === 1 ? d.one : d.many].concat(rows, [d.tail]).join('\n');
+    if (d.warn) blocks.push(d.warnHead + '\n' + d.warn);
+    blocks.push([d.rowsHead].concat(rows).join('\n'));
+    blocks.push(d.tail);
+    return blocks.join('\n\n');
   }
+  E.request = request;
+  E.ticked = ticked;
   $('dock-go').addEventListener('click', function () {
+    var many = $('ask-many'), n = ticked().length, focus = +ask.dataset.focus || 3;
+    if (many) {
+      many.hidden = n <= focus;
+      many.firstElementChild.textContent = (ask.dataset.manyNote || '').split('{n}').join(String(n));
+    }
     var list = $('ask-list'); list.textContent = '';
     ticked().forEach(function (c) {
       var li = document.createElement('li'), s = document.createElement('span');
@@ -52,7 +79,7 @@
     $('ask-copy').textContent = 'Copy the request';
     $('ask-said').textContent = '';
     ask.showModal();
-    $('ask-copy').focus();
+    ($('ask-start') || $('ask-copy')).focus();
   });
   $('ask-close').addEventListener('click', function () { ask.close(); });
   ask.addEventListener('click', function (ev) { if (ev.target === ask) ask.close(); });

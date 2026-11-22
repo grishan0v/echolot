@@ -16,6 +16,7 @@ on:
     branches: [main]
     paths:
       - "README.md"
+      - "README.*.md"
       - "SECURITY.md"
       - "CONTRIBUTING.md"
       - "docs/**/*.md"
@@ -25,6 +26,7 @@ on:
     branches: [main]
     paths:
       - "README.md"
+      - "README.*.md"
       - "SECURITY.md"
       - "CONTRIBUTING.md"
       - "docs/**/*.md"
@@ -64,6 +66,7 @@ jobs:
             --config lychee.toml
             --no-progress
             README.md
+            "README.*.md"
             SECURITY.md
             CONTRIBUTING.md
             "docs/**/*.md"

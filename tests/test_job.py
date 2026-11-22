@@ -402,3 +402,148 @@ def test_a_command_that_ended_just_as_it_was_asked_to(tmp_path):
         return Gone(argv, kw["stdout"], waits=1, on_wait=lambda c: job.stop(tmp_path, "check"))
     job.run(tmp_path, "check", {"steps": steps("collect")}, popen=popen, signals=False)
     check("nothing to signal is no failure of the job: it reads as stopped", job.read(tmp_path, "check")["status"] == job.STOPPED)
+
+
+# --- a step that starts commands of its own ----------------------------------------------------
+
+class Table:
+    """The processes of this computer as `ps` would list them: the job's
+    command (pid 4000 + the words of its command line), and under it the
+    ones a test names, each with its parent. Signals go to `kill`, which
+    takes a process off the list when it gives way, the way it would end."""
+
+    def __init__(self, under: dict[int, int], stays: tuple[int, ...] = (), stubborn_to: int | None = None):
+        self.rows = {pid: {"pid": pid, "ppid": parent, "age": 30.0, "args": f"process {pid}"}
+                     for pid, parent in under.items()}
+        self.stays, self.stubborn_to = set(stays), stubborn_to
+        self.sent: list[tuple[int, int]] = []
+
+    def __call__(self):
+        return list(self.rows.values())
+
+    def kill(self, pid: int, signum: int) -> None:
+        self.sent.append((pid, signum))
+        if signum == 0:
+            if pid not in self.rows:
+                raise ProcessLookupError(pid)
+            return
+        if pid in self.rows and (pid not in self.stays or signum == self.stubborn_to):
+            del self.rows[pid]
+
+
+def tree(name: str) -> list[dict]:
+    return [{"id": name, "argv": [name, "--flag"], "shown": name, "tree": True, "unset": ["CLAUDECODE"]}]
+
+
+def test_a_tree_step_asks_everything_under_it_as_ctrl_c_does(tmp_path):
+    def press_stop(command):
+        job.stop(tmp_path, "check")
+    commands = Commands(agent={"waits": 1, "on_wait": press_stop})
+    # The agent (4002) runs a shell (5001), which runs a recording (5002), which runs adb (5003).
+    table = Table({5001: 4002, 5002: 5001, 5003: 5002, 6000: 1})
+    run(tmp_path, commands, tree("agent"), procs=table, kill=table.kill)
+    sent = [(pid, signum) for pid, signum in table.sent if signum]
+    check("Ctrl-C to everything under it, the deepest first, before anything stronger",
+          sent[:3] == [(5003, signal.SIGINT), (5002, signal.SIGINT), (5001, signal.SIGINT)], sent)
+    check("and to the command itself", commands.started[0].signals == [signal.SIGINT])
+    check("a process that is not under it is left alone", all(pid != 6000 for pid, _ in table.sent))
+    check("nothing had to be ended harder", not any(s in (signal.SIGTERM, signal.SIGKILL) for _, s in sent[:3]))
+    check("what is left in its own group is ended once it is gone", sent[-1] == (-4002, signal.SIGTERM), sent)
+    state = job.read(tmp_path, "check")
+    check("it reads as stopped", state["status"] == job.STOPPED and state["steps"][0]["status"] == job.STOPPED)
+    check("and the state says what kind of step it was", state["steps"][0]["tree"] is True
+          and state["steps"][0]["unset"] == ["CLAUDECODE"])
+
+
+def test_what_stays_under_a_tree_step_is_ended_then_killed(tmp_path):
+    now = [1000.0]
+
+    def tick(command):
+        job.stop(tmp_path, "check")
+        now[0] += job.GRACE_S
+    commands = Commands(agent={"stubborn": True, "on_wait": tick})
+    table = Table({5001: 4002, 5002: 5001}, stays=(5001, 5002), stubborn_to=signal.SIGKILL)
+    run(tmp_path, commands, tree("agent"), procs=table, kill=table.kill, clock=lambda: now[0])
+    sent = [(pid, signum) for pid, signum in table.sent if signum and pid > 0]
+    check("asked, then ended, then killed, each time the deepest first",
+          sent == [(5002, signal.SIGINT), (5001, signal.SIGINT), (5002, signal.SIGTERM), (5001, signal.SIGTERM),
+                   (5002, signal.SIGKILL), (5001, signal.SIGKILL)], sent)
+    command = commands.started[0]
+    check("the command too: Ctrl-C, then the end, then killed",
+          command.signals == [signal.SIGINT, signal.SIGTERM] and command.killed, command.signals)
+    check("and nothing is left", not table.rows)
+
+
+def test_a_process_listed_before_is_not_ended_once_its_id_is_anothers(tmp_path):
+    now = [1000.0]
+    table = Table({5001: 4002}, stays=(5001,))
+
+    def tick(command):
+        job.stop(tmp_path, "check")
+        now[0] += job.GRACE_S
+        if any(signum == signal.SIGINT for _, signum in table.sent):
+            # It ended, and the id went to another program at once.
+            table.rows[5001] = {"pid": 5001, "ppid": 1, "age": 1.0, "args": "somebody else"}
+    commands = Commands(agent={"stubborn": True, "on_wait": tick})
+    run(tmp_path, commands, tree("agent"), procs=table, kill=table.kill, clock=lambda: now[0])
+    check("Ctrl-C reached it while it was the one", (5001, signal.SIGINT) in table.sent)
+    check("and nothing stronger went to the program that has its id now",
+          not [s for pid, s in table.sent if pid == 5001 and s in (signal.SIGTERM, signal.SIGKILL)], table.sent)
+
+
+def test_what_a_tree_step_leaves_in_its_group_when_it_ends_by_itself_is_ended(tmp_path):
+    commands = Commands(agent={})
+    table = Table({})
+    code = run(tmp_path, commands, tree("agent"), procs=table, kill=table.kill)
+    check("it ended well", code == 0 and job.read(tmp_path, "check")["status"] == job.DONE)
+    check("and its group was told to end, nothing else", table.sent == [(-4002, signal.SIGTERM)], table.sent)
+    plain = Table({})
+    run(tmp_path, Commands(collect={}), steps("collect"), procs=plain, kill=plain.kill)
+    check("a step that is no tree is left to end as it ends", plain.sent == [])
+
+
+def test_a_step_runs_without_the_names_it_leaves_out(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("ECHOLOT_KEPT", "yes")
+    seen = []
+
+    def popen(argv, **kw):
+        seen.append(kw["env"])
+        return Command(argv, kw["stdout"])
+    table = Table({})
+    job.run(tmp_path, "check", {"steps": tree("agent") + steps("collect")}, popen=popen, signals=False,
+            procs=table, kill=table.kill)
+    check("the name is not there for the step that leaves it out", "CLAUDECODE" not in seen[0]
+          and seen[0]["ECHOLOT_KEPT"] == "yes" and seen[0]["PYTHONUNBUFFERED"] == "1")
+    check("and is there for the next", seen[1]["CLAUDECODE"] == "1")
+
+
+@pytest.mark.parametrize("text, seconds", [("05:12", 312.0), ("1:02:03", 3723.0), ("2-01:00:00", 176400.0),
+                                           ("0", 0.0), ("ab:cd", None), ("1:2:3:4", None)])
+def test_how_long_a_process_ran_is_read_as_ps_says_it(text, seconds):
+    check(f"{text}", job._etime(text) == seconds, job._etime(text))
+
+
+def test_the_processes_of_this_computer_are_read_from_ps():
+    said = ("    1     0 2-00:00:01 /sbin/launchd\n  4002     1      12:00 claude -p the request\n"
+            "  5001  4002      01:30 /bin/zsh -c ./gradlew installDebug\n  oops\n"
+            "  5002  5001      01:29 java -cp gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain installDebug\n")
+    asked = []
+
+    def ps(argv, **kw):
+        asked.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=said, stderr="")
+    table = job.processes(run=ps)
+    check("ps is asked for every process with what the page needs", asked == [["ps", "-A", "-o", "pid=,ppid=,etime=,args="]]
+          or os.name != "posix", asked)
+    if os.name != "posix":
+        return
+    check("a row each, a line that is none left out", [p["pid"] for p in table] == [1, 4002, 5001, 5002])
+    check("with its parent, its age and its whole command line", table[2] == {
+        "pid": 5001, "ppid": 4002, "age": 90.0, "args": "/bin/zsh -c ./gradlew installDebug"})
+    check("what is under a process, the deepest first", [p["pid"] for p in job.descendants(4002, table)] == [5002, 5001])
+    check("nothing is under a process with no children", job.descendants(5002, table) == [])
+
+    def broken(argv, **kw):
+        raise OSError("no ps here")
+    check("no ps: no processes, and no error", job.processes(run=broken) == [])

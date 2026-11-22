@@ -1,6 +1,6 @@
 # Thresholds from a healthy run
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/calibrate.md)
 
 An absolute threshold is brittle. 16 ms on a flagship and on a budget phone are
 different things, and the config does not travel between devices. Worse, it

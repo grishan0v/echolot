@@ -430,15 +430,18 @@ def settings(st: dict, head: str, says: dict[str, list[str]], cfg: Config | None
     except ConfigError as e:
         row("Time limit", _sentence(str(e)))
     else:
-        # The page writes no config that exists: it shows the line to edit.
+        # The line to edit comes after what the row reads: where the page
+        # may rewrite the line it wrote, its field stands there instead
+        # (`echolot/time_limit.py`).
         under = "scenario" if cfg.get("scenarios") is None else f"scenarios.{cfg.scenario_name}"
         if budget is None:
             row("Time limit", "None is set. The report then says how long the scenario takes and holds "
-                f"that against nothing. A line under `{under}:` in `echolot.yml` sets one, in milliseconds: "
-                "`budget_ms: 2000` is 2 seconds.")
+                "that against nothing.", more=[f"A line under `{under}:` in `echolot.yml` sets one, in "
+                                               "milliseconds: `budget_ms: 2000` is 2 seconds."])
         else:
             row("Time limit", f"{plain.hum(budget)} (`budget_ms: {budget:g}`). The report's first line "
-                f"holds the scenario against it. To change it, edit that line under `{under}:` in `echolot.yml`.")
+                "holds the scenario against it.",
+                more=[f"To change it, edit that line under `{under}:` in `echolot.yml`."])
 
     # The thresholds, and where each comes from.
     try:

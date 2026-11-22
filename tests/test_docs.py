@@ -123,6 +123,82 @@ def test_the_documentation_index_counts_the_documents_it_lists():
     )
 
 
+def test_translations_mirror_every_doc_and_link_between_languages():
+    """Every non-default language in docs/languages.yml ships its README, its
+    docs/<lang>/ mirror of all docs/*.md, and a language switcher in both."""
+    default, langs = _languages()
+    expected_pages = sorted(p.name for p in (ROOT / "docs").glob("*.md") if p.name != "README.md")
+    default_readme = (ROOT / langs[default]["readme"]).read_text(encoding="utf-8")
+
+    for code, info in langs.items():
+        if code == default:
+            continue
+        readme_path = ROOT / info["readme"]
+        assert readme_path.is_file(), f"missing translated README: {info['readme']}"
+        assert info["readme"] in default_readme, (
+            f"{langs[default]['readme']} does not link to {info['readme']}"
+        )
+        readme_text = readme_path.read_text(encoding="utf-8")
+        assert f"/blob/main/{langs[default]['readme']}" in readme_text, (
+            f"{info['readme']} does not link back to {langs[default]['readme']}"
+        )
+
+        lang_dir = ROOT / "docs" / info["docs_dir"]
+        assert (lang_dir / "README.md").is_file(), f"missing index: docs/{info['docs_dir']}/README.md"
+        actual_pages = sorted(p.name for p in lang_dir.glob("*.md") if p.name != "README.md")
+        assert actual_pages == expected_pages, (
+            f"docs/{info['docs_dir']}/ pages differ from docs/: "
+            f"missing={sorted(set(expected_pages) - set(actual_pages))}, "
+            f"extra={sorted(set(actual_pages) - set(expected_pages))}"
+        )
+
+        index_text = (lang_dir / "README.md").read_text(encoding="utf-8")
+        linked = set(re.findall(r"\]\((?!https?://|#)([a-z-]+\.md)", index_text))
+        assert not set(expected_pages) - linked, (
+            f"in docs/{info['docs_dir']}/ and not linked from its index: "
+            f"{sorted(set(expected_pages) - linked)}"
+        )
+
+        for page_name in ["README.md", *expected_pages]:
+            en_text = (ROOT / "docs" / page_name).read_text(encoding="utf-8")
+            tr_text = (lang_dir / page_name).read_text(encoding="utf-8")
+            assert f"{info['docs_dir']}/{page_name}" in en_text, (
+                f"docs/{page_name} does not link to {info['docs_dir']}/{page_name}"
+            )
+            assert f"../{page_name}" in tr_text, (
+                f"docs/{info['docs_dir']}/{page_name} does not link back to ../{page_name}"
+            )
+
+
+def test_russian_docs_keep_counts_and_compare_columns_current():
+    """Translated docs state the same counts and compare headers as the tool."""
+    from echolot.compare import MOVED_COLUMNS, MOVED_HEADERS
+
+    shipped = len(list((ROOT / "echolot/sql/detectors").glob("*.sql")))
+    checks = len(selftest.CHECKS)
+
+    ru_readme = (ROOT / "README.ru.md").read_text(encoding="utf-8")
+    m_det = re.search(r"(\d+)\s+SQL-детектор", ru_readme)
+    assert m_det and int(m_det.group(1)) == shipped, m_det
+    assert f"Detectors fired: **5 of {shipped}**" in ru_readme or re.search(
+        rf"Detectors fired: \*\*\d+ of {shipped}\*\*", ru_readme
+    )
+
+    ru_det = (ROOT / "docs/ru/determinism.md").read_text(encoding="utf-8")
+    assert f"{checks} провер" in ru_det
+    assert f"All {checks} checks passed" in ru_det
+    assert f"self-check: {checks} of {checks} passed" in ru_det
+    assert f"{shipped - len(selftest.SILENT_ON_FIXTURE)} находок" in ru_det
+
+    want = [MOVED_HEADERS[c] for c in MOVED_COLUMNS]
+    ru_cmp = (ROOT / "docs/ru/compare.md").read_text(encoding="utf-8")
+    outside = re.sub(r"^```.*?^```", "", ru_cmp, flags=re.S | re.M)
+    rows = ([cell.strip() for cell in line.strip().strip("|").split("|")]
+            for line in outside.splitlines() if line.startswith("|"))
+    headers = [cells for cells in rows if "Detector" in cells]
+    assert headers and all(got == want for got in headers), headers
+
+
 @pytest.mark.parametrize("document,pattern", DETECTOR_TALLIES, ids=lambda v: v[:34])
 def test_documented_detector_count_is_current(document, pattern):
     shipped = len(list((ROOT / "echolot/sql/detectors").glob("*.sql")))
@@ -185,9 +261,33 @@ def test_the_sample_comparison_has_the_columns_compare_prints(document):
 
 # --- anchors, which a heading can stop answering ----------------------------
 
+def _languages() -> tuple[str, dict[str, dict]]:
+    data = yaml.safe_load((ROOT / "docs" / "languages.yml").read_text(encoding="utf-8"))
+    return data["default"], data["languages"]
+
+
+def _translation_docs() -> list[str]:
+    default, langs = _languages()
+    out: list[str] = []
+    for code, info in langs.items():
+        if code == default:
+            continue
+        readme = ROOT / info["readme"]
+        if readme.is_file():
+            out.append(info["readme"])
+        lang_dir = ROOT / "docs" / info["docs_dir"]
+        if lang_dir.is_dir():
+            out.extend(sorted(f"docs/{info['docs_dir']}/{p.name}" for p in lang_dir.glob("*.md")))
+    return out
+
+
 # The documents a link inside the repository may point into.
-LINKING = ["README.md", "CONTRIBUTING.md",
-           *sorted(f"docs/{p.name}" for p in (ROOT / "docs").glob("*.md"))]
+LINKING = [
+    "README.md",
+    "CONTRIBUTING.md",
+    *sorted(f"docs/{p.name}" for p in (ROOT / "docs").glob("*.md")),
+    *_translation_docs(),
+]
 
 
 def _unfenced(path: Path) -> str:

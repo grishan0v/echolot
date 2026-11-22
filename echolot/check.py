@@ -216,9 +216,19 @@ def _stops_all(st: dict[str, Any], run: dict[str, Any] | None = None) -> str | N
                 "What to do next writes one.")
     if kind == "fix-config":
         return "Not yet: `echolot.yml` does not load. What to do next names the line to fix."
+    # An agent the page started (`echolot/dig.py`): one thing at a time,
+    # whether its investigation is still open or it is finishing after it.
+    from . import dig
+    digging = job.read(st["project"], dig.JOB) if st.get("project") else None
+    if digging is not None and digging["status"] == job.RUNNING:
+        return ("Not now: an agent is digging into this app, and a check from here would get in its way. Its "
+                "page, the agent's answer, shows how far it is.")
     hunt = st.get("hunt") or {}
     if hunt and (hunt.get("status") or "open") == "open":
         asked = f" (\"{hunt['question']}\")" if hunt.get("question") else ""
+        if digging is not None and (digging.get("what") or {}).get("hunt") == hunt.get("n"):
+            return (f"Not now: the investigation the page started is still open{asked}, and no agent works in it "
+                    "any more. A check from here would be filed as one of its rounds: close it on its page first.")
         return (f"Not now: an investigation is open{asked}, and an agent works with this app's recordings. "
                 "A check from here would be mixed into its rounds. Its answer comes first.")
     collect = st.get("collect") or {}
@@ -290,6 +300,9 @@ def offer(project: Path, st: dict[str, Any], lines: list[dict[str, Any]],
             "why": no_phone if do == RECORD else None, "no_record": no_phone,
             "report": report["path"] if _reads(report) else None,
             "report_dir": report_dir,
+            # The recordings that are here, read or not: what a press that
+            # reads them again reads (`again`, after the time limit changed).
+            "there": len(files or ()),
         })
     return out
 
@@ -329,7 +342,11 @@ def asked(form: dict[str, str]) -> dict[str, Any]:
                       "Go back to the start page and press the button there.", 400)
     if form.get("anew") or hunt:
         do = RECORD
-    return {"do": do or None, "scenario": scenario or None, "launches": launches, "hunt": hunt or None}
+    # Read the recordings that are here again, though they were read: the
+    # time limit changed since (`echolot/time_limit.py`).
+    again = do == READ and form.get("again") == "1"
+    return {"do": do or None, "scenario": scenario or None, "launches": launches, "hunt": hunt or None,
+            "again": again}
 
 
 def _shown(project: Path, path: Path) -> str:
@@ -384,7 +401,10 @@ def start(project: Path, config: str, found: dict[str, Any], run: dict[str, Any]
         raise Refusal("No such scenario", "The config names no scenario by that name. Go back to the start "
                       "page and press the button there.", 400)
     do = press["do"] or choice["do"]
-    if do == READ and not choice.get("unread"):
+    # Read again: the recordings that are here, though none is newer than the
+    # report, and no comparison after it, since the recordings are the same.
+    again = do == READ and bool(press.get("again")) and not choice.get("unread") and bool(choice.get("there"))
+    if do == READ and not choice.get("unread") and not again:
         raise Refusal("There is nothing to read", f"No recordings of `{choice['name']}` wait to be read. "
                       "Go back to the start page: its button says what a press does now.")
     if do == RECORD and (choice.get("why") or choice.get("no_record")):
@@ -408,7 +428,7 @@ def start(project: Path, config: str, found: dict[str, Any], run: dict[str, Any]
             raise Refusal("No such investigation", "It filed no report to compare the new one with. "
                           "Go back to the start page and press the button there.", 400)
         before = home / "reports" / f"{first:03d}.json"
-    elif choice.get("report"):
+    elif choice.get("report") and not again:
         # `analyze` writes the new report over the last one, so the last one
         # is copied beside it first: that copy is what `compare` is given.
         before = choice["report_dir"] / "before.json"

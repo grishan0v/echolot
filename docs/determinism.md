@@ -1,6 +1,6 @@
 # Determinism
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/determinism.md)
 
 The whole premise is that the same trace yields the same answer, run after run.
 Two things make that true rather than aspirational: the parser version is
