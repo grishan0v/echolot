@@ -29,6 +29,8 @@ import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -41,7 +43,7 @@ from echolot import main as main_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot.pages import kit, limit_page, report_page, start_page  # noqa: E402
 from tests.support import check  # noqa: E402
-from tests.test_report_page import _blocks, known, make, read  # noqa: E402
+from tests.test_report_page import REACHING_OUT, _blocks, known, make, read  # noqa: E402
 from tests.test_ui import LAUNCH, PAGES, SEVERAL, Adb, Project, get, running, setting, site_of  # noqa: E402
 from tests.test_ui_check import Echolot, a_run, files, press, send  # noqa: E402
 from tests.test_ui_setup import serving as setting_up  # noqa: E402
@@ -638,7 +640,8 @@ def test_each_state_is_one_page_with_ids_of_its_own(project):
                   [n.text for n in primary])
         else:
             check("/: the start page keeps its own next step: the limit's part adds none", not ours, [n.text for n in ours])
-        check(f"/{where}: its own styles are written in, once", body.count(kit.asset("limit.css")) == 1)
+        check(f"/{where}: its own styles and script are written in, once", body.count(kit.asset("limit.css")) == 1
+              and body.count(kit.asset("limit.js")) == 1)
 
 
 def test_reading_writes_nothing_in_any_state_of_the_limit(project, tmp_path_factory):
@@ -678,5 +681,18 @@ def test_the_limits_own_styles_keep_to_the_tokens():
                                              "setup.css", "compare.css"))
     theirs = set(re.findall(r"\.([a-z][a-z0-9-]*)", re.sub(r"/\*.*?\*/", "", shared, flags=re.S)))
     check("a class it names by itself is no other sheet's", not mine & theirs, sorted(mine & theirs))
-    check("and its file is inside the package", all((PAGES / n).is_file() for n in limit_page.CSS))
+    check("and its files are inside the package", all((PAGES / n).is_file() for n in limit_page.CSS + limit_page.JS))
     check("the start page's own sheets are untouched by it", all(n not in start_page.CSS for n in limit_page.CSS))
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not here to parse the script")
+def test_the_script_parses():
+    done = subprocess.run(["node", "--check", str(PAGES / "limit.js")], capture_output=True, text=True)
+    check("limit.js is JavaScript", done.returncode == 0, done.stderr)
+
+
+def test_the_script_asks_no_server_anything_and_opens_the_fold_alone():
+    script = kit.asset("limit.js")
+    check("nothing is fetched, sent or loaded", not [word for word in REACHING_OUT if word in script])
+    check("it reads the address and opens a fold, nothing more", "location.hash" in script and ".open = true" in script
+          and "submit" not in script)

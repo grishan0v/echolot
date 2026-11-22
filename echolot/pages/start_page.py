@@ -392,6 +392,7 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
         css, js = CSS + tuple(setup.get("css") or ()), JS + tuple(setup.get("js") or ())
     if limit:
         css += tuple(limit.get("css") or ())
+        js += tuple(limit.get("js") or ())
     body = f'<div class="start-body stack gap-6">{body}{_reports(view, link)}</div>'
     main = (f'<main><div class="wide start">{head}{_ready(view, link("start") or "", lead)}{body}'
             f'{_settings(view, launches, limit)}</div></main>')

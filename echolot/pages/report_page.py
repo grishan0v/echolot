@@ -497,4 +497,5 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
             + (kit.dock(hot) + kit.ask(*_request(report, where, last)) + kit.sprites() if hot else "")
             + kit.peek("check", "Back to the report"))
     title = "echolot report" + (f": {report['scenario']}" if report.get("scenario") else "")
-    return kit.document(title, body, css=CSS + tuple((limit or {}).get("css") or ()), js=JS, policy=policy)
+    return kit.document(title, body, css=CSS + tuple((limit or {}).get("css") or ()),
+                        js=JS + tuple((limit or {}).get("js") or ()), policy=policy)

@@ -360,9 +360,9 @@ def write(project: Path, config: str, press: dict[str, Any]) -> bool:
     if found["seen"] != press["seen"]:
         if found["rest"] == press["rest"] and text[start:end] == line:
             return False
-        raise Refusal("The limit was not changed", "`echolot.yml` changed after this page was drawn, so the page "
-                      "changed nothing: the file may hold what somebody wrote meanwhile. Go back and load the page "
-                      "again: it reads the file as it is now. Nothing was written.")
+        raise Refusal("The limit was not changed", "`echolot.yml` changed after this page was drawn, and it may "
+                      "hold what somebody wrote meanwhile. Nothing was written. Go back and load the page again: it "
+                      "reads the file as it is now.")
     if text[start:end] == line:
         return False
     new = text[:start] + line + text[end:]

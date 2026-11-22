@@ -5,8 +5,9 @@ report is one made with another limit, that it is, with the button that
 reads the recordings again.
 
 Drawn from `time_limit.view`, it judges nothing. The field and the button
-are forms, so both work with script switched off. A report written to disk
-has none of this: a file cannot change a config.
+are forms, so both work with script switched off; the one script opens "All
+settings" when a press sends the browser back to the limit inside it. A
+report written to disk has none of this: a file cannot change a config.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from . import kit
 from .kit import e
 
 CSS = ("limit.css",)
+JS = ("limit.js",)
 ID = "time-limit"
 
 Link = Callable[..., "str | None"]
@@ -82,7 +84,7 @@ def beside(found: dict[str, Any] | None, link: Link) -> dict[str, Any] | None:
         body = (f'<p class="small sub measure" id="{ID}-no">{kit.prose(found["why"])} The limit is {kit.prose(where)}, '
                 'in milliseconds.</p>')
     return {"html": f'<section class="lim" id="{ID}" aria-label="Time limit">{body}{_behind(found, link, "primary")}'
-                    '</section>', "css": CSS}
+                    '</section>', "css": CSS, "js": JS}
 
 
 def setting(found: dict[str, Any] | None, link: Link) -> dict[str, Any] | None:
@@ -97,4 +99,5 @@ def setting(found: dict[str, Any] | None, link: Link) -> dict[str, Any] | None:
         body, keep = _field(found, action, "start"), False
     else:
         body, keep = f'<p id="{ID}-no">{kit.prose(found["why"])}</p>', True
-    return {"html": f'<div class="lim" id="{ID}">{body}{_behind(found, link, "line")}</div>', "keep": keep, "css": CSS}
+    return {"html": f'<div class="lim" id="{ID}">{body}{_behind(found, link, "line")}</div>', "keep": keep, "css": CSS,
+            "js": JS}
