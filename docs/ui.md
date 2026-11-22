@@ -59,13 +59,57 @@ longer than … seconds", from 0.1 to 60. It is optional, and it is written as
 says whether the app opens fast enough. Without one it says how long the
 launch takes and holds that against nothing: its level is "not checked".
 
-The limit is written when the file is created, and not after. `echolot.yml`
-is a file you edit and may hold your comments, and echolot has no writer that
-keeps them, so the page changes no config that exists. A limit kept anywhere
-else would be one that `echolot analyze` in a terminal and CI do not read. To
-change it later, edit the `budget_ms` line under the scenario. The file the
-page wrote holds that line with a comment (commented out when no limit was
-given), and **All settings** shows the line to write.
+The limit is one line of the file, under the scenario's window, with a
+comment of the page's own; with no limit the same line is there commented
+out. Most people know the number only once the first report says "No time
+limit is set", so the page can set or change it later in that line, and
+nowhere else: see [The time limit, later](#the-time-limit-later).
+
+### The time limit, later
+
+The same sentence with its field, "It should take no longer than … seconds",
+stands beside the verdict of the report the page shows, and under **All
+settings › Time limit**, with the limit in force in it. **Set the limit**
+writes the number; an empty field takes the limit off, and the line goes back
+to its commented-out form.
+
+A press changes exactly one line of `echolot.yml`: the `budget_ms` line the
+page wrote when it set the project up. Every other byte of the file stays as
+it is, your comments and blank lines included. The file is written beside
+the old one, loaded the way every command loads it, and only then put in its
+place, so nothing ever reads half of it.
+
+The page changes that line only while it still reads as the page wrote it:
+`budget_ms` two spaces in, under `scenario:`, a whole number of milliseconds,
+then the page's own comment and nothing else on the line. The number may be
+one you typed there yourself, and the first `#` of the commented-out line may
+be gone: both comments ask for exactly that. Where anything else is the case
+the page changes nothing, says why in a sentence, and shows the line to edit:
+
+- the line was changed by hand in any other way (a word added, its spacing,
+  a number that is not a whole one), moved out of `scenario:`, copied, or
+  removed;
+- another line of the file sets the limit too;
+- the page did not write this `echolot.yml`: it does not begin with the two
+  lines the page puts at its top, so a config written by hand or by an agent
+  is never touched;
+- the config names several scenarios;
+- `local.yml` beside it sets the limit, which wins over `echolot.yml`;
+- `echolot.yml` is a link to another file, does not load, or `echolot ui` was
+  started with `-c` and reads another file;
+- the file changed between the page and the press. The page knows which file
+  it showed you, and a press that finds another one writes nothing. The same
+  press sent twice is one press.
+
+`analyze` reads the limit when it reads the recordings, so after a change the
+report is still the one made with the old limit. The page says so and offers
+**Read the recordings again**: the button's own reading of the recordings
+that are here, without the phone, and with no comparison after it, since the
+recordings are the same. The verdict changes when that report is written;
+the page works none out by itself.
+
+A report written to disk by `analyze --html` has no field: a file cannot
+change a config.
 
 **Something else**, one screen or one action, stays an agent's setup: it has
 to learn from the code how to get there and where the wait begins and ends.
@@ -297,7 +341,8 @@ things in sentences; the terminal's own lines are here:
   (`window: launch`);
 - how many runs, and for how long each records; with a macrobenchmark, that
   the benchmark decides;
-- the time limit, `budget_ms`, with the line that sets or changes it;
+- the time limit, `budget_ms`, with the field that sets or changes it where
+  the page wrote the file, and otherwise why not and the line to edit;
 - the thresholds: how many checks run on the config's, and each one with
   where it comes from: built-in, set in the config, set for this scenario,
   or switched off;
@@ -321,8 +366,9 @@ the page it opened and by nothing else:
   the server stops, the token means nothing.
 - Anything other than reading a page also has to come from the server's own
   pages: the browser says where a request comes from, and one from anywhere
-  else is refused. Three such requests exist, each a form of the start page
-  or of the answer's page: the press of the button, Stop, and **Set it up**.
+  else is refused. Four such requests exist, each a form of the start page,
+  the report's page or the answer's page: the press of the button, Stop,
+  **Set it up** and **Set the limit**.
 - Such a request may carry a form of at most 4096 bytes. One that carries
   more, or does not say how much, is refused unread, and so is one that ends
   before the length it stated. Nothing in a form is
@@ -330,7 +376,10 @@ the page it opened and by nothing else:
   a number of launches a whole number from 1 to 20, an investigation one the
   project has, what to set up one of the names the page offered, and a time
   limit a number of seconds from 0.1 to 60. The one file a setup creates is
-  `echolot.yml` in the project's folder, whatever a form says.
+  `echolot.yml` in the project's folder, whatever a form says, and the one
+  file **Set the limit** changes is that same file, one line of it. What the
+  page saw of it travels as two fingerprints, which are compared and never
+  opened.
 - It serves the pages it draws and no file. No address is turned into a path
   on disk.
 - A page fetches nothing from anywhere else: no font, no script, no image.
@@ -361,6 +410,10 @@ file before the press:
 | `echolot.yml` | the config `echolot scan` drafts, created and never written over |
 | what `echolot init` writes | the files for an agent, lines in `.gitignore`, `.echolot/hosts.json`: only where echolot was never set up here |
 | `.echolot/log/setup.json`, `setup.init.log` | that run of `init`: its state, and what it printed |
+
+**Set the limit** writes one file, `echolot.yml`, and one line of it: the
+`budget_ms` line the page wrote. Nothing else is written, not even a file
+beside it that stays.
 
 The commands themselves write what they always write: the recordings, the
 report, the comparison, their own lines in `.echolot/log/runs.jsonl`. The
