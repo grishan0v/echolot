@@ -563,7 +563,8 @@ The button beside **Dig deeper** ticks where to start: the checks that need
 attention, or with none of those the two that found the largest thing. With
 more than three ticked, the dialog says that one investigation looks at one
 question and suggests ticking fewer. A page written to disk starts nothing
-itself.
+itself; the same report served by `echolot ui` can start Claude Code on the
+request ([Dig deeper from the page](ui.md#dig-deeper-from-the-page)).
 
 What holds for the file:
 
