@@ -44,11 +44,23 @@ def _hidden(keys: Sequence[str]) -> str:
     return "".join(f'<input type="hidden" name="pick.{e(key)}" value="1">' for key in keys)
 
 
+def _why(why: str | Sequence[str] | None) -> str:
+    """Why nothing can start: a sentence, or where each client has a reason
+    of its own, each on a line of its own, and what follows on the next."""
+    if not why:
+        return ""
+    if isinstance(why, str):
+        return kit.prose(why)
+    if len(why) == 1:
+        return kit.prose(why[0])
+    return "".join(f'<span class="dig-why1">{kit.prose(w)}</span> <br>' for w in why)
+
+
 # ---------------------------------------------------------------------------
 # on the report
 
 
-def report_parts(checks: Sequence[dict[str, Any]], action: str, can: bool, why: str | None,
+def report_parts(checks: Sequence[dict[str, Any]], action: str, can: bool, why: str | Sequence[str] | None,
                  who: Sequence[str] = ("Claude Code",)) -> dict[str, Any]:
     """What a served report adds: in the request dialog, the button that leads
     to the screen before the agent starts, or the reason there is none; and
@@ -66,7 +78,7 @@ def report_parts(checks: Sequence[dict[str, Any]], action: str, can: bool, why: 
                'into an agent of your own.</p></form>')
     else:
         ask = ('<p class="small sub">Paste the request into Claude Code, Codex or Cursor opened on the project. '
-               f'The page cannot start one itself: {kit.prose(why or "")}</p>')
+               f'The page cannot start one itself: {_why(why)}</p>')
     boxes = "".join(
         f'<li><label class="dig-pick"><input type="checkbox" name="pick.{e(c["key"])}" value="1">'
         f'{kit.icon(c["kind"])}<span>{e(c["title"])}</span></label></li>' for c in hot)
@@ -127,14 +139,16 @@ def consent(c: dict[str, Any], link: Link, steps: Sequence[tuple[str, str, bool]
                      f'{e(kit.MANY_NOTE.replace("{n}", str(len(picks))))} '
                      f'<a class="lnk" href="{e(c["back"])}">Back to the report</a></p></div>')
     if c["why"]:
-        parts.append(f'<div class="callout" id="dig-why">{kit.icon("yellow")}<p>{kit.prose(c["why"])} The request is '
+        parts.append(f'<div class="callout" id="dig-why">{kit.icon("yellow")}<p>{_why(c["why"])} The request is '
                      'below: copy it into an agent of your own.</p></div>')
+    starts = bool(c.get("action") and not c["why"])
     for other, action in c.get("others") or ():
-        # Another client can do it too: its own screen, for its own terms.
+        # Another client can do it too: its own screen, for its own terms; the
+        # one next step where the client on this screen cannot start.
         parts.append(f'<form method="post" action="{e(action)}" class="rowf dig-other">{_hidden(c["keys"])}'
                      f'<p class="small sub">{e(other)} is on this computer too, and can do it instead. What it may '
-                     f'do differs: its own screen says how.</p><button type="submit" class="btn quiet">Use '
-                     f'{e(other)} instead</button></form>')
+                     f'do differs: its own screen says how.</p><button type="submit" class="btn '
+                     f'{"line" if starts else "primary"}">Use {e(other)} instead</button></form>')
     paths = c.get("paths")
     where = ("any file of the project" if paths == [""] else
              "files under " + _code_list([p or "." for p in paths]) if paths else "")
@@ -142,11 +156,11 @@ def consent(c: dict[str, Any], link: Link, steps: Sequence[tuple[str, str, bool]
         terms = _codex_terms if client.key == "codex" else _claude_terms
         parts.append('<div class="stack gap-5 dig-terms">' + "".join(terms(c, where)) + "</div>")
     buttons = []
-    starts = bool(c.get("action") and not c["why"])
     if starts:
         buttons.append(f'<form method="post" action="{e(c["action"])}" id="dig-start-form">{_hidden(c["keys"])}'
                        '<button type="submit" class="btn primary press" id="dig-start">Start</button></form>')
-    buttons.append(f'<button type="button" class="btn {"line" if starts else "primary"} needs-js" id="dig-copy" '
+    copy_first = not starts and not c.get("others")
+    buttons.append(f'<button type="button" class="btn {"primary" if copy_first else "line"} needs-js" id="dig-copy" '
                    'data-copy="dig-request">Copy the request</button>')
     buttons.append(f'<a class="btn quiet" href="{e(c["back"])}">Back to the report</a>')
     parts.append(f'<div class="rowf dig-go">{"".join(buttons)}<span class="vh" role="status" id="dig-copied"></span></div>')

@@ -148,14 +148,14 @@ def ready(project: Path) -> str | None:
     cmd = codex_mod.init_command(hosts.keys(project), project)
     state = codex_mod.rule_state(project)
     if state == "missing":
-        return (f"Not yet: this project has no `{codex_mod.RULE_SHOWN}`, the rules that let echolot, Gradle and adb "
-                f"out of {NAME}'s sandbox. `{cmd}`, in a terminal in the project's folder, writes it.")
+        return (f"Not yet for {NAME}: this project has no `{codex_mod.RULE_SHOWN}`, the rules that let echolot, "
+                f"Gradle and adb out of {NAME}'s sandbox. `{cmd}`, in a terminal in the project's folder, writes it.")
     if state == "stale":
-        return (f"Not yet: this project's `{codex_mod.RULE_SHOWN}` is from an older echolot. It lets `echolot` out of "
-                f"{NAME}'s sandbox, and not `./gradlew` or `adb`, which an investigation runs too. `{cmd}` brings it "
-                "up to date.")
-    return (f"Not yet: `{codex_mod.RULE_SHOWN}` was edited here, and does not let {dig._listed(missing)} out of "
-            f"{NAME}'s sandbox. Delete it, and `{cmd}` writes echolot's again.")
+        return (f"Not yet for {NAME}: this project's `{codex_mod.RULE_SHOWN}` is from an older echolot. It lets "
+                f"`echolot` out of {NAME}'s sandbox, and not `./gradlew` or `adb`, which an investigation runs too. "
+                f"`{cmd}` brings it up to date.")
+    return (f"Not yet for {NAME}: `{codex_mod.RULE_SHOWN}` was edited here, and does not let {dig._listed(missing)} "
+            f"out of {NAME}'s sandbox. Delete it, and `{cmd}` writes echolot's again.")
 
 
 # ---------------------------------------------------------------------------

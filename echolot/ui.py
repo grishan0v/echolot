@@ -472,9 +472,9 @@ def _clients(site: Site) -> list[dig.Client]:
     return [found] if isinstance(found, dig.Client) else list(found)
 
 
-def _whys(offered: list[tuple[dig.Client, str | None]]) -> str | None:
+def _whys(offered: list[tuple[dig.Client, str | None]]) -> list[str] | None:
     """Why none of the clients can start, each reason once, in their order."""
-    return " ".join(dict.fromkeys(why for _, why in offered if why)) or None
+    return list(dict.fromkeys(why for _, why in offered if why)) or None
 
 
 def _dig_parts(visit: Visit, data: dict[str, Any], params: dict[str, str]) -> dict[str, Any] | None:

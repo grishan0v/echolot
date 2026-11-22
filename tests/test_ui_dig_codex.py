@@ -219,6 +219,8 @@ def test_with_both_the_person_picks_on_the_screen_before_the_start(project):
           == f"/{site.token}/dig/with/codex/ask" and switch.one("button").text == "Use Codex instead"
           and [(i.attrs["name"], i.attrs["value"]) for i in switch.all("input")] == [("pick.main_thread_waits", "1")]
           and "What it may do differs: its own screen says how." in switch.text, switch.text)
+    check("outlined beside Start, which stays the one next step", switch.one("button").attrs["class"] == "btn line"
+          and first.one("button", id="dig-start").attrs["class"] == "btn primary press")
     other = page(press(site, "dig/with/codex/ask", ticked("main_thread_waits")))
     check("Codex's screen, with its own terms and its own Start", blocks(other)["Who does it"].startswith(
         "Codex 0.159.2") and other.one("form", id="dig-start-form").attrs["action"]
@@ -260,13 +262,17 @@ def test_where_neither_can_start_each_reason_is_said_once(project):
     site, _, _ = serving(project, clients=(out, CODEX_IN))
     dialog = page(get(site, "report")).one("dialog", "ask")
     check("no Start, the request to copy, and why for each", "The page cannot start one itself: Claude Code is "
-          "installed and not signed in." in dialog.text and "Not yet: this project's .codex/rules/echolot.rules is "
-          "from an older echolot." in dialog.text and not page(get(site, "report")).all("button", id="ask-start"),
+          "installed and not signed in." in dialog.text and "Not yet for Codex: this project's "
+          ".codex/rules/echolot.rules is from an older echolot." in dialog.text and not page(get(site, "report")).all("button", id="ask-start"),
           dialog.text)
+    check("each reason on a line of its own", [s.text for s in page(get(site, "report")).one("dialog", "ask").all(
+        "span", "dig-why1")] == [w.replace("`", "") for w in (out.why, dig_codex.ready(project.root))])
     consent = page(press(site, "dig/ask", ticked("main_thread_waits")))
     why = consent.one("div", id="dig-why").text
     check("the screen says both too, with the way out", "not signed in" in why and "older echolot" in why
           and "copy it into an agent of your own" in why and not consent.all("button", id="dig-start"), why)
+    check("and copying is its one next step", consent.one("button", id="dig-copy").attrs["class"]
+          == "btn primary needs-js")
     check("and offers no other client", not consent.all("form", "dig-other"))
 
 
@@ -282,6 +288,9 @@ def test_a_codex_that_cannot_start_leaves_claude_code_alone(project):
           in other.one("div", id="dig-why").text and other.one("form", "dig-other").attrs["action"]
           == f"/{site.token}/dig/with/claude/ask" and not other.all("button", id="dig-start"),
           other.one("div", id="dig-why").text)
+    check("where this one cannot start, the other is the one next step, and copying the second",
+          other.one("form", "dig-other").one("button").attrs["class"] == "btn primary"
+          and other.one("button", id="dig-copy").attrs["class"] == "btn line needs-js")
     reply = press(site, "dig/with/codex/start", ticked("main_thread_waits"))
     check("a press is refused the same, and nothing is opened", reply.status == 409 and "older echolot" in reply.body
           and not echolot.ran and codex_.argv is None)

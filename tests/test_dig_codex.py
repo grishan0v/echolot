@@ -156,7 +156,7 @@ def test_rules_that_are_not_there_older_or_edited_are_said_with_the_init_that_pu
     rule = project / codex.RULE_PATH
     rule.unlink()
     why = dig_codex.ready(project)
-    check("none: init writes them", why.startswith("Not yet: this project has no `.codex/rules/echolot.rules`")
+    check("none: init writes them", why.startswith("Not yet for Codex: this project has no `.codex/rules/echolot.rules`")
           and "`echolot init --for agents,codex`" in why, why)
     rule.write_text(OLDER, encoding="utf-8")
     why = dig_codex.ready(project)
