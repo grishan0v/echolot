@@ -127,8 +127,7 @@ _UNLIKE = {
 def _read(report: dict[str, Any]) -> dict[str, Any]:
     """The report with its plain reading. One written before those keys gets
     them worked out on a copy, as `plain.render` does."""
-    dets = report.get("detectors") or []
-    if "verdict" in report and all("plain" in d and "attention" in d for d in dets):
+    if plain.is_read(report):
         return report
     return plain.annotate(copy.deepcopy(report))
 

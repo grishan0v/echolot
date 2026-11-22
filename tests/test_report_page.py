@@ -1088,3 +1088,36 @@ def test_html_is_a_view_of_its_own(project):
     check("and nothing was written", not (root / ".echolot" / "out" / "report.html").exists())
     code, _, err = run("report", "nowhere.json", "--html")
     check("a report that is not there is an error, not a page", code == 2 and "report not found" in err, err)
+
+
+# --- a window that is not the scenario's (#557) -----------------------------------
+
+def missed_report():
+    rep = known()
+    rep["window"]["start_anchor"] = {"glob": "bindApplication", "matches": 1}
+    rep["window"]["end_anchor"] = {"glob": "app_marker", "matches": 0, "missed": "3/3"}
+    return plain.annotate(rep)
+
+
+def test_a_missed_anchor_heads_the_page():
+    page = page_of(missed_report())
+    warned = page.one("div", id="window-warning")
+    check("it says what was not found", "did not find where this scenario ends" in warned.text
+          and "app_marker" in warned.text, warned.text)
+    check("outside the technical report's fold", not warned.inside("details"))
+    raw = report_page.render(missed_report())
+    check("above the headline and the first check",
+          raw.index('id="window-warning"') < raw.index("<h1") < raw.index('class="tr'))
+    check("the headline judges nothing", page.one("h1").text == "There is no measured launch to judge", page.one("h1").text)
+
+
+def test_a_page_whose_anchors_matched_draws_no_warning():
+    rep = known()
+    rep["window"]["end_anchor"] = {"glob": "app_marker", "matches": 1}
+    page = page_of(plain.annotate(rep))
+    check("no warning", not page.all("div", id="window-warning"))
+
+
+def test_the_request_does_not_lead_with_a_time_of_the_whole_recording():
+    q = report_page.question(missed_report())
+    check("no 'takes'", "takes" not in q and "no measured window" in q, q)

@@ -1145,6 +1145,14 @@ def test_how_a_report_was_made_is_said_in_sentences(project):
     check("a report that does not say when", text.startswith("Made from 3 launches."), text)
 
 
+def test_the_card_of_a_report_whose_anchor_missed_says_so(project):
+    from tests.test_report_page import missed_report
+    project.ready().traces().report(data=missed_report())
+    card = read(get(site_of(project)).body).one("ul", "reps").one("li")
+    check("the card carries the warning", "did not find where this scenario ends" in card.text
+          and "The launch takes" not in card.text, card.text)
+
+
 def test_a_report_from_before_the_plain_keys(project):
     old = known()
     del old["verdict"]

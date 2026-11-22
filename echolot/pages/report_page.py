@@ -53,8 +53,7 @@ _FIRST_SENTENCE = re.compile(r"(.+?[.!?])\s+(.+)", re.S)
 def _read(report: dict[str, Any]) -> dict[str, Any]:
     """The report with its plain reading. One written before those keys gets
     them worked out on a copy, as `plain.render` does: the file is not touched."""
-    dets = report.get("detectors") or []
-    if "verdict" in report and all("plain" in d and "attention" in d for d in dets):
+    if plain.is_read(report):
         return report
     return plain.annotate(copy.deepcopy(report))
 
@@ -309,9 +308,16 @@ def _verdict(report: dict[str, Any], ctx: Any) -> str:
     text = str(v.get("text") or "").strip()
     m = _FIRST_SENTENCE.fullmatch(text)
     headline, rest = (m.group(1), m.group(2)) if m else (text, "")
-    rest = " ".join(part for part in (rest, _measured(report, ctx)) if part)
+    warning = v.get("warning")
+    # How the window was measured is a range of recordings' lengths when the
+    # window is the recording, and says nothing of the scenario.
+    rest = " ".join(part for part in (rest, "" if warning else _measured(report, ctx)) if part)
     scenario = f'<span class="small sub">{e(report["scenario"])}</span>' if report.get("scenario") else ""
-    return (f'<div class="stack gap-3"><div class="rowf">{kit.pill(v.get("level"), large=True)}{scenario}</div>'
+    # Above the headline, where a person reads first (#557): a window that is
+    # not the scenario's makes every number under it about something else.
+    first = (f'<div class="callout" id="window-warning" role="note">{kit.icon("red")}'
+             f'<p>{kit.prose(warning)}</p></div>' if warning else "")
+    return (f'<div class="stack gap-3">{first}<div class="rowf">{kit.pill(v.get("level"), large=True)}{scenario}</div>'
             f'<h1 class="h1">{e(headline.rstrip("."))}</h1>'
             + (f'<p class="lead">{e(rest)}</p>' if rest else "") + "</div>")
 
@@ -426,6 +432,9 @@ def question(report: dict[str, Any]) -> str:
     w = report.get("window") or {}
     name = f"`{report['scenario']}`" if report.get("scenario") else "The window"
     window = w.get("duration_ms")
+    if plain.window_warning(report):
+        return (f"{name} has no measured window: echolot did not find where it starts or ends, so the rows "
+                "below are about the whole recording. Find what is behind them, and where that is in the code.")
     if not (_is_number(window) and window > 0):
         return f"{name} has no measured window. Find what is behind the rows below, and where that is in the code."
     ctx = plain._Ctx(report)
