@@ -1195,7 +1195,7 @@ def test_the_investigations_and_what_each_filed(project):
     check("that says which one it is", "investigation 1, report 2" in archived.one("span", "crumb").text)
     check("its request names the file, and not as the last report",
           ".echolot/hunts/1/reports/002.json" in archived.one("dialog", "ask").attrs["data-tail"]
-          and "the last report" not in archived.one("dialog", "ask").attrs["data-one"])
+          and "the last report" not in archived.one("dialog", "ask").attrs["data-tail"])
     check("no step is this page", [a.attrs.get("aria-current") for a in archived.one("nav", "steps").all("a")] == [None, None, None])
     for path in ("hunt/3/report/2", "hunt/2/report/1", "hunt/9/report/1", "hunt/1/report/4", "hunt/0/report/1"):
         check(f"{path} is no page", get(site, path).status == 404)

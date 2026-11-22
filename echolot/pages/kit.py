@@ -313,39 +313,68 @@ def peek(what: str = "check", back: str = "Back to the report") -> str:
 # ticking rows, and the request for an agent
 
 
-def tick_box(ident: str, kind: str, title: str, request: str, twin: bool = False) -> str:
+def tick_box(ident: str, kind: str, title: str, request: str, twin: bool = False,
+             weight: float | None = None) -> str:
     """A box to tick. `request` is what goes to the agent when it is ticked,
     one line per row. A `twin` is the same tick drawn a second time, in the
-    panel: the two move together."""
+    panel: the two move together. `weight` is how large the largest thing
+    the check found is, for the button that ticks where to start."""
     own = "" if twin else f'id="pick-{e(ident)}" '
+    heavy = f'data-weight="{weight:.3f}" ' if weight is not None else ""
     return (f'<label class="ck needs-js"><input type="checkbox" class="pick" {own}data-id="{e(ident)}" data-level="{e(kind)}" '
-            f'data-title="{e(title)}" data-req="{e(request)}" aria-label="Tick: {e(title)}">'
+            f'{heavy}data-title="{e(title)}" data-req="{e(request)}" aria-label="Tick: {e(title)}">'
             f'<span class="ck-box">{CHECK}</span></label>')
 
 
-def dock(total: int) -> str:
+def dock(total: int, start: str = "Tick where to start") -> str:
     """The bar at the bottom that leads to the agent, there before anything
-    is ticked. `total` is how many rows can be ticked."""
+    is ticked. `total` is how many rows can be ticked, and `start` the words
+    of the button that ticks the ones to start from (`picks.js` picks them:
+    those that need attention, or the two largest)."""
     return (f'<div class="dock needs-js" id="dock"><div class="dock-in"><p class="dock-t" id="dock-t" role="status">Nothing ticked yet</p><div class="dock-b">'
-            f'<button type="button" class="btn quiet" id="dock-all" data-n="{total}">Tick everything red and yellow</button>'
+            f'<button type="button" class="btn quiet" id="dock-all" data-n="{total}">{e(start)}</button>'
             '<button type="button" class="btn quiet" id="dock-clear" hidden>Clear</button></div>'
             '<button type="button" class="btn primary" id="dock-go" disabled>Dig deeper</button></div></div>')
 
 
-def ask(one: str, many: str, tail: str) -> str:
-    """The request for an agent, to copy. The text is put together in the page
-    from the rows of what is ticked, between a first line (`one` for a single
-    row, `many` for several) and a last one (`tail`)."""
+# The request for an agent, block by block: the question, what the report
+# warns, the rows it stands on, the report and the traces. The page's script
+# puts the blocks together from what the page holds (`picks.js`), and
+# `report_page.request_text` does it the same way for a page that is served.
+WARN_HEAD = "The report warns, and these come first:"
+ROWS_HEAD = "The rows of the report it stands on:"
+# More than this many checks ticked, and the dialog says it is too much for
+# one question; `{n}` is how many.
+FOCUS = 3
+MANY_NOTE = ("One investigation looks at one question. With {n} checks ticked, the agent has {n} things to chase at "
+             "once: that costs the most and is the least likely to come back with exact places. Tick fewer: the "
+             "one or two that matter most.")
+
+
+def ask(question: str, warnings: Sequence[str], tail: str, *, start_html: str = "") -> str:
+    """The request for an agent, to copy. The text is put together in the
+    page from the rows of what is ticked, in blocks: the question, the
+    report's warnings, the rows, and the last line (`tail`), as
+    `report_page.request_text` does it.
+
+    `start_html` is what a served page adds: the way to have the agent
+    started from the page. It stands before the buttons, which then are
+    Copy the request beside it."""
+    warned = "\n".join(f"- {said}" for said in warnings)
+    copy_look = "line" if start_html else "primary"
     return (
-        f'<dialog class="ask" id="ask" aria-labelledby="ask-h" data-one="{e(one)}" data-many="{e(many)}" data-tail="{e(tail)}"><div class="ask-in">'
+        f'<dialog class="ask" id="ask" aria-labelledby="ask-h" data-question="{e(question)}" '
+        f'data-warn-head="{e(WARN_HEAD)}" data-warn="{e(warned)}" data-rows-head="{e(ROWS_HEAD)}" '
+        f'data-tail="{e(tail)}" data-focus="{FOCUS}" data-many-note="{e(MANY_NOTE)}"><div class="ask-in">'
         '<h2 class="h2" id="ask-h">Dig deeper with an agent</h2>'
         '<p>An agent takes these items into your code. It puts temporary markers around the suspect places and runs '
         'the app again. It comes back with the exact lines and what to change.</p>'
+        '<div class="callout" id="ask-many" hidden><p class="small"></p></div>'
         '<ul class="ask-list" id="ask-list"></ul>'
-        '<p class="small sub">Paste the request into Claude Code, Codex or Cursor opened on the project.</p>'
-        f'<details class="tg"><summary>{TW}<span>The request text</span></summary>'
+        + (start_html or '<p class="small sub">Paste the request into Claude Code, Codex or Cursor opened on the project.</p>')
+        + f'<details class="tg"><summary>{TW}<span>The request text</span></summary>'
         '<div class="tg-b"><pre class="req" id="ask-text" tabindex="0"></pre></div></details>'
-        '<div class="rowf"><button type="button" class="btn primary" id="ask-copy" autofocus>Copy the request</button>'
+        f'<div class="rowf"><button type="button" class="btn {copy_look}" id="ask-copy"{"" if start_html else " autofocus"}>Copy the request</button>'
         '<button type="button" class="btn quiet" id="ask-close">Close</button></div>'
         '<p class="vh" id="ask-said" role="status"></p></div></dialog>')
 

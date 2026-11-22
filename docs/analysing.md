@@ -534,20 +534,36 @@ request for an agent from what is ticked, to copy and paste into an agent
 opened on the project:
 
 ```text
-/echolot-hunt coldStart takes 1,136 ms. Find what is behind these rows of the last report and where it is in the code:
+/echolot-hunt `coldStart` takes 1,136 ms, the median of 5 launches, and has no time limit set. Find what is behind the rows below, and where that is in the code.
+
+The report warns, and these come first:
+- 1 detector(s) could not run, because the trace does not hold what they read. Their silence says nothing about the app. `composables` — The recording does not carry the names of composables, which have to be switched on when recording. A recording that holds what they read lets them look; until then those checks are open.
+
+The rows of the report it stands on:
 - App Deadline Missed · frame_jank · 427.51 ms, 5/5 runs · Self Jank · 4 of 19 frames · longest 188.7 ms
 - inflate · main_thread_block · 222.68 ms, 5/5 runs · com.example.app
 - draw · main_thread_block · 120.8 ms, 5/5 runs · com.example.app
 - TextLayout:initLayout · main_thread_block · 73.95 ms, 5/5 runs · com.example.app
 - Lock contention on a monitor lock (owner tid: 12931) · main_thread_block · 61.6 ms, 5/5 runs · com.example.app
-Traces: the 5 behind .echolot/out/report.json. After which change: unknown.
+
+Traces: the 5 behind .echolot/out/report.json (the last report). After which change: unknown.
 ```
 
 That is the demo app with "Frames that came late" and "Heavy work on the main
-thread" ticked. The four largest rows of each ticked check go in, and a line
-saying how many more it has; the agent reads the rest from the report. With a
-limit set, the first line says it too ("against a limit of 500 ms"). The page
-starts nothing itself.
+thread" ticked. One investigation answers one question, so the request leads
+with one: how long the scenario takes, against its limit where one is set
+("against a time limit of 500 ms. Find what makes it slower than the limit"),
+and what to find. The warnings at the top of the report come next, in its own
+words, an anchor that matched nothing first: they say how far its numbers can
+be trusted. The ticked checks follow as the evidence, the four largest rows of
+each and a line saying how many more it has; the agent reads the rest from
+the report.
+
+The button beside **Dig deeper** ticks where to start: the checks that need
+attention, or with none of those the two that found the largest thing. With
+more than three ticked, the dialog says that one investigation looks at one
+question and suggests ticking fewer. A page written to disk starts nothing
+itself.
 
 What holds for the file:
 
