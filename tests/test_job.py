@@ -615,9 +615,25 @@ def test_a_file_it_watches_written_is_movement(tmp_path):
         if now[0] >= 1000.0 + 5 * 700.0:
             job.stop(tmp_path, "check")
     commands = Commands(agent={"waits": 10, "on_wait": tick})
-    table = Table({})
+    table = Table({5001: 4002})
+    table.rows[5001].update(args=HELPER, age=99999.0)
     run(tmp_path, commands, idle_tree(tmp_path), procs=table, kill=table.kill, clock=lambda: now[0])
     check("a client that writes is not idle", "why" not in job.read(tmp_path, "check"))
+
+
+def test_where_the_processes_cannot_be_listed_nothing_is_idle(tmp_path):
+    """No `ps` (Windows): a build that runs for an hour would look like a wait."""
+    now = [1000.0]
+    watched(tmp_path, 1000.0)
+
+    def tick(command):
+        now[0] += 700.0
+        if now[0] >= 1000.0 + 5 * 700.0:
+            job.stop(tmp_path, "check")
+    table = Table({})
+    run(tmp_path, Commands(agent={"waits": 10, "on_wait": tick}), idle_tree(tmp_path), procs=table, kill=table.kill,
+        clock=lambda: now[0])
+    check("it ran until it was stopped", "why" not in job.read(tmp_path, "check") and now[0] == 4500.0, now)
 
 
 def test_a_process_that_started_under_it_is_movement_and_a_step_without_a_time_is_never_idle(tmp_path):

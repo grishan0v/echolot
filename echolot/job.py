@@ -37,7 +37,8 @@ nothing may move under it (`idle`): no file it names written, no process
 under it started, nothing running under it but the client's own helpers. Once
 that long has passed, it is ended the same way, and the state says why
 (`"why": "idle"`): a client that waits for an answer nobody gives does not
-hold the page for hours.
+hold the page for hours. Where the processes cannot be listed (no `ps`),
+nothing reads as idle: a long build could not be told from a wait.
 
 Only the standard library is imported here: the process starts fast, and the
 page that started it waits for its first word.
@@ -512,7 +513,12 @@ class _Idle:
 
     def passed(self, pid: int, procs: Callable[[], list[dict[str, Any]]]) -> bool:
         now = self.clock()
-        under = descendants(pid, procs())
+        table = procs()
+        if not table:
+            # No list of processes (no `ps`, as on Windows): a build that runs
+            # long cannot be told from a wait, so nothing reads as idle.
+            return False
+        under = descendants(pid, table)
         if any(not _helper(p.get("args") or "", self.helpers) for p in under):
             return False
         stamps = [self.started, *(_newest(self.project / rel) for rel in self.watch)]

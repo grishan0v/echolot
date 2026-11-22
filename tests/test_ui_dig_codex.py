@@ -379,7 +379,7 @@ def test_a_codex_waiting_on_a_question_is_ended_after_half_an_hour_and_its_quest
         # Nothing it prints, nothing under it: the clock moves past the half hour.
         offset[0] = dig_codex.IDLE_S + 60
     site, _, echolot = serving(project, {"do": "ask", "rounds": 1}, on_wait=half_an_hour_on,
-                               clock=lambda: time.time() + offset[0])
+                               clock=lambda: time.time() + offset[0], table=under())
     press(site, "dig/with/codex/start", ticked("main_thread_waits"))
     state = job.read(project.root, dig.JOB)
     check("ended by the page, and the state says why", state["status"] == job.STOPPED and state["why"] == job.IDLE)
