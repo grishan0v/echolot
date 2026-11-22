@@ -17,7 +17,9 @@ report gives the same words every time.
 The attention levels, one sentence each:
 
   needs attention   one thing the main thread spent or lost holds at least 15%
-                    of the launch and at least 0.15 s, in every launch;
+                    of the launch and at least 0.15 s, in every launch (time
+                    it sat idle counts only in a window that ends where the
+                    scenario does: see `_held`);
   worth a look      the check found something else: smaller, on another
                     thread, or not in every launch;
   fine              the check ran and found nothing above its limit;
@@ -142,10 +144,38 @@ class _Ctx:
         self.main = str(window.get("process") or "")[-15:]
         # A startup is a launch; any other stretch is a run.
         self.noun = "launch" if window.get("startup") else "run"
+        # Whether the window ends where the scenario does, which is what an
+        # idle main thread costs turns on (`_held`).
+        self.closed = _closed(window)
 
     @property
     def plural(self) -> str:
         return self.noun + ("es" if self.noun == "launch" else "s")
+
+
+def _anchors(window: dict[str, Any]) -> list[dict[str, Any]]:
+    return [a for a in (window.get("start_anchor"), window.get("end_anchor")) if isinstance(a, dict)]
+
+
+def _missed(window: dict[str, Any]) -> bool:
+    """Did an anchor of the window find nothing, in any repeat, or leave the
+    window open to the end of the recording? Then the window, in those
+    repeats, is the recording and not the scenario."""
+    return any(a.get("missed") or not a.get("matches") or a.get("unfinished")
+               for a in _anchors(window))
+
+
+def _closed(window: dict[str, Any]) -> bool:
+    """Does the window end where the scenario does: on a launch the platform
+    closed, or on an end anchor that matched in every repeat?
+
+    Anything else ends where the recording does: a window without anchors,
+    whose length the script fixes (a scroll), or one whose anchor missed.
+    """
+    if _missed(window):
+        return False
+    end = window.get("end_anchor")
+    return bool(window.get("defined_by")) or isinstance(end, dict)
 
 
 def _value(row: dict[str, Any]) -> float:
@@ -268,6 +298,36 @@ def _counts(det_id: str, row: dict[str, Any]) -> bool:
                 and str(row.get("detail") or "").startswith("near miss"))
 
 
+def _idle_part(row: dict[str, Any]) -> float:
+    """The part of a `main_thread_waits` row the main thread spent idle, with
+    no slice open, read off its evidence: `idle` is all of it, `67% idle ·
+    33% blocked in X` two thirds, `blocked in X` none. The blocked share is
+    the one read, so evidence that names a slice is never all idle."""
+    detail = str(row.get("detail") or "")
+    blocked = _BLOCKED_IN.search(detail)
+    if blocked:
+        return 1 - int(blocked.group(1) or 100) / 100
+    return 1.0 if detail.startswith("idle") else 0.0
+
+
+def _held(det_id: str, row: dict[str, Any], ctx: _Ctx) -> float:
+    """How much of a row counts as time the main thread lost.
+
+    An idle main thread could draw a frame or answer a tap the moment one
+    came. Whether the scenario waited for the thread that woke it the row
+    cannot say on its own: in a launch that ends where the scenario does,
+    idle time before the end can be the launch waiting for its own
+    background work (the case `main_thread_waits` was written for, #418), so
+    it keeps its weight there. In a window that ends where the recording
+    does — a scroll whose length the script fixes, or one whose anchor
+    missed — idle time costs nothing, and only the part spent blocked counts.
+    """
+    ms = _value(row)
+    if det_id == "main_thread_waits" and not ctx.closed:
+        ms *= 1 - _idle_part(row)
+    return ms
+
+
 # ---------------------------------------------------------------------------
 # the level
 
@@ -288,7 +348,7 @@ def attention(det: dict[str, Any], report: dict[str, Any],
     ctx = ctx or _Ctx(report)
     if ctx.window_ms > 0:
         for row in rows:
-            ms = _value(row)
+            ms = _held(did, row, ctx)
             if (_every_run(row) and _counts(did, row) and _on_main(did, row, ctx)
                     and ms >= FLOOR_MS and ms >= SHARE * ctx.window_ms):
                 return NEEDS_ATTENTION
@@ -321,13 +381,27 @@ def _also(rows: list[dict[str, Any]], one: str, many: str, tail: str) -> str:
 def _f_waits(rows, ctx):
     top = rows[0]
     v = _value(top)
+    idle = _idle_part(top)
+    n = len(rows) - 1
+    if idle >= 1:
+        # No slice was open: the main thread had nothing to do, and the row's
+        # thread is the one that gave it its next piece of work.
+        out = (_clause(f"The main thread had nothing to do for {hum(v)}", _runs(top, ctx))
+               + f", each time until {_name(top['location'])} gave it its next piece of work."
+               + _share(v, ctx))
+        out += (f" The {ctx.noun} may have been waiting for that work." if ctx.closed else
+                " While idle, it could still draw and answer taps.")
+        if n > 0:
+            out += f" {_count(n, 'other thread', 'other threads')} woke it, too."
+        return out
     out = _sentence(f"The main thread waited {hum(v)} for {_name(top['location'])}",
                     _runs(top, ctx)) + _share(v, ctx)
     inside = _BLOCKED_IN.search(str(top.get("detail") or ""))
     # "67% idle · 33% blocked in X": inside X for a third of it is not "at the time".
     if inside and int(inside.group(1) or 100) >= 50:
         out += f" It was inside {_name(inside.group(2))} at the time."
-    n = len(rows) - 1
+    if idle > 0:
+        out += f" For {round(idle * 100)}% of that time it had nothing to do."
     if n > 0:
         out += f" It also waited for {_count(n, 'other thread', 'other threads')}."
     return out

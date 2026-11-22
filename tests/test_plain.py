@@ -328,6 +328,76 @@ def test_milliseconds_the_way_a_person_says_them(ms, want):
     check(str(ms), plain.hum(ms) == want, plain.hum(ms))
 
 
+# --- an idle main thread (#554) ---------------------------------------------------
+
+def scroll(rows, duration=2000.0, **window):
+    """A report of a window without anchors, whose length the script fixes."""
+    rep = make([entry("main_thread_waits", rows)], duration=duration, startup=False)
+    rep["window"].update({"start_anchor": None, "end_anchor": None, **window})
+    return rep
+
+
+def closed_launch(rows, duration=2000.0):
+    """A launch whose end anchor matched in every repeat."""
+    rep = make([entry("main_thread_waits", rows)], duration=duration)
+    rep["window"].update({"start_anchor": {"glob": "bindApplication", "matches": 1},
+                          "end_anchor": {"glob": "app_ready", "matches": 1}})
+    return rep
+
+
+def read(rep):
+    det = rep["detectors"][0]
+    return plain.attention(det, rep), plain.found(det, rep)
+
+
+def test_idle_time_in_a_window_of_fixed_length_needs_no_attention():
+    level_, said = read(scroll([row("DefaultExecutor", 400.0, detail="idle")]))
+    check("20% of a scroll, all idle, is worth a look", level_ == "worth_a_look", level_)
+    check("and the sentence says it had nothing to do, not that it waited",
+          "nothing to do for 0.4 s" in said and "waited" not in said
+          and "could still draw and answer taps" in said, said)
+
+
+def test_a_blocked_wait_in_a_window_of_fixed_length_still_needs_attention():
+    level_, said = read(scroll([row("worker_pool_#", 400.0, detail="blocked in loadConfig")]))
+    check("needs attention, as before", level_ == "needs_attention", level_)
+    check("and says it waited inside the slice",
+          said.startswith("The main thread waited 0.4 s") and "inside `loadConfig`" in said, said)
+
+
+def test_idle_time_before_a_launch_ends_keeps_its_weight():
+    """The detector's own case: a first launch sat idle while Room filled its database."""
+    level_, said = read(closed_launch([row("arch_disk_io_0", 660.0, detail="idle")]))
+    check("33% of a launch whose end matched, all idle, needs attention",
+          level_ == "needs_attention", level_)
+    check("with the idle sentence, and that the launch may have waited",
+          "nothing to do for 0.7 s" in said and "launch may have been waiting" in said, said)
+
+
+def test_only_the_blocked_part_of_a_mixed_row_counts_in_a_fixed_window():
+    rows = [row("worker_pool_#", 800.0, detail="67% idle · 33% blocked in loadConfig")]
+    level_, said = read(scroll(rows))
+    check("40% of the run weighs as 13.2%, worth a look", level_ == "worth_a_look", level_)
+    check("the sentence gives the idle share", "For 67% of that time it had nothing to do." in said, said)
+    check("the same row in a launch that ended where it should needs attention",
+          read(closed_launch(rows))[0] == "needs_attention")
+
+
+def test_idle_time_in_a_window_whose_anchor_missed_needs_no_attention():
+    rep = closed_launch([row("DefaultExecutor", 660.0, detail="idle")])
+    rep["window"]["end_anchor"] = {"glob": "app_ready", "matches": 0, "missed": "3/3"}
+    level_, said = read(rep)
+    check("a missed end anchor is a window of the recording's length", level_ == "worth_a_look", level_)
+    check("so the idle sentence does not say the launch waited",
+          "may have been waiting" not in said and "could still draw" in said, said)
+
+
+def test_a_launch_the_platform_closed_is_a_window_that_ends_with_the_scenario():
+    rep = make([entry("main_thread_waits", [row("arch_disk_io_0", 660.0, detail="idle")])])
+    rep["window"].update({"start_anchor": None, "end_anchor": None, "defined_by": "launch"})
+    check("idle time keeps its weight", read(rep)[0] == "needs_attention", read(rep))
+
+
 # --- the level: one sentence each, and where a number moves a row -----------------
 
 def test_the_rule_is_15_percent_and_150_ms_in_every_run_on_the_main_thread():
@@ -681,7 +751,7 @@ def test_build_carries_the_budget_and_aggregate_the_reading():
     def one(window_ms):
         """What `analyze_trace` hands over for one recording: rows have no `runs` yet."""
         waits = {"location": "worker_pool_#", "count": 259, "total_ms": 700.0, "max_ms": 15.2,
-                 "detail": "idle"}
+                 "detail": "blocked in loadConfig"}
         return report_mod.build(
             "t.perfetto-trace",
             {"process": MAIN, "pid": 1, "duration_ms": window_ms,

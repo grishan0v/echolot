@@ -9,7 +9,7 @@
 -- @identity: location
 -- @plain_title: The screen waits for background work
 -- @plain_why: The main thread draws the screen and answers taps. While it
---       waits for another thread of the app, it can do neither.
+--       is held up waiting for another thread of the app, it can do neither.
 -- @plain_clean: The main thread did not wait long for the app's other threads.
 --
 -- Every sleep of the main thread ends with a wakeup, and `sched_waking`

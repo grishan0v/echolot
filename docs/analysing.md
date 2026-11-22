@@ -487,6 +487,18 @@ CPU time of five background threads can add up to two thirds of the launch while
 the main thread waits for them for a third of it, and that wait is the row that
 says so. A row on another thread is at most "worth a look".
 
+A main thread that slept with no slice open was idle: `main_thread_waits` says
+`idle` in its evidence, and the thread it names is the one that gave it its next
+piece of work. An idle main thread can still draw and answer taps, so whether
+that time counts depends on where the window ends. In a launch that ends where
+the scenario does (the platform's launch, or an end anchor that matched in every
+recording), idle time before the end can be the launch waiting for its own
+background work, and it counts in full. In a window that ends where the
+recording does, such as a scroll whose length the script fixes or a window whose
+anchor matched nothing, only the part spent blocked inside a slice counts: a
+once-a-second timer that wakes an idle main thread is "worth a look" there, not
+"needs attention". The sentence says which it was.
+
 The verdict sets the launch against `scenario.budget_ms`: within it is fine, up
 to a quarter over is worth a look, more is needs attention. Nothing fails
 either way, since there is no gate. With no budget the verdict says how long the
