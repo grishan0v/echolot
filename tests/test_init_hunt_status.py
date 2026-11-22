@@ -332,6 +332,188 @@ def test_a_progress_file_as_collect_writes_it_still_reads(tmp_path: Path, monkey
     check("read", (_said(out, "collect") or "").startswith(said), out)
 
 
+def _open_hunt(root: Path) -> Path:
+    """A project with an investigation open, three rounds filed, as `hunt`,
+    `collect` and `analyze` leave it: the path of its hunt.json."""
+    _project(root)
+    reports = root / ".echolot" / "hunts" / "1" / "reports"
+    reports.mkdir(parents=True)
+    for k in (1, 2, 3):
+        (reports / f"{k:03d}.json").write_text("{}", encoding="utf-8")
+    path = root / hunt_mod.HUNT_FILE
+    path.write_text(json.dumps({
+        "n": 1, "question": "cold start got slower", "since": "the new splash", "scenario": "coldStart",
+        "config_sha": "abc123", "confirmed": {}, "opened_at": "2026-11-21T09:00:00+00:00",
+        "touched_at": "2026-11-21T09:30:00+00:00", "status": "open", "collects": 3, "analyzes": 3,
+        "reports": 3, "traces": [".echolot/traces/coldStart-20261121-090000"], "conclusion": None,
+    }, indent=2), encoding="utf-8")
+    return path
+
+
+DAMAGED = {
+    "cut in half": lambda text: text[: len(text) // 2],
+    "empty": lambda text: "",
+    "blank": lambda text: "\n  \n",
+    "a list": lambda text: "[1]",
+    "null": lambda text: "null",
+    "a number": lambda text: "5",
+    "text": lambda text: '"cold start got slower"',
+    "true": lambda text: "true",
+}
+
+
+@pytest.mark.parametrize("damage", list(DAMAGED))
+def test_a_hunt_json_that_does_not_load_is_said(tmp_path: Path, monkeypatch, damage: str) -> None:
+    """#580: a hunt.json cut in half, empty, or JSON and no object read as
+    no investigation at all: `status` said "none open", `hunt` said none
+    is open. Now it is named as a file that does not load, and nothing
+    else is refused for it."""
+    path = _open_hunt(tmp_path)
+    path.write_text(DAMAGED[damage](path.read_text(encoding="utf-8")), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    code, out, _ = _run("status")
+    said = _said(out, "hunt") or ""
+    check("status ends as it should", code == 0, out)
+    check("its hunt line names the file", said.startswith("`.echolot/hunt.json` does not load: ")
+          and "the open investigation is unknown" in said and "none open" not in said, out)
+    check("and the rest of the status is printed",
+          (_said(out, "traces") or "").startswith("2 in .echolot/traces") and _said(out, "next"), out)
+    code, out, _ = _run("status", "--next")
+    check("the next step is still one word", code == 0 and out.strip() in state.NEXT_KINDS, out)
+    code, out, err = _run("hunt")
+    check("bare hunt names the file", code == 0 and "`.echolot/hunt.json` does not load" in out
+          and "no investigation is open" not in out + err, out + err)
+    code, _, err = _run("hunt", "--show")
+    check("hunt --show names it", code == 1 and "does not load" in err and "no investigations yet" not in err, err)
+    code, out, _ = _run("hunt", "--list")
+    check("hunt --list names it", code == 0 and "does not load" in out and "no investigations yet" not in out, out)
+    for argv in (("hunt", "--resume"), ("hunt", "--done", "it was the lock")):
+        code, out, err = _run(*argv)
+        check(f"{' '.join(argv)} names it", code != 0 and "does not load" in err
+              and "no investigation is open" not in err, err)
+    check("and wrote nothing over it", hunt_mod.unreadable(tmp_path) is not None)
+    check("the state has no investigation, and says why",
+          state.project_state(tmp_path)["hunt"] is None
+          and "does not load" in (state.project_state(tmp_path)["hunt_unreadable"] or ""))
+    page = ready.read(tmp_path, "echolot.yml", ready.Sources(scan=_no_scan, pick_device=lambda serial: "EXAMPLE0001"))
+    check("and the start page has the line", "does not load" in (page["hunt_unreadable"] or ""), page["hunt_unreadable"])
+
+
+def test_a_hunt_json_that_is_not_utf8_is_said(tmp_path: Path, monkeypatch) -> None:
+    path = _open_hunt(tmp_path)
+    path.write_bytes(b"\xff\xfe{")
+    monkeypatch.chdir(tmp_path)
+    code, out, _ = _run("status")
+    check("named", code == 0 and "not UTF-8" in (_said(out, "hunt") or ""), out)
+
+
+def test_a_hunt_on_a_hunt_json_that_does_not_load_sets_it_aside(tmp_path: Path, monkeypatch) -> None:
+    """#580: `hunt "<another question>"` wrote over a hunt.json that did not
+    load, and the question and counts in it were gone. Now the file is set
+    aside under a name of its own, said, and the new one opens beside the
+    one whose reports are filed in hunts/1."""
+    path = _open_hunt(tmp_path)
+    damaged = path.read_text(encoding="utf-8")[:200]
+    path.write_text(damaged, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    code, out, err = _run("hunt", "scroll got slow")
+    kept = list((tmp_path / ".echolot" / "hunts").glob("hunt.json.unreadable-*"))
+    check("it opens", code == 0 and 'opened #2: "scroll got slow"' in out, out + err)
+    check("the damaged file is kept as it was", len(kept) == 1 and kept[0].read_text(encoding="utf-8") == damaged, kept)
+    check("and where is said", "did not load" in err and kept[0].name in err, err)
+    check("history does not read it as a record",
+          [h.get("n") for h in hunt_mod.history(tmp_path)] == [2], hunt_mod.history(tmp_path))
+    check("the new record is the open one", hunt_mod.unreadable(tmp_path) is None
+          and (hunt_mod.load(tmp_path) or {}).get("question") == "scroll got slow")
+
+
+def test_a_run_that_picks_a_scenario_says_the_hunt_json_does_not_load(tmp_path: Path, monkeypatch, capsys) -> None:
+    """With several scenarios `report`, `collect` and `analyze` take the open
+    investigation's: one in a hunt.json that does not load fell back to the
+    first without a word."""
+    path = _open_hunt(tmp_path)
+    (tmp_path / "echolot.yml").write_text(
+        "project:\n  package: com.example.app\n  process: com.example.app\n"
+        "scenarios:\n  coldStart:\n    window: launch\n  feedScroll:\n    window: launch\n", encoding="utf-8")
+    path.write_text("[1]", encoding="utf-8")
+    cfg = main_mod.Config.load(tmp_path / "echolot.yml")
+    with recorder.isolated():
+        main_mod._pick_scenario(cfg, None)
+    err = capsys.readouterr().err
+    check("said", "`.echolot/hunt.json` does not load" in err and "first scenario, coldStart" in err, err)
+
+
+WRONG = [
+    # The rows of #580's table.
+    ("reports", "abc"), ("n", "x"), ("traces", 7), ("opened_at", 5), ("question", 5),
+    # The other fields echolot writes, each with what it never writes there.
+    ("n", 0), ("n", -1), ("n", True), ("n", 1.5), ("collects", "3"), ("analyzes", -2), ("reports", [3]),
+    ("touched_at", 5), ("touched_at", [1]), ("closed_at", {"at": 1}), ("since", 5), ("scenario", ["coldStart"]),
+    ("config_sha", 5), ("status", 1), ("conclusion", ["it is the lock"]), ("confirmed", []),
+    ("verdict", "the lock"), ("verdict_check", []), ("traces", "abc"), ("traces", {"a": 1}),
+]
+
+
+@pytest.mark.parametrize("field, value", WRONG)
+def test_a_hunt_json_with_a_field_of_the_wrong_type_still_reads(tmp_path: Path, monkeypatch,
+                                                                field: str, value) -> None:
+    """#580: a field of hunt.json holding what echolot never writes there
+    ended `hunt --show`, `hunt --list` and the start page in a traceback,
+    or printed a question nobody asked. Now that field reads as unknown and
+    the rest of the record is read."""
+    path = _open_hunt(tmp_path)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record[field] = value
+    path.write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    for argv in (("status",), ("status", "--next"), ("hunt",), ("hunt", "--show"), ("hunt", "--list"),
+                 ("hunt", "--show", "1")):
+        code, out, err = _run(*argv)
+        check(f"{' '.join(argv)} ends as it should", code in (0, 1) and "Traceback" not in out + err, out + err)
+    h = hunt_mod.load(tmp_path)
+    check("the field reads as unknown", h is not None and field not in h, h)
+    check("and the rest is read", h["status" if field != "status" else "question"] is not None, h)
+    if field != "question":
+        check("its question too", "cold start got slower" in (_said(_run("status")[1], "hunt") or ""))
+    else:
+        check("a question nobody asked is not printed", '"5"' not in (_said(_run("status")[1], "hunt") or ""))
+    page = ready.read(tmp_path, "echolot.yml", ready.Sources(scan=_no_scan, pick_device=lambda serial: "EXAMPLE0001"))
+    check("the start page is read", page["next"]["kind"] in state.NEXT_KINDS, page["next"])
+    check("with no line about a file that does not load", page["hunt_unreadable"] is None)
+
+
+@pytest.mark.parametrize("field, value", WRONG)
+def test_a_record_with_a_field_of_the_wrong_type_takes_the_next_round(tmp_path: Path, field: str, value) -> None:
+    """What `collect` and `analyze` write into the open investigation, over
+    a field of the wrong type: `"reports": "abc"` ended `analyze` in
+    `int()`, and `"traces": 7` ended `collect` setting a set aside."""
+    path = _open_hunt(tmp_path)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record[field] = value
+    path.write_text(json.dumps(record), encoding="utf-8")
+    out = tmp_path / ".echolot" / "out"
+    out.mkdir(parents=True)
+    (out / "report.json").write_text("{}", encoding="utf-8")
+    hunt_mod.touch(tmp_path, collect=True, analyze=True)
+    hunt_mod.record_traces(tmp_path, tmp_path / ".echolot" / "traces" / "aside")
+    hunt_mod.record_report(tmp_path, out)
+    check("the record still loads", hunt_mod.load(tmp_path) is not None)
+
+
+def test_an_archived_record_with_a_field_of_the_wrong_type_still_reads(tmp_path: Path, monkeypatch) -> None:
+    """The records in `.echolot/hunts/` are read the same way: `"n": "x"` in
+    one of them ended `hunt --list`, and the next `hunt` in counting."""
+    _open_hunt(tmp_path)
+    old = tmp_path / ".echolot" / "hunts" / "7"
+    old.mkdir(parents=True)
+    (old / "hunt.json").write_text(json.dumps({"n": "x", "question": "older", "opened_at": 5,
+                                               "traces": 7, "reports": "abc"}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    code, out, err = _run("hunt", "--list")
+    check("listed", code == 0 and '"older"' in out and '"cold start got slower"' in out, out + err)
+    check("and the next number counts the directory", hunt_mod.next_n(tmp_path) == 8)
+
+
 def test_files_equal_to_the_template_are_current_without_skill_md(tmp_path: Path) -> None:
     _run("init", "--into", str(tmp_path), "--for", "claude", "--no-input", "--no-doctor")
     (tmp_path / ".claude" / "skills" / "echolot" / "SKILL.md").unlink()

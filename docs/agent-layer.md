@@ -1012,6 +1012,15 @@ in place and says whether it is open — a concluded one used to be headed
 "Open investigation", which told an agent deciding whether to open one that
 one was.
 
+A `hunt.json` that is there and does not load — cut short, empty, or JSON that
+is no object — stops nothing, as before. It is no longer silent: `status`,
+`hunt` and the start page of `echolot ui` say "`.echolot/hunt.json` does not
+load: … — the open investigation is unknown" where the investigation would be,
+and the next `echolot hunt "<q>"` moves the file to
+`.echolot/hunts/hunt.json.unreadable-<stamp>` before it opens a new one beside
+it. A field holding what echolot never writes there (`"reports": "abc"`, a
+number in `opened_at`) reads as unknown, and the rest of the record is shown.
+
 Reports are copied, trace directories are recorded by path. That asymmetry is
 deliberate: a report is tens of kilobytes and there is no other way to see what
 an investigation concluded at each step, while traces run to gigabytes and

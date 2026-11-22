@@ -105,16 +105,139 @@ def load(project: Path) -> dict[str, Any] | None:
     readable, until the next question opens another.
 
     A hunt file is a convenience, never a precondition: if it cannot be read,
-    the tool must behave exactly as it did before this module existed.
+    the tool must behave exactly as it did before this module existed. It
+    is not silent about it, though: `unreadable` says why, and `status`,
+    `hunt` and the start page say that line where the investigation would be.
+
+    Each field is read by its type (`_typed`): one that holds what echolot
+    never writes there reads as absent, and the rest of the record is read.
+    """
+    return _read(path(project))[0]
+
+
+def unreadable(project: Path) -> str | None:
+    """Why `.echolot/hunt.json` is there and does not load as a record; None
+    when it loads or is not there at all.
+
+    `load` reads such a file as no investigation, and nothing said so: an
+    open investigation vanished from `status`, `hunt` and the start page,
+    and the next `hunt "<question>"` wrote over the file (#580).
+    """
+    return _read(path(project))[1]
+
+
+def unreadable_line(project: Path, then: bool = True) -> str | None:
+    """`unreadable` as the one line said where the investigation would be,
+    with what the next `hunt "<question>"` does about it unless `then` is
+    false."""
+    why = unreadable(project)
+    if why is None:
+        return None
+    line = f"`{HUNT_FILE.as_posix()}` does not load: {why} — the open investigation is unknown"
+    if then:
+        line += (f'. The next `echolot hunt "<question>"` opens a new one beside it and sets this '
+                 f"file aside in `{ARCHIVE_DIR.as_posix()}/`")
+    return line
+
+
+def _read(p: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """A record file as (record, None), (None, why it does not load), or
+    (None, None) when there is no file."""
+    try:
+        text = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, None
+    except UnicodeDecodeError:
+        return None, "it is not UTF-8 text"
+    except OSError as e:
+        return None, f"it cannot be read ({e.strerror or e})"
+    if not text.strip():
+        return None, "it is empty"
+    try:
+        h = json.loads(text)
+    except ValueError as e:
+        where = f" at line {e.lineno}" if isinstance(e, json.JSONDecodeError) else ""
+        return None, f"it is not whole JSON{where}"
+    if not isinstance(h, dict):
+        return None, f"it holds {_kind(h)}, not a record"
+    return _typed(h), None
+
+
+def _kind(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true or false"
+    if isinstance(value, (int, float)):
+        return "a number"
+    if isinstance(value, str):
+        return "text"
+    return "a list"
+
+
+# The type each field of a record holds when echolot wrote it: `open_new`,
+# `touch`, `record_report`, `record_traces` and `conclude` write nothing else.
+_FIELDS: dict[str, type] = {
+    "n": int, "collects": int, "analyzes": int, "reports": int,
+    "question": str, "since": str, "scenario": str, "config_sha": str, "status": str,
+    "conclusion": str, "opened_at": str, "touched_at": str, "closed_at": str,
+    "confirmed": dict, "verdict": dict, "verdict_check": dict, "traces": list,
+}
+
+
+def _typed(h: dict[str, Any]) -> dict[str, Any]:
+    """A record with each field that holds what echolot never writes there
+    left out, so it reads as unknown: the rest of the record is still read.
+
+    `"reports": "abc"`, `"n": "x"`, `"traces": 7` or a number in `opened_at`
+    stopped `hunt --show`, `hunt --list` and every page of `echolot ui`
+    that reads the record, and `"question": 5` printed a question nobody
+    asked (#580). The same rule `state` holds report.json and collect.json
+    to (#470, #474), by field here: a record is a person's question and the
+    work behind it, worth showing what still reads of it. A number is a
+    whole one, not true or false, never below zero, and `n` is one or more,
+    since it names a directory; a trace set is a path.
+    """
+    out = dict(h)
+    for key, kind in _FIELDS.items():
+        value = out.get(key)
+        if value is None:
+            continue
+        ok = isinstance(value, kind) and not isinstance(value, bool)
+        if ok and kind is int:
+            ok = value >= (1 if key == "n" else 0)
+        if not ok:
+            del out[key]
+        elif key == "traces":
+            out[key] = [t for t in value if isinstance(t, str)]
+    return out
+
+
+def set_aside_unreadable(project: Path) -> Path | None:
+    """Move a `hunt.json` that does not load out of the way, under a name of
+    its own in `.echolot/hunts/`, and say where; None when there was none.
+
+    `open_new` used to write over it: the question and the counts of the
+    investigation it held were gone, though its reports stayed in
+    `hunts/<n>/`. Kept as it is, whatever can still be read off it by hand
+    is there. The name ends in no `.json`, so `history` does not read it as
+    a record.
     """
     p = path(project)
-    if not p.exists():
+    if unreadable(project) is None:
         return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    dest = project / ARCHIVE_DIR / f"hunt.json.unreadable-{stamp}"
+    n = 1
+    while dest.exists():
+        n += 1
+        dest = dest.with_name(f"hunt.json.unreadable-{stamp}-{n}")
     try:
-        h = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(p, dest)
+    except OSError:
         return None
-    return h if isinstance(h, dict) else None
+    return dest
 
 
 def save(project: Path, hunt: dict[str, Any]) -> None:
@@ -280,6 +403,7 @@ def open_new(project: Path, question: str, since: str | None = None,
     the record being closed. Without it the archive remembers the question and
     forgets what was measured, which makes it decoration.
     """
+    set_aside_unreadable(project)
     previous = load(project)
     if previous:
         previous.setdefault("status", "open")
@@ -398,11 +522,8 @@ def history(project: Path) -> list[dict[str, Any]]:
         # <n>/hunt.json is the shape from here on; *.json at the top level is
         # what 0.2.0 wrote and is still read.
         for f in list(d.glob("*/hunt.json")) + list(d.glob("*.json")):
-            try:
-                h = json.loads(f.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if isinstance(h, dict):
+            h = _read(f)[0]
+            if h is not None:
                 out.append(dict(h, current=False))
     # By number first: several investigations can open within one second —
     # a person trying a few questions in a row — and a sort on the timestamp
@@ -560,6 +681,8 @@ def summary_line(hunt: dict[str, Any] | None, st: dict[str, Any]) -> str:
     not load. With no config at all a hunt opens one.
     """
     if not hunt:
+        if st.get("hunt_unreadable"):
+            return st["hunt_unreadable"]
         if (st.get("config") or {}).get("error"):
             return "none open — a hunt opens one once echolot.yml loads"
         return "none open — the next hunt opens one"

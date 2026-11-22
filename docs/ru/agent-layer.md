@@ -130,6 +130,15 @@ pipx install echolot
 `.echolot/hunts/<n>/` вместе со ссылками на его отчёты `reports/001.json…`
 и набором трейсов.
 
+Если `hunt.json` есть, но не читается (обрезан, пуст или это JSON, но не
+объект), ничего не останавливается. `status`, `hunt` и стартовая страница
+`echolot ui` пишут на месте расследования «`.echolot/hunt.json` does not load:
+… — the open investigation is unknown», а следующий `echolot hunt "<q>"`
+переносит файл в `.echolot/hunts/hunt.json.unreadable-<stamp>` и открывает
+новое расследование рядом. Поле, в котором лежит не то, что пишет туда echolot
+(`"reports": "abc"`, число в `opened_at`), считается неизвестным, остальное
+показывается.
+
 Расследование, запущенное из `echolot ui`
 ([Агент со страницы](ui.md#агент-со-страницы)), открывает сама страница:
 `echolot hunt "<the question>" --since unknown`, с вопросом из отчёта. Затем она

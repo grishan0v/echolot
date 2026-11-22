@@ -347,6 +347,11 @@ def _pick_scenario(cfg: Config, asked: str | None) -> None:
     """
     names = cfg.scenarios
     if asked is None and len(names) > 1:
+        damaged = hunt_mod.unreadable_line(_project_root(cfg), then=False)
+        if damaged:
+            print(f"[!] {damaged}. Without it this is the "
+                  f"config's first scenario, {names[0]}: --scenario picks another.",
+                  file=sys.stderr)
         hunt = hunt_mod.load(_project_root(cfg)) or {}
         theirs = hunt.get("scenario") if hunt.get("status", "open") == "open" else None
         if theirs in names:
@@ -2630,7 +2635,7 @@ def _open_hunt(project: Path) -> dict[str, Any] | None:
               f"the next one", file=sys.stderr)
         return None
     if not last:
-        print("no investigation is open", file=sys.stderr)
+        print(hunt_mod.unreadable_line(project) or "no investigation is open", file=sys.stderr)
         return None
     return last
 
@@ -2756,7 +2761,7 @@ def _close_hunt(project: Path, config: str, text: Any, source: str | None) -> in
     conclusion = words if words.strip() else (verdict or {}).get("summary") or ""
     h = hunt_mod.conclude(project, conclusion, verdict=verdict, reports=reports, left=left)
     if not h:
-        print("no investigation is open", file=sys.stderr)
+        print(hunt_mod.unreadable_line(project) or "no investigation is open", file=sys.stderr)
         return 1
     print(f'concluded: "{h["question"]}"')
     if verdict is None:
@@ -2902,13 +2907,20 @@ def cmd_hunt(args) -> int:
         return 2
 
     if args.list:
-        for line in hunt_mod.list_rows(project):
+        damaged = hunt_mod.unreadable_line(project)
+        if damaged:
+            print(damaged)
+        for line in hunt_mod.list_rows(project) if not damaged or hunt_mod.history(project) else ():
             print(line)
         return 0
 
     if args.show:
         # With no number and no words, the last one.
         h = hunt_mod.last(project) if args.show is True else hunt_mod.find(project, args.show)
+        damaged = hunt_mod.unreadable_line(project)
+        if not h and args.show is True and damaged:
+            print(damaged, file=sys.stderr)
+            return 1
         if not h and args.show is True:
             print('no investigations yet — `echolot hunt "<what regressed>"` opens one',
                   file=sys.stderr)
@@ -2976,6 +2988,13 @@ def cmd_hunt(args) -> int:
                 # being moved or cloned somewhere else.
                 with contextlib.suppress(ValueError):
                     aside = aside.resolve().relative_to(project.resolve())
+        damaged = hunt_mod.unreadable(project)
+        kept = hunt_mod.set_aside_unreadable(project)
+        if damaged:
+            print(f"[!] `{hunt_mod.HUNT_FILE.as_posix()}` did not load: {damaged}. "
+                  + (f"Set aside as {_shown_path(kept, project)}; this opens a new investigation beside it."
+                     if kept else "It could not be set aside and is written over."),
+                  file=sys.stderr)
         before = hunt_mod.load(project)
         h = hunt_mod.open_new(project, question,
                               since=getattr(args, "hunt_since", None),
@@ -3036,7 +3055,7 @@ def cmd_hunt(args) -> int:
     if args.resume:
         last = hunt_mod.load(project)
         if not last:
-            print("no investigation is open", file=sys.stderr)
+            print(hunt_mod.unreadable_line(project) or "no investigation is open", file=sys.stderr)
             return 1
         # A concluded one is reported below as it is, and nothing resumed.
         if last.get("status", "open") == "open":
@@ -3046,8 +3065,8 @@ def cmd_hunt(args) -> int:
     # Bare `echolot hunt`, and the tail of --resume: what is open, in full.
     st = state.project_state(project, config)
     if not st.get("hunt"):
-        print('no investigation is open — `echolot hunt "<what regressed>"` '
-              'opens one')
+        print(st.get("hunt_unreadable") or 'no investigation is open — '
+              '`echolot hunt "<what regressed>"` opens one')
         return 0
     for line in hunt_mod.recap(st["hunt"], st, root=project):
         print(line)
