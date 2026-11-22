@@ -310,6 +310,17 @@ def test_the_result_is_the_one_object_it_printed_at_the_end(tmp_path):
     check("a run that printed none has none", dig.result(tmp_path) is None and dig.cost(None) is None)
 
 
+def test_a_run_stopped_at_the_spending_cap_is_known_by_what_claude_code_says():
+    check("by the result's subtype", dig.capped({"subtype": "error_max_budget_usd", "is_error": True}))
+    check("or by why it ended", dig.capped({"subtype": "error_during_execution", "terminal_reason": "budget_exhausted"}))
+    check("an error of another kind is not the cap", not dig.capped({"subtype": "error_during_execution"})
+          and not dig.capped({"subtype": "success", "total_cost_usd": 12.0}) and not dig.capped(None))
+    check("its words: the last message, or the errors in place of one",
+          dig.last_words({"result": " done \n"}) == "done"
+          and dig.last_words({"result": None, "errors": ["Reached the maximum budget", ""]}) == "Reached the maximum budget"
+          and dig.last_words(None) == "")
+
+
 def test_the_words_an_investigation_is_closed_with():
     check("stopped", dig.closing_words({"status": job.STOPPED, "rounds": 2})
           == "Stopped from echolot ui, after 2 rounds, with no answer. Closed from echolot ui.")

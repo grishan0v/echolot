@@ -594,6 +594,27 @@ def cost(found: dict[str, Any] | None) -> str | None:
     return f"${value:,.2f}"
 
 
+# How Claude Code says a run ended at `--max-budget-usd` (the Agent SDK's
+# reference: the result's `subtype`, and its `terminal_reason`). Its own
+# estimate, which it says can pass the cap.
+CAPPED = ("error_max_budget_usd", "budget_exhausted")
+
+
+def capped(found: dict[str, Any] | None) -> bool:
+    """Whether the run ended because it reached the spending cap."""
+    return bool(found) and (found.get("subtype") in CAPPED or found.get("terminal_reason") in CAPPED)
+
+
+def last_words(found: dict[str, Any] | None) -> str:
+    """What it said at the end: its last message, or, for a run that ended in
+    an error, the errors it lists in place of one."""
+    words = (found or {}).get("result")
+    if isinstance(words, str) and words.strip():
+        return words.strip()
+    errors = (found or {}).get("errors")
+    return "\n".join(str(e) for e in errors if str(e).strip()) if isinstance(errors, list) else ""
+
+
 def denied(found: dict[str, Any] | None) -> list[str]:
     """What the agent tried and was refused, as it tried it: a command, or
     the file it meant to write."""
@@ -648,7 +669,8 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
                 if run.get("finished") or status == job.RUNNING else None),
         "shown": step.get("shown") or "", "log": step.get("log") or "",
         "phase": None, "quiet": None, "stuck": False, "stopping": False, "title": "", "text": "", "said": None,
-        "cost": None, "denied": [], "left": None, "can_close": False, "can_unmark": False,
+        "cost": None, "denied": [], "left": None, "can_close": False, "can_unmark": False, "capped": False,
+        "budget": what.get("budget_usd") if isinstance(what.get("budget_usd"), (int, float)) else BUDGET_USD,
     }
     if status == job.RUNNING:
         table = procs()
@@ -660,12 +682,19 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
         return out
 
     found = result(project)
-    out["cost"], out["denied"] = cost(found), denied(found)
+    out["cost"], out["denied"], out["capped"] = cost(found), denied(found), capped(found)
     answered = out["hunt_status"] == "concluded"
-    words = str((found or {}).get("result") or "").strip()
+    words = last_words(found)
     if status == job.DONE and out["verdict"]:
         out["title"] = f"{CLIENT} finished."
         out["text"] = "Its answer is on this page."
+    elif out["capped"] and status in (job.DONE, job.FAILED):
+        # Whatever its exit code: the cap is the reason, and the page says so.
+        out["title"] = f"It reached the spending cap of ${out['budget']:g}."
+        out["text"] = (f"{CLIENT} stopped by itself when its own estimate of what it had spent reached the cap the "
+                       "page sets, before it had an answer"
+                       + (". It closed the investigation before that." if answered else
+                          ". The investigation is still open, with the rounds it has."))
     elif status == job.DONE and answered:
         out["title"] = f"{CLIENT} finished."
         out["text"] = ("It closed the investigation with a few words and no table of causes: they are this page's "
@@ -704,6 +733,9 @@ def closing_words(seen: dict[str, Any]) -> str:
     came of it, in a sentence, since no answer did."""
     rounds = seen.get("rounds") or 0
     after = f"after {rounds} round{'s' if rounds != 1 else ''}" if rounds else "before its first round"
+    if seen.get("capped"):
+        return (f"{CLIENT} stopped at its spending cap of ${seen.get('budget') or BUDGET_USD:g}, {after}, with no "
+                "answer. Closed from echolot ui.")
     how = {job.STOPPED: "Stopped from echolot ui",
            job.FAILED: f"{CLIENT} ended with an error",
            job.INTERRUPTED: f"Cut short, the process that ran {CLIENT} gone",

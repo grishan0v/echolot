@@ -13,7 +13,7 @@ JSON object, as `claude -p --output-format json` does.
 Nothing here talks to a model or the network, and nothing is started but
 the child it is told to leave.
 
-    "do": "verdict" | "rounds" | "text" | "fail" | "ask" | "hang" | "nothing"
+    "do": "verdict" | "rounds" | "text" | "fail" | "budget" | "ask" | "hang" | "nothing"
     "rounds": how many rounds it records first (2)
     "markers": put a temporary marker into this file first
     "child_pipe": a pipe a child it leaves running says its pid into, and
@@ -138,6 +138,13 @@ def act(ns: argparse.Namespace, project: Path, plan: dict[str, Any], out: Any) -
               result="Failed to authenticate: OAuth session expired and could not be refreshed")
         return 1
     prepare(project, plan)
+    if do == "budget":
+        # Where `--max-budget-usd` stops it, as the Agent SDK's reference gives
+        # the result: an error with that subtype, no last message, a cost its
+        # own estimate puts past the cap. The exit code is not documented.
+        _said(out, subtype="error_max_budget_usd", is_error=True, total_cost_usd=10.42, result=None,
+              terminal_reason="budget_exhausted", errors=["Reached the maximum budget ($10.00)"])
+        return int(plan.get("code", 1))
     if plan.get("child_pipe"):
         # A child left running, as a build or a recording would be: it says
         # its pid into a pipe and holds the pipe open for as long as it runs.

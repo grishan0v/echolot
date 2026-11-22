@@ -215,9 +215,11 @@ def test_the_screen_before_it_starts_says_what_a_person_agrees_to(project, monke
     blocks = {b.one("h2").text: b.text for b in consent.all("section", "dig-block")}
     check("the blocks, in order", list(blocks) == ["Who does it", "How long", "What it does",
                                                    "What it may do without asking", "What changes", "Stop"], list(blocks))
-    check("which client and whose account, and what it costs", "Claude Code 2.1.300, the one installed on this "
-          "computer, under your own account, signed in as you@example.com." in blocks["Who does it"]
-          and "about $10 of usage" in blocks["Who does it"], blocks["Who does it"])
+    check("which client and whose account", "Claude Code 2.1.300, the one installed on this computer, under your "
+          "own account, signed in as you@example.com." in blocks["Who does it"], blocks["Who does it"])
+    check("what it costs, with the cap's number in that very sentence", "It costs what any session of yours costs, on "
+          "your Claude plan or your API key, and it stops by itself once it has spent about $10, by its own estimate;"
+          in blocks["Who does it"], blocks["Who does it"])
     check("how long, and that closing the page's server stops it", "Tens of minutes" in blocks["How long"]
           and "closing echolot ui stops the agent too" in blocks["How long"])
     check("what it does: markers under the allowed folder, rebuilds, the phone by name, rounds, cleanup",
@@ -499,6 +501,25 @@ def test_failed_says_so_with_the_client_s_words_and_its_log(project):
           == "Failed to authenticate: OAuth session expired and could not be refreshed")
     check("and where all it printed is", "Everything it printed is in .echolot/log/dig.agent.log." in seen.text)
     check("what it spent is said where it says it", "reports $0.00 of usage" in seen.text)
+
+
+@pytest.mark.parametrize("code", [1, 0])
+def test_a_run_that_reached_the_spending_cap_says_so(project, code):
+    site, _, echolot = serving(project, {"do": "budget", "rounds": 2, "code": code})
+    press(site, "dig/start", ticked("main_thread_waits"))
+    seen = panel(site)
+    check(f"exit {code}: the cap is the reason, said plainly", seen.text.startswith(
+        "It reached the spending cap of $10. Claude Code stopped by itself when its own estimate of what it had spent "
+        "reached the cap the page sets, before it had an answer. The investigation is still open, with the rounds it "
+        "has."), seen.text)
+    check("what it spent, which its estimate can put past the cap", "reports $10.42 of usage, by its own estimate"
+          in seen.text)
+    check("its own words, which an error lists in place of a last message",
+          seen.one("pre", "dig-said").text == "Reached the maximum budget ($10.00)")
+    check("the investigation can be closed", [b.text for b in seen.all("button")] == ["Close the investigation"])
+    press(site, "dig/close")
+    check("closed saying it was the cap", hunt_mod.find(project.root, "1")["conclusion"]
+          == "Claude Code stopped at its spending cap of $10, after 2 rounds, with no answer. Closed from echolot ui.")
 
 
 def test_cut_short_says_the_process_is_gone(project):

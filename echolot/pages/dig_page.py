@@ -126,8 +126,10 @@ def consent(c: dict[str, Any], link: Link, steps: Sequence[tuple[str, str, bool]
     where = ("any file of the project" if paths == [""] else
              "files under " + _code_list([p or "." for p in paths]) if paths else "")
     if client.program and not c["why"]:
-        money = (f"It stops by itself if it reaches about ${c['budget']} of usage, by its own estimate, and the "
-                 "page shows what it reports at the end.")
+        # The number is in the sentence about what it costs, and nowhere else.
+        money = (f"It costs what any session of yours costs, on your Claude plan or your API key, and it stops by "
+                 f"itself once it has spent about <b>${c['budget']}</b>, by its own estimate; the page shows what it "
+                 "reports at the end.")
         phone = f"your phone (<b>{e(c['phone'])}</b>)" if c.get("phone") else "your phone"
         allow_more = ""
         if c.get("own_allow"):
@@ -141,8 +143,7 @@ def consent(c: dict[str, Any], link: Link, steps: Sequence[tuple[str, str, bool]
                      "commit them first if you want to tell its changes from yours.")
         parts.append('<div class="stack gap-5 dig-terms">' + "".join([
             _block("Who does it",
-                   f"{who}, the one installed on this computer, under your own account{account}. It counts against "
-                   f"your Claude plan, or your API key, like any session of yours. {money}"),
+                   f"{who}, the one installed on this computer, under your own account{account}. {money}"),
             _block("How long",
                    "Tens of minutes, usually. Keep <code>echolot ui</code> running, and the phone connected and "
                    "unlocked: closing <code>echolot ui</code> stops the agent too."),
