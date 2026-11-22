@@ -290,6 +290,9 @@ def offer(project: Path, st: dict[str, Any], lines: list[dict[str, Any]],
             "why": no_phone if do == RECORD else None, "no_record": no_phone,
             "report": report["path"] if _reads(report) else None,
             "report_dir": report_dir,
+            # The recordings that are here, read or not: what a press that
+            # reads them again reads (`again`, after the time limit changed).
+            "there": len(files or ()),
         })
     return out
 
@@ -329,7 +332,11 @@ def asked(form: dict[str, str]) -> dict[str, Any]:
                       "Go back to the start page and press the button there.", 400)
     if form.get("anew") or hunt:
         do = RECORD
-    return {"do": do or None, "scenario": scenario or None, "launches": launches, "hunt": hunt or None}
+    # Read the recordings that are here again, though they were read: the
+    # time limit changed since (`echolot/time_limit.py`).
+    again = do == READ and form.get("again") == "1"
+    return {"do": do or None, "scenario": scenario or None, "launches": launches, "hunt": hunt or None,
+            "again": again}
 
 
 def _shown(project: Path, path: Path) -> str:
@@ -384,7 +391,10 @@ def start(project: Path, config: str, found: dict[str, Any], run: dict[str, Any]
         raise Refusal("No such scenario", "The config names no scenario by that name. Go back to the start "
                       "page and press the button there.", 400)
     do = press["do"] or choice["do"]
-    if do == READ and not choice.get("unread"):
+    # Read again: the recordings that are here, though none is newer than the
+    # report, and no comparison after it, since the recordings are the same.
+    again = do == READ and bool(press.get("again")) and not choice.get("unread") and bool(choice.get("there"))
+    if do == READ and not choice.get("unread") and not again:
         raise Refusal("There is nothing to read", f"No recordings of `{choice['name']}` wait to be read. "
                       "Go back to the start page: its button says what a press does now.")
     if do == RECORD and (choice.get("why") or choice.get("no_record")):
@@ -408,7 +418,7 @@ def start(project: Path, config: str, found: dict[str, Any], run: dict[str, Any]
             raise Refusal("No such investigation", "It filed no report to compare the new one with. "
                           "Go back to the start page and press the button there.", 400)
         before = home / "reports" / f"{first:03d}.json"
-    elif choice.get("report"):
+    elif choice.get("report") and not again:
         # `analyze` writes the new report over the last one, so the last one
         # is copied beside it first: that copy is what `compare` is given.
         before = choice["report_dir"] / "before.json"
