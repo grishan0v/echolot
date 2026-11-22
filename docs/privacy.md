@@ -48,7 +48,7 @@ In the project:
   layer, a block between `<!-- echolot -->` markers in `AGENTS.md`,
   `GEMINI.md` or `.github/copilot-instructions.md`,
   `.cursor/rules/echolot.mdc`, and in Codex `.codex/rules/echolot.rules`,
-  which lets `echolot` out of the sandbox;
+  which lets `echolot`, `./gradlew` and `adb` out of the sandbox;
 - while an investigation needs them, temporary trace markers in the sources
   that `instrumentation.allowed` permits. `echolot mark --remove` takes them
   out.

@@ -49,7 +49,8 @@ Codex и Cursor — это просто текст: четыре скилла, �
 - файлы для выбранных вами агентов при `echolot init`: слой `.claude/`, блок
   между маркерами `<!-- echolot -->` в `AGENTS.md`, `GEMINI.md` или
   `.github/copilot-instructions.md`, `.cursor/rules/echolot.mdc`, а для Codex
-  — `.codex/rules/echolot.rules`, выпускающий `echolot` из песочницы;
+  — `.codex/rules/echolot.rules`, выпускающий из песочницы `echolot`,
+  `./gradlew` и `adb`;
 - на время расследования — временные маркеры трассировки в исходниках,
   разрешённых в `instrumentation.allowed`. Команда `echolot mark --remove`
   удаляет их.

@@ -536,6 +536,15 @@ a rule that stopped matching says so as a session starts. The file is
 echolot's alone, so it is written whole; an edit made here is kept, and
 `--all` puts echolot's back, as with the files of the layer.
 
+Two more rules stand beside it, for `./gradlew` and for `adb`: an
+investigation rebuilds the app and puts it on the phone, Gradle needs the
+network and writes under `~/.gradle`, and adb needs its server on localhost.
+With them, Codex runs those two without asking in every session in this
+project, the way it runs `echolot`. A file an earlier echolot wrote, with
+the `echolot` rule alone, is known by its text: `echolot`, `status` and
+`doctor` say it is from an older echolot and name the `init` that brings it
+up to date, and `init` does, since nobody edited it.
+
 Three things decide whether the rule works, and `doctor` and `status` say
 each of them on a `codex` line, shown wherever Codex is chosen, has a
 `.codex/` folder and no choice recorded yet, or is what runs the command. A
