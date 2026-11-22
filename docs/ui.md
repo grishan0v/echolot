@@ -65,6 +65,48 @@ out. Most people know the number only once the first report says "No time
 limit is set", so the page can set or change it later in that line, and
 nowhere else: see [The time limit, later](#the-time-limit-later).
 
+**Something else**, one screen or one action, stays an agent's setup: it has
+to learn from the code how to get there and where the wait begins and ends.
+The page says so in one line under the button, with the command to copy.
+
+**Where the page cannot set a project up** it says why in a sentence of its
+own, with `echolot scan`'s words under it, and the step stays the one under
+**What to do next**:
+
+| what `scan` found | the page says |
+|---|---|
+| no module with a launcher Activity | that no Android app is in this folder |
+| an `applicationId` set through a constant or a convention plugin | that it could not read the app's name from the build files |
+| a macrobenchmark that measures a section of its own, or names no metric `scan` reads | that where it begins and ends has to be picked from a trial recording |
+
+A macrobenchmark that measures the launch (`StartupTimingMetric`) is set up
+like an app with none: the same window, run by the benchmark.
+
+Some steps come first, as before: files written by a newer echolot, a
+self-check that did not pass, and `echolot init` in a project that has an
+older echolot's files or has already chosen its agents. There `init` brings
+files up to date and says itself which, so it stays a command to copy; once
+it ran, the page offers the config. A server started with `-c` naming another
+file sets nothing up: the page creates `echolot.yml` and no file under a name
+somebody typed.
+
+**A config with no scenario** measures everything a recording holds. The page
+shows the lines that make the launch its scenario, to copy and add by hand.
+It writes into no file that is yours.
+
+**After setup** the page is the button's. Until the scenario has been
+recorded once it also says what stands between the two: the build you want
+measured has to be on the phone, because in `launch` mode echolot opens what
+is installed there and installs nothing. It names the gradle task that
+installs it where the build files say one. And the phone has to be connected,
+which its line under **Ready** says.
+
+**When setup does not finish**, `echolot.yml` is written already. If `echolot
+init` failed, the page shows the last lines it printed and the file with all
+of them; if it was cut short (`echolot ui` stopped, the terminal closed), the
+page says so. Either way the step under **What to do next** takes it from
+there.
+
 ### The time limit, later
 
 The same sentence with its field, "It should take no longer than … seconds",
@@ -110,48 +152,6 @@ the page works none out by itself.
 
 A report written to disk by `analyze --html` has no field: a file cannot
 change a config.
-
-**Something else**, one screen or one action, stays an agent's setup: it has
-to learn from the code how to get there and where the wait begins and ends.
-The page says so in one line under the button, with the command to copy.
-
-**Where the page cannot set a project up** it says why in a sentence of its
-own, with `echolot scan`'s words under it, and the step stays the one under
-**What to do next**:
-
-| what `scan` found | the page says |
-|---|---|
-| no module with a launcher Activity | that no Android app is in this folder |
-| an `applicationId` set through a constant or a convention plugin | that it could not read the app's name from the build files |
-| a macrobenchmark that measures a section of its own, or names no metric `scan` reads | that where it begins and ends has to be picked from a trial recording |
-
-A macrobenchmark that measures the launch (`StartupTimingMetric`) is set up
-like an app with none: the same window, run by the benchmark.
-
-Some steps come first, as before: files written by a newer echolot, a
-self-check that did not pass, and `echolot init` in a project that has an
-older echolot's files or has already chosen its agents. There `init` brings
-files up to date and says itself which, so it stays a command to copy; once
-it ran, the page offers the config. A server started with `-c` naming another
-file sets nothing up: the page creates `echolot.yml` and no file under a name
-somebody typed.
-
-**A config with no scenario** measures everything a recording holds. The page
-shows the lines that make the launch its scenario, to copy and add by hand.
-It writes into no file that is yours.
-
-**After setup** the page is the button's. Until the scenario has been
-recorded once it also says what stands between the two: the build you want
-measured has to be on the phone, because in `launch` mode echolot opens what
-is installed there and installs nothing. It names the gradle task that
-installs it where the build files say one. And the phone has to be connected,
-which its line under **Ready** says.
-
-**When setup does not finish**, `echolot.yml` is written already. If `echolot
-init` failed, the page shows the last lines it printed and the file with all
-of them; if it was cut short (`echolot ui` stopped, the terminal closed), the
-page says so. Either way the step under **What to do next** takes it from
-there.
 
 ## Check the app
 
