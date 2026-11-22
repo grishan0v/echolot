@@ -96,7 +96,8 @@ _ON, _OFF = _patterns()
 # Why the page leaves the file alone, a sentence for each reason.
 WHY = {
     "other": "This page reads `{config}`, and it changes no file but the `echolot.yml` it wrote itself.",
-    "link": "`echolot.yml` is a link to another file, and the page changes no file through a link.",
+    "link": "`echolot.yml` is a link to another file, or has another name as well, and the page changes no file "
+            "through a link.",
     "unreadable": "`echolot.yml` does not read as text, so the page changes nothing in it.",
     "broken": "`echolot.yml` does not load, so the page changes nothing in it: the start page says which line to fix.",
     "foreign": "The page did not write this `echolot.yml`, so it changes nothing in it: the file does not begin "
@@ -192,6 +193,11 @@ def reading(project: Path, config: str) -> dict[str, Any] | None:
         return _no("link")
     if not path.is_file():
         return None
+    # A file with a second name: putting a new file in its place would part
+    # the two, and the other name would keep the old limit.
+    with contextlib.suppress(OSError):
+        if path.stat().st_nlink > 1:
+            return _no("link")
     try:
         text = path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError):
@@ -224,6 +230,11 @@ def reading(project: Path, config: str) -> dict[str, Any] | None:
     if (scenario.get("budget_ms") != ms) if holds else ("budget_ms" in scenario):
         return _no("twice")
     start, end, _ = lines[i]
+    # The line is the key itself, and no piece of some other value that reads
+    # like it: with another number in it, the file says the same but that.
+    probe = 1000 if ms != 1000 else 2000
+    if not _reads_back(text, text[:start] + project_setup.limit_line(probe) + text[end:], probe):
+        return _no("edited")
     return {"can": True, "ms": ms if holds else None, "text": text, "start": start, "end": end,
             "seen": _digest(text), "rest": _digest(text[:start] + text[end:])}
 

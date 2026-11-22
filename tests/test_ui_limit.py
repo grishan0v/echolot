@@ -251,6 +251,22 @@ def _link(project: Project, path: Path) -> None:
     path.symlink_to(other)
 
 
+def _hard_link(project: Project, path: Path) -> None:
+    os.link(path, project.root / "shared.yml")
+
+
+def _bom(project: Project, path: Path) -> None:
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+
+def _in_a_string(project: Project, path: Path) -> None:
+    """The page's line as part of a quoted value, with a limit of the same number set by hand below it:
+    YAML reads that limit, and rewriting the line would change the name instead."""
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace(LINE, f'  _note: "set by hand,\n{LINE}\n  "\n  budget_ms:    2000', 1), encoding="utf-8")
+    check("a config that loads", Config.load(path).scenario_budget_ms == 2000)
+
+
 def _moved(project: Project, path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     line = project_setup.limit_line(2000)
@@ -287,6 +303,7 @@ DECLINES = {
     "a number with a leading zero, which YAML reads another way": (_replaced(LINE, LINE.replace("2000", "02000")), "edited",
                                                                    "was changed by hand"),
     "the line twice": (_copied, "edited", "was changed by hand"),
+    "the line inside a quoted value, a limit set below it": (_in_a_string, "edited", "was changed by hand"),
     "the line removed": (_gone, "removed", "is no longer in echolot.yml"),
     "the line moved to another block": (_moved, "moved", "is no longer under scenario:"),
     "another line sets the limit too": (_twice, "twice", "that one counts"),
@@ -295,6 +312,8 @@ DECLINES = {
     "several scenarios": (_several, "several", "names several scenarios"),
     "a limit in local.yml": (_local, "local", "local.yml, beside echolot.yml, sets the limit too"),
     "a link to another file": (_link, "link", "is a link to another file"),
+    "a second name for the file": (_hard_link, "link", "has another name as well"),
+    "a mark an editor put before the first line": (_bom, "foreign", "The page did not write this echolot.yml"),
     "a file that does not load": (_broken, "broken", "does not load"),
 }
 
