@@ -218,6 +218,15 @@ def quiet_words(seen: dict[str, Any]) -> str:
             "you think it is stuck, Stop ends it.")
 
 
+def _ran(seen: dict[str, Any]) -> str:
+    """How long it has worked and how many rounds it has, in a sentence. The
+    question once a second carries it too, so that it does not stand still
+    between two rounds."""
+    rounds = seen.get("rounds") or 0
+    return (f"Claude Code has been at it for {_minutes(seen.get('ran') or 0)}, with "
+            f"{rounds} round{'s' if rounds != 1 else ''} so far.")
+
+
 def _now(seen: dict[str, Any]) -> str:
     """What the agent is doing, in a sentence."""
     if seen.get("stopping"):
@@ -314,9 +323,7 @@ def panel(seen: dict[str, Any], link: Link) -> str:
                   '<span class="small sub">Ends Claude Code and everything it started.</span></form>' if stop else "")
         quiet = quiet_words(seen)
         now = _now(seen)
-        rounds = seen.get("rounds") or 0
-        ran = (f"Claude Code has been at it for {_minutes(seen.get('ran') or 0)}, with "
-               f"{rounds} round{'s' if rounds != 1 else ''} so far.")
+        ran = _ran(seen)
         poll = link("dig-state")
         rev = f'{seen.get("rounds")}:{seen.get("hunt_status")}'
         return (f'<section class="dig stack gap-3" id="dig" data-state="running" data-rev="{e(rev)}"'
@@ -349,14 +356,18 @@ def answer_parts(seen: dict[str, Any], link: Link) -> dict[str, Any]:
 
 
 def progress(seen: dict[str, Any] | None) -> str:
-    """What a page of a run asks for while it runs: the phase, the watchdog's
-    sentence, and a mark that changes when the page has to be drawn anew."""
+    """What a page of a run asks for while it runs: the phase, how long it
+    has worked, the watchdog's sentence, and a mark that changes when the page
+    has to be drawn anew."""
     seen = seen or {"status": "none"}
     now = _now(seen)
-    quiet = quiet_words(seen) if seen.get("status") == "running" else ""
+    going = seen.get("status") == "running"
+    quiet = quiet_words(seen) if going else ""
+    ran = _ran(seen) if going else ""
     rev = f'{seen.get("rounds")}:{seen.get("hunt_status")}'
     return (f'<div id="dig-now" data-state="{e(seen.get("status") or "none")}" data-rev="{e(rev)}" '
-            f'data-said="{e(now)}" data-quiet="{e(quiet)}" data-stopping="{"1" if seen.get("stopping") else ""}"></div>')
+            f'data-said="{e(now)}" data-ran="{e(ran)}" data-quiet="{e(quiet)}" '
+            f'data-stopping="{"1" if seen.get("stopping") else ""}"></div>')
 
 
 # ---------------------------------------------------------------------------

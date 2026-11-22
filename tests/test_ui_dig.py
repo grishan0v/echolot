@@ -400,6 +400,24 @@ def test_each_phase_is_said_from_what_runs_under_the_agent(project, args, said):
           == "running" and fragment.attrs["data-said"] == said)
 
 
+def test_how_long_it_has_worked_keeps_up_between_rounds(project):
+    """The page is drawn anew when a round comes in; between two rounds the
+    question once a second says how long it has worked, so that at minute five
+    the line does not still say a minute."""
+    a_dig(project, ago=70)
+    site, _, _ = serving(project, table=under())
+    check("drawn at the first minute", panel(site).one("p", id="dig-ran").text
+          == "Claude Code has been at it for a minute, with 1 round so far.")
+    a_dig(project, ago=310)
+    fragment = read(get(site, "dig/state").body).one("div", id="dig-now")
+    check("asked at the fifth, the answer says the fifth", fragment.attrs["data-ran"]
+          == "Claude Code has been at it for 5 minutes, with 1 round so far.", fragment.attrs)
+    check("and the page's script puts it in place", "ran.textContent = long" in get(site, "hunt/1/answer").body)
+    a_dig(project, end="stopped")
+    check("an agent that ended has no such line to keep up",
+          read(get(site, "dig/state").body).one("div", id="dig-now").attrs["data-ran"] == "")
+
+
 def test_the_page_of_a_running_agent_keeps_up_with_script_on_and_off(project):
     a_dig(project)
     site, _, _ = serving(project, table=under())
