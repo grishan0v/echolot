@@ -66,6 +66,12 @@ exclude = [
   # pull request brings, its anchor included.
   '^https://github\.com/grishan0v/echolot/(?:blob|tree)/main/',
 
+  # Localized GitHub Pages subpaths (e.g. /echolot/ru/). A new translation
+  # is not deployed to Pages until its pull request merges to `main`, so
+  # checking it here would fail the PR that adds it; docs.yml builds every
+  # language in docs/languages.yml with `--strict` instead.
+  '^https://grishan0v\.github\.io/echolot/[a-z]{2}(?:-[A-Za-z]+)?/$',
+
   # cursor.directory, the plugin's listing in Cursor's community catalog,
   # linked from docs/agent-layer.md and docs/publishing.md. The site sits
   # behind Vercel's bot checkpoint, which answers a client that runs no
