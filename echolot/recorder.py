@@ -209,18 +209,51 @@ def record(args: Any, argv: list[str] | None, started: float,
         _reason = None
 
 
+# What `record` writes in each field of a line. A field that holds anything
+# else is dropped as the line is read, the line itself kept.
+_FIELDS: dict[str, tuple[type, ...]] = {
+    "ts": (str,), "cmd": (str,), "argv": (list,), "cwd": (str,),
+    "exit": (int,), "ms": (int, float), "version": (str,),
+    "config": (dict,), "facts": (dict,), "error": (str,),
+}
+
+
 def read(path: Path | None = None) -> list[dict[str, Any]]:
-    """All recorded runs, oldest first. Missing file → empty list."""
+    """All recorded runs, oldest first. Missing file → empty list.
+
+    Each line `record` writes is an object, one per line. A line that is
+    anything else is skipped: one that is no text, one that is no JSON, and
+    one that is JSON and no object (`[1,2]`, `null`, `42`), which every
+    reader took for a run and ended `echolot`, `status` and every page of
+    `echolot ui` in a traceback on its first `.get` (#555). Such a line comes
+    from a hand edit, a merge of two clones' logs or another tool appending
+    here, and the lines around it still read.
+    """
     p = path or log_file()
     if not p.exists():
         return []
     out: list[dict[str, Any]] = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    for raw in p.read_bytes().splitlines():
         try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
+            run = json.loads(raw.decode("utf-8"))
+        except ValueError:   # no UTF-8 text, or no JSON; a blank line too
             continue
+        if isinstance(run, dict):
+            out.append(_as_written(run))
     return out
+
+
+def _as_written(run: dict[str, Any]) -> dict[str, Any]:
+    """The line without the fields that hold what `record` never writes
+    there: a `facts` that is a list, a `ts` that is a number, an `exit` of
+    true. Read as they are, a doctor's `facts: [1]` ended `status` in a
+    traceback (#555); dropped, the run reads as one that left no such
+    field. A count that is no finite number is no count."""
+    def fits(key: str, value: Any) -> bool:
+        kinds = _FIELDS.get(key)
+        if kinds is None or value is None:
+            return True
+        if isinstance(value, bool) or not isinstance(value, kinds):
+            return False
+        return not isinstance(value, float) or value == value and abs(value) != float("inf")
+    return {k: v for k, v in run.items() if fits(k, v)}
