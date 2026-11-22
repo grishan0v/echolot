@@ -379,14 +379,13 @@ jobs:
           rm -rf "$workdir"
           mkdir -p "$workdir"
 
-          for artefact in sdist wheel; do
-            case "$artefact" in
-              sdist) file=$(ls dist/*.tar.gz) ;;
-              wheel) file=$(ls dist/*.whl) ;;
-            esac
+          check_artefact() {
+            local artefact="$1" file="$2"
+            local run_dir="$workdir/run-$artefact"
+            local venv="$workdir/venv-$artefact"
+            local home="$workdir/home-$artefact"
 
-            echo "::group::$artefact ($(basename "$file"))"
-            venv="$workdir/venv-$artefact"
+            mkdir -p "$run_dir" "$home/.cursor"
             python -m venv "$venv"
             "$venv/bin/pip" install --upgrade pip --quiet
             "$venv/bin/pip" install --quiet "$PWD/$file"
@@ -395,18 +394,47 @@ jobs:
             # sits right next to `dist/` here, and running from that directory
             # would let a bug in package-data hide behind the source tree
             # quietly answering the import instead of the installed artefact.
-            ( cd "$workdir" && "$venv/bin/python" "$RUNNER_TEMP/smoke.py" )
-            ( cd "$workdir" && "$venv/bin/echolot" --help > /dev/null )
+            ( cd "$run_dir" && "$venv/bin/python" "$RUNNER_TEMP/smoke.py" )
+            ( cd "$run_dir" && "$venv/bin/echolot" --help > /dev/null )
             # The CLI's actual behaviour, not a stand-in for it: `doctor -q`
             # is the same three lines and the same exit code an agent or a
             # user's CI routes on, built on a synthetic trace rather than one
             # that would have to ship inside the package.
-            ( cd "$workdir" && "$venv/bin/echolot" doctor -q )
+            ( cd "$run_dir" && "$venv/bin/echolot" doctor -q )
             # The README's one line for Cursor, from the installed artefact,
             # into a home of its own: the copy Cursor would load (#399).
-            home="$workdir/home-$artefact"
-            mkdir -p "$home/.cursor"
-            ( cd "$workdir" && HOME="$home" "$venv/bin/echolot" plugin cursor )
+            ( cd "$run_dir" && HOME="$home" "$venv/bin/echolot" plugin cursor )
             test -f "$home/.cursor/plugins/local/echolot/.cursor-plugin/plugin.json"
-            echo "::endgroup::"
-          done
+          }
+
+          sdist_file=$(ls dist/*.tar.gz)
+          wheel_file=$(ls dist/*.whl)
+
+          check_artefact sdist "$sdist_file" > "$workdir/log-sdist" 2>&1 &
+          pid_sdist=$!
+          check_artefact wheel "$wheel_file" > "$workdir/log-wheel" 2>&1 &
+          pid_wheel=$!
+
+          rc=0
+          sdist_rc=0
+          wheel_rc=0
+          wait "$pid_sdist" || sdist_rc=$?
+          wait "$pid_wheel" || wheel_rc=$?
+
+          echo "::group::sdist ($(basename "$sdist_file"))"
+          cat "$workdir/log-sdist"
+          echo "::endgroup::"
+          if [ "$sdist_rc" -ne 0 ]; then
+            echo "::error::sdist smoke-test failed with exit code $sdist_rc"
+            rc=1
+          fi
+
+          echo "::group::wheel ($(basename "$wheel_file"))"
+          cat "$workdir/log-wheel"
+          echo "::endgroup::"
+          if [ "$wheel_rc" -ne 0 ]; then
+            echo "::error::wheel smoke-test failed with exit code $wheel_rc"
+            rc=1
+          fi
+
+          exit "$rc"

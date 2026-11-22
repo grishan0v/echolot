@@ -1,6 +1,6 @@
 # echolot documentation
 
-[← back to the README](../README.md)
+[← back to the README](../README.md) · **English** · [Русский](ru/README.md)
 
 Fifteen documents. If you are here for the first time, read them in the order of
 the workflow: **collect → mark → analyse → compare → calibrate**. The rest
@@ -17,7 +17,7 @@ The path from a device to an answer, in the order you walk it.
 | 🎬 **[Collecting traces](collecting.md)** | you need traces — the three modes (`launch`, `command`, `gradle`), what the trace config must contain, callstack sampling and what it costs, and why repeats are merged rather than averaged |
 | 🧊 **[ANRs](anr.md)** | the app stopped answering and the report came from a phone you do not have — reading it, pointing its frames at your files, and measuring the freeze when you can record it |
 | 🏷️ **[Marking](mark.md)** | your project has no instrumentation and the report has nothing to attach findings to — `mark` writes the first markers from the platform's vocabulary, `--apply` / `--remove` |
-| 🖥️ **[The page in the browser](ui.md)** | you would rather look than type — `echolot ui` shows whether this computer, the phone and the app are ready, sets a project up for how the app opens, checks the app at the press of a button, and opens the reports as pages; what the local server answers and what it refuses |
+| 🖥️ **[The page in the browser](ui.md)** | you would rather look than type — `echolot ui` shows whether this computer, the phone and the app are ready, sets a project up for how the app opens, checks the app at the press of a button, opens the reports as pages, and starts your own Claude Code on the checks you tick; what the local server answers and what it refuses |
 | 🔎 **[Analysing](analysing.md)** | you have a trace and need a place in the code — `probe`, `names`, `domains`, and the slice-to-code map |
 | 🔀 **[Comparing](compare.md)** | you have two sets of traces and need the difference — what appeared, what grew, and whether the repeats support calling it a change |
 | 📏 **[Calibrating](calibrate.md)** | the shipped thresholds fire on everything, or on nothing — derive them from known-healthy runs instead, and why rank beats percentile |

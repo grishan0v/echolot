@@ -16,7 +16,15 @@ process and `collect` write, so a reloaded page, a second tab and a server
 started again all show the same. A third sets a project up
 (`echolot/project_setup.py`): it creates `echolot.yml` from the draft `scan`
 proposes, never over a file that is there, and where echolot was never set up
-it runs `echolot init` the same way, as a process of its own.
+it runs `echolot init` the same way, as a process of its own. A fourth sets
+or changes the time limit afterwards (`echolot/time_limit.py`): it rewrites
+the one line of that `echolot.yml` the page wrote for the limit, while the
+line still reads as the page wrote it, and nothing else in the file. The
+last ones dig deeper from a report (`echolot/dig.py`): they open an
+investigation with the report's question and start the person's own Claude
+Code in it, as a process of its own, with a command line and a grant the
+server builds; they stop it, take out the markers it left, and close an
+investigation it left open.
 
 What it will and will not answer:
 
@@ -35,8 +43,11 @@ What it will and will not answer:
   and its body is a form of at most `BODY_CAP` bytes. Nothing in a form is
   used as a path or as a command: a scenario is one the config names, a
   number of launches is a small whole number, an investigation is one the
-  project has, what to set up is one of the names the page offered, and a
-  time limit is a number of seconds in a stated range.
+  project has, what to set up is one of the names the page offered, a time
+  limit is a number of seconds in a stated range, the fingerprints of the
+  config a page saw are compared with the file's, never opened, and a ticked
+  check is one the report on disk has; an agent's command line is built from
+  the config and the report alone.
 - It serves the pages it draws and nothing else. There is one table of
   routes, no route reads a file by a path taken from the address, and no page
   fetches anything from elsewhere: a served page may send a form to this
@@ -50,6 +61,8 @@ import errno
 import os
 import re
 import secrets
+import shlex
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -61,11 +74,15 @@ from urllib.parse import parse_qs, quote, unquote
 
 from . import check, job, ready, recorder, state
 from . import project_setup
+from . import time_limit
 from . import hunt as hunt_mod
 from . import main as cli
-from .config import ConfigError
+from .config import Config, ConfigError
 from .pages import answer_page, compare_page, kit, report_page, start_page
 from .pages import setup_page
+from .pages import limit_page
+from . import dig
+from .pages import dig_page
 
 HOST = "127.0.0.1"
 READS = ("GET", "HEAD")
@@ -112,6 +129,13 @@ class Site:
     # A press is answered under the same lock, so two of them cannot both
     # find nothing running.
     drawing: threading.Lock = field(default_factory=threading.Lock)
+    # The agent a press of Dig deeper starts (`echolot/dig.py`): how Claude
+    # Code is found, how a command of echolot's is run and waited for, and
+    # how the processes under a running agent are listed. A test hands in
+    # doubles for all three.
+    agent: Callable[[], dig.Client] = dig.find
+    run: Callable[..., Any] = subprocess.run
+    procs: Callable[[], list[dict[str, Any]]] = job.processes
 
     @property
     def host(self) -> str:
@@ -193,7 +217,12 @@ def _start(visit: Visit, params: dict[str, str]) -> Page:
                                                 view["ready"]), site.url) if site.url("setup") else None
     if setup and setup.get("instead"):
         found = None
-    return Page(start_page.render(view, site.url, visit.steps("start"), check=found, setup=setup))
+    # The time limit under All settings, where the server takes that press.
+    limit = limit_page.setting(time_limit.view(site.project, site.config, visit.st), site.url)
+    digging = (dig_page.on_start(dig.view(site.project, visit.st, procs=site.procs, count=False), site.url)
+               if site.url("dig") else "")
+    return Page(start_page.render(view, site.url, visit.steps("start"), check=found, setup=setup, limit=limit,
+                                  dig_html=digging))
 
 
 def _nothing(visit: Visit, title: str, text: str, status: int = 404) -> Page:
@@ -209,6 +238,7 @@ def _report(visit: Visit, params: dict[str, str]) -> Page:
     """The last report: of the scenario this page is about, or of the one
     named, drawn from its report.json now and not read from a page on disk."""
     st, rep, mine = visit.st, visit.st.get("report"), True
+    name = None
     if "scenario" in params:
         name = unquote(params["scenario"])
         found = next((sc for sc in st.get("scenarios") or [] if sc["name"] == name), None)
@@ -223,8 +253,12 @@ def _report(visit: Visit, params: dict[str, str]) -> Page:
     except ConfigError as e:
         return _nothing(visit, "The report does not read", f"{e}. Run `echolot analyze` again to write it anew.")
     where = cli._shown_path(rep["path"], visit.site.project)
+    # The time limit beside the verdict: this is a scenario's last report,
+    # read with the limit the config had then.
+    limit = limit_page.beside(time_limit.view(visit.site.project, visit.site.config, st, report=data, scenario=name),
+                              visit.site.url)
     return Page(report_page.render(data, where=where, last=True, steps=visit.steps("report" if mine else None),
-                                   policy=kit.SERVED))
+                                   policy=kit.SERVED, limit=limit, dig=_dig_parts(visit, data, params)))
 
 
 def _hunt_report(visit: Visit, params: dict[str, str]) -> Page:
@@ -267,7 +301,8 @@ def _answer(visit: Visit, params: dict[str, str]) -> Page:
     again = cli._check_again_line(site.project, site.config, hunt, reports)
     mine = last is not None and hunt.get("n") == last.get("n")
     return Page(answer_page.render(hunt, reports, again=again, action_html=_again_button(visit, hunt),
-                                   steps=visit.steps("answer" if mine else None), policy=kit.SERVED))
+                                   steps=visit.steps("answer" if mine else None), policy=kit.SERVED,
+                                   agent=_agent_parts(visit, hunt)))
 
 
 def _comparison(visit: Visit, rep: dict | None = None) -> dict[str, Any] | None:
@@ -381,6 +416,185 @@ def _setup_progress(visit: Visit, params: dict[str, str]) -> Page:
     return Page(setup_page.progress(project_setup.progress(visit.site.project)))
 
 
+def _set_limit(visit: Visit, params: dict[str, str]) -> Page:
+    """Set or change the time limit (`echolot/time_limit.py`): rewrite the one
+    line of `echolot.yml` the page wrote for it, as the file is now. Refused,
+    it answers with a page that says why and that nothing was written; taken,
+    or the same press again, it sends the browser back to the limit."""
+    site = visit.site
+    try:
+        press = time_limit.asked(visit.form)
+        time_limit.write(site.project, site.config, press)
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    return Page("", 303, f"{site.url(press['back'])}#{limit_page.ID}")
+
+
+# ---------------------------------------------------------------------------
+# Dig deeper: the person's own agent, started from a report (`echolot/dig.py`)
+
+
+def _config_path(visit: Visit) -> str:
+    known = visit.st.get("config") or {}
+    return str(known.get("path") or visit.site.config)
+
+
+def _dig_report(visit: Visit, params: dict[str, str]) -> tuple[dict[str, Any], str, str | None]:
+    """The report a press of Dig deeper is about: the last one of the
+    scenario the page is about, or of the one its address names, as it is
+    on disk now. Its name as the request gives it, and the scenario's name
+    when the address named one."""
+    st, rep = visit.st, visit.st.get("report")
+    named = None
+    if "scenario" in params:
+        named = unquote(params["scenario"])
+        found = next((sc for sc in st.get("scenarios") or [] if sc["name"] == named), None)
+        if found is None:
+            raise check.Refusal("No such scenario", "The config names no scenario by that name.", 404)
+        rep = found["report"]
+    if not rep or rep.get("error"):
+        raise check.Refusal("No report to dig into", "There is no report that reads. The start page says what to do "
+                            "next.", 409)
+    try:
+        data = cli._load_report(rep["path"])
+    except ConfigError as e:
+        raise check.Refusal("The report does not read", f"{e}. Run `echolot analyze` again to write it anew.",
+                            409) from None
+    return data, cli._shown_path(rep["path"], visit.site.project), named
+
+
+def _dig_parts(visit: Visit, data: dict[str, Any], params: dict[str, str]) -> dict[str, Any] | None:
+    """What a served report adds to start an agent from it, where the server
+    takes that press: the way to the screen before it starts, or why there
+    is none. The phone is not asked here: that screen asks it."""
+    site = visit.site
+    action = site.url("dig-ask-of", scenario=unquote(params["scenario"])) if "scenario" in params else site.url("dig-ask")
+    if not action:
+        return None
+    client = site.agent()
+    why = dig.why_not(site.project, visit.st, [], client)
+    return dig_page.report_parts(report_page.checks(data), action, why is None, why)
+
+
+def _phone(lines: list[dict[str, Any]]) -> str | None:
+    """The phone's name as the ready line says it, when it is connected."""
+    line = next((line for line in lines if line.get("lead") == "The phone"), None)
+    if not line or line.get("tone") != ready.GREEN:
+        return None
+    text = str(line.get("text") or "")
+    if "is connected:" not in text:
+        return None
+    return text.split("is connected:", 1)[1].strip().rstrip(".") or None
+
+
+def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
+    """The screen before an agent starts: what a press of Start would do,
+    for the checks ticked on the report. Nothing is started here."""
+    site = visit.site
+    try:
+        data, where, named = _dig_report(visit, params)
+        picks = dig.picked(data, dig.asked(visit.form))
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    client = site.agent()
+    lines = ready.lines(site.project, site.config, site.src, visit.st)
+    why = dig.why_not(site.project, visit.st, lines, client)
+    paths = None
+    known = visit.st.get("config") or {}
+    try:
+        cfg = Config.load(known["path"], scenario=known.get("scenario"))
+        paths = dig.allowed(cfg)
+        rounds = cfg.get("loop.max_rounds") or 3
+        several = len(cfg.scenarios) > 1
+    except check.Refusal as e:
+        why, rounds, several = why or e.text, 3, False
+    except (ConfigError, KeyError, OSError):
+        rounds, several = 3, False
+    scenario = data.get("scenario")
+    opening = shlex.join(["echolot", "hunt", dig.hunt_question(data), "--since", "unknown",
+                          *(["--scenario", str(scenario)] if several and scenario else [])])
+    back = site.url("report-of", scenario=named) if named else site.url("report")
+    action = site.url("dig-of", scenario=named) if named else site.url("dig")
+    return Page(dig_page.consent({
+        "question": report_page.question(data), "picks": picks, "client": client, "why": why, "paths": paths,
+        "phone": _phone(lines), "rounds": rounds, "changed": dig.changed_files(site.project),
+        "own_allow": dig.own_allow(site.project), "budget": dig.BUDGET_USD, "commands": dig.COMMANDS,
+        "verdict": dig.VERDICT, "opening": opening, "running": dig.shown(dig.rules(paths)) if paths is not None else "",
+        "copy": report_page.request_text(data, picks, where, last=True), "action": action, "back": back or "",
+        "keys": [c["key"] for c in picks], "many": len(picks) > report_page.FOCUS,
+    }, site.url, visit.steps(None)))
+
+
+def _dig_start(visit: Visit, params: dict[str, str]) -> Page:
+    """Start the agent: open the investigation, then Claude Code in it as a
+    process of its own. Held against the project as it is now. Refused, it
+    answers with a page that says why; started, it sends the browser to the
+    investigation's page, where the agent's work shows."""
+    site = visit.site
+    if project_setup.busy(site.project):
+        return _nothing(visit, "Setting up is still under way", "echolot is checking this computer, which takes "
+                        "about a minute. Dig deeper once it is done.", 409)
+    try:
+        data, where, _ = _dig_report(visit, params)
+        picks = dig.picked(data, dig.asked(visit.form))
+        lines = ready.lines(site.project, site.config, site.src, visit.st)
+        started = dig.start(site.project, visit.st, lines, data, picks, where, site.agent(),
+                            run=site.run, spawn=site.spawn)
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    return Page("", 303, site.url("answer-of", n=started["what"]["hunt"]))
+
+
+def _dig_back(visit: Visit) -> str | None:
+    """Where a press about the agent sends the browser: its investigation's page."""
+    run = job.read(visit.site.project, dig.JOB)
+    n = ((run or {}).get("what") or {}).get("hunt")
+    return visit.site.url("answer-of", n=n) if isinstance(n, int) else visit.site.url("start")
+
+
+def _dig_stop(visit: Visit, params: dict[str, str]) -> Page:
+    """Ask the agent to stop. With none running there is nothing to ask;
+    either way its investigation's page says where things stand."""
+    dig.stop(visit.site.project)
+    return Page("", 303, _dig_back(visit))
+
+
+def _dig_unmark(visit: Visit, params: dict[str, str]) -> Page:
+    """Take out the temporary markers an agent left: `echolot mark --remove`."""
+    try:
+        dig.unmark(visit.site.project, _config_path(visit), run=visit.site.run)
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    return Page("", 303, _dig_back(visit))
+
+
+def _dig_close(visit: Visit, params: dict[str, str]) -> Page:
+    """Close the investigation an agent left open, with what came of it."""
+    try:
+        dig.close(visit.site.project, _config_path(visit), visit.st, run=visit.site.run)
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    return Page("", 303, _dig_back(visit))
+
+
+def _dig_progress(visit: Visit, params: dict[str, str]) -> Page:
+    """What the agent is doing, for its investigation's page, which says it in
+    place and draws itself anew when a round comes in or the agent ends."""
+    return Page(dig_page.progress(dig.progress(visit.site.project, procs=visit.site.procs)))
+
+
+def _agent_parts(visit: Visit, hunt: dict[str, Any]) -> dict[str, Any] | None:
+    """The agent the server started in this investigation, for its page."""
+    site = visit.site
+    if not site.url("dig") or not hunt.get("n"):
+        return None
+    run = job.read(site.project, dig.JOB)
+    if run is None or (run.get("what") or {}).get("hunt") != hunt.get("n"):
+        return None
+    seen = dig.view(site.project, visit.st, run, procs=site.procs)
+    return dig_page.answer_parts(seen, site.url) if seen else None
+
+
 # ---------------------------------------------------------------------------
 # the routes: one table. A page is one entry here; a request that changes
 # something is one entry with another `method`.
@@ -414,6 +628,15 @@ ROUTES: list[Route] = [
     Route("check-state", "check/state", _progress),
     Route("setup", "setup", _set_up, method="POST"),
     Route("setup-state", "setup/state", _setup_progress),
+    Route("limit", "limit", _set_limit, method="POST"),
+    Route("dig-ask", "dig/ask", _dig_ask, method="POST"),
+    Route("dig-ask-of", "dig/ask/{scenario}", _dig_ask, method="POST"),
+    Route("dig", "dig/start", _dig_start, method="POST"),
+    Route("dig-of", "dig/start/{scenario}", _dig_start, method="POST"),
+    Route("dig-stop", "dig/stop", _dig_stop, method="POST"),
+    Route("dig-unmark", "dig/unmark", _dig_unmark, method="POST"),
+    Route("dig-close", "dig/close", _dig_close, method="POST"),
+    Route("dig-state", "dig/state", _dig_progress),
 ]
 
 # A part of an address that names something. Numbers are digits; a name is

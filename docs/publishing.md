@@ -1,6 +1,6 @@
 # Publishing to PyPI
 
-[← Docs index](README.md) · [README](../README.md)
+[← Docs index](README.md) · [README](../README.md) · **English** · [Русский](ru/publishing.md)
 
 A release is a git tag. `.github/workflows/publish.yml` builds the sdist and
 wheel on the tag, uploads them with PyPI Trusted Publishing — no API token is

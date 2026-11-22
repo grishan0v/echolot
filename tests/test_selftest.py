@@ -41,21 +41,15 @@ def test_selfcheck(claim, marker_report):
         fn(marker_report)
 
 
-def test_doctor_exits_zero():
-    """The command itself, not just the checks it runs.
+def test_doctor_exits_zero(capsys, tmp_path, monkeypatch):
+    """The command itself, not just the checks it runs, and its `-q` contract.
 
     `doctor` is the one thing in echolot whose exit code is a contract: CI
     gates on it and the agent layer routes on it. It builds its own report, so
     this costs a second pass over the fixture — worth it for the one command
     that must never be wrong about whether it passed.
-    """
-    from echolot.main import main
-    assert main(["doctor", "-q"]) == 0
 
-
-def test_doctor_q_is_actually_quiet(capsys, tmp_path, monkeypatch):
-    """`-q` exists to be short, and it had stopped being short.
-
+    `-q` exists to be short, and it had stopped being short.
     "Three lines and every failure — for a subagent, a CI step, a `| head`."
     It was printing thirty-one: several checks run real commands, `init` into
     a temp directory and `status` against a config in another, and those

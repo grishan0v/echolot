@@ -379,9 +379,15 @@ LAST_WITHOUT_ACTION = (0, 10, 0)
 def test_the_documents_call_the_action_at_a_ref_that_has_it() -> None:
     version = tuple(int(p) for p in __version__.split(".")[:3])
     want = "main" if version <= LAST_WITHOUT_ACTION else f"v{__version__}"
-    found = {(doc, ref) for doc in ("README.md", "docs/compare.md")
+    langs = yaml.safe_load((ROOT / "docs" / "languages.yml").read_text(encoding="utf-8"))
+    docs = []
+    for info in langs["languages"].values():
+        docs.append(info["readme"])
+        docs_dir = "docs" if info["docs_dir"] in (".", "") else f"docs/{info['docs_dir']}"
+        docs.append(f"{docs_dir}/compare.md")
+    found = {(doc, ref) for doc in docs
              for ref in re.findall(r"uses: grishan0v/echolot@([\w.]+)",
                                    (ROOT / doc).read_text(encoding="utf-8"))}
-    check("the README and docs/compare.md show the action", {d for d, _ in found}
-          == {"README.md", "docs/compare.md"}, found)
+    check("every README and compare.md shows the action", {d for d, _ in found}
+          == set(docs), found)
     check(f"at `{want}`", {r for _, r in found} == {want}, found)

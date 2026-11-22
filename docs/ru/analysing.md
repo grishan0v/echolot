@@ -1,0 +1,279 @@
+# От трейса к месту в коде
+
+[← Оглавление](README.md) · [README](../../README.ru.md) · [English](../analysing.md) · **Русский**
+
+Между незнакомым трейсом и находкой, которую можно исправить, стоят три
+команды: `probe` показывает, что внутри, `names` — что увидят детекторы, а
+`domains` привязывает находку к файлу.
+
+## `probe` — что вообще есть в трейсе
+
+```bash
+echolot probe trace.perfetto-trace --process 'com.example.*'
+```
+
+Выводит процессы, потоки и самые длинные срезы. Именно эта команда заполняет
+конфиг при настройке: кандидаты на якоря берутся из реального трейса, а не
+по памяти.
+
+Таблица потоков отсортирована по **процессорному времени, а не по числу
+срезов**. Поток с нулём срезов и сотнями миллисекунд состояния `Running` — это
+как раз та слепая зона, которую нужно найти; при сортировке по срезам он
+оказался бы в самом низу.
+
+Таблица процессов считает `async`-секции отдельно от обычных `slices`, а
+кандидаты в якоря помечаются `(async)` вместо имени потока. Это вызовы
+`Trace.beginAsyncSection` на отдельном треке процесса — обычно ручные маркеры
+приложения и конечные маркеры макроbenchmark-ов. Якорь может на них
+опираться, хотя детекторы их не читают.
+
+## `names` — как ART называет события здесь
+
+Большинство детекторов структурные (длительность, поток, состояние
+планировщика или системный факт), но `gc_pressure`, `monitor_contention` и
+`binder_txn` ищут по **имени**, а имена придумывает ART и они меняются между
+версиями Android и производителями. Не нужно гадать — можно посмотреть:
+
+```bash
+echolot names trace.perfetto-trace --process 'com.example.*'
+echolot names trace.perfetto-trace          # рядом с echolot.yml: его процесс
+echolot names trace.perfetto-trace --grep 'contention|AGENTTMP_'   # фильтр по семействам
+echolot names trace.perfetto-trace --json   # секции, семейства, потоки, маски
+```
+
+Имена обрезаются только при выводе в терминал (для pipe, агента или с флагом
+`--wide` выводятся целиком). Команда сворачивает числа в семейства
+(`owner tid: 1234` и `owner tid: 5678` объединяются), группирует в секции и
+показывает, какие маски детекторов на них срабатывают.
+
+Самая важная секция — **«Missed by the masks»**: всё похожее на GC,
+блокировки или binder, чего не увидит ни один детектор. Элементы, намеренно
+исключённые через `skip_glob`, помечаются как исключённые, а не пропущенные.
+
+### Маски живут в конфиге
+
+```yaml
+detectors:
+  gc_pressure:
+    name_glob: "*GC"
+```
+
+Соглашение заложено в именах параметров: `*name_glob*` задаёт маску имени
+среза, `skip_glob` — исключение, `thread_glob` — маску имени потока. Они
+живут в конфиге, а не в SQL, чтобы адаптация под устройство не требовала
+правок запросов. Примеры имён ART на Android 14 описаны в
+`echolot/claude/skills/echolot/references/naming.md`.
+
+## `domains` — карта соответствия срезов коду
+
+```bash
+echolot domains --root .
+```
+
+`domains` — центральная абстракция конфига: она переводит имя из отчёта в
+гипотезу без слепого сканирования всего репозитория (которое сильнее всего
+съедает контекст). Карта строится механически, так как имя среза — строковый
+литерал:
+
+```yaml
+domains:
+  - slice: "collection_mapping"
+    module: ":feature:collection"
+    hint: "Mapper.kt:5 — fun mapEntities"
+```
+
+Разрешаются и строковые константы (`const val`, `static final String`),
+передаваемые в вызовы трассировки вроде `AppTraces.start(LOAD)` — в карту
+попадает именно точка вызова с пометкой `via Marks.LOAD`. Исключаются тесты
+(`src/test`, `src/androidTest`, `src/testFixtures`), сгенерированный код
+(`build`, `generated`), логирование (`log.trace(...)`) и закрывающие вызовы
+(`end*`/`stop*`/`finish*`). Динамические имена из шаблонов или переменных
+учитываются отдельно в шапке вывода.
+
+### Когда инструментирования нет
+
+Вместо пустого раздела выводится отчёт о покрытии и модули с наибольшим
+объёмом кода без единого вызова трассировки. При этом `uninstrumented_cpu`
+всё равно сразу покажет, какие потоки реально грузят CPU, а `echolot mark`
+предложит первые точки разметки ([mark.md](mark.md)).
+
+## Детекторы для неинструментированного кода
+
+Пять механизмов находят проблемы там, где никто не ставил `trace{}`:
+
+- **`uninstrumented_cpu`** фиксирует потоки, которые долго выполнялись на CPU
+  без единого среза вокруг. Имена потоков Linux обрезает до 15 символов
+  (`DefaultDispatch`). Если запись велась со сэмплингом стеков
+  ([`runner.sampling`](collecting.md#сэмплинг-стеков-вызовов)), строка сразу
+  показывает, что выполнялось (`28 stacks: GzipSink.write 54% … · ours:
+  Store.save 36%, cut 29%`), а столбец `code` указывает файл проекта. Для
+  минифицированной сборки требуется `project.mapping`
+  ([Минифицированная сборка](collecting.md#минифицированная-сборка)).
+- **`io_wait`** находит ожидание диска через `sched/sched_blocked_reason` (там
+  нет ни CPU, ни блокировок, ни срезов; имя ядерной функции на production-сборках
+  скрыто из-за прав на `/proc/kallsyms`, но флаг диска и время точны).
+- **`main_thread_waits`** находит потоки приложения, будившие спящий главный
+  поток (с объединением пулов вроде `arch_disk_io_0..3` в `arch_disk_io_#`).
+- **`main_thread_kernel_waits`** показывает удержание главного потока в ядре
+  на недисковых блокировках (`io_wait = 0`) со стороны потоков приложения
+  (например, маппинг памяти, загрузка библиотек).
+- **`frame_jank`** берёт промахи кадров напрямую из SurfaceFlinger (Android
+  12+, см. [Требования](../../README.ru.md#требования)).
+
+## Собственные имена, измеряемые каждый раз
+
+Вверху отчёта над детекторами выводится таблица **Markers** для всех имён из
+`domains[].slice` и всех имён с префиксом `instrumentation.temp_prefix`
+(по умолчанию `AGENTTMP_`), включая async-секции и с вычитанием времени
+дочерних срезов. Имена с временным префиксом не сворачивают свои цифры в
+семейства (`AGENTTMP_fill_v4` и `AGENTTMP_fill_v6` считаются отдельно).
+
+Если временные маркеры есть в коде (`// echolot:mark`), но отсутствуют в
+трейсах — или наоборот, остались в трейсах от старой сборки после
+`mark --remove` — в шапке отчёта появляется явное предупреждение с точной
+задачей Gradle для пересборки (см. [mark](mark.md#что-дальше-сборка) и
+[Сбор трейсов](collecting.md#сборка-на-телефоне)).
+
+## Чтение отчёта без открытия json
+
+`echolot report` выводит нужную проекцию уже собранного отчёта, не перечитывая
+трейс:
+
+```bash
+echolot report                                 # сработавшие детекторы по одной строке
+echolot report --detector monitor_contention   # строки детектора
+echolot report -d main_thread_block --top 12   # больше строк; -d можно повторять
+echolot report --window                        # окно, главный поток, устройство
+echolot report --markers                       # таблица Markers
+echolot report -d repeated_work --json         # выборка в json
+echolot report path/to/report.json --window    # другой отчёт
+echolot report --plain                         # отчёт простым языком
+echolot report --html                          # то же в виде страницы report.html
+```
+
+## Когда детектор не мог проверить
+
+Если в трейсе отсутствуют нужные данные (`runner.environment: false` для
+`io_wait`, выключенный сэмплинг имён composable для `composables`, Android <
+12 для `frame_jank`), детектор не считается «чистым». В `report.json` его
+запись получает `"checked": false` и `"reason": "…"`, в `report.md` он
+выносится из списка **Silent** в отдельное предупреждение сверху, а `compare`
+исключает его из таблицы сравнения (подробнее — в
+[Детекторы](detectors.md#когда-в-трейсе-нет-данных-для-детектора) и
+[Сравнение](compare.md#когда-два-отчёта-нельзя-сравнивать)).
+
+## Чтение простым языком
+
+`echolot report --plain` переводит отчёт на человеческий язык без использования
+LLM — по фиксированным шаблонам в заголовках детекторов и `echolot/plain.py`.
+Уровни внимания:
+
+| уровень | когда ставится |
+|---|---|
+| `needs attention` | элемент главного потока держит не менее 15% запуска и не менее 0.15 с в каждом запуске; системный `anr` всегда здесь |
+| `worth a look` | найдено что-то ещё: меньше порога, на другом потоке или не в каждом запуске |
+| `fine` | проверка выполнилась и ничего сверх порога не нашла |
+| `not checked` | данных для проверки не было (с причиной) или отчёт слишком старый |
+
+Итоговый вердикт сверяет длительность запуска с `scenario.budget_ms` (в
+рамках бюджета — `fine`, до +25% — `worth a look`, выше — `needs attention`,
+без бюджета — `not checked`). Код возврата всегда 0.
+
+## Отчёт как веб-страница
+
+`echolot analyze --html` или `echolot report --html` создают `report.html` —
+единый автономный файл (без внешних шрифтов и скриптов, со строгим CSP,
+тёмной и светлой темой, интерактивной фильтрацией, панелями деталей с
+графиками разброса по повторам и генератором промпта **Dig deeper** для
+`/echolot-hunt`). Если `report.html` уже существует в папке вывода, каждый
+последующий `analyze` автоматически обновляет его.
+
+Проверку, которая что-то нашла, можно отметить галочкой. **Dig deeper** собирает
+из отмеченного запрос для агента, чтобы скопировать его в агента, открытого на
+проекте:
+
+```text
+/echolot-hunt `coldStart` takes 1,136 ms, the median of 5 launches, and has no time limit set. Find what is behind the rows below, and where that is in the code.
+
+The report warns, and these come first:
+- 1 detector(s) could not run, because the trace does not hold what they read. Their silence says nothing about the app. `composables` — The recording does not carry the names of composables, which have to be switched on when recording. A recording that holds what they read lets them look; until then those checks are open.
+
+The rows of the report it stands on:
+- App Deadline Missed · frame_jank · 427.51 ms, 5/5 runs · Self Jank · 4 of 19 frames · longest 188.7 ms
+- inflate · main_thread_block · 222.68 ms, 5/5 runs · com.example.app
+- draw · main_thread_block · 120.8 ms, 5/5 runs · com.example.app
+- TextLayout:initLayout · main_thread_block · 73.95 ms, 5/5 runs · com.example.app
+- Lock contention on a monitor lock (owner tid: 12931) · main_thread_block · 61.6 ms, 5/5 runs · com.example.app
+
+Traces: the 5 behind .echolot/out/report.json (the last report). After which change: unknown.
+```
+
+Это демо-приложение с отмеченными «Frames that came late» и «Heavy work on the
+main thread». Одно расследование отвечает на один вопрос, поэтому запрос
+начинается с одного вопроса: сколько длится сценарий, при заданном лимите — по
+сравнению с ним («against a time limit of 500 ms. Find what makes it slower than
+the limit»), и что найти. Дальше идут предупреждения из верхней части отчёта,
+его же словами, и первым — якорь, который ничего не нашёл: они говорят, насколько
+можно доверять числам отчёта. Отмеченные проверки идут следом как то, на чём
+стоит вопрос: по четыре самые крупные строки каждой и строка о том, сколько ещё
+у неё есть; остальное агент прочитает в самом отчёте.
+
+Кнопка рядом с **Dig deeper** отмечает, с чего начать: проверки, которым нужно
+внимание, а если таких нет — две, нашедшие самое крупное. Если отмечено больше
+трёх, окно говорит, что одно расследование смотрит на один вопрос, и советует
+отметить меньше. Файл с диска сам ничего не запускает; тот же отчёт, открытый
+через `echolot ui`, может запустить Claude Code на этом запросе
+([Агент со страницы](ui.md#агент-со-страницы)).
+
+## На что ушёл холодный старт
+
+Если в трейсе есть запуск приложения, `analyze` добавляет разбивку
+Perfetto (`android_startups` и `android_startup_opinionated_breakdown`):
+время от интента до первого кадра по категориям (`bind_application`,
+`monitor_contention`, `choreographer_do_frame`, `launch_delay` и т.д.), а
+также состояние AOT/JIT-компиляции ART (`speed-profile`, `verify`,
+`run-from-apk`).
+
+## Окно, равное запуску
+
+```yaml
+scenario:
+  name: coldStart
+  window: launch
+```
+
+Окно открывается на системном интенте запуска и закрывается по более позднему
+из двух событий: первому кадру или завершению первого вызова
+`reportFullyDrawn()`. В отчёте и `runs.jsonl` фиксируется способ закрытия
+(`launch` или `launch+reportFullyDrawn`), а `compare` запрещает сравнивать
+два отчёта с разными способами закрытия окна (см. [Два окна](compare.md#два-окна)).
+
+## От строки к файлу без `domains`
+
+`analyze` автоматически привязывает к исходникам строки с фреймами
+блокировок (`monitor_contention`), инфлейта (`main_thread_block`) и
+сэмплированных стеков (`uninstrumented_cpu`) — с учётом `project.mapping` для
+минифицированных сборок — записывая результат в столбец `code` и массив
+`places` в JSON.
+
+## Две строки об одном имени
+
+`main_thread_block` срабатывает на **сумму** времени (работа стабильно
+дорогая), а `main_thread_outlier` — на **единичный выброс** относительно
+медианы того же имени (редкое состояние вроде холодного кэша или блокировки).
+
+## Строки Compose
+
+Compose сам пишет в трейс свои фазы (`Recomposer:recompose`,
+`Compose:recompose`, `Compose:applyChanges`, `AndroidOwner:onMeasure`,
+`onLayout`, `draw`, `TextStringSimpleNode::measure`). Когда подключён
+`androidx.compose.runtime:runtime-tracing` и включён `runner.compose_names`
+([Сбор трейсов](collecting.md#имена-composable-функций)), время уходит из
+общего `Compose:recompose` в отдельные срезы composable-функций, которые
+ранжирует детектор `composables` с указанием места композиции (`in a first
+composition`, `in a frame`, `during measure`, `elsewhere`).
+
+## Когда у вас уже два отчёта
+
+Чтобы сравнить два набора трейсов и увидеть, что именно изменилось между
+«было» и «стало», используйте [`echolot compare`](compare.md).

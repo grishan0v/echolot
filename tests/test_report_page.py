@@ -664,14 +664,29 @@ def test_a_report_from_before_checked_says_not_checked_and_why():
 
 # --- the request for an agent --------------------------------------------------------------
 
-def test_the_request_is_put_together_from_what_the_page_holds():
+def put_together(ask: dict, ticks: list) -> str:
+    """The request as `picks.js` puts it together from what the page holds:
+    the question, the report's warnings, the rows of what is ticked, the
+    last line, a blank line between each."""
+    rows = [line for tick in ticks for line in tick.attrs["data-req"].split("\n")]
+    blocks = [ask["data-question"]]
+    if ask["data-warn"]:
+        blocks.append(ask["data-warn-head"] + "\n" + ask["data-warn"])
+    blocks.append("\n".join([ask["data-rows-head"], *rows]))
+    blocks.append(ask["data-tail"])
+    return "\n\n".join(blocks)
+
+
+def test_the_request_is_one_question_with_the_rows_as_its_evidence():
     page = page_of(known(), where=".echolot/out/report.json")
     ask = page.one("dialog", "ask").attrs
-    lead = "/echolot-hunt coldStart takes 1,920 ms against a limit of 500 ms. "
-    check("for one row", ask["data-one"] == lead + "Find what is behind this row of the last report and where it is in the code:")
-    check("for several", ask["data-many"] == lead + "Find what is behind these rows of the last report and where it is in the code:")
+    check("it leads with one question, from the verdict and the limit",
+          ask["data-question"] == "/echolot-hunt `coldStart` takes 1,920 ms, the median of 3 launches, against a time "
+                                  "limit of 500 ms. Find what makes it slower than the limit, and where that is in the "
+                                  "code.", ask["data-question"])
+    check("the rows come under it as what it stands on", ask["data-rows-head"] == "The rows of the report it stands on:")
     check("which traces, and after which change",
-          ask["data-tail"] == "Traces: the 3 behind .echolot/out/report.json. After which change: unknown.")
+          ask["data-tail"] == "Traces: the 3 behind .echolot/out/report.json (the last report). After which change: unknown.")
     tick = rows_of(page)["main_thread_waits"].one("input")
     check("the rows of a ticked check, as the report names them",
           tick.attrs["data-req"] == "- worker_pool_# · main_thread_waits · 700 ms, 3/3 runs · idle · 71% blocked in loadConfig")
@@ -679,26 +694,80 @@ def test_the_request_is_put_together_from_what_the_page_holds():
           tick.attrs["data-title"] == "The screen waits for background work" and tick.attrs["data-level"] == "red")
     check("an icon of each level to copy from", sorted(s.attrs["data-icon"] for s in page.all("span")
                                                        if "data-icon" in s.attrs) == ["green", "grey", "red", "yellow"])
+    ticks = [rows_of(page)[k].one("input") for k in ("main_thread_waits", "binder_txn")]
+    picked = [c for c in report_page.checks(known()) if c["key"] in ("main_thread_waits", "binder_txn")]
+    check("the page's blocks make the request a served page puts together",
+          put_together(ask, ticks) == report_page.request_text(known(), picked, ".echolot/out/report.json"),
+          put_together(ask, ticks))
+
+
+def test_the_request_carries_the_reports_warnings_a_missed_anchor_first():
+    rep = known()
+    rep["window"]["end_anchor"] = {"glob": "first_frame*", "matches": 0, "missed": "3/3"}
+    page = page_of(rep, where=".echolot/out/report.json")
+    ask = page.one("dialog", "ask").attrs
+    warned = ask["data-warn"].split("\n")
+    check("under a heading of its own", ask["data-warn-head"] == "The report warns, and these come first:")
+    check("the missed anchor first, in the report's own words",
+          warned[0].startswith("- End anchor `first_frame*` was not found in the trace"), warned)
+    check("then the others the report has at its top", len(warned) == 3
+          and any("startup does not overlap" in w for w in warned), warned)
+    written = report_mod.to_markdown(plain.annotate(copy.deepcopy(rep)))
+    check("every one is a line report.md marks", all(w[2:] in written for w in warned))
+    check("a report with none has no such block", page_of(plain.annotate(make(
+        [entry("main_thread_waits", [row("worker", 700.0)])], startup=False))).one("dialog", "ask").attrs["data-warn"] == "")
 
 
 def test_the_request_of_a_report_named_by_hand_and_of_one_with_no_budget():
     rep = plain.annotate(make([entry("main_thread_waits", [row("worker", 700.0, runs=None)])], runs=None))
     ask = page_of(rep, where="/tmp/before.json", last=False).one("dialog", "ask").attrs
-    check("not called the last report, no limit, one trace",
-          ask["data-one"] == "/echolot-hunt coldStart takes 2,000 ms. Find what is behind this row of the report "
-                             "and where it is in the code:"
+    check("no limit, one trace, not called the last report",
+          ask["data-question"] == "/echolot-hunt `coldStart` takes 2,000 ms and has no time limit set. Find what is "
+                                  "behind the rows below, and where that is in the code."
           and ask["data-tail"] == "Traces: the one behind /tmp/before.json. After which change: unknown.", ask)
     rep["scenario"] = None
     check("a report with no scenario names the window",
-          page_of(rep).one("dialog", "ask").attrs["data-one"].startswith("/echolot-hunt The window takes 2,000 ms."))
+          page_of(rep).one("dialog", "ask").attrs["data-question"].startswith("/echolot-hunt The window takes 2,000 ms"))
+    within = plain.annotate(make([entry("main_thread_waits", [row("worker", 700.0)])], budget=3000))
+    check("one within its limit is asked what is behind the rows",
+          "and stays within its time limit of 3,000 ms. Find what is behind the rows below"
+          in page_of(within).one("dialog", "ask").attrs["data-question"])
+    none = plain.annotate(make([entry("main_thread_waits", [row("worker", 700.0)])], duration=0))
+    check("and one with no window says so",
+          page_of(none).one("dialog", "ask").attrs["data-question"]
+          == "/echolot-hunt `coldStart` has no measured window. Find what is behind the rows below, and where that is "
+             "in the code.")
+
+
+def test_where_to_start_is_what_needs_attention_or_the_two_largest():
+    red = known()
+    page = page_of(red)
+    check("with one that needs attention, that one", [c["key"] for c in report_page.where_to_start(
+        report_page.checks(red))] == ["main_thread_waits"])
+    check("the button says so", page.one("button", id="dock-all").text == "Tick the one that needs attention")
+    check("and so does the sentence under the table",
+          any("Tick the one that needs attention and press Dig deeper" in c.text for c in page.all("div", "callout")))
+    yellow = plain.annotate(make([entry("binder_txn", [row("Sync", 41.0)]), entry("gc_pressure", [row("gc", 90.0)]),
+                                  entry("io_wait", [row("main", 60.0)])], startup=False))
+    picks = report_page.where_to_start(report_page.checks(yellow))
+    check("with none, the two that found the largest thing", [c["key"] for c in picks] == ["gc_pressure", "io_wait"],
+          [c["key"] for c in picks])
+    page = page_of(yellow)
+    check("their weight is on the box for the script to choose by",
+          rows_of(page)["gc_pressure"].one("input").attrs["data-weight"] == "90.000")
+    check("and the button says it", page.one("button", id="dock-all").text == "Tick the two largest")
+    check("more than three ticked is too much for one question: the dialog has the sentence",
+          page.one("dialog", "ask").attrs["data-focus"] == "3"
+          and "One investigation looks at one question. With {n} checks ticked"
+          in page.one("dialog", "ask").attrs["data-many-note"]
+          and "hidden" in page.one("div", id="ask-many").attrs)
 
 
 def test_the_request_in_the_guide_is_the_demos(demo_report):
     """docs/analysing.md shows the request for two ticked checks of the demo app."""
     page = page_of(demo_report, where=".echolot/out/report.json")
     ask, rows = page.one("dialog", "ask").attrs, rows_of(page)
-    request = "\n".join([ask["data-many"], rows["frame_jank"].one("input").attrs["data-req"],
-                         rows["main_thread_block"].one("input").attrs["data-req"], ask["data-tail"]])
+    request = put_together(ask, [rows["frame_jank"].one("input"), rows["main_thread_block"].one("input")])
     guide = (ROOT / "docs" / "analysing.md").read_text(encoding="utf-8")
     check("the sample in the guide is what the page puts together", f"```text\n{request}\n```" in guide, request)
     check("and the two checks are called what the guide calls them",
@@ -998,7 +1067,7 @@ def test_report_html_for_a_report_named_by_hand(project):
     check("analysed into a directory of its own", code == 0, err)
     page = read((root / "elsewhere" / "report.html").read_text(encoding="utf-8"))
     check("which is not what `echolot report` calls the last report",
-          "of the report and" in page.one("dialog", "ask").attrs["data-one"]
+          "(the last report)" not in page.one("dialog", "ask").attrs["data-tail"]
           and "behind elsewhere/report.json." in page.one("dialog", "ask").attrs["data-tail"])
     kept = root / "kept" / "003.json"
     kept.parent.mkdir()

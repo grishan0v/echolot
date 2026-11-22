@@ -1,8 +1,9 @@
 # Configuration for the `lychee` link checker (.github/workflows/linkcheck.yml).
 #
-# Scope is README.md, SECURITY.md, CONTRIBUTING.md and docs/**/*.md — the
-# same paths the workflow triggers on and passes on its command line. No other
-# Markdown in the repository is written for a reader outside it.
+# Scope is README.md, README.*.md, SECURITY.md, CONTRIBUTING.md and
+# docs/**/*.md — the same paths the workflow triggers on and passes on its
+# command line. No other Markdown in the repository is written for a reader
+# outside it.
 
 # A CI runner is not a browser with a person waiting on it: give a slow or
 # momentarily rate-limited server room to answer before calling it dead.
@@ -64,6 +65,12 @@ exclude = [
   # the pictures. tests/test_docs.py checks each address against the tree the
   # pull request brings, its anchor included.
   '^https://github\.com/grishan0v/echolot/(?:blob|tree)/main/',
+
+  # Localized GitHub Pages subpaths (e.g. /echolot/ru/). A new translation
+  # is not deployed to Pages until its pull request merges to `main`, so
+  # checking it here would fail the PR that adds it; docs.yml builds every
+  # language in docs/languages.yml with `--strict` instead.
+  '^https://grishan0v\.github\.io/echolot/[a-z]{2}(?:-[A-Za-z]+)?/$',
 
   # cursor.directory, the plugin's listing in Cursor's community catalog,
   # linked from docs/agent-layer.md and docs/publishing.md. The site sits

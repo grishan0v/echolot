@@ -65,6 +65,16 @@ def no_cursor_here(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def no_agent_here(monkeypatch):
+    """`echolot ui` looks for Claude Code on this computer to start it from a
+    report (#449). A test finds none, whatever the machine running it has
+    installed: no test ever starts the real client, nor asks it anything. A
+    test that wants one hands in a double."""
+    from echolot import dig
+    monkeypatch.setattr(dig, "_which", lambda name: None)
+
+
+@pytest.fixture(autouse=True)
 def keep_cwd():
     """Several cases chdir into a temp project, and one of them may fail there.
 
