@@ -249,6 +249,49 @@ def test_a_layer_no_newer_release_wrote_is_updated_as_before(
           layer.audit(tmp_path)["rows"])
 
 
+def test_a_layer_without_its_door_reads_as_stale_and_one_init_restores_it(
+        tmp_path: Path) -> None:
+    """The manifest and the files are there, SKILL.md is gone (#502).
+
+    `.claude/skills` swapped for a link to another agent's directory took the
+    door with it. The layer read as none installed, and `init` kept the files
+    an older release wrote as `differs` until a second run.
+    """
+    _as_left_by(tmp_path, "0.1.0")
+    door = tmp_path / ".claude" / layer.DOOR
+    door.unlink()
+
+    states = {r["file"]: r["state"] for r in layer.audit(tmp_path)["rows"]}
+    check("the layer is there, with the door missing",
+          states[layer.DOOR] == "missing", states)
+    check("and the older release's file still reads as stale",
+          states["agents/perf-hunter.md"] == "stale", states)
+    verdict, line = layer.one_line(tmp_path)
+    check("the one line says stale and names the door", verdict == "stale"
+          and f"the door skill .claude/{layer.DOOR} is missing" in line, line)
+    check("and `next` is init", next_kind(project_state(tmp_path)) == "init",
+          next_kind(project_state(tmp_path)))
+
+    code, said = run(tmp_path, "init", "--no-input", "--no-doctor")
+    check("init runs", code == 0, said)
+    check("the door is put back", f"+ .claude/{layer.DOOR}" in said
+          and door.is_file(), said)
+    check("the older file is updated in the same run",
+          "↑ .claude/agents/perf-hunter.md (updated)" in said
+          and "untouched" not in said, said)
+    check("one run leaves every file current",
+          {r["state"] for r in layer.audit(tmp_path)["rows"]} == {"current"},
+          layer.audit(tmp_path)["rows"])
+
+
+def test_no_door_and_no_manifest_is_no_layer(tmp_path: Path) -> None:
+    """Without either, nothing says an `init` ran here."""
+    (tmp_path / ".claude" / "agents").mkdir(parents=True)
+    (tmp_path / ".claude" / "agents" / "perf-hunter.md").write_text(
+        "someone's own agent\n", encoding="utf-8")
+    check("none installed", layer.audit(tmp_path) is None)
+
+
 # --- a version that does not read -------------------------------------------
 
 @pytest.mark.parametrize("written", ["banana", "unknown", "", "0.8.x",

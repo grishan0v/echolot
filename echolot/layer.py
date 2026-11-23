@@ -57,6 +57,8 @@ def guide_text(path: Path) -> str:
         if end >= 0:
             text = text[end + len("\n---\n"):]
     return text.strip()
+# The skill every client's session opens first: the door to the rest.
+DOOR = "skills/echolot/SKILL.md"
 # What `init` installed, file by file: the manifest lets `doctor` tell a file
 # the project customised from one the package has since moved on from.
 LAYER_MANIFEST = "echolot-layer.json"
@@ -343,10 +345,16 @@ def audit(project: Path) -> dict | None:
     part is there ("current") or not yet ("stale", which plain `init` fixes).
     """
     root = project / ".claude"
-    if not (root / "skills" / "echolot" / "SKILL.md").exists():
-        return None
     manifest = _read_manifest(root)
     installed = manifest.get("files") or {}
+    # The layer is here when its door is, or when a manifest says an `init`
+    # put it in. Hanging it on SKILL.md alone read a layer whose skill had
+    # gone — `.claude/skills` swapped for a link to another agent's directory
+    # — as none installed, with its manifest and four files still there; and
+    # `init` then had no manifest entry to judge them by, kept them as
+    # `differs`, and needed a second run to update them (#502).
+    if not (root / DOOR).exists() and not installed:
+        return None
     private = hosts.load_private(project)
     rows = []
     for src in template_files():
@@ -583,7 +591,9 @@ def _one_line(project: Path) -> tuple[str, str]:
     if verdict == "stale":
         kept = ("; the files edited here are kept"
                 if any(s in files for s in EDITED) else "")
-        return verdict, f"layer: STALE — {what} → `{a['command']}`{kept}"
+        door = (f"; the door skill .claude/{DOOR} is missing"
+                if DOOR in files.get("missing", []) else "")
+        return verdict, f"layer: STALE — {what}{door} → `{a['command']}`{kept}"
     if verdict == "differs":
         return verdict, (f"layer: STALE — {what} → `{a['command']}` overwrites "
                          f"them, edits made here included — ask first")

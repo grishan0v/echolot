@@ -4362,6 +4362,17 @@ def _(report):
         assert "! .claude/skills/echolot/SKILL.md" in out.getvalue(), out.getvalue()
         assert {r["state"] for r in audit(project)["rows"]} == {"current"}
 
+        # the door goes, the manifest stays: still a layer, with the skill
+        # missing, and one init puts it back (#502)
+        skill.unlink()
+        st = audit(project)
+        assert st is not None, "a manifest without SKILL.md read as no layer"
+        by = {r["file"]: r["state"] for r in st["rows"]}
+        assert by["skills/echolot/SKILL.md"] == "missing", by
+        with contextlib.redirect_stdout(io.StringIO()):
+            cmd_init(argparse.Namespace(into=str(project), force=False, no_doctor=True))
+        assert {r["state"] for r in audit(project)["rows"]} == {"current"}
+
         # a newer echolot wrote it: a file it changed reads as stale against
         # this template, and an older `init` used to put this template's
         # copy back. The manifest's version is read first now, and neither

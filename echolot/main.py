@@ -4194,9 +4194,9 @@ def cmd_init(args) -> int:
                 installed[rel] = layer.sha(src)
                 continue
             if was is None and layer.sha(dst) == layer.sha(src):
-                # No manifest entry to judge by — `audit` knows no file's
-                # state when SKILL.md is gone — and the file is the
-                # template's byte for byte. Called `differs`, it was kept and
+                # Nothing to judge by — `audit` knows no file's state when
+                # neither SKILL.md nor a manifest is there — and the file is
+                # the template's byte for byte. Called `differs`, it was kept and
                 # offered to `--all` for nothing.
                 same.append(rel)
                 installed[rel] = layer.sha(src)
