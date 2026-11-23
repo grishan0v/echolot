@@ -73,6 +73,16 @@ looks like GC, locks or binder yet no detector will see. That is the list to
 act on. A detector the config turned off (`gc_pressure: false`) sees nothing,
 so the names only it would have seen are listed there too.
 
+A section takes a name by the shapes those slices have, never by a word
+inside it: `… GC` and `waitWhileAllocating…` for the collector, `Lock
+contention on …` and `monitor contention with owner …` for locks, `binder
+transaction`, `binder reply` and the `AIDL::` stubs for binder. A JIT
+compilation, a class being initialised (`Lkotlin/collections/CollectionsKt;`)
+and the agent's own markers go to "Everything else" whatever their names
+hold, and a lock of the runtime's own (`Lock contention on ClassLinker
+classes lock`) is listed under locks but not as missed, since no mask is
+meant to see it.
+
 Two subtleties in the output. Something excluded on purpose via `skip_glob` is
 marked as excluded rather than missed — it is a decision, not a gap. And the
 mask column speaks only about detectors that search by name; a dash next to

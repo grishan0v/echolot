@@ -59,6 +59,15 @@ echolot names trace.perfetto-trace --json   # секции, семейства, 
 блокировки или binder, чего не увидит ни один детектор. Элементы, намеренно
 исключённые через `skip_glob`, помечаются как исключённые, а не пропущенные.
 
+Секция берёт имя по форме, которая бывает у таких срезов, а не по слову внутри
+него: `… GC` и `waitWhileAllocating…` для сборщика, `Lock contention on …` и
+`monitor contention with owner …` для блокировок, `binder transaction`,
+`binder reply` и заглушки `AIDL::` для binder. JIT-компиляция, инициализация
+класса (`Lkotlin/collections/CollectionsKt;`) и метки самого агента уходят в
+«Everything else», что бы ни было в их именах, а блокировка самого рантайма
+(`Lock contention on ClassLinker classes lock`) стоит среди блокировок, но не
+среди пропущенных: её не должна видеть ни одна маска.
+
 ### Маски живут в конфиге
 
 ```yaml
