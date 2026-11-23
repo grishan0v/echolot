@@ -874,6 +874,15 @@ The whole point of repeating is the **Runs** column:
 The first row reproduces, the second happened once. Without that column they
 look equally convincing and the agent goes off investigating an accident.
 
+A row is matched across repeats by its name, with the numbers the runtime
+picks anew in each run left out: a lock owner's tid
+(`Lock contention on a monitor lock (owner tid: #)`), a frame's number
+(`Choreographer#doFrame #`), the number of a pool or unnamed thread
+(`Thread-#`, `pool-#-thread-#`). One wait seen in every run is then one row,
+`3/3`, and the names as each trace had them are kept in the row's `variants`
+in `report.json`. Line numbers in a lock note, and the project's own markers,
+keep their digits.
+
 Two warnings come out of merging:
 
 - the runner prints the `am start -W` spread and flags it above 30% — the

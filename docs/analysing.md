@@ -603,7 +603,7 @@ The rows of the report it stands on:
 - inflate · main_thread_block · 222.68 ms, 5/5 runs · com.example.app
 - draw · main_thread_block · 120.8 ms, 5/5 runs · com.example.app
 - TextLayout:initLayout · main_thread_block · 73.95 ms, 5/5 runs · com.example.app
-- Lock contention on a monitor lock (owner tid: 12931) · main_thread_block · 61.6 ms, 5/5 runs · com.example.app
+- Lock contention on a monitor lock (owner tid: #) · main_thread_block · 61.6 ms, 5/5 runs · com.example.app
 
 Traces: the 5 behind .echolot/out/report.json (the last report). After which change: unknown.
 ```

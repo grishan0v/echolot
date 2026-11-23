@@ -253,7 +253,7 @@ def test_a_repeat_whose_sampler_lost_the_process_does_not_speak_for_the_row():
                      detail="98.0% · 40 stacks: GzipSink.write 100%", stacks=named)]),
             one([row("pool-3-thread-1", count=0, total_ms=700.0,
                      detail="97.0% · 38 stacks: GzipSink.write 100%", stacks=named)])]
-    got = merged_rows(runs)["pool-3-thread-1"]
+    got = merged_rows(runs)["pool-#-thread-#"]
     check("the worst of the repeats with stacks gives the evidence",
           got["detail"] == "98.0% · 40 stacks: GzipSink.write 100%", got)
     check("and the stacks with it", got["stacks"] == named, got)

@@ -939,14 +939,15 @@ def test_end_to_end(tmp_path: Path) -> None:
               len(band["values"]) == int(banded[0]["runs"].split("/")[0]),
               f"{band['values']} vs {banded[0]['runs']}")
 
-    # The same report with one worker renamed: a real report shape going
-    # through the family pass.
+    # The same report with the worker named as a report from before #504
+    # named it, with its number: a real report shape going through the
+    # family pass. The merge itself already folds the number.
     before = tmp_path / "before.json"
     before.write_text(json.dumps(written), encoding="utf-8")
     after = json.loads(json.dumps(written))
     for d in after["detectors"]:
         for r in d["rows"]:
-            r["location"] = r["location"].replace("DefaultDispatcher-worker-1",
+            r["location"] = r["location"].replace("DefaultDispatcher-worker-#",
                                                   "DefaultDispatcher-worker-3")
     (tmp_path / "after.json").write_text(json.dumps(after), encoding="utf-8")
 

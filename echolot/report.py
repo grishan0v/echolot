@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 from statistics import median
-from typing import Any
+from typing import Any, Callable
 
 from . import launch as launch_mod
 from . import needs as needs_mod
@@ -28,7 +28,7 @@ COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
 # side of the `code` column — see place.py — and `stacks` the json side of
 # what the evidence says the samples named — see stacks.py. `unfinished` is a
 # marker that never closed, which its numbers say with a `≥`.
-HIDDEN = {"spread", "places", "stacks", "unfinished", "parents"}
+HIDDEN = {"spread", "places", "stacks", "unfinished", "parents", "variants"}
 HEADERS = {
     "location": "Where",
     "runs": "Runs",
@@ -86,6 +86,55 @@ def family(name: str, keep: str | None = None) -> str:
         return name
     # One pass: the digits pass after the hex one rewrote its `0x#` as `#x#`.
     return _NUMBER.sub(lambda m: "0x#" if m.group(0).startswith("0x") else "#", name)
+
+
+# The numbers inside a name that the runtime picks anew in every run, and only
+# those (#504). `family` folds every digit, which is right for a second
+# matching pass and wrong for a row's name: `(Store.java:41)` in a lock note
+# is where the code is, and folding it would cost `place` its line.
+_RUNTIME = [
+    # An address: `Lock contention on 0x7f3a2b`.
+    (re.compile(r"0x[0-9a-fA-F]+"), "0x#"),
+    # A tid: `(owner tid: 13533)`, `tid 4202`.
+    (re.compile(r"\b(tid:?\s*)\d+"), r"\g<1>#"),
+    # The owner's tid in ART's long lock note: `with owner Thread-3 (4455) at`.
+    (re.compile(r"(with owner .+? \()\d+(\))"), r"\g<1>#\g<2>"),
+    # How many waited, in the same note: `waiters=0`, `waiters=1`.
+    (re.compile(r"\b(waiters=)\d+"), r"\g<1>#"),
+    # A frame's vsync id, and what a resync says beside it:
+    # `Choreographer#doFrame 55112`, `… - resynced to 55120 in 21.1ms`.
+    (re.compile(r"(Choreographer#doFrame\b.*)$"),
+     lambda m: _NUMBER.sub("#", m.group(1))),
+    # A binder thread's pid: `binder:1234_5`.
+    (re.compile(r"\b((?:Hw)?[Bb]inder:)\d+"), r"\g<1>#"),
+    # The number of a pool's or an unnamed thread: `Thread-31`,
+    # `pool-3-thread-2`, `DefaultDispatcher-worker-3`, `AsyncTask #2`,
+    # `binder:#_5`. After `-`, `_` or `#` only, so `Store.java:41` and
+    # `Lambda$1` keep theirs, and so does the unknown line `(:-1)`.
+    (re.compile(r"(?<=[-_])(?<!:-)\d+\b"), "#"),
+    (re.compile(r"#\d+\b"), "#"),
+]
+
+
+def runtime_name(name: str, keep: str | None = None,
+                 names: frozenset[str] | set[str] = frozenset()) -> str:
+    """A name with the numbers the runtime chose folded to `#`.
+
+    One wait that happens in every run is one row: `Lock contention on a
+    monitor lock (owner tid: 15427)` in one run and `… 10359` in the next are
+    the same wait, and `Thread-31` … `Thread-39` across fifteen runs are one
+    unnamed thread, started once in each. Merged by the raw name, a 15/15
+    wait read as fifteen 1/15 accidents (#504).
+
+    `keep` is the instrumentation prefix and `names` the project's own marker
+    names, which are left as they are: their digits were written by someone
+    to tell two things apart — see `family`.
+    """
+    if name in names or (keep and name.startswith(keep)):
+        return name
+    for pattern, to in _RUNTIME:
+        name = pattern.sub(to, name)
+    return name
 
 
 def metric_of(row: dict[str, Any]) -> str:
@@ -454,8 +503,34 @@ def _merge_sampling(samplings: list[dict[str, Any] | None]) -> dict[str, Any] | 
     return merged
 
 
+def _one_run(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Rows of one repeat that a folded name made one: added up.
+
+    Two owners' tids in one run are two stretches of one wait, so their
+    times and counts add; the longest single one is the longer of the two.
+    The evidence is the larger row's, as `merge_rows` takes it from the
+    worst repeat.
+    """
+    if len(rows) == 1:
+        return rows[0]
+    out = dict(max(rows, key=_rank))
+    for col in ("count", "self_ms", "total_ms", "covered_ms"):
+        values = [r[col] for r in rows if r.get(col) is not None]
+        if values:
+            out[col] = round(sum(values), 2)
+    tops = [r["max_ms"] for r in rows if r.get("max_ms") is not None]
+    if tops:
+        out["max_ms"] = max(tops)
+    return out
+
+
+# Detectors whose rows are single events rather than recurring work.
+_EVENTS = {"anr"}
+
+
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
-               total: int, *, counts: bool = False) -> list[dict[str, Any]]:
+               total: int, *, counts: bool = False,
+               fold: Callable[[str], str] | None = None) -> list[dict[str, Any]]:
     """The rows of one detector across its repeats, folded to one row per identity.
 
     `per_run` is one list of rows per repeat, in report order. The repeat's
@@ -465,18 +540,31 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
     `counts` keeps the per-run `count` in `spread` too, beside the times.
     The markers table asks for it: "one call became two" is the shape of
     work done twice, and `compare` can only judge it from each run (#618).
+
+    `fold` is applied to every text column of the identity first — see
+    `runtime_name`. Rows of one repeat that it makes one are added up, and the
+    names as the trace had them are kept in the row's `variants`.
     """
-    groups: dict[tuple, list[tuple[int, dict]]] = {}
+    groups: dict[tuple, dict[int, list[dict]]] = {}
+    variants: dict[tuple, dict[str, set]] = {}
     for i, rows in enumerate(per_run):
         for row in rows:
-            groups.setdefault(tuple(row.get(c) for c in identity),
-                              []).append((i, row))
+            raw = tuple(row.get(c) for c in identity)
+            key = raw if fold is None else tuple(
+                fold(v) if isinstance(v, str) else v for v in raw)
+            groups.setdefault(key, {}).setdefault(i, []).append(row)
+            for col, was, now in zip(identity, raw, key, strict=True):
+                if was != now:
+                    variants.setdefault(key, {}).setdefault(col, set()).add(was)
 
     out = []
-    for key, seen in groups.items():
-        found = [r for _, r in seen]
+    for key, by_run in groups.items():
+        found = [_one_run(rows) for rows in by_run.values()]
         row: dict[str, Any] = dict(zip(identity, key, strict=True))
-        row["runs"] = f"{len({i for i, _ in seen})}/{total}"
+        row["runs"] = f"{len(by_run)}/{total}"
+        if key in variants:
+            row["variants"] = {col: sorted(names)
+                               for col, names in variants[key].items()}
         spread = {}
         for col in NUMERIC:
             values = [f[col] for f in found
@@ -675,6 +763,14 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     merged["environment"] = _merge_environment(reports)
     merged["recording"] = recording_mod.merge([r.get("recording") for r in reports])
 
+    # The project's own names are kept as written, see `runtime_name`.
+    sections = [r.get("markers") or {} for r in reports]
+    prefix = next((s["prefix"] for s in sections if s.get("prefix")), None)
+    own = frozenset(row["location"] for s in sections for row in s.get("rows") or [])
+
+    def names(value: str) -> str:
+        return runtime_name(value, keep=prefix, names=own)
+
     by_id: dict[str, list[dict]] = {}
     for report in reports:
         for det in report["detectors"]:
@@ -696,8 +792,12 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         # `1/3` when it had failed in the other two, and `1/3` means caught
         # once. How many failed is said beside the rows instead.
         ran = [run for run in runs if not run["error"]]
+        # An ANR's row is one event, named by the id the platform gave it:
+        # there is no number in it to fold.
+        fold = None if head["id"] in _EVENTS else names
         head["rows"] = merge_rows([run["rows"] for run in ran],
-                                  identity_of(head), len(ran)) if ran else []
+                                  identity_of(head), len(ran),
+                                  fold=fold) if ran else []
         head["error"] = next((r["error"] for r in runs if r["error"]), None)
         if head["error"]:
             head["failed_runs"] = f"{len(runs) - len(ran)}/{len(runs)}"
