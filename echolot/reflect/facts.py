@@ -37,6 +37,11 @@ RE_TRACE_OPEN = re.compile(
 RE_REPORT_BY_HAND = re.compile(
     r"(json\.load|jq\b|python3?\s+-c).*report\.json|report\.json.*(json\.load|jq\b)",
     re.S)
+# Code that reads report.json: python's json, or a reader of the file in any
+# other language an execute tool runs.
+RE_CODE_READS_REPORT = re.compile(
+    r"report\.json[\s\S]*(?:json\.loads?|JSON\.parse|read_text|readFile|open\()|"
+    r"(?:json\.loads?|JSON\.parse|read_text|readFile|open\()[\s\S]*report\.json")
 RE_HELP_FLAG = re.compile(r"(?:^|\s)(?:--help|-h)(?:\s|$)")
 
 _EXIT = re.compile(r"Exit code (\d+)")

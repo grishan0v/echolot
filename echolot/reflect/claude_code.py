@@ -260,6 +260,7 @@ class _Pass:
         self.sub = sub
         self.pending_agents = pending_agents
         self.open_calls: dict[str, Call] = {}
+        self.batches: dict[str, list[Call]] = {}
         self.open_asks: dict[str, list[dict[str, Any]]] = {}
         # One API response is written as several rows (thinking, text, each
         # tool_use) and the usage on them grows as the response streams: the
@@ -367,6 +368,12 @@ class _Pass:
         call = _call_from_use(block, ts, row_agent)
         self.session.calls.append(call)
         self.open_calls[call.id] = call
+        # A batch: each command after the first is a call of its own beside
+        # it, answered by the same result.
+        rest = _batch_rest(block, call)
+        if rest:
+            self.session.calls.extend(rest)
+            self.batches[call.id] = rest
         inp = block.get("input") or {}
         if call.tool == "AskUserQuestion":
             questions = inp.get("questions") or []
@@ -441,6 +448,12 @@ class _Pass:
         if ts and call.ts:
             call.duration_s = round(
                 max(0.0, ts_to_epoch(ts) - ts_to_epoch(call.ts)), 1)
+        # One result for the whole batch. Its size is counted once, on the
+        # first command: shared, every command would add the batch's output
+        # to the window again.
+        for other in self.batches.pop(use_id, []):
+            other.is_error, other.output_head = call.is_error, call.output_head
+            other.duration_s = call.duration_s
         tr = row.get("toolUseResult")
         if use_id in self.open_asks:
             self.session.asks.extend(_asks_from(
@@ -505,15 +518,54 @@ def _call_from_use(block: dict[str, Any], ts: str, agent: str) -> Call:
         # the mv of a trace directory in one session were invisible — they
         # went through such a tool, and every shell-reading signal missed them.
         code = raw.get("command") if isinstance(raw.get("command"), str) else None
-        if code is None and str(raw.get("language") or "").lower() in ("shell", "bash", "sh"):
+        language = str(raw.get("language") or "").lower()
+        if code is None and language in ("shell", "bash", "sh", "zsh"):
             code = raw.get("code")
+        if code is None:
+            first = _batch_commands(raw)[:1]
+            code = first[0] if first else None
         if isinstance(code, str) and code.strip():
             call.command = clip(code, COMMAND_LIMIT)
+        elif isinstance(raw.get("code"), str) and raw["code"].strip():
+            # Python, JavaScript, …: not a shell line, and still what the
+            # agent ran — the signals that read code look here.
+            call.code = clip(raw["code"], COMMAND_LIMIT)
+            call.language = language or None
     if isinstance(raw, dict):
         p = raw.get("file_path") or raw.get("path") or raw.get("notebook_path")
         if p:
             call.path = str(p)
     return call
+
+
+def _batch_commands(raw: dict[str, Any]) -> list[str]:
+    """The commands of a batch tool's input: `commands: [{label, command}]`,
+    or plain strings."""
+    items = raw.get("commands")
+    if not isinstance(items, list):
+        return []
+    out = []
+    for item in items:
+        cmd = item.get("command") if isinstance(item, dict) else item
+        if isinstance(cmd, str) and cmd.strip():
+            out.append(cmd)
+    return out
+
+
+def _batch_rest(block: dict[str, Any], first: Call) -> list[Call]:
+    """The second and later commands of a batch, a call each.
+
+    Nine `echolot … --help` in one batch were missing from `help_lookups`:
+    the tool was known for a shell, and only a string `command` was read
+    out of it (#542).
+    """
+    raw = block.get("input")
+    if not isinstance(raw, dict) or first.command is None \
+            or not _SHELL_TOOL.search(first.tool) or isinstance(raw.get("command"), str):
+        return []
+    return [Call(id=f"{first.id}#{i}", ts=first.ts, tool=first.tool, input=first.input,
+                 agent=first.agent, command=clip(cmd, COMMAND_LIMIT))
+            for i, cmd in enumerate(_batch_commands(raw)[1:], start=1)]
 
 
 def _result_text(content: Any) -> str:

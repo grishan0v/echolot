@@ -53,6 +53,10 @@ turned into `-`; subagents get their own file under
 `<session>/subagents/`. It has what the tool cannot see: the prompts, the
 questions to the human and the answers, every tool call with its input and
 whether it failed, tokens, the prompt handed to perf-hunter and what came back.
+A shell command run through an MCP tool counts like a `Bash` one, each
+command of a batch tool as a call of its own; Python or another language run
+through an execute tool is read by the checks that read code — a
+`report.json` cut up by hand, a trace opened directly.
 The format is undocumented; the reader treats every field as optional and
 puts anything surprising into the report's "Reader notes" rather than into an
 exception.
