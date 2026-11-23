@@ -47,6 +47,7 @@ from statistics import median
 from typing import Any
 
 from . import launch as launch_mod
+from . import when as when_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
 from . import report as report_mod
@@ -363,8 +364,21 @@ def _not_compared_warnings(before: dict, after: dict) -> list[dict[str, str]]:
     them.
     """
     out = []
-    for side, report in (("before", before), ("after", after)):
-        found = needs_mod.said(report.get("detectors") or [])
+    said = {side: needs_mod.said(report.get("detectors") or [])
+            for side, report in (("before", before), ("after", after))}
+    if said["before"] is not None and said["before"] == said["after"]:
+        # The same detectors for the same reasons on both: one warning that
+        # names both sides, where two of the same 69 words pushed what
+        # differs between the rounds off the first screen (#585).
+        count, why = said["before"]
+        return [{
+            "id": "not-checked-both",
+            "text": f"{count} detector(s) could not run on either side, because "
+                    f"neither recording holds what they read. {why} They are "
+                    f"left out of the comparison.",
+        }]
+    for side in ("before", "after"):
+        found = said[side]
         if found is None:
             continue
         count, why = found
@@ -1553,8 +1567,8 @@ STATE_HEADERS = {"id": "detector", "before": "before", "after": "after"}
 def to_markdown(cmp: dict[str, Any]) -> str:
     out: list[str] = ["# Comparison", ""]
     b, a = cmp["before"], cmp["after"]
-    out.append(f"Before  `{b['path']}`  {b['runs']} run(s)  {_when(b)}")
-    out.append(f"After   `{a['path']}`  {a['runs']} run(s)  {_when(a)}")
+    out.append(f"Before  `{b['path']}`  {b['runs']} run(s), {_when(b)}".rstrip(", "))
+    out.append(f"After   `{a['path']}`  {a['runs']} run(s), {_when(a)}".rstrip(", "))
     out.append("")
 
     w = cmp["window"]
@@ -1794,6 +1808,9 @@ def _int(v: Any) -> str:
 
 
 def _when(side: dict[str, Any]) -> str:
-    ts = side.get("generated_at") or ""
-    return ts.replace("T", " ").replace("+00:00", "").rstrip("Z")
+    """When `analyze` wrote that side's report, said as that (#585). The
+    bare UTC stamp beside each side read as when it was recorded, in local
+    time, and a reader set the two against each other."""
+    at = when_mod.local(side.get("generated_at"))
+    return f"report written {at}" if at else ""
 

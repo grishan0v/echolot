@@ -19,6 +19,7 @@ from . import launch as launch_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
 from . import stats, table
+from . import when as when_mod
 
 COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
            "covered_ms", "code", "detail"]
@@ -1687,7 +1688,9 @@ def to_markdown(report: dict[str, Any]) -> str:
         line = f"Scenario window: **{w['duration_ms']} ms**"
         low, high = w.get("duration_ms_min"), w.get("duration_ms_max")
         if low is not None:
-            line += f" (from {low} to {high})"
+            # The shortest and the longest repeat: right after a duration,
+            # a bare "from … to …" read as the window's start and end (#585).
+            line += f" (from {low} to {high} across repeats)"
         out.append(line)
         # Repeats of one scenario cannot differ several-fold. If they do, they
         # are not repeats, and a median across them means nothing.
@@ -2018,9 +2021,9 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     if w.get("duration_ms") is not None:
         line += f" · window **{w['duration_ms']} ms**"
         if w.get("duration_ms_min") is not None:
-            line += f" ({w['duration_ms_min']}–{w['duration_ms_max']})"
+            line += f" (repeats {w['duration_ms_min']}–{w['duration_ms_max']})"
     if report.get("generated_at"):
-        line += f" · {report['generated_at']}"
+        line += f" · written {when_mod.local(report['generated_at'])}"
     out.append(line)
     other = written_by((report.get("toolchain") or {}).get("echolot"),
                        (report.get("summary") or {}).get("detectors_run"))

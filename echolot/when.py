@@ -59,3 +59,21 @@ def iso_epoch(ts: object) -> float | None:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
+
+
+def local(ts: object) -> str:
+    """A stamp echolot wrote, in UTC, as the local time with its zone:
+    `2026-11-22 13:26:39 CET`. Printed with its zone cut off, the UTC read
+    as local time and was off by the offset (#227, #585). A stamp that does
+    not parse is printed as it is; one that is not text, as nothing.
+    """
+    if not isinstance(ts, str) or not ts:
+        return ""
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return ts
+    if dt.tzinfo is None:
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    dt = dt.astimezone()
+    return f"{dt:%Y-%m-%d %H:%M:%S} {dt.tzname() or dt.strftime('%z')}"
