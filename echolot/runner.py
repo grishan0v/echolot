@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import sandbox
+from . import recording, sandbox
 
 # Default atrace categories. sched in ftrace_events is mandatory: without it
 # there is no thread_state, so runnable_starvation, uninstrumented_cpu and
@@ -1015,6 +1015,12 @@ def set_aside(out_dir: Path, name: str,
     aside.mkdir(parents=True)
     for p in existing:
         p.rename(aside / p.name)
+        # What `collect` kept beside it goes with it: left behind, it would
+        # be the account of a trace that is no longer there, and the next
+        # one of that name would take it for its own until overwritten.
+        kept = recording.sidecar(p)
+        if kept.exists():
+            kept.rename(aside / kept.name)
     log(f"previous run set aside: {len(existing)} trace(s) → {aside}/")
     return aside
 
@@ -1212,6 +1218,10 @@ def collect(package: str, out_dir: Path, iterations: int,
                 f"{root.resolve()}. Check that the task really is a "
                 f"macrobenchmark, that it actually ran, and that "
                 f"runner.project_root points at the project that wrote them.")
+        for r in results:
+            # The macrobenchmark drove these, and how it reset the app
+            # between them is its own: none of it is ours to say.
+            recording.write(r["path"], {"runner": "gradle"})
         log(f"  traces collected: {len(results)} in {spent:.0f}s")
         for r in results:
             log(f"    {r['path'].name}  {r['size'] / 1e6:.1f} MB")
@@ -1295,7 +1305,7 @@ def collect(package: str, out_dir: Path, iterations: int,
             # it 95–112 ms after the kill: on an A51, 47 of 59 repeats that
             # had waited began warm, and 0 of 51 that had not. Stopped first,
             # nothing of the app runs while the device cools.
-            left = _stop(dev, package) if reset == "force-stop" else ""
+            left, was = _stop(dev, package) if reset == "force-stop" else ("", None)
             waited = settled.cool()
             screen.ready(dev, _run, log, during=f"before repeat {i + 1} of {iterations}")
             # A last look right before the recording: whatever started the
@@ -1303,7 +1313,7 @@ def collect(package: str, out_dir: Path, iterations: int,
             # so. What is left after that is said under the repeat's line.
             again = _running(dev, package) if reset == "force-stop" else ""
             if again:
-                left = _stop(dev, package)
+                left, _ = _stop(dev, package)
             _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
             # With composable names, `--background-wait` waits on every SDK
             # producer on the device and outlasts the recording (see
@@ -1374,6 +1384,8 @@ def collect(package: str, out_dir: Path, iterations: int,
             # the previous set has to make room, and not a moment earlier.
             make_room()
             info.update(_pull(dev, out))
+            recording.write(out, {"runner": mode, "reset_policy": reset,
+                                  "app_at_stop": was})
             results.append(info)
 
             extra = ""
@@ -1405,8 +1417,14 @@ STOP_SETTLE_S = 0.5
 NOT_COLD = ("WARM", "HOT", "RELAUNCH")
 
 
-def _stop(device: str, package: str) -> str:
-    """Stops the app before a cold start; the pids of it still running after, if any.
+# The first line the stop's shell prints: whether the app was running when
+# the stop came, before HOME and the kill.
+_BEFORE = re.compile(r"^was:(running|stopped)\s*$", re.MULTILINE)
+
+
+def _stop(device: str, package: str) -> tuple[str, str | None]:
+    """Stops the app before a cold start: the pids of it still running after,
+    if any, and whether it was running when the stop came.
 
     HOME first. With an activity of the app on screen, `am force-stop` was
     followed at once by the system starting the process again for that
@@ -1425,17 +1443,28 @@ def _stop(device: str, package: str) -> str:
     bounded, and a pid there at its end is the answer: the process is
     running again. One `adb shell` call, so that nothing of the host's comes
     in between.
+
+    Whether it was running is `running` or `stopped`, or None when the
+    answer did not say, and it goes into the account `collect` keeps beside
+    the trace (recording.py). A repeat whose stop found the app running
+    begins soon after a kill, unless the device has to cool in between, and
+    shares the device with the system cleaning up after the process it
+    killed: the same APK recorded that way, and recorded after a stop made
+    earlier, came out 0.68 s apart in the window with every start cold and
+    nothing else to tell the two apart (#533).
     """
     import shlex
 
     app = shlex.quote(package)
-    left = _run(["adb", "-s", device, "shell",
-                 f"input keyevent KEYCODE_HOME; am force-stop {app}; i=0; "
-                 f"while pidof {app} > /dev/null && [ $i -lt {STOP_POLLS} ]; do "
-                 f"sleep 0.1; i=$((i + 1)); done; sleep {STOP_SETTLE_S}; "
-                 f"pidof {app} || true"],
-                timeout=60)
-    return " ".join(left.split())
+    out = _run(["adb", "-s", device, "shell",
+                f"if pidof {app} > /dev/null; then echo was:running; else echo was:stopped; fi; "
+                f"input keyevent KEYCODE_HOME; am force-stop {app}; i=0; "
+                f"while pidof {app} > /dev/null && [ $i -lt {STOP_POLLS} ]; do "
+                f"sleep 0.1; i=$((i + 1)); done; sleep {STOP_SETTLE_S}; "
+                f"pidof {app} || true"],
+               timeout=60)
+    was = _BEFORE.search(out)
+    return " ".join(_BEFORE.sub("", out).split()), was.group(1) if was else None
 
 
 def _running(device: str, package: str) -> str:

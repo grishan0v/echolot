@@ -2008,6 +2008,158 @@ def _(report):
     assert "io_wait" not in cmp["summary"]["silent_both"], cmp["summary"]
 
 
+# --- which echolot, and how the recording was made (#507, #533) -------------
+
+@check("the report says which echolot wrote it, and what each detector read the trace with")
+def _(report):
+    """`compare` took a detector reworked between two versions for a change in
+    the app: 0.7.0 and 0.17.0 on the very same traces gave rows that held.
+    Each report now names its echolot, and each detector the code it read the
+    trace with, so a difference in either can be said."""
+    from . import __version__
+    from .main import DETECTOR_DIR
+    from .tp import load_detectors
+    got = report["toolchain"].get("echolot")
+    assert got == __version__, (got, __version__)
+    shipped = {d.id: d.sha for d in load_detectors(DETECTOR_DIR)}
+    for d in report["detectors"]:
+        assert d.get("sha") == shipped[d["id"]], (d["id"], d.get("sha"), shipped[d["id"]])
+        assert len(d["sha"]) == 12 and int(d["sha"], 16) >= 0, d["sha"]
+
+
+@check("the report says what its recording asked the device for, from the trace's own config")
+def _(report):
+    """The data sources, atrace categories and ftrace events, as the trace's
+    own config lists them. The fixture was not recorded by `collect`, so how
+    its repeats were driven is unknown, never a guess."""
+    rec = report["recording"]
+    assert rec["data_sources"] == sorted(["linux.ftrace", "linux.process_stats",
+                                          "android.surfaceflinger.frametimeline"]), rec
+    assert rec["atrace_categories"] == sorted(fixture.RECORDED_CATEGORIES), rec
+    assert rec["ftrace_events"] == sorted([*fixture.SCHED_EVENTS, *fixture.STATE_EVENTS]), rec
+    assert rec["runner"] is None and rec["app_at_stop"] is None, rec
+
+
+def _side_with(detectors: dict[str, list[float]], *, echolot: str | None = "1.0.0",
+               shas: dict[str, str] | None = None, **extra) -> dict:
+    """A merged report of four repeats, one row per detector with these values."""
+    dets = []
+    for det_id, values in detectors.items():
+        mid = sorted(values)[len(values) // 2]
+        dets.append({"id": det_id, "title": det_id, "why": "", "params": {},
+                     "params_source": "default", "error": None,
+                     **({"sha": (shas or {}).get(det_id, "a" * 12)} if echolot else {}),
+                     "rows": [{"location": f"{det_id} row", "runs": "4/4", "count": 1,
+                               "self_ms": mid, "spread": {"self_ms": {
+                                   "min": min(values), "max": max(values),
+                                   "values": values}}}]})
+    return {"schema": 1, "runs": 4,
+            "traces": [f"run{i}.perfetto-trace" for i in range(4)],
+            "toolchain": {"echolot": echolot} if echolot else {},
+            "window": {"process": "com.example.app", "duration_ms": 1000.0},
+            "config": {"sha": "aaaa"}, "environment": {},
+            "summary": {"fired_ids": list(detectors)}, "detectors": dets, **extra}
+
+
+SLOWER = [100.0, 102.0, 98.0, 101.0], [200.0, 204.0, 196.0, 202.0]
+
+
+@check("compare gives no verdict on a detector whose code differs between the sides")
+def _(report):
+    """The rows stay, since a wrong-looking table is more useful than none;
+    the verdict that they hold does not, since the move may be the tool's.
+    A side that does not say which echolot wrote it leaves every row
+    without one: which of its detectors read like the other side's cannot
+    be known."""
+    from . import compare as compare_mod
+    before = _side_with({"main_thread_block": SLOWER[0], "io_wait": SLOWER[0]})
+    after = _side_with({"main_thread_block": SLOWER[1], "io_wait": SLOWER[1]},
+                       echolot="1.1.0", shas={"main_thread_block": "b" * 12})
+    cmp = compare_mod.build(before, after, before_path="a.json", after_path="b.json")
+    holds = {r["detector"]: r["holds"] for r in cmp["rows"]}
+    assert holds == {"main_thread_block": None, "io_wait": True}, holds
+    said = {w["id"]: w["text"] for w in cmp["warnings"]}
+    assert "1.0.0 before, 1.1.0 after" in said.get("version", ""), said
+    assert "`main_thread_block`" in said.get("detector-changed", ""), said
+    unstamped = _side_with({"main_thread_block": SLOWER[0], "io_wait": SLOWER[0]},
+                           echolot=None)
+    cmp = compare_mod.build(unstamped, after, before_path="a.json", after_path="b.json")
+    assert [r["holds"] for r in cmp["rows"]] == [None, None], cmp["rows"]
+    assert "does not say which echolot" in {w["id"]: w["text"] for w in cmp["warnings"]}.get(
+        "version", ""), cmp["warnings"]
+
+
+@check("compare says when the two sides were recorded differently, and what reads it")
+def _(report):
+    """Another trace config: the side without a frame timeline names
+    `frame_jank`, the detector that reads one. Another way of driving the
+    repeats: a stop that found the app running against one that found it
+    gone is said, with how many repeats each."""
+    from . import compare as compare_mod
+    bare = _recorded(frames=False)
+    cmp = compare_mod.build(report, bare, before_path="a.json", after_path="b.json")
+    text = {w["id"]: w["text"] for w in cmp["warnings"]}.get("recording", "")
+    assert "only before `android.surfaceflinger.frametimeline`" in text, cmp["warnings"]
+    assert "`frame_jank` read what one side recorded" in text, text
+
+    def driven(*states: str) -> dict:
+        from . import recording as recording_mod
+        return recording_mod.merge([{**report["recording"], "runner": "launch",
+                                     "reset_policy": "force-stop", "app_at_stop": s}
+                                    for s in states])
+    before = _side_with({"main_thread_block": SLOWER[0]},
+                        recording=driven("stopped", *["running"] * 3))
+    after = _side_with({"main_thread_block": SLOWER[1]},
+                       recording=driven(*["stopped"] * 4))
+    cmp = compare_mod.build(before, after, before_path="a.json", after_path="b.json")
+    text = {w["id"]: w["text"] for w in cmp["warnings"]}.get("recording", "")
+    assert "found the app still running in 3 of 4 repeats" in text, cmp["warnings"]
+    assert "found the app already stopped in every repeat" in text, text
+    assert "recording-mixed" not in {w["id"] for w in cmp["warnings"]}, cmp["warnings"]
+
+
+@check("compare says throttling on one side when the other has no thermal record")
+def _(report):
+    """Nothing is claimed about the side nobody measured; what the measured
+    side says about itself is said. Neither side measured: nothing."""
+    from . import compare as compare_mod
+    hot = {"cpu": None, "memory": None, "thermal": {
+        "max_celsius": 82.0, "hottest_zone": "BIG", "throttled": True,
+        "throttle_device": "thermal-cpufreq-1", "throttled_runs": "4/4", "runs": "4/4"}}
+    blind = {"cpu": None, "thermal": None, "memory": None,
+             "missing": ["cpu", "thermal", "memory"]}
+    before = _side_with({"main_thread_block": SLOWER[0]}, environment=blind)
+    after = _side_with({"main_thread_block": SLOWER[1]}, environment=hot)
+    cmp = compare_mod.build(before, after, before_path="a.json", after_path="b.json")
+    text = " ".join(w["text"] for w in cmp["warnings"]
+                    if w["id"] == "environment-thermal-one-side")
+    assert "during the after round in every repeat" in text, cmp["warnings"]
+    assert "cannot be ruled out there" in text, text
+    cmp = compare_mod.build(before, {**after, "environment": blind},
+                            before_path="a.json", after_path="b.json")
+    assert not {"environment-thermal", "environment-thermal-one-side"} & {
+        w["id"] for w in cmp["warnings"]}, cmp["warnings"]
+
+
+@check("compare: the same recordings on both sides are said, with no verdict")
+def _(report):
+    """The same trace names, the same pid and the same window to the
+    hundredth: one set of recordings read twice, so whatever moved is the
+    tool's or the config's."""
+    from . import compare as compare_mod
+    window = {"process": "com.example.app", "pid": 4242, "duration_ms": 1000.0,
+              "duration_ms_min": 990.0, "duration_ms_max": 1010.0}
+    before = _side_with({"main_thread_block": SLOWER[0]}, window=window)
+    after = _side_with({"main_thread_block": SLOWER[1]}, window=window)
+    cmp = compare_mod.build(before, after, before_path="a.json", after_path="b.json")
+    assert "same-traces" in {w["id"] for w in cmp["warnings"]}, cmp["warnings"]
+    assert [r["holds"] for r in cmp["rows"]] == [None], cmp["rows"]
+    moved = {**window, "pid": 4343}
+    cmp = compare_mod.build(before, {**after, "window": moved},
+                            before_path="a.json", after_path="b.json")
+    assert [r["holds"] for r in cmp["rows"]] == [True], cmp["rows"]
+
+
 # --- the window opening inside a block --------------------------------------
 
 def _anchored_at(anchor: str):

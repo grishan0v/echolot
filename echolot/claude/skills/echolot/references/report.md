@@ -28,8 +28,8 @@ produce. The keys only a merged report has are named under the block.
   "scenario": "coldStart", "budget_ms": 2500,
   "verdict": { "level": "needs_attention", "budget_ms": 2500, "ratio": 3.1,
                "text": "The launch takes 7.7 s. You allowed 2.5 s, so it takes 3.1 times as long." },
-  "toolchain": { "perfetto_package": "0.59.1", "trace_processor": "v59.1",
-                 "source": "pinned", "binary": null },
+  "toolchain": { "echolot": "0.17.0", "perfetto_package": "0.59.1",
+                 "trace_processor": "v59.1", "source": "pinned", "binary": null },
   "window": { "ts_start": …, "ts_end": …, "duration_ms": 772.3,
               "duration_ms_min": 751.8, "duration_ms_max": 790.4,
               "process": "com.example.app", "pid": 4100,
@@ -61,6 +61,15 @@ produce. The keys only a merged report has are named under the block.
                                 "verified": { "classes": 9, "ms": 68.0, "main_ms": 5.3 },
                                 "runs": "5/5" },
                    "missing": [] },
+  "recording": { "runner": "launch", "reset_policy": "force-stop",
+                 "app_at_stop": "running",
+                 "data_sources": ["android.surfaceflinger.frametimeline",
+                                  "linux.ftrace", "linux.process_stats",
+                                  "linux.sys_stats"],
+                 "atrace_categories": ["am", "binder_driver", "dalvik", "…"],
+                 "ftrace_events": ["power/cpu_frequency", "sched/sched_switch", "…"],
+                 "mixed": { "app_at_stop": [ { "value": "stopped", "runs": "1/5" },
+                                             { "value": "running", "runs": "4/5" } ] } },
   "summary": { "detectors_run": 16, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
@@ -74,7 +83,7 @@ produce. The keys only a merged report has are named under the block.
                "absent": ["Screen.firstFrame"],
                "in_trace": ["AGENTTMP_seed_first"] },
   "detectors": [
-    { "id": "…", "title": "…", "why": "…",
+    { "id": "…", "title": "…", "why": "…", "sha": "3f9c0d1e2a4b",
       "params": { … }, "params_source": "config",
       "defaults": { "min_slice_ms": 16 },
       "identity": ["location", "detail"],
@@ -533,6 +542,29 @@ calling anything slow, and record again on a build compiled from its
 baseline profile. In the second the repeats ran two builds, or one build
 installed two ways, and no median in the report is either of them.
 
+**`recording`** — how the traces were recorded, which `compare` sets against
+the other side's. `data_sources`, `atrace_categories` and `ftrace_events` are
+what the trace's own config asked the device for, read from every trace, old
+or new; `null` for a trace that carries no config. `runner`, `reset_policy`
+and `app_at_stop` are what `collect` kept beside each trace it recorded, in
+`<trace>.recording.json`: `app_at_stop` is `running` when the force-stop
+before the repeat found the app still up — the start then followed a kill by
+half a second — and `stopped` when it was already gone. They are `null` for
+traces recorded by hand, by another tool, or by a `collect` from before it
+kept them: unknown, not "the same". Each key is the value most repeats had,
+and `mixed` lists the split for any key they did not all share. The first
+repeat of a `collect` finds the app as the last session left it, so a split
+in `app_at_stop` is normal; a split in the runner or the trace config is a set
+recorded two ways.
+
+**`toolchain.echolot`** and each detector's **`sha`** — which echolot wrote
+the report, and what each detector read the trace with (its queries,
+`@identity` and stdlib modules, comment lines aside). Two reports whose
+detector has another `sha` read the trace differently, and `compare` gives no
+verdict on that detector's rows. `status` and `echolot report` say when a
+report was written by another minor version of echolot, or by one from before
+the stamp: analyze its traces again before reading it against today's.
+
 **`toolchain.trace_processor`** — the parser version. If the numbers diverge
 between two reports, check this first: a version change alters trace semantics
 while the SQL stays identical. `source` says where the binary came from —
@@ -971,6 +1003,13 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `thresholds` | detector parameters differ. **appeared** and **gone** mean the bar moved, not that the app changed. Re-run both with `--defaults` |
 | `environment` | the clock the two rounds ran at differs by the relative floor or more (10% unless `--floor-pct` says otherwise), either way, or a side carries no clock, or read its clock or thermal state in only some of its repeats. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
 | `environment-thermal` | the kernel throttled the device during one round and not the other: that side is slower for a reason outside the code. Only when both sides recorded thermal state |
+| `environment-thermal-one-side` | the kernel throttled the device during one round, and the other has no thermal record at all. The throttled side is a slowed device; whether the other was too cannot be said — never call it cool |
+| `recording` | the two sides were not recorded the same way: runner, reset policy, the app found running at the stop on one side and stopped on the other, or the trace config (data sources, atrace categories, ftrace events). The detectors that read what one side recorded alone are named. Rows can move for that reason alone — say it before calling one a regression |
+| `recording-mixed` | one side's repeats were not recorded alike (runner, reset policy or trace config): its medians mix two ways of recording |
+| `recording-unknown` | one side cannot say how it was recorded and the other can — older traces or report, or traces not from `collect`. Unknown, not "the same" |
+| `version` | the reports come from different echolot versions, or one does not say which. A side that does not say leaves every row without a verdict: analyze its traces again |
+| `detector-changed` | the named detectors read the trace with different code on the two sides; their rows carry no verdict, a move there may be the tool's |
+| `same-traces` | both sides are one set of recordings read twice (same trace names, pid and window): every move is the tool's or the config's, and no row carries a verdict |
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `compile` | the two rounds ran the app compiled differently — another `filter`, or the same filter from another profile (`reason`) — or one side's repeats did. Code compiled ahead of time runs faster than code the JIT compiles as the app runs, so a row can move for that reason alone. A side whose traces held no state (the process was already running) is judged by its JIT count instead: three times the other side's methods or more, and 50 or more apart, warns. A report from before the field gets no warning |
 | `instrumentation-removed` | temporary markers that are gone were taken out between the rounds, not work that went away; the slices they sat in got their self time back and are judged on their total |

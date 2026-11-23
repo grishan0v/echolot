@@ -177,8 +177,11 @@ def test_launch_mode_asks_once_then_runs_eight_steps_per_iteration(tmp_path, adb
     check("perfetto is handed the config on stdin, with the package in it",
           f'atrace_apps: "{PACKAGE}"' in recording, recording[:200])
     check("three traces, named by iteration",
-          sorted(p.name for p in (tmp_path / "traces").iterdir())
+          sorted(p.name for p in (tmp_path / "traces").glob("*.perfetto-trace"))
           == [f"startup_iter{i:03d}.perfetto-trace" for i in range(3)])
+    check("each with what collect knows of how it was recorded beside it",
+          sorted(p.name for p in (tmp_path / "traces").glob("*.recording.json"))
+          == [f"startup_iter{i:03d}.perfetto-trace.recording.json" for i in range(3)])
     check("am start -W read per iteration",
           [r["total_time_ms"] for r in results] == [523] * 3, results)
     check("the log names the device and the activity",

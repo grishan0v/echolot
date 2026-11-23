@@ -17,6 +17,7 @@ from typing import Any
 
 from . import launch as launch_mod
 from . import needs as needs_mod
+from . import recording as recording_mod
 from . import stats, table
 
 COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
@@ -106,8 +107,14 @@ def build(
     markers: dict[str, Any] | None = None,
     scenario: str | None = None,
     budget_ms: float | None = None,
+    recording: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """`absent` — shipped detectors this config left out. See `to_markdown`.
+
+    `recording` — how the trace was recorded (recording.py): what it asked
+    the device for, and what `collect` kept beside it. `compare` sets the
+    two sides' against each other. A report written before it existed has
+    none, which `compare` reads as "cannot be checked".
 
     `scenario` — which of the config's scenarios the window is, so that a
     report says what it measured and `compare` can refuse two of them. A
@@ -137,6 +144,7 @@ def build(
         "toolchain": toolchain or {},
         "window": window,
         "environment": environment or {},
+        "recording": recording,
         "markers": markers or {"prefix": None, "globs": [], "rows": [], "absent": []},
         "summary": {
             "detectors_run": len(results),
@@ -665,6 +673,7 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"].update(_merge_window_checks(reports))
 
     merged["environment"] = _merge_environment(reports)
+    merged["recording"] = recording_mod.merge([r.get("recording") for r in reports])
 
     by_id: dict[str, list[dict]] = {}
     for report in reports:
@@ -1646,6 +1655,40 @@ def clip(text: Any, width: int) -> str:
     return text if len(text) <= width else text[:width - 1] + "…"
 
 
+def _minor(version: str | None) -> tuple[int, int] | None:
+    m = re.match(r"\s*(\d+)\.(\d+)", str(version or ""))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def written_by(version: str | None, detectors: int | None = None,
+               short: bool = False) -> str | None:
+    """A report from another echolot, said; None for one from this minor version.
+
+    `version` is the report's `toolchain.echolot`, None for a report from
+    before it was written down (#507). Detectors are added and reworked from
+    one minor version to the next, so a report read back from another one
+    says the trace in another tool's words, and `status`, `report` and the
+    door used to show it as if it were today's. A patch release changes no
+    detector's reading, and is not said.
+    """
+    from . import __version__
+
+    if version is not None and _minor(version) == _minor(__version__):
+        return None
+    if short:
+        return (f"written by echolot {version}, this is {__version__} — analyze again"
+                if version else "written by an older echolot — analyze again")
+    ours = len(list(_DETECTOR_DIR.glob("*.sql")))
+    theirs = f" ({detectors} detectors)" if detectors is not None else ""
+    who = (f"echolot {version}" if version else
+           "an echolot from before reports named their version")
+    return (f"Written by {who}{theirs}; this is {__version__} ({ours}). Analyze "
+            f"its traces again to read them with this one.")
+
+
+_DETECTOR_DIR = Path(__file__).parent / "sql" / "detectors"
+
+
 def _header_lines(report: dict[str, Any]) -> list[str]:
     w = report.get("window") or {}
     out = []
@@ -1662,6 +1705,10 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     if report.get("generated_at"):
         line += f" · {report['generated_at']}"
     out.append(line)
+    other = written_by((report.get("toolchain") or {}).get("echolot"),
+                       (report.get("summary") or {}).get("detectors_run"))
+    if other:
+        out.append(f"⚠️ {other}")
     anchors = []
     for key, label in (("start_anchor", "start"), ("end_anchor", "end")):
         a = w.get(key)

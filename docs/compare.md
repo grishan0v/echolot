@@ -281,9 +281,16 @@ top, the way the Marker Report already states an anchor that never matched.
 | `instrumentation-removed` | the same in the other direction: temporary markers that are gone were taken out between the rounds, not work that went away, and the slices they sat in, whose self time came back, are judged on their total |
 | `environment` | the clock the two rounds ran at differs by the floor or more, 10% unless `--floor-pct` says otherwise, either way, or a side carries no clock at all, or a side read its clock or thermal state in only some of its repeats. Two rounds that recorded no platform state get no warning — see below |
 | `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
+| `environment-thermal-one-side` | the kernel throttled the device during one round, and the other has no thermal record at all. The sentence says how many repeats throttled and that it cannot be ruled out on the other side, never that the other side ran cool |
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
 | `compose_names` | one round was recorded with composable names and the other not, or only some of its repeats were. The names come with the app's Perfetto SDK loaded at its start, which cost a cold start 67 ms on the device it was measured on |
 | `compile` | the app was compiled differently in the two rounds, or in the repeats of one, or — where the traces could not say how — the JIT compiled several times more methods on one side — see below |
+| `recording` | the two sides were not recorded the same way: another runner or reset policy, a force-stop that found the app running on one side and already stopped on the other, or another trace config — data sources, atrace categories and ftrace events, each named on the side that had it. The detectors that read what one side recorded and the other did not are named — see [How the two were recorded](#how-the-two-were-recorded) |
+| `recording-mixed` | one side's own repeats were not recorded alike, by runner, reset policy or trace config, so its medians mix two ways of recording |
+| `recording-unknown` | one side cannot say how it was recorded while the other can: a report from before reports kept it, traces recorded before `collect` wrote its account beside them or by something else, or traces with no config of their own |
+| `version` | the two reports were written by different versions of echolot, or one does not say which wrote it. A side that does not say leaves every row without a verdict — see [Which echolot wrote each](#which-echolot-wrote-each) |
+| `detector-changed` | a detector read the trace with different code on the two sides. Its rows stay, without a verdict |
+| `same-traces` | both sides are the same recordings — the same trace names, pid and window to the hundredth of a millisecond — so whatever moved is the tool's or the config's, and no row carries a verdict |
 
 ### Two windows
 
@@ -373,6 +380,59 @@ are three times apart or more, and at least 50 methods apart, the warning
 names both counts. On an SM-A515F one scroll JIT-compiled 64 methods on its
 profile, 328 after `cmd package compile -m verify` and 2 after `-m speed`.
 A report from before the field gets no warning.
+
+### How the two were recorded
+
+`recording` is about the recording rather than the device. Every report
+carries a `recording` block: what the trace's own config asked the device for
+— its data sources, atrace categories and ftrace events, which the tracing
+service writes into every trace — and what `collect` knew of how it drove each
+repeat, which it keeps beside the trace as
+`<trace>.recording.json`: the runner, the reset policy, and whether the
+force-stop before the repeat found the app still running. A set from a
+Macrobenchmark's own trace config against one `collect` recorded with
+echolot's gave 44 rows that held and 185 that were gone, the main thread's
+`io_wait` among them, with nothing to say which of them moved because the
+recording changed. The warning names what each side had alone and the
+detectors that read it.
+
+The stop is there because of a pair that differed in nothing else anyone
+could see. The same APK on an SM-A515F, recorded on two days with the same
+config, every start cold and both sides throttled alike: one day a plain
+`collect`, whose force-stop found the app still running from the repeat before
+in 14 of 15 repeats, so each start followed a kill by half a second; the other
+day a script stopped the app first and ran `collect -n 1` fifteen times. The
+window came out 0.68 s shorter on the second, and the comparison listed 60 rows
+that held, with no warning. No cooling wait came between the stop and the
+start on either day; a repeat that waits now begins long after its stop, since
+`collect` stops the app before the device cools. Whether the stop found the
+app running is kept, and a difference in it is said; what most of a side's
+repeats did is that side's, since the first repeat of every `collect` finds
+the app as the last session left it.
+
+A side that cannot say — traces recorded before `collect` kept its account,
+by another tool, or a report from before the block — gets `recording-unknown`
+rather than silence, and two sides that both cannot say get nothing.
+
+### Which echolot wrote each
+
+`version` and `detector-changed` are about the tool. Every report says which
+echolot wrote it (`toolchain.echolot`), and every detector what it read the
+trace with (`sha`: its queries, its `@identity` and its stdlib modules, comment
+lines aside). Two versions that differ in a detector read one trace
+differently: two reports of the very same fifteen traces, written by 0.7.0 and
+0.17.0, gave 11 rows that held, `monitor_contention` −3.1 s among them, from a
+double count fixed in between. A detector whose `sha` differs keeps its rows
+and loses their verdict. A side that does not say which echolot wrote it — a
+report from before the stamp — leaves every row without a verdict, since which
+of its detectors read the trace the way the other side's did cannot be known;
+analyze its traces again, which the traces kept beside every round allow. Two
+reports that both predate the stamp are compared as they always were.
+
+`same-traces` needs nothing new in a report, so it works on old ones too:
+the same trace names, the same pid and the same window — median, shortest and
+longest — to the hundredth of a millisecond is one set of recordings read
+twice, and nothing in the app can have moved between them.
 
 `not-checked-before` and `not-checked-after` are about a detector rather than
 a number. `io_wait` reads why the kernel put a thread to sleep, and a round

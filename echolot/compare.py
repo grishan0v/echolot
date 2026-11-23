@@ -42,11 +42,13 @@ instead.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from statistics import median
 from typing import Any
 
 from . import launch as launch_mod
 from . import needs as needs_mod
+from . import recording as recording_mod
 from . import stats, table
 from .report import family, identity_of, metric_of, short_runs
 
@@ -66,6 +68,12 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
           floor_ratio: float = FLOOR_RATIO,
           temp_prefix: str | None = None) -> dict[str, Any]:
     warnings, comparable = _check(before, after, floor_ratio)
+    # Rows whose move may be the tool's rather than the app's (#507): every
+    # row when one side cannot say which echolot read it, or when both sides
+    # are the same recordings; the rows of a detector whose code differs
+    # between the two, otherwise.
+    tool_warnings, unjudged = _tool_moved(before, after)
+    warnings.extend(tool_warnings)
 
     rows: list[dict[str, Any]] = []
     state_changed: list[dict[str, Any]] = []
@@ -150,8 +158,9 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
     # numbers stay, because a wrong-looking table is more useful than a
     # refusal, but a verdict that a move holds would claim a comparison that
     # is not there (#534).
-    if not comparable:
-        for r in [*rows, *markers]:
+    for r in [*rows, *markers]:
+        if not comparable or unjudged is ALL or (
+                "detector" in r and r["detector"] in unjudged):
             r["shift"], r["holds"] = None, None
             if r.get("calls"):
                 r["calls"]["shift"], r["calls"]["holds"] = None, None
@@ -550,6 +559,7 @@ def _check(before: dict, after: dict,
         })
 
     out.extend(_environment_moved(before, after, floor_ratio))
+    out.extend(recording_mod.moved(before, after))
     out.extend(_sampling_moved(before, after))
     out.extend(_compose_names_moved(before, after))
     out.extend(_compile_moved(before, after))
@@ -597,6 +607,124 @@ def _check(before: dict, after: dict,
                     "are listed as appeared or gone for that reason alone.",
         })
     return out, comparable
+
+
+# Every row, for `_tool_moved`: the rows of no particular detector.
+ALL = frozenset({"*"})
+
+
+def _tool_moved(before: dict, after: dict) -> tuple[list[dict[str, str]], frozenset[str] | set[str]]:
+    """What the tool itself changed between the two reports (#507), and the
+    detectors whose rows that leaves without a verdict (`ALL` for every row).
+
+    Each report says which echolot wrote it (`toolchain.echolot`), and each
+    detector what it read the trace with (`sha`). Two versions that differ
+    in a detector read one trace differently: 0.7.0 and 0.17.0 on the very
+    same fifteen traces gave 11 rows that held, `monitor_contention` among
+    them, from a double count fixed in between. A detector whose `sha`
+    differs keeps its rows and loses their verdict; a side that does not say
+    which echolot wrote it leaves every row without one, since which of its
+    detectors read the trace the way the other side's did cannot be known.
+    Two reports that both predate the stamp are compared as they always were.
+
+    And the same recordings on both sides — a heuristic that needs nothing
+    new in the report, so it works on old ones too: the same trace names,
+    the same pid, the same window to the hundredth of a millisecond. Then
+    nothing in the app can have moved, and every row that did is the tool's
+    or the config's.
+    """
+    out: list[dict[str, str]] = []
+    unjudged: frozenset[str] | set[str] = set()
+    vb, va = _stamp(before), _stamp(after)
+
+    same = _same_recordings(before, after)
+    if same is not None:
+        out.append({
+            "id": "same-traces",
+            "text": f"Both sides are the same recordings: {same}. Nothing in "
+                    f"the app can have moved between them, so every move "
+                    f"below is the tool's or the config's, and no row "
+                    f"carries a verdict.",
+        })
+        unjudged = ALL
+
+    if bool(vb) != bool(va):
+        old, new = ("before", va) if not vb else ("after", vb)
+        out.append({
+            "id": "version",
+            "text": f"The {old} report does not say which echolot wrote it: "
+                    f"it predates reports that did (the other side is "
+                    f"{new}). Whether its detectors read the trace the way "
+                    f"the other side's did cannot be checked, so no row "
+                    f"carries a verdict — a move may be the tool's. Analyze "
+                    f"the {old} side's traces again to compare like with like.",
+        })
+        return out, ALL
+
+    changed = sorted(
+        d for d, (sb, sa) in _shas(before, after).items() if sb and sa and sb != sa)
+    if vb and va and vb != va:
+        text = f"Written by different versions of echolot: {vb} before, {va} after."
+        if not changed:
+            text += (" Every detector both ran read the trace the same way, so "
+                     "their rows compare as they are.")
+        out.append({"id": "version", "text": text})
+    if changed:
+        out.append({
+            "id": "detector-changed",
+            "text": f"{_names(changed)} read the trace differently on the "
+                    f"two sides — the detector's code changed between the "
+                    f"echolot that wrote one report and the one that wrote "
+                    f"the other — so their rows carry no verdict: a move "
+                    f"there may be the tool's. Analyze both sides' traces "
+                    f"with one echolot to compare them.",
+        })
+        if unjudged is not ALL:
+            unjudged = set(changed)
+    return out, unjudged
+
+
+def _stamp(report: dict) -> str | None:
+    """Which echolot wrote a report, or None when it does not say."""
+    tc = report.get("toolchain")
+    v = tc.get("echolot") if isinstance(tc, dict) else None
+    return v if isinstance(v, str) and v else None
+
+
+def _shas(before: dict, after: dict) -> dict[str, tuple[str | None, str | None]]:
+    """Each detector both sides ran, with what each read the trace with."""
+    sb = {d["id"]: d.get("sha") for d in before.get("detectors") or []}
+    sa = {d["id"]: d.get("sha") for d in after.get("detectors") or []}
+    return {d: (sb[d], sa[d]) for d in sb if d in sa}
+
+
+def _same_recordings(before: dict, after: dict) -> str | None:
+    """Words for why the two sides look like one set of recordings, or None.
+
+    The trace names alone are not enough: every round of one scenario is
+    `<scenario>_iter000…`. The pid is what one recording has and another
+    does not, and the window's median, shortest and longest, to the
+    hundredth of a millisecond, is what one set has and another does not.
+    """
+    def names(rep: dict) -> list[str]:
+        traces = rep.get("traces") or ([rep["trace"]] if rep.get("trace") else [])
+        return sorted(Path(str(t)).name for t in traces)
+
+    wb, wa = before.get("window") or {}, after.get("window") or {}
+    if not names(before) or names(before) != names(after):
+        return None
+    if wb.get("pid") is None or wb.get("pid") != wa.get("pid"):
+        return None
+    spans = [tuple(None if (w.get(k) is None) else round(w[k], 2)
+                   for k in ("duration_ms", "duration_ms_min", "duration_ms_max"))
+             for w in (wb, wa)]
+    if spans[0] != spans[1] or spans[0][0] is None:
+        return None
+    n = len(names(before))
+    window = (f"median {spans[0][0]} ms, {spans[0][1]}–{spans[0][2]}"
+              if spans[0][1] is not None else f"{spans[0][0]} ms")
+    return (f"the same {n} trace name{'s' if n != 1 else ''}, the same process "
+            f"(pid {wb['pid']}) and the same window ({window})")
 
 
 def _anchor_warning(side: str, w: dict) -> tuple[dict[str, str] | None, bool]:
@@ -798,6 +926,26 @@ def _environment_moved(before: dict, after: dict,
                     f"so the {hot} side is slower for a reason that has "
                     f"nothing to do with the code. Let the device cool and "
                     f"record that side again.",
+        })
+    elif bool(tb) != bool(ta) and (tb or ta).get("throttled"):
+        # Throttled on one side, and no thermal record on the other (#533).
+        # The rule above holds: nothing is said of the side nobody measured.
+        # But silence here was the riskiest case — "window ×0.93" with no
+        # word that one side was measured on a throttling phone — and what
+        # the measured side says about itself is a fact either way.
+        hot, blind = ("before", "after") if tb else ("after", "before")
+        k_n = short_runs((tb or ta).get("throttled_runs"))
+        runs = (f" in {k_n[0]} of {k_n[1]} repeats" if k_n else
+                " in every repeat" if (tb or ta).get("throttled_runs") else "")
+        out.append({
+            "id": "environment-thermal-one-side",
+            "text": f"The kernel throttled the device during the {hot} "
+                    f"round{runs}. The {blind} round has no thermal record, "
+                    f"so throttling cannot be ruled out there either: the "
+                    f"{hot} numbers are a slowed device, and the comparison "
+                    f"cannot say whether the {blind} ones are too. Record "
+                    f"both rounds with `runner.environment` on to set the two "
+                    f"against each other.",
         })
     return out
 

@@ -55,6 +55,7 @@ from . import mapping as mapping_mod
 from . import moves as moves_mod
 from . import needs as needs_mod
 from . import place as place_mod
+from . import recording as recording_mod
 from . import plain as plain_mod
 from . import report as report_mod
 from . import stacks as stacks_mod
@@ -328,6 +329,9 @@ def _report_text(rep: dict | None, cfg: dict | None, project: Path,
         note = " · made with --defaults"
     elif cfg and cfg.get("sha") and rep.get("config_sha") and rep["config_sha"] != cfg["sha"]:
         note = " · made with an older config"
+    other = report_mod.written_by(rep.get("echolot"), short=True)
+    if other:
+        note += f" · {other}"
     return f"{where}, {made} · {rep['runs']} run(s) · {what}{note}"
 
 
@@ -572,6 +576,9 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
             tp, package or str(procs[0].get("name") or "").split(":")[0],
             mapped=extra is not None)
         markers = _markers_info(tp, cfg)
+        # How the trace was recorded: what it asked the device for, and what
+        # `collect` kept beside it (#533).
+        recording = recording_mod.of_trace(tp, trace)
         # What each detector's silence can be taken to mean: whether the trace
         # holds what it reads (#441). Asked once, of the sources the planned
         # detectors name.
@@ -629,6 +636,9 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 "id": d.id,
                 "title": d.title,
                 "why": d.why,
+                # What it read the trace with (#507): `compare` gives no
+                # verdict on a row whose detector differs between the sides.
+                "sha": d.sha,
                 "params": params,
                 "params_source": source,
                 # What tells one row from another. Written down per report so
@@ -661,7 +671,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                             toolchain=toolchain_info(tp_binary, tp_source),
                             absent=absent, environment=environment,
                             markers=markers, scenario=cfg.scenario_name,
-                            budget_ms=budget_ms)
+                            budget_ms=budget_ms, recording=recording)
 
 
 def _markers_info(tp, cfg: Config) -> dict:
