@@ -47,7 +47,7 @@ permissions:
 
 # A second push to the same PR makes the first run pointless.
 concurrency:
-  group: workflowlint-${{ github.ref }}
+  group: workflowlint-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

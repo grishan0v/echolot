@@ -26,9 +26,12 @@ on:
 permissions:
   contents: read
 
-# A second push to the same PR makes the first run pointless.
+# A second push to the same PR makes the first run pointless. A pull
+# request's run is grouped by its number, not by `github.ref`: when a PR
+# of a stack is merged, GitHub runs it once more with `github.ref` set to
+# main, and in main's group that run cancelled main's own (#693).
 concurrency:
-  group: checks-${{ github.ref }}
+  group: checks-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

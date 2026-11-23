@@ -41,7 +41,7 @@ permissions:
 
 # A second push to the same PR makes the first run pointless.
 concurrency:
-  group: linkcheck-${{ github.ref }}
+  group: linkcheck-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
