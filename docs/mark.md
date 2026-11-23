@@ -204,9 +204,11 @@ the same tag, so `--apply` and `--remove` are unchanged.
 Expect most proposals to be refused, and read the reasons rather than working
 around them:
 
-- **the line falls inside another function than the frame names** — the
-  compiler moved it, and bracketing where the line landed would name one
-  function and measure another;
+- **the line falls inside another function than the frame names** — another
+  build, an inlined function, or the compiler moved it, and bracketing where
+  the line landed would name one function and measure another;
+- **an expression body** — `fun save(v: String) = …` has no block to
+  bracket: rewrite it as a block, or mark the caller;
 - **a `return` in the body**, **a body on one line**, and **code sharing a
   line with the `{` or the `}`** — the refusals of `--apply` above;
 - **a frame entered through a lambda** — `onCreate$lambda$0`,
@@ -219,8 +221,9 @@ around them:
   `delay`; mark a stretch with no suspension point by hand;
 - **a frame outside `instrumentation.allowed`** — shown and not applied,
   like any site outside; the frame under it may be the allowed caller;
-- **most frames landing nowhere** — one sentence naming the build the report
-  came from. The working tree is not that build, and no line number in the
+- **most frames landing nowhere** — on a line in no function, inside another
+  function (unless the build's mapping named the frames back), or in a file
+  that is not here: one sentence naming the build the report came from. The working tree is not that build, and no line number in the
   report means anything until it is.
 
 A minified build's frames are named back first with `project.mapping` from

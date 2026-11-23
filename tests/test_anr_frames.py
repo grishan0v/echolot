@@ -673,3 +673,72 @@ def test_a_frame_with_no_such_class_says_so_by_its_cause(kotlin_checkout):
     out = anr.render(rep, anr.locate(rep, kotlin_checkout))
     check("the gap names the file and the class it looked for",
           "names `Gone.java`" in out and "class `Gone` in `com.example.app.sync`" in out, out)
+
+
+# --- a frame whose line is in another function now (#525) --------------------
+
+FOO = """\
+package com.example.app
+
+class Foo {
+    fun bar() {
+        clear()
+    }
+
+    fun await() {
+        wait()
+    }
+}
+"""
+
+AWAITING = PARKED_TOP + """\
+       at com.example.app.Foo.await(Foo.kt:5)
+       at com.example.app.Foo.bar(Foo.kt:9)
+       at com.example.app.Foo.await(Foo.kt:9)
+"""
+
+
+def test_a_line_now_inside_another_function_is_marked_and_counted(tmp_path):
+    root = write(tmp_path / "checkout", {"app/src/main/java/com/example/app/Foo.kt": FOO})
+    rep = anr.parse(AWAITING)
+    placed, missing = anr.locate(rep, root)
+    by_frame = {f.frame: f for f in placed}
+    off = by_frame["com.example.app.Foo.await(Foo.kt:5)"]
+    check("marked with what the line is in now",
+          off.astray == "line 5 is now inside `bar`, the frame names `await`", off.astray)
+    check("a line inside its own function is not",
+          by_frame["com.example.app.Foo.await(Foo.kt:9)"].astray == "",
+          by_frame["com.example.app.Foo.await(Foo.kt:9)"])
+    out = anr.render(rep, (placed, missing))
+    check("the report shows it beside the line",
+          "← line 5 is now inside `bar`, the frame names `await`" in out, out)
+    check("two of three: probably not the build, with its version",
+          "2 of the 3 frames placed land outside the function they name" in out
+          and "(1.2.0 (120))" in out, out)
+    got = anr.summary(rep, (placed, missing))["code"]
+    check("json: astray per frame and the verdict",
+          got["not_the_build"] is True
+          and sum(1 for f in got["placed"] if f["astray"]) == 2, got)
+
+
+def test_a_checkout_of_the_build_has_no_such_line(tmp_path):
+    right = ("package com.example.app\n\nclass Foo {\n"
+             "    fun await() {\n        wait()\n    }\n\n"
+             "    fun bar() {\n        await()\n    }\n}\n")
+    root = write(tmp_path / "checkout", {"app/src/main/java/com/example/app/Foo.kt": right})
+    rep = anr.parse(PARKED_TOP + "       at com.example.app.Foo.await(Foo.kt:5)\n"
+                                 "       at com.example.app.Foo.bar(Foo.kt:9)\n")
+    placed, missing = anr.locate(rep, root)
+    out = anr.render(rep, (placed, missing))
+    check("no frame marked", not any(f.astray for f in placed),
+          [(f.frame, f.astray) for f in placed])
+    check("and no word of another build", "probably not the build" not in out, out)
+
+
+def test_a_bridge_beside_its_method_is_no_stale_line(tmp_path):
+    root = write(tmp_path / "checkout", {"app/src/main/java/com/example/app/Foo.kt": FOO})
+    rep = anr.parse(PARKED_TOP + "       at com.example.app.Foo.bar(Foo.kt:5)\n"
+                                 "       at com.example.app.Foo.bar(Foo.kt:3)\n")
+    placed, _ = anr.locate(rep, root)
+    check("the class declaration's line beside a matching frame is not counted",
+          not any(f.astray for f in placed), [(f.frame, f.astray) for f in placed])

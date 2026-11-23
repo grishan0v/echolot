@@ -202,7 +202,8 @@ that name a lock chain.
 | "every frame belongs to the platform or a library", then "the frames nearest to the app" | the platform is a dead end, a library the app drives is not: `SystemJobScheduler.cancel` points at the app's WorkManager setup. Read that setup |
 | "every frame belongs to the platform or a library", then a platform frame such as `JobServiceEngine$JobHandler.ackStopMessage` with what it was doing | still a lead: the main thread was telling the system a JobScheduler job had stopped. Read the app's WorkManager or JobService setup |
 | "Who was holding what" under what it does not say | this file carries no lock notes; an empty chain list is the file's limit, not the freeze's. Get the device's own record |
-| frames placed in the checkout | open those lines |
+| frames placed in the checkout | open those lines, once `anr` marks none of them as now inside another function |
+| "probably not the build that froze" above the placed frames | most lines fall outside the function their frame names: check out the build the report names before opening any |
 | frames landing nowhere | check out the build the report names — line numbers go stale first |
 | "What N frames are: they read as R8 named them" under what it does not say | a minified build: run it again with `--mapping` and that build's `mapping.txt`, or set `project.mapping` in the config under `--root`. Until then nothing in it is the app's |
 | a warning that frames R8 wrote have no place in the mapping, or name another mapping's id | the mapping is another build's: find the one that froze before reading the names |

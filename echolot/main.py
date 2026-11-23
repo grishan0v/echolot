@@ -3506,7 +3506,8 @@ def cmd_mark(args) -> int:
         pl = mark_mod.plan_from_anr(
             root, [(f.symbol, f.file, f.line) for f in placed if f.exact],
             prefix=prefix, allowed=allowed, unplaced=len(missing),
-            version=report.head.get("Version") or report.head.get("Package"))
+            version=report.head.get("Version") or report.head.get("Package"),
+            retraced=bool(report.retraced and report.retraced.get("frames")))
         for f in placed:
             if not f.exact:
                 pl.notes.append(

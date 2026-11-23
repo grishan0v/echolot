@@ -238,10 +238,16 @@ declares until the build's mapping names it back, as the next section says.
 > **Check out the build the report came from.** Line numbers are the first
 > thing to go stale. On a report from 26.15.1 read against a working tree,
 > 103 frames of 116 landed on an import, on a blank line, on a constant, in a
-> different function, or past the end of the file. `mark --from-anr` does two
-> things about that: it refuses each such frame with its own reason, and when
-> most of the frames land somewhere it does not recognise, it adds one sentence
-> saying the checkout is probably not the build that froze.
+> different function, or past the end of the file. `anr` checks every line it
+> places against the function the frame names, and marks one that is not in
+> it: "line 138 is now inside `clearAll`, the frame names `await`" (`--json`:
+> `astray`). `mark --from-anr` refuses each such frame with its own reason.
+> When most of the frames land outside their function, both add one sentence
+> saying the checkout is probably not the build that froze, with the build's
+> version (`--json` of `anr`: `code.not_the_build`). A line inside another
+> function counts towards that only when the build's mapping did not have to
+> name the frames back: R8 moves lines on the build that froze too. A
+> Kotlin `inline fun` does it on any build, so one such frame proves nothing.
 
 ### A minified build
 
@@ -301,9 +307,10 @@ code and the same tag.
 
 Most proposals will not be applicable, and the reasons are the useful part:
 
-- **the line falls inside another function than the frame names** — the
-  compiler moved it, and bracketing where the line landed would put a marker
-  named after one function around the body of another. The name is read the
+- **the line falls inside another function than the frame names** — another
+  build, an inlined function, or the compiler moved it, and bracketing where
+  the line landed would put a marker named after one function around the body
+  of another. The name is read the
   way the compiler wrote it: a member of a companion, a nested class or an
   `object` is that member, and a lambda — a class of its own,
   `load$lambda$0`, or javac's `lambda$load$0` — is the function it was written

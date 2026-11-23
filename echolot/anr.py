@@ -1283,6 +1283,10 @@ class Located:
     # The file the frame named, when it was placed in another: a Kotlin
     # class's frame that says `Guard.java`, placed in `Guard.kt`.
     named: str = ""
+    # What the line is in now, when that is not the function the frame
+    # names: "line 138 is now inside `clearAll`, the frame names `await`".
+    # Empty when they agree, and when there is no line to check.
+    astray: str = ""
 
 
 def source_index(root: Path) -> dict[str, list[Path]]:
@@ -1510,7 +1514,73 @@ def locate(report: Report, root: Path,
             if named and _WHERE.match(named.group("where").strip()):
                 # It named a source file, and this checkout has no such file.
                 missing.append(frame)
+    _check_functions(placed, root)
     return placed, missing
+
+
+def _check_functions(placed: list[Located], root: Path) -> None:
+    """Whether each placed line is inside the function its frame names.
+
+    The file and the line are the frame's own, and the file is the right
+    one; the line is the build's. On a checkout nine releases ahead of the
+    report, five of twelve placed frames fell inside another function, and
+    the report printed them as the lines to open. `mark` has asked this of
+    every frame all along; `anr` asks the same, the same way.
+
+    A frame whose line is in no function, beside a frame of the same method
+    whose line is in it, is the compiler's bridge and not a stale line.
+    """
+    from . import mark as mark_mod   # mark imports nothing of anr's
+
+    texts: dict[str, str | None] = {}
+    for found in placed:
+        if found.line is None:
+            continue
+        if found.file not in texts:
+            try:
+                texts[found.file] = mark_mod.read_source(root / found.file)
+            except OSError:
+                texts[found.file] = None
+        text = texts[found.file]
+        if text is None:
+            continue
+        suffix = Path(found.file).suffix
+        declared = mark_mod.declared_functions(text, suffix)
+        wanted = mark_mod.frame_function(found.symbol, declared)
+        block = mark_mod.enclosing_block(text, suffix, found.line)
+        if block is None:
+            if mark_mod.expression_body(text, suffix, found.line, wanted) is None:
+                found.astray = f"line {found.line} is in no function now"
+        elif block[0] == wanted:
+            continue
+        elif mark_mod.lambda_frame(found.symbol) and wanted not in declared:
+            # A lambda the compiler made into a class of its own, on the
+            # build that froze as on any other.
+            continue
+        elif wanted not in declared:
+            found.astray = f"the file declares no `{wanted}`"
+        else:
+            found.astray = (f"line {found.line} is now inside `{block[0]}`, "
+                            f"the frame names `{wanted}`")
+    agree = {(f.symbol, f.file) for f in placed if f.line is not None and not f.astray}
+    for found in placed:
+        if found.astray.endswith("in no function now") and (found.symbol, found.file) in agree:
+            found.astray = ""
+
+
+def astray(placed: list[Located], report: Report) -> int | None:
+    """How many placed frames land outside their function, when that is most
+    of them and says the checkout is not the build; None otherwise.
+
+    Not after the build's mapping has named the frames back: R8 moves lines
+    and inlines, and a retraced frame can sit inside its neighbour on the
+    build that froze. `mark --from-anr` draws the line in the same place.
+    """
+    checked = [f for f in placed if f.line is not None]
+    off = sum(1 for f in checked if f.astray)
+    if report.retraced and report.retraced.get("frames"):
+        return None
+    return off if checked and off * 2 > len(checked) else None
 
 
 # --- the report -------------------------------------------------------------
@@ -1838,8 +1908,16 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
     placed, missing = code or ([], [])
     if placed:
         out += ["## Where these frames are in this checkout", "",
-                "_the compiler wrote the file and the line into the frame; "
-                "nothing here was searched for_", ""]
+                "_the file and the line are the frame's own; each line was "
+                "checked against the function the frame names_", ""]
+        off = astray(placed, report)
+        if off is not None:
+            version = report.head.get("Version", "")
+            out += [f"> ⚠️ {off} of the {sum(1 for f in placed if f.line is not None)} "
+                    f"frames placed land outside the function they name: this "
+                    f"checkout is probably not the build that froze"
+                    + (f" ({version})" if version else "")
+                    + ". Check that build out before opening these lines.", ""]
         for found in placed:
             mark = "" if found.exact else (
                 f"  ← one of {len(found.others) + 1} of that name, also "
@@ -1850,6 +1928,8 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 # Placed by its class: said, so the line is not read as a
                 # file of that name somebody could look for.
                 mark += f"  ← the frame names `{found.named}`"
+            if found.astray:
+                mark += f"  ← {found.astray}"
             out.append(f"- `{_short(found.symbol)}` — {where}{mark}")
         out.append("")
 
@@ -2084,10 +2164,15 @@ def summary(report: Report,
                 {"symbol": f.symbol, "file": f.file, "line": f.line,
                  "exact": f.exact, "others": list(f.others),
                  # The file the frame named when it was placed by its class.
-                 "named": f.named or None}
+                 "named": f.named or None,
+                 # What the line is in now, when not the function named.
+                 "astray": f.astray or None}
                 for f in code[0]
             ],
             "unplaced": code[1],
+            # Most placed frames land outside their function: probably not
+            # the build that froze.
+            "not_the_build": astray(code[0], report) is not None,
         },
         "load": [{"share": s, "process": n} for s, n in report.load],
         "own_frames": any(t.own(ours) for t in of_interest(report)),
