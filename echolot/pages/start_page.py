@@ -277,9 +277,12 @@ def _reports(view: dict[str, Any], link: Link) -> str:
             f'<p class="small sub measure">{kit.prose(rep["plain"])}</p>'
             f'<div class="rowf"><a class="btn primary" href="{e(href)}">See the report</a></div></li>')
     past = "".join(_investigation(inv, link) for inv in view["investigations"])
+    damaged = view.get("hunt_unreadable")
+    lost = f'<p class="small measure">{kit.prose(damaged)}.</p>' if damaged else ""
+    listed = f'<ul class="invs">{past}</ul>' if past else ""
     earlier = (f'<div class="stack gap-3"><h3 class="h3">Investigations</h3>'
                f'<p class="small sub measure">What an agent was asked to find, newest first, with the reports '
-               f'each one filed.</p><ul class="invs">{past}</ul></div>' if past else "")
+               f'each one filed.</p>{lost}{listed}</div>' if past or lost else "")
     return (f'<section class="stack gap-5" aria-labelledby="reps-h"><div class="stack gap-3">'
             f'<h2 class="h2" id="reps-h">Reports</h2><ul class="reps">{"".join(cards)}</ul></div>{earlier}</section>')
 

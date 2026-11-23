@@ -45,6 +45,8 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     # Which question all of the below is about. None is a normal answer:
     # every project predates its first investigation.
     st["hunt"] = hunt_mod.load(project)
+    # One that is there and does not load is said as that, not as none (#580).
+    st["hunt_unreadable"] = hunt_mod.unreadable_line(project)
     # Where the latest report is: the config's, per scenario when it names
     # several, else `.echolot/out` as always.
     report_dir = ".echolot/out"

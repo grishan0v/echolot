@@ -1238,6 +1238,48 @@ STEPS_NAV = re.compile(r'<nav class="steps".*?</nav>', re.S)
 BUTTON = re.compile(r'(<div class="rowf" id="check-again-action">).*?(</div>)', re.S)
 
 
+HUNT_PAGES = ("", "report", "answer", "hunt/1/answer", "hunt/1/report/1")
+
+
+@pytest.mark.parametrize("field, value", [("reports", "abc"), ("n", "x"), ("traces", 7), ("opened_at", 5),
+                                          ("question", 5), ("touched_at", [1]), ("status", 1), ("collects", "3")])
+def test_a_hunt_json_with_a_field_of_the_wrong_type_draws_every_page(project, field, value):
+    """#580: `"n": "x"` answered 500 on the start page, the report page and
+    the agent's answer, and `"reports": "abc"`, `"traces": 7` or a number in
+    `opened_at` on the start page and the answer. Now the field reads as
+    unknown, and every page is drawn from what still reads."""
+    project.ready().traces().report().hunt(1, "why is it slow", "open", reports=3, current=True,
+                                           touched_at="2026-11-11T09:30:00+00:00", traces=[".echolot/traces"])
+    path = project.root / ".echolot" / "hunt.json"
+    path.write_text(json.dumps({**json.loads(path.read_text(encoding="utf-8")), field: value}), encoding="utf-8")
+    site = site_of(project)
+    for page in HUNT_PAGES:
+        reply = get(site, page)
+        check(f"/{page} is drawn", reply.status != 500 and "could not be drawn" not in reply.body, reply.body[:300])
+    check("the start page and the answer are there", get(site).status == 200 and get(site, "answer").status == 200)
+    items = read(get(site).body).one("ul", "invs").all("li")
+    said = [q.text for q in items[0].all("p")] if len(items) == 1 else []
+    check("the investigation is listed, with no question nobody asked",
+          ("why is it slow" in said) == (field != "question") and "5" not in said, said)
+
+
+@pytest.mark.parametrize("text", ['{"n": 1, "question": "why is', "", "[1]", "null"])
+def test_a_hunt_json_that_does_not_load_is_said_on_the_start_page(project, text):
+    """#580: a hunt.json that does not load read as no investigation on the
+    start page. Now the page says the file does not load, where the
+    investigations are."""
+    project.ready().traces().report().hunt(1, "why is it slow", "open", reports=3, current=True)
+    (project.root / ".echolot" / "hunt.json").write_text(text, encoding="utf-8")
+    site = site_of(project)
+    reply = get(site)
+    check("the start page is drawn", reply.status == 200, reply.body[:300])
+    body = read(reply.body).one("div", "start-body").text
+    check("and says the file does not load", ".echolot/hunt.json does not load" in body
+          and "the open investigation is unknown" in body, body)
+    for page in HUNT_PAGES[1:]:
+        check(f"/{page} is drawn", get(site, page).status != 500)
+
+
 @pytest.mark.parametrize("state", sorted(STATES))
 def test_an_investigations_page_in_each_state(project, demo_report, state):
     """Every investigation has a page, whatever it came to: the answer with
