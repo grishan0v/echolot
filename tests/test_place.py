@@ -495,3 +495,71 @@ def test_annotate_places_a_composable_at_its_declaration(tmp_path: Path) -> None
           and placed["places"][0]["file"]
           == "feature/feed/src/main/kotlin/com/example/app/ui/FeedScreen.kt", placed)
     check("and the library's is not in this checkout", "code" not in library, library)
+
+
+# --- the checkout the sources are read from (#499) ---------------------------
+
+def _config(where: Path, extra: str = ""):
+    from echolot.config import Config
+    where.mkdir(parents=True, exist_ok=True)
+    (where / "echolot.yml").write_text(
+        "project:\n  package: com.example\n" + extra
+        + "scenario:\n  name: s\n  start: {name: A}\n  end: {name: B}\n", encoding="utf-8")
+    return Config.load(where / "echolot.yml")
+
+
+def test_the_sources_are_the_configs_directory_then_project_root_then_root(tmp_path: Path) -> None:
+    from echolot.config import ConfigError
+    check("by default, the config's directory",
+          _config(tmp_path / "a").sources == (tmp_path / "a").resolve())
+    cfg = _config(tmp_path / "b" / "offline", "  root: ../checkout\n")
+    check("project.root, from the config's directory",
+          cfg.sources == (tmp_path / "b" / "checkout").resolve(), cfg.sources)
+    cfg.root_override = tmp_path / "elsewhere"
+    check("and analyze --root over both", cfg.sources == (tmp_path / "elsewhere").resolve(), cfg.sources)
+    try:
+        _ = _config(tmp_path / "c", "  root: [a, b]\n").sources
+        check("a project.root that is no path is refused", False)
+    except ConfigError as e:
+        check("a project.root that is no path is refused", "project.root must be a path" in str(e), e)
+
+
+def _contention() -> dict:
+    return {"detectors": [{"id": "monitor_contention", "rows": [
+        {"location": "Thread-3", "total_ms": 30.0, "detail": FIXTURE}]}]}
+
+
+def test_a_config_away_from_its_sources_says_nothing_was_placed(tmp_path: Path, capsys) -> None:
+    """#499: a config copied out of the checkout placed nothing, silently."""
+    from echolot import main as main_mod
+    cfg = _config(tmp_path / "offline")
+    rep = _contention()
+    place.annotate(rep, cfg.sources)
+    main_mod._say_no_sources(rep, cfg)
+    err = capsys.readouterr().err
+    check("stderr says so, and how to name the checkout",
+          "No Kotlin or Java sources under" in err and "1 row name code and none was placed" in err
+          and "--root" in err and "project.root" in err, err)
+    check("and the report keeps it", rep.get("no_sources", {}).get("rows") == 1, rep.get("no_sources"))
+    md = "\n".join(report_mod._no_sources_lines(rep["no_sources"]))
+    check("for its header", "No Kotlin or Java sources under" in md and "none was placed" in md, md)
+
+    (tmp_path / "checkout").mkdir()
+    cfg.root_override = checkout(tmp_path / "checkout")
+    rep = _contention()
+    placed = place.annotate(rep, cfg.sources)
+    main_mod._say_no_sources(rep, cfg)
+    check("with --root the same row is placed, and nothing is said",
+          placed == 1 and "no_sources" not in rep and not capsys.readouterr().err, rep)
+
+
+def test_composable_calls_with_no_sources_are_said_too(tmp_path: Path, capsys) -> None:
+    """#499: outside the checkout `composables` read as silent with 79 899 calls recorded."""
+    from echolot import main as main_mod
+    cfg = _config(tmp_path / "offline")
+    rep = {"detectors": [], "environment": {"compose_names": {"asked": True, "calls": 79899}}}
+    main_mod._say_no_sources(rep, cfg)
+    err = capsys.readouterr().err
+    check("the calls are named", "79899 composable calls were recorded" in err, err)
+    check("nothing is said of a report with nothing to place",
+          (main_mod._say_no_sources({"detectors": []}, cfg), capsys.readouterr().err)[1] == "")
