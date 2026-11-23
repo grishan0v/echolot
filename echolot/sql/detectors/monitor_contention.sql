@@ -41,31 +41,73 @@
 -- out: the outer one stays, because it names both frames — which `code`
 -- places in the checkout — and the owner by name. One that stands alone is
 -- a wait of its own, and counts.
+WITH waits AS (
+    SELECT
+        s.thread_name,
+        s.ts,
+        s.dur,
+        s.name,
+        s.name GLOB '{{name_glob_alt}}'   AS named,
+        parent.name                       AS parent_name
+    FROM _slice_win s
+    JOIN slice x ON x.id = s.slice_id
+    LEFT JOIN slice parent ON parent.id = x.parent_id
+    WHERE (s.name GLOB '{{name_glob}}' OR s.name GLOB '{{name_glob_alt}}')
+      AND NOT (s.name GLOB '{{name_glob}}'
+               AND COALESCE(parent.name GLOB '{{name_glob_alt}}', 0))
+),
+-- The wait that speaks for the row (#510). The longest one used to, and
+-- ART writes some waits in the short shape alone, owner tid and nothing
+-- else: on a real cold start a thread's longest wait, 890 ms, was one,
+-- while its other waits named the owner's method and its own. So the
+-- longest of the long shape speaks when the row has one; `max_ms` stays
+-- the longest wait of all.
+evidence AS (
+    SELECT thread_name, ts, name, parent_name,
+           ROW_NUMBER() OVER (PARTITION BY thread_name
+                              ORDER BY named DESC, dur DESC, ts) AS pick
+    FROM waits
+),
+-- A row with the short shape alone still has what the trace knows about the
+-- moment: the owner's tid is the app's thread whose name the trace has, the
+-- slice open on that thread is what it was doing while it held the lock,
+-- and the slice the wait sits in is where the waiter was.
+told AS (
+    SELECT e.thread_name, e.name, e.parent_name,
+           CAST(SUBSTR(e.name, INSTR(e.name, 'owner tid: ') + 11) AS INT) AS owner_tid,
+           e.ts
+    FROM evidence e
+    WHERE e.pick = 1
+)
 SELECT
-    s.thread_name                     AS location,
+    w.thread_name                     AS location,
     COUNT(*)                          AS count,
-    ROUND(SUM(s.dur) / 1e6, 2)        AS total_ms,
-    ROUND(MAX(s.dur) / 1e6, 2)        AS max_ms,
-    s.name                            AS detail
-FROM _slice_win s
-JOIN slice x ON x.id = s.slice_id
-LEFT JOIN slice parent ON parent.id = x.parent_id
-WHERE (s.name GLOB '{{name_glob}}' OR s.name GLOB '{{name_glob_alt}}')
-  AND NOT (s.name GLOB '{{name_glob}}'
-           AND COALESCE(parent.name GLOB '{{name_glob_alt}}', 0))
+    ROUND(SUM(w.dur) / 1e6, 2)        AS total_ms,
+    ROUND(MAX(w.dur) / 1e6, 2)        AS max_ms,
+    CASE
+        WHEN INSTR(t.name, 'owner tid: ') = 0
+            THEN t.name
+        ELSE t.name
+             || COALESCE(' · owner ' || (
+                    SELECT th.name FROM thread th JOIN _proc p ON th.upid = p.upid
+                    WHERE th.tid = t.owner_tid LIMIT 1), '')
+             || COALESCE(' in ' || (
+                    SELECT o.name FROM _slice o
+                    WHERE o.tid = t.owner_tid AND o.ts <= t.ts
+                      AND (o.dur < 0 OR o.ts + o.dur > t.ts)
+                    ORDER BY o.depth DESC LIMIT 1), '')
+             || COALESCE(' · waiting in ' || t.parent_name, '')
+    END                               AS detail
+FROM waits w
+JOIN told t ON t.thread_name = w.thread_name
 -- Grouped by thread, not by slice name. The owner's tid sits inside the name
 -- ('owner tid: 13533'), so grouping by name shatters one finding into a dozen
 -- rows, one per owner: on the gameplay scenario 190 blocks scattered so widely
 -- that no group cleared the threshold. The detector's question is "who is
 -- being blocked", not "by which particular lock".
---
--- detail carries the name of the LONGEST block: with a single min/max in the
--- query, SQLite takes the remaining columns from the record-holding row. That
--- keeps the owner's tid in the evidence, which is what the investigation
--- hooks onto.
-GROUP BY s.thread_name
-HAVING MAX(s.dur) >= {{min_block_ms}} * 1000000
-    OR SUM(s.dur) >= {{max_total_ms}} * 1000000
+GROUP BY w.thread_name
+HAVING MAX(w.dur) >= {{min_block_ms}} * 1000000
+    OR SUM(w.dur) >= {{max_total_ms}} * 1000000
 ORDER BY total_ms DESC
 LIMIT 20;
 

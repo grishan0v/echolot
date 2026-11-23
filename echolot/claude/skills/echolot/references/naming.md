@@ -68,6 +68,12 @@ so a contention row is an address, not a string to grep for. When ART did not
 know the owner's method it leaves out ` at <frame>` — about one slice in fifty
 on real cold starts — and the row is placed by the waiter alone.
 
+A thread's row is grouped from all its waits, and its evidence is the longest
+wait of the second shape when it has one: `max_ms` can be a longer wait of the
+first shape. A row of the first shape alone adds what the trace knows of the
+moment: `… (owner tid: 30788) · owner DefaultDispatcher-worker-3 in
+<the owner's open slice> · waiting in <the slice the wait sat in>`.
+
 Everything else shaped `Lock contention on <something> lock` is a
 **runtime-internal lock** with no application code behind it:
 
