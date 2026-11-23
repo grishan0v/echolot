@@ -834,6 +834,41 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     return merged
 
 
+def _merge_drawn(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The frames the app drew, across the repeats: the median, and in how many
+    of the repeats that could tell it drew none (#536)."""
+    counts = [d["count"] for d in ((r.get("window") or {}).get("drawn") for r in reports)
+              if isinstance(d, dict) and isinstance(d.get("count"), int)]
+    if not counts:
+        return None
+    return {"count": round(median(counts)), "none": sum(1 for c in counts if c == 0),
+            "runs": len(counts)}
+
+
+def undrawn(report: dict[str, Any]) -> tuple[int, int] | None:
+    """(repeats in which the app drew no frame, repeats that could tell), when any."""
+    d = (report.get("window") or {}).get("drawn")
+    if not isinstance(d, dict) or not isinstance(d.get("count"), int):
+        return None
+    none, runs = d.get("none", 1 if d["count"] == 0 else 0), d.get("runs", 1)
+    return (none, runs) if none else None
+
+
+def _undrawn_lines(report: dict[str, Any]) -> list[str]:
+    """The first thing to say of a set whose scenario never reached its screen."""
+    got = undrawn(report)
+    if not got:
+        return []
+    none, runs = got
+    where = "in its recording" if runs == 1 else (
+        f"in any of the {runs} repeats" if none == runs else f"in {none} of {runs} repeats")
+    them = "it" if none == 1 else "those repeats"
+    return [f"> ⚠️ The app drew no frame {where}: the scenario did not reach its "
+            f"screen there. Look at what the phone showed (an error screen, no "
+            f"network, a dialog in the way) and record again; the numbers below "
+            f"from {them} are not about the scenario."]
+
+
 def _merge_window_checks(reports: list[dict[str, Any]]) -> dict[str, Any]:
     """What the window says about how it was cut, for every repeat at once.
 
@@ -914,6 +949,7 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"]["main_thread"] = _merge_budget(reports)
         merged["window"]["crowding"] = _merge_crowding(reports)
         merged["window"]["frames"] = _merge_frames(reports)
+        merged["window"]["drawn"] = _merge_drawn(reports)
         merged["window"]["startup"] = _merge_startup(reports)
         merged["window"].update(_merge_window_checks(reports))
 
@@ -1531,6 +1567,17 @@ def _unbuilt_markers_lines(report: dict[str, Any]) -> list[str]:
     else:
         head = f"{len(names)} temporary markers are in the code and none is in these traces"
         it, they, are, wrap = "them", "they", "are", "wrap"
+    if u.get("in_build"):
+        # `collect` read the build before it recorded and found them there.
+        return [f"> ⚠️ {head}, though `collect` found {it} in the build on the phone "
+                f"before it recorded: the scenario did not run the code {they} {wrap}. "
+                f"Look at what the phone showed during the recording; there is nothing "
+                f"to rebuild."]
+    got = undrawn(report)
+    if got and got[0] == got[1]:
+        return [f"> ⚠️ {head}. The app drew no frame in these recordings, so the "
+                f"scenario most likely did not run the code {they} {wrap}: see the "
+                f"warning above before rebuilding anything."]
     still = (f"If {they} {are} still missing after that, the scenario does not run "
              f"the code {they} {wrap}.")
     if u.get("mode") == "gradle":
@@ -1723,6 +1770,7 @@ def to_markdown(report: dict[str, Any]) -> str:
         first = (f" in `{Path(traces[0]).name.removesuffix('.perfetto-trace')}`, "
                  f"the first of {len(traces)}") if traces and len(traces) > 1 else ""
         out.append(f"Process: `{w['process']}` (pid {w.get('pid')}{first})")
+    out.extend(_undrawn_lines(report))
     alts = w.get("process_alternatives")
     if alts:
         names = ", ".join(f"`{a['name']}`" for a in alts)
@@ -2082,6 +2130,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     if report.get("generated_at"):
         line += f" · written {when_mod.local(report['generated_at'])}"
     out.append(line)
+    out.extend(_undrawn_lines(report))
     other = written_by((report.get("toolchain") or {}).get("echolot"),
                        (report.get("summary") or {}).get("detectors_run"))
     if other:

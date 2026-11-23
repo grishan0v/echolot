@@ -1047,6 +1047,13 @@ def set_aside(out_dir: Path, name: str,
 # told a reader to "let it cool and record again" after a set that had cooled
 # to 35 °C before every repeat and throttled all the same (#522). `collect`
 # keeps them in the account beside each trace (recording.py).
+def markers_in_build(trace: Path) -> list[str] | None:
+    """The temporary markers `collect` found in the build on the phone before it
+    recorded `trace`; None when it did not look, or found some missing (#536)."""
+    names = recording.kept(trace, "markers_in_build")
+    return [str(n) for n in names] if isinstance(names, list) else None
+
+
 def cooldown_record(trace: Path) -> dict | None:
     """What `collect` kept about the cooldown of the repeat that recorded `trace`.
 
@@ -1128,7 +1135,9 @@ def collect(package: str, out_dir: Path, iterations: int,
             log: Callable[[str], None] = print,
             on_set_aside: Callable[[Path], None] | None = None,
             progress: Callable[..., None] | None = None,
-            planted: Planted | None = None) -> list[dict]:
+            planted: Planted | None = None,
+            check_first: Callable[[Path], tuple[str | None, str | None]] | None = None,
+            ) -> list[dict]:
     """N repeats of a scenario. The mode decides who drives it.
 
     launch  — we do: HOME, force-stop, and launch the activity. Cold start.
@@ -1162,6 +1171,13 @@ def collect(package: str, out_dir: Path, iterations: int,
     In command mode the scenario may install the app itself, so a build
     found lacking is read again after the first repeat, and the set stops
     there. Gradle mode builds the app from the code and is not asked.
+
+    `check_first` reads the first repeat's trace in launch and command modes
+    and says whether the scenario got where it was going (#536): `(stop,
+    note)`, a reason the round stops for, or a line worth saying. A round
+    whose app drew no frame, or whose end never closed, used to be recorded
+    whole and accepted, and only `analyze` said so, as a build too old for
+    its markers.
     """
     import contextlib
     import time
@@ -1303,11 +1319,16 @@ def collect(package: str, out_dir: Path, iterations: int,
     # after `mark --apply` held none of them (#390). Read before the device
     # is held still, so that the cooldown takes the heat of the reading.
     reread = False
+    # The markers the build on the phone was found to carry, kept beside the
+    # set: a report that finds none of them in the traces then knows the build
+    # was not the reason (#536).
+    built: list[str] | None = None
     if planted:
         lacking, why = unbuilt(dev, package, planted)
         if lacking and mode == "launch":
             raise RunnerError(unbuilt_sentence(dev, package, planted, lacking))
         if lacking == []:
+            built = sorted(planted.names)
             log(_has_line(planted))
         elif mode == "command":
             reread = True
@@ -1398,6 +1419,8 @@ def collect(package: str, out_dir: Path, iterations: int,
                     _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
                     raise RunnerError(f"repeat 1 of {iterations}: "
                                       + unbuilt_sentence(dev, package, planted, lacking))
+                if lacking == []:
+                    built = sorted(planted.names)
                 log(_has_line(planted) if lacking == [] else _unread_line(planted, why))
             # `am start` refused, an activity that is not there most often,
             # and exited 0 all the same: the repeat recorded the device and
@@ -1441,7 +1464,8 @@ def collect(package: str, out_dir: Path, iterations: int,
                 "cooldown": None if cooling is None else {
                     "max_c": cooling.max_c, "sensor": cooling.sensor,
                     "before_c": (round(settled.last_c, 1)
-                                 if settled.last_c is not None else None)}})
+                                 if settled.last_c is not None else None)},
+                **({"markers_in_build": built} if built is not None else {})})
             results.append(info)
 
             extra = ""
@@ -1463,6 +1487,25 @@ def collect(package: str, out_dir: Path, iterations: int,
                     "unlocked: this trace may hold none")
             if restarted:
                 log("      [!] " + _not_cold_line(package, left))
+            # One look at the first trace before the rest are recorded: a
+            # round in which the scenario never reached its screen stops here,
+            # with the phone still in hand (#536).
+            if i == 0 and check_first is not None:
+                stop, note = check_first(out)
+                if stop and iterations == 1:
+                    # The one trace there is: kept, to look at.
+                    note = (f"{stop}: the scenario did not get where it was going. "
+                            f"Look at the phone before recording more")
+                elif stop:
+                    out.unlink(missing_ok=True)
+                    recording.sidecar(out).unlink(missing_ok=True)
+                    raise RunnerError(
+                        f"repeat 1 of {iterations}: {stop}. The scenario did not get "
+                        f"where it was going, and nothing more was recorded. Look at "
+                        f"the phone: an error screen, no network, a dialog in the way. "
+                        f"Once it shows the scenario's screen, collect again.")
+                if note:
+                    log(f"      [!] {note}")
             tell(done=i + 1)
     return results
 

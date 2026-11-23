@@ -156,10 +156,17 @@ waiting for one.
    window.process_alternatives present  → possibly the wrong process
    config / params_source say calibrated on these very runs
                                         → analyze --defaults before believing silence
+   the warning that the app drew no frame  → the scenario did not reach its
+                                          screen: look at the phone (network,
+                                          an error screen, a dialog), fix that,
+                                          record again; nothing to rebuild
    the warning that the code's temporary markers are not in these traces
-                                        → the app recorded was built before them:
-                                          do what it says and record again; this
-                                          round says nothing about the markers
+                                        → read which cause it names: a build
+                                          from before them (build, install,
+                                          record again) or a scenario that did
+                                          not run their code (look at the
+                                          phone); this round says nothing
+                                          about the markers
    everything silent on a plausible window → exit: "clean"
    → in these cases fix the config, do not hunt a problem — except a value
      under `_source: confirmed_by_user`: a person chose it, and it is theirs.
