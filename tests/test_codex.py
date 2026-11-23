@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from echolot import codex, hosts, sandbox, selftest
+from echolot import codex, hosts, layer, sandbox, selftest
 from echolot.main import build_parser, main
 from tests.support import check
 
@@ -314,11 +314,29 @@ def test_doctor_q_gains_a_line_where_codex_is_used(project, home, checked):
 
 
 def test_a_codex_project_with_no_rule_is_told_the_command(project, home):
+    """A `.codex/` folder, and no choice recorded yet: Codex is detected."""
     (project / ".codex").mkdir()
-    init(project, "--for", "claude")
+    check("no choice yet", hosts.load_choice(project) is None)
     line = status_line(project, "codex")
     check("no rule, said as a problem", line and line.startswith("NO RULE"), line)
-    check("and the command keeps Claude Code", "`echolot init --for claude,codex`" in line, line)
+    check("and the command names Codex", "codex`" in line, line)
+
+
+def test_a_choice_that_leaves_codex_out_wins_over_its_folder(project, home, checked):
+    """`.codex/` holds the project's MCP servers for Codex; the agents chosen
+    are Claude Code and two others (#503)."""
+    (project / ".codex").mkdir()
+    (project / ".codex" / "config.toml").write_text("", encoding="utf-8")
+    init(project, "--for", "claude,agents,gemini")
+    check("no codex line on every `echolot`", status_line(project, "codex") is None,
+          run(project, "status")[1])
+    code, said = run(project, "doctor", "-q")
+    check("nor in `doctor -q`", "codex:" not in said, said)
+    code, said = run(project, "doctor")
+    section = flat(said.split("## Codex in this project", 1)[-1].split("##", 1)[0])
+    check("the full doctor says once that the folder is there",
+          "## Codex in this project" in said and "leave Codex out" in section
+          and "`echolot init --for claude,agents,gemini,codex`" in section, section)
 
 
 def test_an_untrusted_project_is_told_its_rule_is_not_read(project, home):
@@ -395,6 +413,46 @@ def test_the_copies_import_made_are_listed_and_left_alone(project, home):
     check("and what replaces them", "echolot plugin replaces them" in said, said)
     check("nothing deleted", (project / ".agents" / "skills" / "echolot").is_dir()
           and (project / ".codex" / "agents" / "perf-hunter.toml").is_file())
+
+
+def test_the_door_through_a_linked_skills_directory_is_no_copy(project, home):
+    """`.claude/skills` is a link to `.agents/skills`, and `init` installed the
+    door through it: one file, the layer's, and nothing to delete (#503)."""
+    init(project, "--for", "claude,agents,gemini")
+    claude_skills = project / ".claude" / "skills"
+    (project / ".agents").mkdir()
+    claude_skills.rename(project / ".agents" / "skills")
+    claude_skills.symlink_to(Path("..") / ".agents" / "skills")
+    check("the door is still the layer's", layer.one_line(project)[0] == "current",
+          layer.one_line(project))
+    check("and not a copy /import made", codex.imported(project) == [],
+          codex.imported(project))
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        codex.print_status(project, hosts.keys(project))
+    check("doctor tells nobody to remove it", ".agents/skills/echolot/"
+          not in out.getvalue(), out.getvalue())
+
+
+def test_a_door_copied_by_hand_into_another_agents_skills_is_named(project, home):
+    """`.gemini/skills/echolot/`, an old door copied there by hand (#503)."""
+    init(project, "--for", "claude,gemini")
+    copy = project / ".gemini" / "skills" / "echolot"
+    copy.mkdir(parents=True)
+    (copy / "SKILL.md").write_text("an old door\n", encoding="utf-8")
+    line = status_line(project, "layer")
+    check("counted on the layer line", "1 copies of echolot's door in other "
+          "agents' skills that nothing keeps current" in line, line)
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        layer.print_status(project)
+    said = flat(out.getvalue())
+    check("doctor names it", ".gemini/skills/echolot/" in said, said)
+    check("nothing deleted", (copy / "SKILL.md").is_file())
+
+    (copy / "SKILL.md").unlink()
+    copy.rmdir()
+    copy.symlink_to(Path("..") / ".." / ".claude" / "skills" / "echolot")
+    check("a link to the layer's door is no copy", layer.strays(project) == [],
+          layer.strays(project))
 
 
 def test_a_skill_of_another_name_is_not_ours(project, home):

@@ -507,7 +507,10 @@ echolot's alone, so it is written whole; an edit made here is kept, and
 
 Three things decide whether the rule works, and `doctor` and `status` say
 each of them on a `codex` line, shown wherever Codex is chosen, has a
-`.codex/` folder, or is what runs the command:
+`.codex/` folder and no choice recorded yet, or is what runs the command. A
+recorded choice that leaves Codex out wins over the folder, which may hold
+nothing but the project's MCP servers for Codex: the line is gone, and only
+the full `doctor` says once that the folder is there and how to add Codex.
 
 - **The file**: there, as echolot wrote it, edited, or gone. A rule counts
   when it is a `prefix_rule` with the pattern `["echolot"]` and
@@ -552,6 +555,13 @@ them on the way. The manifest knows only `.claude/`, so the layer line went
 on saying `current` while an agent in Codex followed copies that described a
 `.Codex/settings.json` nobody has. `doctor` now lists them, says the plugin
 replaces them, and deletes nothing: someone may have edited them on purpose.
+
+Two things are not copies. A project that keeps one skills directory for
+several agents may link `.claude/skills` to `.agents/skills`; the door `init`
+wrote through the link is the layer's own, and is not listed. A door copied
+by hand into another agent's skills directory (`.gemini/skills/`,
+`.cursor/skills/`, `.github/skills/`) is listed on the layer line and in the
+layer section of `doctor`, unless it is a link to the layer's door.
 
 ## What calls what
 

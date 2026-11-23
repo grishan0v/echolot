@@ -551,6 +551,32 @@ _NO_MANIFEST = (f"if this is already the newest echolot, the manifest is what "
                 f"then keeps every file that differs until `--all` is chosen")
 
 
+# Other agents' skills directories in a project, where a person may have
+# copied echolot's door by hand. `.agents/skills/` is not here: Codex's
+# /import writes there, and `codex.imported` names what it left.
+OTHER_SKILLS = (".gemini/skills", ".cursor/skills", ".github/skills")
+
+
+def strays(project: Path) -> list[str]:
+    """Copies of echolot's door in other agents' skills directories.
+
+    Nothing keeps them current: `init` writes the door into `.claude/` and
+    nowhere else. A directory linked to `.claude/skills` holds the door
+    itself and is left out (#503).
+    """
+    door = project / ".claude" / DOOR
+    return [f"{d}/echolot/" for d in OTHER_SKILLS
+            if (project / d / "echolot" / "SKILL.md").is_file()
+            and not codex.same_file(project / d / "echolot" / "SKILL.md", door)]
+
+
+def _strays_said(found: list[str]) -> str:
+    return (f"Copies of echolot's door skill that nothing keeps current: "
+            f"{', '.join(found)}. `echolot init` updates only .claude/, and "
+            f"`echolot guide` gives any agent the current text. echolot deletes "
+            f"nothing — remove them, unless someone here keeps them on purpose.")
+
+
 # Said on the layer line when `init --private` installed here: a reader of
 # `status` should know that the team does not see this install.
 PRIVATE_NOTE = "private to this clone: git ignores what init wrote"
@@ -561,6 +587,10 @@ def one_line(project: Path) -> tuple[str, str]:
     verdict, line = _one_line(project)
     if verdict not in ("absent", "newer") and hosts.load_private(project):
         line += f" · {PRIVATE_NOTE}"
+    found = strays(project)
+    if found:
+        line += (f" · {len(found)} copies of echolot's door in other agents' "
+                 f"skills that nothing keeps current (`echolot doctor` lists them)")
     return verdict, line
 
 
@@ -612,6 +642,17 @@ def print_status(project: Path) -> str | None:
 
     The same verdict and the same command as `one_line`, with the files named.
     """
+    verdict = _print_status(project)
+    found = strays(project)
+    if found:
+        print()
+        print(textwrap.fill(_strays_said(found), width=80, initial_indent="  ",
+                            subsequent_indent="  ", break_on_hyphens=False,
+                            break_long_words=False))
+    return verdict
+
+
+def _print_status(project: Path) -> str | None:
     a = assess(project)
     verdict, files, status = a["verdict"], a["files"], a["status"]
     print("\n## The .claude/ layer in this project\n")

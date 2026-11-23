@@ -256,11 +256,27 @@ def home_rules(env: Mapping[str, str] | None = None) -> str:
 
 # --- the copies /import leaves ---------------------------------------------
 
+def same_file(a: Path, b: Path) -> bool:
+    """Whether two paths are one file: a link, or a directory linked in above it."""
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
 def imported(project: Path) -> list[str]:
-    """Copies of echolot's skills and subagent where Codex's /import puts them."""
+    """Copies of echolot's skills and subagent where Codex's /import puts them.
+
+    The door there that is the layer's own door is no copy: a project that
+    keeps one skills directory for several agents links `.claude/skills` to
+    `.agents/skills`, and `init` installed through the link. Listed as a copy
+    to remove, it was the door itself (#503).
+    """
     found = []
     skills = project / ".agents" / "skills"
-    if (skills / "echolot" / "SKILL.md").is_file():
+    door = skills / "echolot" / "SKILL.md"
+    if door.is_file() and not same_file(door, project / ".claude" / "skills"
+                                        / "echolot" / "SKILL.md"):
         found.append(".agents/skills/echolot/")
     for d in sorted(skills.glob("source-command-echolot-*")):
         if (d / "SKILL.md").is_file():
@@ -273,9 +289,27 @@ def imported(project: Path) -> list[str]:
 # --- the verdict -------------------------------------------------------------
 
 def in_use(project: Path, keys: list[str], env: Mapping[str, str] | None = None) -> bool:
-    """Whether Codex is worth a line here: chosen, found, or running this."""
-    return (KEY in keys or (project / ".codex").is_dir()
+    """Whether Codex is worth a line here: chosen, found, or running this.
+
+    A `.codex/` folder counts until the project chooses its agents. Once the
+    choice is recorded and leaves Codex out, the folder is someone's MCP
+    servers for Codex and nothing echolot was asked to look after: the line
+    `NO RULE` on every `echolot` was a warning about a choice already made
+    (#503). `doctor` still says once that the folder is there (`unchosen`).
+    """
+    return (KEY in keys or (_folder(project) and not unchosen(project))
             or sandbox.host(env) == sandbox.CODEX or bool(imported(project)))
+
+
+def _folder(project: Path) -> bool:
+    return (project / ".codex").is_dir()
+
+
+def unchosen(project: Path) -> bool:
+    """A `.codex/` folder here, and a recorded choice of agents without Codex."""
+    from . import hosts  # late: hosts imports this module
+    chosen = hosts.load_choice(project)
+    return _folder(project) and chosen is not None and KEY not in chosen
 
 
 def init_command(keys: list[str], project: Path | None = None) -> str:
@@ -382,6 +416,12 @@ def print_status(project: Path, keys: list[str],
     env = os.environ if env is None else env
     a = assess(project, keys, env)
     if a is None:
+        if unchosen(project):
+            print("\n## Codex in this project\n")
+            _say(f"There is a .codex/ folder here, and the agents this project "
+                 f"chose leave Codex out, so echolot says nothing about Codex "
+                 f"elsewhere. To run echolot in Codex: `{init_command(keys, project)}`, "
+                 f"outside its sandbox.")
         return None
     verdict, found = a["verdict"], a["found"]
     print("\n## Codex in this project\n")
