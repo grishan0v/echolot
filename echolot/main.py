@@ -669,6 +669,12 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         environment = _environment_info(
             tp, package or str(procs[0].get("name") or "").split(":")[0],
             mapped=extra is not None)
+        # Whether the device was cooled before this repeat is in the record
+        # `collect` kept beside the set, not in the trace (#522).
+        from . import runner
+        cooled = runner.cooldown_record(Path(trace))
+        if cooled is not None:
+            environment["cooldown"] = cooled
         markers = _markers_info(tp, cfg)
         # How the trace was recorded: what it asked the device for, and what
         # `collect` kept beside it (#533).

@@ -440,3 +440,66 @@ def test_a_knob_the_device_cannot_read_is_skipped_and_an_interrupt_puts_back_the
             pass
     check("what was switched before the interrupt is switched back",
           phone.asked[-1] == "cmd power set-fixed-performance-mode-enabled false", phone.asked)
+
+
+# --- what the report is told about the cooling (#522) -------------------------
+
+def test_collect_keeps_the_cooldown_and_each_repeats_temperature_beside_the_set(
+        tmp_path, monkeypatch) -> None:
+    phone = Phone(temps=(30.0, 30.0, 36.0, 33.0, 30.0))
+    monkeypatch.setattr(runner, "_run", SettlingAdb(phone))
+    monkeypatch.delenv("ANDROID_SERIAL", raising=False)
+    Clock().stand_in(monkeypatch)
+    out = tmp_path / "traces"
+    runner.collect(PACKAGE, out, 3, section={"cooldown": {"max_c": 34}},
+                   name="startup", log=lambda m: None)
+    got = [runner.cooldown_record(out / f"startup_iter{i:03d}.perfetto-trace")
+           for i in range(3)]
+    check("each repeat: on, its limit and sensor, and how warm it was before",
+          got == [{"on": True, "max_c": 34.0, "sensor": "battery", "before_c": t}
+                  for t in (30.0, 33.0, 30.0)], got)
+
+    monkeypatch.setattr(runner, "_run", FakeAdb())
+    runner.collect(PACKAGE, out, 1, section={}, name="startup", log=lambda m: None)
+    check("a set recorded without it says so",
+          runner.cooldown_record(out / "startup_iter000.perfetto-trace") == {"on": False})
+    aside = [d for d in out.iterdir() if d.is_dir()]
+    check("the record of the set before moved aside with its traces",
+          len(aside) == 1 and runner.cooldown_record(
+              aside[0] / "startup_iter002.perfetto-trace")["before_c"] == 30.0, aside)
+    check("a trace with no record beside it gets none",
+          runner.cooldown_record(tmp_path / "startup_iter000.perfetto-trace") is None)
+    from echolot import recording
+    older = tmp_path / "older_iter000.perfetto-trace"
+    recording.write(older, {"runner": "launch", "reset_policy": "force-stop"})
+    check("nor does one whose account was written before the cooldown was kept",
+          runner.cooldown_record(older) is None)
+
+
+def _throttled(cooldown) -> str:
+    from echolot import report
+    env = {"thermal": {"max_celsius": 83.0, "throttled": True,
+                       "throttle_device": "thermal-cpufreq-1", "throttled_runs": "4/4"}}
+    if cooldown is not None:
+        env["cooldown"] = cooldown
+    return "\n".join(report._environment_lines(env))
+
+
+def test_the_throttle_warning_follows_how_the_set_was_cooled() -> None:
+    from echolot import report
+    merged = report._merge_cooldown(
+        [{"on": True, "max_c": 38, "sensor": "cpu", "before_c": b} for b in (34.2, 35.0)])
+    text = _throttled(merged)
+    check("cooled and throttled anyway: the scenario heats the device",
+          "though `runner.cooldown` was on: cpu at or below 38 °C before each repeat, "
+          "35 °C at most" in text and "heats this device" in text
+          and "Let it cool" not in text, text)
+    text = _throttled(report._merge_cooldown([{"on": False}, {"on": False}]))
+    check("recorded without it: the setting is named",
+          "recorded without `runner.cooldown`: set it" in text and "Let it cool" not in text, text)
+    text = _throttled(None)
+    check("unknown: cool and record again, with the setting that does it",
+          "Let it cool and record again" in text and "`runner.cooldown`" in text, text)
+    check("a set that mixes the two, or lacks a record, is unknown",
+          report._merge_cooldown([{"on": False}, {"on": True, "max_c": 38}]) is None
+          and report._merge_cooldown([{"on": False}, None]) is None)

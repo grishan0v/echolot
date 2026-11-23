@@ -200,6 +200,9 @@ class Settled:
                  sleep: Callable[[float], None] | None = None,
                  clock: Callable[[], float] | None = None) -> None:
         self.cooldown = cooldown_of(section)
+        # The sensor's last reading before a repeat, in °C, when `cool` read
+        # one: what the set's record keeps for the report (#522).
+        self.last_c: float | None = None
         self.knobs = knobs_of(section)
         self.device = device
         self.run = run
@@ -343,6 +346,7 @@ class Settled:
             return 0.0
         c = self.cooldown
         now = self.read()
+        self.last_c = now
         if now is None or now <= c.max_c:
             return 0.0
         self.log(f"  cooling: {c.sensor} {now:.1f} °C, waiting for {c.max_c:g}")
@@ -357,6 +361,7 @@ class Settled:
                     return waited
                 self.sleep(min(POLL_S, c.timeout_s - waited))
                 now = self.read()
+                self.last_c = now
         finally:
             self.notify(cooling=None)
         waited = self.clock() - started

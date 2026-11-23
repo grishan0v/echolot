@@ -516,7 +516,13 @@ runner:
   `environment` shows how hot it ran. In launch and command modes the app is
   stopped before the wait: nothing of it runs while the device cools, and a
   job it scheduled during the recording is not yet due when the stop comes
-  ([`launch`](#launch--we-drive-it)).
+  ([`launch`](#launch--we-drive-it)). The account `collect` keeps beside
+  each trace, `<trace>.recording.json`, holds the cooldown and the sensor's
+  reading before that repeat. When the kernel throttled anyway, the report
+  reads it: a set cooled before every
+  repeat was heated by the scenario itself, and waiting longer would not help,
+  so the report says to compare it only with sets recorded the same way; a
+  set recorded without `cooldown` is told to set it.
 - **`fixed_performance`** asks for the platform's fixed performance mode,
   which holds the clock at a level the device can keep. Whether a device has
   one is up to its power HAL: the A51 takes the command and moves no frequency
