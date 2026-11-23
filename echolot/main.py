@@ -538,7 +538,8 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
 def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                   cli_overrides: dict[str, dict] | None = None,
                   use_defaults: bool = False,
-                  tp_source: str | None = None) -> dict:
+                  tp_source: str | None = None,
+                  below_bar: bool = False) -> dict:
     """The core of a run: trace + config → Marker Report.
 
     Separate from cmd_analyze because it has two callers: the command, which
@@ -553,6 +554,12 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     numbers, the config untouched. Each detector in the report says which it
     got (`params_source`), so a reader can tell calibrated numbers from the
     shipped ones, and a scenario's from the config's, without opening it.
+
+    `below_bar` also runs each detector with its thresholds open, and keeps
+    what that returned beside its rows for the merge of a set (#505): a row
+    one repeat reports may have been there below the bar in another, and
+    only this tells it from a row that was not there at all. The merge takes
+    it out again, see `report.merge_rows`.
     """
     plan = plan_detectors(cfg, cli_overrides=cli_overrides, use_defaults=use_defaults)
     # Refused here, like a threshold of the wrong kind: before a trace is opened.
@@ -632,6 +639,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                         _stacks_behind(tp, d, params, rows, package, root)
                     except Exception as e:  # the rows stand without it
                         print(f"[!] {d.id} @samples: {e}", file=sys.stderr)
+            opened = _below_bar(tp, d, overrides, sql, rows) if below_bar and not err else None
             entry = {
                 "id": d.id,
                 "title": d.title,
@@ -650,6 +658,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 # Did it look: `checked`, and `reason` when it did not.
                 **needs_mod.verdict(d.needs, held, err),
             }
+            if opened is not None:
+                entry[report_mod.OPEN_ROWS] = opened
             if source != "default":
                 # What the shipped numbers would have been — the reader can
                 # see how far calibration moved them without `explain`.
@@ -672,6 +682,21 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                             absent=absent, environment=environment,
                             markers=markers, scenario=cfg.scenario_name,
                             budget_ms=budget_ms, recording=recording)
+
+
+def _below_bar(tp, d, overrides: dict | None, sql: str,
+               rows: list[dict]) -> list[dict] | None:
+    """The detector's rows with its calibrated thresholds at zero and no LIMIT.
+
+    The rows themselves when that is the same query. None when it fails: the
+    rows stand without it, and a missing row then reads as absent, as it did.
+    """
+    try:
+        open_sql = d.render_open(overrides)
+        return rows if open_sql == sql else tp.query(open_sql)
+    except Exception as e:  # the same leniency as the detector's own query
+        print(f"[!] {d.id} with its thresholds open: {e}", file=sys.stderr)
+        return None
 
 
 def _markers_info(tp, cfg: Config) -> dict:
@@ -819,7 +844,8 @@ def cmd_analyze(args) -> int:
         if same:
             print(f"[!] {report_mod.same_recording_said(same)}", file=sys.stderr)
         reports = [analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
-                                 use_defaults=args.defaults, tp_source=tp_source)
+                                 use_defaults=args.defaults, tp_source=tp_source,
+                                 below_bar=len(traces) > 1)
                    for t in traces]
         rep = report_mod.aggregate(reports)
         if same:
