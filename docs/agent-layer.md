@@ -372,6 +372,17 @@ choice, and installs nothing else; `echolot` then reads the layer as provided
 by the plugin, and stops asking for `init`. In Codex the door runs
 `echolot init --for plugin,codex`, which writes Codex's rule as well.
 
+A person may run `echolot` first, before any agent. With no choice saved
+yet, `echolot` looks for the plugin where each agent keeps it: Claude Code's
+`enabledPlugins` in the user's settings and the project's `settings.json`
+and `settings.local.json` (the nearer file decides), and the entries of
+`~/.claude/plugins/installed_plugins.json` installed for this project or its
+main checkout; Codex's plugin cache; the copy `echolot plugin cursor` makes.
+When it finds one, the layer line and `next` name `echolot init --for plugin`
+(`--for plugin,codex` for Codex's) and the agent that has it. When it finds
+none, `next` names plain `echolot init` and, beside it, `--for plugin` for a
+person who has the plugin anyway.
+
 ### Installing the plugin
 
 `.claude-plugin/marketplace.json` at the root of this repository is a

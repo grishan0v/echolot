@@ -32,6 +32,10 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     """
     st: dict = {"project": project}
     st["layer_verdict"], st["layer_line"] = layer.one_line(project)
+    # The `init` a project with echolot's plugin runs, where the plugin is
+    # found: plain `init` beside it installs every skill twice (#598).
+    st["plugin_init"] = plugin.init_for(project)
+    st["plugin_hosts"] = layer.plugin_hosts(project) if st["plugin_init"] else None
     st["hosts"] = hosts.load_choice(project)
     # Where Codex is used: whether a rule lets echolot out of its sandbox.
     said = codex.one_line(project, hosts.keys(project))
@@ -460,7 +464,15 @@ def next_step(st: dict) -> str:
                 f"layer line says why)")
     if kind == "init":
         if st["layer_verdict"] == "absent":
-            return "echolot init — installs the .claude/ layer; then /echolot in Claude Code"
+            if st.get("plugin_init"):
+                return (f"{st['plugin_init']} — the echolot plugin is in "
+                        f"{st['plugin_hosts']} and brings the skills, so .claude/ "
+                        f"stays out; then the plugin's echolot skill")
+            # Nothing found is no proof there is no plugin: a person who
+            # has it reads which line is theirs.
+            return ("echolot init — installs the .claude/ layer; then /echolot in "
+                    "Claude Code. With the echolot plugin installed: `echolot init "
+                    "--for plugin` instead, which keeps .claude/ out")
         return "echolot init — brings the .claude/ layer up to date (the agent reads it)"
     if kind == "doctor":
         # The fact `echolot`'s doctor line reads, read the same way. A
