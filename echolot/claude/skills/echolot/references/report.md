@@ -837,7 +837,22 @@ percentiles are quoted in and the one to match a FrameTimingMetric run against.
 *`detail` leads with whose deadline it was*, and it is the platform's verdict
 rather than ours. `Self Jank` is the app — go and look. `Other Jank` is the
 compositor or the display, and sending anyone into the app's code over it
-wastes a round. `Buffer Stuffing` is the queue backing up.
+wastes a round.
+
+*`Buffer Stuffing` is latency, not jank.* The platform tags a frame that way
+when the app queued it while the frame before was still waiting to be shown:
+it reaches the screen a frame or more late and smoothly. Nothing stutters;
+input feels a little behind. Its row keeps the count and has 0 in `total_ms`
+and `max_ms`, ranks after every late frame, and its `detail` reads `latency,
+not jank · N of M frames queued behind the one before · up to X ms late`. A
+large count there is not a finding to hunt: it is usually a render thread or
+GPU that takes most of each frame, and the frames the app missed are the rows
+above it. A frame that also missed its deadline keeps the miss's tag:
+`App Deadline Missed, Buffer Stuffing` is `Self Jank`, and its overrun
+includes the wait in the queue (its `detail` ends by saying so), so it reads
+larger than the same miss without the queue. A report written before echolot
+counted the queue this way has the summed wait as the `Buffer Stuffing` row's
+total, often the largest row of the report: read it the same way.
 
 *Silence has two causes here.* No bad frames, or no frame timeline in the
 trace at all — Android 11 and below, or a capture that did not ask for the

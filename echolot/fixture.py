@@ -230,6 +230,24 @@ APP_FRAMES = [
     (60, 1200, 16, 200, FT.JANK_APP_DEADLINE_MISSED),
 ]
 
+# The app's frames of a list that runs a frame behind (#537), in place of the
+# ones above with `build(stuffed=True)`. On a device where the render thread
+# takes most of every frame the app queues each frame while the one before is
+# still waiting to be shown: the platform tags those Buffer Stuffing, and they
+# reach the screen late and smoothly. Here they are the most frames and the
+# most time past a deadline, 12 of 25 frames 24 ms over each — 288 ms, 29% of
+# the window — against the frames the app really missed: 4 of its own, 20 ms
+# over each, and 3 that missed while queued, 18 ms over each. Summed as late
+# frames, the queued ones were the first row and a level that needed
+# attention.
+STUFFED_FRAMES = [
+    *[(1 + i, 150 + i * 40, 16, 40, FT.JANK_BUFFER_STUFFING) for i in range(12)],
+    *[(20 + i, 650 + i * 40, 16, 36, FT.JANK_APP_DEADLINE_MISSED) for i in range(4)],
+    *[(30 + i, 820 + i * 30, 16, 34,
+       FT.JANK_APP_DEADLINE_MISSED | FT.JANK_BUFFER_STUFFING) for i in range(3)],
+    *[(40 + i, 920 + i * 20, 16, 14, FT.JANK_NONE) for i in range(6)],
+]
+
 # Negative control: another app janking inside our window.
 OTHER_LAYER = "com.other.app/com.other.app.Main#0"
 OTHER_FRAMES = [
@@ -1056,11 +1074,11 @@ def _span(builder, cookies, kind, start_ms, dur_ms, **fields) -> None:
     _frame_timeline(packet).frame_end.cookie = cookie
 
 
-def _frames(builder) -> None:
+def _frames(builder, app_frames=APP_FRAMES) -> None:
     """The frame timeline: expected and actual, for three processes."""
     cookies = iter(range(10**5, 10**6))
 
-    for frames, pid, layer in ((APP_FRAMES, APP_PID, LAYER),
+    for frames, pid, layer in ((app_frames, APP_PID, LAYER),
                                (OTHER_FRAMES, OTHER_PID, OTHER_LAYER)):
         # An optional sixth field: how late the actual frame started after
         # the expected one.
@@ -1419,7 +1437,7 @@ def config(builder, *, categories=RECORDED_CATEGORIES, environment: bool = True,
 def build(frames: bool = True, environment: bool = True,
           sampling: str | None = None, names: bool = False,
           crowded: bool = False, categories=None, composables: bool = True,
-          fully_drawn: str | None = None) -> bytes:
+          fully_drawn: str | None = None, stuffed: bool = False) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1458,6 +1476,9 @@ def build(frames: bool = True, environment: bool = True,
     `fully_drawn` plants a `reportFullyDrawn()` call: `"app"`, `"system_server"`
     or `"early"` (see `_fully_drawn`). `None` by default: the app never calls
     it.
+
+    `stuffed=True` draws the app's frames from `STUFFED_FRAMES`, a list that
+    runs a frame behind, in place of `APP_FRAMES`.
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -1471,7 +1492,7 @@ def build(frames: bool = True, environment: bool = True,
                            (SS_PID, SS_NAME, SS_THREADS)])
 
     if frames:
-        _frames(builder)
+        _frames(builder, STUFFED_FRAMES if stuffed else APP_FRAMES)
     if sampling:
         _samples(builder, arrived=sampling in ("arrived", "minified"),
                  minified=sampling == "minified")

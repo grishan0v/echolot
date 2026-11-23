@@ -319,6 +319,9 @@ production build; on a userdebug kernel `detail` names the function.
 
 `frame_jank` needs no instrumentation at all: SurfaceFlinger records every
 frame's deadline and what it actually took, and says whose fault a miss was.
+Frames it tags `Buffer Stuffing` only waited in a queue behind the frame
+before: they reach the screen late and smoothly, so their row counts them
+with nothing past the deadline, after every late frame.
 Android 12 and up — see [requirements](../README.md#requirements).
 
 ## Your own names, measured every time

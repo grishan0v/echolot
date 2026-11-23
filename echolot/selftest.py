@@ -1783,7 +1783,8 @@ def _(report):
 # The fixture plants 24 frames inside the window: 5 the app was 44 ms late for,
 # 3 more of the same kind but only 2 ms late, 4 that SurfaceFlinger was late
 # for, 10 healthy ones and 2 stuffed. Outside the window sits the worst frame
-# in the trace, and in other processes sit eight more.
+# in the trace, and in other processes sit eight more. `fixture.build(stuffed=
+# True)` draws the app's frames of a list that runs a frame behind instead.
 
 @check("frame_jank: found the app's late frames, at the right size")
 def _(report):
@@ -1832,6 +1833,48 @@ def _(report):
     other = by_loc["SurfaceFlinger CPU Deadline Missed"]
     assert other["detail"].startswith("Other Jank"), other["detail"]
     assert other["count"] == 4 and other["total_ms"] == 56.0, other
+
+
+@check("frame_jank: frames queued behind the one before are latency, "
+       "ranked after the late ones and outside their time")
+def _(report):
+    """A list that runs a frame behind (`fixture.STUFFED_FRAMES`): 12 of 25
+    frames the platform tags Buffer Stuffing, 24 ms past their deadlines
+    each, 288 ms in all, 29% of the window; 4 the app missed, 20 ms over
+    each; 3 it missed while queued, 18 ms over each. On a real scroll the
+    queued frames were 1263 of 1446 and 16 s past the deadline in 40 s: the
+    first row, and a level that needed attention, above the 28 frames the
+    app really missed.
+
+    The late frames rank first, by what they cost. The queued ones keep
+    their row and their count, and count nothing past a deadline, so no
+    summed wait is there for a rank, a level or `compare` to read as late
+    frames; their evidence says what they are and how far behind they were.
+    The frames that missed while queued stay the app's late frames, and say
+    that their overrun holds the wait. The plain reading leads with the
+    app's late frames and is worth a look: 80 ms of them is under the floor.
+    On `main`'s query the queued row came first, at 288 ms.
+    """
+    from . import plain
+    got = _recorded(stuffed=True)
+    found = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"])
+             for r in rows(got, "frame_jank")]
+    assert found == [
+        ("App Deadline Missed", 4, 80.0, 20.0,
+         "Self Jank · 4 of 25 frames · longest 36.0 ms"),
+        ("App Deadline Missed, Buffer Stuffing", 3, 54.0, 18.0,
+         "Self Jank · 3 of 25 frames · longest 34.0 ms"
+         " · the overrun includes the wait in the queue"),
+        ("Buffer Stuffing", 12, 0.0, 0.0,
+         "latency, not jank · 12 of 25 frames queued behind the one before"
+         " · up to 24.0 ms late"),
+    ], found
+    det = next(d for d in plain.annotate(got)["detectors"] if d["id"] == "frame_jank")
+    assert det["attention"] == plain.WORTH_A_LOOK, det["attention"]
+    said = det["plain"]["found"]
+    assert said.startswith("4 of 25 frames came late because of the app: 80 ms past "
+                           "their deadlines together"), said
+    assert "12 of 25 frames waited in a queue" in said and "without a stutter" in said, said
 
 
 @check("frame_jank: the worst frame in the trace is outside the window")
