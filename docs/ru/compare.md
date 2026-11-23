@@ -47,6 +47,14 @@ echolot compare old.json new.json     # ровно эти два отчёта
 **`Evidence`** заполняется только у детекторов, где `detail` входит в
 идентичность строки (`main_thread_block` группирует по потокам).
 
+**Маркеры.** Таблица маркеров из отчёта (домены из конфига и временные
+маркеры) сравнивается отдельной секцией «Markers» под основной таблицей:
+строки сопоставляются по имени и оцениваются по self time, как строки
+детектора, а столбец Calls отдельно оценивает число вызовов за прогон
+(«загрузка шла дважды вместо одного раза»). Для асинхронных секций
+(`Trace.beginAsyncSection`) это единственное место, где они вообще
+измеряются: детекторы их не читают.
+
 ## Столбец Holds
 
 Решает, можно ли доверять сдвигу. Показывает 95%-й доверительный интервал
@@ -134,7 +142,8 @@ echolot compare old.json new.json --html      # comparison.html рядом с co
 ## JSON сравнения
 
 `comparison.json` (схема 2) содержит `comparable`, `warnings`, `window`,
-`summary` (включая `not_compared`, `state_changed`, `silent_both`) и `rows`
+`summary` (включая `not_compared`, `state_changed`, `silent_both`,
+`markers_moved`), `markers` (таблица маркеров по обеим сторонам, с `calls`) и `rows`
 с полями `change` (`appeared`, `grew`, `shrank`, `vanished`, `steady`),
 `shift` (`ms`, `low_ms`, `high_ms`, `resolves_ms`, `runs_needed`) и `holds`.
 При `--plain`/`--html` добавляется секция `plain`.

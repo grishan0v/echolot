@@ -136,22 +136,25 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
                      temp_prefix))
 
     rows.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
+    markers = _markers(before, after, floor_ms, floor_ratio, temp_prefix)
 
     # Two processes, two windows, or a window that is not the scenario's: the
     # numbers stay, because a wrong-looking table is more useful than a
     # refusal, but a verdict that a move holds would claim a comparison that
     # is not there (#534).
     if not comparable:
-        for r in rows:
+        for r in [*rows, *markers]:
             r["shift"], r["holds"] = None, None
+            if r.get("calls"):
+                r["calls"]["shift"], r["calls"]["holds"] = None, None
 
     warnings.extend(_not_compared_warnings(before, after))
 
-    planted = _planted(rows, temp_prefix)
+    planted = _planted([*rows, *markers], temp_prefix)
     if planted:
         warnings.append({
             "id": "instrumentation",
-            "text": f"{len(planted)} row(s) that appeared are markers added "
+            "text": f"{len(planted)} marker(s) that appeared were added "
                     f"between the two rounds, not new work: "
                     + ", ".join(f"`{name}`" for name in planted[:5])
                     + (" …" if len(planted) > 5 else "")
@@ -189,9 +192,77 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
             # why, from each side that could not (null where it could).
             "not_compared": not_compared,
             "silent_both": _silent_both(before, after),
+            # Rows of the markers table that moved, by time or by calls.
+            "markers_moved": sum(1 for r in markers if _marker_moved(r)),
         },
         "rows": rows,
+        # The report's markers table, paired by name: the only place an async
+        # section the app writes is measured at all (#618).
+        "markers": markers,
     }
+
+
+def _markers(before: dict, after: dict, floor_ms: float, floor_ratio: float,
+             temp_prefix: str | None) -> list[dict[str, Any]]:
+    """The markers tables of both reports, paired by name like a detector's rows.
+
+    Every marker of the project's own is measured there, whatever fired:
+    the domains the config lists and the temporary ones. An async section
+    (`Trace.beginAsyncSection`) has no thread to answer for, so no detector
+    reads it, and a load that ran twice per run instead of once reached no
+    row of the comparison at all. Here it is judged by self time like any
+    row, and by its calls per run on their own (`calls`).
+
+    A report written before the table existed has none, and that side is
+    unknown rather than without markers: nothing is paired against it.
+    """
+    if "markers" not in before or "markers" not in after:
+        return []
+    rows_b = (before.get("markers") or {}).get("rows") or []
+    rows_a = (after.get("markers") or {}).get("rows") or []
+    out = []
+    for rb, ra, how in _match(rows_b, rows_a, ("location",), temp_prefix):
+        r = _row("markers", ("location",), rb, ra, how, floor_ms, floor_ratio,
+                 temp_prefix)
+        calls = _calls(rb, ra, floor_ratio)
+        if calls is not None:
+            r["calls"] = calls
+        out.append(r)
+    out.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
+    return out
+
+
+def _calls(rb: dict | None, ra: dict | None,
+           floor_ratio: float) -> dict[str, Any] | None:
+    """A marker's calls per run on both sides, and whether the move holds.
+
+    Moved when the medians are a whole call apart and more than the relative
+    floor: 1 → 2 is the shape of work done twice, 400 → 404 is not news. The
+    range is read the way a time's is, from each run's count, with zeros for
+    the repeats a side did not find it in when the shares differ.
+    """
+    if rb is None or ra is None or rb.get("count") is None or ra.get("count") is None:
+        return None
+    shares = _shares(rb, ra)
+    b, a = _values(rb, "count", shares), _values(ra, "count", shares)
+    was, now = rb["count"], ra["count"]
+    if shares and b and a:
+        was, now = median(b), median(a)
+    delta = round(now - was, 2)
+    shift = stats.shift(b, a) if b and a else None
+    return {
+        "before": was, "after": now, "delta": delta,
+        "moved": abs(delta) >= 1 and abs(delta) > floor_ratio * was,
+        "shift": None if shift is None else {"low": shift["low_ms"],
+                                             "high": shift["high_ms"]},
+        "holds": None if shift is None else (
+            shift["low_ms"] > 0 or shift["high_ms"] < 0),
+    }
+
+
+def _marker_moved(r: dict[str, Any]) -> bool:
+    """A markers row worth listing: its time moved, or its calls did."""
+    return r["change"] != STEADY or bool((r.get("calls") or {}).get("moved"))
 
 
 def _not_compared_warnings(before: dict, after: dict) -> list[dict[str, str]]:
@@ -228,12 +299,15 @@ def _planted(rows: list[dict], temp_prefix: str | None) -> list[str]:
     difference is that they were planted, under the config's prefix, or
     `AGENTTMP_` when it names none: `cmd_compare` falls back the way
     `analyze` and `mark` do.
+
+    Each name once: one marker found by two detectors, and by the markers
+    table, is one marker, and listed per row two markers read as four.
     """
     if not temp_prefix:
         return []
-    return [r["location"] for r in rows
-            if r["change"] == APPEARED
-            and str(r["location"]).startswith(temp_prefix)]
+    return list(dict.fromkeys(
+        r["location"] for r in rows
+        if r["change"] == APPEARED and str(r["location"]).startswith(temp_prefix)))
 
 
 # --- what may be compared with what ----------------------------------------
@@ -1153,6 +1227,7 @@ def to_markdown(cmp: dict[str, Any]) -> str:
     out.append(
         f"Moved **{s['moved']}** · appeared **{s['appeared']}** · "
         f"gone **{s['vanished']}** · steady {s['steady']}"
+        + (f" · markers moved **{s['markers_moved']}**" if s.get("markers_moved") else "")
     )
     out.append(
         f"Detectors fired: {len(s['fired_before'])} → {len(s['fired_after'])}"
@@ -1164,7 +1239,8 @@ def to_markdown(cmp: dict[str, Any]) -> str:
         out.append("")
 
     moved = [r for r in cmp["rows"] if r["change"] != STEADY]
-    if not moved:
+    marked = [r for r in cmp.get("markers") or [] if _marker_moved(r)]
+    if not moved and not marked:
         out.append("## Nothing moved")
         out.append("")
         out.append(
@@ -1174,7 +1250,7 @@ def to_markdown(cmp: dict[str, Any]) -> str:
             f"not land where these detectors look, or the two sets are the "
             f"same scenario in the same state."
         )
-    else:
+    elif moved:
         out.append("## What moved")
         out.append("")
         out.append(
@@ -1188,6 +1264,17 @@ def to_markdown(cmp: dict[str, Any]) -> str:
         out.append("")
         out.append(_table(moved))
     out.append("")
+
+    if marked:
+        out.append("## Markers")
+        out.append("")
+        out.append(
+            "_the report's markers table — the project's own sections, async "
+            "ones included — paired by name: self time judged as a detector's "
+            "rows are, and the calls per run (N) judged on their own in Calls._")
+        out.append("")
+        out.append(_markers_table(marked))
+        out.append("")
 
     if s["state_changed"]:
         out.append("## Detectors that changed state")
@@ -1263,6 +1350,36 @@ def _table(rows: list[dict[str, Any]]) -> str:
         "count": _counts(r),
         "holds": _holds(r),
     } for r in rows], order=MOVED_COLUMNS, headers=MOVED_HEADERS)
+
+
+MARKER_COLUMNS = ["location", "before", "after", "delta", "count", "holds", "calls"]
+MARKER_HEADERS = {**MOVED_HEADERS, "calls": "Calls"}
+
+
+def _markers_table(rows: list[dict[str, Any]]) -> str:
+    """The markers that moved, in the moved table's columns, and their calls."""
+    return table.render([{
+        "location": r["location"]
+                    + (" *(family)*" if r["matched_by"] == "family" else ""),
+        "before": _band(r["before"], r["metric"]),
+        "after": _band(r["after"], r["metric"]),
+        "delta": _delta(r),
+        "count": _counts(r),
+        "holds": _holds(r),
+        "calls": _calls_text(r.get("calls")),
+    } for r in rows], order=MARKER_COLUMNS, headers=MARKER_HEADERS)
+
+
+def _calls_text(calls: dict[str, Any] | None) -> str:
+    """The verdict on a marker's calls per run, when they moved."""
+    if not calls or not calls.get("moved"):
+        return "—"
+    text = f"{_int(calls['before'])} → {_int(calls['after'])}"
+    shift = calls.get("shift")
+    if shift is None:
+        return text
+    word = "yes" if calls["holds"] else "no"
+    return f"{text}, {word}, {shift['low']:+g} … {shift['high']:+g}"
 
 
 def _holds(r: dict[str, Any]) -> str:
