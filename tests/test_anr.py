@@ -1396,3 +1396,127 @@ def test_a_cut_stack_is_not_struck_out_by_a_native_mask_alone():
               "       at java.lang.Thread.run(Thread.java:1012)\n\nOkHttp example.com",
               "       ... frames omitted ...\n\nOkHttp example.com")).by_tid()["40"])
           is not None)
+
+
+# --- the main thread under a native unwinder's format (#587) -----------------
+
+HEAD_LINES = "# Crashlytics -\n# Application: com.example.app\n# Version: 1.2.0 (120)\n\n"
+
+MAIN_NAMED_AFTER_PROCESS = HEAD_LINES + """\
+com.example.app (native):tid=1 systid=4242
+#00 pc 0x00000000000a1b2c /apex/com.android.runtime/lib64/bionic/libc.so (__epoll_pwait+8)
+#01 pc 0x0000000000012345 /system/lib64/libutils.so (android::Looper::pollOnce(int, int*, int*, void**)+180)
+       at android.os.MessageQueue.nativePollOnce(Native method)
+       at android.os.MessageQueue.next(MessageQueue.java:335)
+       at android.os.Looper.loopOnce(Looper.java:162)
+       at android.os.Looper.loop(Looper.java:294)
+       at android.app.ActivityThread.main(ActivityThread.java:8177)
+       at java.lang.reflect.Method.invoke(Native method)
+       at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:552)
+       at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:971)
+"""
+
+CONTROL_MAIN = MAIN_NAMED_AFTER_PROCESS.replace("com.example.app (native)", "main (native)")
+
+MAIN_NATIVE_POLLONCE_ONLY = HEAD_LINES + """\
+main (native):tid=1 systid=4242
+#00 pc 0x00000000000a1b2c /apex/com.android.runtime/lib64/bionic/libc.so (__epoll_pwait+8)
+#01 pc 0x0000000000012345 /system/lib64/libutils.so (android::Looper::pollOnce(int, int*, int*, void**)+180)
+#02 pc 0x0000000000023456 /system/lib64/libandroid_runtime.so (android::android_os_MessageQueue_nativePollOnce(_JNIEnv*, _jobject*, long, int)+44)
+       at android.os.MessageQueue.nextLegacy(MessageQueue.java)
+       at android.os.MessageQueue.next(MessageQueue.java)
+       at android.os.Looper.loopOnce(Looper.java)
+       at android.os.Looper.loop(Looper.java)
+       at android.app.ActivityThread.main(ActivityThread.java)
+       at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java)
+       at com.android.internal.os.ZygoteInit.main(ZygoteInit.java)
+"""
+
+MAIN_UNWINDER_FORMAT = HEAD_LINES + """\
+com.example.app (native):tid=1 systid=4242
+#00 pc 0x0000000000091a2c /apex/com.android.runtime/lib64/bionic/libc.so (syscall+28)
+#01 pc 0x0000000000095b3c /apex/com.android.runtime/lib64/bionic/libc.so (__futex_wait_ex(void volatile*, bool, int, bool, timespec const*)+144)
+#02 pc 0x00000000000f1c4d /apex/com.android.runtime/lib64/bionic/libc.so (pthread_cond_timedwait+136)
+#03 pc 0x00000000000a2d5e /system/lib64/libunwindstack.so (unwindstack::ThreadEntry::Wait(unwindstack::WaitType, int)+108)
+#04 pc 0x00000000000a3e6f /system/lib64/libunwindstack.so (unwindstack::SignalHandler(int, siginfo*, void*)+52)
+#05 pc 0x0000000000091a2c /apex/com.android.runtime/lib64/bionic/libc.so (syscall+28)
+#06 pc 0x0000000000204394 /apex/com.android.art/lib64/libart.so (art::ConditionVariable::WaitHoldingLocks(art::Thread*)+140)
+#07 pc 0x000000000066343c /apex/com.android.art/lib64/libart.so (artJniMethodEnd+128)
+#08 pc 0x000000000072e92c /apex/com.android.art/lib64/libart.so (art_jni_method_end+12)
+#09 pc 0x0000000000412f00 /apex/com.android.art/lib64/libart.so (art_jni_trampoline+112)
+       at android.os.MessageQueue.nextLegacy(Unknown Source)
+       at android.os.MessageQueue.next(Unknown Source)
+       at android.os.Looper.loopOnce(Unknown Source)
+       at android.os.Looper.loop(Unknown Source)
+       at android.app.ActivityThread.main(Unknown Source)
+#10 pc 0x0000000000221a00 /apex/com.android.art/lib64/libart.so (art_quick_invoke_static_stub+640)
+"""
+
+MAIN_UNWINDER_FORMAT_NAMED_MAIN = MAIN_UNWINDER_FORMAT.replace(
+    "com.example.app (native)", "main (native)")
+
+
+@pytest.mark.parametrize("text", [
+    MAIN_NAMED_AFTER_PROCESS, MAIN_NATIVE_POLLONCE_ONLY,
+    MAIN_UNWINDER_FORMAT, MAIN_UNWINDER_FORMAT_NAMED_MAIN, CONTROL_MAIN,
+], ids=["named-after-process", "native-pollonce-only", "unwinder-format",
+        "unwinder-format-named-main", "control-main"])
+def test_the_main_thread_is_found_by_its_stack_and_read_as_idle(text):
+    rep = anr.parse(text)
+    check("there is a main thread", rep.main is rep.threads[0], rep.main)
+    out = anr.render(rep)
+    check("with its section", "## The main thread" in out, out)
+    check("saying it was idle", "It was **idle**" in out, out)
+    check("and nothing doing something",
+          "— 0 doing something, 1 idle" in out
+          and "## Threads that were doing something" not in out, out)
+    check("nor a gap about the main thread", "What the main thread" not in out, out)
+    got = anr.summary(rep)
+    check("json: idle at the looper", got["main"]["idle"] == "looper idle", got["main"])
+
+
+def test_a_main_thread_under_another_name_keeps_that_name():
+    out = anr.render(anr.parse(MAIN_UNWINDER_FORMAT))
+    check("the name the file gave it, called the main thread",
+          "**com.example.app** is the main thread" in out, out)
+    check("and the control says nothing of the kind",
+          "is the main thread" not in anr.render(anr.parse(CONTROL_MAIN)))
+
+
+def test_the_unwinders_own_frames_decide_no_mask():
+    thread = anr.parse(MAIN_UNWINDER_FORMAT).threads[0]
+    check("five frames of taking the dump", thread.dumping == 5, thread.dumping)
+    check("and ten above the top managed frame", thread.above == 10, thread.above)
+    worker = MAIN_UNWINDER_FORMAT.replace("com.example.app (native)", "Worker-1 (native)") \
+        .replace("android.os.MessageQueue.nextLegacy", "com.vendor.sdk.Upload.send") \
+        .replace("android.app.ActivityThread.main", "java.lang.Thread.run")
+    rep = anr.parse(worker)
+    check("a worker in that format is not asleep on the unwinder's futex",
+          anr.idle_reason(rep.threads[0], rep.ownership) is None,
+          anr.idle_reason(rep.threads[0], rep.ownership))
+
+
+def test_a_file_without_a_main_thread_says_so():
+    only = HEAD_LINES + """\
+DefaultDispatcher-worker-3 (waiting):tid=31 systid=4300
+       at jdk.internal.misc.Unsafe.park(Native method)
+       at com.example.app.data.Repo.load(Repo.kt:30)
+"""
+    rep = anr.parse(only)
+    check("no main thread", rep.main is None, rep.main)
+    check("and the report says it is not in the file",
+          "What the main thread was doing" in anr.render(rep), anr.render(rep))
+
+
+def test_a_main_thread_in_that_format_running_the_apps_code_is_busy():
+    busy = MAIN_UNWINDER_FORMAT.replace(
+        "       at android.os.MessageQueue.nextLegacy(Unknown Source)\n"
+        "       at android.os.MessageQueue.next(Unknown Source)\n",
+        "       at com.example.app.ui.Home.render(Home.kt:42)\n"
+        "       at android.os.Handler.dispatchMessage(Unknown Source)\n")
+    rep = anr.parse(busy)
+    check("still the main thread", rep.main is rep.threads[0], rep.main)
+    check("and not idle", anr.idle_reason(rep.main, rep.ownership) is None,
+          anr.idle_reason(rep.main, rep.ownership))
+    check("the report says what it stood on",
+          "It was **idle**" not in anr.render(rep), anr.render(rep))

@@ -370,13 +370,36 @@ class Thread:
     # ...` and stopped: the stack goes on below, and nothing here says how.
     # None when the stack was given whole.
     cut: int | None = None
+    # How many native frames came before the first managed one: what sits
+    # above the top managed frame. A source that prints the two interleaved,
+    # as a native unwinder does, is otherwise read as two separate lists.
+    above: int = 0
+
+    @property
+    def dumping(self) -> int:
+        """How many native frames at the top are the unwinder taking the dump.
+
+        A stack written by a native unwinder has its own signal handler on
+        top — `unwindstack::SignalHandler`, `unwindstack::ThreadEntry::Wait`,
+        and the futex they wait in. That is the act of taking the dump, not
+        anything the thread was doing, and no mask is decided by it.
+        """
+        last = max((i for i, line in enumerate(self.native[:self.above])
+                    if "unwindstack::" in line), default=-1)
+        return last + 1
+
+    @property
+    def own_native(self) -> list[str]:
+        """The native frames that are the thread's own — see `dumping`."""
+        return self.native[self.dumping:]
 
     @property
     def top(self) -> str:
         """The frame this thread was standing on, java preferred."""
         if self.frames:
             return self.frames[0]
-        return self.native[0] if self.native else "(no frames)"
+        native = self.own_native or self.native
+        return native[0] if native else "(no frames)"
 
     def own(self, ours: Ownership) -> list[str]:
         """The frames that are the project's own code — see `Ownership`."""
@@ -491,7 +514,27 @@ class Report:
 
     @property
     def main(self) -> Thread | None:
-        return next((t for t in self.threads if t.name == "main"), None)
+        """The main thread: the one named `main`, else the one running
+        `ActivityThread.main` under whatever name the file gave it."""
+        return next((t for t in self.threads if t.name == "main"),
+                    next((t for t in self.threads if is_main(t)), None))
+
+
+_ACTIVITY_THREAD = "android.app.ActivityThread.main("
+
+
+def is_main(thread: Thread) -> bool:
+    """Whether this is the app's main thread.
+
+    ART's own dump always calls it `main`. A stack written by a native
+    unwinder, as Crashlytics gives some events, calls it by the name the
+    kernel knows it by: the last fifteen characters of the process. Read by
+    its name alone, such a thread was a background one for every rule after
+    that — every idle mask applied to it, and the report had no main thread.
+    Its stack says what it is: `ActivityThread.main` runs only there.
+    """
+    return thread.name == "main" or any(f.startswith(_ACTIVITY_THREAD)
+                                        for f in thread.frames)
 
 
 def detect(text: str) -> Source | None:
@@ -658,6 +701,8 @@ def _read_body(line: str, thread: Thread, source: Source) -> bool:
         return True
     if source.native.match(line):
         thread.native.append(line.strip())
+        if not thread.frames:
+            thread.above += 1
         return True
     if _OMITTED.match(line):
         # The source stopped writing the stack here. Read as one more line
@@ -883,6 +928,28 @@ CALL_IN_PROGRESS = (
     "java.net.Socket.connect",
 )
 
+# A looper waiting for a message, seen the way a native unwinder writes it:
+# `MessageQueue.next` (or `nextLegacy`) is the top managed frame, and above it
+# sit only the native half of the poll, ART's JNI entry and exit, and the
+# futex the runtime waits in to re-enter managed code. The managed
+# `nativePollOnce` that the looper mask reads is not there.
+_LOOPER_NEXT = ("android.os.MessageQueue.next(", "android.os.MessageQueue.nextLegacy(")
+_LOOPER_NATIVE = (
+    "epoll_pwait", "epoll_wait", "Looper::pollOnce", "Looper::pollInner",
+    "android_os_MessageQueue_nativePollOnce",
+    "art_jni_trampoline", "art_jni_method_end", "artJniMethodEnd",
+    "ConditionVariable::WaitHoldingLocks", "syscall", "__futex_wait",
+)
+
+
+def _looper_wait(thread: Thread) -> bool:
+    """Whether the thread waits in its looper with nothing of its own above."""
+    if not thread.frames or not thread.frames[0].startswith(_LOOPER_NEXT):
+        return False
+    return all(any(part in line for part in _LOOPER_NATIVE)
+               for line in thread.native[thread.dumping:thread.above])
+
+
 # The runtime's thread that writes the dump is runnable in every dump it
 # writes. That is a property of its stack: this reader does not know which
 # signal the dump answered.
@@ -918,13 +985,16 @@ def idle_reason(thread: Thread, ours: Ownership | None = None) -> str | None:
     if thread.state in ("blocked", "runnable"):
         return None
     ours = ours or Ownership()
+    if _looper_wait(thread):
+        return "looper idle"
+    main = is_main(thread)
 
     def busy(frames: list[str]) -> bool:
         return any(ours.claims(f) or "Binder.execTransact" in f
                    or any(call in f for call in CALL_IN_PROGRESS) for f in frames)
 
     for reason, masks in IDLE:
-        if thread.name == "main" and reason != "looper idle":
+        if main and reason != "looper idle":
             continue
         for i, frame in enumerate(thread.frames):
             if any(mask in frame for mask in masks):
@@ -932,7 +1002,7 @@ def idle_reason(thread: Thread, ours: Ownership | None = None) -> str | None:
                     return reason
                 break
         else:
-            if any(mask in line for line in thread.native for mask in masks) \
+            if any(mask in line for line in thread.own_native for mask in masks) \
                     and thread.cut is None and not busy(thread.frames):
                 return reason
     return None
@@ -988,7 +1058,7 @@ class Chain:
 
     @property
     def blocks_main(self) -> bool:
-        return any(t.name == "main" for t in self.waiters)
+        return any(is_main(t) for t in self.waiters)
 
 
 # What R8 makes of a class name: a letter or three, lower case, with a digit
@@ -1119,7 +1189,7 @@ def _queues_without_a_note(report: Report) -> list[Chain]:
         Chain(monitor=where, named=None, waiters=waiting, holders=[],
               inferred=True)
         for where, waiting in queues.items()
-        if len(waiting) > 1 or any(t.name == "main" for t in waiting)
+        if len(waiting) > 1 or any(is_main(t) for t in waiting)
     ]
 
 
@@ -1411,7 +1481,7 @@ def _stack(thread: Thread, ours: Ownership, limit: int = 8) -> list[str]:
             entered += 1
         if entered:
             lines.append(thread.frames[entered])
-    return lines + thread.native[1:3] if len(lines) == 1 else lines
+    return lines + thread.own_native[1:3] if len(lines) == 1 else lines
 
 
 def doing(report: Report, busy: list[Thread], found: list[Chain]) -> list[Thread]:
@@ -1545,6 +1615,11 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
     main = report.main
     if main is not None:
         out += ["## The main thread", ""]
+        if main.name != "main":
+            # The name the file gave it, kept: it is what a reader searches
+            # the export for.
+            out += [f"**{main.name}** is the main thread: it runs "
+                    f"`ActivityThread.main`.", ""]
         reason = idle_reason(main, ours)
         if reason == "looper idle":
             out += ["It was **idle**, waiting for a message. Whatever caused "
@@ -1733,6 +1808,10 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
                     "chain cannot be read off it: an empty chain list here "
                     "means the file cannot say, not that nothing was blocked. "
                     "The device's own record (`dumpsys dropbox`) keeps the notes.")
+    if report.threads and report.main is None:
+        gaps.append("- What the main thread was doing. No thread in this file "
+                    "is named `main` or runs `ActivityThread.main`, so it is "
+                    "not in it, and the threads below may be all the file has.")
     gaps.append("- How long anything took. A dump is one moment; durations "
                 "come from a trace.")
     if report.unread:
@@ -1818,6 +1897,7 @@ def summary(report: Report,
             for chain in chains(report)
         ],
         "main": None if main_thread is None else {
+            "name": main_thread.name,
             "state": main_thread.state,
             "idle": idle_reason(main_thread, ours),
             "denied": None if not main_thread.lock else main_thread.lock.cls,
