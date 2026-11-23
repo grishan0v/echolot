@@ -34,14 +34,15 @@ from .facts import (
     RE_CODE_READS_REPORT,
     RE_REPORT_BY_HAND,
     RE_TRACE_LITERAL,
-    RE_TRACE_OPEN,
     Facts,
     config_writes,
     gaps,
     hunt_agents,
-    is_invocation,
+    opens_trace,
+    runs_analyze,
+    runs_guide,
     shell_edits,
-    verbs,
+    trace_reads,
 )
 from .facts import SEGMENT as _SEGMENT
 from .facts import expand_vars as _expand_vars
@@ -208,27 +209,17 @@ def doctor_first(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
 
 
 def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    rows = []
-    known = verbs()
-    for c in s.bash():
-        cmd = c.shell
-        # Without echolot's own invocations: `--tp-binary` names a
-        # trace_processor_shell, and a call that went through echolot was
-        # reported as the agent opening the trace itself.
-        outside = cmd
-        for m in RE_ECHOLOT.finditer(cmd):
-            if is_invocation(m.group(1), known):
-                outside = outside.replace(m.group(0), " ")
-        if RE_TRACE_OPEN.search(outside):
-            rows.append({"ts": _t(c.ts), "agent": c.agent, "how": c.tool,
-                         "command": cmd[:120]})
+    # Read off what the shell ran, echolot's own invocations left out:
+    # `--tp-binary` names a trace_processor_shell, and a call that went
+    # through echolot was reported as the agent opening the trace itself.
+    rows = [{**r, "ts": _t(r["ts"])} for r in trace_reads(s)]
     for c in s.calls:
         if c.tool == "Read" and c.path and RE_TRACE_LITERAL.search(c.path):
             rows.append({"ts": _t(c.ts), "agent": c.agent, "how": "Read",
                          "command": _short(c.path)})
         # Python through an execute tool, or a trace handed to one as the
         # file it processes (#542).
-        elif c.code is not None and (RE_TRACE_OPEN.search(c.code)
+        elif c.code is not None and (opens_trace(c.code)
                                      or (c.path and RE_TRACE_LITERAL.search(c.path))):
             rows.append({"ts": _t(c.ts), "agent": c.agent,
                          "how": f"{c.tool} ({c.language or 'code'})",
@@ -280,8 +271,6 @@ def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | N
                   "the command should refuse to loop in place.")
 
 
-# `echolot guide <topic>`, the topic captured; the overview has none.
-_GUIDE = re.compile(r"\becholot\s+guide(?:\s+([a-z][a-z-]*))?")
 # The guides the loop reads for itself, in its subagent.
 _LOOP_GUIDES = ("loop", "report")
 
@@ -302,12 +291,12 @@ def guides_in_main(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     handed = min((ts_to_epoch(a.started) for a in loops if a.started), default=None)
     rows = []
     for c in s.bash(MAIN):
-        m = _GUIDE.search(c.shell)
-        if not m or m.group(1) not in _LOOP_GUIDES:
+        topic = next((t for t in _LOOP_GUIDES if runs_guide(c.shell, t) is not None), None)
+        if topic is None:
             continue
         if handed is not None and ts_to_epoch(c.ts) > handed:
             continue
-        rows.append({"ts": _t(c.ts), "guide": f"echolot guide {m.group(1)}",
+        rows.append({"ts": _t(c.ts), "guide": f"echolot guide {topic}",
                      "chars": c.output_chars})
     if not rows:
         return Signal("guides_in_main", "ok",
@@ -891,7 +880,7 @@ def baseline_lost(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
         # analyze in it was an analyze and nothing else, and the re-record
         # before it was never checked.
         for raw_seg in _SEGMENT.split(cmd):
-            if RE_ECHOLOT.search(raw_seg) and re.search(r"echolot\s+analyze\b", raw_seg):
+            if runs_analyze(raw_seg):
                 for m in RE_ECHOLOT.finditer(raw_seg):
                     if m.group(1) == "analyze":
                         d = _trace_dir(m.group(2) or "")

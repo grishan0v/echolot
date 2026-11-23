@@ -11,26 +11,94 @@ number appears the same way in both.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from ..config import Config
 from ..mark import under_allowed
+from . import shell
 from .model import MAIN, Call, Session, SubAgent, strip_heredocs, ts_to_epoch
 
+
+class EcholotMatch:
+    """One echolot invocation in a shell line, read the way `re.Match` is:
+    `group(0)` the invocation's text, `group(1)` the word after `echolot`,
+    `group(2)` the rest of its command."""
+
+    def __init__(self, whole: str, word: str, rest: str) -> None:
+        self._groups = (whole, word, rest)
+
+    def group(self, i: int = 0) -> str:
+        return self._groups[i]
+
+
+@lru_cache(maxsize=8192)
+def _invocations(text: str) -> tuple[EcholotMatch, ...]:
+    out = []
+    for cmd, h, src in shell.runs(text):
+        w = cmd.words
+        prog = shell.name(w[h].value)
+        # `python -m echolot …` runs it too.
+        if prog.startswith("python"):
+            k = next((i for i in range(h + 1, len(w) - 1)
+                      if w[i].value == "-m" and w[i + 1].value == "echolot"), None)
+            if k is not None:
+                h, prog = k + 1, "echolot"
+        if prog != "echolot" or h + 1 >= len(w):
+            continue
+        sub = w[h + 1]
+        m = re.match(r"[a-zA-Z-]+", sub.value)
+        if not m:
+            continue
+        rest = sub.value[m.end():] + src[sub.end:cmd.end]
+        out.append(EcholotMatch(src[w[h].start:cmd.end], m.group(0), rest))
+    return tuple(out)
+
+
+class _EcholotCalls:
+    """`echolot <word>` where the shell runs it, and nowhere else.
+
+    With the interface the regex it replaces had, so every reader of it
+    keeps its loop. The regex matched the words after any space, inside
+    quotes too: `echo "… echolot collect …"` and `sed -n '/echolot report/p'`
+    were calls, and `gh … -R owner/echolot --json title,body` a help lookup,
+    because `/` before the name was there to catch `~/.local/bin/echolot`
+    (#529). A path to the binary is still the binary — `shell.name`.
+    """
+
+    def finditer(self, text: str):
+        return iter(_invocations(text))
+
+    def search(self, text: str) -> EcholotMatch | None:
+        found = _invocations(text)
+        return found[0] if found else None
+
+
+class _ReRecord:
+    """A capture made again: gradle's connected run, perfetto by hand, or a
+    `collect` that runs — not one quoted in an `echo`."""
+
+    _by_hand = re.compile(
+        r"gradlew\b(?![^\n]*\btasks\b)[^\n]*\bconnected\w+|"
+        r"adb\s+shell\s+perfetto|record_android_trace", re.I | re.S)
+
+    def search(self, text: str):
+        return self._by_hand.search(text) or next(
+            (m for m in RE_ECHOLOT.finditer(text) if m.group(1) == "collect"), None)
+
+
 # Shared with signals.py — the vocabulary of what an agent does around the tool.
-RE_ECHOLOT = re.compile(r"(?:^|[\s;&|(`$/])echolot\s+([a-zA-Z-]+)((?:\s+[^;&|\n]*)?)")
+RE_ECHOLOT = _EcholotCalls()
 # A launch is not a recording: `adb shell am start -W` reads TotalTime, or
 # opens a screen to look at, and no trace file is touched. Counted, it warned
 # that the baseline was lost and opened hunt rounds that never happened. A
 # capture made by hand still matches through its perfetto part.
-RE_RE_RECORD = re.compile(
-    r"gradlew\b(?![^\n]*\btasks\b)[^\n]*\bconnected\w+|echolot\s+collect|"
-    r"adb\s+shell\s+perfetto|record_android_trace",
-    re.I | re.S)
+RE_RE_RECORD = _ReRecord()
 RE_TRACE_LITERAL = re.compile(r"\.(perfetto-trace|pftrace)\b")
 RE_TRACE_OPEN = re.compile(
     r"trace_processor|from\s+perfetto|import\s+perfetto|TraceProcessor\(", re.I)
@@ -558,7 +626,132 @@ def session_configs(session: Session, runs: list[dict[str, Any]],
     return [{"path": p, "shas": s} for p, s in found.items()]
 
 
+# ------------------------------------------------------- the trace itself
+
+# What reads a file's bytes when handed one. `cp`, `mv`, `ls`, `du`, `md5`
+# and `stat` take the file without reading it as a trace and are left out.
+_BYTE_READERS = {"strings", "xxd", "hexdump", "od", "head", "tail", "cat", "less", "more",
+                 "base64", "grep", "egrep", "fgrep", "zgrep", "rg", "protoc"}
+_INTERPRETERS = re.compile(r"^(?:python[\d.]*|node|deno|bun|ruby|perl|bash|sh|zsh)$")
+_PY_OPENS_TRACE = re.compile(r"\bopen\([^)]*\.(?:perfetto-trace|pftrace)\b", re.S)
+_HEREDOC_HEAD = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+_WRITE_TARGET = re.compile(r"(?:>>?|\btee\s+(?:-a\s+)?)\s*[\"']?([^\s\"';&|<>]+)")
+
+
+def opens_trace(code: str) -> bool:
+    """Code that opens a trace: trace_processor's API, or python's `open`
+    on a trace file."""
+    return bool(RE_TRACE_OPEN.search(code) or _PY_OPENS_TRACE.search(code))
+
+
+def _heredocs(command: str) -> list[tuple[str, str]]:
+    """Each heredoc of a command: the line it starts on, and its body."""
+    from .model import _HEREDOC
+    out = []
+    for m in _HEREDOC.finditer(command):
+        line = command[command.rfind("\n", 0, m.start()) + 1:m.start()]
+        rest = m.group(0).partition("\n")[2]
+        out.append((line, rest.rsplit("\n", 1)[0] if "\n" in rest else ""))
+    return out
+
+
+def trace_reads(session: Session) -> list[dict[str, Any]]:
+    """Every time a shell line read a trace without echolot, and how.
+
+    `trace_processor_shell` run on one; python handed code that opens one,
+    with `-c` or through a heredoc; a script written in the session — by
+    Write or a heredoc — that opens one, then run; a tool that reads the
+    file's bytes, `strings` among them. A word anywhere on the line is not
+    enough: `ls ~/.local/pipx/…/perfetto/trace_processor` fired, and the
+    four `python -I verify*.py` that did open the traces went unseen, their
+    code having gone in through a heredoc the line's reader strips (#529).
+    """
+    written: dict[str, str] = {}      # a script's file name → why it counts
+    rows = []
+    for c in sorted(session.calls, key=lambda x: ts_to_epoch(x.ts)):
+        if c.tool in ("Write", "Edit", "MultiEdit") and c.path:
+            inp = c.input or {}
+            if opens_trace(str(inp.get("content") or inp.get("new_string") or "")):
+                written[Path(c.path).name] = c.path
+            continue
+        if c.command is None:
+            continue
+        for first, body in _heredocs(c.command):
+            if not opens_trace(body):
+                continue
+            target = _WRITE_TARGET.search(first)
+            runs_it = any(_INTERPRETERS.match(shell.name(cmd.words[h].value))
+                          for cmd, h, _ in shell.runs(first))
+            if target and not runs_it:
+                written[Path(target.group(1)).name] = target.group(1)
+            elif runs_it:
+                rows.append({"ts": c.ts, "agent": c.agent, "how": "code through a heredoc",
+                             "command": c.shell[:120]})
+        for cmd, h, _ in shell.runs(c.shell):
+            words = [w.value for w in cmd.words]
+            prog, args = shell.name(words[h]), words[h + 1:]
+            how = None
+            if prog == "echolot":
+                continue
+            if prog.startswith("trace_processor"):
+                how = prog
+            elif prog.startswith("python") and "-c" in args \
+                    and args.index("-c") + 1 < len(args) and opens_trace(args[args.index("-c") + 1]):
+                how = "python -c"
+            elif prog in written or (_INTERPRETERS.match(prog)
+                                     and any(Path(a).name in written for a in args)):
+                script = prog if prog in written else next(
+                    Path(a).name for a in args if Path(a).name in written)
+                how = f"ran {script}, written to open the trace"
+            elif prog in _BYTE_READERS and any(RE_TRACE_LITERAL.search(a) for a in args):
+                how = f"{prog} on the trace file"
+            if how:
+                rows.append({"ts": c.ts, "agent": c.agent, "how": how,
+                             "command": c.shell[:120]})
+                break
+    return rows
+
+
 # ------------------------------------------------------------ config writes
+
+_COPIES = {"cp", "mv", "install", "rsync", "ditto"}
+_IN_PLACE = re.compile(r"^-[a-zA-Z]*i")
+
+
+def _is_project_file(path: str, name: str, cwd: str | None) -> bool:
+    """Whether a path, as written in the session, is the project's own file
+    of that name — the one beside the session's working directory."""
+    p = path.strip("\"'")
+    if Path(p).name != name:
+        return False
+    if not cwd:
+        return True
+    p = p.replace("${PWD}", cwd).replace("$PWD", cwd)
+    full = Path(p).expanduser()
+    if not full.is_absolute():
+        full = Path(cwd) / full
+    return os.path.normpath(full) == os.path.normpath(Path(cwd) / name)
+
+
+def _write_targets(command: str, name: str) -> list[str]:
+    """The paths a shell line writes, as far as it shows them: redirects,
+    a copy's destination (a directory taking the copied file's name), and
+    what `tee` and an in-place `sed`/`perl` edit."""
+    out = [m.group(1) for m in _WRITE_TARGET.finditer(command)]
+    for cmd, h, _ in shell.runs(strip_heredocs(command)):
+        words = [w.value for w in cmd.words]
+        prog, args = shell.name(words[h]), [a for a in words[h + 1:] if not a.startswith("-")]
+        if prog in _COPIES and len(args) >= 2:
+            dest = args[-1]
+            if Path(dest).name != name and any(Path(a).name == name for a in args[:-1]):
+                dest = str(Path(dest) / name)
+            out.append(dest)
+        elif prog == "tee":
+            out += args
+        elif prog in ("sed", "perl") and any(_IN_PLACE.match(w) for w in words[h + 1:]):
+            out += [a for a in args if Path(a).name == name]
+    return out
+
 
 def config_writes(session: Session, names: tuple[str, ...] = ("echolot.yml", "local.yml")
                   ) -> list[dict[str, Any]]:
@@ -574,9 +767,10 @@ def config_writes(session: Session, names: tuple[str, ...] = ("echolot.yml", "lo
     from an untouched one on the write alone.
     """
     out = []
+    cwd = session.cwd
     for c in session.calls:
         if c.tool in ("Edit", "Write", "MultiEdit") and c.path \
-                and Path(c.path).name in names:
+                and any(_is_project_file(c.path, n, cwd) for n in names):
             inp = c.input or {}
             out.append({"ts": c.ts, "agent": c.agent, "file": Path(c.path).name,
                         "tool": c.tool,
@@ -585,7 +779,15 @@ def config_writes(session: Session, names: tuple[str, ...] = ("echolot.yml", "lo
             continue
         if c.command is not None:
             for name in names:
-                if writes_file(c.command, name):
+                if not writes_file(c.command, name):
+                    continue
+                # The project's own file, not a copy of it elsewhere: two
+                # "shell wrote echolot.yml" were copies in another
+                # directory (#529). Python writing a path from a variable
+                # shows no target, and then the file's mentions speak.
+                targets = _write_targets(c.command, name) or re.findall(
+                    r"[\w./~${}-]*" + re.escape(name) + r"(?![\w.-])", c.command)
+                if any(_is_project_file(t, name, cwd) for t in targets):
                     out.append({"ts": c.ts, "agent": c.agent, "file": name,
                                 "tool": c.tool, "text": c.command, "before": ""})
                     break
@@ -660,10 +862,24 @@ def describe(c: Call, limit: int = 80) -> str:
 
 # --------------------------------------------------------------------- hunt
 
-_GUIDE_LOOP = re.compile(r"echolot\s+guide\s+loop\b")
 # The commands of one shell line, in the order they run.
 SEGMENT = re.compile(r"\n|;|&&|\|\||\|")
-_ANALYZE = re.compile(r"echolot\s+analyze\b")
+
+
+def runs_guide(command: str, topic: str | None = None) -> str | None:
+    """The topic of an `echolot guide` this line runs — "" for the overview —
+    or None when it runs none; with `topic`, only that one."""
+    for m in RE_ECHOLOT.finditer(command):
+        if m.group(1) == "guide":
+            words = m.group(2).split()
+            found = words[0] if words and not words[0].startswith("-") else ""
+            if topic is None or found == topic:
+                return found
+    return None
+
+
+def runs_analyze(command: str) -> bool:
+    return any(m.group(1) == "analyze" for m in RE_ECHOLOT.finditer(command))
 
 
 def hunt_agents(session: Session) -> list[SubAgent]:
@@ -679,7 +895,8 @@ def hunt_agents(session: Session) -> list[SubAgent]:
     """
     return [s for s in session.subagents
             if s.type == "perf-hunter"
-            or any(_GUIDE_LOOP.search(c.shell) for c in session.bash(f"sub:{s.id}"))]
+            or any(runs_guide(c.shell, "loop") is not None
+                   for c in session.bash(f"sub:{s.id}"))]
 
 
 def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
@@ -708,7 +925,7 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
             for seg in SEGMENT.split(c.shell):
                 if RE_RE_RECORD.search(seg):
                     seen_record = True
-                elif (_ANALYZE.search(seg) and not RE_HELP_FLAG.search(seg)
+                elif (runs_analyze(seg) and not RE_HELP_FLAG.search(seg)
                       and (c.ts, c.agent) in real and (rounds == 0 or seen_record)):
                     rounds += 1
                     seen_record = False
