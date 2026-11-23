@@ -761,8 +761,8 @@ def _anchor_warning(side: str, w: dict) -> tuple[dict[str, str] | None, bool]:
     if never:
         text = (f"The {side} report's " + " and ".join(never)
                 + " never matched in any repeat — its window is not the "
-                  "scenario's, and runs to the edge of the trace, so the Holds "
-                  "column stays empty.")
+                  "scenario's: it runs over the process's own first and last "
+                  "slices instead, so the Holds column stays empty.")
         if w.get("startup") is None:
             text += (" Its traces hold no app launch either: if the scenario "
                      "starts the app, those recordings were not launches "
@@ -774,8 +774,8 @@ def _anchor_warning(side: str, w: dict) -> tuple[dict[str, str] | None, bool]:
         bits.append(text)
     if partial:
         text = ("The " + "; the ".join(partial)
-                + ". In those the window expanded to the whole trace, and their "
-                  "rows are in the medians.")
+                + ". In those the window took the process's first or last "
+                  "slice for the missing end, and their rows are in the medians.")
         types = str((w.get("startup") or {}).get("type") or "")
         if " and " in types:
             text += (f" The set mixes starts ({types}): the repeats without the "
