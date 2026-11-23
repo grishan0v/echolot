@@ -524,13 +524,19 @@ def by_hand(st: dict) -> tuple[str, str]:
     # investigation's, else the first (see `project_state`).
     scenario = (st.get("config") or {}).get("scenario") if st.get("scenarios") else None
     if not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
-        return "collect", collect_line_for(scenario)
+        return "collect", collect_line_for(scenario, (st.get("config") or {}).get("runner"))
     return "analyze", analyze_line(traces.get("files"), scenario)
 
 
-def collect_line_for(scenario: str | None = None) -> str:
-    """`echolot collect` for a scenario, named when the config has several."""
-    return "echolot collect -c echolot.yml -n 5" + (
+def collect_line_for(scenario: str | None = None, runner: str | None = None) -> str:
+    """`echolot collect` for a scenario, named when the config has several.
+
+    No `-n` for a macrobenchmark (`runner.mode: gradle`): its own
+    `measureRepeated` decides how many times it runs, and `collect` says the
+    flag does not reach it. The line offered it all the same (#520, #551).
+    """
+    count = "" if runner == "gradle" else " -n 5"
+    return f"echolot collect -c echolot.yml{count}" + (
         f" --scenario {shlex.quote(scenario)}" if scenario else "")
 
 

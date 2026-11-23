@@ -556,3 +556,28 @@ def test_status_still_calls_a_sound_config_sound(tmp_path: Path, monkeypatch) ->
     _, out, _ = _run("status")
     line = next((ln for ln in out.splitlines() if ln.startswith("config")), "")
     check("no error", "does not load" not in line and "2 scenarios" in line, out)
+
+
+GRADLE = CONFIG + ('runner:\n  mode: gradle\n'
+                   '  gradle_task: ":benchmark:connectedBenchmarkAndroidTest"\n')
+
+
+@pytest.mark.parametrize("config, line", [
+    (GRADLE, "echolot collect -c echolot.yml\n"),
+    (CONFIG, "echolot collect -c echolot.yml -n 5\n"),
+])
+def test_the_line_to_collect_by_hand_has_no_count_for_a_macrobenchmark(
+        tmp_path: Path, monkeypatch, config: str, line: str) -> None:
+    """#520, #551: the benchmark's measureRepeated decides how many times it runs."""
+    (tmp_path / "echolot.yml").write_text(config, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    st = state.project_state(tmp_path, "echolot.yml")
+    check("by hand", state.by_hand(st) == ("collect", line.strip()), state.by_hand(st))
+    _run("init", "--into", str(tmp_path), "--for", "plugin", "--no-input", "--no-doctor")
+    _, out, _ = _run("status")
+    nxt = next((ln for ln in out.splitlines() if ln.startswith("next")), "")
+    check("status, its next line", nxt.endswith(line.strip()), out)
+    _, _, err = _run("hunt", "cold start got slower")
+    by = next((ln for ln in err.splitlines() if ln.startswith("By hand:")), "")
+    check("and the line hunt prints", line.strip() + "," in by
+          and (config is CONFIG or ("-n " not in by and "_iter" not in by)), err[-500:])

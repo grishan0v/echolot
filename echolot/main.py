@@ -3102,9 +3102,15 @@ def cmd_hunt(args) -> int:
         door = state.hunt_door(state.project_state(project, config))
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
         named = scenario if cfg is not None and len(cfg.scenarios) > 1 else None
-        print(f"By hand: {state.collect_line_for(named)}, then "
-              + state.analyze_line(state.repeats(scenario, 5) if scenario else None, named),
-              file=sys.stderr)
+        try:
+            runner = str((cfg.runner or {}).get("mode", "launch")) if cfg is not None else None
+        except ConfigError:
+            runner = None  # a runner section that is no mapping: collect says so itself
+        # A macrobenchmark names its own traces and their number, so the
+        # files to analyze are not five echolot would name.
+        files = state.repeats(scenario, 5) if scenario and runner != "gradle" else None
+        print(f"By hand: {state.collect_line_for(named, runner)}, then "
+              + state.analyze_line(files, named), file=sys.stderr)
         return 0
 
     if conclusion is not None:
