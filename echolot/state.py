@@ -175,7 +175,13 @@ def _report(rep: Path) -> dict | None:
         "fired": s.get("detectors_fired"), "run": s.get("detectors_run"),
         "runs": len(r.get("traces") or []) or 1,
         "config_sha": c.get("sha"), "defaults": c.get("defaults"),
+        "tool_gap": _tool_gap(r.get("toolchain")),
     }
+
+
+def _tool_gap(toolchain: object) -> str | None:
+    from .report import tool_gap
+    return tool_gap(toolchain)
 
 
 def _as_written(r: dict) -> bool:

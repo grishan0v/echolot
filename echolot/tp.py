@@ -227,6 +227,11 @@ class Detector:
     plain_title: str = ""
     plain_why: str = ""
     plain_clean: str = ""
+    # A fingerprint of what the detector asks of the trace: its queries with
+    # the comments taken out, so a reworded `@plain_why` keeps it and a
+    # changed join does not. Written into each report's entry, where
+    # `compare` reads two that differ as two tools (#507).
+    sha: str = ""
 
     @classmethod
     def from_file(cls, path: Path) -> "Detector":
@@ -258,6 +263,7 @@ class Detector:
             intervals_sql=sections.get("intervals", ""),
             samples_sql=sections.get("samples", ""),
             needs=needs,
+            sha=logic_sha(first, sections.get("intervals", ""), sections.get("samples", "")),
             plain_title=meta.get("plain_title", ""),
             plain_why=meta.get("plain_why", ""),
             plain_clean=meta.get("plain_clean", ""),
@@ -442,7 +448,9 @@ def toolchain_info(bin_path: str | None = None,
     reads the report next. They would search their history for a flag nobody
     typed while the answer sat in a file beside the config.
     """
-    info: dict[str, Any] = {"perfetto_package": None,
+    from . import __version__
+    info: dict[str, Any] = {"echolot": __version__,
+                            "perfetto_package": None,
                             "trace_processor": None,
                             "source": "pinned",
                             "binary": None}
@@ -802,6 +810,20 @@ def _coerce(raw: str) -> Any:
         except ValueError:
             continue
     return raw
+
+
+def logic_sha(*queries: str) -> str:
+    """The first twelve hex digits of a sha256 over the queries, each line
+    stripped of its comment and blank lines dropped. Comments carry the
+    detector's metadata and its prose; neither changes what it finds."""
+    import hashlib
+    lines = []
+    for q in queries:
+        for line in q.splitlines():
+            code = line.split("--", 1)[0].strip()
+            if code:
+                lines.append(code)
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:12]
 
 
 def load_detectors(directory: Path) -> list[Detector]:

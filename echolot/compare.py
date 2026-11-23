@@ -41,6 +41,8 @@ instead.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from datetime import datetime, timezone
 from statistics import median
 from typing import Any
@@ -145,6 +147,15 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
         # inside each half.
         rows.sort(key=lambda r: (r["delta_ms"] or 0.0) * (frames["ratio"] - 1) >= 0)
     markers = _markers(before, after, floor_ms, floor_ratio, temp_prefix, moved_into)
+
+    # A detector that reads the trace differently on the two sides is two
+    # tools: its rows' moves may be the tool's, so none of them holds (#507).
+    logic = _logic_moved(before, after)
+    if logic["ids"]:
+        for r in rows:
+            if r["detector"] in logic["ids"]:
+                r["shift"], r["holds"] = None, None
+        warnings.append(logic["warning"])
 
     # Two processes, two windows, or a window that is not the scenario's: the
     # numbers stay, because a wrong-looking table is more useful than a
@@ -518,6 +529,9 @@ def _check(before: dict, after: dict,
         # a verdict over that is a verdict about a different stretch (#534).
         if broken:
             comparable = False
+
+    out.extend(_versions_moved(before, after))
+    out.extend(_same_recordings(before, after))
 
     cb, ca = before.get("config") or {}, after.get("config") or {}
     if cb.get("sha") and ca.get("sha") and cb["sha"] != ca["sha"]:
@@ -979,6 +993,95 @@ def _measured(env: dict) -> bool:
     carries none of it.
     """
     return any(env.get(key) for key in ("cpu", "thermal", "memory"))
+
+
+def _version(report: dict) -> str | None:
+    """The echolot that wrote a report, or None for one written before it
+    said (0.17.0 and older)."""
+    v = (report.get("toolchain") or {}).get("echolot")
+    return v if isinstance(v, str) and v else None
+
+
+def _versions_moved(before: dict, after: dict) -> list[dict[str, str]]:
+    """Two reports written by two versions of echolot (#507). Its detectors
+    and the way it merges repeats change between versions, and compare reads
+    such a change as a change in the app. Said when either side says which
+    version it is and the two differ; two reports from before the field
+    existed say nothing either way."""
+    vb, va = _version(before), _version(after)
+    if vb == va:
+        return []
+    said = {v: f"echolot {v}" if v else "an echolot older than 0.18.0, which did not record its version"
+            for v in (vb, va)}
+    return [{
+        "id": "versions",
+        "text": f"Written by two versions of echolot: {said[vb]} before, {said[va]} after. "
+                f"What changed in the tool between them reads below as a change in the app; "
+                f"analyse both sides' traces with one version to compare like with like.",
+    }]
+
+
+def _logic_moved(before: dict, after: dict) -> dict[str, Any]:
+    """The detectors on both sides whose queries are not the same (#507):
+    their `sha` differs, or one side recorded none, while the other did.
+
+    Two reports neither of which records one say nothing: they come from
+    before the field, and the version warning is the only thing to go on.
+    """
+    def shas(report: dict) -> dict[str, str | None]:
+        return {d["id"]: (d.get("sha") if isinstance(d.get("sha"), str) else None)
+                for d in report.get("detectors") or [] if not _failed(d)}
+    sb, sa = shas(before), shas(after)
+    both = set(sb) & set(sa)
+    if not any(sb[i] for i in both) and not any(sa[i] for i in both):
+        return {"ids": set(), "warning": None}
+    ids = {i for i in both if sb[i] != sa[i]}
+    if not ids:
+        return {"ids": set(), "warning": None}
+    unknown = sorted(i for i in ids if not sb[i] or not sa[i])
+    names = ", ".join(f"`{i}`" for i in sorted(ids))
+    text = (f"{len(ids)} detector(s) read the trace differently on the two sides: {names}. "
+            f"Their rows carry no Holds: a move there may be the tool's.")
+    if unknown:
+        text += (f" {len(unknown)} of them recorded no fingerprint of their query on one side, "
+                 f"which was written before echolot recorded one.")
+    return {"ids": ids, "warning": {"id": "logic", "text": text}}
+
+
+def _same_recordings(before: dict, after: dict) -> list[dict[str, str]]:
+    """Both sides read the same recordings (#507): the same trace files by
+    name, the same process id and window timestamps, and the same window to
+    the hundredth of a millisecond, its median, shortest and longest. Then nothing in the app moved, and every move is
+    the tool's or the config's. A heuristic that works on old reports too:
+    no report keeps a hash of its files."""
+    def names(report: dict) -> list[str]:
+        traces = report.get("traces") or ([report["trace"]] if report.get("trace") else [])
+        return sorted(Path(str(t)).name for t in traces)
+    nb, na = names(before), names(after)
+    if not nb or nb != na:
+        return []
+    wb, wa = before.get("window") or {}, after.get("window") or {}
+    keys = ("duration_ms", "duration_ms_min", "duration_ms_max")
+
+    def same(k: str) -> bool:
+        b, a = wb.get(k), wa.get(k)
+        if b is None or a is None:
+            return b is None and a is None
+        return isinstance(b, (int, float)) and isinstance(a, (int, float)) and round(b, 2) == round(a, 2)
+    if wb.get("duration_ms") is None or not all(same(k) for k in keys):
+        return []
+    # The process and the clock the recording ran on: a pid and the
+    # timestamps of the window, which two recordings share only by being
+    # one.
+    for k in ("pid", "ts_start", "ts_end"):
+        if wb.get(k) is None or wb.get(k) != wa.get(k):
+            return []
+    return [{
+        "id": "same-recordings",
+        "text": f"Both sides are the same recordings: the same {len(nb)} trace file(s), and the "
+                f"same window to the hundredth of a millisecond. Nothing in the app moved between "
+                f"them; every move below is the tool's or the config's.",
+    }]
 
 
 def _params_moved(before: dict, after: dict) -> list[str]:

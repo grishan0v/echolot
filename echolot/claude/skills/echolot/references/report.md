@@ -975,6 +975,9 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `runs` / `single` | different repeat counts, or a single trace with no spread to test against |
 | `few` | too few repeats to be 95% sure of any move — four a side is always enough — so every `holds` is `null`. Record another round rather than read the moves as settled |
 | `detectors` | the two runs did not use the same set of detectors |
+| `versions` | the two reports were written by two versions of echolot (`toolchain.echolot`), or one by a version from before reports said (0.17.0 and older). What changed in the tool reads as a change in the app: analyse both sides' traces with one version |
+| `logic` | detectors whose query differs between the two sides (`sha` of each detector entry), or that recorded none on one side. Their rows carry no Holds |
+| `same-recordings` | both sides read the same recordings: the same trace file names, process id, window timestamps and window length. Nothing in the app moved; every move is the tool's or the config's |
 | `detector-failed` | a detector failed on that side. Its rows on the other side are left out rather than called gone or new; the failure is no answer about the app |
 | `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording does not hold what they read (`checked: false` in its report). Their rows are left out on both sides rather than called gone or new, and `summary.not_compared` gives each side's reason, `null` for a side that could look. Record that side again with what they read |
 

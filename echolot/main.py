@@ -328,6 +328,9 @@ def _report_text(rep: dict | None, cfg: dict | None, project: Path,
         note = " · made with --defaults"
     elif cfg and cfg.get("sha") and rep.get("config_sha") and rep["config_sha"] != cfg["sha"]:
         note = " · made with an older config"
+    if rep.get("tool_gap"):
+        # Read by detectors that may have changed since (#507).
+        note += f" · written by {rep['tool_gap']}, analyse again"
     return f"{where}, {made} · {rep['runs']} run(s) · {what}{note}"
 
 
@@ -635,6 +638,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 # that merging repeats does not have to guess, and so that a
                 # report read back later still knows.
                 "identity": list(d.identity),
+                # What it asks of the trace, to tell two versions of it apart.
+                "sha": d.sha,
                 "rows": rows,
                 "error": err,
                 # Did it look: `checked`, and `reason` when it did not.

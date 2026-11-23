@@ -1390,6 +1390,36 @@ def _sampling_lines(s: dict[str, Any] | None) -> list[str]:
     ]
 
 
+def tool_gap(toolchain: Any) -> str | None:
+    """The echolot that wrote a report, said when it is not this one (#507):
+    another minor or major version, or one from before reports said which.
+
+    A report with no toolchain at all says nothing: that is a report made by
+    hand or by a test, and there is nothing to tell. A patch release changes
+    no detector, so 0.17.0 and 0.17.2 are one tool here.
+    """
+    from . import __version__
+    if not isinstance(toolchain, dict) or not toolchain:
+        return None
+    v = toolchain.get("echolot")
+    if not isinstance(v, str) or not v:
+        return "an echolot older than 0.18.0, which did not record its version"
+
+    def minor(text: str) -> tuple[str, ...]:
+        return tuple(text.split(".")[:2])
+    return None if minor(v) == minor(__version__) else f"echolot {v}"
+
+
+def _tool_gap_lines(report: dict[str, Any]) -> list[str]:
+    from . import __version__
+    gap = tool_gap(report.get("toolchain"))
+    if gap is None:
+        return []
+    return [f"> ⚠️ Written by {gap}; this is echolot {__version__}. Its detectors may read "
+            f"the trace differently now: run `echolot analyze` again on the same traces "
+            f"before acting on it."]
+
+
 def to_markdown(report: dict[str, Any]) -> str:
     w = report["window"]
     out: list[str] = []
@@ -1403,6 +1433,7 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(f"Trace: `{report['trace']}`")
     if report.get("same_recording"):
         out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
+    out.extend(_tool_gap_lines(report))
     if report.get("scenario"):
         out.append(f"Scenario: `{report['scenario']}`")
     if w.get("process"):
@@ -1681,6 +1712,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     if report.get("generated_at"):
         line += f" · {report['generated_at']}"
     out.append(line)
+    out.extend(_tool_gap_lines(report))
     anchors = []
     for key, label in (("start_anchor", "start"), ("end_anchor", "end")):
         a = w.get(key)

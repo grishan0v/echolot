@@ -93,3 +93,89 @@ def test_markers_keep_their_digits_without_a_configured_prefix(tmp_path: Path, d
     code, out, _ = _run("compare", "a.json", "b.json")
     check("two markers, and the warning that names them",
           code == 0 and "AGENTTMP_fill_v#" not in out and "AGENTTMP_fill_v6" in out, out[:1500])
+
+
+# --- two versions of echolot (#507) ------------------------------------------
+
+def test_a_report_names_the_echolot_that_wrote_it(demo_report) -> None:
+    from echolot import __version__
+    from echolot.main import DETECTOR_DIR
+    from echolot.tp import load_detectors
+    shipped = {d.id: d.sha for d in load_detectors(DETECTOR_DIR)}
+    check("toolchain.echolot is this version", demo_report["toolchain"].get("echolot") == __version__,
+          demo_report["toolchain"])
+    check("and every detector carries the fingerprint of its query",
+          all(d.get("sha") == shipped[d["id"]] for d in demo_report["detectors"]),
+          [(d["id"], d.get("sha")) for d in demo_report["detectors"]])
+
+
+def test_a_fingerprint_ignores_comments_and_follows_the_query() -> None:
+    from echolot.tp import logic_sha
+    check("a reworded comment keeps it",
+          logic_sha("-- @plain_why: one\nSELECT 1 -- why\n") == logic_sha("-- @plain_why: two\n\nSELECT 1\n"))
+    check("a changed query does not", logic_sha("SELECT 1") != logic_sha("SELECT 2"))
+
+
+def _older(report: dict, *, version: str | None, sha_of: tuple[str, ...] = ()) -> dict:
+    """The same report as another echolot would have written it."""
+    old = copy.deepcopy(report)
+    if version is None:
+        old["toolchain"].pop("echolot", None)
+        for d in old["detectors"]:
+            d.pop("sha", None)
+    else:
+        old["toolchain"]["echolot"] = version
+    for d in old["detectors"]:
+        if d["id"] in sha_of:
+            d["sha"] = "000000000000"
+    return old
+
+
+def _compare(tmp_path: Path, before: dict, after: dict) -> dict:
+    (tmp_path / "b.json").write_text(json.dumps(before), encoding="utf-8")
+    (tmp_path / "a.json").write_text(json.dumps(after), encoding="utf-8")
+    code, _, err = _run("compare", str(tmp_path / "b.json"), str(tmp_path / "a.json"),
+                        "-o", str(tmp_path / "cmp"))
+    check("compare ran", code == 0, err[-500:])
+    return json.loads((tmp_path / "cmp" / "comparison.json").read_text(encoding="utf-8"))
+
+
+def test_two_versions_are_said_and_a_changed_detector_has_no_holds(tmp_path: Path, demo_report,
+                                                                    demo_changed_report) -> None:
+    """#507: 0.7.0 against 0.17.0 gave `holds: yes` to moves that were the tool's."""
+    fired = next(d["id"] for d in demo_changed_report["detectors"] if d["rows"])
+    before = _older(demo_report, version="0.7.0", sha_of=(fired,))
+    cmp = _compare(tmp_path, before, demo_changed_report)
+    said = {w["id"]: w["text"] for w in cmp["warnings"]}
+    check("the two versions are named", "echolot 0.7.0 before" in said.get("versions", ""), said)
+    check("and the detector whose query differs", f"`{fired}`" in said.get("logic", ""), said)
+    mine = [r for r in cmp["rows"] if r["detector"] == fired]
+    check("its rows carry no Holds", mine and all(r["holds"] is None for r in mine), mine)
+    others = [r for r in cmp["rows"] if r["detector"] != fired and r["holds"] is not None]
+    check("while the others keep theirs", others or not [r for r in cmp["rows"] if r["detector"] != fired],
+          cmp["rows"][:3])
+
+
+def test_a_report_from_before_the_fingerprint_takes_every_holds(tmp_path: Path, demo_report,
+                                                                 demo_changed_report) -> None:
+    cmp = _compare(tmp_path, _older(demo_report, version=None), demo_changed_report)
+    said = {w["id"]: w["text"] for w in cmp["warnings"]}
+    check("an older echolot is named", "older than 0.18.0" in said.get("versions", ""), said)
+    check("and no row holds", all(r["holds"] is None for r in cmp["rows"]), cmp["rows"][:3])
+
+
+def test_one_report_against_itself_is_the_same_recordings(tmp_path: Path, demo_report) -> None:
+    cmp = _compare(tmp_path, demo_report, copy.deepcopy(demo_report))
+    said = {w["id"]: w["text"] for w in cmp["warnings"]}
+    check("said", "same recordings" in said.get("same-recordings", ""), said)
+    check("no version line between one version", "versions" not in said and "logic" not in said, said)
+
+
+def test_status_and_report_say_an_older_echolot(tmp_path: Path, demo_report, monkeypatch) -> None:
+    project = _project(tmp_path, _older(demo_report, version="0.7.0"))
+    monkeypatch.chdir(project)
+    _, out, _ = _run("status")
+    line = next((ln for ln in out.splitlines() if ln.startswith("report")), "")
+    check("status", "written by echolot 0.7.0, analyse again" in line, out)
+    _, out, _ = _run("report")
+    check("report", "Written by echolot 0.7.0" in out and "analyze` again" in out, out[:800])
