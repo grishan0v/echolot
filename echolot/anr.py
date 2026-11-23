@@ -1481,7 +1481,66 @@ def _stack(thread: Thread, ours: Ownership, limit: int = 8) -> list[str]:
             entered += 1
         if entered:
             lines.append(thread.frames[entered])
+    if len(lines) == 1:
+        # The platform's all the way down. A binder call on top says only
+        # "binder"; the interface proxy under the plumbing says which call,
+        # and the frame that made it says what for.
+        lines += _binder_call(thread.frames)
     return lines + thread.own_native[1:3] if len(lines) == 1 else lines
+
+
+# The plumbing of a binder call, above the frame that names it.
+_BINDER = ("android.os.BinderProxy.", "android.os.Binder.", "android.os.Parcel.")
+
+
+def _binder_call(frames: list[str]) -> list[str]:
+    """What a thread standing in a binder call was calling, and who called it.
+
+    `BinderProxy.transactNative` on top is true and says nothing more. The
+    first AIDL proxy below it (`IJobCallback$Stub$Proxy.acknowledgeStopMessage`)
+    names the call into the system, and the frame under that one
+    (`JobServiceEngine$JobHandler.ackStopMessage`) says why it was made. With
+    no proxy, the first frame below the plumbing.
+    """
+    if not frames or not frames[0].startswith(_BINDER):
+        return []
+    for i, frame in enumerate(frames):
+        if "$Stub$Proxy." in frame:
+            return frames[i:i + 2]
+    below = next((i for i, f in enumerate(frames) if not f.startswith(_BINDER)), None)
+    return frames[below:below + 1] if below is not None else []
+
+
+# Platform frames that point at the app's own setup, though nothing of the
+# app is on the stack: (the frame, what it says, where to read next). A lead,
+# not a cause — the platform is a dead end, the setup that drives it is not.
+_PLATFORM_LEADS = (
+    ("android.app.job.JobServiceEngine$JobHandler.ackStopMessage",
+     "was telling the system that a JobScheduler job had stopped "
+     "(`acknowledgeStopMessage` runs after `onStopJob` returns), and the call "
+     "into the system had not returned",
+     "Which jobs the app runs, and how often it schedules and cancels them "
+     "(its WorkManager or JobService setup), is where to read next."),
+    ("android.app.job.JobServiceEngine$JobHandler.ackStartMessage",
+     "was telling the system that a JobScheduler job had started "
+     "(`acknowledgeStartMessage` runs after `onStartJob` returns), and the "
+     "call into the system had not returned",
+     "Which jobs the app runs, and how often it schedules and cancels them "
+     "(its WorkManager or JobService setup), is where to read next."),
+)
+
+
+def _platform_leads(report: Report) -> list[tuple[str, str, str, str]]:
+    """(thread, frame, what it says, where to read) for each known platform lead."""
+    out = []
+    for thread in of_interest(report):
+        for frame in thread.frames:
+            lead = next((entry for entry in _PLATFORM_LEADS
+                         if frame.startswith(entry[0] + "(")), None)
+            if lead:
+                out.append((thread.name, frame, lead[1], lead[2]))
+                break
+    return out
 
 
 def doing(report: Report, busy: list[Thread], found: list[Chain]) -> list[Thread]:
@@ -1667,6 +1726,10 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
             out += ["", "That names what the app set up — its WorkManager jobs, "
                         "its network client, its coroutine scopes — and that "
                         "setup is where to read next.", ""]
+        for name, frame, says, then in _platform_leads(report):
+            # No line of the app's, and still not the end of the road: the
+            # platform frame names the app's own setup it was serving.
+            out += [f"**{name}**, at `{frame}`, {says}. {then}", ""]
 
     others = doing(report, busy, found)
     if others:
@@ -1923,6 +1986,10 @@ def summary(report: Report,
         # a library it drives, per working thread.
         "nearest": [{"thread": name, "frame": frame}
                     for name, frame in _nearest_libraries(report)],
+        # Platform frames that point at the app's own setup: what the thread
+        # was doing there, and where to read next.
+        "leads": [{"thread": name, "frame": frame, "says": says, "next": then}
+                  for name, frame, says, then in _platform_leads(report)],
         "code": None if code is None else {
             "placed": [
                 {"symbol": f.symbol, "file": f.file, "line": f.line,

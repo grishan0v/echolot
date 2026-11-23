@@ -138,7 +138,13 @@ The library frames nearest to the app are then listed as leads: the platform is
 a dead end, and a library the app drives points at the app's own setup of it.
 A thread standing inside a library is one of them, and its stack shows the
 frame where the library was entered: `Gson.fromJson` under the adapter's
-`read`.
+`read`. A thread standing in a binder call into the platform keeps, under
+`BinderProxy.transactNative`, the interface proxy that names the call and the
+frame that made it: `IJobCallback$Stub$Proxy.acknowledgeStopMessage` under
+`JobServiceEngine$JobHandler.ackStopMessage`. Some platform frames are leads
+in their own right, printed after the verdict (`--json`: `leads`): that one says
+the main thread was telling the system a JobScheduler job had stopped, and the
+app's WorkManager or JobService setup is where to read next.
 
 **Then the threads that were doing something.** A dump holds fifty threads on a
 quiet app and three hundred on a busy one, nearly all asleep, and striking out

@@ -1520,3 +1520,61 @@ def test_a_main_thread_in_that_format_running_the_apps_code_is_busy():
           anr.idle_reason(rep.main, rep.ownership))
     check("the report says what it stood on",
           "It was **idle**" not in anr.render(rep), anr.render(rep))
+
+
+# --- a main thread in a platform binder call (#588) --------------------------
+
+MAIN_IN_JOBSCHEDULER_ACK = HEAD_LINES + """\
+main (native):tid=1 systid=4242
+#00 pc 0x00000000000b1c2d /apex/com.android.runtime/lib64/bionic/libc.so (__ioctl+12)
+#01 pc 0x00000000000a2b3c /apex/com.android.runtime/lib64/bionic/libc.so (ioctl+156)
+#02 pc 0x0000000000056789 /system/lib64/libbinder.so (android::IPCThreadState::transact(int, unsigned int, android::Parcel const&, android::Parcel*, unsigned int)+340)
+       at android.os.BinderProxy.transactNative(Native method)
+       at android.os.BinderProxy.transact(BinderProxy.java:639)
+       at android.app.job.IJobCallback$Stub$Proxy.acknowledgeStopMessage(IJobCallback.java:456)
+       at android.app.job.JobServiceEngine$JobHandler.ackStopMessage(JobServiceEngine.java:355)
+       at android.app.job.JobServiceEngine$JobHandler.handleMessage(JobServiceEngine.java:180)
+       at android.os.Handler.dispatchMessage(Handler.java:106)
+       at android.os.Looper.loopOnce(Looper.java:222)
+       at android.os.Looper.loop(Looper.java:314)
+       at android.app.ActivityThread.main(ActivityThread.java:8716)
+       at java.lang.reflect.Method.invoke(Native method)
+       at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:565)
+       at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1081)
+"""
+
+
+def test_a_main_thread_in_a_binder_call_shows_the_call_and_who_made_it():
+    rep = anr.parse(MAIN_IN_JOBSCHEDULER_ACK)
+    stack = anr.summary(rep)["main"]["stack"]
+    check("the proxy that names the call",
+          any("IJobCallback$Stub$Proxy.acknowledgeStopMessage" in f for f in stack), stack)
+    check("and the frame that made it",
+          any("JobServiceEngine$JobHandler.ackStopMessage" in f for f in stack), stack)
+    out = anr.render(rep)
+    check("the markdown has the job-service lead",
+          "a JobScheduler job had stopped" in out and "WorkManager or JobService" in out, out)
+    check("after the platform verdict, not instead of it",
+          out.index("no line of yours to open") < out.index("a JobScheduler job had stopped"),
+          out)
+    leads = anr.summary(rep)["leads"]
+    check("json: the lead", leads and leads[0]["thread"] == "main"
+          and "ackStopMessage" in leads[0]["frame"], leads)
+
+
+def test_a_binder_call_without_a_proxy_keeps_the_frame_below_the_plumbing():
+    frames = ["android.os.BinderProxy.transactNative(Native method)",
+              "android.os.BinderProxy.transact(BinderProxy.java:639)",
+              "android.content.ContentResolver.query(ContentResolver.java:1200)",
+              "android.os.Looper.loop(Looper.java:314)"]
+    check("the first frame below", anr._binder_call(frames) == [frames[2]],
+          anr._binder_call(frames))
+    check("nothing for a stack that is no binder call",
+          anr._binder_call(["android.os.MessageQueue.nativePollOnce(Native method)"]) == [])
+
+
+def test_an_idle_main_thread_is_unchanged_by_the_binder_rule():
+    rep = anr.parse(IDLE_MAIN)
+    check("still idle", anr.summary(rep)["main"]["idle"] == "looper idle",
+          anr.summary(rep)["main"])
+    check("and no lead", anr.summary(rep)["leads"] == [], anr.summary(rep)["leads"])
