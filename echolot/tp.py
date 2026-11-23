@@ -49,7 +49,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from . import needs as needs_mod
-from . import sandbox
+from . import orphans, sandbox
 from .config import ConfigError
 
 _CALIB = re.compile(
@@ -829,6 +829,7 @@ class TraceSession:
     def __init__(self, trace_path: str | Path, binary: str | None = None,
                  extra: bytes | None = None, *, cut_ok: bool = False):
         self._tp = None
+        self._signals = False
         # Where the file ends inside its last packet, said; None for a file
         # that is whole or that this cannot tell about. See `cut_short`.
         self.cut: str | None = None
@@ -899,11 +900,17 @@ class TraceSession:
                 f"no trace_processor at {binary} — the path given for it "
                 f"(--tp-binary, or toolchain.tp_binary in the config) is not "
                 f"a file")
+        # From here to close(), SIGTERM and SIGHUP unwind through close()
+        # rather than end the process with trace_processor still running;
+        # and whatever perfetto has started is stopped if the start fails,
+        # an interrupt included. See orphans.py (#570).
+        self._signals = orphans.hold_signals()
         try:
-            self._tp = TraceProcessor(
-                trace=str(path) if extra is None else _then(path, extra),
-                config=TraceProcessorConfig(bin_path=binary))
+            self._tp = orphans.open_processor(
+                TraceProcessor, TraceProcessorConfig(bin_path=binary),
+                lambda started: _then(path, extra, started))
         except TraceProcessorException as e:
+            self.close()
             # A file that is there and is not a trace: a capture cut short, a
             # log saved under the wrong name. It came out of the CLI as a
             # PerfettoException traceback, and one such file among the
@@ -920,6 +927,7 @@ class TraceSession:
                 f"capture that was cut short, or a file that is not a trace; "
                 f"leave it out and run again.") from e
         except OSError as e:
+            self.close()
             # Before trace_processor starts, perfetto binds a socket to find
             # a free port for it. An agent's sandbox with no network refuses
             # that, and it came out of `analyze` as a PermissionError
@@ -928,6 +936,9 @@ class TraceSession:
             if not sandbox.refused(e):
                 raise
             raise sandbox.trace_processor_refused(e) from e
+        except BaseException:
+            self.close()
+            raise
         stopped = self._stopped_short(path)
         if stopped:
             self.close()
@@ -972,12 +983,11 @@ class TraceSession:
 
     def close(self) -> None:
         tp, self._tp = self._tp, None
-        if tp is None:
-            return
-        try:
-            tp.close()
-        except Exception:
-            pass
+        if tp is not None:
+            orphans.close(tp)
+        if self._signals:
+            self._signals = False
+            orphans.let_go()
 
     def __enter__(self):
         return self
@@ -1045,16 +1055,21 @@ def _is_gzip(path: Path) -> bool:
         return False
 
 
-def _then(path: Path, extra: bytes):
-    """The trace's bytes, then `extra`.
+def _then(path: Path, extra: bytes | None, started: Any = None):
+    """The trace's bytes, then `extra`; `started` called before the first.
 
     A trace is a run of packets, so packets added at its end are read as part
     of it — which is how Perfetto's own tools attach a deobfuscation map.
+    `started` is the first moment trace_processor's pid can be read (see
+    orphans.open_processor).
     """
+    if started is not None:
+        started()
     with path.open("rb") as trace:
         while chunk := trace.read(32 << 20):
             yield chunk
-    yield extra
+    if extra is not None:
+        yield extra
 
 
 def _split_statements(sql: str) -> list[str]:
