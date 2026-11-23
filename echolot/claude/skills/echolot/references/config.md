@@ -23,6 +23,11 @@ block. `scenario:` holding scenario names, each with its own `start` and
 `project.process` are one name each, written as text. Keys that start with
 `_` are setup's notes and are never refused.
 
+`echolot` and `echolot status` make the checks `analyze` makes before it
+opens a trace, for every scenario: the process or package, each anchor, each
+`budget_ms`, and the thresholds. A config `analyze` would refuse, an empty
+file included, is said on the `config` line, and the next step is to fix it.
+
 ## What the code reads today
 
 ```yaml

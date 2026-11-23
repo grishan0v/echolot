@@ -520,3 +520,39 @@ def test_files_equal_to_the_template_are_current_without_skill_md(tmp_path: Path
     _, out, _ = _run("init", "--into", str(tmp_path), "--for", "claude", "--no-input",
                      "--no-doctor")
     check("none called differs", "differs" not in out and "init --all" not in out, out)
+
+
+TWO = ("project:\n  package: com.example.app\n  process: com.example.app\n"
+       "scenarios:\n"
+       "  cold:\n    start: {name: bindApplication}\n    end: {name: home_shown}\n"
+       "  scroll:\n    start: {name: Feed.scroll}\n    end: {name: Feed.idle}\n")
+
+
+@pytest.mark.parametrize("config, said", [
+    ("", "the file is empty"),
+    (TWO.replace("    end: {name: Feed.idle}\n", '    end: {name: Feed.idle}\n    budget_ms: "abc"\n'),
+     "scenarios.scroll.budget_ms must be a number"),
+    (CONFIG + "detectors:\n  main_thread_block:\n    min_slice_ms: abc\n",
+     "main_thread_block.min_slice_ms (from the config) must be a number"),
+    (TWO.replace("    end: {name: Feed.idle}\n", "    end: {}\n"),
+     "scenarios.scroll.end: the block has no `name`"),
+])
+def test_status_says_what_analyze_would_refuse(tmp_path: Path, monkeypatch, config: str,
+                                               said: str) -> None:
+    """#583: status called a config sound that analyze then refused."""
+    (tmp_path / "echolot.yml").write_text(config, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    _run("init", "--into", str(tmp_path), "--for", "plugin", "--no-input", "--no-doctor")
+    _, out, _ = _run("status")
+    line = next((ln for ln in out.splitlines() if ln.startswith("config")), "")
+    check("the config line names it", "does not load" in line and said in line, out)
+    nxt = next((ln for ln in out.splitlines() if ln.startswith("next")), "")
+    check("and the next step is the config", "fix echolot.yml" in nxt, out)
+
+
+def test_status_still_calls_a_sound_config_sound(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "echolot.yml").write_text(TWO, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    _, out, _ = _run("status")
+    line = next((ln for ln in out.splitlines() if ln.startswith("config")), "")
+    check("no error", "does not load" not in line and "2 scenarios" in line, out)

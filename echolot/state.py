@@ -54,6 +54,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     if cfg_path.exists():
         try:
             cfg = loaded = Config.load(cfg_path)
+            refused_by_analyze(cfg)
             # The top-level section, every scenario's; a scenario's own
             # thresholds are said on its line.
             calibrated = bool(cfg.shared_overrides)
@@ -487,6 +488,28 @@ def next_step(st: dict) -> str:
 
 def _hunt_step(st: dict) -> str:
     return f"{_door(st)} hunt` — or by hand: {by_hand(st)[1]}"
+
+
+def refused_by_analyze(cfg: Config) -> None:
+    """Raise the ConfigError `analyze` would stop on before it opens a trace.
+
+    `status` checked that the file loads, and `analyze` checks the fields it
+    is about to use: an empty file, `budget_ms: "abc"`, a threshold given as
+    text or an anchor block with no name read as a sound config with the
+    usual next step, and `analyze` then refused it (#583). These checks need
+    no trace, so they run here too, for every scenario, the ones not being
+    measured included.
+    """
+    from .main import DETECTOR_DIR, plan_detectors  # main imports this module
+    from .tp import load_detectors
+
+    if not cfg.raw:
+        raise ConfigError("the file is empty: it names no app and no scenario")
+    shipped = load_detectors(DETECTOR_DIR)
+    for name in cfg.scenarios:
+        one = Config(cfg.raw, cfg.path, cfg.local_path).select(name)
+        _ = one.process, one.scenario_start, one.scenario_end, one.scenario_budget_ms
+        plan_detectors(one, detectors=shipped)
 
 
 def by_hand(st: dict) -> tuple[str, str]:

@@ -185,7 +185,7 @@ EDITS = {
     "a comment above the line and one below": lambda t, line: _around(t, line, f"  # set after the first report\n{line}\n  # ↑ ours"),
     "blank lines around it": lambda t, line: _around(t, line, f"\n\n{line}\n\n"),
     "other keys after it, and odd spacing": lambda t, line: _around(t, line, f"{line}\n  runner:  {{iterations:   3}}")
-    + "detectors:\n    gc_pressure:   {min_pause_ms:  20}\n",
+    + "detectors:\n    gc_pressure:   {max_total_ms:  200}\n",
     "the line first in its block": lambda t, line: _around(_around(t, f"{line}\n", ""), "scenario:\n", f"scenario:\n{line}\n"),
     "a comment on the scenario's own line": lambda t, line: _around(t, "scenario:\n", "scenario:    # the launch\n"),
     "other sections edited by hand": lambda t, line: t.replace("  iterations: 5", "  iterations:    7   # mine")
