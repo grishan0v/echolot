@@ -138,3 +138,32 @@ def test_a_subpackage_s_file_of_the_same_name_is_not_the_frame_s(tmp_path: Path)
     check("the package's own file, for certain",
           found is not None and found.file == "data/src/main/java/com/example/Mapper.kt"
           and found.exact, found)
+
+
+def test_java_names_for_kotlin_classes_are_not_another_build(tmp_path: Path) -> None:
+    """On the build that froze, frames naming `Prefs.java` for a Kotlin class
+    made 'probably not the build that froze' (#590)."""
+    from tests.test_anr_frames import JAVA_NAMES_ONLY, KOTLIN_NAMED_JAVA_SOURCES, SYNC
+
+    for rel, body in KOTLIN_NAMED_JAVA_SOURCES.items():
+        write(tmp_path, rel, body)
+    rep = anr.parse(JAVA_NAMES_ONLY)
+    placed, missing = anr.locate(rep, tmp_path)
+    pl = mark.plan_from_anr(tmp_path, [(f.symbol, f.file, f.line) for f in placed if f.exact],
+                            unplaced=len(missing), version="1.2.0 (120)")
+    check("every frame placed", len(placed) == 3 and not missing, (placed, missing))
+    check("each takes a pair", all(p.applicable for p in pl.proposals),
+          [(p.marker, p.reason) for p in pl.proposals])
+    check("and no word of another build", not pl.notes, pl.notes)
+
+    prefs = KOTLIN_NAMED_JAVA_SOURCES[SYNC + "Prefs.kt"].replace(
+        "    fun write(value: String) {\n        store(value)\n        sync.push(value)\n",
+        "    fun write(value: String) = store(value)\n"
+        "    fun flush() {\n        sync.push(value)\n")
+    write(tmp_path, SYNC + "Prefs.kt", prefs)
+    placed, missing = anr.locate(anr.parse(JAVA_NAMES_ONLY), tmp_path)
+    pl = mark.plan_from_anr(tmp_path, [(f.symbol, f.file, f.line) for f in placed if f.exact],
+                            unplaced=len(missing))
+    moved = next(p for p in pl.proposals if p.marker.endswith("Prefs_write"))
+    check("a call moved into another function is still said to be",
+          not moved.applicable and "`flush`" in moved.reason, moved.reason)
