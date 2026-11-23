@@ -70,6 +70,7 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
     rows: list[dict[str, Any]] = []
     state_changed: list[dict[str, Any]] = []
     not_compared: list[dict[str, Any]] = []
+    moved_into = _moved_into(before, after, temp_prefix)
 
     by_id_before = {d["id"]: _upgraded(d) for d in before.get("detectors", [])}
     by_id_after = {d["id"]: _upgraded(d) for d in after.get("detectors", [])}
@@ -131,12 +132,11 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
 
         identity = _identity(db, da)
         for rb, ra, how in _match(rows_b, rows_a, identity, temp_prefix):
-            rows.append(
-                _row(det_id, identity, rb, ra, how, floor_ms, floor_ratio,
-                     temp_prefix))
+            rows.append(_judged(det_id, identity, rb, ra, how, floor_ms,
+                                floor_ratio, temp_prefix, moved_into))
 
     rows.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
-    markers = _markers(before, after, floor_ms, floor_ratio, temp_prefix)
+    markers = _markers(before, after, floor_ms, floor_ratio, temp_prefix, moved_into)
 
     # Two processes, two windows, or a window that is not the scenario's: the
     # numbers stay, because a wrong-looking table is more useful than a
@@ -156,11 +156,22 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
             "id": "instrumentation",
             "text": f"{len(planted)} marker(s) that appeared were added "
                     f"between the two rounds, not new work: "
-                    + ", ".join(f"`{name}`" for name in planted[:5])
-                    + (" …" if len(planted) > 5 else "")
+                    + _names(planted)
                     + ". They show where the time inside a blind spot went, "
                       "which is what they were added for — read them as a "
-                      "breakdown of what was already there.",
+                      "breakdown of what was already there."
+                    + _parents_said([*rows, *markers], "after"),
+        })
+    removed = _planted([*rows, *markers], temp_prefix, VANISHED)
+    if removed:
+        warnings.append({
+            "id": "instrumentation-removed",
+            "text": f"{len(removed)} marker(s) that are gone were removed "
+                    f"between the two rounds, not work that went away: "
+                    + _names(removed)
+                    + ". They were a breakdown of time that is still there, "
+                      "now counted in the slices they sat in."
+                    + _parents_said([*rows, *markers], "before"),
         })
 
     counts = {k: 0 for k in (APPEARED, VANISHED, GREW, SHRANK, STEADY)}
@@ -203,7 +214,8 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
 
 
 def _markers(before: dict, after: dict, floor_ms: float, floor_ratio: float,
-             temp_prefix: str | None) -> list[dict[str, Any]]:
+             temp_prefix: str | None,
+             moved_into: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """The markers tables of both reports, paired by name like a detector's rows.
 
     Every marker of the project's own is measured there, whatever fired:
@@ -222,8 +234,8 @@ def _markers(before: dict, after: dict, floor_ms: float, floor_ratio: float,
     rows_a = (after.get("markers") or {}).get("rows") or []
     out = []
     for rb, ra, how in _match(rows_b, rows_a, ("location",), temp_prefix):
-        r = _row("markers", ("location",), rb, ra, how, floor_ms, floor_ratio,
-                 temp_prefix)
+        r = _judged("markers", ("location",), rb, ra, how, floor_ms, floor_ratio,
+                    temp_prefix, moved_into or {})
         calls = _calls(rb, ra, floor_ratio)
         if calls is not None:
             r["calls"] = calls
@@ -290,7 +302,8 @@ def _not_compared_warnings(before: dict, after: dict) -> list[dict[str, str]]:
     return out
 
 
-def _planted(rows: list[dict], temp_prefix: str | None) -> list[str]:
+def _planted(rows: list[dict], temp_prefix: str | None,
+             change: str = APPEARED) -> list[str]:
     """Rows that appeared because the hunt instrumented them, not because of a change.
 
     Inside the loop, a round is compared against the one before it — and
@@ -302,12 +315,89 @@ def _planted(rows: list[dict], temp_prefix: str | None) -> list[str]:
 
     Each name once: one marker found by two detectors, and by the markers
     table, is one marker, and listed per row two markers read as four.
+    `change` VANISHED asks for the other direction: markers a round took out.
     """
     if not temp_prefix:
         return []
     return list(dict.fromkeys(
         r["location"] for r in rows
-        if r["change"] == APPEARED and str(r["location"]).startswith(temp_prefix)))
+        if r["change"] == change and str(r["location"]).startswith(temp_prefix)))
+
+
+def _names(names: list[str]) -> str:
+    return ", ".join(f"`{name}`" for name in names[:5]) + (" …" if len(names) > 5 else "")
+
+
+def _moved_into(before: dict, after: dict,
+                temp_prefix: str | None) -> dict[str, dict[str, Any]]:
+    """The slices whose self time went into markers one round added, or came back from.
+
+    A marker placed directly under a slice becomes its child, and self time
+    is a slice less its direct children: `Compose:recompose` dropped from
+    3714 to 105 ms self in the round that put a marker of 3885 ms under it,
+    while its total did not move, and the drop opened the table as the
+    largest improvement (#584). `analyze` records for each temporary marker
+    the slices it sat in and for how long (`parents` in the markers table).
+
+    Keyed by the parent's name: how many ms went into markers, which
+    markers, and the side that has them — `after` for markers a round
+    added, `before` for markers it took out.
+    """
+    if not temp_prefix:
+        return {}
+
+    def temp(rep: dict) -> dict[str, dict]:
+        return {str(r["location"]): r for r in (rep.get("markers") or {}).get("rows") or []
+                if str(r["location"]).startswith(temp_prefix)}
+
+    tb, ta = temp(before), temp(after)
+    out: dict[str, dict[str, Any]] = {}
+    for side, have, other in (("after", ta, tb), ("before", tb, ta)):
+        for name, r in have.items():
+            if name in other:
+                continue
+            for parent, ms in (r.get("parents") or {}).items():
+                into = out.setdefault(parent, {"ms": 0.0, "markers": [], "side": side})
+                if into["side"] == side:
+                    into["ms"] = round(into["ms"] + (ms or 0.0), 2)
+                    into["markers"].append(name)
+    return out
+
+
+def _judged(det_id: str, identity: tuple[str, ...], rb: dict | None,
+            ra: dict | None, how: str, floor_ms: float, floor_ratio: float,
+            keep: str | None, moved_into: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """One paired row, judged on its total where its self time went into markers.
+
+    The total of a slice is what a marker under it cannot move, so moved,
+    steady and Holds are read from that, and the row says how much self time
+    the markers took (`into_markers`). A row that carries no total keeps its
+    self time, and the warning still names it.
+    """
+    r = _row(det_id, identity, rb, ra, how, floor_ms, floor_ratio, keep)
+    into = moved_into.get(str(r["location"]))
+    if (into and r["metric"] == "self_ms" and rb is not None and ra is not None
+            and rb.get("total_ms") is not None and ra.get("total_ms") is not None):
+        r = _row(det_id, identity, rb, ra, how, floor_ms, floor_ratio, keep,
+                 metric="total_ms")
+        r["into_markers"] = into
+    return r
+
+
+def _parents_said(rows: list[dict], side: str) -> str:
+    """The sentence naming the slices whose self time the markers took or gave back."""
+    named = list(dict.fromkeys(
+        f"`{r['location']}` ({r['into_markers']['ms']:g} ms)" for r in rows
+        if (r.get("into_markers") or {}).get("side") == side))
+    if not named:
+        return ""
+    if side == "after":
+        return (" The self time of " + ", ".join(named) + " went into them, so "
+                "it shrank by that much on the after side without getting any "
+                "cheaper: those rows are judged on their total.")
+    return (" The self time of " + ", ".join(named) + " came back from them, so "
+            "it grew by that much without any new work: those rows are judged on "
+            "their total.")
 
 
 # --- what may be compared with what ----------------------------------------
@@ -1027,8 +1117,9 @@ def _match(before_rows: list[dict], after_rows: list[dict],
 
 def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
          ra: dict | None, how: str, floor_ms: float,
-         floor_ratio: float, keep: str | None = None) -> dict[str, Any]:
-    metric = metric_of(ra if ra is not None else rb)
+         floor_ratio: float, keep: str | None = None,
+         metric: str | None = None) -> dict[str, Any]:
+    metric = metric or metric_of(ra if ra is not None else rb)
     vb = (rb or {}).get(metric)
     va = (ra or {}).get(metric)
     loc, detail = _name(rb if rb is not None else ra, identity, how, keep)
@@ -1341,7 +1432,8 @@ def _table(rows: list[dict[str, Any]]) -> str:
     """
     return table.render([{
         "location": r["location"]
-                    + (" *(family)*" if r["matched_by"] == "family" else ""),
+                    + (" *(family)*" if r["matched_by"] == "family" else "")
+                    + (" *(by total)*" if r.get("into_markers") else ""),
         **({"detail": r["detail"]} if r.get("detail") else {}),
         "detector": r["detector"],
         "before": _band(r["before"], r["metric"]),
