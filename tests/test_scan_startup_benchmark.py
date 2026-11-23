@@ -159,10 +159,14 @@ UNCHANGED = {
         ({"ClickBenchmark": PLAIN},
          "  name: openCart\n" + QUESTION + _gradle("ClickBenchmark")),
     # The developer named a section, so the launch window does not take its
-    # place, and the end is asked for as before.
+    # place, and the end is asked for, naming the constant to look up (#516).
     "a section whose name was not read, beside the launch":
         ({"StartupBenchmark": UNREAD_SECTION},
-         "  name: startup\n" + QUESTION + _gradle("StartupBenchmark")),
+         "  name: startup\n"
+         '  start: {name: "bindApplication", _source: default}\n'
+         '  end: {name: "?", _source: default, _evidence: "TraceSectionMetric(Elsewhere.READY) '
+         f'in {BENCH_DIR}/StartupBenchmark.kt: its value was not read here. Put the string it '
+         'holds, or pick from `echolot probe`"}\n' + _gradle("StartupBenchmark")),
     "no benchmark at all": ({}, NO_BENCHMARK_DRAFT),
     # The class with a section and a cold start is taken first, as it was.
     "every kind in one module": (EVERY, SECTION_DRAFT),

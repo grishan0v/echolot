@@ -197,7 +197,11 @@ names no `TraceSectionMetric`. The other classes keep the draft they had:
 `scan` says which of the three each class is, and takes one that measures
 the launch before one that only sets `StartupMode`. It reads the class's own
 file: a benchmark whose metrics are listed in a shared helper names none of
-the three there, and keeps an `end` to pick.
+the three there, and keeps an `end` to pick. A section named by a constant,
+`TraceSectionMetric(AppTraces.LIST_SHOWN)`, is looked up in the class's file
+first and then across the project's sources, so a constants object in
+another module is read too. When no declaration is found, the draft keeps
+`end: "?"` and its `_evidence` names the constant to look up.
 
 The class filter in `gradle_args` runs every test of the class. A test that
 starts no launch inside its recording writes a trace with no launch in it,
