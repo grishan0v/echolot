@@ -248,6 +248,9 @@ class Config:
         # Which of `scenarios:` the scenario's accessors read. None is the
         # first, and the only one of a config with one `scenario:`.
         self.scenario_key: str | None = None
+        # `analyze --root`: the checkout named on the command line, over
+        # `project.root` (see `sources`).
+        self.root_override: Path | None = None
 
     @classmethod
     def load(cls, path: str | Path, local: str | Path | None = None,
@@ -374,6 +377,27 @@ class Config:
         if not proc:
             raise ConfigError("neither project.process nor project.package set")
         return str(proc)
+
+    @property
+    def sources(self) -> Path:
+        """The checkout whose sources rows are placed in and composables are
+        told apart by: `analyze --root`, then `project.root`, then the
+        config's own directory.
+
+        A relative `project.root` is taken from the config's directory, as
+        `project.mapping` is. Without either, a config copied out of the
+        checkout to analyze traces on their own placed nothing and found no
+        composable of the project's, and nothing said so (#499).
+        """
+        if self.root_override is not None:
+            return self.root_override.resolve()
+        here = Path(self.path).resolve().parent if self.path else Path.cwd()
+        value = self.get("project.root")
+        if value is None or value == "":
+            return here
+        if not isinstance(value, str):
+            raise ConfigError(f"{self.path}: project.root must be a path, written as text, got {value!r}")
+        return (here / Path(value).expanduser()).resolve()
 
     @property
     def mapping(self) -> Path | None:

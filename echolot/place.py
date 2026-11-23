@@ -380,6 +380,15 @@ def code_column(places: list[Place]) -> str | None:
     return " · ".join(parts) or None
 
 
+def wants_place(row: dict[str, Any]) -> bool:
+    """Whether a row names something a checkout could place: a contention's
+    frames, a class, a composable, or a sampled stack."""
+    return bool(_CONTENTION.match(str(row.get("detail") or ""))
+                or _CLASS.match(str(row.get("location") or ""))
+                or _COMPOSABLE.match(str(row.get("location") or ""))
+                or _sampled(row))
+
+
 def annotate(report: dict[str, Any], root: Path, mapping: Path | None = None) -> int:
     """Adds `places` and `code` to every row that names something placeable.
 
@@ -402,11 +411,7 @@ def annotate(report: dict[str, Any], root: Path, mapping: Path | None = None) ->
     traced = batch.traced if batch is not None else {}
     for det in report.get("detectors") or []:
         for row in det.get("rows") or []:
-            needs = _CONTENTION.match(str(row.get("detail") or "")) \
-                or _CLASS.match(str(row.get("location") or "")) \
-                or _COMPOSABLE.match(str(row.get("location") or "")) \
-                or _sampled(row)
-            if not needs:
+            if not wants_place(row):
                 continue
             if idx is None:
                 idx = index(root) if root.is_dir() else {}

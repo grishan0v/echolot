@@ -234,3 +234,11 @@ def test_a_report_with_a_part_analyze_never_writes_is_a_sentence(tmp_path, how, 
     names = ["good.json", "bad.json"] if argv == ["compare"] else ["bad.json"]
     refused(cli(tmp_path, *argv[:1], *names, *argv[1:]), "bad.json", "does not read as a Marker Report",
             said, "run `echolot analyze` again")
+
+
+def test_analyze_root_that_is_no_directory_is_a_sentence(tmp_path):
+    """#499: `analyze --root` names the checkout; one that is not there is said first."""
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    (tmp_path / "t.perfetto-trace").write_bytes(NOT_A_TRACE)
+    refused(cli(tmp_path, "analyze", "--root", "nowhere", "t.perfetto-trace"),
+            "--root nowhere: no such directory")

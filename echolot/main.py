@@ -848,6 +848,11 @@ def cmd_analyze(args) -> int:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
         inside = _working_in(cfg, args.hunt)
         _pick_scenario(cfg, args.scenario, inside=inside is not None)
+        if args.root:
+            if not Path(args.root).is_dir():
+                raise ConfigError(f"--root {args.root}: no such directory")
+            cfg.root_override = Path(args.root)
+        _ = cfg.sources  # a project.root that is no path is refused before the traces are read
         tp_binary, tp_source = _tp_binary_source(args, cfg)
         _note_local(cfg)
         if not args.defaults:
@@ -896,9 +901,10 @@ def cmd_analyze(args) -> int:
     # is a macrobenchmark's output directory as often as not. The build's
     # mapping names back the lock slices' frames R8 wrote, which
     # trace_processor never sees.
-    placed = place_mod.annotate(rep, _project_root(cfg), cfg.mapping)
+    placed = place_mod.annotate(rep, cfg.sources, cfg.mapping)
     if placed:
         recorder.note(placed=placed)
+    _say_no_sources(rep, cfg)
     _markers_against_code(rep, cfg)
 
     # Which config made this report. Without it the next reader of
@@ -1092,7 +1098,7 @@ def _markers_against_code(rep: dict[str, Any], cfg: Config) -> None:
     markers = rep.get("markers") or {}
     if not cfg.path or markers.get("in_trace") is None:
         return
-    root = _project_root(cfg)
+    root = cfg.sources
     in_trace = markers["in_trace"]
     code = mark_mod.named(root, markers.get("prefix") or mark_mod.DEFAULT_PREFIX)
 
@@ -1623,6 +1629,31 @@ def _setup_context(tp, cfg: Config, upid: int,
     return bounds
 
 
+def _say_no_sources(rep: dict, cfg: Config) -> None:
+    """A line on stderr and in the report when the checkout holds no
+    sources while the report has code to place or composables to tell apart.
+
+    Without it a config kept outside the checkout left every row unplaced
+    and `composables` silent, as if nothing had been found there (#499).
+    """
+    wanted = sum(1 for d in rep.get("detectors") or [] for r in d.get("rows") or []
+                 if place_mod.wants_place(r))
+    calls = ((rep.get("environment") or {}).get("compose_names") or {}).get("calls") or 0
+    if not wanted and not calls:
+        return
+    root = cfg.sources
+    if root.is_dir() and next(iter(place_mod.source_files(root)), None) is not None:
+        return
+    rep["no_sources"] = {"root": str(root), "rows": wanted, "composable_calls": calls}
+    what = []
+    if wanted:
+        what.append(f"{wanted} row{'s' if wanted != 1 else ''} name code and none was placed")
+    if calls:
+        what.append(f"{calls} composable calls were recorded and none was told apart as the project's own")
+    print(f"[!] No Kotlin or Java sources under {root}: {'; '.join(what)}. Name the "
+          f"checkout with `analyze --root` or `project.root` in echolot.yml.", file=sys.stderr)
+
+
 def _own_composables(tp, cfg: Config) -> None:
     """`_compose_own` — the composables in the window that are the project's.
 
@@ -1636,7 +1667,7 @@ def _own_composables(tp, cfg: Config) -> None:
     names = [r["name"] for r in tp.query(
         "SELECT DISTINCT name FROM _slice_win "
         "WHERE is_main_thread = 1 AND name GLOB '* ([A-Za-z]*.kt:[0-9]*)'")]
-    root = Path(cfg.path).resolve().parent if cfg.path else None
+    root = cfg.sources if cfg.path or cfg.root_override else None
     own = place_mod.own_composables(names, root, cfg.get("project.package"))
     tp.exec_script("DROP TABLE IF EXISTS _compose_own;")
     tp.exec_script("CREATE TABLE _compose_own (name TEXT PRIMARY KEY);")
@@ -5913,6 +5944,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="ignore the config's detectors section: every detector, "
                          "built-in thresholds. To see what the shipped numbers "
                          "say without touching the config")
+    an.add_argument("--root", metavar="DIR",
+                    help="the checkout the traces were recorded from, to place "
+                         "rows in its files and tell its composables from the "
+                         "libraries' (default: project.root, then the config's "
+                         "directory)")
     an.add_argument("--html", action="store_true",
                     help="also write report.html beside report.json: the same report "
                          "as a page for a person, one file that opens from disk. A "
