@@ -20,7 +20,7 @@ import re
 import textwrap
 from pathlib import Path
 
-from . import codex, hosts, recorder
+from . import codex, hosts, plugin, recorder
 
 GUIDE_DIR = Path(__file__).resolve().parent / "guide"
 CLAUDE_DIR = Path(__file__).parent / "claude"
@@ -499,6 +499,15 @@ def assess(project: Path) -> dict:
                 says = f"not installed — this project points {named} at echolot"
             return {"verdict": "opted-out", "status": None, "files": {},
                     "command": None, "says": says}
+        # Nothing chosen yet, and the plugin already installed: plain `init`
+        # would put `.claude/` beside it, and Claude Code would load every
+        # skill twice. The plugin's door forbids it; the first `echolot` in
+        # the project said it (#598).
+        plugged = plugin.init_for(project)
+        if plugged:
+            return {"verdict": "absent", "status": None, "files": {},
+                    "command": plugged, "says": f"none installed here, and the "
+                    f"echolot plugin is in {plugin_hosts(project)}"}
         return {"verdict": "absent", "status": None, "files": {},
                 "command": "echolot init", "says": "none installed here"}
     if not hosts.wants_claude(project):
@@ -535,6 +544,11 @@ def assess(project: Path) -> dict:
         verdict, command = "current", None
     return {"verdict": verdict, "status": status, "files": files,
             "command": command, "says": None}
+
+
+def plugin_hosts(project: Path) -> str:
+    """The agents that have echolot's plugin for this project, by name."""
+    return " and ".join(hosts.BY_KEY[k].title for k in plugin.for_project(project))
 
 
 def _counts(files: dict[str, list[str]]) -> str:
@@ -676,6 +690,14 @@ def _print_status(project: Path) -> str | None:
                             break_long_words=False))
         return verdict
     if verdict == "absent":
+        if a["command"] != "echolot init":
+            print(textwrap.fill(
+                f"{a['says']}. `{a['command']}` writes the .gitignore lines and "
+                f"keeps .claude/ out: the skills come with the plugin. Plain "
+                f"`echolot init` would install them a second time.",
+                width=80, initial_indent="  ", subsequent_indent="  ",
+                break_on_hyphens=False, break_long_words=False))
+            return verdict
         print(f"  {a['says']}. `{a['command']}` puts the skill, the agent "
               f"and the commands into ./.claude/")
         return verdict

@@ -125,6 +125,98 @@ def in_claude_code(home: Path | None = None) -> bool:
                for key in plugins)
 
 
+def _json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _ours(key: object) -> bool:
+    return isinstance(key, str) and key.split("@")[0] == NAME
+
+
+def _same_dir(a: object, b: Path) -> bool:
+    try:
+        return isinstance(a, str) and Path(a).resolve() == b.resolve()
+    except (OSError, ValueError):
+        return False
+
+
+def in_claude_code_here(project: Path, home: Path | None = None) -> bool:
+    """Whether Claude Code has echolot's plugin on for this project.
+
+    Where Claude Code declares it, `enabledPlugins` in the user's settings,
+    then the project's `.claude/settings.json`, then its
+    `settings.local.json`, the nearer file deciding; and where it records an
+    install for one project, an entry of `installed_plugins.json` with this
+    project's path, or its main checkout's when this is a linked worktree:
+    `--scope local` from a worktree lands there (#597). `in_claude_code`
+    reads only the user's settings, which is what Cursor reads, and missed
+    a plugin installed for one project (#598).
+    """
+    from . import codex  # late: what the main checkout is, as Codex finds it
+    claude = (home or _home()) / ".claude"
+    enabled: dict = {}
+    for settings in (claude / "settings.json", project / ".claude" / "settings.json",
+                     project / ".claude" / "settings.local.json"):
+        flags = _json(settings).get("enabledPlugins")
+        if isinstance(flags, dict):
+            enabled.update({k: v for k, v in flags.items() if _ours(k)})
+    if any(v is True for v in enabled.values()):
+        return True
+    here = [project, *([m] if (m := codex._main_root(project)) else [])]
+    plugins = _json(claude / "plugins" / "installed_plugins.json").get("plugins")
+    if not isinstance(plugins, dict):
+        return False
+    for key, entries in plugins.items():
+        if not _ours(key) or enabled.get(key) is False:
+            continue
+        for entry in entries if isinstance(entries, list) else []:
+            if (isinstance(entry, dict) and entry.get("scope") in ("local", "project")
+                    and any(_same_dir(entry.get("projectPath"), d) for d in here)):
+                return True
+    return False
+
+
+def in_codex(home: Path | None = None) -> bool:
+    """Whether Codex has echolot's plugin: its copy in Codex's plugin cache.
+
+    `codex plugin add echolot@<marketplace>` puts it in
+    `<codex home>/plugins/cache/<marketplace>/echolot/`.
+    """
+    codex_home = (Path(os.environ["CODEX_HOME"]) if os.environ.get("CODEX_HOME")
+                  else (home or _home()) / ".codex")
+    return any(d.is_dir() for d in (codex_home / "plugins" / "cache").glob(f"*/{NAME}"))
+
+
+def for_project(project: Path, home: Path | None = None) -> list[str]:
+    """The agents that bring echolot's plugin to this project, by host key:
+    `claude`, `codex`, `cursor`. Empty when none is found."""
+    found = []
+    if in_claude_code_here(project, home):
+        found.append("claude")
+    if in_codex(home):
+        found.append("codex")
+    copy = cursor_copy(home)
+    if copy.is_dir() and not copy.is_symlink() and any(copy.iterdir()) and _is_ours(copy):
+        found.append("cursor")
+    return found
+
+
+def init_for(project: Path, home: Path | None = None) -> str | None:
+    """The `init` a project with the plugin runs, or None when no plugin is found.
+
+    The plugin's door says it: `--for plugin`, and in Codex `--for
+    plugin,codex`, which writes the rule that lets echolot out of the sandbox.
+    """
+    found = for_project(project, home)
+    if not found:
+        return None
+    return "echolot init --for plugin" + (",codex" if "codex" in found else "")
+
+
 def stale_line(home: Path | None = None) -> str | None:
     """For `echolot` and `doctor`: the copy in Cursor, when it is another
     release's. None when there is no copy, or it is this echolot's.
