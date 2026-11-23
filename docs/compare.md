@@ -16,6 +16,14 @@ echolot compare old.json              # that report vs the latest of its scenari
 echolot compare old.json new.json     # exactly those two
 ```
 
+With no arguments, inside an open investigation, the two sides are its last
+two rounds among the reports every `analyze` files there. A look is not a
+round and is left out: a report that read fewer traces than the round before
+it, read only traces that round read already, or ran with other `--set` or
+`--defaults`. A single-run look at one trace of round 2 would otherwise be the
+after side, with no spread to judge a move by. The line on stderr names the
+two reports taken and the looks left out; name two paths for any other pair.
+
 It writes `comparison.md` and `comparison.json` next to the report, by the same
 rule `analyze` uses: a relative `-o` is taken from the config's directory, so
 running it from a build folder full of traces still lands the output in the

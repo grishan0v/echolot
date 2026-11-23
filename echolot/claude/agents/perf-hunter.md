@@ -72,7 +72,7 @@ with your conclusion.
 It is open while you work, and that is what the loop stands on: every
 `analyze` files a copy of its report under it — the line ending
 `(this investigation's copy)` says where — and `echolot compare` with no
-arguments reads the last two copies.
+arguments reads the last two rounds among them.
 
 The investigation is about one scenario, too. In a config that names
 several, `collect`, `analyze`, `calibrate` and `report` take it without
@@ -168,12 +168,12 @@ waiting for one.
 
 4. from round 2 on, before anything else:
    echolot compare
-   the investigation's last two `analyze` runs, sorted by what moved. That
-   is the previous round against this one while every round gets one
-   `analyze`, with the same flags. An extra one (a `-o` copy, a look with
-   `--defaults`) shifts the pair, and a round held against itself says
-   nothing moved: then compare the two rounds by path, and
-   `echolot hunt --show <n>` lists the copies.
+   the investigation's last two `analyze` runs that are rounds, sorted by
+   what moved: the previous round against this one. A look is left out — an
+   `analyze` of fewer traces than the round before it, of that round's own
+   traces again, or with other `--set`/`--defaults` — and the line on stderr
+   names the two reports taken. If they are not the two rounds you meant,
+   compare the two by path; `echolot hunt --show <n>` lists the copies.
    New rows with the AGENTTMP_ prefix are your own markers breaking down a
    blind spot; the warning at the top names them. A row that grew with
    Holds `yes` is a real move, `no` means the repeats disagree by more
@@ -224,8 +224,8 @@ echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere; it files
 echolot analyze … --defaults                       every detector, built-in thresholds
 echolot analyze … --set main_thread_block.min_slice_ms=4
                                                    one threshold, this run only
-echolot compare                                    the last two analyze runs: the previous
-                                                   round against this one, one analyze a round;
+echolot compare                                    the last two analyze runs that are rounds:
+                                                   the previous one against this one, looks left out;
                                                    --hunt <n> for first against last
 echolot report                                     what fired, one line per detector
 echolot report -d monitor_contention --top 5       one detector's rows, evidence cut short;
