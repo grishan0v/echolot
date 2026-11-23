@@ -245,3 +245,85 @@ def test_a_frame_that_is_another_vsync_each_run_is_one_row_in_compare() -> None:
     check("one row on both sides, no vanished or appeared",
           len(frames) == 1 and frames[0]["change"] not in ("vanished", "appeared"),
           frames)
+
+
+def _slice(ms: float) -> dict:
+    return row("draw", count=1, self_ms=ms, total_ms=ms, max_ms=ms, detail="main")
+
+
+def _below(rows: list[dict], opened: list[dict] | None) -> dict:
+    rep = one(rows, det_id="main_thread_block")
+    rep["detectors"][0]["identity"] = ["location", "detail"]
+    if opened is not None:
+        rep["detectors"][0][report_mod.OPEN_ROWS] = opened
+    return rep
+
+
+def test_a_row_below_the_bar_in_two_repeats_is_present_in_all_three() -> None:
+    """#505: 20 ms in one repeat, 12 ms in two, threshold 16."""
+    reps = [_below([_slice(20.0)], [_slice(20.0)]),
+            _below([], [_slice(12.0)]),
+            _below([], [_slice(12.0), row("other", self_ms=1.0, detail="main")])]
+    merged = report_mod.aggregate(reps)
+    got = merged["detectors"][0]["rows"]
+    check("one row: the one that fired, not every name the open query saw",
+          [r["location"] for r in got] == ["draw"], got)
+    check("present in all three, over the bar in one",
+          got[0]["runs"] == "3/3" and got[0]["fired"] == "1/3", got[0])
+    check("the median is over every repeat",
+          got[0]["self_ms"] == 12.0
+          and got[0]["spread"]["self_ms"]["values"] == [20.0, 12.0, 12.0], got[0])
+    check("what the open query returned is not written",
+          all(report_mod.OPEN_ROWS not in d for d in merged["detectors"]), merged)
+    md = report_mod.to_markdown(merged)
+    check("report.md says both counts", "3/3, over the bar in 1" in md, md)
+
+
+def test_a_row_the_open_query_did_not_find_either_is_absent() -> None:
+    reps = [_below([_slice(20.0)], [_slice(20.0)]), _below([], []),
+            _below([], None)]
+    got = report_mod.aggregate(reps)["detectors"][0]["rows"][0]
+    check("absent where it was not there, and where nobody looked",
+          got["runs"] == "1/3" and "fired" not in got, got)
+
+
+def test_compare_takes_the_values_under_the_bar_and_no_zeros() -> None:
+    """#505: a row reported in 7 of 7 against 3 of 8, present in all 15, is
+    judged on its 15 values, not on 5 zeros."""
+    def side(reported: list[bool]) -> dict:
+        return report_mod.aggregate([
+            _below([_slice(20.0)] if fired else [], [_slice(20.0 if fired else 19.5)])
+            for fired in reported])
+    before, after = side([True] * 7), side([True] * 3 + [False] * 5)
+    row_after = after["detectors"][0]["rows"][0]
+    check("the after side counts every run it happened in",
+          row_after["runs"] == "8/8" and row_after["fired"] == "3/8", row_after)
+    cmp = compare_mod.build(before, after, before_path="b.json", after_path="a.json")
+    draw = next(r for r in cmp["rows"] if r["location"] == "draw")
+    check("no shrink made of zeros", draw["change"] == compare_mod.STEADY
+          and not draw.get("shares"), draw)
+
+
+def test_analyze_keeps_the_rows_below_the_bar_for_the_merge(tmp_path) -> None:
+    from echolot import fixture, selftest
+    from echolot.config import Config
+    from echolot.main import analyze_trace
+
+    trace = tmp_path / "f.perfetto-trace"
+    trace.write_bytes(fixture.build())
+    cfg = Config(selftest.FIXTURE_CONFIG)
+    # `collection_mapping` takes 120 ms of the main thread: over a bar of 100,
+    # under one of 200.
+    reps = [analyze_trace(trace, cfg, below_bar=True,
+                          cli_overrides={"main_thread_block": {"min_slice_ms": bar}})
+            for bar in (100, 200, 200)]
+    merged = report_mod.aggregate(reps)
+    det = next(d for d in merged["detectors"] if d["id"] == "main_thread_block")
+    got = next(r for r in det["rows"] if r["location"] == "collection_mapping")
+    check("found in all three, reported in one",
+          got["runs"] == "3/3" and got["fired"] == "1/3", got)
+    single = analyze_trace(trace, cfg, below_bar=True)
+    check("a report of one recording carries none of it once merged",
+          report_mod.OPEN_ROWS not in next(
+              d for d in report_mod.aggregate([single])["detectors"]
+              if d["id"] == "main_thread_block"))

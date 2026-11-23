@@ -874,6 +874,15 @@ The whole point of repeating is the **Runs** column:
 The first row reproduces, the second happened once. Without that column they
 look equally convincing and the agent goes off investigating an accident.
 
+A detector reports a row only where it clears a threshold, and a row missing
+from one repeat may have been there below it. So `analyze` of several
+recordings runs each detector a second time with its calibrated thresholds at
+zero and no limit on rows, and looks up there every row some repeat reported.
+`Runs` counts the repeats where the thing happened; where that differs from
+the repeats where it cleared the bar, the cell says so: `5/5, over the bar in
+1`, with `fired: "1/5"` in `report.json`. The median and spread cover every
+repeat it happened in.
+
 A row is matched across repeats by its name, with the numbers the runtime
 picks anew in each run left out: a lock owner's tid
 (`Lock contention on a monitor lock (owner tid: #)`), a frame's number

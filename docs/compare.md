@@ -189,6 +189,14 @@ would take are read from those. A row found in 1 of 5 repeats before and in
 all 5 after, at the same milliseconds, now happens on every run, and is listed
 as grew rather than steady.
 
+"Found" means the thing happened, over the detector's threshold or under it.
+`analyze` of a set looks each row up in every repeat with the thresholds open,
+so a row that cleared the bar in 3 of 8 repeats and was there below it in the
+other 5 is `8/8, over the bar in 3`, its median covers all 8, and no zero is
+put in for it. A zero stands only for a repeat where the row was not there at
+all. A row that one report has and the other does not was never looked up on
+the other side, and keeps no verdict.
+
 ## The same thing under a new name
 
 Thread pools hand work to whichever worker is free, so `arch_disk_io_0` in

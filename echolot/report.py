@@ -28,7 +28,7 @@ COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
 # side of the `code` column — see place.py — and `stacks` the json side of
 # what the evidence says the samples named — see stacks.py. `unfinished` is a
 # marker that never closed, which its numbers say with a `≥`.
-HIDDEN = {"spread", "places", "stacks", "unfinished", "parents", "variants"}
+HIDDEN = {"spread", "places", "stacks", "unfinished", "parents", "variants", "fired"}
 HEADERS = {
     "location": "Where",
     "runs": "Runs",
@@ -524,13 +524,19 @@ def _one_run(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+# Where `analyze` hands the merge each repeat's rows below the bar, see
+# `merge_rows`. Never written to a report: the merge takes it out.
+OPEN_ROWS = "open_rows"
+
 # Detectors whose rows are single events rather than recurring work.
 _EVENTS = {"anr"}
 
 
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
                total: int, *, counts: bool = False,
-               fold: Callable[[str], str] | None = None) -> list[dict[str, Any]]:
+               fold: Callable[[str], str] | None = None,
+               opened: list[list[dict[str, Any]] | None] | None = None,
+               ) -> list[dict[str, Any]]:
     """The rows of one detector across its repeats, folded to one row per identity.
 
     `per_run` is one list of rows per repeat, in report order. The repeat's
@@ -544,24 +550,54 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
     `fold` is applied to every text column of the identity first — see
     `runtime_name`. Rows of one repeat that it makes one are added up, and the
     names as the trace had them are kept in the row's `variants`.
+
+    `opened` is, per repeat, what the same query returned with its thresholds
+    at zero and no `LIMIT` (`Detector.render_open`), or None where that was
+    not run. A row missing from a repeat's report may have been there below
+    the bar: then that repeat's value is taken from there, `runs` counts it
+    (the thing happened), and `fired` says in how many repeats it cleared the
+    bar. Only a row the open query did not find either is absent from a
+    repeat, and only there does `compare` put a zero (#505). The evidence is
+    still the reported rows': the open ones carry no stacks or places.
     """
+    def key_of(row: dict[str, Any]) -> tuple:
+        raw = tuple(row.get(c) for c in identity)
+        return raw if fold is None else tuple(
+            fold(v) if isinstance(v, str) else v for v in raw)
+
     groups: dict[tuple, dict[int, list[dict]]] = {}
     variants: dict[tuple, dict[str, set]] = {}
     for i, rows in enumerate(per_run):
         for row in rows:
             raw = tuple(row.get(c) for c in identity)
-            key = raw if fold is None else tuple(
-                fold(v) if isinstance(v, str) else v for v in raw)
+            key = key_of(row)
             groups.setdefault(key, {}).setdefault(i, []).append(row)
             for col, was, now in zip(identity, raw, key, strict=True):
                 if was != now:
                     variants.setdefault(key, {}).setdefault(col, set()).add(was)
+    below: list[dict[tuple, list[dict]]] = []
+    for rows in opened or []:
+        found_open: dict[tuple, list[dict]] = {}
+        for row in rows or []:
+            key = key_of(row)
+            if key in groups:
+                found_open.setdefault(key, []).append(row)
+        below.append(found_open)
 
     out = []
     for key, by_run in groups.items():
-        found = [_one_run(rows) for rows in by_run.values()]
+        fired = [_one_run(rows) for rows in by_run.values()]
+        present = dict(by_run)
+        for i, found_open in enumerate(below):
+            if i not in present and key in found_open:
+                present[i] = found_open[key]
+        # In report order: the values of `spread` are read as the run index.
+        values_by_run = {i: _one_run(rows) for i, rows in present.items()}
+        found = [values_by_run[i] for i in sorted(values_by_run)]
         row: dict[str, Any] = dict(zip(identity, key, strict=True))
-        row["runs"] = f"{len(by_run)}/{total}"
+        row["runs"] = f"{len(present)}/{total}"
+        if len(present) > len(by_run):
+            row["fired"] = f"{len(by_run)}/{total}"
         if key in variants:
             row["variants"] = {col: sorted(names)
                                for col, names in variants[key].items()}
@@ -579,7 +615,8 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
             row[col] = int(mid) if col == "count" and mid == int(mid) else mid
             if col in SPREAD:
                 # In report order, and only the repeats where this row was
-                # found at all — which is what the `runs` column counts.
+                # found at all — which is what the `runs` column counts —
+                # over the bar or under it.
                 kept = [round(v, 2) for v in values]
                 spread[col] = {
                     "min": round(min(values), 2),
@@ -602,14 +639,14 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
         # Evidence comes from the worst repeat: that is where it says most.
         # Unless it is part of what names the row, in which case it is the
         # same in every repeat by construction and already set above.
-        worst = max(found, key=_rank)
+        worst = max(fired, key=_rank)
         # Unless it is a repeat whose sampler lost the process, while the
         # others got stacks: its evidence would say nothing ran that anyone
         # could name. On a device one recording of six lost every stack, and
         # for a thread it happened to be the worst in, the merged row said
         # "none with a stack" over five repeats that named the work. The worst
         # of the repeats with stacks speaks for the row then.
-        stacked = [f for f in found if (f.get("stacks") or {}).get("with_stack")]
+        stacked = [f for f in fired if (f.get("stacks") or {}).get("with_stack")]
         if stacked and not (worst.get("stacks") or {}).get("with_stack"):
             worst = max(stacked, key=_rank)
         if "detail" not in identity and worst.get("detail") is not None:
@@ -740,6 +777,8 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     when the milliseconds match.
     """
     if len(reports) == 1:
+        for det in reports[0].get("detectors") or []:
+            det.pop(OPEN_ROWS, None)
         return reports[0]
 
     total = len(reports)
@@ -796,8 +835,9 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         # there is no number in it to fold.
         fold = None if head["id"] in _EVENTS else names
         head["rows"] = merge_rows([run["rows"] for run in ran],
-                                  identity_of(head), len(ran),
-                                  fold=fold) if ran else []
+                                  identity_of(head), len(ran), fold=fold,
+                                  opened=[run.get(OPEN_ROWS) for run in ran]) if ran else []
+        head.pop(OPEN_ROWS, None)
         head["error"] = next((r["error"] for r in runs if r["error"]), None)
         if head["error"]:
             head["failed_runs"] = f"{len(runs) - len(ran)}/{len(runs)}"
@@ -2101,4 +2141,17 @@ def _source_note(d: dict[str, Any]) -> str:
 
 
 def _table(rows: list[dict[str, Any]]) -> str:
-    return table.render(rows, order=COLUMNS, headers=HEADERS, skip=HIDDEN)
+    return table.render([_with_fired(r) for r in rows], order=COLUMNS,
+                        headers=HEADERS, skip=HIDDEN)
+
+
+def _with_fired(row: dict[str, Any]) -> dict[str, Any]:
+    """`5/5, over the bar in 1`: found in every run, past the threshold once.
+
+    The two counts are different news (#505). The first says how often the
+    thing happened, the second how often it was large enough to report.
+    """
+    fired = short_runs(row.get("fired"))
+    if fired is None:
+        return row
+    return {**row, "runs": f"{row['runs']}, over the bar in {fired[0]}"}
