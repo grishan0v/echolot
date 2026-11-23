@@ -389,7 +389,7 @@ def test_inside_an_investigation_the_commands_take_its_scenario(tmp_path: Path, 
     write(tmp_path, TWO)
     monkeypatch.chdir(tmp_path)
     run("hunt", "--scenario", "loaded", "the feed got slower")
-    code, _, err = run("analyze", str(trace))
+    code, _, err = run("analyze", str(trace), "--hunt")
     rep = json.loads((tmp_path / ".echolot/out/loaded/report.json").read_text(encoding="utf-8"))
     check("analyze measured the investigation's scenario, and said so",
           code == 0 and rep["scenario"] == "loaded"
@@ -412,7 +412,7 @@ def test_collect_inside_an_investigation_records_its_scenario(tmp_path: Path,
                      "runner": {"iterations": 2}})
     monkeypatch.chdir(tmp_path)
     run("hunt", "--scenario", "warm", "warm start got slower")
-    code, _, err = run("collect")
+    code, _, err = run("collect", "--hunt")
     names = sorted(p.name for p in (tmp_path / ".echolot/traces").glob("*.perfetto-trace"))
     check("the investigation's traces", code == 0
           and names == ["warm_iter000.perfetto-trace"], (names, err[-400:]))

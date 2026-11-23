@@ -33,12 +33,20 @@ def _old(minutes: int) -> str:
 
 
 def test_no_resume_question_while_the_investigation_collects() -> None:
-    hunt = {"status": "open", "question": "cold start", "touched_at": _old(40),
+    hunt = {"n": 3, "status": "open", "question": "cold start", "touched_at": _old(40),
             "opened_at": _old(60)}
     st = {"traces": {"count": 5}, "report": None, "hunt": hunt,
-          "collect": {"status": "running"}}
+          "collect": {"status": "running", "hunt": 3}}
     check("a collect in flight is the investigation working",
           not hunt_mod.needs_choice(hunt, st))
+    # Anyone else's collect is not the investigation working (#498): a
+    # baseline recorded by hand kept the question from being asked, and the
+    # next request was attached to a two-month-old investigation.
+    for other in ({"status": "running"}, {"status": "running", "hunt": None},
+                  {"status": "running", "hunt": 2}):
+        st["collect"] = other
+        check("a collect started outside it still leaves the question to ask",
+              hunt_mod.needs_choice(hunt, st), other)
     st["collect"] = {"status": "done"}
     check("once it is done, an old investigation is asked about again",
           hunt_mod.needs_choice(hunt, st))

@@ -343,7 +343,7 @@ def _rel_to(path: Path, root: Path) -> str:
         return str(path)
 
 
-def _pick_scenario(cfg: Config, asked: str | None) -> None:
+def _pick_scenario(cfg: Config, asked: str | None, inside: bool = True) -> None:
     """The scenario this run measures: `--scenario`, else the open
     investigation's, else the first.
 
@@ -351,9 +351,14 @@ def _pick_scenario(cfg: Config, asked: str | None) -> None:
     an `analyze` without the flag measured the first one, and the
     investigation's evidence then mixed two journeys. Said on stderr, as the
     first is, when the config names several.
+
+    `inside` is False for a `collect` or an `analyze` run without `--hunt`:
+    work outside the investigation measures the config's first scenario, as
+    it would with nothing open. A cold-start baseline recorded by hand was
+    otherwise recorded as the open investigation's scroll (#498).
     """
     names = cfg.scenarios
-    if asked is None and len(names) > 1:
+    if asked is None and len(names) > 1 and inside:
         damaged = hunt_mod.unreadable_line(_project_root(cfg), then=False)
         if damaged:
             print(f"[!] {damaged}. Without it this is the "
@@ -788,7 +793,12 @@ def _markers_info(tp, cfg: Config) -> dict:
 def cmd_analyze(args) -> int:
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
-        _pick_scenario(cfg, args.scenario)
+        filing, why = hunt_mod.inside(_project_root(cfg), args.hunt)
+        if why:
+            print(f"error: {why}", file=sys.stderr)
+            recorder.failed(why)
+            return 2
+        _pick_scenario(cfg, args.scenario, inside=filing is not None)
         tp_binary, tp_source = _tp_binary_source(args, cfg)
         _note_local(cfg)
         if not args.defaults:
@@ -912,6 +922,12 @@ def cmd_analyze(args) -> int:
     elif again:
         print(f"→ {page}  (it stood there from an earlier report: written again from this one)",
               file=sys.stderr)
+    if filing is None:
+        # Outside the investigation: its record is left as it was (#498).
+        note = hunt_mod.outside_line(root)
+        if note:
+            print(note, file=sys.stderr)
+        return 0
     # `touched_at` has to mean work, not "when someone last typed echolot":
     # the freshness rule that decides whether to ask stands on it.
     hunt_mod.touch(root, analyze=True)
@@ -3805,9 +3821,14 @@ def cmd_collect(args) -> int:
     # both used to pass the load and end in a traceback on the next line.
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
+        filing, why = hunt_mod.inside(_project_root(cfg), args.hunt)
+        if why:
+            print(f"error: {why}", file=sys.stderr)
+            recorder.failed(why)
+            return 2
         # Before the runner is read: the scenario picked is whose runner
         # keys apply, the investigation's included.
-        _pick_scenario(cfg, args.scenario)
+        _pick_scenario(cfg, args.scenario, inside=filing is not None)
         section = cfg.runner
         package = cfg.get("project.package") or cfg.process
     except ConfigError as e:
@@ -3832,6 +3853,9 @@ def cmd_collect(args) -> int:
     # it. Written before the first iteration and after the last, with why
     # when it ended badly.
     progress = runner.Progress(project / runner.PROGRESS_FILE)
+    # Whose collect this is: `status` holds back the "carry on, or something
+    # new?" question only while the investigation's own one runs (#498).
+    progress.state["hunt"] = filing.get("n") if filing else None
     # The temporary markers in the code, which the build on the phone must
     # have for the set to hold them (#393). Gradle mode builds it from the code.
     planted = _planted(cfg, project) if mode in ("launch", "command") else None
@@ -3857,8 +3881,11 @@ def cmd_collect(args) -> int:
             log=lambda m: print(m, file=sys.stderr),
             # The set pushed aside is the previous round of this same
             # investigation — its baseline, and what the next report is
-            # compared against.
-            on_set_aside=lambda d: hunt_mod.record_traces(project, d),
+            # compared against. Outside it, recorded only when that set is
+            # the investigation's own last round: its evidence moved.
+            on_set_aside=lambda d: (hunt_mod.record_traces(project, d)
+                                    if filing or hunt_mod.holds_round(project, d)
+                                    else None),
             progress=progress.update,
             planted=planted,
         )
@@ -3911,7 +3938,13 @@ def cmd_collect(args) -> int:
 
     for r in results:
         print(r["path"])
+    if filing is None:
+        note = hunt_mod.outside_line(project)
+        if note:
+            print(note, file=sys.stderr)
+        return 0
     hunt_mod.touch(project, collect=True)
+    hunt_mod.record_round(project, [Path(r["path"]) for r in results])
     return 0
 
 
@@ -5388,7 +5421,12 @@ def build_parser() -> argparse.ArgumentParser:
     col.add_argument("-o", "--out", default=".echolot/traces")
     col.add_argument("--device", help="device serial, when there are several")
     col.add_argument("--scenario", metavar="NAME",
-                     help="which of the config's scenarios to record (default: the first)")
+                     help="which of the config's scenarios to record (default: the first, "
+                          "or the investigation's with --hunt)")
+    col.add_argument("--hunt", nargs="?", const=hunt_mod.OPEN, metavar="N",
+                     help="work inside the open investigation: the round is filed "
+                          "under it and takes its scenario. Without it the "
+                          "investigation is left as it is")
     col.set_defaults(func=cmd_collect)
 
     ini = add("init", "yours", "", "install or update the .claude/ layer; checks the environment",
@@ -5484,7 +5522,11 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("--local", help="path to local.yml (defaults to alongside)")
     an.add_argument("--scenario", metavar="NAME",
                     help="which of the config's scenarios the traces are: its window "
-                         "(default: the first)")
+                         "(default: the first, or the investigation's with --hunt)")
+    an.add_argument("--hunt", nargs="?", const=hunt_mod.OPEN, metavar="N",
+                    help="work inside the open investigation: a copy of the report "
+                         "is filed under it, for compare, and it takes its "
+                         "scenario. Without it the investigation is left as it is")
     an.add_argument("-o", "--out", default=None,
                     help="where report.md and report.json go; a relative path "
                          "is taken from the config's directory (default: "

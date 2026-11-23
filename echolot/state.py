@@ -101,6 +101,9 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                   if (m := runner._ITERATION.match(p.name))
                   and m.group("scenario") == scenario) if scenario else None
     st["traces"] = {"dir": traces_dir, "count": len(stamps),
+                    # Every loose trace by name, for the recap to tell the
+                    # open investigation's own round from other work's.
+                    "names": sorted(f".echolot/traces/{p.name}" for p in stamps),
                     "scenario": None if mine is None else len(mine),
                     "files": mine,
                     "newest": max(stamps.values(), default=None)}
@@ -260,7 +263,8 @@ def _as_collect_writes(p: dict) -> bool:
     """Whether each field read off the progress file holds what `collect`
     writes there, or nothing: a time for `started`, which it always writes,
     and for `finished` once the run ended; a process id for `pid`; a whole
-    number for `done` and `exit`; text for `scenario`, `cooling` and
+    number for `done` and `exit`, and for `hunt`, the investigation a
+    `collect --hunt` works inside; text for `scenario`, `cooling` and
     `error`. Every echolot that writes this file, 0.8.0 on, writes those:
     the times from `time.time()`, the process id from `os.getpid()`.
 
@@ -283,6 +287,7 @@ def _as_collect_writes(p: dict) -> bool:
             and (p.get("finished") is None or _moment(p["finished"]))
             and (pid is None or (_holds(pid, int) and 0 < pid <= _PID_MAX))
             and _holds(p.get("done"), int) and _holds(p.get("exit"), int)
+            and _holds(p.get("hunt"), int)
             and all(_holds(p.get(k), str) for k in ("scenario", "cooling", "error")))
 
 

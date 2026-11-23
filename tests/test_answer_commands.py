@@ -170,7 +170,7 @@ def test_a_page_that_stands_there_is_written_again_when_its_investigation_moves_
     check("the open one's page has one round", len(read(first).one("ol").all("li")) == 1)
 
     trace = demo.write(project)[0]
-    code, _, err = run("analyze", str(trace))
+    code, _, err = run("analyze", str(trace), "--hunt")
     again = read(page.read_text(encoding="utf-8"))
     check("a round more: the page that stood there is written again by analyze, and named with the other files",
           code == 0 and len(again.one("ol").all("li")) == 2

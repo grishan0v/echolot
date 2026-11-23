@@ -745,11 +745,24 @@ traces aside between **rounds**, opening an investigation moves them aside
 between **investigations**, and both use the same primitive at different
 levels.
 
-A second guard falls out of the same design: every `collect` and `analyze`
-updates `touched_at`, so a running loop keeps its own investigation inside the
-freshness window even if it started from a stale one. `touched_at` means work
-rather than "when someone last typed `echolot`", which is what makes the
-freshness rule honest.
+A second guard falls out of the same design: every `collect --hunt` and
+`analyze --hunt` updates `touched_at`, so a running loop keeps its own
+investigation inside the freshness window even if it started from a stale one.
+`touched_at` means work rather than "when someone last typed `echolot`", which
+is what makes the freshness rule honest.
+
+Only work started from the investigation counts. The hunt and its loop pass
+`--hunt`; a `collect` or an `analyze` without it is outside the
+investigation: nothing is filed under it, `touched_at` stays, the config's
+first scenario is measured rather than the investigation's, and stderr says
+`not filed under the open investigation`. While a `collect` runs, the
+question waits only if it is the investigation's own. A cold-start baseline
+recorded by hand used to go into a two-month-old investigation about
+scrolling as its eighth report, made it fresh, so the next `/echolot` carried
+on without asking, and its five traces were offered as the ones to reuse. The
+recap now counts as reusable only the round the investigation's own
+`collect --hunt` left loose, and says how many of the loose traces were
+recorded outside it.
 
 Starting a new investigation is where the value beyond the question sits. The
 previous one is archived rather than deleted — the question someone was chasing

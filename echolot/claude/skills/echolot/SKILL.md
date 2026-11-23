@@ -82,7 +82,10 @@ formulation is sometimes a sharper version of the same hunt.
 Two things this is never asked about. Inside `perf-hunter`'s loop: it
 re-records and re-instruments on purpose, works inside an investigation it was
 handed, and never calls `status` at all. And within half an hour of the last
-`collect` or `analyze` — that is the same sitting, and `next` says `hunt`.
+`collect --hunt` or `analyze --hunt`, or while the investigation's own
+`collect --hunt` runs — that is the same sitting, and `next` says `hunt`. A
+`collect` or `analyze` without `--hunt` is work outside the investigation:
+it files nothing under it and leaves the question to ask.
 
 ## `init-force`: edits made here
 

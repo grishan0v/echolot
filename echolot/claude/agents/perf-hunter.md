@@ -69,14 +69,17 @@ happens at the door and not here. Do not open or close one either — the
 command that called you opened it before anything was recorded, and closes it
 with your conclusion.
 
-It is open while you work, and that is what the loop stands on: every
-`analyze` files a copy of its report under it — the line ending
-`(this investigation's copy)` says where — and `echolot compare` with no
-arguments reads the last two rounds among them.
+It is open while you work, and that is what the loop stands on. **Pass
+`--hunt` to every `collect` and `analyze`**: that is what files the work
+under it. With it, `analyze` files a copy of its report — the line ending
+`(this investigation's copy)` says where — `collect` records the round, and
+`echolot compare` with no arguments reads the last two rounds among them.
+Without it, the run leaves the investigation alone, and stderr says
+`not filed under the open investigation`: run it again with the flag.
 
 The investigation is about one scenario, too. In a config that names
-several, `collect`, `analyze`, `calibrate` and `report` take it without
-`--scenario`, and stderr says so:
+several, `collect --hunt`, `analyze --hunt`, `calibrate` and `report` take it
+without `--scenario`, and stderr says so:
 `[i] scenario <name>, the open investigation's: --scenario picks another`.
 Do not pass another. A round recorded for a second scenario is another
 journey, and `compare` refuses to hold two scenarios against each other.
@@ -132,7 +135,7 @@ waiting for one.
     context already paid for it)
    round = 1
 
-1. report = echolot analyze <traces> -c echolot.yml
+1. report = echolot analyze <traces> -c echolot.yml --hunt
    read .echolot/out/report.json — the schema is what `echolot guide report`
    prints, do not discover it by hand
    report.markers.rows is every AGENTTMP_ name and every `domains` name,
@@ -222,8 +225,11 @@ The commands you will reach for, so that `--help` is not a round trip:
 
 ```
 echolot doctor -q                                  three lines, four with Codex; the full run is about 10 KB
-echolot analyze <traces> -c echolot.yml            report → .echolot/out/ next to the config
-echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere; it files a copy for
+echolot collect -c echolot.yml --hunt -n 5         a new round, filed under the investigation
+echolot analyze <traces> -c echolot.yml --hunt     report → .echolot/out/ next to the config,
+                                                   and a copy filed for compare
+echolot analyze <traces> -c echolot.yml --hunt -o <dir>
+                                                   the same, elsewhere; it files a copy for
                                                    compare too, so a round runs one or the other
 echolot analyze … --defaults                       every detector, built-in thresholds
 echolot analyze … --set main_thread_block.min_slice_ms=4

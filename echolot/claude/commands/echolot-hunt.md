@@ -69,16 +69,17 @@ recorded or analysed for this question:
 echolot hunt "<what regressed, in the human's words>" --since "<the change, or unknown>"
 ```
 
-Everything from here on is filed under it: each `collect` notes the round it
-set aside, each `analyze` keeps a copy of its report, and from the second
-round on `echolot compare` reads those copies — with no investigation open it
-has nothing to compare. Its last lines name the loop, which needs an agent:
+Everything run with `--hunt` from here on is filed under it: each
+`collect --hunt` notes the round it set aside, each `analyze --hunt` keeps a
+copy of its report, and from the second round on `echolot compare` reads
+those copies — with no investigation open it has nothing to compare. A
+`collect` or `analyze` without the flag leaves the investigation alone. Its last lines name the loop, which needs an agent:
 that is the rest of this command, so do not start `/echolot` again.
 
 With several scenarios, add `--scenario <name>` to the command: the
 investigation is about that scenario, only its traces move aside, and every
-`collect`, `analyze` and `report` inside it takes that scenario without the
-flag.
+`collect --hunt`, `analyze --hunt` and `report` inside it takes that scenario
+without the flag.
 
 Opening one moves the scenario's traces that are loose in `.echolot/traces/`
 into a directory beside them, and says where on stderr:
@@ -95,7 +96,7 @@ is, ask them to fix `echolot.yml`, and stop — record nothing, and do not call
 `perf-hunter`.
 
 **Traces.** None that show it? Capture them now that the investigation is
-open, so they are filed under it: `echolot collect -c echolot.yml -n 5`. With
+open, so they are filed under it: `echolot collect -c echolot.yml --hunt -n 5`. With
 a runner config that is new or was just changed, make the first run a cheap
 one where the mode allows it: in `launch` and `command` mode that is `-n 1`.
 In `gradle` mode the macrobenchmark sets its own iteration count and `-n`
@@ -150,8 +151,8 @@ Pass the agent:
 - what regressed and against what: "it was 3 s, now it is 7 s"
 - after which change — or the word "unknown", said explicitly
 - that the investigation is open, and its number (`opened #<n>` when it
-  opened, `echolot hunt --list` otherwise): every `analyze` it runs is filed
-  there, and `echolot compare` reads from it
+  opened, `echolot hunt --list` otherwise): every `collect --hunt` and
+  `analyze --hunt` it runs is filed there, and `echolot compare` reads from it
 - with several scenarios, which one the investigation is about: its commands
   take it without `--scenario`
 - whether the config's thresholds are trustworthy for this hunt (see above),
@@ -231,7 +232,8 @@ Every time, whatever the answer: an interim conclusion, "clean", or "the
 config needs fixing" is what this investigation came to, and
 `echolot hunt --list` shows it beside the question from then on. Left open, a
 finished hunt
-stays the open one: every later `analyze`, about any question, is filed under
-it, and the next `/echolot` asks whether to carry on with work that is over.
+stays the open one: every later `analyze --hunt`, about any question, is filed
+under it, and the next `/echolot` asks whether to carry on with work that is
+over.
 If the human wants more rounds, that is a new investigation, and the traces
 this one left are where it starts.

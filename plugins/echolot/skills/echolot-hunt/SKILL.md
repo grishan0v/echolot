@@ -22,15 +22,15 @@ a host that does not list this skill; the loop's guide is the subagent's.
    echolot hunt "<what regressed, in their words>" --since "<the change, or unknown>"
    ```
 
-   Several scenarios in `echolot.yml`, as `echolot status` lists them: match
+   Several scenarios (`echolot status` lists them): match
    the question to one, ask when you cannot tell, and add `--scenario <name>`.
-   It moves the scenario's loose traces aside, and stderr names the directory. Those traces are this question's evidence only if the human
-   recorded them for it before asking; most often they are an earlier
-   question's last round or setup's probe capture. Exit 2 means
+   It moves the scenario's loose traces aside; stderr names the directory.
+   They are this question's evidence only if the human recorded them for it
+   before asking; most often an earlier question's last round or setup's probe. Exit 2 means
    `echolot.yml` does not load: show the error and stop. Markers the previous
    investigation left go before anything is recorded: `echolot mark --remove`,
    and by hand the lines it lists. No traces recorded for this question:
-   `echolot collect -c echolot.yml -n 5`, or `-n 1` first after a change to
+   `echolot collect --hunt -n 5`, or `-n 1` first after a change to
    the runner config, as `echolot guide hunt` says.
 4. **Hand the loop to a subagent that starts with none of this conversation**,
    with this brief as its first message, filled in. `#<n>` is `opened #<n>`,
@@ -42,14 +42,14 @@ a host that does not list this skill; the loop's guide is the subagent's.
    Run `echolot guide loop` first and follow it: it is your guide to the loop.
    Traces: <each trace file by name, from the directory `echolot hunt` set aside or from .echolot/traces>
    Regressed: <what, against what>, after <the change, or "unknown">
-   Investigation #<n> is open: every `analyze` you run is filed under it, and `echolot compare` reads from it.
+   Investigation #<n> is open: `collect --hunt` and `analyze --hunt` file under it, and `echolot compare` reads from it.
    Thresholds: <the config's can be trusted | start with `echolot analyze --defaults`>
    Doctor passed at <time>: do not run it again.
    Instrumentation: <what `echolot domains --root .` found | none: start with `echolot mark`, not with reading the app>
    ```
 
-   **Do not run `echolot guide loop` yourself**: it is the subagent's, and here
-   it only fills this window. Then **wait for its conclusion**. Do not end
+   **Do not run `echolot guide loop` yourself**: it is the subagent's, and
+   here only fills the window. Then **wait for its conclusion**. Do not end
    your turn while it runs: a turn that ends on "I will come back with its
    output" may never get a next one. If your host has no subagent tool, even
    among those it lists on request, the loop is yours: `echolot guide loop`,

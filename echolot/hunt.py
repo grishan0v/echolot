@@ -182,6 +182,7 @@ _FIELDS: dict[str, type] = {
     "question": str, "since": str, "scenario": str, "config_sha": str, "status": str,
     "conclusion": str, "opened_at": str, "touched_at": str, "closed_at": str,
     "confirmed": dict, "verdict": dict, "verdict_check": dict, "traces": list,
+    "round": list,
 }
 
 
@@ -208,7 +209,7 @@ def _typed(h: dict[str, Any]) -> dict[str, Any]:
             ok = value >= (1 if key == "n" else 0)
         if not ok:
             del out[key]
-        elif key == "traces":
+        elif key in ("traces", "round"):
             out[key] = [t for t in value if isinstance(t, str)]
     return out
 
@@ -300,6 +301,69 @@ def _rel(project: Path, p: Path) -> str:
         return str(p)
 
 
+def inside(project: Path, asked: str | None) -> tuple[dict[str, Any] | None, str | None]:
+    """The open investigation a `collect` or an `analyze` works inside, from
+    its `--hunt`: (the record, None), (None, None) without the flag, or
+    (None, why) when the flag names nothing that is open.
+
+    Only work started from the investigation is filed under it (#498). A
+    cold-start baseline recorded by hand in a project whose investigation
+    about scrolling had been untouched for two months went into that
+    investigation's history as its eighth report, renewed its freshness so
+    the next `/echolot` carried on without asking, and offered its five
+    traces for reuse. The hunt and its loop pass `--hunt`; a plain command
+    does not, and leaves the record as it found it.
+    """
+    if asked is None:
+        return None, None
+    hunt = load(project)
+    if not hunt or hunt.get("status", "open") != "open":
+        why = unreadable_line(project, then=False) or "no investigation is open"
+        return None, f"--hunt: {why}, so there is nothing to file this under"
+    if asked != OPEN and asked.lstrip("#") != str(hunt.get("n")):
+        return None, (f"--hunt {asked}: the open investigation is "
+                      f"#{hunt.get('n') or '?'}, \"{hunt.get('question') or ''}\"")
+    return hunt, None
+
+
+# What `--hunt` with no number stands for: the investigation that is open.
+OPEN = "open"
+
+
+def outside_line(project: Path) -> str | None:
+    """Said on stderr by a `collect` or an `analyze` without `--hunt` while
+    an investigation is open: that it left the investigation alone, and how
+    to file it there. None when nothing is open."""
+    hunt = load(project)
+    if not hunt or hunt.get("status", "open") != "open":
+        return None
+    return (f"[i] not filed under the open investigation #{hunt.get('n') or '?'}: "
+            f"run inside it with --hunt")
+
+
+def record_round(project: Path, traces: list[Path]) -> None:
+    """Note the traces the open investigation's own `collect` just left in
+    `.echolot/traces/`: the round it would reuse, told apart from loose
+    traces some other work recorded there."""
+    hunt = load(project)
+    if not hunt or hunt.get("status") != "open":
+        return
+    hunt["round"] = sorted(_rel(project, Path(t)) for t in traces)
+    with contextlib.suppress(OSError):
+        save(project, hunt)
+
+
+def holds_round(project: Path, directory: Path) -> bool:
+    """Whether a set `collect` just moved aside is the open investigation's
+    own last round. A `collect` outside it still records where that went:
+    that is the investigation's evidence moving, not new work filed."""
+    hunt = load(project)
+    if not hunt or hunt.get("status") != "open":
+        return False
+    names = {Path(t).name for t in hunt.get("round") or []}
+    return bool(names) and any((directory / n).exists() for n in names)
+
+
 def record_traces(project: Path, directory: Path) -> None:
     """Note that this directory of traces belongs to the open investigation.
 
@@ -314,8 +378,14 @@ def record_traces(project: Path, directory: Path) -> None:
         return
     rel = _rel(project, directory)
     kept = hunt.setdefault("traces", [])
-    if rel not in kept:
-        kept.append(rel)
+    # Its last round is in that directory now: none of the loose traces
+    # are its own until its next `collect` records them.
+    moved = holds_round(project, directory)
+    if moved:
+        hunt["round"] = []
+    if rel not in kept or moved:
+        if rel not in kept:
+            kept.append(rel)
         with contextlib.suppress(OSError):
             save(project, hunt)
 
@@ -427,6 +497,10 @@ def open_new(project: Path, question: str, since: str | None = None,
         "collects": 0,
         "analyzes": 0,
         "traces": [],
+        # The traces its own `collect` left loose in .echolot/traces/: none
+        # yet. A record without the field was written before echolot told
+        # them apart, and reads every loose trace as its own.
+        "round": [],
         "conclusion": None,
     }
     save(project, hunt)
@@ -564,7 +638,11 @@ def needs_choice(hunt: dict[str, Any] | None, st: dict[str, Any]) -> bool:
     # up to an hour and touches the investigation only when it ends, and the
     # agent calls `echolot` while it runs: past thirty minutes it was told
     # to ask the human whether to carry on with the work it was doing.
-    if (st.get("collect") or {}).get("status") == "running":
+    # Only its own collect, one started with `--hunt` under its number:
+    # any other one in that window attached whatever came next to it (#498).
+    running = st.get("collect") or {}
+    if running.get("status") == "running" and running.get("hunt") is not None \
+            and running.get("hunt") == hunt.get("n"):
         return False
     return not is_fresh(hunt)
 
@@ -743,7 +821,7 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
 
     tr = st.get("traces") or {}
     if tr.get("count"):
-        out.append(f"  traces it would reuse: {tr['count']} in .echolot/traces")
+        out.extend(_reuse_lines(hunt, tr))
     rep = st.get("report")
     if rep and not rep.get("error") and rep.get("run") is not None:
         out.append(f"  last report: {rep['fired']} of {rep['run']} detectors fired")
@@ -755,6 +833,32 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
         note = leftover_line(leftovers(root, (st.get("config") or {}).get("temp_prefix")))
         if note:
             out.append(f"  ! {note}")
+    return out
+
+
+def _reuse_lines(hunt: dict[str, Any], tr: dict[str, Any]) -> list[str]:
+    """The loose traces the investigation would carry on with, and the ones
+    other work left beside them.
+
+    Every loose trace used to count as its own: five cold starts recorded
+    by hand, outside it, were offered for reuse by an investigation about
+    scrolling (#498). A record from before echolot kept its round has no
+    `round`, and reads every loose trace as its own, as it did then.
+    """
+    count = int(tr.get("count") or 0)
+    if "round" not in hunt:
+        return [f"  traces it would reuse: {count} in .echolot/traces"]
+    own = set(hunt.get("round") or [])
+    names = tr.get("names")
+    mine = (sum(1 for n in names if n in own) if isinstance(names, list)
+            else min(len(own), count))
+    others = count - mine
+    if not mine:
+        return [f"  traces it would reuse: none of its own — the {others} in "
+                f".echolot/traces were recorded outside this investigation"]
+    out = [f"  traces it would reuse: {mine} in .echolot/traces"]
+    if others:
+        out.append(f"  {others} more there were recorded outside this investigation")
     return out
 
 
