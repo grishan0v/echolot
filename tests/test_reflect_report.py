@@ -115,3 +115,55 @@ def test_notes_once_and_pipes_escaped_once() -> None:
     row = render_mod._table([{"command": "echolot names x | grep AGENTTMP_", "n": 1}])
     check("one backslash", "x \\| grep" in row and "\\\\|" not in row, row)
     check("no Reader notes section", "_notes" not in [f.__name__ for f in render_mod._SECTIONS])
+
+
+def test_a_session_that_ran_on_a_copy_is_judged_by_the_copy(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "app"
+    (project / "work-a").mkdir(parents=True)
+    (project / "echolot.yml").write_text(
+        "scenarios:\n  coldStart: {}\n  listScroll: {}\n", encoding="utf-8")
+    (project / "work-a" / "echolot.yml").write_text(
+        "scenario: {name: copyA}\nloop: {max_rounds: 7}\n", encoding="utf-8")
+    tdir = tmp_path / "transcripts"
+    tdir.mkdir()
+    cmd = "echolot analyze .echolot/traces/a.perfetto-trace -c work-a/echolot.yml"
+    rows = [
+        {"type": "user", "timestamp": "2026-09-01T10:00:00.000Z", "cwd": str(project),
+         "message": {"role": "user", "content": "analyze the copy"}},
+        {"type": "assistant", "timestamp": "2026-09-01T10:00:05.000Z", "cwd": str(project),
+         "message": {"id": "m1", "role": "assistant", "content": [
+             {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": cmd}}]}},
+        {"type": "user", "timestamp": "2026-09-01T10:00:09.000Z", "cwd": str(project),
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}},
+    ]
+    (tdir / "s1.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows),
+                                   encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    code, said = _reflect("--last", "--project", str(project), "--transcripts", str(tdir))
+    rep = json.loads((project / ".echolot" / "reflect" / "s1.json").read_text(
+        encoding="utf-8")) if code == 0 else {}
+    cfg = (rep.get("context") or {}).get("config") or {}
+    check("the copy is the config read", str(cfg.get("path", "")).endswith(
+        "work-a/echolot.yml") and cfg.get("max_rounds") == 7, said[-600:])
+    check("and the header says so",
+          "work-a/echolot.yml` (the copy this session ran with `-c`)" in said
+          and "listScroll" not in said.split("Config:", 1)[-1].split("\n", 1)[0], said[:900])
+
+
+def test_a_config_changed_since_the_session_is_said(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "p1"
+    _log(project)
+    (project / "echolot.yml").write_text("loop: {max_rounds: 5}\n", encoding="utf-8")
+    log = project / recorder.LOG_FILE
+    lines = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    for r in lines:
+        r["cwd"] = str(project)
+        if r["cmd"] == "analyze":
+            r["config"] = {"path": "echolot.yml", "sha": "0123456789ab"}
+    log.write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
+    monkeypatch.chdir(project)
+    code, said = _reflect("--from-log", "--project", str(project))
+    check("the header says the file is not what the session read",
+          code == 0 and "The file changed after this session ran" in said
+          and "`0123456789ab`" in said, said[:900])

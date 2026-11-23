@@ -121,6 +121,8 @@ def _config_line(cfg: dict[str, Any]) -> str:
         return ("Config: _none found in this directory — protocol checks that "
                 "need it were skipped_")
     bits = [f"`{cfg.get('path')}`"]
+    if cfg.get("source") == "session":
+        bits[-1] += " (the copy this session ran with `-c`)"
     if cfg.get("scenario"):
         bits.append(f"scenario `{cfg['scenario']}`")
     elif cfg.get("scenarios"):
@@ -129,7 +131,15 @@ def _config_line(cfg: dict[str, Any]) -> str:
         bits.append(f"max_rounds {cfg['max_rounds']}")
     if cfg.get("instrumentation_allowed"):
         bits.append("allowed " + ", ".join(f"`{a}`" for a in cfg["instrumentation_allowed"]))
-    return "Config: " + " · ".join(bits)
+    line = "Config: " + " · ".join(bits)
+    if cfg.get("changed"):
+        # The checks can only read the file as it is now; said, so a verdict
+        # on a threshold the session never saw is not taken for its own.
+        line += (f"\n_The file changed after this session ran: its runs logged "
+                 f"{', '.join(f'`{s}`' for s in cfg.get('logged_sha') or [])}, it "
+                 f"holds `{cfg.get('sha_now')}` now. The protocol checks read it "
+                 f"as it is now._")
+    return line
 
 
 def _tally(report: dict[str, Any], out: list[str]) -> None:

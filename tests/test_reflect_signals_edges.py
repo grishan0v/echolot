@@ -118,3 +118,32 @@ def test_totals_are_counted_beyond_the_list() -> None:
     hogs = _sig(s, "context_hogs")
     check("fifteen silences", gaps.title.startswith("15 silence(s)"), gaps.title)
     check("sixteen large outputs", hogs.title.startswith("16 tool output(s)"), hogs.title)
+
+
+def _doctor_run(at: float, exit: int = 0, version: str = "0.17.0", **facts) -> dict:
+    return {"ts": (T0 + timedelta(seconds=at)).isoformat(timespec="seconds"),
+            "cmd": "doctor", "argv": ["doctor"], "exit": exit, "ms": 900,
+            "version": version, **({"facts": facts} if facts else {})}
+
+
+def test_a_passing_doctor_in_the_run_log_counts_before_the_analyze() -> None:
+    s = _session([_bash(1000, "echolot"),
+                  _bash(1010, "echolot analyze .echolot/traces/a.perfetto-trace")])
+
+    def verdict(runs: list[dict]):
+        return signals_mod.doctor_first(s, facts_mod.gather(s, None, runs), None)
+
+    sig = verdict([_doctor_run(1010 - 15 * 60)])
+    check("a doctor that passed 15 minutes before is the check the protocol asks for",
+          sig.severity == "ok" and "15 min" in sig.title, sig.title)
+    sig = verdict([_doctor_run(1010 - 30 * 3600)])
+    check("one from 30 hours before is not", sig.severity == "warn", sig.title)
+    sig = verdict([_doctor_run(1010 - 15 * 60, exit=1, failed=["adb"])])
+    check("nor one that failed", sig.severity == "warn", sig.title)
+    init = _doctor_run(1010 - 600, checks=148)
+    init["cmd"] = "init"
+    sig = verdict([init])
+    check("the self-check inside init counts, as status reads it",
+          sig.severity == "ok" and "init" in sig.title, sig.title)
+    sig = verdict([_doctor_run(1010 + 60)])
+    check("a doctor after the analyze does not", sig.severity == "warn", sig.title)

@@ -120,6 +120,7 @@ class Facts:
     runs: list[dict[str, Any]] = field(default_factory=list)
     building: dict[str, Any] = field(default_factory=dict)
     conclusion: dict[str, Any] | None = None
+    prior_doctor: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -427,6 +428,92 @@ def match_runs(calls: list[EcholotCall], runs: list[dict[str, Any]],
             if c.exit is None or c.exit == 0:
                 c.exit = inside[best].get("exit", c.exit)
     return inside
+
+
+# How long a passing self-check in the run log answers for the environment.
+# `echolot` prints "doctor 15m ago, passed" and its `next` sends nobody back
+# to doctor after one: a session that followed it was doing what it was told.
+DOCTOR_FRESH_S = 24 * 3600
+
+
+def _self_check(run: dict[str, Any]) -> bool:
+    """A doctor, or the self-check `init` runs — its facts carry `checks`,
+    and `status` reads it as the last doctor the same way."""
+    return run.get("cmd") == "doctor" or "checks" in (run.get("facts") or {})
+
+
+def prior_doctor(calls: list[EcholotCall], runs: list[dict[str, Any]]
+                 ) -> dict[str, Any] | None:
+    """The run log's last self-check before the session's first analyze.
+
+    The transcript only has the doctors this session ran. The project's run
+    log has the one `echolot` reported a quarter of an hour earlier, and
+    whether it passed; looking in the transcript alone, three sessions of
+    one day were each warned for skipping a doctor their own `next` had not
+    asked for (#544). None when the log holds none before that analyze.
+    """
+    analyzes = sorted((c for c in calls if c.sub == "analyze" and not c.is_help and c.ran),
+                      key=lambda c: ts_to_epoch(c.ts))
+    if not analyzes:
+        return None
+    first = ts_to_epoch(analyzes[0].ts)
+    before = [r for r in runs if _self_check(r) and 0 < ts_to_epoch(r.get("ts")) <= first]
+    if not before:
+        return None
+    last = max(before, key=lambda r: ts_to_epoch(r.get("ts")))
+    failed = (last.get("facts") or {}).get("failed")
+    analyze_version = (analyzes[0].recorded or {}).get("version")
+    return {
+        "ts": last.get("ts"),
+        "cmd": last.get("cmd"),
+        "age_s": round(first - ts_to_epoch(last.get("ts"))),
+        "exit": last.get("exit"),
+        "passed": last.get("exit") == 0 and not failed,
+        "version": last.get("version"),
+        # Unknown is no mismatch: a transcript call the log did not match.
+        "same_version": (analyze_version is None or last.get("version") is None
+                         or analyze_version == last.get("version")),
+    }
+
+
+# The commands that read the config the protocol checks are about.
+CONFIG_SUBS = ("analyze", "calibrate", "collect", "names")
+
+
+def session_configs(session: Session, runs: list[dict[str, Any]],
+                    base: Path | None = None) -> list[dict[str, Any]]:
+    """The configs this session's own commands read: a path each, and the
+    hashes the run log stamped on them.
+
+    From each call's own run-log line where it has one: the path as typed and
+    the directory it ran in, which is where that path starts. Without one,
+    the call's own `-c`, or the default, from the session's directory. Every
+    run of the session's window would bring in another session's runs
+    working beside it on the same project.
+    """
+    calls = echolot_calls(session)
+    window = None
+    if session.started and session.ended:
+        window = (ts_to_epoch(session.started), ts_to_epoch(session.ended))
+    match_runs(calls, runs, window)
+    found: dict[str, list[str]] = {}
+    for c in calls:
+        if c.sub not in CONFIG_SUBS or c.is_help or not c.ran:
+            continue
+        rec = c.recorded or {}
+        stamp = rec.get("config") or {}
+        if stamp.get("path"):
+            raw, where, sha = str(stamp["path"]), rec.get("cwd"), stamp.get("sha")
+        else:
+            raw = (c.config or "echolot.yml").strip("\"'")
+            where, sha = None, None
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            p = Path(where or session.cwd or base or ".") / p
+        shas = found.setdefault(str(p.resolve()), [])
+        if sha and sha not in shas:
+            shas.append(sha)
+    return [{"path": p, "shas": s} for p, s in found.items()]
 
 
 # ------------------------------------------------------------ config writes
@@ -1203,6 +1290,9 @@ def gather(session: Session, cfg: Config | None,
         runs=inside,
         building=building_the_tool(project, calls),
         conclusion=conclusion(session),
+        # Over the whole log: the self-check that counts usually ran before
+        # this session started.
+        prior_doctor=prior_doctor(calls, runs),
     )
 
 
