@@ -136,6 +136,14 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
                                 floor_ratio, temp_prefix, moved_into))
 
     rows.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
+    frames = _frames_moved(before, after, floor_ratio)
+    if frames is not None:
+        warnings.append(frames["warning"])
+        _per_frame(rows, frames["ratio"], floor_ratio)
+        # The rows that moved against the frames first: they are the ones
+        # the frame count does not explain. Stable, so the size order holds
+        # inside each half.
+        rows.sort(key=lambda r: (r["delta_ms"] or 0.0) * (frames["ratio"] - 1) >= 0)
     markers = _markers(before, after, floor_ms, floor_ratio, temp_prefix, moved_into)
 
     # Two processes, two windows, or a window that is not the scenario's: the
@@ -211,6 +219,65 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
         # section the app writes is measured at all (#618).
         "markers": markers,
     }
+
+
+def _frames_moved(before: dict, after: dict,
+                  floor_ratio: float) -> dict[str, Any] | None:
+    """Whether the two sides drew different numbers of frames in the window.
+
+    In a frame-paced scenario the window is the gesture's length whatever
+    the app does, and a build that janks draws fewer frames in it. Work done
+    once a frame shrinks with them: on one screen five times fewer frames
+    (657 → 117.5) made `postAndWait` 894 → 400 ms, a shrink that held, while
+    each occurrence went from 1.33 to 2.48 ms (#566). The same fix the other
+    way round reads as a list of regressions. Warned at the relative floor,
+    the move a row needs to be called moved at all.
+
+    None when either side has no frame timeline, or the counts are close.
+    """
+    fb = ((before.get("window") or {}).get("frames") or {}).get("count")
+    fa = ((after.get("window") or {}).get("frames") or {}).get("count")
+    if not fb or not fa:
+        return None
+    ratio = fa / fb
+    if abs(ratio - 1) < floor_ratio:
+        return None
+    fewer = ratio < 1
+    factor = (1 / ratio) if fewer else ratio
+    side = "after" if fewer else "before"
+    return {"ratio": ratio, "warning": {
+        "id": "frames",
+        "text": f"The {side} side drew {factor:.1f}× fewer frames in the window "
+                f"({_int(fb)} before, {_int(fa)} after, medians), so work done "
+                f"once a frame is {'smaller after' if fewer else 'larger after'} "
+                f"for that reason alone. Rows whose count followed the frames "
+                f"are given per occurrence beside the total and get no verdict "
+                f"on the total; the rows that moved against the frames are "
+                f"listed first.",
+    }}
+
+
+def _per_frame(rows: list[dict[str, Any]], ratio: float, floor_ratio: float) -> None:
+    """Rows whose count moved with the frames: per occurrence, and no verdict on the total.
+
+    A row whose count went the way the frames went, by more than the floor,
+    is work the frame count carries. Its total moving with them says nothing
+    about the work, so `holds` is cleared, and the time per occurrence on
+    each side, medians over counts, says which way the work itself went. A
+    row without a count on both sides cannot be told apart and keeps its
+    verdict.
+    """
+    for r in rows:
+        b, a = r["before"] or {}, r["after"] or {}
+        cb, ca = b.get("count"), a.get("count")
+        vb, va = b.get(r["metric"]), a.get(r["metric"])
+        if not cb or not ca or vb is None or va is None:
+            continue
+        moved = ca / cb
+        if abs(moved - 1) < floor_ratio or (moved - 1) * (ratio - 1) <= 0:
+            continue
+        r["per_occurrence"] = {"before": round(vb / cb, 2), "after": round(va / ca, 2)}
+        r["shift"], r["holds"] = None, None
 
 
 def _markers(before: dict, after: dict, floor_ms: float, floor_ratio: float,
@@ -1529,7 +1596,11 @@ def _counts(r: dict[str, Any]) -> str:
     a = (r["after"] or {}).get("count")
     if b is None and a is None:
         return "—"
-    return f"{_int(b)} → {_int(a)}"
+    text = f"{_int(b)} → {_int(a)}"
+    each = r.get("per_occurrence")
+    if each:
+        text += f" · {each['before']:g} → {each['after']:g} ms each"
+    return text
 
 
 def _int(v: Any) -> str:

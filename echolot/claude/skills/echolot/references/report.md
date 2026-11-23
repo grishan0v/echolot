@@ -313,6 +313,12 @@ window.` On a large app's launch that was the case behind the main thread's
 wait for a CPU: half of it was spent behind the app's own work. Read it with
 `waiting_for_cpu` and with `runnable_starvation`'s row for the main thread.
 
+**`window.frames`** — how many frames the app drew in the window, by the
+frame timeline (`count`; merged, the median with each run's in `values`).
+`null` without a frame timeline. `compare` reads it: in a scripted scroll or
+drag the window is the gesture's length, and a build that janks draws fewer
+frames in it, so work done once a frame shrinks with them.
+
 **`window.startup`** — the app's launch as Perfetto's standard library
 measures it, when the trace holds one: `type` (cold, warm, hot), `dur_ms` from
 the intent to the first frame, and `reasons`, every millisecond of it given to
@@ -962,6 +968,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `window` | the two windows were not defined the same way: anchors against a launch window, a launch closed at its end against one that ran on to `reportFullyDrawn()`, or a side whose repeats did not agree. `comparable: false`. The command refuses the pair before any table is made; the warning is what another caller of the comparison sees |
 | `defaults` / `config` | one side used `--defaults`, or the config's hash changed; what the reports show changed (an anchor's glob, the config's path) is named |
 | `anchor-before` / `anchor-after` | that side's start or end anchor never matched in any repeat: its window runs to the edge of the trace, `comparable: false` and every `holds` is `null`. With no launch in those traces either, the runner (`runner.reset_policy`) is named rather than the config. Missed in some repeats only (`not found in 1 of 15 after repeats`): still comparable, and the remedy is to leave those traces out — the warm ones, when the set mixes cold and warm starts |
+| `frames` | one side drew fewer frames in the window, by the relative floor or more. Rows whose count followed the frames carry `per_occurrence` (time per occurrence each side) and `holds: null`: their total moved with the frames, not with the work. The rows that moved against the frames come first. Read `per_occurrence`, and the app's own late frames, before calling anything faster or slower |
 | `runs` / `single` | different repeat counts, or a single trace with no spread to test against |
 | `few` | too few repeats to be 95% sure of any move — four a side is always enough — so every `holds` is `null`. Record another round rather than read the moves as settled |
 | `detectors` | the two runs did not use the same set of detectors |

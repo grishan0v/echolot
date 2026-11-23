@@ -226,6 +226,27 @@ without, to get more runs a side. The report's markers section says so and
 names the slices the markers sit in: their self-time medians mix two
 measures. Analyze the two rounds apart.
 
+### Frame-paced scenarios
+
+A scripted scroll or drag, recorded for a fixed time, lasts as long as the
+gesture whatever the app does, and a build that janks draws fewer frames in
+that time. Every row of work done once a frame — the main thread's per-frame
+slices, RenderThread, the GPU driver's threads — then shrinks with the frame
+count. On one screen five times fewer frames turned `postAndWait` from 894 into
+400 ms, a shrink that held, while each occurrence went from 1.33 to 2.48 ms;
+the fix, the other way round, read as a list of regressions.
+
+`analyze` keeps the frames drawn in the window (`window.frames`). When the two
+sides differ by the relative floor or more, the comparison opens with the
+`frames` warning. A row whose count moved the way the frames did, by more than
+the floor, gets its time per occurrence beside its count — `670 → 161.5 · 1.33
+→ 2.48 ms each` — and no verdict on its total (`per_occurrence` in the JSON,
+`holds: null`). The rows that moved against the frames lead the table: work
+that grew while the frames fell, such as the frames the app itself made late,
+is what the frame count does not explain. A row without a count on both sides
+keeps its verdict, so read rows like `uninstrumented_cpu` with the warning in
+mind.
+
 ## When two reports may not be compared
 
 Subtraction always produces a number, including for two reports that have
@@ -241,6 +262,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `defaults` | one side ran with `--defaults` and the other did not |
 | `config` | the config's hash changed between the two. What the reports themselves show changed is named — an anchor's glob (end anchor `list_shown_mark` → `list_shown`), the config's path — and the hash alone where nothing visible moved: anchors, process mask and thresholds all live there |
 | `anchor-before` / `anchor-after` | that side's start or end anchor never matched in any repeat, so its window runs to the edge of the trace rather than the scenario's: `comparable: false`, and the Holds column stays empty. With no launch in that side's traces either, the warning points at the runner (`runner.reset_policy`) rather than the config. An anchor missed in some repeats only — `not found in 1 of 15 after repeats` — keeps the pair comparable and names those repeats, the warm ones when the set mixes cold and warm starts, as the ones to leave out |
+| `frames` | one side drew fewer frames in the window than the other, by the relative floor or more — see [Frame-paced scenarios](#frame-paced-scenarios) |
 | `runs` | different numbers of repeats. Holds allows for it; the ± beside each median does not, and the narrower side is the smaller sample |
 | `single` | one trace on a side: no spread, so the Holds column is empty throughout |
 | `few` | too few repeats to be 95% sure of any move, so the Holds column is empty throughout. How many are enough is under [the Holds column](#the-holds-column) |

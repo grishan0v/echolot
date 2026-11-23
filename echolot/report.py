@@ -236,6 +236,17 @@ def _merge_crowding(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
+def _merge_frames(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The frames drawn in the window across repeats: the median, and each run's."""
+    counts = [f["count"] for r in reports
+              if (f := (r.get("window") or {}).get("frames")) and f.get("count") is not None]
+    if not counts:
+        return None
+    mid = median(counts)
+    return {"count": int(mid) if mid == int(mid) else round(mid, 1),
+            "values": counts, "runs": f"{len(counts)}/{len(reports)}"}
+
+
 def _merge_startup(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The startup across repeats, reason by reason, by median, like the budget.
 
@@ -649,6 +660,7 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"]["duration_ms_max"] = max(windows)
         merged["window"]["main_thread"] = _merge_budget(reports)
         merged["window"]["crowding"] = _merge_crowding(reports)
+        merged["window"]["frames"] = _merge_frames(reports)
         merged["window"]["startup"] = _merge_startup(reports)
         merged["window"].update(_merge_window_checks(reports))
 
