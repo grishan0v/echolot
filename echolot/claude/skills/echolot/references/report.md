@@ -1059,6 +1059,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `detectors` | the two runs did not use the same set of detectors |
 | `detector-failed` | a detector failed on that side. Its rows on the other side are left out rather than called gone or new; the failure is no answer about the app |
 | `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording does not hold what they read (`checked: false` in its report). Their rows are left out on both sides rather than called gone or new, and `summary.not_compared` gives each side's reason, `null` for a side that could look. Record that side again with what they read |
+| `not-checked-both` | the same detectors could not run on either side, for the same reasons: one warning in place of the two above. They are left out of the comparison |
 
 A row is listed as moved when it changes by more than 5 ms or 10 %, whichever
 is larger — `--floor-ms` and `--floor-pct` change that. A row whose share of

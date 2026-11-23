@@ -93,3 +93,38 @@ def test_markers_keep_their_digits_without_a_configured_prefix(tmp_path: Path, d
     code, out, _ = _run("compare", "a.json", "b.json")
     check("two markers, and the warning that names them",
           code == 0 and "AGENTTMP_fill_v#" not in out and "AGENTTMP_fill_v6" in out, out[:1500])
+
+
+def _compare(tmp_path: Path, before: dict, after: dict) -> dict:
+    (tmp_path / "b.json").write_text(json.dumps(before), encoding="utf-8")
+    (tmp_path / "a.json").write_text(json.dumps(after), encoding="utf-8")
+    code, _, err = _run("compare", str(tmp_path / "b.json"), str(tmp_path / "a.json"),
+                        "-o", str(tmp_path / "cmp"))
+    check("compare ran", code == 0, err[-500:])
+    return json.loads((tmp_path / "cmp" / "comparison.json").read_text(encoding="utf-8"))
+
+
+# --- header lines that read as something else (#585) -------------------------
+
+def test_the_time_beside_each_side_is_when_its_report_was_written(tmp_path: Path,
+                                                                  demo_report) -> None:
+    """A bare UTC stamp read as when the side was recorded, in local time."""
+    from datetime import datetime
+    before = copy.deepcopy(demo_report)
+    before["generated_at"] = "2026-11-22T12:26:39+00:00"
+    _compare(tmp_path, before, demo_report)
+    md = (tmp_path / "cmp" / "comparison.md").read_text(encoding="utf-8")
+    line = next(ln for ln in md.splitlines() if ln.startswith("Before"))
+    here = datetime.fromisoformat(before["generated_at"]).astimezone()
+    zone = here.tzname() or here.strftime("%z")
+    check("labelled, in local time, with its zone",
+          f"report written {here:%Y-%m-%d %H:%M:%S} {zone}" in line and zone, line)
+
+
+def test_the_windows_spread_is_named_as_the_repeats(demo_report) -> None:
+    from echolot import report as report_mod
+    md = report_mod.to_markdown(demo_report)
+    line = next(ln for ln in md.splitlines() if ln.startswith("Scenario window"))
+    check("report.md", line.endswith("across repeats)"), line)
+    head = "\n".join(report_mod._header_lines(demo_report))
+    check("and the short header", "(repeats " in head and "· written " in head, head)

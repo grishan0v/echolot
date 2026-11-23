@@ -75,8 +75,17 @@ def test_a_detector_neither_side_could_run_is_not_compared_and_not_silent() -> N
           cmp["summary"]["not_compared"])
     check("and silence in both is not what it was", cmp["summary"]["silent_both"] == [],
           cmp["summary"])
-    check("one warning for each side, not one for each detector",
-          {"not-checked-before", "not-checked-after"} <= warned(cmp), warned(cmp))
+    check("one warning that names both sides, not one for each side (#585)",
+          "not-checked-both" in warned(cmp)
+          and not {"not-checked-before", "not-checked-after"} & warned(cmp), warned(cmp))
+    md = compare_mod.to_markdown(cmp)
+    check("said once", md.count("could not run on either side") == 1
+          and "could not run on the before side" not in md, md)
+
+
+def test_different_reasons_on_the_two_sides_are_two_warnings() -> None:
+    cmp = compare(report([blind("io_wait")]), report([blind("io_wait"), blind("gc_pressure")]))
+    check("one for each side", {"not-checked-before", "not-checked-after"} <= warned(cmp), warned(cmp))
 
 
 def test_the_state_table_says_not_checked() -> None:
