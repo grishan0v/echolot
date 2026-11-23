@@ -103,7 +103,7 @@ something becomes a section of the report:
 `report.md` for you and `report.json` for the agent, in `.echolot/out/`.
 An 81 MB trace with 475k slices comes out as a 14 KB `report.json` in about
 five seconds, and the repeats of a set are read side by side, each in a
-trace_processor of its own: fifteen cold starts in about five seconds.
+trace_processor of its own: fifteen cold starts in about nine seconds.
 `echolot analyze --html` adds `report.html`: the same report in plain words as
 a page, one file that opens from disk. `echolot hunt --show --html`
 writes an investigation the same way: what the agent found, where, and what to change.

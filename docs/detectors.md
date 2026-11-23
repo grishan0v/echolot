@@ -301,12 +301,19 @@ The same holds one level up. A view is a query with a name, not rows: each
 reference to `_slice_win` ran the join under it again, over every slice of the
 process, and every detector reads it, most more than once. On trace_processor
 v56.1 `app_init`, which names it four times, took 25 of 48 seconds of five cold
-starts of a large app; on v59.1 fifteen of them took 50 s one trace at a time,
-and 38 s with the window's sets built once. So `_slice`, `_slice_win`,
+starts of a large app. On v59.1 fifteen of them took 225 s one trace at a time,
+and take 57 s with the window's sets built once. So `_slice`, `_slice_win`,
 `_child_sum`, `_aslice_win` and `_tstate_win` are `PERFETTO TABLE`s:
 trace_processor's own columnar tables, built once when the script runs and
 read as stored rows after that. The rest stay views, cheap or read once. A
 detector reads both the same way.
+
+`_slice_win` is indexed by `slice_id`. A view over `slice` handed a join on the
+id down to slice's own lookup; a table has none until it is given one. Without
+it, `app_init`'s walk down the androidx.startup tree, which joins `_slice_win`
+on the id of every child at every step, read the whole window for each row:
+2.5 s a query on one cold start, asked three times per trace of a set, three
+quarters of the trace's time.
 
 Each table is dropped with `DROP TABLE IF EXISTS` before it is made, and each
 view with `DROP VIEW IF EXISTS`. trace_processor refuses the other pairing, and

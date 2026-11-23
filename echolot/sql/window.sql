@@ -6,12 +6,15 @@
 -- each reference to _slice_win ran the join under it again, over every slice
 -- of the process, and every detector reads it, most of them more than once.
 -- On trace_processor v56.1 `app_init`, which names it four times, took 25
--- of 48 seconds of five cold starts of a large app (#486); on v59.1 fifteen
--- of them took 50 s one at a time, and 38 s with these built once. So the
--- window's own sets — _slice in context.sql, _slice_win, _child_sum,
--- _aslice_win and _tstate_win — are PERFETTO TABLEs: built once, when this
--- script runs, and read as stored rows after that. The bounds are constants by then, so nothing in them can
--- go stale. The views below them stay views: they are cheap, or read once.
+-- of 48 seconds of five cold starts of a large app (#486). On v59.1, with
+-- app_init walking the androidx.startup tree (#512) and every detector of a
+-- set asked again with its thresholds open (#505), fifteen of them took 225 s
+-- one at a time, and take 57 s with these built once and _slice_win indexed
+-- by id. So the window's own sets — _slice in context.sql, _slice_win,
+-- _child_sum, _aslice_win and _tstate_win — are PERFETTO TABLEs: built once,
+-- when this script runs, and read as stored rows after that. The bounds are
+-- constants by then, so nothing in them can go stale. The views below them
+-- stay views: they are cheap, or read once.
 --
 -- Each is dropped as a table before it is made. trace_processor refuses
 -- `DROP VIEW` on a table, and a second CREATE without a drop, so a session
@@ -61,6 +64,14 @@ FROM _slice s
 WHERE s.ts < {{ts_end}}
   AND s.ts + CASE WHEN s.dur < 0 THEN {{ts_end}} - s.ts
                   ELSE MAX(s.dur, 0) END > {{ts_start}};
+
+-- Its rows found by id. A view over `slice` handed a join on `slice_id` down
+-- to slice's own lookup by id; a table has none until it is given one. Without
+-- it, app_init's walk down the androidx.startup tree, which joins _slice_win
+-- on the id of every child at every step, read every slice of the process per
+-- row. The table goes with its index when it is dropped, so the next pass
+-- makes both again.
+CREATE PERFETTO INDEX _slice_win_id ON _slice_win(slice_id);
 
 -- How much of each slice its children account for, with an open child read
 -- the way _slice_win reads an open slice: running to the end of the window.
