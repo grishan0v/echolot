@@ -1294,6 +1294,74 @@ def _crowded(sched: list, threads: dict, other_threads: dict) -> tuple[list, dic
     return sched, threads, other_threads
 
 
+# --- a blind stretch on a well-marked main thread ------------------------------
+#
+# `blind_main()` only, a scene of its own: the default trace's main thread sits
+# whole inside `AppStart`, a top-level slice, and can have no blind spot.
+#
+# The shape a large app's cold start had on a real project. The start anchor is
+# `bindApplication`, which closes early, and the main thread's work from there
+# to the end anchor is marked up at the top level, with 5 ms nobody names
+# between one slice and the next: 25 ms in all, below `uninstrumented_cpu`'s
+# bar. Then the fault planted there: a busy loop of 300 ms on the main thread,
+# right before the last frame, with no section of its own. The main thread is
+# on a CPU for 1520 ms and 1195 of them are inside slices, 79% covered — over
+# the 50% that keeps a thread out of the rows — and the 325 ms outside them
+# are the main thread's row. `loop_ms` sets the loop; 0 is the start without
+# it.
+#
+# Two other threads, for the bar that still holds for them. A pool with no
+# slices at all, 350 ms on a CPU: it ranks above the main thread on the time
+# nobody named, though the main thread spent four times its CPU. And Room's
+# thread, 400 ms on a CPU, 300 of them inside its queries: 100 ms outside,
+# above the bar, and 75% covered. A thread that names three quarters of its
+# work is not where the next marker goes; only the main thread is held to the
+# time alone.
+BLIND_POOL, BLIND_ROOM = 4301, 4302
+# The main thread named as the kernel names it: the package's last fifteen
+# characters, all of `com.example.app`.
+BLIND_THREADS = {TID_MAIN: APP_NAME[-15:], BLIND_POOL: "DefaultDispatch",
+                 BLIND_ROOM: "arch_disk_io_0"}
+BLIND_LOOP_MS = 300
+
+
+def blind_main(loop_ms: float = BLIND_LOOP_MS) -> bytes:
+    """The scene above: `com.example.app`'s cold start from `bindApplication`
+    to `Screen.firstFrame`, with `loop_ms` of busy loop on the main thread and
+    no slice around it."""
+    main = [
+        ("bindApplication", 100, 300, []),
+        ("activityStart", 405, 200, []),
+        ("Choreographer#doFrame", 610, 300, []),
+        ("Choreographer#doFrame", 915, 300, []),
+        # The loop runs from 1215 on, after the gap.
+        ("Choreographer#doFrame", 1220 + loop_ms, 90, []),
+        ("Screen.firstFrame", 1315 + loop_ms, 5, []),
+    ]
+    room = [("room_query", 200, 100, []), ("room_query", 350, 100, []),
+            ("room_query", 500, 100, [])]
+    sched = [(0, TID_MAIN, 100, 1320 + loop_ms, S),
+             (1, BLIND_POOL, 300, 650, S),
+             (2, BLIND_ROOM, 200, 600, S)]
+
+    builder = TraceProtoBuilder()
+    process_tree(builder, [(APP_PID, APP_NAME, BLIND_THREADS)])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {}
+    for cpu, tid, start, end, end_state in sched:
+        idle = f"swapper/{cpu}"
+        by_cpu.setdefault(cpu, []).extend([
+            (ms(start), next(seq), "sched", idle, 0, R, BLIND_THREADS[tid], tid),
+            (ms(end), next(seq), "sched", BLIND_THREADS[tid], tid, end_state, idle, 0),
+        ])
+    for cpu, tid, tree in ((0, TID_MAIN, main), (2, BLIND_ROOM, room)):
+        for ts, order, kind, name in _flatten(tree, [], seq):
+            buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+            by_cpu[cpu].append((ts, order, "print", tid, buf))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # --- the recording's own account of itself ---------------------------------------
 #
 # The tracing service writes the config a recording ran with at the head of

@@ -190,7 +190,8 @@ waiting for one.
    echolot compare .echolot/out/previous/report.json .echolot/out/report.json
    — and say in your conclusion that no investigation was open
 
-5. otherwise pick a blind spot (usually uninstrumented_cpu):
+5. otherwise pick a blind spot (usually uninstrumented_cpu; its row on the
+   main thread first, when there is one — that time is the window's own):
    its evidence names what ran (a recording with runner.sampling) →
      `ours: Store.save 36%`: AGENTTMP_ markers inside that method, in the
      file `code` names. `ours: none` is work a pool ran with its caller off

@@ -206,6 +206,8 @@ detectors:
     skip_glob: "*async*"
   runnable_starvation:
     min_runnable_ms: 20
+  # A thread's time on a CPU outside every top-level slice. The share bars
+  # every thread but the main one, whose time is the window's.
   uninstrumented_cpu:
     min_running_ms: 50
     max_covered_pct: 50

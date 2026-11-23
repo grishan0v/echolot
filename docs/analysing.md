@@ -218,6 +218,20 @@ at fifteen characters by Linux rather than by echolot: every worker of that
 pool reaches the trace as `DefaultDispatch`, so write thread masks with the
 truncation in mind.
 
+A row's `total_ms` is the thread's time on a CPU outside every top-level
+slice, and `covered_ms` its time inside one: the blind spot and the rest,
+which add up to the thread's CPU. Rows are ranked and compared on the blind
+spot. A thread other than the main one is a row only when slices cover less
+than half of its CPU (`max_covered_pct`): a pool that names nine tenths of what
+it does is not where the next marker goes, and the slivers between its slices
+would bury the rows that are. The main thread is a row whenever its time
+outside slices clears `min_running_ms`, however well the rest of it is marked.
+That time is the window's own, and the first place a regression in the app's
+code hides: on a large app's cold start, whose main thread named 72–80% of
+its CPU in every run, a 200 ms busy loop planted on it with no section around
+it grew the window by 277 ms and was in no row until the share stopped
+applying to the main thread.
+
 A recording with callstack samples ([`runner.sampling`](collecting.md#callstack-sampling))
 answers the next question in the same round: what the thread ran. The row
 reads the samples that fell in its blind spot — on a CPU, outside every
@@ -457,8 +471,8 @@ NEEDS ATTENTION   The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.8 tim
  !  The screen waits for background work
     The main thread waited 0.7 s for `arch_disk_io_#`, in all 3 launches. That is 36% of the launch.
  ~  Work nobody can name
-    5 threads or pools of threads were busy for 1.2 s of processor time between them, mostly doing
-    work that nothing in the recording names. The busiest is `arch_disk_io_0`: 0.5 s, in all 3 launches.
+    5 threads or pools of threads spent 1.2 s of processor time between them on work that nothing in
+    the recording names. The largest part is on `arch_disk_io_0`: 0.5 s, in all 3 launches.
 
  ok 14 checks are fine
 ```

@@ -1109,17 +1109,56 @@ def _(report):
     # thread is on CPU for only 60 of them, plus 100 ms of Running with no
     # slices at all. Comparing slice duration against on-CPU time would give
     # 300 of 160 = 188% and hide the blind spot. A live cold start showed
-    # exactly that: 217% on the main thread.
+    # exactly that: 217% on the main thread. The row's time is the 100 ms
+    # outside the slice, and with the 60 inside it adds up to the 160.
     got = [r for r in rows(report, "uninstrumented_cpu")
            if r["location"] == "BlockingIO-1"]
     assert len(got) == 1, (
         "a thread sleeping inside a slice must still count as blind: "
         f"{rows(report, 'uninstrumented_cpu')}"
     )
-    assert got[0]["total_ms"] == 160.0, got[0]
+    assert got[0]["total_ms"] == 100.0, got[0]
     assert got[0]["covered_ms"] == 60.0, (
         f"expected the Running/slice intersection, not the slice length: {got[0]}"
     )
+
+
+@check("uninstrumented_cpu: the main thread's CPU outside slices is a row, "
+       "however much of the rest is marked")
+def _(report):
+    """A cold start whose main thread is marked up at the top level, and a
+    busy loop of 300 ms planted on it with no section around it (see
+    `fixture.blind_main`). The main thread is 79% covered, and the share that
+    keeps a well-marked thread out of the rows kept this one out: on a real
+    project such a loop grew the window by 277 ms and gave no row in either
+    report, nor in `compare`.
+
+    The row is the 325 ms outside every slice, the loop and the gaps, and
+    ranks below the pool's 350 though the main thread spent four times its
+    CPU. Its stretch counts as one the rows explain. Room's thread, 75%
+    covered with 100 ms outside, stays out: the share still holds for every
+    other thread. And the same start without the loop has no main-thread
+    row: 25 ms between slices is under the bar.
+    """
+    cfg = Config({**FIXTURE_CONFIG, "scenario": {
+        "name": "blind", "start": {"name": "bindApplication"},
+        "end": {"name": "Screen.firstFrame"}}})
+    with tempfile.TemporaryDirectory() as tmp:
+        got = {}
+        for loop in (fixture.BLIND_LOOP_MS, 0):
+            path = Path(tmp) / f"blind-{loop}.perfetto-trace"
+            path.write_bytes(fixture.blind_main(loop))
+            got[loop] = _analyze(path, cfg)
+    planted = [(r["location"], r["total_ms"], r["covered_ms"], r["detail"])
+               for r in rows(got[fixture.BLIND_LOOP_MS], "uninstrumented_cpu")]
+    assert planted == [
+        ("DefaultDispatch", 350.0, 0.0, "100.0% of CPU outside slices"),
+        ("com.example.app", 325.0, 1195.0, "21.0% of CPU outside slices"),
+    ], planted
+    main = got[fixture.BLIND_LOOP_MS]["window"]["main_thread"]
+    assert (main["window_ms"], main["in_rows_ms"]) == (1520.0, 1515.0), main
+    healthy = [r["location"] for r in rows(got[0], "uninstrumented_cpu")]
+    assert healthy == ["DefaultDispatch"], healthy
 
 
 @check("uninstrumented_cpu: the samples in a blind spot name what ran there")
@@ -1243,21 +1282,21 @@ def _(report):
 
     Every thread with nested slices is a negative control, so the shipped
     report cannot show it: counted twice, their coverage only rises, and they
-    stay out of the rows either way. With the bar above 100% every thread is
+    stay out of the rows either way. With both bars open every thread is
     listed, and the numbers can be read. Costs one more pass over the fixture.
     """
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build())
         every = _analyze(trace, Config(FIXTURE_CONFIG), cli_overrides={
-            "uninstrumented_cpu": {"max_covered_pct": 101}})
+            "uninstrumented_cpu": {"max_covered_pct": 101, "min_running_ms": 0}})
     by_thread = {r["location"]: r for r in rows(every, "uninstrumented_cpu")}
     main = by_thread.get("m.example.app")
-    assert main and main["covered_ms"] == main["total_ms"] == 835.0, (
+    assert main and (main["covered_ms"], main["total_ms"]) == (835.0, 0.0), (
         "the main thread's slices nest; counted once they cover its 835 ms "
-        f"on a CPU exactly: {main}")
+        f"on a CPU exactly, and leave none of it outside: {main}")
     heap = by_thread.get("HeapTaskDaemon")
-    assert heap and heap["covered_ms"] == 80.0, (
+    assert heap and (heap["covered_ms"], heap["total_ms"]) == (80.0, 20.0), (
         f"HeapTaskDaemon: 80 ms of slices over 100 ms on a CPU: {heap}")
 
 
