@@ -1212,3 +1212,187 @@ def test_a_state_with_no_rule_is_not_mistaken_for_an_idle_one():
     check("the unreadable one is kept", "main" in left, left)
     check("while a pool thread waiting to be given work still is",
           "Worker-1" not in left, left)
+
+
+# --- the dump's own threads, and calls in progress (#528, #589) --------------
+
+# Every SIGQUIT dump has a runnable `Signal Catcher` writing it, and any app on
+# the platform's `HttpURLConnection` has okio's watchdog waiting for a timeout.
+DUMPERS = """\
+# Application: com.example.app
+
+main (native):tid=1 systid=1001
+       at android.os.MessageQueue.nativePollOnce(Native method)
+       at android.os.Looper.loop(Looper.java:294)
+       at android.app.ActivityThread.main(ActivityThread.java:8177)
+
+Signal Catcher (runnable):tid=6 systid=1006
+#00 pc 0x5b4c10 libart.so (art::DumpNativeStack + 104) (BuildId: aa)
+#01 pc 0x6b3a2c libart.so (art::Runtime::DumpForSigQuit + 72) (BuildId: aa)
+#02 pc 0x6c1a3c libart.so (art::SignalCatcher::HandleSigQuit + 1388) (BuildId: aa)
+#03 pc 0x6c0b1c libart.so (art::SignalCatcher::Run + 252) (BuildId: aa)
+
+Okio Watchdog (waiting):tid=30 systid=1030
+       at java.lang.Object.wait(Native method)
+       at java.lang.Object.wait(Object.java:442)
+       at com.android.okhttp.okio.AsyncTimeout.awaitTimeout(AsyncTimeout.java:313)
+       at com.android.okhttp.okio.AsyncTimeout.access$000(AsyncTimeout.java:42)
+       at com.android.okhttp.okio.AsyncTimeout$Watchdog.run(AsyncTimeout.java:288)
+
+Okio Watchdog (native):tid=31 systid=1031
+       at java.net.PlainSocketImpl.socketClose0(Native method)
+       at java.net.Socket.close(Socket.java:1470)
+       at com.android.okhttp.okio.Okio$3.timedOut(Okio.java:233)
+       at com.android.okhttp.okio.AsyncTimeout$Watchdog.run(AsyncTimeout.java:286)
+
+Worker-1 (runnable):tid=9 systid=1009
+       at com.example.app.work.Sync.run(Sync.kt:19)
+"""
+
+
+def test_the_thread_writing_the_dump_and_an_idle_watchdog_are_struck_out():
+    rep = anr.parse(DUMPERS)
+    by_tid = rep.by_tid()
+    check("the Signal Catcher in HandleSigQuit is the dump being written",
+          anr.idle_reason(by_tid["6"]) is not None, anr.idle_reason(by_tid["6"]))
+    check("okio's watchdog waiting for a timeout is idle",
+          anr.idle_reason(by_tid["30"]) == "library idle loop",
+          anr.idle_reason(by_tid["30"]))
+    check("a watchdog that fired is still listed",
+          anr.idle_reason(by_tid["31"]) is None, anr.idle_reason(by_tid["31"]))
+    check("and a runnable app thread too",
+          anr.idle_reason(by_tid["9"]) is None, anr.idle_reason(by_tid["9"]))
+    text = anr.render(rep)
+    doing = text.split("## Threads that were doing something", 1)[1]
+    check("neither of the first two is under doing something",
+          "Signal Catcher" not in doing and "tid=30" not in doing
+          and doing.count("Okio Watchdog") == 1, doing)
+
+
+def test_a_runnable_thread_is_still_never_idle_off_the_dump_writers_stack():
+    """`SignalCatcher::Run` alone is the catcher between signals; runnable,
+    it is doing something this reader cannot name, and it stays listed."""
+    other = DUMPERS.replace(
+        "#01 pc 0x6b3a2c libart.so (art::Runtime::DumpForSigQuit + 72) (BuildId: aa)\n", ""
+    ).replace("art::SignalCatcher::HandleSigQuit", "art::SignalCatcher::WaitForSignal")
+    thread = anr.parse(other).by_tid()["6"]
+    check("not struck out", anr.idle_reason(thread) is None, anr.idle_reason(thread))
+
+
+TLS_TOP = """\
+# Application: com.example.app
+
+DefaultDispatcher-worker-3 (native):tid=31 systid=4300
+#00 pc 0x00000000000c1d2e /apex/com.android.runtime/lib64/bionic/libc.so (__ppoll+8)
+#01 pc 0x00000000000b2c3d /apex/com.android.runtime/lib64/bionic/libc.so (poll+92)
+       at java.net.SocketInputStream.socketRead0(Native method)
+       at java.net.SocketInputStream.socketRead(SocketInputStream.java:118)
+       at java.net.SocketInputStream.read(SocketInputStream.java:173)
+       at com.android.org.conscrypt.ConscryptEngineSocket$SSLInputStream.readFromSocket(ConscryptEngineSocket.java:1015)
+       at com.android.org.conscrypt.ConscryptEngineSocket.doHandshake(ConscryptEngineSocket.java:244)
+       at com.android.org.conscrypt.ConscryptEngineSocket.startHandshake(ConscryptEngineSocket.java:226)
+       at okhttp3.internal.connection.ConnectPlan.connectTls(ConnectPlan.kt:346)
+       at okhttp3.internal.connection.ConnectPlan.connectTlsEtc(ConnectPlan.kt:201)
+       at okhttp3.internal.connection.FastFallbackExchangeFinder.find(FastFallbackExchangeFinder.kt:78)
+       at okhttp3.internal.connection.RealCall.initExchange$okhttp(RealCall.kt:275)
+       at okhttp3.internal.connection.ConnectInterceptor.intercept(ConnectInterceptor.kt:32)
+       at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:126)
+"""
+
+CUT_WORKER = TLS_TOP + "       ... frames omitted ...\n"
+
+LIBRARY_CALLER = TLS_TOP + """\
+       at okhttp3.internal.connection.RealCall.getResponseWithInterceptorChain$okhttp(RealCall.kt:203)
+       at okhttp3.internal.connection.RealCall.execute(RealCall.kt:154)
+       at com.vendor.sdk.upload.Uploader.send(Uploader.kt:88)
+       at com.vendor.sdk.upload.Uploader$run$1.invoke(Uploader.kt:40)
+"""
+
+APP_CALLER = TLS_TOP + """\
+       at com.example.app.net.HeaderInterceptor.intercept(HeaderInterceptor.kt:20)
+       at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:126)
+       at okhttp3.internal.connection.RealCall.getResponseWithInterceptorChain$okhttp(RealCall.kt:203)
+       at okhttp3.internal.connection.RealCall.execute(RealCall.kt:154)
+       at com.example.app.data.Repo.load(Repo.kt:30)
+"""
+
+# What stays idle on the same read path: a selector loop under OkHttp's task
+# runner, and the HTTP/2 reader that waits in `socketRead0` for as long as a
+# connection is open.
+NETWORK_IDLE = """\
+# Application: com.example.app
+
+OkHttp TaskRunner (native):tid=40 systid=4400
+#00 pc 0x00000000000a1b2c /apex/com.android.runtime/lib64/bionic/libc.so (__epoll_pwait+8)
+       at sun.nio.ch.EPollArrayWrapper.epollWait(Native method)
+       at java.nio.channels.Selector.select(Selector.java:100)
+       at okhttp3.internal.concurrent.TaskRunner$runnable$1.run(TaskRunner.kt:58)
+       at java.lang.Thread.run(Thread.java:1012)
+
+OkHttp example.com (native):tid=41 systid=4401
+#00 pc 0x00000000000c1d2e /apex/com.android.runtime/lib64/bionic/libc.so (__ppoll+8)
+       at java.net.SocketInputStream.socketRead0(Native method)
+       at java.net.SocketInputStream.read(SocketInputStream.java:173)
+       at okio.InputStreamSource.read(JvmOkio.kt:93)
+       at okio.RealBufferedSource.require(RealBufferedSource.kt:211)
+       at okhttp3.internal.http2.Http2Reader.nextFrame(Http2Reader.kt:89)
+       at okhttp3.internal.http2.Http2Connection$ReaderRunnable.invoke(Http2Connection.kt:618)
+       at java.lang.Thread.run(Thread.java:1012)
+"""
+
+
+def test_a_thread_in_the_middle_of_an_http_call_was_doing_something(tmp_path):
+    root = tmp_path / "checkout"
+    for rel in ("app/src/main/java/com/example/app/net/HeaderInterceptor.kt",
+                "app/src/main/java/com/example/app/data/Repo.kt"):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"package {'.'.join(rel.split('/')[4:-1])}\n\nclass X\n",
+                        encoding="utf-8")
+    for name, text in (("cut", CUT_WORKER), ("library", LIBRARY_CALLER),
+                       ("app", APP_CALLER)):
+        rep = anr.parse(text)
+        code = anr.locate(rep, root)
+        out = anr.render(rep, code)
+        check(f"{name}: listed as doing something",
+              "0 doing something" not in out
+              and "**DefaultDispatcher-worker-3**" in out, out)
+    cut = anr.parse(CUT_WORKER)
+    worker = cut.threads[0]
+    check("the cut is read as one", worker.cut == 14 and not worker.unread,
+          (worker.cut, worker.unread))
+    out = anr.render(cut)
+    check("and said of the thread", "stack cut after 14 frames" in out, out)
+    check("not counted as a line nothing read",
+          "neither frames nor a lock note" not in out, out)
+    check("and the platform-only verdict says the cut may hide the app",
+          "Unless it is below a cut" in out, out)
+    check("the json carries it", anr.summary(cut)["working"][0]["cut"] == 14,
+          anr.summary(cut)["working"])
+    whole = anr.parse(APP_CALLER).threads[0]
+    check("a whole stack has no cut", whole.cut is None, whole.cut)
+
+
+def test_the_idle_loops_on_the_same_read_path_are_still_struck_out():
+    by_tid = anr.parse(NETWORK_IDLE).by_tid()
+    check("a selector loop under the task runner",
+          anr.idle_reason(by_tid["40"]) is not None, anr.idle_reason(by_tid["40"]))
+    check("the HTTP/2 reader in socketRead0",
+          anr.idle_reason(by_tid["41"]) == "waiting on a descriptor",
+          anr.idle_reason(by_tid["41"]))
+
+
+def test_a_cut_stack_is_not_struck_out_by_a_native_mask_alone():
+    """Below the cut may be the app's frames, which a native mask asks about."""
+    cut = NETWORK_IDLE.split("OkHttp example.com", 1)[0] + (
+        "OkHttp example.com (native):tid=41 systid=4401\n"
+        "#00 pc 0x00000000000c1d2e /apex/com.android.runtime/lib64/bionic/libc.so (__ppoll+8)\n"
+        "       at java.net.SocketInputStream.socketRead0(Native method)\n"
+        "       ... frames omitted ...\n")
+    by_tid = anr.parse(cut).by_tid()
+    check("kept", anr.idle_reason(by_tid["41"]) is None, anr.idle_reason(by_tid["41"]))
+    check("while a managed mask above a cut still strikes out",
+          anr.idle_reason(anr.parse(NETWORK_IDLE.replace(
+              "       at java.lang.Thread.run(Thread.java:1012)\n\nOkHttp example.com",
+              "       ... frames omitted ...\n\nOkHttp example.com")).by_tid()["40"])
+          is not None)
