@@ -33,15 +33,22 @@ def _old(minutes: int) -> str:
 
 
 def test_no_resume_question_while_the_investigation_collects() -> None:
-    hunt = {"status": "open", "question": "cold start", "touched_at": _old(40),
+    hunt = {"n": 2, "status": "open", "question": "cold start", "touched_at": _old(40),
             "opened_at": _old(60)}
     st = {"traces": {"count": 5}, "report": None, "hunt": hunt,
-          "collect": {"status": "running"}}
-    check("a collect in flight is the investigation working",
+          "collect": {"status": "running", "hunt": 2}}
+    check("a collect in flight inside it is the investigation working",
           not hunt_mod.needs_choice(hunt, st))
-    st["collect"] = {"status": "done"}
+    st["collect"] = {"status": "done", "hunt": 2}
     check("once it is done, an old investigation is asked about again",
           hunt_mod.needs_choice(hunt, st))
+    # #498: a baseline recorded outside it attached the next `/echolot` to a
+    # two-month-old investigation without the question.
+    for outside in ({"status": "running", "hunt": None}, {"status": "running", "hunt": 1},
+                    {"status": "running"}):
+        st["collect"] = outside
+        check("a collect outside it does not stand in for its work",
+              hunt_mod.needs_choice(hunt, st), outside)
 
 
 def test_leftover_markers_are_found_by_the_config_s_prefix(tmp_path: Path) -> None:

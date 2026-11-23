@@ -3909,6 +3909,155 @@ def _(report):
             "the previous round was written over"
 
 
+# A project with investigation #1 open and untouched for months, about a
+# question the runs below have nothing to do with.
+_STALE = "2026-01-01T00:00:00+00:00"
+
+
+def _stale_investigation(project: Path, config: str) -> None:
+    from . import hunt as hunt_mod
+    (project / "echolot.yml").write_text(config, encoding="utf-8")
+    hunt_mod.open_new(project, "the list stutters when scrolling")
+    h = hunt_mod.load(project)
+    h["touched_at"] = _STALE
+    hunt_mod.save(project, h)
+
+
+def _quietly(argv: list[str]) -> tuple[int, str]:
+    """`echolot …` with its output kept, and its run log line out of the doctor's."""
+    import io
+
+    from .main import main
+    said = io.StringIO()
+    with recorder.isolated(), contextlib.redirect_stdout(said), contextlib.redirect_stderr(said):
+        code = main(argv)
+    return code, said.getvalue()
+
+
+@check("analyze: a run outside the open investigation files nothing under it, "
+       "and one with --hunt N is filed there")
+def _(report):
+    """With an investigation about scrolling open and untouched for two
+    months, a cold-start baseline's report went into it as its eighth, and
+    renewed it as worked on that day: the next `/echolot` carried on with the
+    scroll question on cold-start traces without asking (#498). A run is the
+    investigation's when it says so, `--hunt N`.
+
+    `analyze_trace` hands back this check's own report, so no trace is read.
+    """
+    import copy
+
+    from . import hunt as hunt_mod
+    from . import main as main_mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        _stale_investigation(project, "project:\n  process: com.example.app\n"
+                                      "scenario:\n  name: coldStart\n")
+        before = hunt_mod.load(project)
+        trace, config = str(project / "a.perfetto-trace"), str(project / "echolot.yml")
+        Path(trace).write_bytes(b"a trace")
+        real = main_mod.analyze_trace
+        main_mod.analyze_trace = lambda *a, **kw: copy.deepcopy(report)
+        try:
+            code, said = _quietly(["analyze", trace, "-c", config])
+            assert code == 0, said[-400:]
+            assert hunt_mod.load(project) == before, (
+                f"a run outside the investigation changed its record: {hunt_mod.load(project)}")
+            assert not (project / ".echolot" / "hunts" / "1" / "reports").exists(), \
+                "a run outside the investigation filed its report there"
+            assert "[i] outside investigation #1" in said, said[-400:]
+
+            code, said = _quietly(["analyze", trace, "-c", config, "--hunt", "2"])
+            assert code == 2 and "the open investigation is #1" in said, (
+                f"--hunt with a number that is not the open one ran: {said[-400:]}")
+
+            code, said = _quietly(["analyze", trace, "-c", config, "--hunt", "1"])
+        finally:
+            main_mod.analyze_trace = real
+        after = hunt_mod.load(project)
+        assert code == 0 and (project / ".echolot/hunts/1/reports/001.json").is_file(), said[-400:]
+        assert after["analyzes"] == 1 and after["touched_at"] != _STALE, after
+
+
+@check("collect: a run outside the open investigation leaves it as it was, and "
+       "does not stand in for its work while it runs")
+def _(report):
+    """A collect in flight kept `/echolot` from asking "carry on, or something
+    new?", whoever had started it, and once done it renewed the investigation
+    and filed the round it pushed aside (#498). Only a collect started inside
+    it (`--hunt N`) counts now. The round it pushes aside is still filed under
+    the investigation that recorded it, whoever pushes it: that is its
+    evidence, and the record is the only place that says where it went.
+
+    Driven through `runner._run`, the runner's one door to adb.
+    """
+    import json
+    import time
+
+    from . import hunt as hunt_mod
+    from . import runner, state
+
+    package = "com.example.app"
+
+    def adb(args, stdin=None, timeout=120):
+        args = list(args)
+        text = " ".join(args[4:]) if args[3:4] == ["shell"] else " ".join(args)
+        if text == "adb devices":
+            return "List of devices attached\nemulator-5554\tdevice\n\n"
+        if text.startswith("pm path"):
+            return f"package:/data/app/{package}/base.apk\n"
+        if text.startswith("dumpsys power"):
+            return ("  mWakefulness=Awake\n  mIsPowered=true\n  mStayOn=true\n"
+                    "    mShowingDream=false mDreamingLockscreen=false\n"
+                    "    isKeyguardShowing=false\n")
+        if text.startswith("am start -W"):
+            return "Status: ok\nLaunchState: COLD\nTotalTime: 523\nComplete\n"
+        if args[3:4] == ["pull"]:
+            Path(args[-1]).write_bytes(b"a trace")
+        return ""
+
+    real = runner._run
+    runner._run = adb
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            _stale_investigation(project, f"project:\n  package: {package}\n"
+                                          f"scenario:\n  name: coldStart\nrunner:\n"
+                                          f"  activity: {package}/.Main\n  iterations: 1\n")
+            config = str(project / "echolot.yml")
+            code, said = _quietly(["collect", "-c", config, "--hunt", "1"])
+            assert code == 0, said[-400:]
+            inside = hunt_mod.load(project)
+            assert inside["collects"] == 1 and inside["touched_at"] != _STALE, inside
+            inside["touched_at"] = _STALE
+            hunt_mod.save(project, inside)
+
+            code, said = _quietly(["collect", "-c", config])
+            assert code == 0 and "[i] outside investigation #1" in said, said[-400:]
+            after = hunt_mod.load(project)
+            assert after["collects"] == 1 and after["touched_at"] == _STALE, (
+                f"a collect outside the investigation renewed it: {after}")
+            assert len(after.get("traces") or []) == 1, (
+                f"the investigation's round, pushed aside by a run outside it, is not "
+                f"recorded where it went: {after.get('traces')}")
+            assert hunt_mod.needs_choice(after, state.project_state(project)), \
+                "after a run outside it, the investigation is no longer asked about"
+
+            progress = project / runner.PROGRESS_FILE
+            for n, asked in ((None, True), (1, False)):
+                progress.write_text(json.dumps({"started": time.time(), "pid": os.getpid(),
+                                                "scenario": "coldStart", "hunt": n}),
+                                    encoding="utf-8")
+                st = state.project_state(project)
+                assert st["collect"]["status"] == "running", st["collect"]
+                assert hunt_mod.needs_choice(after, st) == asked, (
+                    f"a collect running {'inside' if n else 'outside'} the investigation: "
+                    f"asked {not asked}, should be {asked}")
+    finally:
+        runner._run = real
+
+
 @check("repeats: the merged report describes the run, not the repeat that failed")
 def _(report):
     """`params` says which thresholds a detector actually used.
@@ -5168,6 +5317,54 @@ def _(report):
     assert "wait for it" in overview, (
         "the guide tells other hosts to use a subagent and does not tell them "
         "to wait for it")
+
+
+@check(".claude/ layer: the door sends a measurement, an ANR and traces on disk "
+       "outside any investigation, and asks before a hunt closes the open one")
+def _(report):
+    """`/echolot` sent every request in words to a new hunt: "record a
+    baseline", an ANR from a crash console and a question about last month's
+    traces each opened an investigation, and opening one closed the open one
+    as abandoned without a word (#497). Twenty lines apart, the door said to
+    ask and said not to, and an agent could not tell which rule won.
+
+    The words are routed by what they ask for, and only a regression is a
+    hunt. The other routes run without `--hunt`, so nothing of theirs is
+    filed under the open investigation (#498). The plugin's door, the guide
+    and the hunt command say the same.
+    """
+    from .layer import CLAUDE_DIR, GUIDE_DIR
+
+    skill = (CLAUDE_DIR / "skills" / "echolot" / "SKILL.md").read_text(encoding="utf-8")
+    table = skill[skill.index("| the words ask for | the route |"):].split("\n\n")[0]
+    rows = table.splitlines()[2:]
+    assert len(rows) == 4 and rows[-1].startswith("| a regression to find"), (
+        f"the door's words go four ways, a hunt last: {[r[:40] for r in rows]}")
+    anr, disk, measure, hunt = rows
+    assert "`echolot anr " in anr and "echolot collect" not in anr, anr
+    assert "echolot analyze" in disk and "echolot collect" not in disk, disk
+    assert "`echolot collect" in measure and "without `--hunt`" in measure, measure
+    assert "ask first" in hunt and 'never `echolot hunt "<words>"`' in hunt, (
+        "with an investigation open, words go to a new hunt without the question")
+    flat = " ".join(skill.split())
+    assert "`resume-or-new` question is not asked" not in flat, \
+        "the rule that skipped the question for words is back"
+    assert "| a new report, outside it |" in skill, \
+        "resume-or-new offers no way to record a report without the investigation"
+
+    plugin = CLAUDE_DIR.parent.parent / "plugins" / "echolot" / "skills" / "echolot" / "SKILL.md"
+    if plugin.is_file():            # a source checkout; the wheel ships no plugin
+        door = " ".join(plugin.read_text(encoding="utf-8").split())
+        assert "the open investigation is not asked about" not in door and \
+            "With an investigation open, ask first" in door, \
+            "the plugin's door still sends words to a hunt without the question"
+    overview = " ".join((GUIDE_DIR / "overview.md").read_text(encoding="utf-8").split())
+    assert "A request in words is not always a hunt" in overview, \
+        "the guide sends every request in words to a hunt"
+    command = (CLAUDE_DIR / "commands" / "echolot-hunt.md").read_text(encoding="utf-8")
+    assert 'echolot hunt --done "<what it came to>"' in command, (
+        "a new investigation closes the open one as abandoned without asking what it "
+        "came to")
 
 
 @check(".claude/ layer: the hunter names work, and hands back what it measured")

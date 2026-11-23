@@ -579,5 +579,6 @@ def test_the_line_to_collect_by_hand_has_no_count_for_a_macrobenchmark(
     check("status, its next line", nxt.endswith(line.strip()), out)
     _, _, err = _run("hunt", "cold start got slower")
     by = next((ln for ln in err.splitlines() if ln.startswith("By hand:")), "")
-    check("and the line hunt prints", line.strip() + "," in by
+    check("and the line hunt prints, inside the investigation it opened",
+          line.strip() + " --hunt 1," in by and by.endswith("--hunt 1")
           and (config is CONFIG or ("-n " not in by and "_iter" not in by)), err[-500:])

@@ -307,7 +307,8 @@ def unattended(n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> s
         "a question, or anything that needs a person's approval, is refused and the run goes on. So do not ask. "
         "Decide with what you have, and say in your answer what you would have asked.",
         f"- The investigation is open: #{n}, opened for this question by the page. Carry on in it, do not open "
-        "another, and close it at the end.",
+        f"another, and close it at the end. Run every `collect` and `analyze` in it with `--hunt {n}`: without "
+        "it nothing is filed under it.",
         evidence,
         "- After which change: unknown.",
         f"- You may run `echolot`, `./gradlew` and `adb` without asking, and edit files under {where}, and "

@@ -17,7 +17,9 @@ echolot compare old.json new.json     # exactly those two
 ```
 
 With no arguments, inside an open investigation, the two sides are its last
-two rounds among the reports every `analyze` files there. A look is not a
+two rounds among the reports filed there: every `analyze --hunt <n>` files
+one, and an `analyze` without the flag runs outside the investigation and
+files nothing. A look is not a
 round and is left out: a report that read fewer traces than the round before
 it, read only traces that round read already, or ran with other `--set` or
 `--defaults`. A single-run look at one trace of round 2 would otherwise be the

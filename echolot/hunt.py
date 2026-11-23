@@ -300,8 +300,60 @@ def _rel(project: Path, p: Path) -> str:
         return str(p)
 
 
-def record_traces(project: Path, directory: Path) -> None:
-    """Note that this directory of traces belongs to the open investigation.
+class NotOpen(Exception):
+    """`--hunt N` names no open investigation. Said, and nothing runs."""
+
+
+def inside(project: Path, asked: int | None) -> dict[str, Any] | None:
+    """The investigation a `collect` or an `analyze` works inside: the open
+    one, when `--hunt N` names it. None without the flag: the run is outside
+    any.
+
+    Every run used to be filed under whatever was open. A cold-start
+    baseline recorded two months after a question about scrolling went into
+    that question's record as its eighth report, renewed it as worked on
+    that day, and in a config with several scenarios would have been
+    measured as the scroll (#498). The run is the investigation's when it
+    says so: the hunt and its loop pass `--hunt N`, a plain command does not.
+
+    By number, so that a run meant for one investigation is never filed under
+    another that opened since. Raises NotOpen, saying what to do instead,
+    when N is not the open one: before anything is recorded or read, rather
+    than after a set nobody can file.
+    """
+    if asked is None:
+        return None
+    damaged = unreadable_line(project, then=False)
+    if damaged:
+        raise NotOpen(f"--hunt {asked}: {damaged}")
+    hunt = load(project)
+    if hunt and hunt.get("status") == "open":
+        if hunt.get("n") == asked:
+            return hunt
+        n = hunt.get("n") or "?"
+        raise NotOpen(f'--hunt {asked}: the open investigation is #{n}, '
+                      f'"{hunt.get("question") or "—"}". `--hunt {n}` works inside it; '
+                      f"without `--hunt` this runs outside any")
+    was = find(project, str(asked))
+    said = f"#{asked} is {was.get('status') or 'closed'}" if was else f"there is no #{asked}"
+    raise NotOpen(f"--hunt {asked}: no investigation is open ({said}). "
+                  f'`echolot hunt "<question>"` opens one; without `--hunt` this '
+                  f"runs outside any")
+
+
+def _still(hunt: dict[str, Any] | None, n: int | None) -> bool:
+    """Open, and the one numbered `n` when a number is given.
+
+    A gradle `collect` runs for up to an hour, and an investigation can be
+    closed and another opened while it does: what it was started inside is
+    what it is filed under, or nothing.
+    """
+    return bool(hunt) and hunt.get("status") == "open" and (n is None or hunt.get("n") == n)
+
+
+def record_traces(project: Path, directory: Path, n: int | None = None) -> None:
+    """Note that this directory of traces belongs to the open investigation,
+    the one numbered `n` when it is given.
 
     Called by `collect`, which pushes the previous round's set aside; the set
     pushed aside when a new investigation opens is recorded by `open_new`
@@ -310,7 +362,7 @@ def record_traces(project: Path, directory: Path) -> None:
     the last one and lost the three it reasoned from.
     """
     hunt = load(project)
-    if not hunt or hunt.get("status") != "open":
+    if not _still(hunt, n):
         return
     rel = _rel(project, directory)
     kept = hunt.setdefault("traces", [])
@@ -320,8 +372,9 @@ def record_traces(project: Path, directory: Path) -> None:
             save(project, hunt)
 
 
-def record_report(project: Path, out_dir: Path) -> Path | None:
-    """Copy the report just written into the open investigation's own history.
+def record_report(project: Path, out_dir: Path, n: int | None = None) -> Path | None:
+    """Copy the report just written into the open investigation's own history,
+    the one numbered `n` when it is given.
 
     `.echolot/out/report.json` is always the latest one and every analyze
     overwrites it — including an analyze belonging to a different question.
@@ -329,7 +382,7 @@ def record_report(project: Path, out_dir: Path) -> Path | None:
     investigation concluded at each step rather than only at the end.
     """
     hunt = load(project)
-    if not hunt or hunt.get("status") != "open":
+    if not _still(hunt, n):
         return None
     dest = home(project, hunt)
     if dest is None:
@@ -433,16 +486,21 @@ def open_new(project: Path, question: str, since: str | None = None,
     return hunt
 
 
-def touch(project: Path, *, collect: bool = False, analyze: bool = False) -> None:
-    """Record that the open investigation is still being worked on.
+def touch(project: Path, *, collect: bool = False, analyze: bool = False,
+          n: int | None = None) -> None:
+    """Record that the open investigation is still being worked on, the one
+    numbered `n` when it is given.
 
-    Called from `collect`, `analyze` and `hunt --resume`, which is what makes
-    `touched_at` honest: the freshness rule is about work, not about when
-    someone last typed `echolot`. Silent when nothing is open — an ad-hoc `analyze` on a
+    Called from `hunt --resume`, and from a `collect` or an `analyze` run
+    inside the investigation (`--hunt N`), which is what makes `touched_at`
+    honest: the freshness rule is about its work, not about when someone last
+    typed `echolot` — nor about a run outside it, which renewed a two-month-old
+    investigation as worked on that day and took away the question it was
+    owed (#498). Silent when nothing is open — an ad-hoc `analyze` on a
     trace from somewhere else must not invent an investigation.
     """
     hunt = load(project)
-    if not hunt or hunt.get("status") != "open":
+    if not _still(hunt, n):
         return
     hunt["touched_at"] = _now()
     if collect:
@@ -560,13 +618,33 @@ def needs_choice(hunt: dict[str, Any] | None, st: dict[str, Any]) -> bool:
         return False
     if not has_history(st):
         return False
-    # A collect in flight is the investigation working. A gradle run takes
-    # up to an hour and touches the investigation only when it ends, and the
-    # agent calls `echolot` while it runs: past thirty minutes it was told
-    # to ask the human whether to carry on with the work it was doing.
-    if (st.get("collect") or {}).get("status") == "running":
+    # A collect in flight inside the investigation is the investigation
+    # working. A gradle run takes up to an hour and touches the investigation
+    # only when it ends, and the agent calls `echolot` while it runs: past
+    # thirty minutes it was told to ask the human whether to carry on with the
+    # work it was doing. Any collect used to count, whoever started it, and a
+    # baseline recording outside a two-month-old investigation attached the
+    # next `/echolot` to it without the question (#498).
+    if running_inside(hunt, st.get("collect")):
         return False
     return not is_fresh(hunt)
+
+
+def running_inside(hunt: dict[str, Any] | None, run: dict[str, Any] | None) -> bool:
+    """A collect in flight that was started inside this investigation (`--hunt N`)."""
+    run = run or {}
+    return (run.get("status") == "running" and bool(hunt)
+            and hunt.get("n") is not None and run.get("hunt") == hunt.get("n"))
+
+
+def recorded_outside(hunt: dict[str, Any] | None, run: dict[str, Any] | None) -> bool:
+    """The last collect ran outside this investigation.
+
+    Only a collect that says which investigation it ran in can say so: one
+    from before `collect` wrote it is not taken for either.
+    """
+    run = run or {}
+    return bool(hunt) and "hunt" in run and run.get("hunt") != hunt.get("n")
 
 
 def confirmed_changed(hunt: dict[str, Any] | None,
@@ -742,7 +820,15 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
         out.append("  " + " · ".join(facts))
 
     tr = st.get("traces") or {}
-    if tr.get("count"):
+    last_run = st.get("collect") or {}
+    if tr.get("count") and recorded_outside(hunt, last_run):
+        # Offered for reuse, a baseline recorded outside the investigation
+        # read as its own evidence: "traces it would reuse: 5" were cold
+        # starts a question about scrolling never asked for (#498).
+        out.append(f"  traces in .echolot/traces: {tr['count']}, not this investigation's "
+                   f"— the last collect ({last_run.get('scenario') or 'a scenario'}, "
+                   f"{_ago(last_run.get('started'))}) ran outside it")
+    elif tr.get("count"):
         out.append(f"  traces it would reuse: {tr['count']} in .echolot/traces")
     rep = st.get("report")
     if rep and not rep.get("error") and rep.get("run") is not None:

@@ -182,7 +182,8 @@ def test_the_request_of_an_agent_started_from_the_page():
     check("then that nobody can answer, and not to ask", rest[0].startswith("This run was started from echolot ui, "
           "and nobody is at the keyboard.") and "So do not ask." in rest[0])
     check("which investigation it works in", rest[1] == "- The investigation is open: #4, opened for this question by "
-          "the page. Carry on in it, do not open another, and close it at the end.")
+          "the page. Carry on in it, do not open another, and close it at the end. Run every `collect` and "
+          "`analyze` in it with `--hunt 4`: without it nothing is filed under it.")
     check("on which recordings", rest[2] == "- Its first evidence is the 3 recordings behind the report, moved aside "
           "when it opened, into `.echolot/traces/coldStart-20261122-101500/`. Do not record them again.")
     check("after which change", rest[3] == "- After which change: unknown.")

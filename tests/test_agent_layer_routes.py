@@ -368,7 +368,9 @@ def test_the_hunt_command_opens_before_anything_is_recorded_and_closes_after() -
     opens = text.find('echolot hunt "<')
     collects = text.find("echolot collect")
     run_section = text.find("## The run")
-    closes = text.find("echolot hunt --done")
+    # The first `--done` may close the investigation a new one replaces,
+    # when it came to something (#497): this one closes in its own section.
+    closes = text.find("echolot hunt --done", text.find("## Closing the investigation"))
     check("the command opens an investigation", opens >= 0)
     check("with the change", "--since" in text[opens:text.find("\n", opens)])
     check("before it records anything", 0 <= opens < collects, (opens, collects))
@@ -378,11 +380,107 @@ def test_the_hunt_command_opens_before_anything_is_recorded_and_closes_after() -
 
 def test_the_skill_says_what_hunt_with_words_means_once() -> None:
     skill = _read("skills/echolot/SKILL.md")
-    defined = [ln for ln in skill.splitlines() if ln.startswith("- `/echolot hunt <words>`")]
+    defined = [ln for ln in skill.splitlines() if "`hunt <words>`" in ln and ln.startswith("|")]
     check("`/echolot hunt <words>` has one definition", len(defined) == 1, defined)
     row = next(ln for ln in skill.splitlines() if ln.startswith("| `hunt`"))
     check("the hunt row says the investigation is opened and closed",
           "opens the investigation" in row and "closes" in row, row)
+
+
+# --- words that are not a hunt (#497) ----------------------------------------
+
+def _routes(text: str) -> list[str]:
+    """The rows of the door's table of words, in their order."""
+    start = text.index("| the words ask for | the route |")
+    rows = []
+    for line in text[start:].splitlines()[2:]:
+        if not line.startswith("|"):
+            break
+        rows.append(line)
+    return rows
+
+
+def test_the_door_sends_words_where_they_ask_to_go() -> None:
+    """A baseline, an ANR and a question about last month's traces all went
+    to a new hunt, which closed the open investigation without asking."""
+    rows = _routes(_read("skills/echolot/SKILL.md"))
+    check("four routes: an ANR, traces on disk, a measurement, then a hunt", len(rows) == 4
+          and [r.split("|")[1].split(":")[0].strip() for r in rows]
+          == ["an ANR", "traces already on disk, no device", "a measurement with nothing to blame",
+              "a regression to find"], rows)
+    anr, disk, measure, regression = rows
+    check("an ANR is `echolot anr`", "`echolot anr <the report's file> --root .`" in anr
+          and "echolot collect" not in anr and 'echolot hunt "' not in anr, anr)
+    check("traces on disk are analysed, nothing recorded",
+          "`echolot analyze <those traces, named> -c echolot.yml`" in disk
+          and "no `collect` and no `--hunt`" in disk and "echolot collect" not in disk, disk)
+    check("a measurement records and analyses outside any investigation",
+          disk.find("echolot analyze") >= 0 and measure.find("`echolot collect -c echolot.yml`")
+          < measure.find("`echolot analyze <the traces it printed, named>")
+          and "both without `--hunt`" in measure and 'echolot hunt "' not in measure, measure)
+    check("a regression is the hunt", "the `echolot-hunt` skill with those words" in regression,
+          regression)
+
+
+def test_words_with_an_investigation_open_are_a_question_never_a_hunt() -> None:
+    skill = _read("skills/echolot/SKILL.md")
+    regression = _routes(skill)[-1]
+    check("with one open, ask first, the new one first",
+          "With one open, ask first" in regression and '"something new" first' in regression
+          and 'never `echolot hunt "<words>"` before the human has answered' in regression,
+          regression)
+    flat = " ".join(skill.split())
+    check("the rule that skipped the question is gone",
+          "`resume-or-new` question is not asked" not in flat
+          and "means the same" not in flat, flat[:200])
+    check("and the resume-or-new rule names the hunt's words too",
+          "`/echolot hunt <words>` — and an investigation is open, ask this same question "
+          "whatever `next` says" in flat, flat)
+    plugin = (Path(__file__).resolve().parent.parent / "plugins/echolot/skills/echolot/SKILL.md"
+              ).read_text(encoding="utf-8")
+    flat = " ".join(plugin.split())
+    check("the plugin's door follows: no hunt that skips the question",
+          "the open investigation is not asked about" not in flat
+          and "With an investigation open, ask first" in flat, flat)
+    check("and routes words as the guide does, which it names",
+          'as `echolot guide` says under "A request in words"' in flat, flat)
+    guide = " ".join((Path(__file__).resolve().parent.parent / "echolot/guide/overview.md")
+                     .read_text(encoding="utf-8").split())
+    for route in ("A request in words is not always a hunt", "`echolot anr <the report's file> --root .`",
+                  "`echolot collect`, then `echolot analyze`", "no `--hunt`, nothing filed",
+                  "the human is asked first whether to carry on with it or start a new one"):
+        check(f"the guide says {route}", route in guide, guide)
+
+
+def test_resume_or_new_offers_a_report_outside_the_investigation() -> None:
+    skill = _read("skills/echolot/SKILL.md")
+    table = skill[skill.index("| the human picks |"):].split("\n\n")[0].splitlines()[2:]
+    picks = [r.split("|")[1].strip() for r in table]
+    check("four choices", picks == ["carry on", "something new", "a new report, outside it",
+                                    "just show the report"], picks)
+    new, outside = table[1], table[2]
+    check("something new asks whether the open one came to something",
+          'echolot hunt --done "<what it came to>"' in new and "`abandoned`" in new, new)
+    check("a new report runs without `--hunt`", "without `--hunt`" in outside, outside)
+
+
+def test_every_run_the_hunt_makes_is_filed_under_it() -> None:
+    """#498: only a run that says `--hunt <n>` is the investigation's, so every
+    `collect` and every `analyze` of traces the hunt texts give carries it."""
+    root = Path(__file__).resolve().parent.parent
+    texts = {"commands/echolot-hunt.md": _read("commands/echolot-hunt.md"),
+             "agents/perf-hunter.md": _read("agents/perf-hunter.md"),
+             "guide/hunt.md": (root / "echolot/guide/hunt.md").read_text(encoding="utf-8"),
+             "plugin echolot-hunt": (root / "plugins/echolot/skills/echolot-hunt/SKILL.md"
+                                     ).read_text(encoding="utf-8")}
+    for name, text in texts.items():
+        runs = re.findall(r"echolot (?:collect|analyze <)[^`\n]*", text)
+        check(f"{name}: each run carries --hunt <n>", runs and all("--hunt <n>" in r for r in runs),
+              runs)
+    brief = [ln.strip() for t in (texts["guide/hunt.md"], texts["plugin echolot-hunt"])
+             for ln in t.splitlines() if ln.strip().startswith("Investigation #<n> is open")]
+    check("the brief tells the loop to pass it", len(brief) == 2 and brief[0] == brief[1]
+          and "pass `--hunt <n>` to every `collect` and `analyze`" in brief[0], brief)
 
 
 def test_the_hunter_works_inside_the_investigation_and_does_not_open_one() -> None:

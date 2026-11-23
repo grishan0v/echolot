@@ -1,6 +1,6 @@
 ---
 name: echolot
-description: The door to echolot — localise Android performance regressions from a Perfetto trace, from the metric down to a place in the code. /echolot with nothing after it reads the project's state and takes the next step (install the layer, build the config, or hunt); with an argument it does that. Use when cold start regressed, scrolling stutters, TTI grew, a benchmark dropped, or there is a .perfetto-trace to analyse. Also for questions like "why is startup slow", "where does main thread time go", "what is burning CPU".
+description: The door to echolot — localise Android performance regressions from a Perfetto trace, from the metric down to a place in the code. /echolot with nothing after it reads the project's state and takes the next step (install the layer, build the config, or hunt); with words it takes the route they ask for — a hunt, a measurement, an ANR, or traces already on disk. Use when cold start regressed, scrolling stutters, TTI grew, a benchmark dropped, or there is a .perfetto-trace to analyse. Also for questions like "why is startup slow", "where does main thread time go", "what is burning CPU".
 ---
 
 # echolot
@@ -59,7 +59,8 @@ and anything that drifted since. **Show that recap as it is**, then ask with
 | the human picks | what you do |
 |---|---|
 | carry on | `echolot hunt --resume`, then the `echolot-hunt` skill, saying the human chose to carry on: it works inside that investigation, with the question and the change it recorded |
-| something new | the `echolot-hunt` skill with their question: it asks for the change and opens the new investigation before anything is recorded for it |
+| something new | the `echolot-hunt` skill with their question: it asks for the change and opens the new investigation before anything is recorded for it. Opening it closes the open one: ask first whether that one came to something, and if it did, record it with `echolot hunt --done "<what it came to>"` — otherwise it is closed as `abandoned` |
+| a new report, outside it | measure, as the measurement route under "With an argument" says: `collect`, then `analyze` without `--hunt`, and show the report. The investigation stays open, as it was |
 | just show the report | print `.echolot/out/report.md` — `.echolot/out/<scenario>/report.md`, the investigation's scenario, when the config names several — and stop |
 
 Lean towards "something new" when the recap shows a `!` line — the scenario
@@ -74,15 +75,20 @@ says on stderr if the previous one left `AGENTTMP_` markers in the sources.
 Instrumentation nobody meant to leave behind is the starting condition of the
 next investigation otherwise.
 
-When the human's own words already name a different question — `/echolot why
-does the list stutter` while the open investigation is about cold start — still
-ask, but offer "something new" first with their words filled in. A new
-formulation is sometimes a sharper version of the same hunt.
+When the human's own words name a question — `/echolot why does the list
+stutter`, `/echolot hunt <words>` — and an investigation is open, ask this
+same question whatever `next` says, and offer "something new" first with their
+words filled in. A new formulation is sometimes a sharper version of the same
+hunt, and only the human can say which.
 
 Two things this is never asked about. Inside `perf-hunter`'s loop: it
 re-records and re-instruments on purpose, works inside an investigation it was
-handed, and never calls `status` at all. And within half an hour of the last
-`collect` or `analyze` — that is the same sitting, and `next` says `hunt`.
+handed, and never calls `status` at all. And a bare `/echolot` within half an
+hour of the investigation's own last `collect` or `analyze` — that is the same
+sitting, and `next` says `hunt`. Only a run inside it counts: `--hunt <n>`, the
+flag the hunt and its loop pass. A `collect` or an `analyze` without it runs
+outside any investigation, files nothing under it and renews nothing, and
+stderr says so.
 
 ## `init-force`: edits made here
 
@@ -104,27 +110,36 @@ Never run `echolot init --all` without that answer.
 
 ## With an argument
 
-The argument wins over the state:
+A verb wins over the state:
 
 - `/echolot init` — run `echolot init`. Not setup: `init` installs or
   updates **this** layer; the config is setup's job.
 - `/echolot setup` — the `echolot-setup` skill.
-- `/echolot hunt <words>` — a hunt for that question, and the
-  `resume-or-new` question is not asked: the words are what regressed. It
-  is the `echolot-hunt` skill with those words. The skill asks for the
-  change, opens the investigation with `echolot hunt "<words>" --since …` —
-  the same word in a shell, which does that half and nothing else — hands
-  the loop to `perf-hunter`, and closes the investigation with its answer.
-  `/echolot <free text>` about slowness ("why is startup slow", "the list
-  stutters since the redesign") means the same.
-- `/echolot doctor`, `/echolot status`, `/echolot analyze …` — run that
-  command, show the output.
+- `/echolot doctor`, `/echolot status`, `/echolot analyze …`,
+  `/echolot anr …` — run that command, show the output.
 - `/echolot reflect` — the `echolot-reflect` skill: how the last session
   went, what to change in the tool.
 
-Every argument after `/echolot` is a CLI verb of the same name, except
+Every verb after `/echolot` is a CLI verb of the same name, except
 `setup` — that one needs an agent and has no shell half. Where a verb has
 both, `/echolot X` runs `echolot X` and then whatever loop it needs.
+
+Words are a request, and not every request is a hunt. Run `echolot` first, as
+without an argument, and show it: an `upgrade`, `init`, `doctor`, `setup` or
+`fix-config` in its `next` comes first, as the table above says, and its
+`hunt` line says whether an investigation is open. Then the first route that
+fits the words:
+
+| the words ask for | the route |
+|---|---|
+| an ANR: a freeze, "not responding", a Crashlytics or Play Console issue, a drop box record, an issue's id | the section "When what arrived is an ANR" below: `echolot anr <the report's file> --root .`. An id or a link and no file: ask the human for the report itself, exported as text — echolot reads a file. Nothing opens, and the open investigation is not asked about |
+| traces already on disk, no device: "from last month's traces", "no phone today", a path | `echolot analyze <those traces, named> -c echolot.yml`, no `collect` and no `--hunt`, then `echolot report` and its views. Two sets: analyse each with its own `-o`, then `echolot compare <a>/report.json <b>/report.json`. Nothing opens, nothing is filed |
+| a measurement with nothing to blame: "record a baseline", "just measure", "how long does the cold start take now" | `echolot collect -c echolot.yml`, then `echolot analyze <the traces it printed, named> -c echolot.yml`, both without `--hunt`, and show the report. Nothing opens, and an open investigation stays as it was |
+| a regression to find: `hunt <words>`, "why is startup slow", "the list stutters since the redesign" | with no investigation open, the `echolot-hunt` skill with those words: it asks for the change, opens the investigation with `echolot hunt "<words>" --since …` — the same word in a shell, which does that half and nothing else — hands the loop to `perf-hunter`, and closes the investigation with its answer. With one open, ask first, as `resume-or-new` says, "something new" first with their words: never `echolot hunt "<words>"` before the human has answered, since it closes the open one |
+
+Only the hunt opens an investigation, and only after that question. The other
+three run outside any: without `--hunt`, nothing of theirs is filed under the
+open one, and its freshness is not renewed.
 
 `/echolot-setup`, `/echolot-hunt` and `/echolot-reflect` still exist for
 whoever knows where they are going; `/echolot` is the door for everyone else.

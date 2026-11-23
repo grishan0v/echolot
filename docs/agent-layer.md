@@ -32,11 +32,23 @@ word: `upgrade`, `init`, `doctor`, `setup`, `fix-config`, `resume-or-new`,
 `init-force`, `fix-settings`, `hunt`. Setup and hunt are the two commands
 beside it, invoked through the Skill tool, so only the branch that applies
 enters the window; they remain callable directly for whoever knows where they
-are going. An argument wins over the state: `/echolot init` runs
-`echolot init` (not setup — a session once confused the two),
-`/echolot hunt <words>` starts a hunt with the words as the regression and
-without the `resume-or-new` question, and free text about slowness means the
-same.
+are going. A verb wins over the state: `/echolot init` runs
+`echolot init` (not setup — a session once confused the two), and
+`/echolot doctor`, `/echolot anr …` run those commands.
+
+Words are a request, and only one kind of request is a hunt. The door runs
+`echolot` first, then takes the first route that fits: an ANR, a freeze or a
+crash console's issue goes to `echolot anr <file>`; a question about traces
+already on disk, with no device, to `echolot analyze` and `echolot report`; a
+measurement with nothing to blame — "record a baseline", "just measure" — to
+`echolot collect` and `echolot analyze`; and a regression to find, `hunt
+<words>` or slowness after a change, to the `echolot-hunt` skill. The first
+three run without `--hunt`, outside any investigation. A hunt with an
+investigation open is asked about first, whatever `next` says, with "something
+new" offered first: opening a new investigation closes the open one. All four
+used to go to a new hunt, which closed the open investigation as abandoned
+without a word, and the door said to ask and not to ask twenty lines apart
+(#497).
 
 They are listed in the order `next_kind` tries them, and the order is part of
 the design. A layer a newer echolot wrote comes before everything
@@ -756,10 +768,23 @@ between **investigations**, and both use the same primitive at different
 levels.
 
 A second guard falls out of the same design: every `collect` and `analyze`
-updates `touched_at`, so a running loop keeps its own investigation inside the
-freshness window even if it started from a stale one. `touched_at` means work
-rather than "when someone last typed `echolot`", which is what makes the
-freshness rule honest.
+run inside the investigation updates `touched_at`, so a running loop keeps its
+own investigation inside the freshness window even if it started from a stale
+one. `touched_at` means the investigation's work rather than "when someone
+last typed `echolot`", which is what makes the freshness rule honest.
+
+Inside is said, not assumed: `--hunt <n>`, which the hunt command and
+`perf-hunter` pass on every `collect` and `analyze`, by the number
+`echolot hunt` printed when it opened. A run without it is outside any
+investigation, whatever is open: nothing of it is filed, `touched_at` stays,
+a `collect` in flight does not stand in for the investigation's work, and the
+first scenario is the default. Every run used to count. A cold-start baseline
+recorded two months after a question about scrolling went into that
+investigation as its eighth report and renewed it as worked on that day, so
+the next `/echolot` carried on with the scroll question on cold-start traces,
+without asking and without the "untouched for 68 days" line (#498). A number
+that is not the open one exits 2 before anything is recorded, so a run meant
+for one investigation is never filed under another that opened since.
 
 Starting a new investigation is where the value beyond the question sits. The
 previous one is archived rather than deleted — the question someone was chasing
@@ -779,9 +804,11 @@ directory `echolot hunt` names, rather than recording them again.
 An investigation is about one scenario. In a config that names several,
 `echolot hunt --scenario feed_scroll "<q>"` opens it on that one, the first
 without the flag, and only that scenario's loose set moves aside. Inside it,
-`collect`, `analyze`, `calibrate` and `report` take its scenario when no
-`--scenario` is given, and say so on stderr: one forgotten flag measured the
-first scenario, and the investigation's evidence then mixed two journeys.
+`collect --hunt <n>`, `analyze --hunt <n>`, `calibrate` and `report` take its
+scenario when no `--scenario` is given, and say so on stderr: one forgotten
+flag measured the first scenario, and the investigation's evidence then mixed
+two journeys. A `collect` or an `analyze` without `--hunt` is not inside it,
+and takes the first.
 The scenario is the question's, so a config that no longer has it is drift,
 named among the signs that the investigation is not the one being asked
 about. `/echolot-hunt` picks it from the human's words, by the scenarios'
@@ -1016,6 +1043,13 @@ would rewrite all three for tidiness. What changed is that each artefact is
                                  asked for (hunt --show --html)
 ```
 
+Only a run inside the investigation is filed: `collect --hunt <n>` records
+the round it pushes aside, `analyze --hunt <n>` copies its report. One round
+is recorded whoever pushes it aside: the set a run outside the investigation
+moves is still filed under the investigation that recorded it, read off the
+last collect's progress file, since it is that investigation's evidence and
+the record is the one place that says where it went.
+
 `echolot hunt --done` marks the record concluded where it is;
 `echolot hunt "<q>"` is what moves it here. Bare `echolot hunt` reads the one
 in place and says whether it is open — a concluded one used to be headed
@@ -1078,8 +1112,11 @@ what was measured to answer it, and what each round concluded on the way.
 
 You rarely type any of it. `/echolot` reads the state and, when an
 investigation has been sitting untouched with traces behind it, asks whether
-to carry on or start something new — and never asks inside the hunting loop,
-which re-records and re-instruments on purpose.
+to carry on, start something new, or record a new report outside it — and
+never asks inside the hunting loop, which re-records and re-instruments on
+purpose. By hand, `--hunt <n>` on `collect` and `analyze` is what files a run
+under the open investigation; the `By hand:` line `echolot hunt` prints
+carries it.
 
 ## Three things this layer closes
 
