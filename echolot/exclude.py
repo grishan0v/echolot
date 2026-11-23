@@ -17,7 +17,11 @@ the repository, since the project may live in a subdirectory of it. Every
 private `init` writes the block anew, so a file a later release stops
 installing drops out of it; everything outside the markers is the person's
 own and is never touched. Where the file is, git says: in a worktree `.git`
-is a file, and the exclude file lives in the repository it points to.
+is a file, and the exclude file lives in the repository it points to. That
+one file is read in every checkout of the repository, so a private install
+in one checkout and `init` in another share the block: `--shared` leaves it
+while another checkout's private install needs it, and a private `init`
+keeps the other installs' paths in it (#608).
 """
 
 from __future__ import annotations
@@ -78,6 +82,43 @@ def find(project: Path) -> Repo | None:
         exclude = project / exclude
     return Repo(top=Path(lines[0]).resolve(), exclude=exclude.resolve(),
                 project=project.resolve())
+
+
+def checkouts(repo: Repo) -> list[Path]:
+    """The other checkouts of this repository: the main one and every linked
+    worktree but this one.
+
+    Git keeps one `info/exclude` for all of them, in the common git
+    directory, and has no exclude file of a worktree's own. The patterns are
+    anchored at each checkout's top, so echolot's block hides the same paths
+    in every checkout at once (#608).
+    """
+    out = _git(repo.project, "worktree", "list", "--porcelain")
+    found = []
+    # One block of lines per worktree, a blank line between them; a bare
+    # repository's has no checkout to hide anything in.
+    for block in (out or "").split("\n\n"):
+        lines = block.splitlines()
+        if not lines or not lines[0].startswith("worktree ") or "bare" in lines:
+            continue
+        path = Path(lines[0][len("worktree "):])
+        try:
+            if path.resolve() != repo.top and path.is_dir():
+                found.append(path.resolve())
+        except OSError:
+            continue
+    return found
+
+
+def private_elsewhere(repo: Repo) -> list[Path]:
+    """The project as it sits in each other checkout, where `init --private` installed.
+
+    The block in the shared exclude file is what keeps those installs from
+    git, so taking it out or writing it anew from here changes them too.
+    """
+    from . import hosts  # late: the choice each checkout saved
+    rel = repo.project.relative_to(repo.top)
+    return [top / rel for top in checkouts(repo) if hosts.load_private(top / rel)]
 
 
 def tracked(repo: Repo, paths: list[Path]) -> set[Path]:
