@@ -262,6 +262,11 @@ _INTERESTING = re.compile(
 _BOILERPLATE = re.compile(
     r"^\s*(\*|>)?\s*(Try:|Run with --|Get more help|BUILD FAILED|"
     r"Deprecated Gradle|You can use|See https://docs\.gradle)")
+# A warning the build printed on its way, long before anything failed: D8's
+# `WARNING: …/isoparser-1.9.41.jar: D8: … error: Could not assign …`, Kotlin's
+# `w: …`. Words like "error" are in them, and the first such line was taken
+# for the cause of a test that failed minutes later (#521).
+_WARNING = re.compile(r"^\s*(WARNING\b|w:\s)")
 
 # Failures a macrobenchmark run produces by the shape of the device or the
 # build rather than by anything in the scenario, each with the one thing that
@@ -323,7 +328,7 @@ def failure_lines(out: str, err: str, limit: int = 20) -> list[str]:
     for stream in (out or "", err or ""):
         for line in stream.splitlines():
             text = line.strip()
-            if not text or text in seen or _BOILERPLATE.match(line):
+            if not text or text in seen or _BOILERPLATE.match(line) or _WARNING.match(line):
                 continue
             if _INTERESTING.search(text):
                 seen.add(text)
@@ -360,20 +365,30 @@ def failure_message(command: str, code: int, out: str, err: str) -> str:
 # Gradle's frame around it — "Execution failed for task", "What went wrong"
 # — says where the failure happened, which the command line already said.
 _THROWN = re.compile(r"(Exception|Error)\b\s*:\s*\S", re.IGNORECASE)
+# A JVM class that was thrown, by its name: `SetupHelper$SetupException: …`,
+# `AssertionError: …`. A lowercase `error:` is a word in a sentence as often.
+_CLASS_THROWN = re.compile(r"[A-Za-z0-9_$.]*[a-z0-9_$](Exception|Error)\s*:\s*\S")
+# Gradle's line for a test that failed; what the test threw comes after it.
+_TEST_FAILED = re.compile(r"\bFAILED\s*$")
 
 
 def failure_gist(code: int, out: str, err: str) -> str:
     """The one line of a failed command that says why, and what fixes it.
 
-    Of the lines `failure_lines` picked: one a known failure matches, else an
-    exception with its message, else the first that looked interesting, else
-    the last thing the command printed. Then every hint, whole — the hint is
-    the half an agent acts on, and the run log cuts what it keeps at 800
-    characters, so it goes near the front rather than after twenty lines of
-    gradle.
+    Of the lines `failure_lines` picked: one a known failure matches, else
+    what was thrown — a JVM exception by its class name, the first after a
+    test's `FAILED` line before any other — else a lowercase `error:` line,
+    else the first that looked interesting, else the last thing the command
+    printed. Then every hint, whole — the hint is the half an agent acts on,
+    and the run log cuts what it keeps at 800 characters, so it goes near the
+    front rather than after twenty lines of gradle.
     """
     lines = failure_lines(out, err)
+    failed = next((i for i, ln in enumerate(lines) if _TEST_FAILED.search(ln)), None)
+    after = lines[failed + 1:] if failed is not None else []
     said = ([ln for ln in lines if hints(ln)]
+            or [ln for ln in after if _CLASS_THROWN.search(ln)]
+            or [ln for ln in lines if _CLASS_THROWN.search(ln)]
             or [ln for ln in lines if _THROWN.search(ln)]
             or [ln for ln in lines if _INTERESTING.search(ln)]
             or lines[-1:]
