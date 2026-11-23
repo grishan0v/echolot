@@ -313,13 +313,43 @@ def test_collect_cools_before_each_repeat_and_puts_the_screen_back(tmp_path, mon
                              "settings put system screen_brightness_mode 1"], asked)
     kinds = [shell(c) for c in adb.calls]
     stops = [i for i, k in enumerate(kinds) if "am force-stop" in k]
-    # The screen is read after the wait, which can outlast it (screen.py).
-    check("a reading before each repeat's stop, then the screen",
-          all(kinds[i - 2] == "dumpsys battery"
-              and kinds[i - 1] == "dumpsys power; dumpsys window policy" for i in stops)
-          and len(stops) == 3, kinds)
+    # The app is stopped before the wait, not after it (#611); the screen is
+    # read after the wait, which can outlast it (screen.py); and the app's
+    # process is looked for once more right before the recording.
+    after = [kinds[i + 1:kinds.index(f"rm -f {runner.DEVICE_TRACE}", i)]
+             for i in stops]
+    check("each repeat: the stop, then the readings, the screen and a last look",
+          len(stops) == 3 and all(
+              set(a[:-2]) == {"dumpsys battery"}
+              and a[-2:] == ["dumpsys power; dumpsys window policy",
+                             f"pidof {PACKAGE} || true"] for a in after), after)
     check("the warm one waited", clock.slept == [10] and "  cooled to 33.0 °C in 10s" in said,
           (clock.slept, said))
+    check("and the set says the app is stopped before each wait",
+          sum("the app is stopped before each wait" in s for s in said) == 1, said)
+
+
+def test_an_app_a_job_restarted_during_the_wait_is_stopped_again(tmp_path, monkeypatch) -> None:
+    """The case that made the order (#611): a job the app schedules is due
+    after the wait, and starts the process again while the device cools. The
+    look before the recording finds it, and the line names the wait."""
+    phone = Phone(temps=(30.0, 30.0, 36.0, 33.0))
+    adb = SettlingAdb(phone, script={"look": ["", "4242\n"]})
+    monkeypatch.setattr(runner, "_run", adb)
+    monkeypatch.delenv("ANDROID_SERIAL", raising=False)
+    Clock().stand_in(monkeypatch)
+    said: list[str] = []
+    results = runner.collect(PACKAGE, tmp_path / "traces", 2,
+                             section={"cooldown": {"max_c": 34}},
+                             name="startup", log=said.append)
+    kinds = [shell(c) for c in adb.calls]
+    stops = [i for i, k in enumerate(kinds) if "am force-stop" in k]
+    check("three stops: one a repeat, and one more for the app the wait found running",
+          len(stops) == 3 and kinds[stops[2] - 1] == f"pidof {PACKAGE} || true", kinds)
+    check("the line under the second repeat names the wait",
+          f"      {PACKAGE} was running again after the 10s cooling wait (pid 4242), and "
+          f"was stopped again before the recording" in said, said)
+    check("and the repeat is a cold one", not any(r.get("not_cold") for r in results), results)
 
 
 def test_a_collect_that_fails_still_puts_the_device_back(tmp_path, monkeypatch) -> None:

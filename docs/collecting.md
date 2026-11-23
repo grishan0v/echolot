@@ -74,7 +74,8 @@ builds and installs the app itself, as part of the macrobenchmark's task.
 
 ### `launch` — we drive it
 
-HOME, `force-stop`, a wait for the app's process to be gone, start recording,
+HOME, `force-stop`, a wait for the app's process to be gone, the cooldown when
+`runner.cooldown` asks for one, a last look for the process, start recording,
 `am start -W`, wait, pull. A cold start. With `reset_policy: none` nothing is
 reset between repeats, and that is not a warm start: the app is still in front
 from the repeat before, so `am start -W` has nothing to start and only the
@@ -90,6 +91,18 @@ same app stayed dead after the force-stop, 8 times of 8. The wait after it
 lasts until `pidof` finds no process of the app, five seconds at most, and
 half a second more: the old process was gone at the first look, and the new
 one was there a moment later.
+
+The device cools after the stop, not before it. Cooled with the app in front,
+a job the app had scheduled during the wait was due by the time the
+force-stop came, and the system started the process for it 95–112 ms after
+the kill (`am_proc_start … service` in the events log). On an A51, 47 of 59
+repeats that had waited for the device began warm, against 0 of 51 that had
+not; stopped first, 70 starts of the same app began cold 70 times, 31 of them
+after a wait. Right before the recording `collect` looks for the process once
+more, and a process something started while the device cooled is stopped
+again, with a line under the repeat's own: `was running again after the 95s
+cooling wait (pid 4242), and was stopped again before the recording`. A set
+with a cooldown says at its start that the app is stopped before each wait.
 
 A repeat that was stopped and started warm all the same gets a line under its
 own: `not a cold start`, with the pid when the process was running again
@@ -475,7 +488,10 @@ runner:
   `max_c` goes a little above the sensor's reading at rest: 34 for the A51's
   `cpu`, which reads about 31 there. A device that does not cool within
   `timeout_s` is recorded anyway, and the line says so; the report's
-  `environment` shows how hot it ran.
+  `environment` shows how hot it ran. In launch and command modes the app is
+  stopped before the wait: nothing of it runs while the device cools, and a
+  job it scheduled during the recording is not yet due when the stop comes
+  ([`launch`](#launch--we-drive-it)).
 - **`fixed_performance`** asks for the platform's fixed performance mode,
   which holds the clock at a level the device can keep. Whether a device has
   one is up to its power HAL: the A51 takes the command and moves no frequency

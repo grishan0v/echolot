@@ -65,6 +65,9 @@ adb shell wm dismiss-keyguard
 adb shell input keyevent KEYCODE_HOME
 adb shell am force-stop $PKG
 adb shell "i=0; while pidof $PKG > /dev/null && [ \$i -lt 50 ]; do sleep 0.1; i=\$((i + 1)); done"
+# A wait for the device to cool goes here, after the stop, never before it.
+# Then the process looked for once more: something may have started it.
+adb shell pidof $PKG && adb shell am force-stop $PKG
 adb shell rm -f /data/misc/perfetto-traces/t.pftrace
 adb shell perfetto -c - --txt -o /data/misc/perfetto-traces/t.pftrace \
     --background-wait < /tmp/trace.cfg || exit 1
@@ -81,6 +84,15 @@ again by the launch: the trace holds neither its start nor `bindApplication`.
 `collect` says `not a cold start` under such a repeat and counts them at the
 end; `adb logcat -b events -d | grep am_proc_start` says what the system
 started the process for.
+
+`collect` stops the app before `runner.cooldown`'s wait, not after it. Left
+in front while the device cooled, the app had a job it scheduled come due by
+the stop, and the system started the process for it at once: four in five
+repeats after a wait began warm. Right before each recording `collect` looks
+for the process again and stops one it finds; the repeat says `was running
+again after the …s cooling wait (pid …), and was stopped again before the
+recording`. That repeat is cold. Only a `not a cold start` line under it says
+otherwise.
 
 ## What the config must contain
 

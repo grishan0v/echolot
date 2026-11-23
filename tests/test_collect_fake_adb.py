@@ -82,7 +82,8 @@ def kind(args: list[str]) -> str:
                          ("devices", "adb devices"), ("resolve", "resolve-activity"),
                          ("force-stop", "am force-stop"), ("rm", "rm -f"),
                          ("perfetto", "perfetto -c"), ("start", "am start -W"),
-                         ("wait", "pidof perfetto"), ("pull", " pull "),
+                         ("wait", "pidof perfetto"), ("look", "shell pidof "),
+                         ("pull", " pull "),
                          ("screen", "dumpsys power"), ("wake", "KEYCODE_WAKEUP"),
                          ("dismiss", "dismiss-keyguard"), ("installed", "pm path")):
         if needle in text:
@@ -157,16 +158,17 @@ def old_set(out: Path, name: str = "startup", n: int = 3) -> list[str]:
 
 # --- launch mode: the calls, in order -----------------------------------------
 
-def test_launch_mode_asks_once_then_runs_seven_steps_per_iteration(tmp_path, adb):
+def test_launch_mode_asks_once_then_runs_eight_steps_per_iteration(tmp_path, adb):
     said: list[str] = []
     results = runner.collect(PACKAGE, tmp_path / "traces", 3, section={},
                              name="startup", log=said.append)
     kinds = adb.kinds()
     check("the device, the app on it, the activity and the screen, once each and first",
           kinds[:4] == ["devices", "installed", "resolve", "screen"], kinds)
-    check("then per iteration: the screen, stop, clear, record, launch, wait, pull",
-          kinds[4:] == ["screen", "force-stop", "rm", "perfetto", "start", "wait", "pull"] * 3,
-          kinds)
+    check("then per iteration: stop, the screen, a last look, clear, record, launch, "
+          "wait, pull",
+          kinds[4:] == ["force-stop", "screen", "look", "rm", "perfetto", "start", "wait",
+                        "pull"] * 3, kinds)
     check("a screen on and unlocked says nothing",
           not any("screen" in line for line in said), said)
     check("every call after `adb devices` names the device it picked",
@@ -285,7 +287,8 @@ def test_without_a_stop_a_warm_launch_is_nobodys_business(tmp_path, adb):
     results = runner.collect(PACKAGE, tmp_path / "traces", 2,
                              section={"reset_policy": "none"}, name="startup",
                              log=lines.append)
-    check("no stop, no HOME", "force-stop" not in adb.kinds()
+    check("no stop, no HOME, no look for the process", "force-stop" not in adb.kinds()
+          and "look" not in adb.kinds()
           and not any("KEYCODE_HOME" in " ".join(c) for c in adb.calls), adb.calls)
     check("and nothing said", not [s for s in lines if "not a cold start" in s]
           and not any(r.get("not_cold") for r in results), (lines, results))
@@ -322,6 +325,54 @@ def test_a_scenario_command_that_began_with_the_process_up_says_so(tmp_path, adb
               i for i, s in enumerate(lines) if "[2/2]" in s), lines)
     check("and only its result carries it",
           [r.get("not_cold", False) for r in results] == [False, True], results)
+
+
+# --- the last look before the recording (#611) -----------------------------------
+
+def test_an_app_running_again_by_the_recording_is_stopped_again_and_said(tmp_path, adb):
+    """Something on the device started the app between its stop and the
+    recording — a job it had scheduled, on a real project. The look right
+    before the recording finds it, and it is stopped again."""
+    adb.script["look"] = ["", "4242\n"]
+    lines: list[str] = []
+    results = runner.collect(PACKAGE, tmp_path / "traces", 2, section={},
+                             name="startup", log=lines.append)
+    kinds = adb.kinds()
+    second = kinds[kinds.index("pull") + 1:]
+    check("the first repeat: one stop, the look found nothing",
+          kinds[:kinds.index("pull")].count("force-stop") == 1, kinds)
+    check("the second: stopped, looked, found, stopped again, then recorded",
+          second[:5] == ["force-stop", "screen", "look", "force-stop", "rm"], second)
+    check("the second stop is the whole stop, HOME first",
+          sum("KEYCODE_HOME" in " ".join(c) for c in adb.calls) == 3, adb.calls)
+    said = [s for s in lines if "was running again" in s]
+    check("one line, under the second repeat's own",
+          len(said) == 1 and lines.index(said[0]) - 1 == next(
+              i for i, s in enumerate(lines) if "[2/2]" in s), lines)
+    check("with the pid, and what was done about it",
+          f"{PACKAGE} was running again after the stop (pid 4242), and was stopped "
+          f"again before the recording" in said[0], said)
+    check("a cold start after it is a cold start",
+          not [s for s in lines if "not a cold start" in s]
+          and not any(r.get("not_cold") for r in results), (lines, results))
+    check("without a cooldown, no line about one",
+          not any("stopped before each wait" in s for s in lines), lines)
+
+
+def test_what_the_second_stop_leaves_is_what_the_repeat_is_judged_by(tmp_path, adb):
+    """A process the second stop could not keep down is the one the launch
+    found: the line under the repeat says both."""
+    adb.script["force-stop"] = ["", "4243\n"]
+    adb.script["look"] = ["4242\n"]
+    adb.script["start"] = [am_start("WARM", 295)]
+    lines: list[str] = []
+    results = runner.collect(PACKAGE, tmp_path / "traces", 1, section={},
+                             name="startup", log=lines.append)
+    under = lines[next(i for i, s in enumerate(lines) if "[1/1]" in s) + 1:]
+    check("stopped again, then not cold with the pid left after the second stop",
+          len(under) == 2 and "(pid 4242), and was stopped again" in under[0]
+          and "running again before the recording began (pid 4243)" in under[1], lines)
+    check("the result carries it", results[0].get("not_cold") is True, results)
 
 
 def test_collect_counts_the_repeats_that_were_not_cold_and_blames_no_device(
@@ -423,8 +474,8 @@ def test_the_set_moves_after_the_device_check_and_before_the_first_pull(tmp_path
     check("once", kinds.count("<set aside>") == 1 and len(moved) == 1, kinds)
     where = kinds.index("<set aside>")
     check("after the device check and the first recording, right before its pull",
-          kinds[:where] == ["devices", "installed", "resolve", "screen", "screen",
-                            "force-stop", "rm", "perfetto", "start", "wait"]
+          kinds[:where] == ["devices", "installed", "resolve", "screen", "force-stop",
+                            "screen", "look", "rm", "perfetto", "start", "wait"]
           and kinds[where + 1] == "pull", kinds)
     check("the old set is in the directory it went to",
           sorted(p.name for p in moved[0].iterdir()) == before)

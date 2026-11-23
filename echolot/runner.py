@@ -1283,16 +1283,27 @@ def collect(package: str, out_dir: Path, iterations: int,
     switched = (composenames.Names(package, dev, run=_run, log=log) if names
                 else contextlib.nullcontext())
     with stabilize.Settled(section, dev, run=_run, log=log, notify=tell) as settled, switched:
+        if settled.cooldown is not None and reset == "force-stop":
+            log("  the app is stopped before each wait, and stopped again if it "
+                "is running by the recording")
         for i in range(iterations):
             out = out_dir / f"{name}_iter{i:03d}.perfetto-trace"
-            # Before the app is stopped and the recording starts, so
-            # that a repeat begins on a cool device whatever the last
-            # one left behind.
-            settled.cool()
-            screen.ready(dev, _run, log, during=f"before repeat {i + 1} of {iterations}")
             # HOME, the force-stop and a wait for the process to be gone (see
-            # _stop). What is left of it is said under the repeat's line.
+            # _stop), before the device cools and not after (#611). Cooled
+            # with the app in front, a job it scheduled during the wait was
+            # due by the force-stop, and the system started the process for
+            # it 95–112 ms after the kill: on an A51, 47 of 59 repeats that
+            # had waited began warm, and 0 of 51 that had not. Stopped first,
+            # nothing of the app runs while the device cools.
             left = _stop(dev, package) if reset == "force-stop" else ""
+            waited = settled.cool()
+            screen.ready(dev, _run, log, during=f"before repeat {i + 1} of {iterations}")
+            # A last look right before the recording: whatever started the
+            # app during the wait, it is stopped again, and the repeat says
+            # so. What is left after that is said under the repeat's line.
+            again = _running(dev, package) if reset == "force-stop" else ""
+            if again:
+                left = _stop(dev, package)
             _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
             # With composable names, `--background-wait` waits on every SDK
             # producer on the device and outlasts the recording (see
@@ -1372,6 +1383,8 @@ def collect(package: str, out_dir: Path, iterations: int,
                 extra += f" ({info['launch_state']})"
             log(f"  [{i + 1}/{iterations}] {out.name}  "
                 f"{info['size'] / 1e6:.1f} MB{extra}")
+            if again:
+                log("      " + _stopped_again_line(package, again, waited))
             if unmeasured:
                 log("      [!] am start -W measured no start, with the screen on and "
                     "unlocked: this trace may hold none")
@@ -1423,6 +1436,22 @@ def _stop(device: str, package: str) -> str:
                  f"pidof {app} || true"],
                 timeout=60)
     return " ".join(left.split())
+
+
+def _running(device: str, package: str) -> str:
+    """The pids of the app's process, if it has one; empty when it has none."""
+    import shlex
+
+    app = shlex.quote(package)
+    pids = _run(["adb", "-s", device, "shell", f"pidof {app} || true"], timeout=60)
+    return " ".join(pids.split())
+
+
+def _stopped_again_line(package: str, pids: str, waited: float) -> str:
+    """The line under a repeat whose app was running again by its recording (#611)."""
+    after = f"after the {waited:.0f}s cooling wait" if waited else "after the stop"
+    return (f"{package} was running again {after} (pid {pids}), and was stopped "
+            f"again before the recording")
 
 
 def _not_cold_line(package: str, left: str) -> str:
