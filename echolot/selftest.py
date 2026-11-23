@@ -1307,7 +1307,7 @@ def _(report):
     from .main import DETECTOR_DIR
     from .tp import load_detectors
     d = next(x for x in load_detectors(DETECTOR_DIR)
-             if x.id == "main_thread_block")
+             if x.id == "runnable_starvation")
     sql = d.render_open()
     # A statistic over a truncated top twenty would be a statistic over the tail.
     assert "LIMIT" not in sql.upper(), "LIMIT must be stripped while measuring"

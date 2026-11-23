@@ -4,7 +4,6 @@
 --       lands in the report several times at different depths and the agent
 --       counts it twice
 -- @param: min_slice_ms = 16
--- @calibrate: min_slice_ms = top10(self_ms) * 1.5
 -- @identity: location, detail
 -- @plain_title: Heavy work on the main thread
 -- @plain_why: The main thread draws the screen and answers taps, so while it
@@ -19,6 +18,16 @@
 -- Three rows, one event. Meanwhile the real time sink, draw with its own
 -- 125 ms, sat fifth, and TextLayout:initLayout at depth 6 never made it into
 -- the report at all.
+--
+-- ## The threshold is a frame, and is not calibrated
+--
+-- 16 ms is one frame at 60 Hz: work that holds the main thread longer than
+-- that costs a frame wherever it runs. There is deliberately no `@calibrate`
+-- line. This detector says where the main thread's time went, and a bar from
+-- the tail of healthy runs moves with how busy the scenario is: on 15 healthy
+-- cold starts it came out at 119.7 ms, and a 100 ms block stopped being a row
+-- (#509). A slice that is long for this app is `main_thread_outlier`'s to
+-- find, against its own median.
 --
 -- Self times add up without overlap: their sum across a thread cannot exceed
 -- the thread's own time. Total duration stays alongside — the "self / total"

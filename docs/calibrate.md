@@ -19,8 +19,8 @@ with the reasoning on every line:
 ```yaml
 detectors:
   frame_jank: false
-  main_thread_block:
-    min_slice_ms: 26.6    # top10(self_ms)=17.7 × 1.5, median of 5 run(s), sample 175 per run
+  repeated_work:
+    # min_total_ms: kept the default (40) — the healthy runs' tail gives 2.4 (top5(total_ms)=1.6 × 1.5), 17× lower
   runnable_starvation:
     min_runnable_ms: 27.2    # top10(total_ms)=18.1 × 1.5, median of 5 run(s), sample 46–50 per run
     skip_glob: "*Binder*"    # from the config
@@ -32,6 +32,43 @@ not calibrated — a mask, a ratio, a detector with no `@calibrate` — is carri
 over as it stands; and a threshold left uncalibrated keeps the config's value
 as a setting, or the shipped one as a comment.
 
+## The default is a floor
+
+A threshold whose healthy tail comes out **below** the shipped default keeps
+the default, and its line says how far below the tail was. The default says
+what is worth a row on any device; a healthy tail under it says this scenario
+has little of the kind, and a threshold set there reports that little as
+findings. On 15 healthy cold starts, `repeated_work` at 2.4 against the
+default 40 went from no rows to 28, each found in one run of the fifteen.
+`--below-defaults` proposes the lower numbers all the same, marked as below
+the default.
+
+## The section tried on its own runs
+
+`topN` per run leaves up to N−1 rows above the threshold in every run, and
+across many runs those are different rows. `analyze` folds the repeats into
+one row per identity, so their union is what it reports, and the union grows
+with the number of runs. After the section, `calibrate` runs the detectors it
+moves again over the same traces, with the section in place, and counts the
+rows as `analyze` would:
+
+```
+# On these 15 healthy run(s), with this section in place of
+# the thresholds in effect now, analyze would report:
+#   runnable_starvation  9 row(s), now 4
+```
+
+Healthy runs should come out quiet, or nearly. A detector that goes from a
+few rows to many is set too low by the section: leave its number out.
+
+`main_thread_block` is not calibrated. It says where the main thread's time
+went, and its bar is a frame, 16 ms. A bar from the tail of healthy runs
+moves with how busy the scenario is: on the cold starts above it came out at
+119.7 ms, and a 100 ms block of the main thread stopped being a row. A slice
+that is long for this app is `main_thread_outlier`'s to find.
+
+## A proposal, not an edit
+
 The command deliberately **does not edit the config itself**. Thresholds define
 what counts as normal, and that decision is not handed to a script: it prints a
 proposal, a human looks at the numbers and decides.
@@ -41,8 +78,8 @@ proposal, a human looks at the numbers and decides.
 Next to the threshold, in the header:
 
 ```sql
--- @param: min_slice_ms = 16
--- @calibrate: min_slice_ms = top10(self_ms) * 1.5
+-- @param: min_runnable_ms = 20
+-- @calibrate: min_runnable_ms = top10(total_ms) * 1.5
 ```
 
 The measuring pass zeroes the calibrated thresholds so `HAVING` lets everything
@@ -58,8 +95,8 @@ shut the filter completely.
 Both forms are supported:
 
 ```sql
--- @calibrate: min_slice_ms = top10(self_ms) * 1.5
--- @calibrate: min_slice_ms = p95(self_ms) * 1.5
+-- @calibrate: min_runnable_ms = top10(total_ms) * 1.5
+-- @calibrate: min_runnable_ms = p95(total_ms) * 1.5
 ```
 
 The default is `topN`, "the Nth largest value". It reads as *on a healthy run
@@ -97,7 +134,7 @@ threshold — there is nowhere for a number to come from when a healthy run
 barely feeds this detector.
 
 In both cases the output keeps a comment with the default and the reason, plus
-a summary line at the end.
+a summary line at the end. So does a tail below the default (see above).
 
 A detector whose query **failed** is neither: its error is on stderr, its line
 says it failed on every trace, or on how many, and the summary names it. When
@@ -114,13 +151,14 @@ What that looks like in practice, from the same app on two devices:
 ```
                        emulator   Galaxy A51
 runnable_starvation        27.2          7.9
-main_thread_block          26.6         36.5
 binder_txn total           84.3         30.5
 ```
 
-Two thresholds fell about threefold and one rose by about a third. One config with absolute
-numbers would have meant something completely different on those two machines —
-which is the entire argument for this command.
+Both thresholds fell about threefold. One config with absolute numbers would
+have meant something completely different on those two machines — which is
+the entire argument for this command. Both A51 numbers are below the defaults
+(20 and 50), so on that phone they come only with `--below-defaults`; check
+what the section would report on the runs before pasting it.
 
 ## Several scenarios
 
@@ -133,10 +171,10 @@ and its first launch after `pm clear`, calibrated like this:
 runnable_starvation           3.6            9.8
 uninstrumented_cpu           10.4           27.3
 binder_txn total              1.1            2.5
-main_thread_block            17.8           21.5
 ```
 
-Analysed with the first launch's numbers, the cold start lost 9 of its 12
+(Those are below the defaults, so taken with `--below-defaults`.) Analysed
+with the first launch's numbers, the cold start lost 9 of its 12
 `runnable_starvation` rows and 6 of its 8 `uninstrumented_cpu` rows. The first
 launch, with the cold start's, listed 30 and 20 rows instead of 13 and 7, all
 of them its normal run.
@@ -155,8 +193,8 @@ measured, to paste under that scenario beside its `start` and `end`:
 scenarios:
   cold_start:
     detectors:
-      main_thread_block:
-        min_slice_ms: 17.8    # top10(self_ms)=11.9 × 1.5, median of 5 run(s), sample 246–254 per run
+      runnable_starvation:
+        min_runnable_ms: 27.2    # top10(total_ms)=18.1 × 1.5, median of 5 run(s), sample 46–50 per run
       main_thread_outlier:
         min_abs_ms: 40    # kept the default over the 2.8 in detectors: — top10(max_ms)=0.15, the tail of the distribution is degenerate
 ```
