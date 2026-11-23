@@ -27,7 +27,7 @@ COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
 # side of the `code` column — see place.py — and `stacks` the json side of
 # what the evidence says the samples named — see stacks.py. `unfinished` is a
 # marker that never closed, which its numbers say with a `≥`.
-HIDDEN = {"spread", "places", "stacks", "unfinished"}
+HIDDEN = {"spread", "places", "stacks", "unfinished", "parents"}
 HEADERS = {
     "location": "Where",
     "runs": "Runs",
@@ -534,6 +534,16 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     for row in rows:
         if row["location"] in open_in:
             row["unfinished"] = True
+    # Where each temporary marker sat, by the median of the repeats it was
+    # found in, as every number of its row is.
+    for row in rows:
+        per_run = [r.get("parents") or {} for s in sections for r in s.get("rows") or []
+                   if r["location"] == row["location"]]
+        names = sorted({name for p in per_run for name in p})
+        if names:
+            row["parents"] = dict(sorted(
+                ((name, round(median([p.get(name, 0.0) for p in per_run]), 2))
+                 for name in names), key=lambda kv: (-kv[1], kv[0])))
     merged = {
         "prefix": head.get("prefix"),
         "globs": head.get("globs") or [],
@@ -547,6 +557,18 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     # none, and the markers in the code as missing from it.
     if sections and all("in_trace" in s for s in sections):
         merged["in_trace"] = sorted({n for s in sections for n in s["in_trace"]})
+    # Temporary markers in some repeats and not others: the set is two rounds,
+    # one with them and one without, merged as repeats (#584). The slices they
+    # sit in had their self time measured two ways, and a median over both is
+    # neither.
+    prefix = head.get("prefix")
+    mixed = [{"location": row["location"], "runs": row["runs"],
+              "parents": list(row.get("parents") or {})}
+             for row in rows
+             if prefix and str(row["location"]).startswith(prefix)
+             and short_runs(row.get("runs"))]
+    if mixed:
+        merged["mixed"] = mixed
     return merged
 
 
@@ -1837,6 +1859,20 @@ def _markers_lines(markers: dict[str, Any]) -> list[str]:
     if absent:
         out.append("Not in the window: " + ", ".join(f"`{g}`" for g in absent)
                    + " — listed in `domains`, never seen in this scenario.")
+        out.append("")
+    mixed = markers.get("mixed") or []
+    if mixed:
+        named = ", ".join(f"`{m['location']}` ({m['runs']})" for m in mixed)
+        parents = list(dict.fromkeys(p for m in mixed for p in m.get("parents") or []))
+        out.append(
+            f"> ⚠️ Temporary markers are in some repeats and not others: {named}. "
+            f"The set is two rounds, one with the markers and one without, not "
+            f"repeats of one."
+            + (" The self time of " + ", ".join(f"`{p}`" for p in parents)
+               + ", which the markers sit in, was measured two ways — less the "
+                 "markers in some runs, whole in the others — so its median is "
+                 "neither; read its total." if parents else "")
+            + " Analyze the two rounds apart.")
         out.append("")
     return out
 

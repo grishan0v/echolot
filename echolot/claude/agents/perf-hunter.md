@@ -175,7 +175,10 @@ waiting for one.
    nothing moved: then compare the two rounds by path, and
    `echolot hunt --show <n>` lists the copies.
    New rows with the AGENTTMP_ prefix are your own markers breaking down a
-   blind spot; the warning at the top names them. A row that grew with
+   blind spot; the warning at the top names them, and the slice each sits
+   in, whose self time went into it: that row is judged `(by total)`, and
+   its drop is not a fix. Never analyze a round with markers together with
+   one without; the report warns when a set mixes them. A row that grew with
    Holds `yes` is a real move, `no` means the repeats disagree by more
    than it moved — record another round before concluding, as many runs
    a side as the cell says. Hundreds means another round will not settle

@@ -744,6 +744,23 @@ def _markers_info(tp, cfg: Config) -> dict:
     # changed under it.
     absent = [g for g in globs[1:]
               if not any(fnmatch.fnmatchcase(r["location"], g) for r in out)]
+    # The slice each temporary marker sits directly in, and how long it spent
+    # there. A marker under a slice is its child, so that slice's self time
+    # drops by the marker's time, and `compare` reads that drop as the slice
+    # getting cheaper unless it knows where the time went (#584).
+    parents: dict[str, dict[str, float]] = {}
+    for r in tp.query(f"""
+        SELECT s.name AS marker, p.name AS parent, SUM(MAX(s.dur, 0)) AS ns
+        FROM _slice_win s
+        JOIN slice c ON c.id = s.slice_id
+        JOIN slice p ON p.id = c.parent_id
+        WHERE s.name GLOB '{sql_value(globs[0])}' AND p.name != s.name
+        GROUP BY s.name, p.name
+    """):
+        parents.setdefault(r["marker"], {})[r["parent"]] = round((r["ns"] or 0) / 1e6, 2)
+    for row in out:
+        if parents.get(row["location"]):
+            row["parents"] = parents[row["location"]]
     # Every prefixed name in the trace, the window or not: what the markers
     # in the code are held against (`_markers_against_code`). One that ran
     # outside the window is in the build all the same.

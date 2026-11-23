@@ -205,6 +205,27 @@ honest way to say which became which, and they stay listed as appeared and
 gone. A row paired this way is marked `*(family)*` in the table and
 `"matched_by": "family"` in the JSON.
 
+### Markers added between rounds
+
+A marker placed directly under a slice becomes its child, and self time is a
+slice less its direct children. So the round that adds a marker under
+`Compose:recompose` reads, by self time, as `Compose:recompose` getting
+cheaper by exactly the marker's time — on a real pair 3714 → 105 ms, the
+largest move in the table, while its total did not move. `analyze` records
+for each temporary marker the slices it sits directly in and how long it
+spent there (`parents` on its row of the markers table). A slice whose self
+time went into markers one side added, or came back from markers one side
+took out, is judged on its total instead: the row says so in the table,
+`*(by total)*`, and in `comparison.json` with `metric: "total_ms"` and
+`into_markers` (`ms`, the `markers`, and the `side` that has them). The
+`instrumentation` and `instrumentation-removed` warnings name these slices.
+
+A set whose repeats carry a temporary marker in some runs and not others is
+two rounds merged as repeats — `analyze` of a round with markers and one
+without, to get more runs a side. The report's markers section says so and
+names the slices the markers sit in: their self-time medians mix two
+measures. Analyze the two rounds apart.
+
 ## When two reports may not be compared
 
 Subtraction always produces a number, including for two reports that have
@@ -226,7 +247,8 @@ top, the way the Marker Report already states an anchor that never matched.
 | `detectors` | the two runs did not use the same set of detectors |
 | `detector-failed` | a detector failed on that side, with its error. It did not look there, so its rows on the other side are left out of the table rather than listed as gone or new, its params stay out of `thresholds`, and "Detectors that changed state" says `failed` |
 | `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording does not hold what they read, named with their reasons (see [When a detector could not look](analysing.md#when-a-detector-could-not-look)). Their rows are left out of the table on both sides rather than listed as gone or new, and "Detectors that changed state" says `not checked` |
-| `instrumentation` | markers that appeared, each named once, carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. Only with that key in the config — without it they are ordinary appeared rows |
+| `instrumentation` | markers that appeared, each named once, carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. The slices they sit in directly are named too: their self time went into the markers, so those rows are judged on their total — see [Markers added between rounds](#markers-added-between-rounds). Only with that key in the config — without it they are ordinary appeared rows |
+| `instrumentation-removed` | the same in the other direction: temporary markers that are gone were taken out between the rounds, not work that went away, and the slices they sat in, whose self time came back, are judged on their total |
 | `environment` | the clock the two rounds ran at differs by the floor or more, 10% unless `--floor-pct` says otherwise, either way, or a side carries no clock at all, or a side read its clock or thermal state in only some of its repeats. Two rounds that recorded no platform state get no warning — see below |
 | `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
