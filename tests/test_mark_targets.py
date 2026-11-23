@@ -167,3 +167,22 @@ def test_java_names_for_kotlin_classes_are_not_another_build(tmp_path: Path) -> 
     moved = next(p for p in pl.proposals if p.marker.endswith("Prefs_write"))
     check("a call moved into another function is still said to be",
           not moved.applicable and "`flush`" in moved.reason, moved.reason)
+
+
+def test_lines_inside_other_functions_say_the_checkout_is_not_the_build(tmp_path: Path) -> None:
+    """Counted when nothing was retraced; after the mapping, R8 moves lines on
+    the right build too, and the per-frame refusal is all there is (#525)."""
+    from tests.test_anr_frames import AWAITING, FOO
+
+    write(tmp_path, "app/src/main/java/com/example/app/Foo.kt", FOO)
+    placed, missing = anr.locate(anr.parse(AWAITING), tmp_path)
+    frames = [(f.symbol, f.file, f.line) for f in placed if f.exact]
+    pl = mark.plan_from_anr(tmp_path, frames, unplaced=len(missing), version="1.2.0 (120)")
+    check("the refusal is worded neutrally",
+          any("another build, an inlined function, or the compiler" in p.reason
+              for p in pl.proposals), [p.reason for p in pl.proposals])
+    check("and, not minified, most of them is a note",
+          any("probably not the build that froze (1.2.0 (120))" in n for n in pl.notes), pl.notes)
+    pl = mark.plan_from_anr(tmp_path, frames, unplaced=len(missing), retraced=True)
+    check("retraced with the mapping: no such note",
+          not any("not the build" in n for n in pl.notes), pl.notes)

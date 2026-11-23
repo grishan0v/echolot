@@ -51,7 +51,8 @@ when the console never got the mapping.
 | a lock chain with the main thread behind it | you have the mechanism. Open the frames of the thread at the bottom — this needs no trace |
 | a queue with no holder named | the source withheld it. The holder is among the threads that were working |
 | the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working |
-| frames placed in the checkout | open those lines |
+| frames placed in the checkout | open those lines, once `anr` marks none of them as now inside another function |
+| "probably not the build that froze" above the placed frames | most lines fall outside the function their frame names: check out the build the report names before opening any |
 | frames landing nowhere | check out the build the report names. Line numbers are the first thing to go stale |
 | "What N frames are: they read as R8 named them" under what it does not say | a minified build: run it again with that build's mapping |
 | frames R8 wrote "have no place in the mapping", or are named after another mapping | the mapping is another build's. Find the one that froze before reading the names |

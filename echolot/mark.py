@@ -1425,7 +1425,8 @@ def marker_for(symbol: str, prefix: str) -> str:
 def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
                   prefix: str = DEFAULT_PREFIX,
                   allowed: list[str] | None = None,
-                  unplaced: int = 0, version: str | None = None) -> Plan:
+                  unplaced: int = 0, version: str | None = None,
+                  retraced: bool = False) -> Plan:
     """A marker plan whose targets come from a stack rather than the manifest.
 
     `frames` is `(symbol, file relative to root, line)` — what `echolot anr`
@@ -1435,7 +1436,9 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
 
     `unplaced` and `version` are only for the note at the end: they are what
     lets a working tree from the wrong build be named as such instead of
-    looking like a tool that refuses everything.
+    looking like a tool that refuses everything. `retraced` says the build's
+    mapping named the frames back, and a line inside a neighbour is then not
+    counted towards that note: R8 moved it on the build that froze too.
     """
     out = Plan(root=str(root), module=None, package=None)
     seen: set[str] = set()
@@ -1547,7 +1550,8 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
                         f"declare — mark by hand")
         else:
             disagree = (f"the line falls inside `{name}` while the frame names "
-                        f"`{wanted}` — the compiler moved it; mark by hand")
+                        f"`{wanted}` — another build, an inlined function, or the "
+                        f"compiler moved it; mark by hand")
         flat = one_line_body(text, open_at, close_at)
         # A function body takes its end in a `finally`, and a return then
         # skips nothing. A composable's cannot: the end goes in bare.
@@ -1586,12 +1590,19 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
     # from another build. Refusing each one on its own merits and saying
     # nothing about the pattern reads as a tool that cannot do its job, when
     # what happened is that the checkout is not the version that froze.
-    # Only what another build explains: a line in no function, or a frame
-    # naming a function this file does not have. A lambda refused on purpose
-    # and a line R8 moved into a neighbour happen on the build that froze.
+    # Only what another build explains: a line in no function, a frame
+    # naming a function this file does not have, and a line inside another
+    # function. A lambda refused on purpose and an expression body happen on
+    # the build that froze. So does a line R8 moved into a neighbour, which
+    # is why that one counts only when nothing was retraced: on frames the
+    # mapping did not have to name back, a line inside another function
+    # vanished, all five of them, on a checkout of the build's revision.
+    # A Kotlin `inline fun` still does it on the right build; one frame of
+    # twelve does not make most of them.
     astray = sum(1 for p in out.proposals if not p.applicable
                  and (p.reason.startswith("no function")
-                      or p.reason.startswith("the frame names")))
+                      or p.reason.startswith("the frame names")
+                      or (not retraced and p.reason.startswith("the line falls inside"))))
     total = len(out.proposals) + unplaced
     if total and (astray + unplaced) * 2 > total:
         out.notes.append(
