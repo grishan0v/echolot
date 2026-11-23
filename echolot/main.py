@@ -2480,27 +2480,61 @@ def _in_rows(window: dict, spans: list[tuple[int, int]],
     }
 
 
-# Inventory sections. The keywords are deliberately broad: the job is to show
-# what the detector masks MISS, and one extra row in a section is cheaper than
-# an undiscovered problem.
+# Inventory sections. Each holds the shapes the runtime and the platform
+# actually write for its kind of slice, matched against the slice NAME only.
+# The job is to show what the detector masks MISS, and a section is only as
+# useful as it is narrow: "Missed by the masks" asks to widen a mask for each
+# family it lists, and a family that is no GC, lock or binder slice sends that
+# advice the wrong way.
+#
+# Substrings were tried first and caught the wrong things every time: `alloc`
+# took graphics buffer work, `collect` took ProfileSaver, `lock` took `LZ4
+# decompress block`. The substrings that replaced them were no better on a
+# real app (#518): `collection` took `JIT compiling … kotlinx.collections…`
+# and `AccessibilityNodeInfo$CollectionItemInfo`, `monitor` an app marker
+# `startup_health_monitor`, `locked` `Choreographer#scheduleVsyncLocked`, and
+# `ipc` `Lretrofit2/SkipCallbackExecutorImpl;`. On a scroll trace all nine
+# rows of "Missed by the masks" were JIT compilations of Compose methods. So
+# a section names whole words and known shapes, and the first that matches
+# claims the family: `waitWhileAllocatingLocked` is waiting on the collector,
+# and goes under garbage collection before locks can see its `Locked`.
 BUCKETS = (
-    # Keywords are matched ONLY against the slice name. Order matters: the
-    # first matching section claims the family, which is why 'allocating' sits
-    # under garbage collection and pulls waitWhileAllocatingLocked there even
-    # though its name also contains 'lock'. That is waiting on the collector,
-    # not contention.
-    # 'allocating' rather than 'alloc': otherwise all graphics buffer work
-    # (allocateBuffers, IAllocator::allocate) would land here too.
-    # 'collection' rather than 'collect': otherwise ProfileSaver::CollectClasses
-    # comes along, and it has nothing to do with garbage collection.
-    ("Garbage collection", ("gc", "garbage", "collection", "allocating", "heap")),
-    # 'locked' rather than 'lock': the word 'block' also contains 'lock', and
-    # that is how 'LZ4 decompress block' ended up under contention. The real
-    # names are either '...Locked' methods or 'lock contention', which the word
-    # 'contention' already catches.
-    ("Locks and waiting", ("contention", "monitor", "locked", "mutex", "futex")),
-    ("Binder / IPC", ("binder", "transact", "ipc")),
+    ("Garbage collection", (
+        r"\bGC\b",                       # young concurrent copying GC, … GC
+        r"(?i:\bgarbage collect)",
+        r"^waitWhileAllocating",         # an allocation stalled on the collector
+        r"^WaitForGcToComplete",
+        r"(?i:\bconcurrent copying\b)",
+    )),
+    ("Locks and waiting", (
+        r"^Lock contention on ",
+        r"^monitor contention with owner ",
+        r"(?i:\bcontention\b)",
+        r"(?i:\bfutex)",                 # futex_wait, futex wait
+        r"(?i:\bmutex\b)",
+    )),
+    ("Binder / IPC", (
+        r"^binder (transaction|reply|async)",
+        r"^[AH]IDL::",                   # the generated stubs' own sections
+    )),
 )
+
+# Families no section takes, whatever their name holds: they are never the
+# runtime's GC, lock or binder slices. ART names the method it compiles and
+# the class it initialises, so `JIT compiling …Collection…` and
+# `Lkotlin/collections/CollectionsKt;` carry any word their code does, and a
+# marker the agent placed is named after the code it measures.
+# The agent's own markers are left out by their prefix, in `_bucket`.
+NEVER_BUCKETED = re.compile(r"^(JIT compiling |L[\w/$#]+;$)")
+# A lock of the runtime's own: `Lock contention on ClassLinker classes lock`,
+# `… thread list lock`, `… InternTable lock`. They are locks, and listed with
+# them, but `monitor_contention` leaves them out on purpose: no application
+# code is behind them (see its header). Widening its mask is not the move,
+# so they are not missed by it.
+RUNTIME_LOCK = re.compile(r"^Lock contention on (?!a monitor lock)")
+_BUCKET_RE = tuple((title, re.compile("|".join(f"(?:{k})" for k in shapes)))
+                   for title, shapes in BUCKETS)
+
 
 def _detector_masks(overrides: dict | None = None,
                     off: set[str] | frozenset[str] = frozenset()) -> list[tuple[str, str, str]]:
@@ -2636,7 +2670,7 @@ def cmd_names(args) -> int:
     # Cells are cut to fit a terminal, and only a terminal: a pipe or an
     # agent gets the whole name, and so does `--wide` on a screen.
     wide = args.wide or args.json or not sys.stdout.isatty()
-    sections, missed = _name_sections(families, args.min_ms * 1e6, pattern)
+    sections, missed = _name_sections(families, args.min_ms * 1e6, pattern, prefix)
     if args.json:
         _names_json(args, procs[0], async_rows, sections, missed)
     else:
@@ -2688,20 +2722,23 @@ def _names_process(path: str, cfg: Config) -> str | None:
     return process
 
 
-def _name_sections(families: dict, floor_ns: float, pattern) -> tuple[list, list]:
+def _name_sections(families: dict, floor_ns: float, pattern,
+                   prefix: str | None = None) -> tuple[list, list]:
     """The families in BUCKETS' sections, then "Everything else"; and the
-    ones a bucket holds that no mask sees, the biggest first."""
+    ones a bucket holds that no mask sees, the biggest first. `prefix` is the
+    agent's markers', which no section takes."""
     assigned: set[str] = set()
     sections: list[tuple[str, list[tuple[str, dict]]]] = []
     missed: list[tuple[str, str, dict]] = []
-    for title, keywords in BUCKETS:
-        picked = _bucket(families, keywords, assigned, floor_ns, pattern)
+    for title, shapes in _BUCKET_RE:
+        picked = _bucket(families, shapes, assigned, floor_ns, pattern, prefix)
         if not picked:
             continue
         picked.sort(key=lambda x: -x[1]["ns"])
         sections.append((title, picked))
         # Something excluded on purpose (skip_glob) is not a miss.
-        missed += [(title, f, d) for f, d in picked if not d["dets"] and not d["skips"]]
+        missed += [(title, f, d) for f, d in picked
+                   if not d["dets"] and not d["skips"] and not RUNTIME_LOCK.match(f)]
 
     rest = [(f, d) for f, d in families.items()
             if f not in assigned and d["ns"] >= floor_ns
@@ -2713,8 +2750,8 @@ def _name_sections(families: dict, floor_ns: float, pattern) -> tuple[list, list
     return sections, missed
 
 
-def _bucket(families: dict, keywords, assigned: set[str], floor_ns: float,
-            pattern) -> list[tuple[str, dict]]:
+def _bucket(families: dict, shapes, assigned: set[str], floor_ns: float,
+            pattern, prefix: str | None = None) -> list[tuple[str, dict]]:
     """The families one section takes, marked as taken, and of them the ones it shows."""
     picked = []
     for fam, data in families.items():
@@ -2725,7 +2762,8 @@ def _bucket(families: dict, keywords, assigned: set[str], floor_ns: float,
         # `Thread::Init` landed under garbage collection because one of
         # its threads happened to be HeapTaskDaemon. A thread says
         # WHERE code ran, not what it did.
-        if fam in assigned or not any(k in fam.lower() for k in keywords):
+        if (fam in assigned or not shapes.search(fam) or NEVER_BUCKETED.match(fam)
+                or (prefix and fam.startswith(prefix))):
             continue
         # A section on no thread is read by no detector, so no mask can reach
         # it, and listed among GC, locks and binder it landed in "Missed by
