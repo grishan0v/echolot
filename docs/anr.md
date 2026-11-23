@@ -214,6 +214,15 @@ and it names the others; that includes several whose directories all end in
 the package, such as one class in `src/debug` and `src/release`.
 `mark --from-anr` marks only frames placed for certain and names the rest.
 
+A deobfuscated stack can name a Kotlin class's file `Guard.java`. When the
+checkout has no file of that name, the frame is placed in `Guard.kt` of its
+package, in the file a top-level function's `GuardKt` comes from, or in the
+`.kt` file of its package that declares the class (`FooImpl` in `Foo.kt`). Such
+a frame is placed for certain, and the placement says which file the frame
+named (`--json`: `named`). A frame that is not placed even so is listed under
+what the report does not say by its cause: the file it names and the class
+its package does not declare.
+
 The checkout also decides which frames are the project's at all. Without one
 that is a list — the platform's packages and those of the libraries every app
 carries — and a library missing from it reads as the app's own. With one, the

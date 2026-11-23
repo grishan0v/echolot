@@ -556,3 +556,120 @@ def test_the_help_names_play_console_and_what_the_verb_writes():
     check("Play Console is one of the inputs", "Play Console" in text, text)
     check("the run log is what it writes", ".echolot/log/runs.jsonl" in text, text)
     check("not that it writes nothing", "writes nothing" not in text, text)
+
+
+# --- a Kotlin class's frame that names `Foo.java` (#590) ----------------------
+
+SYNC = "app/src/main/java/com/example/app/sync/"
+
+KOTLIN_NAMED_JAVA_SOURCES = {
+    SYNC + "Guard.kt": (
+        "package com.example.app.sync\n"
+        "\n"
+        "object Guard {\n"
+        "\n"
+        "    fun <T> run(action: () -> T): T? {\n"        # 5
+        "        return try {\n"
+        "            val value = action()\n"              # 7
+        "            value\n"
+        "        } catch (e: Exception) { null }\n"
+        "    }\n"
+        "}\n"),
+    SYNC + "Sync.kt": (
+        "package com.example.app.sync\n"
+        + "\n" * 10
+        + "class Sync {\n    private fun <T> Task<T>.block() = Guard.run { Tasks.await(this) }\n"   # 12, 13
+        + "\n"
+        + "    fun push(value: String) {\n"              # 15
+        + "        val task = upload(value)\n"
+        + "        log(value)\n"
+        + "        task.block()\n"                        # 18
+        + "    }\n}\n"),
+    SYNC + "Prefs.kt": (
+        "package com.example.app.sync\n"
+        + "\n" * 7
+        + "class Prefs(private val sync: Sync) {\n"       # 9
+        + "    fun write(value: String) {\n"              # 10
+        + "        store(value)\n"
+        + "        sync.push(value)\n"                    # 12
+        + "    }\n}\n"),
+    SYNC + "Planner.kt": (
+        "package com.example.app.sync\n"
+        + "\n" * 2
+        + "class Planner(private val prefs: Prefs) {\n"   # 4
+        + "    fun step() {\n"                            # 5
+        + "        val next = plan()\n"
+        + "        check(next)\n"
+        + "        prefs.write(next)\n"                   # 8
+        + "    }\n}\n"),
+}
+
+PARKED_TOP = """\
+# Crashlytics -
+# Application: com.example.app
+# Version: 1.2.0 (120)
+
+DefaultDispatcher-worker-9 (waiting):tid=30 systid=4301
+       at jdk.internal.misc.Unsafe.park(Native method)
+       at java.util.concurrent.locks.LockSupport.park(LockSupport.java:226)
+       at java.util.concurrent.locks.AbstractQueuedSynchronizer.acquireSharedInterruptibly(AbstractQueuedSynchronizer.java:1139)
+       at java.util.concurrent.CountDownLatch.await(CountDownLatch.java:230)
+       at com.google.android.gms.tasks.Tasks.await(com.google.android.gms:play-services-tasks@@18.1.0:8)
+"""
+
+KOTLIN_FRAMES_NAMED_JAVA = PARKED_TOP + """\
+       at com.example.app.sync.Sync.block$lambda$0(Sync.kt:13)
+       at com.example.app.sync.Guard.run(Guard.java:7)
+       at com.example.app.sync.Sync.block(Sync.kt:13)
+       at com.example.app.sync.Sync.push(Sync.kt:18)
+       at com.example.app.sync.Prefs.write(Prefs.java:12)
+       at com.example.app.sync.Planner.step(Planner.java:8)
+"""
+
+JAVA_NAMES_ONLY = PARKED_TOP + """\
+       at com.example.app.sync.Sync.push(Sync.java:18)
+       at com.example.app.sync.Prefs.write(Prefs.java:12)
+       at com.example.app.sync.Planner.step(Planner.kt:8)
+"""
+
+
+@pytest.fixture
+def kotlin_checkout(tmp_path) -> Path:
+    return write(tmp_path / "checkout", KOTLIN_NAMED_JAVA_SOURCES)
+
+
+def test_a_kotlin_class_frame_that_names_java_is_placed_in_its_kt_file(kotlin_checkout):
+    rep = anr.parse(KOTLIN_FRAMES_NAMED_JAVA)
+    placed, missing = anr.locate(rep, kotlin_checkout)
+    check("all six frames placed", len(placed) == 6 and not missing,
+          ([f.frame for f in placed], missing))
+    guard = next(f for f in placed if f.symbol.endswith("Guard.run"))
+    check("in Guard.kt, at the frame's line, for certain",
+          guard.file == SYNC + "Guard.kt" and guard.line == 7 and guard.exact, guard)
+    check("saying which file the frame named", guard.named == "Guard.java", guard)
+    out = anr.render(rep, (placed, missing))
+    check("no 'another version' line, nor a missing file",
+          "this checkout does not have" not in out and "another version" not in out, out)
+    check("the placement says what the frame named", "the frame names `Guard.java`" in out, out)
+
+
+def test_a_class_declared_in_a_file_of_another_name_is_found(tmp_path):
+    """`FooImpl`, declared in `Foo.kt`, arrives as `(FooImpl.java:M)`."""
+    root = write(tmp_path / "checkout", {
+        "app/src/main/java/com/example/app/Foo.kt":
+            "package com.example.app\n\ninterface Foo\n\n"
+            "internal class FooImpl : Foo {\n    fun go() {\n        work()\n    }\n}\n"})
+    found = anr.place("com.example.app.FooImpl.go(FooImpl.java:7)", anr.source_index(root), root)
+    check("placed in Foo.kt", found is not None
+          and found.file == "app/src/main/java/com/example/app/Foo.kt" and found.exact, found)
+    found = anr.place("com.example.app.Gone.go(Gone.java:7)", anr.source_index(root), root)
+    check("a class the package does not declare stays unplaced", found is None, found)
+
+
+def test_a_frame_with_no_such_class_says_so_by_its_cause(kotlin_checkout):
+    text = KOTLIN_FRAMES_NAMED_JAVA.replace("Planner.step(Planner.java:8)",
+                                            "Gone.step(Gone.java:8)")
+    rep = anr.parse(text)
+    out = anr.render(rep, anr.locate(rep, kotlin_checkout))
+    check("the gap names the file and the class it looked for",
+          "names `Gone.java`" in out and "class `Gone` in `com.example.app.sync`" in out, out)

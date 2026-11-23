@@ -1280,6 +1280,9 @@ class Located:
     # The other files it could be, when it is a guess: the same name, and as
     # far as the package says, the same place.
     others: tuple[str, ...] = ()
+    # The file the frame named, when it was placed in another: a Kotlin
+    # class's frame that says `Guard.java`, placed in `Guard.kt`.
+    named: str = ""
 
 
 def source_index(root: Path) -> dict[str, list[Path]]:
@@ -1337,14 +1340,23 @@ def place(frame: str, index: dict[str, list[Path]], root: Path) -> Located | Non
     where = _WHERE.match(parsed.group("where").strip())
     if not where:
         return None
-    candidates = index.get(where.group("file"))
-    if not candidates:
-        return None
-
     symbol = parsed.group("symbol").strip()
     # `pkg.Class$1.onClick` — the anonymous class is still that package.
     package = _package_of(symbol)
     wanted = "/" + package.replace(".", "/") if package else ""
+
+    named = where.group("file")
+    candidates = index.get(named)
+    if not candidates:
+        found = _kotlin_for(symbol, named, package, index, root)
+        if not found:
+            return None
+        line = where.group("line")
+        return Located(frame=frame, symbol=symbol,
+                       file=found[0].relative_to(root).as_posix(),
+                       line=int(line) if line else None, exact=len(found) == 1,
+                       others=tuple(p.relative_to(root).as_posix() for p in found[1:]),
+                       named=named)
 
     # One file of that name in the whole checkout is not a guess, whatever the
     # package says: Kotlin lets a class live in a directory that does not spell
@@ -1369,6 +1381,73 @@ def place(frame: str, index: dict[str, list[Path]], root: Path) -> Located | Non
                    line=int(line) if line else None, exact=exact,
                    others=() if exact else tuple(
                        p.relative_to(root).as_posix() for p in pool[1:]))
+
+
+def _class_of(symbol: str) -> str:
+    """`Guard` of `pkg.Guard$run$1.invoke`: the outer class the frame is in."""
+    return symbol.rsplit(".", 1)[0].rsplit(".", 1)[-1].split("$", 1)[0]
+
+
+def _in_package(path: Path, root: Path, package: str) -> bool:
+    """Whether a source file is in this package: by its directory, or by the
+    `package` line, which is what the compiler went by."""
+    wanted = "/" + package.replace(".", "/") if package else ""
+    if wanted and ("/" + path.relative_to(root).parent.as_posix()).endswith(wanted):
+        return True
+    try:
+        with path.open("rb") as source:
+            head = source.read(8192).decode("utf-8-sig", errors="replace")
+    except OSError:
+        return False
+    declared = _PACKAGE.search(head)
+    return (declared.group("name") if declared else "") == package
+
+
+def _kotlin_for(symbol: str, named: str, package: str,
+                index: dict[str, list[Path]], root: Path) -> list[Path]:
+    """The Kotlin files a frame naming `X.java` the checkout does not have is in.
+
+    A deobfuscated stack can name the file after the class with `.java`,
+    Kotlin classes included — where the mapping kept no source file name,
+    as far as the events show. The name follows the build, not the class:
+    one frame read `(X.kt:N)` in one release and `(X.java:N)` in the next.
+    Looked up by the name alone, such a frame was in no file, and `mark`
+    counted it as a sign of another build on the build that froze.
+
+    `X.kt` of the frame's package first; then the file of a top-level
+    function's `XKt`; then a `.kt` file in the package's directory that
+    declares the class — `FooImpl` declared in `Foo.kt`.
+    """
+    if not named.endswith(".java"):
+        return []
+    cls = _class_of(symbol)
+    names = [named[:-len(".java")] + ".kt"]
+    if cls.endswith("Kt") and len(cls) > 2:
+        names.append(cls[:-2] + ".kt")
+    for name in names:
+        found = [p for p in index.get(name, []) if _in_package(p, root, package)]
+        if found:
+            return found
+    if not cls or not package:
+        return []
+    declares = re.compile(
+        r"^[ \t]*(?:[\w@]+[ \t]+)*(?:class|object|interface)[ \t]+"
+        + re.escape(cls) + r"\b", re.MULTILINE)
+    wanted = "/" + package.replace(".", "/")
+    found = []
+    for name, paths in index.items():
+        if not name.endswith(".kt"):
+            continue
+        for path in paths:
+            if not ("/" + path.relative_to(root).parent.as_posix()).endswith(wanted):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if declares.search(text) and _in_package(path, root, package):
+                found.append(path)
+    return sorted(found)
 
 
 def of_interest(report: Report) -> list[Thread]:
@@ -1767,6 +1846,10 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 + ", ".join(found.others[:3])
                 + (" …" if len(found.others) > 3 else ""))
             where = found.file + (f":{found.line}" if found.line else "")
+            if found.named:
+                # Placed by its class: said, so the line is not read as a
+                # file of that name somebody could look for.
+                mark += f"  ← the frame names `{found.named}`"
             out.append(f"- `{_short(found.symbol)}` — {where}{mark}")
         out.append("")
 
@@ -1898,10 +1981,16 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
                     f"this build, and one from another build misses the app's "
                     f"own.")
     if missing:
-        gaps.append(f"- Where {len(missing)} of this project's frames are: they "
-                    f"name a source file this checkout does not have. Either "
-                    f"the module is elsewhere or the report is from another "
-                    f"version — first is `{missing[0]}`.")
+        first = missing[0]
+        named = _FRAME.match(first)
+        file = _WHERE.match(named.group("where").strip()).group("file") if named else ""
+        symbol = named.group("symbol").strip() if named else first
+        gaps.append(f"- Where {len(missing)} of this project's frames are. The "
+                    f"first, `{first}`, names `{file}`, a file this checkout "
+                    f"does not have, and no file of it declares a class "
+                    f"`{_class_of(symbol)}` in `{_package_of(symbol)}`. Either "
+                    f"the module lives outside this checkout, or the class is "
+                    f"not in it any more.")
     if report.skipped or report.preamble:
         where = ("before and after the threads" if report.skipped and report.preamble
                  else "after the threads" if report.skipped else "before the threads")
@@ -1993,7 +2082,9 @@ def summary(report: Report,
         "code": None if code is None else {
             "placed": [
                 {"symbol": f.symbol, "file": f.file, "line": f.line,
-                 "exact": f.exact, "others": list(f.others)}
+                 "exact": f.exact, "others": list(f.others),
+                 # The file the frame named when it was placed by its class.
+                 "named": f.named or None}
                 for f in code[0]
             ],
             "unplaced": code[1],
