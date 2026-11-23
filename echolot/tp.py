@@ -909,6 +909,36 @@ class TraceSession:
             if not sandbox.refused(e):
                 raise
             raise sandbox.trace_processor_refused(e) from e
+        stopped = self._stopped_short(path)
+        if stopped:
+            self.close()
+            raise ConfigError(stopped)
+
+    def _stopped_short(self, path: Path) -> str | None:
+        """What to say when the load ended before the tables a trace ends with.
+
+        A gzip stream with no end: trace_processor finds it out at the end of
+        the file and says so only on its own command line. Through perfetto's
+        client, which drops what the end-of-file step answers, the session
+        opens with no `process`, no `slice` — and the first query echolot
+        sent, the process list, ended `probe`, `names` and `analyze` in a
+        traceback reading "no such table: process" (#578). Every recording
+        has the table, empty or not; a load without it did not finish.
+        """
+        try:
+            self.query("SELECT 1 FROM process LIMIT 1")
+            return None
+        except Exception as e:
+            if "no such table" not in str(e):
+                raise
+        if _is_gzip(path):
+            return (f"{path}: the gzip stream ends early — the file was not "
+                    f"pulled or written whole. Pull or copy it again, or leave "
+                    f"it out and run again.")
+        return (f"{path}: trace_processor stopped before the end of this file "
+                f"and built none of a trace's tables from it. A capture that "
+                f"was cut short, or a file that is not a trace; leave it out "
+                f"and run again.")
 
     def exec_script(self, sql: str) -> None:
         """Runs a multi-statement script (DDL), discarding the output."""
@@ -932,6 +962,14 @@ class TraceSession:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def _is_gzip(path: Path) -> bool:
+    try:
+        with path.open("rb") as f:
+            return f.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
 
 
 def _then(path: Path, extra: bytes):

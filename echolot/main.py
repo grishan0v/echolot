@@ -124,6 +124,7 @@ def _probe_config(args) -> Config | None:
 
 def _probe(args, tp_binary: str | None) -> int:
     with TraceSession(args.trace, tp_binary) as tp:
+        _require_named_processes(tp, args.trace)
         print("## Processes\n")
         # Two counts, because they are two kinds of section. `slices` are
         # the threads' — what the detectors read. `async` are the process's
@@ -1294,18 +1295,7 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
     """)
     if not rows:
         where = f" {Path(trace).name}" if trace else ""
-        # A file trace_processor opens without complaint and that holds no
-        # trace data: a report.json, the benchmarkData.json a macrobenchmark
-        # writes beside its traces, an empty file. No config is wrong about
-        # it, and `probe` on it lists no process either.
-        named = tp.query("SELECT COUNT(*) AS n FROM process "
-                         "WHERE name IS NOT NULL AND name != ''")
-        if not (named and named[0]["n"]):
-            raise ConfigError(
-                f"{Path(trace).name if trace else 'the trace'} holds no process "
-                f"with a name: it is no trace data, or a recording without the "
-                f"process list. A report.json or a macrobenchmark's "
-                f"benchmarkData.json opens like a trace and holds none.")
+        _require_named_processes(tp, trace)
         said = {"--process": f"--process '{glob}'",
                 "default": f"the default mask '{glob}'"}.get(
                     source, f"project.process = '{glob}'")
@@ -1343,6 +1333,25 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
             file=sys.stderr,
         )
     return rows
+
+
+def _require_named_processes(tp, trace: str | None) -> None:
+    """Refuses a file trace_processor opens without complaint and that holds
+    no trace data: a report.json, the benchmarkData.json a macrobenchmark
+    writes beside its traces, an empty file. No config is wrong about it.
+
+    `probe` asks it first, `analyze` and `names` once no process matched:
+    probe on such a file printed an empty process table and exited 0, and
+    `probe x && analyze x` went on with a file that holds nothing (#567).
+    """
+    named = tp.query("SELECT COUNT(*) AS n FROM process "
+                     "WHERE name IS NOT NULL AND name != ''")
+    if not (named and named[0]["n"]):
+        raise ConfigError(
+            f"{Path(trace).name if trace else 'the trace'} holds no process "
+            f"with a name: it is no trace data, or a recording without the "
+            f"process list. A report.json or a macrobenchmark's "
+            f"benchmarkData.json opens like a trace and holds none.")
 
 
 def _setup_context(tp, cfg: Config, upid: int,

@@ -139,6 +139,20 @@ def test_one_bad_file_among_the_repeats_is_named(tmp_path, fixture_trace):
     refused(done, "cut-short.perfetto-trace", "leave it out")
 
 
+@pytest.mark.parametrize("verb", ["probe", "names", "analyze"])
+def test_a_gzip_that_ends_early_is_named(tmp_path, fixture_trace, verb):
+    """A compressed recording cut in transit: perfetto's client drops what
+    trace_processor says at the end of the file, the session opened with no
+    `process` table, and the first query ended all three in a traceback
+    (#578)."""
+    import gzip
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    whole = gzip.compress(fixture_trace.read_bytes())
+    (tmp_path / "cut.perfetto-trace.gz").write_bytes(whole[:len(whole) // 2])
+    refused(cli(tmp_path, verb, "cut.perfetto-trace.gz"),
+            "cut.perfetto-trace.gz", "the gzip stream ends early")
+
+
 def test_a_mask_is_taken_as_typed(tmp_path, fixture_trace):
     """`*GC*` is a glob: the same shape as the shipped `*GC`, and a value."""
     (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
