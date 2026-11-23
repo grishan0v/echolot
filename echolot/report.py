@@ -1460,21 +1460,22 @@ def to_markdown(report: dict[str, Any]) -> str:
             out.append(
                 f"> ⚠️ {label} anchor `{anchor['glob']}` occurs only before the "
                 f"start anchor ({anchor['before_start']} time(s)), so nothing "
-                f"closed the window and it ran to the end of the trace. Are the "
+                f"closed the window and it ran to where the process's last "
+                f"slice ends. Are the "
                 f"two anchors swapped? The numbers below are not about your "
                 f"scenario."
             )
         elif missed:
             out.append(
                 f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in "
-                f"{missed[0]} of {missed[1]} repeats — in those the window "
-                f"expanded to the whole trace, and their rows are in the "
+                f"{missed[0]} of {missed[1]} repeats — in those "
+                f"{FALLBACK[key]}, and their rows are in the "
                 f"medians below. Check against `probe`."
             )
         elif anchor and anchor.get("matches") == 0:
             out.append(
                 f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in the "
-                f"trace — the window expanded to the whole trace. Check against "
+                f"trace — {FALLBACK[key]}. Check against "
                 f"`probe`; the numbers below are not about your scenario."
             )
         elif anchor and anchor.get("unfinished"):
@@ -1483,6 +1484,7 @@ def to_markdown(report: dict[str, Any]) -> str:
                 f"scenario had not reached its end when the recording stopped, "
                 f"so the window runs to the end of the trace."
             )
+    out.extend(_no_anchor_lines(w))
     processes = w.get("processes")
     if processes:
         out.append(
@@ -1687,6 +1689,45 @@ def written_by(version: str | None, detectors: int | None = None,
 
 
 _DETECTOR_DIR = Path(__file__).parent / "sql" / "detectors"
+
+
+# Where a window with no anchor in the config is cut. context.sql falls back
+# to the process's own slices, and says so in its comment; the report has to
+# say it too (#614).
+SPAN = "the process's first slice to where its last one ends"
+FALLBACK = {"start_anchor": "the window opened at the process's first slice",
+            "end_anchor": "the window ran to where the process's last slice ends"}
+
+
+def _no_anchor_lines(w: dict[str, Any]) -> list[str]:
+    """One line when the scenario names no start or no end anchor.
+
+    `null` is what setup writes when no anchor was found, and it is honest
+    in the config. The window then runs over everything the process did:
+    on three `command` scenarios of one app it was 3 to 6 times the path
+    from the tap to the settled screen, and the first row of two of them was
+    a background batch that only happened to fall inside. A window cut by a
+    launch (`defined_by`) has its own line, and a report older than the
+    `start_anchor` key says nothing.
+    """
+    if w.get("defined_by"):
+        return []
+    start = "start_anchor" in w and w["start_anchor"] is None
+    end = "end_anchor" in w and w["end_anchor"] is None
+    if start and end:
+        where = f"the window runs from {SPAN}"
+        what = "No anchors in the scenario"
+    elif start:
+        where = "the window opens at the process's first slice"
+        what = "No start anchor in the scenario"
+    elif end:
+        where = "the window runs to where the process's last slice ends"
+        what = "No end anchor in the scenario"
+    else:
+        return []
+    return [f"> {what}: {where}, so its length is everything the process did "
+            f"there, and the scenario may be a small part of it. Name the "
+            f"anchors in the config to measure the scenario alone."]
 
 
 def _header_lines(report: dict[str, Any]) -> list[str]:

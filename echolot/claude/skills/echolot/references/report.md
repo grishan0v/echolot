@@ -518,8 +518,11 @@ which is neither checked nor not.
 
 **A merged report's window checks cover every repeat.** `start_anchor` and
 `end_anchor` carry the fewest `matches` any repeat had, and `missed: "1/3"`
-when the anchor found nothing in some of them: those repeats' windows were the
-whole trace, and their rows are in the medians. `opened_inside` comes from a
+when the anchor found nothing in some of them: those repeats' windows ran from
+the process's first slice to where its last one ends, and their rows are in
+the medians. A scenario with no anchor in the config (`null`) has
+`start_anchor` or `end_anchor` set to `null`, and the header says in one line
+where its window was taken from. `opened_inside` comes from a
 repeat where it is material, with `runs` saying in how many. `processes` lists
 the process names when the repeats measured more than one.
 

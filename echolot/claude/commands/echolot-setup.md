@@ -194,7 +194,8 @@ confirmed it (untouchable), `default` — an engine default.
 Nothing found? Write `null` and say so out loud. A plausible invented name is
 worse than an honest gap: it will break the window silently. For an anchor,
 `end: null`, or `name: null` in the block above, means no anchor: the window
-runs to the end of the trace.
+runs to where the process's last slice ends, which can be long after the
+journey did, and the report says so in its header.
 
 ## Verification instead of trust
 
@@ -278,14 +279,15 @@ as it was, and the new one gets a window and a runner of its own.
    scrolls, or, in `gradle` mode, the class in `gradle_args` whose test drives
    it. When the repository does not say, ask the human: a macrobenchmark test,
    a UI test, an `adb` command.
-3. **A probe of it**, with no anchors yet, so its window is the whole trace:
+3. **A probe of it**, with no anchors yet, so its window is everything the
+   process did in the recording:
    `echolot collect --scenario feed_scroll -n 1`, then
    `echolot probe <its trace> --process '<package>*'`.
 4. **Where it ends, with the human**, as question 2 asks it: the options are
    the probe's longest slices, and the answer goes under the new scenario as
    `end`, with `_source: confirmed_by_user`. Ask for a `start` the same way
-   when the journey begins later than the trace does; without one, the window
-   opens where the trace starts.
+   when the journey begins later than the app's first slice does; without
+   one, the window opens at the process's first slice.
 5. **Its thresholds**, once there are healthy runs of it, as "Thresholds"
    above says: `echolot calibrate --scenario feed_scroll <its traces>` prints
    `scenarios.feed_scroll.detectors`, which goes under the new scenario. A
