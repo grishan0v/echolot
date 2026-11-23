@@ -34,9 +34,10 @@
 --                      or `Ll71;` once a release build is obfuscated
 --   the platform       binder transactions, lock contention, resources
 --
--- A row per name, with `Startup` opened into its Initializers, because the
--- Initializer is what somebody can move or defer and `Startup` is only the
--- library's own wrapper. ART's classes fold into one row, told by their
+-- A row per name, with `Startup` opened into its Initializers at every
+-- depth, because the Initializer is what somebody can move or defer and
+-- `Startup` is only the library's own wrapper. One that runs inside another
+-- is a row of its own, and the other's self time leaves it out. ART's classes fold into one row, told by their
 -- shape — `L`, no space, `;` — since an obfuscated name has no package to
 -- go by. One cold start wrote 4,758 of them into this stretch, 331 ms
 -- together, and a row each would bury everything else. A name another
@@ -62,7 +63,7 @@
 -- above that: a silent detector means the providers and `Application.onCreate`
 -- together were short.
 
-WITH bind AS (
+WITH RECURSIVE bind AS (
     SELECT s.slice_id, s.ts, s.ts + s.dur AS te
     FROM _slice_win s
     WHERE s.is_main_thread = 1
@@ -92,18 +93,47 @@ inside AS (
     JOIN stretch t ON t.bind_id = k.bind_id
     WHERE k.ts >= t.ts
 ),
+-- What `Startup` holds, at every depth. An Initializer that another depends
+-- on runs inside the other's section: androidx.startup opens the dependent's
+-- section, initializes what it depends on, then creates it. Taken from
+-- `Startup`'s children alone, such an Initializer had no row wherever it was
+-- nested, and its time was its parent's (#512). Below the first level a
+-- section of ART's or of another detector stays where it is, in its
+-- parent's own time; neither is descended into.
+startup (slice_id, up, name, dur, parent) AS (
+    SELECT s.slice_id, NULL, s.name, s.dur, NULL
+    FROM _slice_win s
+    JOIN slice raw ON raw.id = s.slice_id
+    JOIN inside i  ON raw.parent_id = i.slice_id
+    WHERE i.name = 'Startup'
+
+    UNION ALL
+
+    SELECT s.slice_id, t.slice_id, s.name, s.dur, t.name
+    FROM startup t
+    JOIN slice raw    ON raw.parent_id = t.slice_id
+    JOIN _slice_win s ON s.slice_id = raw.id
+    WHERE NOT ((t.name GLOB 'L*;' AND t.name NOT GLOB '* *')
+               OR t.name GLOB 'VerifyClass *')
+      AND t.name NOT IN (SELECT name FROM _claimed_name)
+      AND NOT ((s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
+               OR s.name GLOB 'VerifyClass *')
+      AND s.name NOT IN (SELECT name FROM _claimed_name)
+),
+-- Self time is a section less the sections below it that are rows here: an
+-- Initializer's own work, apart from the ones it waited for.
 candidate AS (
-    SELECT i.name, i.dur, 0 AS initializer
+    SELECT i.name, i.dur, i.dur AS self, 0 AS initializer, NULL AS parent
     FROM inside i
     WHERE i.name != 'Startup'
 
     UNION ALL
 
-    SELECT s.name, s.dur, 1
-    FROM _slice_win s
-    JOIN slice raw ON raw.id = s.slice_id
-    JOIN inside i  ON raw.parent_id = i.slice_id
-    WHERE i.name = 'Startup'
+    SELECT t.name, t.dur,
+           t.dur - COALESCE((SELECT SUM(c.dur) FROM startup c
+                             WHERE c.up = t.slice_id), 0),
+           1, t.parent
+    FROM startup t
 ),
 named AS (
     SELECT CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')
@@ -112,9 +142,12 @@ named AS (
                 ELSE c.name
            END AS location,
            c.dur,
+           c.self,
            CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')
                   OR c.name GLOB 'VerifyClass *'
                 THEN 'ART writes a section for every class it initializes'
+                WHEN c.initializer AND c.parent IS NOT NULL
+                THEN 'under androidx.startup, run inside ' || c.parent
                 WHEN c.initializer
                 THEN 'an androidx.startup Initializer'
                 ELSE 'a section under bindApplication, after makeApplication'
@@ -125,6 +158,8 @@ named AS (
     UNION ALL
 
     SELECT '(no section)',
+           (t.te - t.ts) - COALESCE((SELECT SUM(i.dur) FROM inside i
+                                     WHERE i.bind_id = t.bind_id), 0),
            (t.te - t.ts) - COALESCE((SELECT SUM(i.dur) FROM inside i
                                      WHERE i.bind_id = t.bind_id), 0),
            CASE WHEN t.made
@@ -140,6 +175,7 @@ named AS (
 SELECT
     location,
     COUNT(*)                          AS count,
+    ROUND(SUM(self) / 1e6, 2)         AS self_ms,
     ROUND(SUM(dur) / 1e6, 2)          AS total_ms,
     ROUND(MAX(dur) / 1e6, 2)          AS max_ms,
     MAX(detail)                       AS detail
@@ -147,7 +183,7 @@ FROM named
 WHERE dur > 0
   AND (SELECT MAX(te - ts) FROM stretch) >= {{min_stretch_ms}} * 1000000
 GROUP BY location
-ORDER BY total_ms DESC
+ORDER BY self_ms DESC
 LIMIT 20;
 
 -- @intervals
@@ -156,7 +192,7 @@ LIMIT 20;
 -- whole, and for the row nobody named, the gaps between the sections in the
 -- stretch. The steps that find the stretch are the ones above, repeated.
 
-WITH bind AS (
+WITH RECURSIVE bind AS (
     SELECT s.slice_id, s.ts, s.ts + s.dur AS te
     FROM _slice_win s
     WHERE s.is_main_thread = 1
@@ -184,6 +220,26 @@ inside AS (
     JOIN stretch t ON t.bind_id = k.bind_id
     WHERE k.ts >= t.ts
 ),
+startup (slice_id, name, ts, dur) AS (
+    SELECT s.slice_id, s.name, s.ts, s.dur
+    FROM _slice_win s
+    JOIN slice raw ON raw.id = s.slice_id
+    JOIN inside i  ON raw.parent_id = i.slice_id
+    WHERE i.name = 'Startup'
+
+    UNION ALL
+
+    SELECT s.slice_id, s.name, s.ts, s.dur
+    FROM startup t
+    JOIN slice raw    ON raw.parent_id = t.slice_id
+    JOIN _slice_win s ON s.slice_id = raw.id
+    WHERE NOT ((t.name GLOB 'L*;' AND t.name NOT GLOB '* *')
+               OR t.name GLOB 'VerifyClass *')
+      AND t.name NOT IN (SELECT name FROM _claimed_name)
+      AND NOT ((s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
+               OR s.name GLOB 'VerifyClass *')
+      AND s.name NOT IN (SELECT name FROM _claimed_name)
+),
 candidate AS (
     SELECT i.name, i.ts, i.dur
     FROM inside i
@@ -191,11 +247,8 @@ candidate AS (
 
     UNION ALL
 
-    SELECT s.name, s.ts, s.dur
-    FROM _slice_win s
-    JOIN slice raw ON raw.id = s.slice_id
-    JOIN inside i  ON raw.parent_id = i.slice_id
-    WHERE i.name = 'Startup'
+    SELECT t.name, t.ts, t.dur
+    FROM startup t
 ),
 pieces AS (
     SELECT CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')

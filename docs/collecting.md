@@ -862,7 +862,8 @@ in `runner.gradle_args`.
 
 Numbers are merged by **median** — not by mean (one outlier would drag the
 conclusion along) and not by maximum (then any random hiccup becomes a
-"finding").
+"finding"). The one exception is **Max**, the longest single occurrence: it is
+the longest any repeat saw, and each repeat's own is in `spread.max_ms`.
 
 The whole point of repeating is the **Runs** column:
 

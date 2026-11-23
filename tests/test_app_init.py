@@ -87,3 +87,61 @@ def test_a_cold_start_without_bind_application_is_silent(
     """A warm start never binds the Application, and has nothing to say here."""
     monkeypatch.setattr(fixture, "SLICES", _without("bindApplication"))
     check("no bindApplication, no rows", _rows(_analysed(tmp_path)) == {})
+
+
+def _nested() -> dict:
+    """The fixture with two Initializers that `WorkManagerInitializer` depends
+    on, run inside its section, and a class ART initialized inside it."""
+    def put(nodes):
+        out = []
+        for n, start, dur, kids in nodes:
+            if n == "WorkManagerInitializer":
+                kids = [("LogsInitializer", 111.5, 3, [
+                            ("ConfigInitializer", 112, 1, [])]),
+                        ("Lcom/example/app/Logs;", 115, 0.5, []),
+                        ("ReportingInitializer", 116, 2, [])]
+            out.append((n, start, dur, put(kids)))
+        return out
+    slices = copy.deepcopy(fixture.SLICES)
+    slices[fixture.TID_MAIN] = put(slices[fixture.TID_MAIN])
+    return slices
+
+
+def test_an_initializer_inside_another_is_a_row_of_its_own(
+        tmp_path: Path, monkeypatch) -> None:
+    """#512: an Initializer that another depends on runs inside the other's
+    section, and had no row wherever it was nested."""
+    monkeypatch.setattr(fixture, "SLICES", _nested())
+    got = _rows(_analysed(tmp_path))
+    check("both children and the grandchild are rows",
+          {"LogsInitializer", "ReportingInitializer", "ConfigInitializer"} <= set(got),
+          sorted(got))
+    logs = got["LogsInitializer"]
+    check("a child's total, and its own time without its own child",
+          logs["total_ms"] == 3.0 and logs["self_ms"] == 2.0, logs)
+    check("and says what it ran inside",
+          "inside WorkManagerInitializer" in logs["detail"], logs["detail"])
+    parent = got["WorkManagerInitializer"]
+    # 9 ms, less 3 and 2 of the Initializers in it. The class ART initialized
+    # inside it stays in its own time, as before.
+    check("the parent's self time leaves its Initializers out",
+          parent["total_ms"] == 9.0 and parent["self_ms"] == 4.0, parent)
+    check("a class initialized inside an Initializer is not pulled out of it",
+          "Lcom/example/app/Logs;" not in got, sorted(got))
+
+
+def test_rows_of_a_flat_startup_have_self_equal_to_total(tmp_path: Path) -> None:
+    got = _rows(_analysed(tmp_path))
+    check("the shipped fixture has no nesting, so self is total",
+          all(r["self_ms"] == r["total_ms"] for r in got.values()), got)
+
+
+def test_a_merged_max_is_the_largest_repeat() -> None:
+    """#512: `Max 508` over runs of ~30, ~510, ~510 and ~550 ms."""
+    from echolot import report as report_mod
+    from tests.test_report import one, row
+    reps = [one([row("TelemetryInitializer", count=1, self_ms=ms, total_ms=ms, max_ms=ms)],
+                det_id="app_init") for ms in (30.0, 508.0, 512.0, 550.0)]
+    got = report_mod.aggregate(reps)["detectors"][0]["rows"][0]
+    check("Max is the largest value seen, the median stays the median",
+          got["max_ms"] == 550.0 and got["total_ms"] == 510.0, got)
