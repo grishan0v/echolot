@@ -327,6 +327,16 @@ window.` On a large app's launch that was the case behind the main thread's
 wait for a CPU: half of it was spent behind the app's own work. Read it with
 `waiting_for_cpu` and with `runnable_starvation`'s row for the main thread.
 
+`crowding.outside` is the other side of the crowd: `pct`, the share of the
+window's CPU time (cores × its length) that processes other than the app
+took, and `top`, the three largest, processes of one name and uid together.
+About 10–17% on a quiet cold start. At 40% or more the header warns that the
+app ran on a busy device and names the largest load, and the crowding line
+puts the app's waits behind those processes too. Merged, the median, with
+`pct_max` and the names from the repeat where they took most. The share of
+the main thread's core others held (`runnable_starvation`) is no measure of
+this: 35% at rest, 42% with eight busy loops taking 68% of the device.
+
 **`window.frames`** — how many frames the app drew in the window, by the
 frame timeline (`count`; merged, the median with each run's in `values`).
 `null` without a frame timeline. `compare` reads it: in a scripted scroll or
@@ -1010,6 +1020,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `version` | the reports come from different echolot versions, or one does not say which. A side that does not say leaves every row without a verdict: analyze its traces again |
 | `detector-changed` | the named detectors read the trace with different code on the two sides; their rows carry no verdict, a move there may be the tool's |
 | `same-traces` | both sides are one set of recordings read twice (same trace names, pid and window): every move is the tool's or the config's, and no row carries a verdict |
+| `environment-load` | other processes took 40% or more of the CPUs' time in one round's window, 15 points or more above the other. That side ran on a busy device; the warning names the largest load. Record it again with nothing else running |
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `compile` | the two rounds ran the app compiled differently — another `filter`, or the same filter from another profile (`reason`) — or one side's repeats did. Code compiled ahead of time runs faster than code the JIT compiles as the app runs, so a row can move for that reason alone. A side whose traces held no state (the process was already running) is judged by its JIT count instead: three times the other side's methods or more, and 50 or more apart, warns. A report from before the field gets no warning |
 | `instrumentation-removed` | temporary markers that are gone were taken out between the rounds, not work that went away; the slices they sat in got their self time back and are judged on their total |
