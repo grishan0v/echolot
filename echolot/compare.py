@@ -635,8 +635,10 @@ def _compile_moved(before: dict, after: dict) -> list[dict[str, str]]:
     the install brought (`install-dm`).
 
     A report from before the field carries no `compile` and is unknown, and
-    so is a side whose traces did not hold the state: no sentence for either.
-    A side whose own repeats disagree gets one, whatever the other side did.
+    so is a side whose traces did not hold the state. That side's filter
+    gets no sentence; its JIT count, which every trace holds, is compared
+    instead (`_jit_moved`, #592). A side whose own repeats disagree gets
+    one, whatever the other side did.
     """
     eb, ea = before.get("environment") or {}, after.get("environment") or {}
     if "compile" not in eb or "compile" not in ea:
@@ -653,6 +655,8 @@ def _compile_moved(before: dict, after: dict) -> list[dict[str, str]]:
                     f"that reason alone. Record both rounds on builds "
                     f"compiled the same way.",
         })
+    elif not (was and now):
+        out.extend(_jit_moved(cb, ca))
     for side, c in (("before", cb), ("after", ca)):
         if " and " in (c.get("filter") or "") or " and " in (c.get("reason") or ""):
             out.append({
@@ -663,6 +667,44 @@ def _compile_moved(before: dict, after: dict) -> list[dict[str, str]]:
                         f"one build, installed one way.",
             })
     return out
+
+
+# How far apart the JIT's work may be before it says the code ran another way:
+# a factor, and a floor in methods so that 2 against 7 is not a finding. On an
+# SM-A515F a scroll compiled from its profile JIT-compiled 64 methods in the
+# window, the same APK compiled `verify` 328 and compiled `speed` 2 (#592).
+JIT_FACTOR = 3.0
+JIT_FLOOR_METHODS = 50
+
+
+def _jit_moved(cb: dict, ca: dict) -> list[dict[str, str]]:
+    """The JIT's work in the window, when a side could not say its compile state.
+
+    A recording that begins with the process already running holds no
+    compile state, and #415 left such a side without a sentence. Its JIT
+    count is still a measurement, taken in the window, by any later
+    `analyze`: code compiled ahead of time leaves the JIT little to do, and
+    code nobody compiled leaves it a lot. Five times the methods is not the
+    same build run twice.
+    """
+    jb, ja = (cb.get("jit") or {}).get("methods"), (ca.get("jit") or {}).get("methods")
+    if jb is None or ja is None:
+        return []
+    low, high = sorted((jb, ja))
+    if high - low < JIT_FLOOR_METHODS or high < JIT_FACTOR * max(low, 1):
+        return []
+    more = "after" if ja > jb else "before"
+    return [{
+        "id": "compile",
+        "text": f"The JIT compiled {jb} methods in the window before and {ja} "
+                f"after, and the traces do not say how the app was compiled. "
+                f"That many more on the {more} side is what code compiled "
+                f"another way looks like — `verify` or a cleared profile leave "
+                f"the JIT more to do — so a row can move for that reason "
+                f"alone. Check the compile state on the device "
+                f"(`dumpsys package dexopt`), or record both rounds with the "
+                f"app's process started after its last compile.",
+    }]
 
 
 def _compiled(c: dict | None) -> str | None:

@@ -120,9 +120,33 @@ def test_compare_is_quiet_when_it_cannot_know_or_nothing_moved() -> None:
     check("alike is quiet", compare._compile_moved(rep(COMPILED), rep(COMPILED)) == [])
     check("a report from before the field is unknown, and quiet",
           compare._compile_moved({"environment": {}}, rep(NOTHING)) == [])
-    check("a side whose traces held no state is unknown, and quiet",
-          compare._compile_moved(rep(None), rep(NOTHING)) == []
-          and compare._compile_moved(rep(state(None)), rep(NOTHING)) == [])
+    check("a side whose traces held nothing at all is unknown, and quiet",
+          compare._compile_moved(rep(None), rep(NOTHING)) == [])
+    check("a side without a state, with JIT counts alike, is quiet",
+          compare._compile_moved(rep(state(None, methods=64)),
+                                 rep(state(None, methods=70))) == [])
+
+
+def test_compare_reads_the_jit_when_no_side_holds_the_state() -> None:
+    """A scroll recorded with the process already up holds no compile state;
+    its JIT count does (#592): 64 methods on the profile, 328 after `verify`,
+    2 after `speed`."""
+    for jb, ja, more in ((64, 328, "after"), (64, 2, "before")):
+        warned = compare._compile_moved(rep(state(None, methods=jb)),
+                                        rep(state(None, methods=ja)))
+        check(f"{jb} against {ja}: one compile warning, both counts named",
+              [w["id"] for w in warned] == ["compile"]
+              and f"{jb} methods in the window before and {ja} after" in warned[0]["text"]
+              and f"the {more} side" in warned[0]["text"], warned)
+    one_known = compare._compile_moved(rep(COMPILED), rep(state(None, methods=328)))
+    check("one side known and the other not: the JIT still speaks",
+          [w["id"] for w in one_known] == ["compile"], one_known)
+    check("both known and alike: the JIT is not asked",
+          compare._compile_moved(rep(state("speed-profile", methods=64)),
+                                 rep(state("speed-profile", methods=328))) == [])
+    check("a few methods apart is not a finding",
+          compare._compile_moved(rep(state(None, methods=2)),
+                                 rep(state(None, methods=9))) == [])
 
 
 def test_compare_warns_about_a_side_whose_repeats_disagree() -> None:
