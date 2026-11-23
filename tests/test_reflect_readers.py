@@ -159,3 +159,54 @@ def test_transcripts_that_never_used_echolot_leave_the_log_to_speak(
         code = main(["reflect", "--last", "--transcripts", str(transcripts)])
     check("the run log is read, and said to be", code == 0
           and "reading .echolot/log/runs.jsonl instead" in err.getvalue(), err.getvalue())
+
+
+def test_a_batch_is_a_call_per_command_and_python_is_read_as_code(tmp_path: Path) -> None:
+    from echolot.reflect import signals
+
+    def use(ts: str, uid: str, name: str, inp: dict) -> dict:
+        return {"type": "assistant", "timestamp": ts, "message": {
+            "id": uid, "role": "assistant",
+            "content": [{"type": "tool_use", "id": uid, "name": name, "input": inp}]}}
+
+    def result(ts: str, uid: str, text: str) -> dict:
+        return {"type": "user", "timestamp": ts, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": uid, "content": text}]}}
+
+    batch = "mcp__plugin_x__ctx_batch_execute"
+    s = claude_code.read_session(_transcript(tmp_path, [
+        use("2026-09-01T11:59:00.000Z", "b1", batch, {"commands": [
+            {"label": "help", "command": "echolot analyze --help"},
+            {"label": "help", "command": "echolot report --help"}]}),
+        result("2026-09-01T11:59:02.000Z", "b1", "usage: echolot analyze …"),
+        use("2026-09-01T12:00:10.000Z", "b2", batch, {"commands": [
+            {"label": "run", "command": "echolot analyze .echolot/traces/a.perfetto-trace"}]}),
+        result("2026-09-01T12:00:40.000Z", "b2", "# Marker Report"),
+        use("2026-09-01T12:01:00.000Z", "p1", "mcp__plugin_x__ctx_execute", {
+            "language": "python",
+            "code": "import json; d=json.load(open('.echolot/out/report.json')); "
+                    "print(d['detectors'][0])"}),
+        result("2026-09-01T12:01:01.000Z", "p1", "{…}"),
+        use("2026-09-01T12:01:10.000Z", "p2", "mcp__plugin_x__ctx_execute", {
+            "language": "python",
+            "code": "from perfetto.trace_processor import TraceProcessor\n"
+                    "tp = TraceProcessor(trace='.echolot/traces/a.perfetto-trace')"}),
+        result("2026-09-01T12:01:12.000Z", "p2", "ok"),
+    ]))
+    f = facts.gather(s, None, [{"ts": "2026-09-01T12:00:11+00:00", "cmd": "analyze",
+                                "argv": ["analyze"], "exit": 0, "ms": 29000}])
+    helps = signals.help_lookups(s, f, None)
+    check("both --help lookups of the batch are counted",
+          helps is not None and [r["command"] for r in helps.rows]
+          == ["echolot analyze --help", "echolot report --help"], helps and helps.rows)
+    analyze = [c for c in f.echolot_calls if c.sub == "analyze" and not c.is_help]
+    check("a batch's analyze is matched to the run log like a Bash one",
+          len(analyze) == 1 and analyze[0].recorded is not None, analyze)
+    sliced = signals.report_sliced_by_hand(s, f, None)
+    check("python slicing report.json through an execute tool is listed",
+          sliced is not None and len(sliced.rows) == 1, sliced and sliced.rows)
+    opened = signals.trace_opened_directly(s, f, None)
+    check("and python opening a trace there is the trace opened directly",
+          opened.severity == "warn" and len(opened.rows) == 1, opened.rows)
+    chars = sum(c.output_chars for c in s.calls if c.id.startswith("b1"))
+    check("the batch's output is counted once", chars == len("usage: echolot analyze …"), chars)

@@ -31,6 +31,7 @@ from . import facts as facts_mod
 from .facts import (
     RE_ECHOLOT,
     RE_RE_RECORD,
+    RE_CODE_READS_REPORT,
     RE_REPORT_BY_HAND,
     RE_TRACE_LITERAL,
     RE_TRACE_OPEN,
@@ -225,6 +226,13 @@ def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | 
         if c.tool == "Read" and c.path and RE_TRACE_LITERAL.search(c.path):
             rows.append({"ts": _t(c.ts), "agent": c.agent, "how": "Read",
                          "command": _short(c.path)})
+        # Python through an execute tool, or a trace handed to one as the
+        # file it processes (#542).
+        elif c.code is not None and (RE_TRACE_OPEN.search(c.code)
+                                     or (c.path and RE_TRACE_LITERAL.search(c.path))):
+            rows.append({"ts": _t(c.ts), "agent": c.agent,
+                         "how": f"{c.tool} ({c.language or 'code'})",
+                         "command": " ".join((c.code or "").split())[:120]})
     if not rows:
         return Signal("trace_opened_directly", "ok", "the trace was never opened directly",
                       "Everything went through echolot, as the one rule says.")
@@ -701,6 +709,17 @@ def report_sliced_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | 
     rows = [{"ts": _t(c.ts), "agent": c.agent,
              "command": _around(c.shell, "report.json")}
             for c in s.bash() if RE_REPORT_BY_HAND.search(c.shell)]
+    # The same cut made in python through an execute tool: in one session
+    # about ten of them, none listed (#542). A file handed to the tool
+    # whole counts when it is the report.
+    rows += [{"ts": _t(c.ts), "agent": c.agent,
+              "command": _around(c.code or "", "report.json")
+              if "report.json" in (c.code or "") else f"{_short(c.path)}: "
+              + " ".join((c.code or "").split())[:80]}
+             for c in s.calls if c.code is not None
+             and (RE_CODE_READS_REPORT.search(c.code)
+                  or (c.path or "").endswith("report.json"))]
+    rows.sort(key=lambda r: r["ts"])
     if not rows:
         return None
     return Signal("report_sliced_by_hand", "info",

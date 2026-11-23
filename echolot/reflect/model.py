@@ -70,6 +70,10 @@ class Call:
     # Convenience views filled by the reader:
     command: str | None = None    # Bash: the command text (truncated)
     path: str | None = None       # Edit/Write/Read: the file path
+    # Code an execute tool ran in a language other than the shell — python
+    # slicing report.json, say — for the signals that read code (#542).
+    code: str | None = None
+    language: str | None = None
 
     @property
     def shell(self) -> str:
