@@ -4093,6 +4093,67 @@ def _(report):
     assert only["error"] == "boom", only["error"]
 
 
+# The window's own sets, stored once per session rather than recomputed on
+# every reference (#486), and the scripts that make them.
+WINDOW_TABLES = ("_slice", "_slice_win", "_child_sum", "_aslice_win", "_tstate_win")
+
+
+@check("window: _slice_win and its siblings are built once, and building them again gives the same rows")
+def _(report):
+    """A view is a query with a name: every reference to `_slice_win` ran the
+    join under it again, over every slice of the process, and every detector
+    reads it. On trace_processor v56.1 `app_init` alone took 25 of 48
+    seconds of five cold starts of a large app that way. The five sets are
+    PERFETTO TABLEs now.
+
+    What can go wrong with that is the drop in front of each. trace_processor
+    refuses `DROP VIEW` on a table, and a second CREATE without a drop, so a
+    script whose drop and create disagree works once and fails the second
+    time it runs in a session. Nothing runs them twice today; this does, and
+    holds every drop in the shipped scripts to its create.
+    """
+    import re as _re
+    from .main import SQL_DIR, _resolve_process, _setup_context
+    from .tp import TraceSession
+
+    made: dict[str, str] = {}
+    for script in ("context.sql", "window.sql", "environment.sql"):
+        text = (SQL_DIR / script).read_text(encoding="utf-8")
+        for kind, name in _re.findall(
+                r"^CREATE (VIEW|PERFETTO TABLE|VIRTUAL TABLE|TABLE) (\w+)", text, _re.M):
+            dropped = "VIEW" if kind == "VIEW" else "TABLE"
+            assert _re.search(rf"^DROP {dropped} IF EXISTS {name};", text, _re.M), (
+                f"{script}: {name} is made with CREATE {kind} and not dropped "
+                f"as a {dropped.lower()} first")
+            made[name] = kind
+    for name in WINDOW_TABLES:
+        assert made.get(name) == "PERFETTO TABLE", (name, made.get(name))
+
+    cfg = Config(FIXTURE_CONFIG)
+
+    def rows(tp) -> dict:
+        return {name: tp.query(f"SELECT COUNT(*) AS n, TOTAL(dur) AS dur FROM {name}"
+                               if name != "_child_sum" else
+                               f"SELECT COUNT(*) AS n, TOTAL(ns) AS dur FROM {name}")[0]
+                for name in WINDOW_TABLES}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        with TraceSession(trace, _binary) as tp:
+            upid = _resolve_process(tp, cfg.process, str(trace))[0]["upid"]
+            _setup_context(tp, cfg, upid)
+            kinds = {r["name"]: r["type"] for r in tp.query(
+                "SELECT name, type FROM sqlite_master WHERE name IN ("
+                + ", ".join(f"'{n}'" for n in WINDOW_TABLES) + ")")}
+            assert kinds == dict.fromkeys(WINDOW_TABLES, "table"), kinds
+            first = rows(tp)
+            assert all(r["n"] for r in first.values()), first
+            _setup_context(tp, cfg, upid)
+            again = rows(tp)
+    assert again == first, (first, again)
+
+
 @check("reflect: a signal that broke is not checked, and does not read as checked")
 def _(report):
     """`skip` and not `info`, for the reason `skip` exists at all.

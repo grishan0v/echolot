@@ -21,8 +21,14 @@ FROM process
 WHERE upid = {{upid}};
 
 -- Every slice of our process, tied to its thread.
-DROP VIEW IF EXISTS _slice;
-CREATE VIEW _slice AS
+--
+-- A table, built once, and not a view: a view is not kept anywhere, and the
+-- join under it ran again for every query that named it — _window, the
+-- anchors, _slice_win, and each detector through _slice_win (#486). See the
+-- head of window.sql. A PERFETTO TABLE is trace_processor's own columnar
+-- table, and scans faster than a plain CREATE TABLE.
+DROP TABLE IF EXISTS _slice;
+CREATE PERFETTO TABLE _slice AS
 SELECT
     s.id            AS slice_id,
     s.ts            AS ts,
