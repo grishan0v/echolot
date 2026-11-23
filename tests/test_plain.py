@@ -159,8 +159,8 @@ SAMPLES = {
         [row("App Deadline Missed", 160.0, count=6, max_ms=48.0,
              detail="Self Jank · 6 of 41 frames · longest 80.0 ms")],
         "worth_a_look",
-        "6 of 41 frames came late, in all 3 launches: 0.2 s past their deadlines together, 48 ms "
-        "at worst. Together that is 8% of the launch."),
+        "6 of 41 frames came late because of the app, in all 3 launches: 0.2 s past their "
+        "deadlines together, 48 ms at worst. Together that is 8% of the launch."),
     "anr": (
         [row("Input dispatching timed out", 5000.0, max_ms=5000.0,
              detail="inside the window at +120.0 ms · abc-123")],

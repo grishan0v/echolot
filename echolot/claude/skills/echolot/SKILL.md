@@ -271,7 +271,11 @@ Its `total_ms` and `max_ms` are time **past the deadline**; the frame's own
 length is in `detail`, which is where a benchmark's percentiles can be matched.
 `detail` also leads with the platform's verdict on whose deadline was missed —
 `Self Jank` is the app, `Other Jank` is the compositor and is not something to
-go into the code over.
+go into the code over. `Buffer Stuffing` is neither: frames queued behind the
+one before reach the screen late and smoothly, latency rather than stutter, so
+that row counts its frames with 0 past the deadline and comes after every late
+frame. A frame that also missed a deadline keeps the miss's tag, and its
+overrun includes the wait in the queue.
 
 Its silence is ambiguous: no bad frames, and no frame timeline in the trace at
 all, look the same. Android 11 and below have none, and neither does a capture

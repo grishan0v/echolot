@@ -43,6 +43,22 @@
 -- verdict on whose deadline was missed: 'Self Jank' is the app, 'Other Jank'
 -- is the system and is not something to send anyone into the code over.
 --
+-- Buffer Stuffing is not a missed frame, and its row says so (#537). The
+-- platform tags a frame that way, and with nothing else, when the app queued
+-- it while the frame before was still waiting to be shown: it reaches the
+-- screen a vsync or more after its deadline, smoothly, behind that frame.
+-- Latency, not stutter. Summed with the rest, on a scroll where the render
+-- thread took most of every frame, it was 1263 of 1446 frames and 16 s "past
+-- the deadline" in 40 s: the first row, and a level that needed attention,
+-- above the 28 frames the app really missed. So the row keeps its frames and
+-- counts nothing past a deadline — total_ms and max_ms are 0, it ranks after
+-- every late frame, `compare` has no summed delay to call a move — and its
+-- evidence leads with `latency, not jank` and says how far behind they were.
+-- A frame that also missed a deadline is tagged by that: 'App Deadline
+-- Missed, Buffer Stuffing' is Self Jank and stays a late frame. Its overrun
+-- includes the wait in the queue, which nothing in the timeline separates,
+-- and its evidence says so.
+--
 -- jank_tag joins that GROUP BY and still does not belong in @identity: it is
 -- a verdict *on* the jank_type, one per type, so the pair names no more rows
 -- than the type alone. And `detail` carries per-frame numbers around it, so
@@ -87,18 +103,28 @@ counted AS (
 SELECT
     f.jank_type                                          AS location,
     COUNT(*)                                             AS count,
-    ROUND(SUM(f.over_ns) / 1e6, 2)                       AS total_ms,
-    ROUND(MAX(f.over_ns) / 1e6, 2)                       AS max_ms,
-    f.jank_tag
+    CASE WHEN f.jank_tag = 'Buffer Stuffing' THEN 0.0
+         ELSE ROUND(SUM(f.over_ns) / 1e6, 2) END         AS total_ms,
+    CASE WHEN f.jank_tag = 'Buffer Stuffing' THEN 0.0
+         ELSE ROUND(MAX(f.over_ns) / 1e6, 2) END         AS max_ms,
+    CASE WHEN f.jank_tag = 'Buffer Stuffing' THEN
+        'latency, not jank · ' || COUNT(*) || ' of ' || (SELECT n FROM counted)
+        || ' frames queued behind the one before · up to '
+        || ROUND(MAX(f.over_ns) / 1e6, 1) || ' ms late'
+    ELSE
+        f.jank_tag
         || ' · ' || COUNT(*) || ' of ' || (SELECT n FROM counted) || ' frames'
         || ' · longest ' || ROUND(MAX(f.actual_ns) / 1e6, 1) || ' ms'
-                                                         AS detail
+        || CASE WHEN f.jank_type LIKE '%Buffer Stuffing%'
+                THEN ' · the overrun includes the wait in the queue' ELSE '' END
+    END                                                  AS detail
 FROM frames f
 WHERE f.jank_tag != 'No Jank'
   AND f.over_ns >= {{min_overrun_ms}} * 1000000
 GROUP BY f.jank_type, f.jank_tag
 HAVING COUNT(*) >= {{min_frames}}
-ORDER BY total_ms DESC
+-- Late frames first, by what they cost; frames that only queued after them.
+ORDER BY f.jank_tag = 'Buffer Stuffing', total_ms DESC
 LIMIT 20;
 
 -- @intervals

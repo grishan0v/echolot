@@ -159,6 +159,10 @@ class _Ctx:
         # recording, whatever the scenario is (#557): "56% of the launch" of
         # such a window is a share of something that is not the launch.
         self.noun = "recording" if _missed(window) else self.kind
+        # The frames drawn in the window, the median over the repeats; None
+        # without a frame timeline, or in a report written before it was kept.
+        drawn = (window.get("frames") or {}).get("count")
+        self.frames = round(float(drawn)) if drawn else None
 
     @property
     def plural(self) -> str:
@@ -373,11 +377,29 @@ def _held(det_id: str, row: dict[str, Any], ctx: _Ctx) -> float:
     it keeps its weight there. In a window that ends where the recording
     does — a scroll whose length the script fixes, or one whose anchor
     missed — idle time costs nothing, and only the part spent blocked counts.
+
+    Frames that only waited in a queue (`_stuffed`) count for nothing: they
+    were shown without a stutter, and lost no time anyone could see.
     """
+    if _stuffed(det_id, row):
+        return 0.0
     ms = _value(row)
     if det_id == "main_thread_waits" and not ctx.closed:
         ms *= 1 - _idle_part(row)
     return ms
+
+
+# The platform's name for frames that waited in a queue behind the frame
+# before, and the location of `frame_jank`'s row of them. They reach the
+# screen smoothly, a frame or more late: latency, which no level is about
+# (#537). `frame_jank` counts nothing past a deadline for them; a report
+# written before it did has their delays in the row's total, 16 s of a 40 s
+# scroll on one app, and the location is what both have in common.
+_STUFFED = "Buffer Stuffing"
+
+
+def _stuffed(det_id: str, row: dict[str, Any]) -> bool:
+    return det_id == "frame_jank" and row.get("location") == _STUFFED
 
 
 # ---------------------------------------------------------------------------
@@ -611,17 +633,48 @@ def _f_kernel(rows, ctx):
     return out
 
 
+# Whose deadline the platform says a late frame missed, by the tag its
+# evidence leads with.
+_WHOSE = {"Self Jank": " because of the app", "Other Jank": " because of the system"}
+
+
+def _frames_of(row: dict[str, Any], ctx: _Ctx) -> str:
+    """`28 of 1446 frames`: the row's count out of the frames drawn in the
+    window, both medians in a merged report. The evidence's two numbers are
+    its worst repeat's, and gave "1263 of 1446" beside a row that counted
+    1254 (#537); they stand in only for what the report does not keep."""
+    count = round(float(row.get("count") or 1))
+    said = _FRAMES.search(str(row.get("detail") or ""))
+    drawn = ctx.frames or (int(said.group(2)) if said else None)
+    return f"{count} of {drawn} frames" if drawn else _count(count, "frame", "frames")
+
+
 def _f_jank(rows, ctx):
-    top = rows[0]
-    v = _value(top)
-    frames = _FRAMES.search(str(top.get("detail") or ""))
-    late = (f"{frames.group(1)} of {frames.group(2)} frames came late" if frames else
-            f"{_count(int(top.get('count') or 1), 'frame', 'frames')} came late")
-    out = _clause(late, _runs(top, ctx)) + f": {hum(v)} past their deadlines together"
-    if top.get("max_ms"):
-        out += f", {hum(float(top['max_ms']))} at worst"
-    out += "." + _share(v, ctx, "Together that is")
-    return out + _also(rows, "more kind", "more kinds", "of late frame, too.")
+    # The frames that missed a deadline first, and those that only waited in
+    # a queue after them, whatever either measures: a report written before
+    # #537 summed the wait as time past the deadline, and the queued frames
+    # were the largest row there.
+    late = [r for r in rows if not _stuffed("frame_jank", r)]
+    queued = [r for r in rows if _stuffed("frame_jank", r)]
+    said = []
+    if late:
+        top = late[0]
+        v = _value(top)
+        whose = _WHOSE.get(str(top.get("detail") or "").split(" · ")[0], "")
+        out = (_clause(f"{_frames_of(top, ctx)} came late{whose}", _runs(top, ctx))
+               + f": {hum(v)} past their deadlines together")
+        if top.get("max_ms"):
+            out += f", {hum(float(top['max_ms']))} at worst"
+        out += "." + _share(v, ctx, "Together that is")
+        if _STUFFED in str(top.get("location") or ""):
+            out += " That counts the time they waited in a queue behind the frame before, too."
+        said.append(out + _also(late, "more kind", "more kinds", "of late frame, too."))
+    if queued:
+        said.append(_sentence(f"{_frames_of(queued[0], ctx)} waited in a queue behind the frame "
+                              f"before", _runs(queued[0], ctx))
+                    + " They reached the screen without a stutter, only later than they "
+                      "could: the screen follows a touch a little late.")
+    return " ".join(said)
 
 
 def _f_anr(rows, ctx):

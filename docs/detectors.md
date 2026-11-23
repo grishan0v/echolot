@@ -222,6 +222,20 @@ loss is the actionable number and the frame's own length is not. The frame
 duration is in `detail` instead, since that is the number a benchmark's
 percentiles are quoted in.
 
+Its `Buffer Stuffing` row bends it further. The platform tags a frame that way
+when the app queued it while the frame before was still waiting to be shown:
+it reaches the screen a frame or more late, without a stutter. That is
+latency, not a missed frame, so the row keeps its count and has 0 in both
+columns: it ranks after every late frame, the plain reading never weighs it,
+and `compare` has no summed wait to call a move. Its `detail` leads with
+`latency, not jank` and says how far behind the frames were. Summed with the
+late frames, on a scroll where the render thread took most of every frame,
+it was 1263 of 1446 frames and 16 s past the deadline in 40 s, the first row
+above the 28 frames the app really missed. A frame that also missed a
+deadline is tagged by that (`App Deadline Missed, Buffer Stuffing` is
+`Self Jank`) and stays a late frame; its overrun includes the wait, and its
+`detail` says so.
+
 `composables` bends `self_ms` the same way. A composable's own slice holds
 about a millisecond, the rest being the library's composables under it, so
 its `self_ms` is the calls less the app's own composables nested in them,
