@@ -80,9 +80,10 @@ SELECT
     ROUND(SUM(s.dur) / 1e6, 2)        AS total_ms,
     ROUND(MAX(s.dur) / 1e6, 2)        AS max_ms,
     s.state                           AS state,
-    'state ' || s.state
-        || CASE WHEN MAX(s.tid = p.pid) = 1 THEN COALESCE(e.text, '') ELSE '' END
-                                      AS detail
+    -- The state is a column of its own; `detail` holds only what the
+    -- state does not say, and nothing on a thread with nothing more (#515).
+    CASE WHEN MAX(s.tid = p.pid) = 1 AND e.text IS NOT NULL
+         THEN LTRIM(e.text, ' ·') END AS detail
 FROM _tstate_win s
 CROSS JOIN _proc p
 LEFT JOIN evidence e ON e.state = s.state

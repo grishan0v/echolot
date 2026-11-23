@@ -1057,9 +1057,9 @@ def _(report):
     row = only_row(report, "runnable_starvation")
     assert row["location"] == "OkHttp Dispatcher", row
     assert row["total_ms"] == 50.0, row
-    # The state names the row; a background thread's row carries no more
-    # evidence than that.
-    assert (row["state"], row["detail"]) == ("R", "state R"), row
+    # The state names the row and has its own column; a background
+    # thread's row has no evidence beyond it, and none repeats it (#515).
+    assert (row["state"], row.get("detail")) == ("R", None), row
     # The fixture never crowds the cores: no line about it in the header.
     crowd = dict(report["window"]["crowding"])
     # And other processes took little of the CPUs: `com.other.app`'s one
@@ -1089,7 +1089,7 @@ def _(report):
     row = main[0]
     assert (row["state"], row["total_ms"]) == ("R", 30.0), row
     assert row["detail"] == (
-        "state R · its core held by the app 60% (CrowdWorker most), other "
+        "its core held by the app 60% (CrowdWorker most), other "
         "processes 27%, idle 13% · 3.7 other cores idle on average"), row
     crowd = {k: v for k, v in crowded["window"]["crowding"].items() if k != "outside"}
     assert crowd == {"threads": 26, "cores": 10, "peak": 13, "above_cores_ms": 64.0}, crowd
