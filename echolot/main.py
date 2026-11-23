@@ -123,7 +123,8 @@ def _probe_config(args) -> Config | None:
 
 
 def _probe(args, tp_binary: str | None) -> int:
-    with TraceSession(args.trace, tp_binary) as tp:
+    with TraceSession(args.trace, tp_binary, cut_ok=True) as tp:
+        _say_cut(tp, args.trace)
         _require_named_processes(tp, args.trace)
         print("## Processes\n")
         # Two counts, because they are two kinds of section. `slices` are
@@ -1308,7 +1309,14 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
         # either. Seen on one trace out of fifteen from a single
         # macrobenchmark round, where the other fourteen carried the full name.
         tail = glob.rstrip("*")[-15:]
-        if tail and source != "default":
+        if getattr(tp, "cut", None):
+            # The process list sits at the end of a launch recording, and a
+            # cut takes it first: what is left are comm's fifteen characters,
+            # and a new mask would only make a report on half a file (#568).
+            message += (f" The file is cut short, and the process list it "
+                        f"held at its end went with the tail: pull or copy it "
+                        f"again rather than change {source}.")
+        elif tail and source != "default":
             again = (f"--process '*{tail}'" if source == "--process"
                      else f"project.process = '*{tail}'")
             message += (f" If the name is there but cut to fifteen characters, "
@@ -1333,6 +1341,17 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
             file=sys.stderr,
         )
     return rows
+
+
+def _say_cut(tp, trace: str) -> None:
+    """The warning `probe` and `names` print over a recording that lost its
+    tail. Both still read it — they are where a reader looks to see what a
+    file holds — while `analyze` and `calibrate` refuse it (see TraceSession)."""
+    if tp.cut:
+        print(f"[!] {Path(trace).name}: {tp.cut}. What it held at its end is "
+              f"missing below — in a launch recording, the process list (names "
+              f"cut to fifteen characters are what is left) and the last "
+              f"frames.", file=sys.stderr)
 
 
 def _require_named_processes(tp, trace: str | None) -> None:
@@ -2369,12 +2388,13 @@ def cmd_names(args) -> int:
     """
     overrides, tp_bin, prefix, process, source, off = _names_setup(args)
     try:
-        session = TraceSession(args.trace, tp_bin)
+        session = TraceSession(args.trace, tp_bin, cut_ok=True)
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
     with session as tp:
+        _say_cut(tp, args.trace)
         try:
             procs = _resolve_process(tp, process, args.trace, source=source, flag=True)
         except ConfigError as e:

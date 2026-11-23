@@ -126,7 +126,9 @@ def opened(monkeypatch) -> list:
     seen: list = []
 
     class Session:
-        def __init__(self, trace, binary=None):
+        cut = None
+
+        def __init__(self, trace, binary=None, **_):
             seen.append(binary)
 
         def __enter__(self):
