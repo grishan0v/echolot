@@ -804,10 +804,16 @@ def cmd_analyze(args) -> int:
         # Repeats are merged by median: one outlier must not drag the
         # conclusion along, and the "Runs" column separates the reproducible
         # from the one-off.
+        # One recording is one repeat, however many times it is named (#565).
+        traces, same = _distinct_recordings(args.traces)
+        if same:
+            print(f"[!] {report_mod.same_recording_said(same)}", file=sys.stderr)
         reports = [analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
                                  use_defaults=args.defaults, tp_source=tp_source)
-                   for t in args.traces]
+                   for t in traces]
         rep = report_mod.aggregate(reports)
+        if same:
+            rep["same_recording"] = same
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
@@ -842,7 +848,7 @@ def cmd_analyze(args) -> int:
 
     w = rep.get("window") or {}
     recorder.note(
-        traces=len(args.traces),
+        traces=len(traces),
         fired=rep["summary"]["fired_ids"],
         window_ms=w.get("duration_ms"),
         start_anchor_matches=(w.get("start_anchor") or {}).get("matches"),
@@ -910,6 +916,57 @@ def cmd_analyze(args) -> int:
             print(f"→ {again}  (this investigation's page stood there: written again "
                   f"with this round)", file=sys.stderr)
     return 0
+
+
+def _distinct_recordings(paths: list[str]) -> tuple[list[str], list[list[str]]]:
+    """The traces with each recording once, and the paths that were one recording.
+
+    A path given twice, a glob that overlaps another or a path given by hand,
+    a symlink beside its file, a set copied under another directory: each
+    read as one more repeat. Every value then occurred twice on its side, the
+    `few` warning went away and the interval saw twice the agreement there
+    was — 48 rows held on four recordings that, named once, held none (#565).
+    The same file by its resolved path, or the same bytes by size and hash,
+    is the same recording: the first path is kept, in the order given.
+    A path that cannot be read is kept as it is; `analyze_trace` says why.
+    """
+    import hashlib
+
+    sums: dict[str, str] = {}
+
+    def digest(path: str) -> str:
+        if path not in sums:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    h.update(block)
+            sums[path] = h.hexdigest()
+        return sums[path]
+
+    kept: list[str] = []
+    groups: dict[str, list[str]] = {}
+    by_size: dict[int, list[tuple[str, str]]] = {}
+    for path in paths:
+        try:
+            real, size = str(Path(path).resolve()), os.path.getsize(path)
+        except OSError:
+            kept.append(path)
+            continue
+        same = None
+        for other, other_real in by_size.get(size, []):
+            try:
+                if real == other_real or digest(real) == digest(other_real):
+                    same = other
+                    break
+            except OSError:
+                continue
+        if same is None:
+            by_size.setdefault(size, []).append((path, real))
+            kept.append(path)
+            groups[path] = [path]
+        else:
+            groups[same].append(path)
+    return kept, [g for g in groups.values() if len(g) > 1]
 
 
 def _markers_against_code(rep: dict[str, Any], cfg: Config) -> None:

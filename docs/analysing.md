@@ -394,6 +394,17 @@ location at 60 characters and the evidence at 100; `--wide` keeps both
 whole. `--json` keeps everything and cuts only the rows, and only when
 `--top` says how many.
 
+### One recording, one repeat
+
+`analyze` counts each recording once, however it was named. A path given
+twice, two globs that overlap, a symlink beside its file or a set copied under
+another directory name would otherwise read as more repeats than there are:
+every value twice on its side, and `compare` seeing twice the agreement there
+is. The same file by its resolved path, or the same bytes by size and hash, is
+one recording; the first path is kept, a line on stderr and one under the
+report's Traces line name the others, and `same_recording` in `report.json`
+lists them. `Runs` is the number of distinct recordings.
+
 ## When a detector could not look
 
 A detector with no rows says it ran and nothing cleared its bar. Some are

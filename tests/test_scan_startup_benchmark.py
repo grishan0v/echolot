@@ -255,15 +255,19 @@ def test_a_drafted_startup_benchmark_records_and_analyses(tmp_path: Path, capsys
 
     # What the benchmark would write: one trace for each repeat, under the
     # module's build directory.
+    # Two recordings, not one copied twice: `analyze` counts one recording
+    # once, however many paths it arrives under (#565).
     written = tmp_path / "recorded.bin"
     written.write_bytes(fixture.build(fully_drawn="app"))
+    second = tmp_path / "recorded2.bin"
+    second.write_bytes(fixture.build(fully_drawn="app", composables=False))
     wrapper = root / "gradlew"
     wrapper.write_text(
         "#!/bin/sh\n"
         'd="benchmark/build/outputs/connected_android_test_additional_output/benchmark/connected/Pixel"\n'
         'mkdir -p "$d"\n'
         f'cp "{written}" "$d/StartupBenchmark_startup_iter000.perfetto-trace"\n'
-        f'cp "{written}" "$d/StartupBenchmark_startup_iter001.perfetto-trace"\n',
+        f'cp "{second}" "$d/StartupBenchmark_startup_iter001.perfetto-trace"\n',
         encoding="utf-8")
     wrapper.chmod(0o755)
 

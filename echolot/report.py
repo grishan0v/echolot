@@ -716,6 +716,15 @@ def to_json(report: dict[str, Any]) -> str:
     return json.dumps(report, ensure_ascii=False, indent=2)
 
 
+def same_recording_said(groups: list[list[str]]) -> str:
+    """The sentence for traces that were one recording given more than once."""
+    named = "; ".join(" = ".join(f"`{p}`" for p in g) for g in groups)
+    extra = sum(len(g) - 1 for g in groups)
+    return (f"The same recording was given more than once: {named}. Each is "
+            f"counted once, so the runs are the distinct recordings, "
+            f"{extra} fewer than the paths given.")
+
+
 def _traces_line(traces: list[str], limit: int = 8) -> str:
     """The files behind `Runs: N`, so a stranger among them is visible.
 
@@ -1392,6 +1401,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(_traces_line(traces))
     else:
         out.append(f"Trace: `{report['trace']}`")
+    if report.get("same_recording"):
+        out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
     if report.get("scenario"):
         out.append(f"Scenario: `{report['scenario']}`")
     if w.get("process"):
