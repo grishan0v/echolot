@@ -1183,6 +1183,18 @@ def test_a_file_that_is_no_report(project, text):
     check("and its address says why", reply.status == 404 and ("does not read" in reply.body or "No report yet" in reply.body))
 
 
+@pytest.mark.parametrize("how", ["detectors", "rows", "markers"])
+def test_a_report_with_a_part_analyze_never_writes(project, how):
+    """#555: `"detectors": "x"` or rows that are an object answered 500."""
+    from tests.test_cli_errors import _damaged
+    project.ready().traces().report(data=_damaged(how))
+    site = site_of(project)
+    page = read(get(site).body)
+    check("the start page offers nothing to open", [a.text for a in page.all("a", "btn")] == ["Refresh"], page.text)
+    reply = get(site, "report")
+    check("and its address says why", reply.status != 500 and "does not read" in reply.body, reply.body[-600:])
+
+
 def test_the_investigations_and_what_each_filed(project):
     project.ready().traces().report()
     project.hunt(1, "why is it <slow>", reports=3, conclusion="the lock is held over a read", closed_at="2026-11-11T11:00:00+00:00")

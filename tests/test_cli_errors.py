@@ -198,3 +198,39 @@ def test_a_file_that_is_no_report_is_a_sentence(tmp_path, verb):
     for name in ("trace.perfetto-trace", "arr.json"):
         argv = [verb, name] + (["arr.json"] if verb == "compare" else [])
         refused(cli(tmp_path, *argv), name, "not a Marker Report")
+
+
+def _damaged(how: str) -> dict:
+    """A whole report with one part of it in a shape `analyze` never writes."""
+    from tests.test_report_page import known
+    data = known()
+    if how == "detectors":
+        data["detectors"] = "x"
+    elif how == "a detector":
+        data["detectors"][0] = "gc_pressure"
+    elif how == "rows":
+        data["detectors"][2]["rows"] = {"a": 1}
+    elif how == "a row":
+        data["detectors"][2]["rows"] = ["Sync Worker"]
+    elif how == "markers":
+        data["markers"] = {"rows": "x"}
+    return data
+
+
+@pytest.mark.parametrize("how, said", [
+    ("detectors", "`detectors` is text, not a list"),
+    ("a detector", "detector 1 is text, not an object"),
+    ("rows", "the rows of binder_txn are an object, not a list"),
+    ("a row", "a row of binder_txn is not an object"),
+    ("markers", "`markers.rows` is text, not a list"),
+])
+@pytest.mark.parametrize("argv", [["report"], ["report", "--html"], ["report", "--json"], ["compare"]])
+def test_a_report_with_a_part_analyze_never_writes_is_a_sentence(tmp_path, how, said, argv):
+    """#555: a report whose detectors or rows are not lists ended `report`,
+    `report --html` and `compare` in a traceback."""
+    (tmp_path / "bad.json").write_text(json.dumps(_damaged(how)), encoding="utf-8")
+    from tests.test_report_page import known
+    (tmp_path / "good.json").write_text(json.dumps(known()), encoding="utf-8")
+    names = ["good.json", "bad.json"] if argv == ["compare"] else ["bad.json"]
+    refused(cli(tmp_path, *argv[:1], *names, *argv[1:]), "bad.json", "does not read as a Marker Report",
+            said, "run `echolot analyze` again")
