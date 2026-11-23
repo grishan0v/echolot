@@ -1010,6 +1010,48 @@ def _reports_of_hunt(project: Path, ident: str) -> list[Path]:
     return reports
 
 
+def _last_two_rounds(reports: list[Path]) -> tuple[Path, Path, list[Path]]:
+    """The previous round and the latest one, among the reports a hunt filed.
+
+    Every `analyze` inside an open investigation files a report, and a look
+    at part of a round files one too: the last two reports were round 2 and
+    a single-run look at one of its traces, a side with no spread and an
+    empty Holds column under a header that read as two rounds (#613). A
+    report is a look, not a round, when it read fewer traces than the round
+    before it, ran with other `--set` or `--defaults`, or read only traces
+    that round read already. The looks that would have been taken are named
+    on stderr; with fewer than two rounds the last two reports are taken, as
+    before.
+    """
+    rounds: list[tuple[Path, dict]] = []
+    looks: list[Path] = []
+    for path in reports:
+        try:
+            rep = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            rep = None
+        if not isinstance(rep, dict):
+            rounds.append((path, {}))  # `_load_report` says what it is instead
+            continue
+        cfg = rep.get("config") if isinstance(rep.get("config"), dict) else {}
+        shape = {"runs": compare_mod._runs(rep), "set": cfg.get("set") or None,
+                 "defaults": bool(cfg.get("defaults")),
+                 "traces": set(map(str, rep.get("traces") or [rep.get("trace")]))}
+        if rounds and rounds[-1][1]:
+            last = rounds[-1][1]
+            if (shape["runs"] < last["runs"] or shape["set"] != last["set"]
+                    or shape["defaults"] != last["defaults"]
+                    or shape["traces"] <= last["traces"]):
+                looks.append(path)
+                continue
+        rounds.append((path, shape))
+    if len(rounds) < 2:
+        return reports[-2], reports[-1], []
+    after = rounds[-1][0]
+    before = rounds[-2][0]
+    return before, after, [p for p in looks if p.name > before.name]
+
+
 def _same_scenario(before: dict, after: dict, before_path: Path, after_path: Path) -> None:
     """Refuse two reports of different scenarios.
 
@@ -1094,7 +1136,13 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
     open_hunt = hunt_mod.load(project)
     if open_hunt and open_hunt.get("status") == "open":
         reports = _reports_of_hunt(project, str(open_hunt.get("n")))
-        return reports[-2], reports[-1]
+        before, after, looks = _last_two_rounds(reports)
+        print(f"[i] compare: {_shown_path(before, project)} against "
+              f"{_shown_path(after, project)}, this investigation's last two rounds"
+              + ("; left out as looks rather than rounds: "
+                 + ", ".join(p.name for p in looks) if looks else ""),
+              file=sys.stderr)
+        return before, after
 
     raise ConfigError(
         "nothing to compare. Name two reports, or `--hunt <n>` for an "

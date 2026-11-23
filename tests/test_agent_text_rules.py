@@ -69,7 +69,9 @@ def test_the_loop_stops_before_recording_a_round_nobody_analyses():
 
 def test_the_loop_says_bare_compare_takes_the_last_two_analyze_runs():
     flat = _flat(LOOP)
-    check("the last two analyze runs", "last two `analyze` runs" in flat, flat)
+    check("the last two analyze runs", "last two `analyze` runs that are rounds" in flat, flat)
+    check("that a look is left out, and the pair is named (#613)",
+          "A look is left out" in flat and "names the two reports taken" in flat, flat)
     check("and how to pick the rounds after an extra one",
           "echolot hunt --show <n>" in flat, flat)
 
