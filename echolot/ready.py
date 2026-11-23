@@ -690,6 +690,12 @@ def read(project: Path, config: str, src: Sources, tp_binary: str | None = None,
     said = scan_says(facts)
     ready = [computer(st, says), phone(cfg, facts, said, src), app(cfg, facts, said)]
     step = next_step(st, says, cfg)
+    if step["kind"] in ("init", "setup") and not (facts is not None and facts.app) and not app_name(cfg, facts):
+        # No app in this folder: `init` here writes echolot's files into the
+        # wrong one, and an agent has nothing to set up. The step is the app
+        # line's own advice (#556).
+        step.update(text="echolot found no Android app in this folder. Start `echolot ui` in the folder of "
+                         "the app's project.", command=None, how=None, note=None)
     if step.get("what") == "collect" and any(line["tone"] == RED for line in ready[1:]):
         # `next` does not ask the phone or the repository. A recording does.
         # Kept apart from the step's own note: a page with the button says

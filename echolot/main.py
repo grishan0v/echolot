@@ -2622,6 +2622,21 @@ def _project_and_config(args) -> tuple[Path, str]:
     return Path.cwd(), config
 
 
+def _named_config_missing(args) -> bool:
+    """`-c` names a file that is not there: said as `analyze` says it, and the
+    command stops. Shown the working directory instead, `ui -c ../nope.yml`
+    served another project's start page, and `status` said "no echolot.yml
+    here" about a folder nobody asked about (#556). The default name, not
+    there, is a project not set up yet, and is not this."""
+    config = getattr(args, "config", "echolot.yml")
+    if config == "echolot.yml" or Path(config).is_file():
+        return False
+    said = f"config not found: {Path(config).resolve()}"
+    print(f"error: {said}", file=sys.stderr)
+    recorder.failed(said)
+    return True
+
+
 def _open_hunt(project: Path) -> dict[str, Any] | None:
     """The open investigation; None, after saying on stderr why there is none.
 
@@ -3082,6 +3097,8 @@ def cmd_status(args) -> int:
     branch that applies. Two commands are all a person needs to know —
     `echolot init` and `echolot` — and the agent knows the rest.
     """
+    if _named_config_missing(args):
+        return 2
     project, config = _project_and_config(args)
     st = state.project_state(project, config)
     if getattr(args, "next", False):
@@ -4879,6 +4896,8 @@ def cmd_ui(args) -> int:
     """
     from . import ui
 
+    if _named_config_missing(args):
+        return 2
     project, config = _project_and_config(args)
     return ui.serve(project, config, port=args.port, open_browser=not args.no_open,
                     tp_binary=getattr(args, "tp_binary", None))

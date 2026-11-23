@@ -868,6 +868,37 @@ def test_a_recording_that_outlived_its_check_keeps_the_button_waiting(project, m
 
 # --- recordings that are already there ----------------------------------------------------------
 
+def _log(project, *runs):
+    path = project.root / ".echolot" / "log" / "runs.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        for run in runs:
+            f.write((run if isinstance(run, str) else json.dumps(run)) + "\n")
+
+
+def _analyzed(ms, traces, *argv, exit_=0):
+    return {"cmd": "analyze", "argv": ["analyze", *argv], "exit": exit_, "ms": ms, "facts": {"traces": traces}}
+
+
+def test_reading_takes_what_the_projects_last_analyze_took(project, adb):
+    adb.listing = ""
+    project.ready().traces(n=4)
+    _log(project, _analyzed(2000, 2), _analyzed(33950, 5),
+         _analyzed(900000, 5, exit_=1), _analyzed(100, 5, "--scenario", "feedScroll"))
+    page = page_of(serving(project)[0])
+    check("6.8 s a recording, from the log: four take about 25 seconds", hint(page)
+          == "4 recordings are already here. Reading them takes about 25 seconds. The phone is not needed.", hint(page))
+
+
+def test_the_estimate_prefers_the_same_scenario_and_falls_back_to_the_default(tmp_path):
+    check("nothing in the log: the default", check_mod.read_s(tmp_path) == check_mod.READ_S)
+    project = type("P", (), {"root": tmp_path})()
+    _log(project, _analyzed(10000, 2, "--scenario", "coldStart"), "[1, 2]", _analyzed(3000, 3))
+    check("one of the same scenario wins over a later one that names none", check_mod.read_s(tmp_path, "coldStart") == 5.0)
+    check("another scenario reads the one that names none", check_mod.read_s(tmp_path, "feedScroll") == 1.0)
+    check("a config of one scenario reads the last", check_mod.read_s(tmp_path) == 1.0)
+
+
 def test_recordings_that_are_there_are_read_without_the_phone(project, adb):
     adb.listing = ""        # no phone at all
     site, echolot = serving(project.ready().traces(n=4))
@@ -940,7 +971,8 @@ def test_several_scenarios_are_choice_cards(project):
           [(r.attrs["type"], r.attrs["name"], r.attrs["form"], r.attrs["value"], "checked" in r.attrs) for r in radios] == [
               ("radio", "what", "check-form", "record:coldStart", True), ("radio", "what", "check-form", "read:feedScroll", False)])
     check("the cards carry the choice, so the form has no hidden one", not page.one("form", id="check-form").all("input"))
-    check("with script off the button cannot follow the choice: it keeps the plain name", button(page).text == "Check the app")
+    check("with script off the button cannot follow the choice: it says what holds for every card",
+          button(page).text == "Start")
     check("and the line says where to look", hint(page) == "Each choice says where it stands. Nothing in your code changes.")
     offers = json.loads(page.one("form", id="check-form").attrs["data-offers"])
     check("the script has each choice's own button and line", {k: (v["label"], v["anew"]) for k, v in offers.items()} == {

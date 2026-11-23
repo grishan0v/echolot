@@ -458,6 +458,7 @@ How much attention a check needs:
 |---|---|
 | needs attention | one thing the main thread spent or lost holds at least 15% of the launch and at least 0.15 s, in every launch. A freeze the system itself recorded (`anr`) is always here |
 | worth a look | the check found something else: smaller, on another thread, or not in every launch |
+| a marker to move | the only rows are near misses of `repeated_work`: a marker put one level off. It is advice on where the marker sits, not a finding, and it is not offered to an agent |
 | fine | the check ran and found nothing above its limit |
 | not checked | it found nothing, and it could not run on these recordings (it says why), or the report is too old to say whether it could |
 
@@ -502,8 +503,8 @@ once-a-second timer that wakes an idle main thread is "worth a look" there, not
 The verdict sets the launch against `scenario.budget_ms`: within it is fine, up
 to a quarter over is worth a look, more is needs attention. Nothing fails
 either way, since there is no gate. With no budget the verdict says how long the
-launch takes and that no limit is set, and its level is "not checked": green
-always means that something was looked at and found fine. [`echolot ui`](ui.md#setting-a-project-up)
+launch takes and that no limit is set, and its level is "no time limit", in
+grey: green always means that something was looked at and found fine. [`echolot ui`](ui.md#setting-a-project-up)
 takes the limit in a field when it writes a project's first config.
 
 A window that is not the scenario's is not judged. When an anchor matched

@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import hunt as hunt_mod
-from . import job, ready, state, stats, when
+from . import job, ready, recorder, state, stats, when
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
 from .pages import compare_page, report_page
 
@@ -58,8 +58,11 @@ MOST = 20
 
 # What a launch takes beside its recording (the app stopped, the recorder
 # started, the file pulled off the phone), and what reading one recording
-# takes: 2.3 s each over 10 MB recordings on a laptop, measured on one, three
-# and five of them.
+# takes when the project has never read one: 2.3 s each over 10 MB recordings
+# on a laptop, measured on one, three and five of them. A project that has
+# read recordings has its own number in the run log (`read_s`): five cold
+# starts of 22–25 MB took 6.8 s each on the same laptop, five 40 s scrolls of
+# 66–71 MB 6.1 s each, so neither this number nor the files' size says it.
 AROUND_S = 4.0
 READ_S = 2.5
 # How long a run that ended stays on the start page as the last thing that
@@ -119,15 +122,43 @@ def _record_s(section: dict[str, Any], n: int) -> float:
     return n * (each + AROUND_S)
 
 
+def read_s(project: Path, scenario: str | None = None) -> float:
+    """What reading one recording takes on this machine, for this app: the
+    last `analyze` of the run log that read recordings and ended well, its
+    time over its traces, preferring one of the same scenario. `READ_S` when
+    the log has none (#556)."""
+    same = other = None
+    for run in recorder.read(project / recorder.LOG_FILE):
+        if not isinstance(run, dict) or run.get("cmd") != "analyze" or run.get("exit") != 0:
+            continue
+        facts, ms = run.get("facts"), run.get("ms")
+        traces = facts.get("traces") if isinstance(facts, dict) else None
+        if (isinstance(traces, bool) or not isinstance(traces, int) or traces < 1
+                or isinstance(ms, bool) or not isinstance(ms, (int, float)) or ms <= 0):
+            continue
+        argv = run.get("argv") if isinstance(run.get("argv"), list) else []
+        named = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--scenario"]
+        # The later wins over the earlier, and one of the same scenario over
+        # one that names none; one of another scenario says nothing of this.
+        each = ms / 1000.0 / traces
+        if scenario and scenario in named:
+            same = each
+        elif scenario is None or not named:
+            other = each
+    found = same if same is not None else other
+    return READ_S if found is None else found
+
+
 def hint(do: str, mode: str, n: int | None, section: dict[str, Any], *, unread: int = 0,
-         before: int | None = None) -> str:
+         before: int | None = None, each_s: float = READ_S) -> str:
     """The line beside the button: how many launches, about how long, and that
     the code is not touched. `before` is how many launches the report before
-    it was made from, when a comparison follows."""
+    it was made from, when a comparison follows. `each_s` is what reading one
+    recording takes (`read_s`)."""
     then = ", then a comparison with the report before it" if before else ""
     if do == READ:
         return (f"{_counted(unread, 'recording is', 'recordings are')} already here. Reading "
-                f"{'it' if unread == 1 else 'them'} takes {about(unread * READ_S)}{then}. The phone is not needed.")
+                f"{'it' if unread == 1 else 'them'} takes {about(unread * each_s)}{then}. The phone is not needed.")
     if mode == "gradle":
         return ("This runs the project's macrobenchmark, which decides how many launches it takes: often a few "
                 f"minutes{then}. Nothing in your code changes.")
@@ -136,7 +167,7 @@ def hint(do: str, mode: str, n: int | None, section: dict[str, Any], *, unread: 
         # No number to count with: the config's own does not read as one,
         # and `collect` says so the moment it is started.
         return f"As many {many} as `runner.iterations` in the config says{then}. Nothing in your code changes."
-    text = f"{_counted(n, one, many)}, {about(_record_s(section, n) + n * READ_S)}{then}. Nothing in your code changes."
+    text = f"{_counted(n, one, many)}, {about(_record_s(section, n) + n * each_s)}{then}. Nothing in your code changes."
     if section.get("cooldown"):
         text += f" The phone may wait to cool down between {many}."
     if before and stats.cut(before, n) is None:
@@ -282,7 +313,9 @@ def offer(project: Path, st: dict[str, Any], lines: list[dict[str, Any]],
         do = READ if unread else RECORD
         before = int(report.get("runs") or 1) if _reads(report) else None
         counted = do == RECORD and mode != "gradle"
-        hints = ({str(n): hint(do, mode, n, section, before=before) for n in range(1, MOST + 1)} if counted else {})
+        each_s = read_s(project, name)
+        hints = ({str(n): hint(do, mode, n, section, before=before, each_s=each_s) for n in range(1, MOST + 1)}
+                 if counted else {})
         report_dir = project / cfg.report_dir
         choice = {"name": name, "mode": mode}
         runs = steps(project, str(known["path"]), choice, do, LAUNCHES if counted else None,
@@ -294,7 +327,8 @@ def offer(project: Path, st: dict[str, Any], lines: list[dict[str, Any]],
             "label": LABEL[READ] if do == READ else LABEL["again" if before else "first"],
             "text": f"{_measures(cfg)} {_stands(unread, report)}",
             "hints": hints,
-            "hint": hints.get(str(LAUNCHES)) or hint(do, mode, None, section, unread=unread, before=before),
+            "hint": hints.get(str(LAUNCHES)) or hint(do, mode, None, section, unread=unread, before=before,
+                                                     each_s=each_s),
             # What keeps this choice from being pressed, and what keeps it
             # from being recorded anew where a press reads.
             "why": no_phone if do == RECORD else None, "no_record": no_phone,

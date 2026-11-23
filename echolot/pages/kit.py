@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from ..plain import FINE, NEEDS_ATTENTION, NOT_CHECKED, WORTH_A_LOOK
+from ..plain import FINE, MOVE_MARKER, NEEDS_ATTENTION, NO_LIMIT, NOT_CHECKED, WORTH_A_LOOK
 
 HERE = Path(__file__).parent
 
@@ -105,9 +105,11 @@ def topbar(crumbs: Sequence[str], steps: Sequence[tuple[str, str, bool]] = ()) -
 # ---------------------------------------------------------------------------
 # a level of attention: an icon with its own shape, a word, a tint
 
-TONE = {NEEDS_ATTENTION: "red", WORTH_A_LOOK: "yellow", FINE: "green", NOT_CHECKED: "grey"}
+TONE = {NEEDS_ATTENTION: "red", WORTH_A_LOOK: "yellow", FINE: "green", NOT_CHECKED: "grey",
+        MOVE_MARKER: "grey", NO_LIMIT: "grey"}
 WORD = {NEEDS_ATTENTION: "Needs attention", WORTH_A_LOOK: "Worth a look",
-        FINE: "Fine", NOT_CHECKED: "Not checked"}
+        FINE: "Fine", NOT_CHECKED: "Not checked", MOVE_MARKER: "A marker to move",
+        NO_LIMIT: "No time limit"}
 
 _SHAPE = {
     "red": ('<circle cx="8" cy="8" r="7" fill="var(--red)"/>'

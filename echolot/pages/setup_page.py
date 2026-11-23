@@ -105,13 +105,17 @@ def _offer(found: dict[str, Any], action: str) -> str:
 def _cannot(found: dict[str, Any]) -> str:
     """Why this project cannot be set up from the page: a sentence of the
     page's, `scan`'s own words under it, and where the agent's path is."""
+    # With no app in the folder there is nothing for an agent to set up here
+    # either: the sentence above says where to start instead (#556).
     way = ("The file that is there stays as it is. An agent can write the scenario into it."
-           if found.get("exists") else "An agent can set it up: the step under What to do next says how.")
+           if found.get("exists") else "" if found.get("no_app") else
+           "An agent can set it up: the step under What to do next says how.")
     return ('<section class="stack gap-3" id="setup" aria-labelledby="setup-h">'
             '<h2 class="h2" id="setup-h">Setting this project up</h2>'
             f'<div class="callout" id="setup-cannot">{kit.icon("grey")}<div class="stack gap-2">'
             f'<p class="measure"><b>This page cannot set the project up by itself.</b> {kit.prose(found["plain"])}</p>'
-            f'{_says(found["says"])}<p class="small sub measure">{e(way)}</p></div></div></section>')
+            f'{_says(found["says"])}' + (f'<p class="small sub measure">{e(way)}</p>' if way else "")
+            + '</div></div></section>')
 
 
 def _by_hand(found: dict[str, Any]) -> str:

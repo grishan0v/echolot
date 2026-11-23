@@ -77,26 +77,19 @@ def _bare_pipes(line: str) -> int:
 
 @given(st.sampled_from(_LINE_BREAKERS), st.text(min_size=0, max_size=10).filter(
     lambda s: not any(c in _LINE_BREAKERS or c == "|" for c in s)))
-def test_render_does_not_escape_line_breaks_in_cells(breaker, plain):
-    """Documented gap, not fixed here: only `|` is escaped by `_escape`.
-
-    A cell value containing `\\r`, `\\n`, or a unicode line/paragraph
-    separator is *not* escaped, so it can add extra visual "lines" to the
-    row it is in when the markdown is displayed — the same class of problem
-    the module's docstring describes for `|` (an attacker-or-just-weird
-    string reshaping a table an agent reads as data), just for rows instead
-    of columns. `_escape` only replaces `|`; everything else, including
-    every line-breaking character, passes through `str(text)` unchanged.
-    """
+def test_a_line_break_in_a_cell_does_not_break_its_row(breaker, plain):
+    """A cell value containing `\\r`, `\\n`, or a unicode line/paragraph
+    separator used to pass through `_escape` unchanged, and added extra
+    "lines" to the row it was in: the same class of problem the module's
+    docstring describes for `|`, for rows instead of columns. A slice name
+    from the Perfetto SDK may carry one (#556). A break is a space now."""
     text = plain + breaker + plain
     out = render([{"name": text}])
-    # The line breaker survives verbatim — this is the gap, stated as a
-    # fact rather than asserted as correct.
-    assert breaker in out
-    # And because it survives, splitting the result the way a viewer would
-    # (on any line-breaking character, as str.splitlines() does) yields more
-    # "lines" than the table's 3 logical rows (header/rule/body).
-    assert len(out.splitlines()) > 3
+    # Header, rule, body: the three rows of a one-row table, however a viewer
+    # splits it, and the body row holds the whole value.
+    lines = out.splitlines()
+    assert len(lines) == 3, lines
+    assert breaker not in lines[2] and plain in lines[2], lines[2]
 
 
 @given(rows)

@@ -127,7 +127,7 @@ def draft(facts: scan_mod.Facts | None) -> dict[str, Any]:
         return {"can": False, "plain": "echolot could not read this folder, so it cannot tell which app is here.",
                 "says": []}
     if not facts.app:
-        return {"can": False, "says": [("echolot scan", note) for note in facts.notes[:1]],
+        return {"can": False, "no_app": True, "says": [("echolot scan", note) for note in facts.notes[:1]],
                 "plain": "echolot found no Android app in this folder: no module here has a screen that the "
                          "launcher opens. Start `echolot ui` in the folder of the app's project."}
     lines = scan_mod.skeleton(_fresh(facts))
@@ -357,7 +357,8 @@ def offer(project: Path, config: str, st: dict[str, Any], facts: scan_mod.Facts 
         return None
     drafted = draft(facts)
     if not drafted["can"]:
-        return {"state": "cannot", "plain": drafted["plain"], "says": drafted["says"]}
+        return {"state": "cannot", "plain": drafted["plain"], "says": drafted["says"],
+                "no_app": bool(drafted.get("no_app"))}
     gradle = drafted["mode"] == "gradle"
     writes = [{"title": "What to measure, and how. Its text is below.", "files": [(CONFIG, "")]}]
     if runs_init:
