@@ -32,7 +32,7 @@ Where things are looked for, when they are not where the defaults say:
 |---|---|---|
 | `--project ROOT` | `.` | the application project the agent worked in — its run log, its config, its source tree |
 | `--transcripts DIR` | `~/.claude/projects/<slug>` | where Claude Code's transcripts are; naming it leaves Codex's sessions out |
-| `-c`, `--local` | `echolot.yml` in the project, `local.yml` beside it | the config the protocol checks read |
+| `-c`, `--local` | the copy the session's own commands read with `-c`, when they all read one; otherwise `echolot.yml` in the project; `local.yml` beside it | the config the protocol checks read; when it changed after the session ran, the header says so |
 | `-o DIR` | `.echolot/reflect` in the project | where the reports go; a path given here is from the current directory, like `-c` |
 | `--from-log` | off | ignore any transcript and read the run log alone — see below |
 
@@ -127,7 +127,8 @@ The ones that ship, by what they watch:
 - **entry** — `entry_fumbling`: several slash commands, or the human
   interrupting, before real work started; `agent_prompt_gaps`: the prompt
   handed to the subagent left out the traces, the regression or the change
-- **protocol** — doctor before analyze; the trace never opened directly; the
+- **protocol** — doctor before analyze (in the session, or a passing one in
+  the run log within 24 hours before it, as `echolot` reports it); the trace never opened directly; the
   loop stayed in the subagent; the loop's own guides left to the subagent;
   rounds within the limit; every inserted tracing
   call carries the prefix; edits inside `instrumentation.allowed`; the

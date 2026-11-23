@@ -27,6 +27,7 @@ from typing import Any, Callable
 import yaml
 
 from ..config import Config
+from . import facts as facts_mod
 from .facts import (
     RE_ECHOLOT,
     RE_RE_RECORD,
@@ -110,6 +111,12 @@ def _t(ts: str) -> str:
     return ts[11:19] if ts and len(ts) >= 19 else ts
 
 
+def _age(seconds: float) -> str:
+    """`15 min`, `3 h` — how long before, the way `echolot` says it."""
+    m = int(seconds) // 60
+    return f"{m} min" if m < 120 else f"{m // 60} h"
+
+
 # ------------------------------------------------------------------ entry
 
 def entry_fumbling(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
@@ -180,6 +187,17 @@ def doctor_first(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                            for d in failed])
         return Signal("doctor_first", "ok", "doctor ran before the first analyze",
                       "The environment was checked before any conclusion.")
+    # None in the session, and the run log has one that passed shortly
+    # before: `echolot` showed it, its `next` did not ask for another, and
+    # the session followed the door (#544).
+    prior = f.prior_doctor
+    if prior and prior["passed"] and prior["same_version"] \
+            and prior["age_s"] <= facts_mod.DOCTOR_FRESH_S:
+        what = "doctor" if prior.get("cmd") == "doctor" else f"the self-check in {prior.get('cmd')}"
+        return Signal("doctor_first", "ok",
+                      f"{what} passed {_age(prior['age_s'])} before the first analyze",
+                      "Not in this session: the run log has it, and `echolot` reports "
+                      "it and asks for no other doctor after one that passed.")
     return Signal("doctor_first", "warn", "analyze ran without a preceding doctor",
                   "The protocol starts with doctor: an unchecked environment can "
                   "compute a plausible but wrong report.",

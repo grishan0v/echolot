@@ -179,14 +179,19 @@ def cmd_reflect(args) -> int:
     # only the default is the project's. Joined to --project, `-c
     # app/echolot.yml` looked for app/app/echolot.yml, and a path that was
     # not there was dropped without a word.
-    cfg = None
     given = args.config != "echolot.yml"
-    cfg_path = Path(args.config) if given else project / "echolot.yml"
-    if cfg_path.exists() or given:
-        try:
-            cfg = Config.load(cfg_path, args.local)
-        except ConfigError as e:
-            print(f"config ignored: {e}", file=sys.stderr)
+    loaded: dict[Path, Config | None] = {}
+
+    def load(path: Path) -> Config | None:
+        if path not in loaded:
+            loaded[path] = None
+            if path.exists() or given:
+                try:
+                    loaded[path] = Config.load(path, args.local)
+                except ConfigError as e:
+                    print(f"config ignored: {e}", file=sys.stderr)
+        return loaded[path]
+
     runs = recorder.read(project / recorder.LOG_FILE)
 
     # The same rule as -c above: an explicit -o is a path from here, as every
@@ -199,7 +204,15 @@ def cmd_reflect(args) -> int:
     reports = []
     written = []
     for _reader, ref, session in picked:
+        cfg_path, source, logged = (
+            (Path(args.config), "given", []) if given
+            else _session_config(session, runs, project))
+        cfg = load(cfg_path)
         facts = facts_mod.gather(session, cfg, runs, project)
+        if cfg is not None:
+            now = (recorder._config_stamp(str(cfg_path)) or {}).get("sha")
+            facts.config.update(source=source, logged_sha=logged, sha_now=now,
+                                changed=bool(logged and now and now not in logged))
         sigs = signals_mod.run(session, facts, cfg)
         rep = reflect_render.build(session, facts, sigs)
         stem = short[ref.id]
@@ -231,6 +244,27 @@ def cmd_reflect(args) -> int:
 
     print("\n" + "\n".join(f"→ {p}" for p in written), file=sys.stderr)
     return 0
+
+
+def _session_config(session, runs: list[dict], project: Path
+                    ) -> tuple[Path, str, list[str]]:
+    """The config one session worked with, where it was, and the hashes its
+    runs logged for it.
+
+    The session's own: when every command of it that reads a config read
+    one copy (`-c work-a/echolot.yml`), the checks are judged by that copy.
+    Read off the project instead, a session that never touched the project's
+    config was shown it, with a scenario another session added while this
+    one worked on its copies (#544). Several, or none, and it is the
+    project's, as before.
+    """
+    own = project / "echolot.yml"
+    used = facts_mod.session_configs(session, runs, project)
+    if len(used) == 1 and Path(used[0]["path"]).is_file() \
+            and Path(used[0]["path"]) != own.resolve():
+        return Path(used[0]["path"]), "session", used[0]["shas"]
+    shas = next((u["shas"] for u in used if Path(u["path"]) == own.resolve()), [])
+    return own, "project", shas
 
 
 def _parse_since(text: str) -> float:
