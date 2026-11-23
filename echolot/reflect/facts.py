@@ -73,10 +73,47 @@ _CONCLUSION_FIELDS = {
     "ruled_out": r"Ruled out|Отброшен|Исключен|Исключён|Проверено и отброшен",
     "cleanup": r"\bCleanup\b|Уборк|Очистк",
 }
-# The value after "Confidence:", up to the end of the phrase — markdown
-# emphasis, a bracket or a full stop close it.
-_CONFIDENCE = re.compile(
-    r"(?:Confidence|Уверенность)\s*[:*]*\s*\**\s*([^\n.*(]{0,60})", re.I)
+# A field counts where it is a heading: at the start of a line, behind
+# markdown's `#`, a list mark or `**`, and followed by its colon, a dash,
+# closing emphasis or the end of the line. Anywhere in the text, a brief
+# quoted back in a refusal — "Place / Evidence / … / Cleanup" — had all eight
+# (#541). A few words may sit between the name and the colon: "Place
+# (file:line):", "Отброшено:".
+_HEAD_START = r"^[ \t]*(?:#{1,6}[ \t]*|>[ \t]*|[*+\-•][ \t]+|\d+[.)][ \t]+)*(?:\*\*|__)?[ \t]*"
+_HEAD_END = (r"(?:\*\*|__|[^\n:*_]{0,30}?[ \t]*(?:\*\*|__)?[ \t]*"
+             r"(?::|—|–|-[ \t]|$))")
+
+
+def _heading(name: str) -> re.Pattern[str]:
+    return re.compile(_HEAD_START + r"(?:" + name + r")(?P<end>)" + _HEAD_END,
+                      re.I | re.M)
+
+
+_CONCLUSION_HEADINGS = {k: _heading(p) for k, p in _CONCLUSION_FIELDS.items()}
+_PHRASE = re.compile(r"[^\n.*(]{0,60}")
+
+
+def confidence(text: str) -> str | None:
+    """What the conclusion says under its Confidence heading, or None.
+
+    The rest of the heading's line, up to the end of the phrase — markdown
+    emphasis, a bracket or a full stop close it — or, for a heading on a line
+    of its own, the next line that has anything on it. Only from a heading:
+    the 60 characters after the word anywhere were once
+    `/ Ruled out / Also measured / Cleanup)`, and the summary printed that
+    as the hunt's confidence (#541).
+    """
+    text = text or ""
+    m = _CONCLUSION_HEADINGS["confidence"].search(text)
+    if not m:
+        return None
+    # The rest of the word first: the name matched is a stem, `Уверенност`.
+    line, _, after = re.sub(r"^\w*", "", text[m.start("end"):]).partition("\n")
+    for candidate in [line, *after.splitlines()]:
+        value = _PHRASE.match(candidate.strip(" \t*_:—–-")).group(0).strip(" *_:")
+        if value or candidate.strip(" \t*_:—–-"):
+            return value or None
+    return None
 # A traceback whose first frame is the shell's inline python belongs to the
 # agent's one-liner, not to echolot.
 _TB_FIRST_FRAME = re.compile(r"Traceback \(most recent call last\):\s*File \"([^\"]*)\"")
@@ -674,9 +711,8 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
         for c in calls:
             tools[c.tool] = tools.get(c.tool, 0) + 1
         fields_present = {
-            k: bool(re.search(p, s.final_text)) for k, p in _CONCLUSION_FIELDS.items()
+            k: bool(p.search(s.final_text or "")) for k, p in _CONCLUSION_HEADINGS.items()
         }
-        conf = _CONFIDENCE.search(s.final_text or "")
         dur = None
         if s.started and s.ended:
             dur = round(ts_to_epoch(s.ended) - ts_to_epoch(s.started))
@@ -703,7 +739,7 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
                                  or "AGENTTMP_"),
             "thinking_blocks": s.thinking_blocks,
             "conclusion_fields": fields_present,
-            "confidence": conf.group(1).strip(" *:") if conf else None,
+            "confidence": confidence(s.final_text),
             "final_text": s.final_text,
             "has_transcript": bool(s.source),
         })

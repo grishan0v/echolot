@@ -133,7 +133,9 @@ The ones that ship, by what they watch:
   rounds within the limit; every inserted tracing
   call carries the prefix; edits inside `instrumentation.allowed`; the
   temporary markers are gone (see below); the conclusion has its eight
-  fields; analysis ran on the project's config and not one the agent wrote;
+  fields, each as a heading (`Place:`, `**Place**`, `## Place`) and not as a
+  word in a sentence — the conclusion being what the subagent handed back,
+  through the host's hand-back where it has one; analysis ran on the project's config and not one the agent wrote;
   thresholds edited only after `calibrate`; the traces analysed before a
   re-record were copied out first (a `mv` inside the build tree does not
   count — gradle cleans it); values a person confirmed still hold
