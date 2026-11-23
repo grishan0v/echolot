@@ -471,7 +471,7 @@ def parse_set(values: list[str], detectors) -> dict[str, dict]:
 
 
 def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
-                   use_defaults: bool = False) -> list[tuple]:
+                   use_defaults: bool = False, detectors: list | None = None) -> list[tuple]:
     """Which detectors run, with which overrides, from where.
 
     Pure — no trace, no trace_processor — so the self-check can pin the
@@ -487,7 +487,9 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
     value the config cannot mean is a config error — the same answer
     `parse_set` already gives a `--set` typo, before a trace is opened.
     """
-    detectors = load_detectors(DETECTOR_DIR)
+    # `detectors`: the shipped ones, read once by a caller that plans every
+    # scenario of a config (`state.refused_by_analyze`).
+    detectors = list(detectors) if detectors is not None else load_detectors(DETECTOR_DIR)
     if not use_defaults:
         cfg.unknown_detectors({d.id for d in detectors})
     cli_overrides = cli_overrides or {}
