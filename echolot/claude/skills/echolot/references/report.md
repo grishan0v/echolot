@@ -186,6 +186,12 @@ echolot, or from a config with `runner.environment: false`, arrives this way.
 Treat a missing clock as "unknown", and say so rather than calling a run
 clean.
 
+Temperature and free memory are sampled about once a second, and a value
+holds until the next sample. A window shorter than that, a hot start or a
+tap, often holds no sample of its own: it reads the last one before it
+opened, and `sampled_before_ms` says how long before. With a sample inside
+the window the key is absent.
+
 `thermal.throttled` is the one to act on. A hot device is not a slowed device;
 a cooling device above zero is the kernel saying it took capacity away, and
 the numbers below then understate the app.
