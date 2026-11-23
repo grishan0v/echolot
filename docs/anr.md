@@ -121,6 +121,14 @@ did.
 `nativePollOnce` means it was **idle** when the dump was taken. Whatever caused
 the freeze had already let go, or never ran on that thread at all. Reading the
 top frame as the culprit sends an investigation into Android's message queue.
+The main thread is the one named `main`, or, when the file calls it by the
+process's name — as a stack written by a native unwinder does — the one running
+`ActivityThread.main`; the report keeps that name and says it is the main
+thread. In that format the looper wait can show only as native frames
+(`Looper::pollOnce`, ART's JNI entry and exit) above `MessageQueue.next` or
+`nextLegacy`, and that reads as idle too; the unwinder's own frames on top
+(`unwindstack::SignalHandler` and what it calls) decide nothing. A file with no
+main thread at all says so under what it does not say.
 
 **When every frame belongs to the platform or a library**, it says that in
 those words. One of the ten sample reports had not a single frame outside them
