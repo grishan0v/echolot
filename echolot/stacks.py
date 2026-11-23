@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import functools
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -264,14 +265,24 @@ def chains(tp, callsites: set[int]) -> dict[int, list[Frame]]:
     return out
 
 
-@functools.lru_cache(maxsize=4)
 def ownership(package: str, root: Path | None) -> anr.Ownership:
     """Whose frames are the project's, for the checkout at `root`.
 
     Cached, because `analyze` asks once per trace and ten repeats would walk
     the checkout ten times. `root` is None where there is no checkout to ask,
-    as in the self-check, and the answer is then the package's guess.
+    as in the self-check, and the answer is then the package's guess. Under a
+    lock, since the traces of a set are read side by side (#488): the workers
+    ask at about the same moment, and each walked the checkout without it.
     """
+    with _ownership_lock:
+        return _ownership(package, root)
+
+
+_ownership_lock = threading.Lock()
+
+
+@functools.lru_cache(maxsize=4)
+def _ownership(package: str, root: Path | None) -> anr.Ownership:
     declared = None
     if root is not None and root.is_dir():
         declared = anr.declared_packages(anr.source_index(root)) or None

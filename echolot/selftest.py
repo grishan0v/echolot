@@ -19,6 +19,7 @@ import functools
 import os
 import shlex
 import tempfile
+import time
 from pathlib import Path
 
 from . import fixture
@@ -4152,6 +4153,96 @@ def _(report):
             _setup_context(tp, cfg, upid)
             again = rows(tp)
     assert again == first, (first, again)
+
+
+def _two_fixtures(tmp: str) -> list[Path]:
+    """Two recordings of the fixture that differ, in an order that is not
+    their names'."""
+    crowded, plain = Path(tmp) / "b-crowded.perfetto-trace", Path(tmp) / "a.perfetto-trace"
+    crowded.write_bytes(fixture.build(crowded=True))
+    plain.write_bytes(fixture.build())
+    return [crowded, plain]
+
+
+@check("analyze: the traces of a set read side by side give the report one after another gives, in the order given")
+def _(report):
+    """Each trace is read by a trace_processor of its own, and `analyze` now
+    reads the set's traces at once (#488). The merge is where the order could
+    leak in — the report is sensitive to the order of its inputs (#581) — so
+    the reports have to reach it in the order the traces were named, however
+    the workers finish. Two recordings, analysed side by side and one after
+    another, merge into the same report, and both list the traces as given.
+    """
+    from . import parallel
+    from . import report as rep
+
+    cfg = Config(FIXTURE_CONFIG)
+    with tempfile.TemporaryDirectory() as tmp:
+        traces = _two_fixtures(tmp)
+
+        def merged(jobs: int) -> dict:
+            out = rep.aggregate(parallel.in_order(traces, lambda t: _analyze(t, cfg), jobs))
+            out.pop("generated_at", None)
+            return out
+
+        apart, together = merged(1), merged(2)
+    assert together["traces"] == [str(t) for t in traces], together["traces"]
+    assert together == apart, "the merged report depends on how the traces were read"
+
+
+@check("analyze: a trace that cannot be read ends a run read side by side with its error, and closes the sessions still reading")
+def _(report):
+    """The first failure in the order given is the run's, as it was one trace
+    at a time. The traces still being read when it comes are not waited out:
+    their trace_processors are closed from the main thread — a worker is out
+    of reach of signals and of Ctrl-C, and only the group that opened its
+    session can end it — and each worker ends at its next query.
+    """
+    import threading
+    from . import orphans, parallel
+    from .tp import TraceSession
+
+    with tempfile.TemporaryDirectory() as tmp:
+        good = _two_fixtures(tmp)
+        bad = Path(tmp) / "not-a-trace.perfetto-trace"
+        bad.write_text("not a trace\n" * 64, encoding="utf-8")
+        pids: list[int] = []
+        closed: list[str] = []
+        both_open = threading.Event()
+
+        def read(trace: Path):
+            if trace == bad:
+                both_open.wait(30)
+                with TraceSession(trace, _binary):
+                    return None
+            with TraceSession(trace, _binary) as tp:
+                pids.append(orphans.pid_of(tp._tp))
+                if len(pids) == len(good):
+                    both_open.set()
+                until = time.monotonic() + 20
+                while time.monotonic() < until:   # reading, until the run closes it
+                    try:
+                        tp.query("SELECT 1")
+                    except BaseException:   # Stopped, or the query it cut off
+                        closed.append(trace.name)
+                        raise
+            raise AssertionError(f"{trace.name} was read to the end")
+
+        try:
+            parallel.in_order([bad, *good], read, 3)
+        except ConfigError as e:
+            assert bad.name in str(e), str(e)
+        else:
+            raise AssertionError("the run did not end with the trace that cannot be read")
+    assert len(pids) == 2, pids
+    assert sorted(closed) == sorted(t.name for t in good), (
+        f"closed from outside: {closed} of {[t.name for t in good]}")
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        raise AssertionError(f"trace_processor {pid} is still running")
 
 
 @check("reflect: a signal that broke is not checked, and does not read as checked")

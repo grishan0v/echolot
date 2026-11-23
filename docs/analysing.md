@@ -432,6 +432,41 @@ one recording; the first path is kept, a line on stderr and one under the
 report's Traces line name the others, and `same_recording` in `report.json`
 lists them. `Runs` is the number of distinct recordings.
 
+### A set read side by side
+
+`analyze` reads the traces of a set at once, each in a trace_processor of its
+own. All the work of reading a trace happens in that process, and echolot only
+waits for its answers, so one after another kept one core busy while the rest
+waited. How many at once is the smallest of three numbers: the traces, the
+cores, and how many trace_processors half the machine's memory holds, each
+taken at twelve times the size of the largest trace (one holds its whole
+trace, up to 250 MB for a cold start of 16–24 MB). `-j N` says how many instead;
+`-j 1` reads them one after another, in the same process, the way it always
+did.
+
+The report is the same either way. The reports are merged in the order the
+traces were given, however the reading finishes, and what each trace's reading
+printed comes out whole and in that order: a warning about the second trace
+after the first trace's lines, never in the middle of them. A trace that cannot
+be read ends the run with its own error, the first one in the order given, as
+before; the traces still being read are stopped rather than waited for. Ctrl-C,
+SIGTERM and SIGHUP end every trace_processor of the set, not only the one that
+happened to be reading.
+
+Each trace_processor builds the window's sets once — `_slice`, `_slice_win`,
+`_child_sum`, `_aslice_win` and `_tstate_win` are tables, not views — so a
+detector reads stored rows instead of running the join under them again. On
+fifteen cold starts of a large Kotlin app, 16–24 MB each, on an 11-core
+laptop with 36 GB, eleven at once:
+
+| | one after another | side by side |
+|---|---:|---:|
+| views | 50.5 s | — |
+| tables | 38.5 s | 5.2 s |
+
+What is left of a trace's time one after another is mostly trace_processor's
+start: perfetto's client waits a second for the shell to answer.
+
 ## When a detector could not look
 
 A detector with no rows says it ran and nothing cleared its bar. Some are

@@ -1009,9 +1009,14 @@ class TraceSession:
     def exec_script(self, sql: str) -> None:
         """Runs a multi-statement script (DDL), discarding the output."""
         for stmt in _split_statements(sql):
+            orphans.check_joined()
             list(self._tp.query(stmt))
 
     def query(self, sql: str) -> list[dict[str, Any]]:
+        # A worker's session closed from the main thread (#488): the run
+        # was stopped, and this ends the worker rather than every detector
+        # failing in turn. See orphans.Group.
+        orphans.check_joined()
         rows = []
         for r in self._tp.query(sql):
             rows.append(dict(r.__dict__))

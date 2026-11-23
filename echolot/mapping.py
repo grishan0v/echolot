@@ -57,6 +57,7 @@ from __future__ import annotations
 import functools
 import json
 import re
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -143,9 +144,17 @@ def packet(package: str, classes: Classes) -> bytes:
 
 
 def packet_for(path: Path, package: str) -> bytes:
-    """The packet for a mapping file, read once while the file stays the same."""
+    """The packet for a mapping file, read once while the file stays the same.
+
+    Once with traces read side by side too (#488): every worker asks for it as
+    it opens its trace, and without the lock each read the whole file.
+    """
     stat = path.stat()
-    return _packet_for(path.resolve(), stat.st_mtime_ns, stat.st_size, package)
+    with _packet_lock:
+        return _packet_for(path.resolve(), stat.st_mtime_ns, stat.st_size, package)
+
+
+_packet_lock = threading.Lock()
 
 
 @functools.lru_cache(maxsize=2)
