@@ -81,6 +81,11 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
             if theirs in cfg.scenarios:
                 cfg.select(theirs)
             st["config"]["scenario"] = cfg.scenario_name
+            # The runner of that scenario: read before the choice, it was
+            # the first scenario's, or the top level's under a scenario that
+            # has a runner of its own (#501).
+            st["config"]["runner"] = (str(cfg.runner.get("mode", "launch"))
+                                      if cfg.runner else None)
             report_dir = cfg.report_dir
         except ConfigError as e:
             st["config"] = {"path": cfg_path, "error": str(e)}
@@ -97,6 +102,20 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                 stamps[p] = p.stat().st_mtime
             except OSError:
                 continue
+    # The earlier rounds `collect` and `hunt` moved into subdirectories of
+    # their own. Globbed at the top only, eleven of them read as "none"
+    # (#501).
+    sets: dict[str, float] = {}
+    for d in (traces_dir.iterdir() if traces_dir.is_dir() else []):
+        try:
+            if not d.is_dir() or d.is_symlink():
+                continue
+            held = [f.stat().st_mtime for pat in ("*.perfetto-trace", "*.pftrace")
+                    for f in d.glob(pat)]
+        except OSError:
+            continue
+        if held:
+            sets[d.name] = max(held)
     # The repeats of the config's scenario, named apart: the directory keeps
     # every scenario's set side by side, and the next step names this one's
     # alone.
@@ -107,7 +126,9 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     st["traces"] = {"dir": traces_dir, "count": len(stamps),
                     "scenario": None if mine is None else len(mine),
                     "files": mine,
-                    "newest": max(stamps.values(), default=None)}
+                    "newest": max(stamps.values(), default=None),
+                    "sets": len(sets),
+                    "last_set": max(sets, key=lambda k: sets[k]) if sets else None}
     st["collect"] = collect_state(project)
 
     st["report"] = _report(project / report_dir / "report.json")
@@ -115,6 +136,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     # report, for `status` to list. None for one scenario, which prints as
     # it always has.
     st["scenarios"] = None
+    st["old_report"] = None
     if loaded is not None and loaded.get("scenarios") is not None:
         focus = loaded.scenario_name
         st["scenarios"] = []
@@ -128,6 +150,11 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                 "own_thresholds": bool(loaded.scenario_overrides),
                 "report": _report(project / loaded.report_dir / "report.json")})
         loaded.select(focus)
+        # The report a single-scenario config left at `.echolot/out/`, from
+        # before it named several: they go to `.echolot/out/<scenario>/`
+        # now, and its scenario read "no report yet" with it one level up
+        # (#501). Named on its scenario's line, with where it belongs.
+        st["old_report"] = _old_report(project, [sc["name"] for sc in st["scenarios"]])
 
     # The last self-check, whichever command ran it: `init` runs one too and
     # its facts carry `checks` like a doctor's. Read off `doctor` alone, a
@@ -182,6 +209,8 @@ def _report(rep: Path) -> dict | None:
         # Which echolot wrote it, for `status` to say when it was another
         # (#507). Text, or nothing for a report from before it was kept.
         "echolot": _stamp(r.get("toolchain")),
+        "window": window_warning(r.get("window")),
+        "scenario": r.get("scenario") if isinstance(r.get("scenario"), str) else None,
     }
 
 
@@ -189,6 +218,50 @@ def _stamp(toolchain) -> str | None:
     """`toolchain.echolot` when it is text; None for anything else."""
     v = toolchain.get("echolot") if isinstance(toolchain, dict) else None
     return v if isinstance(v, str) else None
+
+
+def window_warning(w: object) -> str | None:
+    """The first thing report.md warns about the window, in a few words; None
+    when its window is the scenario's.
+
+    The summary is what an agent decides on, and a report whose end anchor
+    matched in none of five traces, its window the whole trace, read there
+    as healthy as any other (#501). The same checks report.md opens with:
+    an anchor that matched nowhere or in some repeats only, an end that
+    never closed, and repeats whose windows differ several-fold.
+    """
+    if not isinstance(w, dict):
+        return None
+    for key, label in (("start_anchor", "start"), ("end_anchor", "end")):
+        a = w.get(key)
+        if not isinstance(a, dict):
+            continue
+        missed = a.get("missed")
+        if isinstance(missed, str) and missed:
+            return f"{label} anchor not found in {missed} runs: their window is the whole trace"
+        if a.get("matches") == 0:
+            return f"{label} anchor not found: the window is the whole trace"
+        if a.get("unfinished") is True:
+            return f"{label} anchor never closed: the window runs to the end of the trace"
+    low, high = w.get("duration_ms_min"), w.get("duration_ms_max")
+    if (isinstance(low, (int, float)) and isinstance(high, (int, float))
+            and not isinstance(low, bool) and not isinstance(high, bool)
+            and low > 0 and high > 2 * low):
+        return f"repeat windows diverged {high / low:.1f}x"
+    return None
+
+
+def _old_report(project: Path, names: list[str]) -> dict | None:
+    """`.echolot/out/report.json` left by a config that named one scenario,
+    when the config now names several and that scenario has no report of
+    its own yet: which scenario it is, and where it belongs."""
+    rep = _report(project / ".echolot" / "out" / "report.json")
+    if not rep or rep.get("error") or rep.get("scenario") not in names:
+        return None
+    own = project / ".echolot" / "out" / rep["scenario"] / "report.json"
+    if own.exists():
+        return None
+    return rep
 
 
 def _as_written(r: dict) -> bool:
@@ -441,7 +514,12 @@ def next_kind(st: dict) -> str:
     # Then what `init` does on its own. The agent is about to read this
     # layer, and `init` touches nothing the project edited, so there is
     # nothing to ask.
-    if st["layer_verdict"] in ("absent", "stale"):
+    # Not in a directory that is only a copy of the config, for an analysis
+    # away from the project: `init` would install the layer into a scratch
+    # directory (#501).
+    if st["layer_verdict"] == "stale" or (st["layer_verdict"] == "absent"
+                                          and not (st.get("config")
+                                                   and config_copy_only(st["project"]))):
         return "init"
     d = st.get("last_doctor")
     if d and d.get("facts", {}).get("failed"):
@@ -475,6 +553,21 @@ def whose_sandbox(host: str) -> str:
     """The `sandbox` fact doctor logs, as the words `status` and `next` use."""
     return {"codex": "Codex's sandbox", "cursor": "Cursor's sandbox"}.get(
         host, "the agent's sandbox")
+
+
+# What a project's own checkout holds at its root, and a directory holding
+# only a copy of `echolot.yml` does not.
+_PROJECT_FILES = ("settings.gradle", "settings.gradle.kts", "build.gradle",
+                  "build.gradle.kts", "gradlew", ".git", ".claude")
+
+
+def config_copy_only(project: Path) -> bool:
+    """A directory with no `.claude/`, no checkout and no build of its own:
+    a copy of the config, for reading traces away from the project."""
+    try:
+        return not any((project / name).exists() for name in _PROJECT_FILES)
+    except OSError:
+        return False
 
 
 def door(st: dict) -> str:
@@ -544,9 +637,12 @@ def next_step(st: dict) -> str:
     if kind == "fix-config":
         return f"fix echolot.yml — it does not load: {st['config']['error']}"
     if kind == "resume-or-new":
-        q = (st.get("hunt") or {}).get("question") or "the earlier question"
-        return (f'{_door(st)}` — the agent asks whether to carry on with "{q}" '
-                f'or start a new investigation')
+        # The question itself is on the hunt line and heads the recap below:
+        # said a third time here, it was the longest thing on screen (#501).
+        n = (st.get("hunt") or {}).get("n")
+        which = f"investigation #{n}" if n else "the open investigation"
+        return (f'{_door(st)}` — the agent asks whether to carry on with {which} '
+                f'or start a new one')
     if kind == "init-force":
         return ("echolot init --all — overwrites .claude/ files that may carry "
                 "edits made here (`echolot init` lists them): ask first, keep "
@@ -559,6 +655,11 @@ def next_step(st: dict) -> str:
 
 
 def _hunt_step(st: dict) -> str:
+    # While a collect runs, the step by hand is to wait for it: a second
+    # `collect` on the same phone is what the line offered (#501).
+    if (st.get("collect") or {}).get("status") == "running":
+        return (f"{_door(st)} hunt` — or by hand: wait for the running collect "
+                f"to finish (the collect line says how far it got)")
     return f"{_door(st)} hunt` — or by hand: {by_hand(st)[1]}"
 
 

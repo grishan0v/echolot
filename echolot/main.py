@@ -332,6 +332,10 @@ def _report_text(rep: dict | None, cfg: dict | None, project: Path,
     other = report_mod.written_by(rep.get("echolot"), short=True)
     if other:
         note += f" · {other}"
+    # The window warning report.md opens with: a report over the whole
+    # trace read here as healthy as any (#501).
+    if rep.get("window"):
+        note += f" · ! {rep['window']}"
     return f"{where}, {made} · {rep['runs']} run(s) · {what}{note}"
 
 
@@ -3491,15 +3495,21 @@ def cmd_status(args) -> int:
         if cfg.get("local"):
             bits.append("local.yml applied")
         lines.append(("config", "echolot.yml · " + " · ".join(bits)))
+    recap = state.next_kind(st) == "resume-or-new"
     lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"), st)))
     collecting = state.collect_line(st)
     if collecting:
         lines.append(("collect", collecting))
     tr = st["traces"]
     if tr["count"]:
-        lines.append(("traces", f"{tr['count']} in .echolot/traces, newest {when.ago(tr['newest'])}"))
+        said = f"{tr['count']} in .echolot/traces, newest {when.ago(tr['newest'])}"
     else:
-        lines.append(("traces", "none in .echolot/traces"))
+        said = "none in .echolot/traces"
+    if tr.get("sets"):
+        # The rounds moved aside are traces too, and were not counted (#501).
+        said += (f" · {tr['sets']} earlier set(s) in subdirectories, "
+                 f"last {tr['last_set']}")
+    lines.append(("traces", said))
     if st.get("scenarios"):
         # One line a scenario, its traces and its latest report, so that the
         # one the next step names is seen beside the others.
@@ -3509,8 +3519,14 @@ def cmd_status(args) -> int:
             count = len(sc["files"])
             mark = "  ← the open investigation's" if sc["name"] == open_on else ""
             own = " · own thresholds" if sc.get("own_thresholds") else ""
+            old = st.get("old_report")
+            none = "no report yet"
+            if old and old.get("scenario") == sc["name"]:
+                none += (f" · {_rel_to(old['path'], st['project'])} is this scenario's, "
+                         f"from before the config named several: it belongs in "
+                         f".echolot/out/{sc['name']}/")
             lines.append(("scenario", f"{sc['name']}{own} · {count} trace(s) · "
-                          + _report_text(sc["report"], cfg, st["project"], "no report yet")
+                          + _report_text(sc["report"], cfg, st["project"], none)
                           + mark))
     else:
         lines.append(("report", _report_text(st["report"], cfg, st["project"])))
@@ -3547,9 +3563,10 @@ def cmd_status(args) -> int:
 
     # Everything needed to answer "carry on, or start new?" in one call, so
     # the agent asks the human without a second round trip.
-    if state.next_kind(st) == "resume-or-new":
+    if recap:
         print()
-        for line in hunt_mod.recap(st.get("hunt"), st, root=project):
+        # The question is on the hunt line above: once is enough (#501).
+        for line in hunt_mod.recap(st.get("hunt"), st, root=project, quoted=False):
             print(line)
     return 0
 

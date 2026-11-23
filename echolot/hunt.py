@@ -782,7 +782,7 @@ def summary_line(hunt: dict[str, Any] | None, st: dict[str, Any]) -> str:
 
 
 def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
-          root: Path | None = None) -> list[str]:
+          root: Path | None = None, quoted: bool = True) -> list[str]:
     """Everything the human needs to answer "continue, or start new?".
 
     A week later nobody remembers what they were chasing, so the question has
@@ -794,7 +794,9 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
     q = hunt.get("question") or "(no question recorded)"
     state = hunt.get("status") or "open"
     if state == "open":
-        out = [f'Open investigation: "{q}"']
+        # `quoted` False under `status`, whose hunt line has just said it.
+        out = [f'Open investigation: "{q}"' if quoted else
+               f"Open investigation #{hunt.get('n') or '?'}, the question on the hunt line:"]
     else:
         # A closed record stays at .echolot/hunt.json until the next one
         # opens, and bare `echolot hunt` reads it from there. Headed "Open
