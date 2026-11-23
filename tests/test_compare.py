@@ -907,21 +907,23 @@ def test_end_to_end(tmp_path: Path) -> None:
     about the contract between the two commands. This is the case that fails
     when a column is renamed on one side only.
     """
+    from echolot import fixture
+
     env = dict(os.environ, ECHOLOT_NO_RECORD="1")
-    trace = tmp_path / "fixture.perfetto-trace"
-    run = subprocess.run([sys.executable, "-m", "echolot.fixture", str(trace)],
-                         capture_output=True, text=True, env=env)
-    if run.returncode != 0:
-        check("the fixture builds", False, run.stderr[-300:])
-        return
+    # Three recordings, not one named three times: `analyze` counts one
+    # recording once (#565), and the spread needs repeats.
+    traces = []
+    for i, build in enumerate(({}, {"composables": False}, {"crowded": True})):
+        trace = tmp_path / f"fixture{i}.perfetto-trace"
+        trace.write_bytes(fixture.build(**build))
+        traces.append(str(trace))
     (tmp_path / "echolot.yml").write_text(FIXTURE_CONFIG, encoding="utf-8")
 
     def cli(*argv) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-m", "echolot.main", *argv],
                               capture_output=True, text=True, cwd=tmp_path, env=env)
 
-    done = cli("analyze", str(trace), str(trace), str(trace),
-               "-c", "echolot.yml")
+    done = cli("analyze", *traces, "-c", "echolot.yml")
     if done.returncode != 0:
         check("analyze runs on the fixture", False, done.stderr[-400:])
         return

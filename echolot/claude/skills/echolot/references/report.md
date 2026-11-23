@@ -94,7 +94,10 @@ produce. The keys only a merged report has are named under the block.
 ```
 
 **`traces` and `runs`** — the repeats behind a merged report, by path, and
-how many. Every number in it is then a median across them, and a few keys say
+how many. One recording counts once however it was named: a path given twice,
+a byte copy under another name or a symlink beside the file is read once, and
+`same_recording` lists the paths that were one recording, the kept one first
+(the markdown warns under the Traces line). Every number in it is then a median across them, and a few keys say
 how far the repeats spread: `window.duration_ms_min` and `_max`,
 `window.main_thread.runs` (how many repeats had a main thread to account for),
 `environment.cpu.mean_mhz_min` and `_max` with `environment.cpu.runs` (how many
