@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot.reflect import facts as facts_mod  # noqa: E402
 from echolot.reflect import signals as signals_mod  # noqa: E402
-from echolot.reflect.model import MAIN, Call, Session, SubAgent  # noqa: E402
+from echolot.reflect.model import MAIN, Call, Session, SubAgent, Turn  # noqa: E402
 from tests.support import check  # noqa: E402
 
 T0 = datetime(2026, 10, 4, 10, 0, 0, tzinfo=timezone.utc)
@@ -147,3 +147,51 @@ def test_a_passing_doctor_in_the_run_log_counts_before_the_analyze() -> None:
           sig.severity == "ok" and "init" in sig.title, sig.title)
     sig = verdict([_doctor_run(1010 + 60)])
     check("a doctor after the analyze does not", sig.severity == "warn", sig.title)
+
+
+def _why(s: Session) -> list[tuple[int, str]]:
+    return [(g["seconds"], g["why"]) for g in facts_mod.gaps(s, keep=None)]
+
+
+def test_a_silence_is_labelled_by_what_the_session_was_waiting_on() -> None:
+    bg = _bash(10, "echolot analyze .echolot/traces/*.perfetto-trace",
+               out="Command running in background with ID: b7x2k9")
+    bg.input["run_in_background"] = True
+    s = _session([bg, _bash(20, "ls .echolot/out"), _bash(515, "cat .echolot/out/report.md")])
+    s.turns = [Turn(ts=_ts(510), role="user", kind="notification",
+                    text="<task-notification>\n<task-id>b7x2k9</task-id>\n<status>completed")]
+    check("a background shell, until its notification",
+          _why(s) == [(495, "waiting on a background task")], _why(s))
+
+    agent = Call(id="a", ts=_ts(5), tool="Agent", input={"prompt": "hunt"},
+                 output_head="Async agent launched")
+    s = _session([agent, _bash(30, "git status"), _bash(983, "git diff")])
+    s.subagents = [SubAgent(id="h1", type="perf-hunter", started=_ts(6), ended=_ts(980))]
+    s.calls += [_bash(40, "echolot guide loop", agent="sub:h1"),
+                _bash(60, "echolot analyze t.perfetto-trace", agent="sub:h1")]
+    check("a subagent in the background, after a plain Bash",
+          (953, "a subagent was running") in _why(s), _why(s))
+
+    s = _session([_bash(10, "git push"), _bash(1456, "gh pr view 1")])
+    s.turns = [Turn(ts=_ts(12), role="assistant", text="Pushed; over to you."),
+               Turn(ts=_ts(1450), role="user", text="CI is green, go on")]
+    check("the turn handed back, then a message",
+          _why(s) == [(1446, "waiting for the human or another session")], _why(s))
+
+    s = _session([_bash(10, "git push"), _bash(1456, "gh pr view 1")])
+    check("and nothing outstanding stays unknown", _why(s) == [(1446, "unknown")], _why(s))
+
+
+def test_an_exit_1_that_is_an_answer_is_no_friction() -> None:
+    answers = ["diff a.json b.json", "cd out && cmp a b", "grep -rn AGENTTMP_ app/src",
+               "LC_ALL=C rg -n foo src"]
+    s = _session([_bash(i, cmd, out="Exit code 1\n", error=True)
+                  for i, cmd in enumerate(answers)])
+    sig = _sig(s, "env_friction")
+    check("diff, cmp and grep saying no are answers", sig is None, sig and sig.rows)
+    s = _session([_bash(1, "diff a b | head -5", out="Exit code 1\n", error=True),
+                  _bash(2, "diff a b", out="Exit code 2\ndiff: a: No such file or directory",
+                        error=True)])
+    sig = _sig(s, "env_friction")
+    check("a pipeline's exit is its last stage's, and diff's 2 is an error",
+          sig is not None and sum(r["count"] for r in sig.rows) == 2, sig and sig.rows)

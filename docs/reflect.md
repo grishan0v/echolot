@@ -146,9 +146,13 @@ The ones that ship, by what they watch:
   a sentence that names the defect is worth more than any rule
 - **failures** — echolot calls that failed, tracebacks apart from clean exits,
   shell failures apart from the tool's own; retries, with what moved between
-  the two attempts; tool errors outside echolot, by kind
-- **cost** — silences of two minutes or more, each with what it was read off
-  the call before it (a subagent running, the human answering, a build); tool
+  the two attempts; tool errors outside echolot, by kind (an exit 1 from
+  `diff`, `cmp` or a grep is their answer, not an error, and is left out)
+- **cost** — silences of two minutes or more, each with its likely cause:
+  what the session was waiting on for most of it — a subagent at work, a
+  command in the background before its notification, the turn handed back
+  until a message from the human or another session — and failing that the
+  call before it (the human answering a question, a build); tool
   outputs over 8k characters; the subagent's window fed by reading sources by
   hand rather than by the report (per activity: echolot, report reading,
   source reading, instrumentation edits, builds — calls and characters, with
