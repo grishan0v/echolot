@@ -861,3 +861,63 @@ def test_the_three_keys_come_after_the_last_key_and_before_the_prose():
         while lines[after].startswith("-- @plain_") or re.match(r"--\s{2,}\S", lines[after]):
             after += 1
         check(f"{det.id}: and a blank comment line ends them", lines[after] == "--", lines[after])
+
+
+# --- a window that is not the scenario's (#557) -----------------------------------
+
+def missed(budget=None, missed_="3/3", startup_ms=1258.0):
+    rep = make([entry("main_thread_waits", [row("worker_pool_#", 700.0, detail="blocked in loadConfig")])],
+               duration=18786.61, budget=budget)
+    rep["window"]["startup"] = {"type": "cold", "dur_ms": startup_ms}
+    rep["window"].update({"start_anchor": {"glob": "bindApplication", "matches": 1},
+                          "end_anchor": {"glob": "app_marker", "matches": 0, "missed": missed_}})
+    return rep
+
+
+@pytest.mark.parametrize("budget", [None, 2000.0])
+def test_a_window_whose_end_was_not_found_is_not_judged(budget):
+    v = plain.verdict(missed(budget))
+    check("not checked, with or without a limit", v["level"] == "not_checked" and v["ratio"] is None, v)
+    check("no 'The launch takes'", "The launch takes" not in v["text"]
+          and v["text"].startswith("There is no measured launch to judge."), v["text"])
+    check("the platform's start is said as the platform's", "The platform measured the start at 1.3 s." in v["text"],
+          v["text"])
+    check("and the warning says what was not found, in how many recordings",
+          v["warning"] == "echolot did not find where this scenario ends (`app_marker`) in 3 of 3 recordings, so "
+                          "the numbers below are about the whole recording, not about the scenario.", v["warning"])
+    if budget:
+        check("the limit is named as not applied", "not held against the time limit of 2.0 s" in v["text"], v["text"])
+
+
+def test_an_end_missed_in_one_recording_of_three_is_said_as_that():
+    v = plain.verdict(missed(missed_="1/3"))
+    check("1 of 3, and those are in the numbers", v["warning"].startswith(
+        "echolot did not find where this scenario ends (`app_marker`) in 1 of 3 recordings. In those")
+        and v["level"] == "not_checked", v)
+
+
+def test_shares_of_a_missed_window_are_of_the_recording():
+    rep = missed()
+    said = plain.found(rep["detectors"][0], rep)
+    check("not 'of the launch'", "of the launch" not in said and "of the recording" in said, said)
+
+
+def test_a_window_whose_anchors_matched_has_no_warning():
+    rep = missed(budget=2000.0)
+    rep["window"]["end_anchor"] = {"glob": "app_marker", "matches": 1}
+    rep["window"]["duration_ms"] = 1900.0
+    v = plain.verdict(rep)
+    check("judged as before", v["warning"] is None and v["text"].startswith("The launch takes 1.9 s."), v)
+
+
+def test_the_list_says_the_window_first():
+    out = plain.render(missed())
+    check("the warning is the first line", out.startswith("WINDOW            echolot did not find"), out)
+
+
+def test_a_reading_from_before_the_warning_is_read_again():
+    rep = plain.annotate(missed())
+    del rep["verdict"]["warning"]
+    rep["verdict"]["text"] = "The launch takes 18.8 s."
+    check("is_read says no", not plain.is_read(rep))
+    check("and the list works it out anew", "The launch takes" not in plain.render(rep), plain.render(rep))

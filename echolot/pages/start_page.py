@@ -271,8 +271,12 @@ def _reports(view: dict[str, Any], link: Link) -> str:
             cards.append(f'<li class="rep empty"><p class="sub">{name}{kit.prose(rep["plain"])}</p></li>')
             continue
         name = f'<span class="small sub">{e(rep["scenario"])}</span>' if rep.get("scenario") else ""
+        # A window that is not the scenario's is said on the card too (#557).
+        warning = verdict.get("warning")
+        warned = (f'<div class="callout">{kit.icon("red")}<p class="small">{kit.prose(warning)}</p></div>'
+                  if warning else "")
         cards.append(
-            f'<li class="rep"><div class="rowf">{kit.pill(verdict.get("level"))}{name}</div>'
+            f'<li class="rep"><div class="rowf">{kit.pill(verdict.get("level"))}{name}</div>{warned}'
             f'<p class="measure">{e(verdict.get("text") or "")}</p>'
             f'<p class="small sub measure">{kit.prose(rep["plain"])}</p>'
             f'<div class="rowf"><a class="btn primary" href="{e(href)}">See the report</a></div></li>')

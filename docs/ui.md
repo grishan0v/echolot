@@ -59,6 +59,9 @@ longer than … seconds", from 0.1 to 60. It is optional, and it is written as
 `scenario.budget_ms`, in milliseconds. With a limit the report's first line
 says whether the app opens fast enough. Without one it says how long the
 launch takes and holds that against nothing: its level is "not checked".
+A report whose window is not the scenario's, because an anchor matched
+nothing, is "not checked" with a limit too, and its card on the start page
+says what was not found.
 
 The limit is one line of the file, under the scenario's window, with a
 comment of the page's own; with no limit the same line is there commented

@@ -143,10 +143,14 @@ class _Ctx:
         # thread of an app carries the last 15 of its process's.
         self.main = str(window.get("process") or "")[-15:]
         # A startup is a launch; any other stretch is a run.
-        self.noun = "launch" if window.get("startup") else "run"
+        self.kind = "launch" if window.get("startup") else "run"
         # Whether the window ends where the scenario does, which is what an
         # idle main thread costs turns on (`_held`).
         self.closed = _closed(window)
+        # What a share is a share of. A window whose anchor missed is the
+        # recording, whatever the scenario is (#557): "56% of the launch" of
+        # such a window is a share of something that is not the launch.
+        self.noun = "recording" if _missed(window) else self.kind
 
     @property
     def plural(self) -> str:
@@ -176,6 +180,46 @@ def _closed(window: dict[str, Any]) -> bool:
         return False
     end = window.get("end_anchor")
     return bool(window.get("defined_by")) or isinstance(end, dict)
+
+
+def _of(missed: Any) -> tuple[int, int] | None:
+    try:
+        k, n = (int(x) for x in str(missed).split("/"))
+    except ValueError:
+        return None
+    return k, n
+
+
+def window_warning(report: dict[str, Any]) -> str | None:
+    """What a person has to read before any number of the report, when the
+    window is not the scenario's: an anchor that found nothing, in some
+    repeats or in all, or an end that never closed. None for a window that is
+    the scenario's. `report.md` says the same in its header, for an agent."""
+    window = report.get("window") or {}
+    said = []
+    for key, where in (("start_anchor", "starts"), ("end_anchor", "ends")):
+        anchor = window.get(key)
+        if not isinstance(anchor, dict):
+            continue
+        glob = _name(anchor.get("glob") or "?")
+        seen = _of(anchor.get("missed"))
+        if not anchor.get("matches") and anchor.get("before_start"):
+            said.append(f"The marker where this scenario ends ({glob}) comes only before the one where "
+                        f"it starts, so nothing closed the window: the numbers below run to the end of "
+                        f"the recording, not to the end of the scenario. Are the two swapped?")
+        elif seen and seen[0] < seen[1]:
+            said.append(f"echolot did not find where this scenario {where} ({glob}) in {seen[0]} of "
+                        f"{seen[1]} recordings. In those the numbers are about the whole recording, and "
+                        f"they are part of the numbers below.")
+        elif seen or not anchor.get("matches"):
+            scope = (f" in {seen[0]} of {seen[1]} recordings" if seen and seen[1] > 1 else
+                     " in the recording")
+            said.append(f"echolot did not find where this scenario {where} ({glob}){scope}, so the "
+                        f"numbers below are about the whole recording, not about the scenario.")
+        elif anchor.get("unfinished"):
+            said.append(f"This scenario had not reached its end ({glob}) when the recording stopped, "
+                        f"so the numbers below run to the end of the recording.")
+    return " ".join(said) or None
 
 
 def _value(row: dict[str, Any]) -> float:
@@ -658,16 +702,31 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
 
     With no budget there is nothing to compare with, and the verdict says so
     instead of calling the launch fine: green always means "looked at, and
-    fine".
+    fine". A window that is not the scenario's (`window_warning`) is not
+    judged at all, and `warning` carries what to read first.
     """
     ctx = ctx or _Ctx(report)
     budget = _budget(report)
+    warning = window_warning(report)
+    if warning:
+        # The window is the recording's, and its length says nothing about the
+        # scenario: neither "the launch takes 18.8 s" nor a red "9.4 times as
+        # long" against a limit. The platform's own start, when the trace
+        # holds one, is the platform's number, and is said as that.
+        rest = "Its window is not the scenario's"
+        rest += f", so it is not held against the time limit of {hum(budget)}." if budget else "."
+        startup = (report.get("window") or {}).get("startup") or {}
+        start_ms = startup.get("dur_ms") if isinstance(startup, dict) else None
+        if isinstance(start_ms, (int, float)) and not isinstance(start_ms, bool) and start_ms > 0:
+            rest += f" The platform measured the start at {hum(float(start_ms))}."
+        return {"level": NOT_CHECKED, "budget_ms": budget, "ratio": None, "warning": warning,
+                "text": f"There is no measured {ctx.kind} to judge. {rest}"}
     if ctx.window_ms <= 0:
-        return {"level": NOT_CHECKED, "budget_ms": budget, "ratio": None,
+        return {"level": NOT_CHECKED, "budget_ms": budget, "ratio": None, "warning": None,
                 "text": f"This recording has no measured {ctx.noun} to judge."}
     lead = f"The {ctx.noun} takes {hum(ctx.window_ms)}."
     if budget is None:
-        return {"level": NOT_CHECKED, "budget_ms": None, "ratio": None,
+        return {"level": NOT_CHECKED, "budget_ms": None, "ratio": None, "warning": None,
                 "text": f"{lead} No time limit is set, so there is nothing to compare it with."}
     # The key, and what is said from it: the sentence's ratio is `verdict.ratio`
     # rounded to one decimal, never the rounded window over the rounded budget
@@ -681,12 +740,22 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
         over = round((ratio - 1) * 100)
         rest = (f"it takes {ratio:.1f} times as long." if ratio >= 2 else
                 f"it runs {over}% over." if over >= 1 else "it is just over the limit.")
-    return {"level": level, "budget_ms": budget, "ratio": ratio,
+    return {"level": level, "budget_ms": budget, "ratio": ratio, "warning": None,
             "text": f"{lead} {allowed} {rest}"}
 
 
 # ---------------------------------------------------------------------------
 # into the report
+
+
+def is_read(report: dict[str, Any]) -> bool:
+    """Does a report carry the plain reading of this version? One whose
+    verdict has no `warning` was read before a missed anchor was (#557), and
+    its verdict may judge a window that is not the scenario's."""
+    dets = report.get("detectors") or []
+    v = report.get("verdict")
+    return (isinstance(v, dict) and "warning" in v
+            and all("plain" in d and "attention" in d for d in dets))
 
 
 def annotate(report: dict[str, Any]) -> dict[str, Any]:
@@ -729,7 +798,7 @@ def render(report: dict[str, Any], width: int | None = None) -> str:
     first, and the rest as a count. A report that already carries the reading
     is read as it says; an older one gets it worked out here."""
     dets = report.get("detectors") or []
-    if "verdict" not in report or not all("plain" in d and "attention" in d for d in dets):
+    if not is_read(report):
         report = annotate(copy.deepcopy(report))
         dets = report["detectors"]
     width = width or max(60, min(100, shutil.get_terminal_size((100, 24)).columns))
@@ -740,7 +809,9 @@ def render(report: dict[str, Any], width: int | None = None) -> str:
 
     v = report["verdict"]
     label = _LABEL.get(v["level"]) or str(v["level"]).upper().replace("_", " ")
-    lines = wrap(v["text"], f"{label:<18}", " " * 18)
+    # A window that is not the scenario's is said before anything else.
+    lines = (wrap(v["warning"], f"{'WINDOW':<18}", " " * 18) + [""]) if v.get("warning") else []
+    lines += wrap(v["text"], f"{label:<18}", " " * 18)
     listed = sorted((d for d in dets if d["attention"] in _MARK),
                     key=lambda d: (LEVELS.index(d["attention"]), -_weight(d)))
     if listed:

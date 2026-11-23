@@ -506,6 +506,18 @@ launch takes and that no limit is set, and its level is "not checked": green
 always means that something was looked at and found fine. [`echolot ui`](ui.md#setting-a-project-up)
 takes the limit in a field when it writes a project's first config.
 
+A window that is not the scenario's is not judged. When an anchor matched
+nothing, in some recordings or in all, or the end never closed before the
+recording stopped, the verdict is "not checked" with or without a limit, and
+says "There is no measured launch to judge" instead of how long the window
+took: that length is the recording's. Where the trace holds the platform's own
+startup, the verdict gives it as the platform's number. The plain reading and
+the page say what was not found before anything else ("echolot did not find
+where this scenario ends (`app_marker`) in 5 of 5 recordings, so the numbers
+below are about the whole recording, not about the scenario"), the shares in
+the sentences are "of the recording", and `report.json` keeps that line as
+`verdict.warning`.
+
 ## The report as a page
 
 `report.md` is a table for an agent and a terminal. For a person there is
