@@ -276,6 +276,9 @@ Most proposals will not be applicable, and the reasons are the useful part:
   `object` is that member, and a lambda — a class of its own,
   `load$lambda$0`, or javac's `lambda$load$0` — is the function it was written
   in;
+- **an expression body** — `fun save(v: String) = store.put(v)` is a function
+  with no block to bracket: rewrite it as a block, or mark the caller. It is
+  not counted as a line from another build;
 - **a `return` in the body** — a begin/end pair leaks the section on the early
   path;
 - **the body is on one line** — `remove` could not take it out without taking
@@ -287,6 +290,12 @@ Most proposals will not be applicable, and the reasons are the useful part:
 - **a frame outside `instrumentation.allowed`** — shown as a row and refused,
   not left out: it is still on the stack, and the frame under it may be the
   allowed caller to mark instead.
+
+A method on the stack twice is said to call itself, so its marker opens inside
+itself. Not when one of the two frames is on a line in no function, such as
+the class declaration: that is the bridge the compiler adds for a generic
+interface (`create(Context): Object` for `Initializer<Unit>`), and it is
+passed over.
 
 ## Measuring the freeze
 
