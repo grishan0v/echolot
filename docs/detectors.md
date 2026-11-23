@@ -295,6 +295,23 @@ temperature, throttling and memory the report states every duration under.
 Nothing in it is a detector — no threshold, no finding — and its views are
 there for a detector that wants them all the same.
 
+### Why the window's own sets are tables
+
+The same holds one level up. A view is a query with a name, not rows: each
+reference to `_slice_win` ran the join under it again, over every slice of the
+process, and every detector reads it, most more than once. On trace_processor
+v56.1 `app_init`, which names it four times, took 25 of 48 seconds of five cold
+starts of a large app; on v59.1 fifteen of them took 50 s one trace at a time,
+and 38 s with the window's sets built once. So `_slice`, `_slice_win`,
+`_child_sum`, `_aslice_win` and `_tstate_win` are `PERFETTO TABLE`s:
+trace_processor's own columnar tables, built once when the script runs and
+read as stored rows after that. The rest stay views, cheap or read once. A
+detector reads both the same way.
+
+Each table is dropped with `DROP TABLE IF EXISTS` before it is made, and each
+view with `DROP VIEW IF EXISTS`. trace_processor refuses the other pairing, and
+`doctor` runs the scripts twice in one session to hold them to it.
+
 ## Self time versus total time
 
 `main_thread_block` measures **self** time — the slice's duration minus its

@@ -19,6 +19,7 @@ import functools
 import os
 import shlex
 import tempfile
+import time
 from pathlib import Path
 
 from . import fixture
@@ -4091,6 +4092,157 @@ def _(report):
     # The failure is still reported. Taking the description from a repeat
     # that ran must not turn into hiding that another one did not.
     assert only["error"] == "boom", only["error"]
+
+
+# The window's own sets, stored once per session rather than recomputed on
+# every reference (#486), and the scripts that make them.
+WINDOW_TABLES = ("_slice", "_slice_win", "_child_sum", "_aslice_win", "_tstate_win")
+
+
+@check("window: _slice_win and its siblings are built once, and building them again gives the same rows")
+def _(report):
+    """A view is a query with a name: every reference to `_slice_win` ran the
+    join under it again, over every slice of the process, and every detector
+    reads it. On trace_processor v56.1 `app_init` alone took 25 of 48
+    seconds of five cold starts of a large app that way. The five sets are
+    PERFETTO TABLEs now.
+
+    What can go wrong with that is the drop in front of each. trace_processor
+    refuses `DROP VIEW` on a table, and a second CREATE without a drop, so a
+    script whose drop and create disagree works once and fails the second
+    time it runs in a session. Nothing runs them twice today; this does, and
+    holds every drop in the shipped scripts to its create.
+    """
+    import re as _re
+    from .main import SQL_DIR, _resolve_process, _setup_context
+    from .tp import TraceSession
+
+    made: dict[str, str] = {}
+    for script in ("context.sql", "window.sql", "environment.sql"):
+        text = (SQL_DIR / script).read_text(encoding="utf-8")
+        for kind, name in _re.findall(
+                r"^CREATE (VIEW|PERFETTO TABLE|VIRTUAL TABLE|TABLE) (\w+)", text, _re.M):
+            dropped = "VIEW" if kind == "VIEW" else "TABLE"
+            assert _re.search(rf"^DROP {dropped} IF EXISTS {name};", text, _re.M), (
+                f"{script}: {name} is made with CREATE {kind} and not dropped "
+                f"as a {dropped.lower()} first")
+            made[name] = kind
+    for name in WINDOW_TABLES:
+        assert made.get(name) == "PERFETTO TABLE", (name, made.get(name))
+
+    cfg = Config(FIXTURE_CONFIG)
+
+    def rows(tp) -> dict:
+        return {name: tp.query(f"SELECT COUNT(*) AS n, TOTAL(dur) AS dur FROM {name}"
+                               if name != "_child_sum" else
+                               f"SELECT COUNT(*) AS n, TOTAL(ns) AS dur FROM {name}")[0]
+                for name in WINDOW_TABLES}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        with TraceSession(trace, _binary) as tp:
+            upid = _resolve_process(tp, cfg.process, str(trace))[0]["upid"]
+            _setup_context(tp, cfg, upid)
+            kinds = {r["name"]: r["type"] for r in tp.query(
+                "SELECT name, type FROM sqlite_master WHERE name IN ("
+                + ", ".join(f"'{n}'" for n in WINDOW_TABLES) + ")")}
+            assert kinds == dict.fromkeys(WINDOW_TABLES, "table"), kinds
+            first = rows(tp)
+            assert all(r["n"] for r in first.values()), first
+            _setup_context(tp, cfg, upid)
+            again = rows(tp)
+    assert again == first, (first, again)
+
+
+def _two_fixtures(tmp: str) -> list[Path]:
+    """Two recordings of the fixture that differ, in an order that is not
+    their names'."""
+    crowded, plain = Path(tmp) / "b-crowded.perfetto-trace", Path(tmp) / "a.perfetto-trace"
+    crowded.write_bytes(fixture.build(crowded=True))
+    plain.write_bytes(fixture.build())
+    return [crowded, plain]
+
+
+@check("analyze: the traces of a set read side by side give the report one after another gives, in the order given")
+def _(report):
+    """Each trace is read by a trace_processor of its own, and `analyze` now
+    reads the set's traces at once (#488). The merge is where the order could
+    leak in — the report is sensitive to the order of its inputs (#581) — so
+    the reports have to reach it in the order the traces were named, however
+    the workers finish. Two recordings, analysed side by side and one after
+    another, merge into the same report, and both list the traces as given.
+    """
+    from . import parallel
+    from . import report as rep
+
+    cfg = Config(FIXTURE_CONFIG)
+    with tempfile.TemporaryDirectory() as tmp:
+        traces = _two_fixtures(tmp)
+
+        def merged(jobs: int) -> dict:
+            out = rep.aggregate(parallel.in_order(traces, lambda t: _analyze(t, cfg), jobs))
+            out.pop("generated_at", None)
+            return out
+
+        apart, together = merged(1), merged(2)
+    assert together["traces"] == [str(t) for t in traces], together["traces"]
+    assert together == apart, "the merged report depends on how the traces were read"
+
+
+@check("analyze: a trace that cannot be read ends a run read side by side with its error, and closes the sessions still reading")
+def _(report):
+    """The first failure in the order given is the run's, as it was one trace
+    at a time. The traces still being read when it comes are not waited out:
+    their trace_processors are closed from the main thread — a worker is out
+    of reach of signals and of Ctrl-C, and only the group that opened its
+    session can end it — and each worker ends at its next query.
+    """
+    import threading
+    from . import orphans, parallel
+    from .tp import TraceSession
+
+    with tempfile.TemporaryDirectory() as tmp:
+        good = _two_fixtures(tmp)
+        bad = Path(tmp) / "not-a-trace.perfetto-trace"
+        bad.write_text("not a trace\n" * 64, encoding="utf-8")
+        pids: list[int] = []
+        closed: list[str] = []
+        both_open = threading.Event()
+
+        def read(trace: Path):
+            if trace == bad:
+                both_open.wait(30)
+                with TraceSession(trace, _binary):
+                    return None
+            with TraceSession(trace, _binary) as tp:
+                pids.append(orphans.pid_of(tp._tp))
+                if len(pids) == len(good):
+                    both_open.set()
+                until = time.monotonic() + 20
+                while time.monotonic() < until:   # reading, until the run closes it
+                    try:
+                        tp.query("SELECT 1")
+                    except BaseException:   # Stopped, or the query it cut off
+                        closed.append(trace.name)
+                        raise
+            raise AssertionError(f"{trace.name} was read to the end")
+
+        try:
+            parallel.in_order([bad, *good], read, 3)
+        except ConfigError as e:
+            assert bad.name in str(e), str(e)
+        else:
+            raise AssertionError("the run did not end with the trace that cannot be read")
+    assert len(pids) == 2, pids
+    assert sorted(closed) == sorted(t.name for t in good), (
+        f"closed from outside: {closed} of {[t.name for t in good]}")
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        raise AssertionError(f"trace_processor {pid} is still running")
 
 
 @check("reflect: a signal that broke is not checked, and does not read as checked")

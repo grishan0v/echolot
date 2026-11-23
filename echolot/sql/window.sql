@@ -1,6 +1,21 @@
 -- Phase 2: everything narrowed to the window. ts_start/ts_end arrive as plain
 -- numbers — the CLI read them from _window after context.sql. That matters: a
 -- view in their place would be recomputed on every reference to _slice_win.
+--
+-- And the same holds one level up. A view is a query with a name, not rows:
+-- each reference to _slice_win ran the join under it again, over every slice
+-- of the process, and every detector reads it, most of them more than once.
+-- On trace_processor v56.1 `app_init`, which names it four times, took 25
+-- of 48 seconds of five cold starts of a large app (#486); on v59.1 fifteen
+-- of them took 50 s one at a time, and 38 s with these built once. So the
+-- window's own sets — _slice in context.sql, _slice_win, _child_sum,
+-- _aslice_win and _tstate_win — are PERFETTO TABLEs: built once, when this
+-- script runs, and read as stored rows after that. The bounds are constants by then, so nothing in them can
+-- go stale. The views below them stay views: they are cheap, or read once.
+--
+-- Each is dropped as a table before it is made. trace_processor refuses
+-- `DROP VIEW` on a table, and a second CREATE without a drop, so a session
+-- that ran these scripts twice would have failed on the second pass.
 
 -- The window is constants now. The view stays so a detector can refer to the
 -- scenario duration without paying anything for it.
@@ -22,8 +37,8 @@ SELECT {{ts_start}} AS ts_start, {{ts_end}} AS ts_end;
 -- the recording is not a block of no length — it is the longest one there is,
 -- and the honest reading is that it ran to the end of the window.
 
-DROP VIEW IF EXISTS _slice_win;
-CREATE VIEW _slice_win AS
+DROP TABLE IF EXISTS _slice_win;
+CREATE PERFETTO TABLE _slice_win AS
 SELECT
     s.slice_id,
     s.ts,
@@ -58,8 +73,8 @@ WHERE s.ts < {{ts_end}}
 -- length stops there, and a child it opened after the window is not part of
 -- it. One pass over the whole trace; a correlated subquery per slice would
 -- cost an order of magnitude more.
-DROP VIEW IF EXISTS _child_sum;
-CREATE VIEW _child_sum AS
+DROP TABLE IF EXISTS _child_sum;
+CREATE PERFETTO TABLE _child_sum AS
 SELECT
     parent_id,
     SUM(CASE WHEN dur < 0 THEN MAX({{ts_end}} - ts, 0) ELSE dur END)    AS ns,
@@ -74,8 +89,8 @@ GROUP BY parent_id;
 -- a section on no thread has no place in a per-thread sum. What reads this is
 -- the markers table — the project's own names are usually async — and
 -- nothing that attributes time to a thread.
-DROP VIEW IF EXISTS _aslice_win;
-CREATE VIEW _aslice_win AS
+DROP TABLE IF EXISTS _aslice_win;
+CREATE PERFETTO TABLE _aslice_win AS
 SELECT
     a.slice_id,
     a.ts,
@@ -110,8 +125,8 @@ WHERE a.ts < {{ts_end}}
 -- open slice does above. Dropped, it took each thread's last stretch with it:
 -- a main thread asleep from before the window to the end had no budget at
 -- all, and the report put the gap down to a thread that was not there.
-DROP VIEW IF EXISTS _tstate_win;
-CREATE VIEW _tstate_win AS
+DROP TABLE IF EXISTS _tstate_win;
+CREATE PERFETTO TABLE _tstate_win AS
 SELECT
     ts.utid,
     th.tid,

@@ -49,7 +49,7 @@ from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
 from . import atomic
 from . import compare as compare_mod
 from . import hunt as hunt_mod
-from . import codex, layer, plugin, recorder, sandbox, state, table, when
+from . import codex, layer, parallel, plugin, recorder, sandbox, state, table, when
 from . import launch as launch_mod
 from . import mapping as mapping_mod
 from . import moves as moves_mod
@@ -943,10 +943,24 @@ def cmd_analyze(args) -> int:
         traces, same = _distinct_recordings(sorted(args.traces, key=run_order))
         if same:
             print(f"[!] {report_mod.same_recording_said(same)}", file=sys.stderr)
-        reports = [analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
-                                 use_defaults=args.defaults, tp_source=tp_source,
-                                 below_bar=len(traces) > 1)
-                   for t in traces]
+        # Side by side, each in its own trace_processor, and merged in the
+        # order given (#488). See parallel.py.
+        jobs = parallel.jobs_for(traces, getattr(args, "jobs", None))
+        if jobs > 1:
+            # The pinned binary settled once, here, before the workers ask
+            # for it: its download's lock is a file lock, held per process,
+            # and every worker would have downloaded it at once. A binary
+            # that cannot be had is every trace's error alike, and one after
+            # another says it the way it always did.
+            try:
+                resolve_binary_path(tp_binary)
+            except ConfigError:
+                jobs = 1
+        reports = parallel.in_order(
+            traces, lambda t: analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
+                                            use_defaults=args.defaults, tp_source=tp_source,
+                                            below_bar=len(traces) > 1),
+            jobs)
         rep = report_mod.aggregate(reports)
         if same:
             rep["same_recording"] = same
@@ -5822,6 +5836,18 @@ class _Versions(argparse.Action):
         parser.exit()
 
 
+def _jobs(text: str) -> int:
+    """`analyze -j`: how many traces at once, one or more."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            f"{value}: give 1 or more — 1 reads the traces one after another")
+    return value
+
+
 def _at_least_one(text: str) -> int:
     """`--top`: a count of rows, one or more.
 
@@ -6199,6 +6225,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "as a page for a person, one file that opens from disk. A "
                          "report.html that is already there is written again without "
                          "this flag too")
+    an.add_argument("-j", "--jobs", type=_jobs, default=None, metavar="N",
+                    help="how many traces to read at once, each in its own "
+                         "trace_processor (default: as many as the cores and half "
+                         "the memory allow; 1 reads them one after another). The "
+                         "report is the same either way")
     an.set_defaults(func=cmd_analyze)
 
     cp = add("compare", "pipeline", "[<before.json> [<after.json>]]",

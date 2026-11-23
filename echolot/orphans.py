@@ -20,6 +20,13 @@ loaded, whenever echolot ended without that call:
   still held when echolot's end of its pipe closes, which the kernel does
   however echolot ends. What it cannot cover is a SIGKILL within the second
   perfetto spends starting the shell, before its pid is known here.
+
+And one more way, since `analyze` reads the traces of a set side by side
+(#488): the sessions are opened in worker threads, and none of the above
+reaches a thread. Signals are Python's main thread's alone, and so is
+Ctrl-C. A `Group` is what the main thread holds instead: every session its
+workers open joins it, and `Group.stop` closes them all from the main
+thread, and any that starts after as it starts.
 """
 
 from __future__ import annotations
@@ -83,13 +90,86 @@ def open_processor(cls, config, trace_for: Callable[[Callable[[], None]], Iterab
     once the child is up: the trace is fed to it from a generator, and its
     first step is the first moment the child's pid can be read.
     """
+    group = getattr(_joined, "group", None)
+    check_joined()
     tp = cls.__new__(cls)
+
+    def started() -> None:
+        _watcher.hold(pid_of(tp))
+        if group is not None:
+            group.add(tp)
+
     try:
-        tp.__init__(trace=trace_for(lambda: _watcher.hold(pid_of(tp))), config=config)
+        tp.__init__(trace=trace_for(started), config=config)
     except BaseException as e:
         _stop(tp, e.__traceback__)
         raise
     return tp
+
+
+class Stopped(BaseException):
+    """The group this thread joined was stopped: its work is not wanted.
+
+    Not an `Exception`, for the reason `KeyboardInterrupt` is not one: it is
+    not a failure of whatever it interrupts. `analyze_trace` reads every
+    detector under an `except Exception`, so that one broken query does not
+    take the run with it, and a worker whose session was closed would have
+    gone on through every detector, each failing at once.
+    """
+
+
+_joined = threading.local()
+
+
+def check_joined() -> None:
+    """`Stopped` here when this thread's group was stopped; nothing otherwise."""
+    group = getattr(_joined, "group", None)
+    if group is not None:
+        group.check()
+
+
+class Group:
+    """The sessions a set of worker threads opens, to be closed together.
+
+    A thread joins with `with group.joined():`, and each session it opens
+    from then on is the group's from the moment its trace_processor is up —
+    the same moment the watcher learns its pid. `stop`, called from any
+    thread, closes every one of them, and a session asked for after it
+    raises `Stopped` instead of starting, or as soon as its shell is up.
+    Closed from outside, a worker's session raises `Stopped` at its next
+    query (`check_joined`), and the worker ends instead of reading the rest
+    of its trace.
+    """
+
+    def __init__(self) -> None:
+        self._open: list[Any] = []
+        self._lock = threading.Lock()
+        self._stopped = False
+
+    @contextlib.contextmanager
+    def joined(self):
+        before = getattr(_joined, "group", None)
+        _joined.group = self
+        try:
+            yield self
+        finally:
+            _joined.group = before
+
+    def check(self) -> None:
+        if self._stopped:
+            raise Stopped("the run was stopped")
+
+    def add(self, tp) -> None:
+        with self._lock:
+            self.check()
+            self._open.append(tp)
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stopped = True
+            held, self._open = self._open, []
+        for tp in held:
+            close(tp)
 
 
 def close(tp) -> None:
