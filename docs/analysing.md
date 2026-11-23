@@ -796,6 +796,14 @@ only when a row has something to place — rather than `project.source_root`:
 a lock in `domain/` is exactly the kind of place a project with several
 modules has, and that key's example value names one module.
 
+The checkout is the config's directory. A config kept elsewhere, to analyse
+traces on their own, names it: `analyze --root <checkout>`, or `project.root`
+in `echolot.yml`, a path from the config's directory. When the checkout holds
+no Kotlin or Java sources while the report has rows to place or composables
+to tell apart, `analyze` says so on stderr and in the report's header: every
+row is then left without a file, and `composables` finds none of the
+project's own to rank.
+
 ## Two rows about one name
 
 A name can appear under both `main_thread_block` and `main_thread_outlier`,

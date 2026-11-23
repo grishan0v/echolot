@@ -1509,6 +1509,7 @@ def to_markdown(report: dict[str, Any]) -> str:
         )
 
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
+    out.extend(_no_sources_lines(report.get("no_sources")))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
     out.extend(_code_markers_lines(report))
@@ -1646,6 +1647,24 @@ def clip(text: Any, width: int) -> str:
     return text if len(text) <= width else text[:width - 1] + "…"
 
 
+def _no_sources_lines(gap: dict[str, Any] | None) -> list[str]:
+    """What `analyze` could not do in the code, when the checkout it was
+    given holds no sources (#499): rows left without a file, and
+    composables none of which read as the project's own."""
+    if not isinstance(gap, dict):
+        return []
+    what = []
+    if gap.get("rows"):
+        what.append(f"{gap['rows']} row{'s' if gap['rows'] != 1 else ''} name code and none was placed")
+    if gap.get("composable_calls"):
+        what.append(f"{gap['composable_calls']} composable calls were recorded and none was told apart "
+                    f"as the project's own, so `composables` found nothing to rank")
+    if not what:
+        return []
+    return [f"> ⚠️ No Kotlin or Java sources under `{gap.get('root')}`: {'; '.join(what)}. Name the "
+            f"checkout with `analyze --root` or `project.root` in echolot.yml."]
+
+
 def _header_lines(report: dict[str, Any]) -> list[str]:
     w = report.get("window") or {}
     out = []
@@ -1681,6 +1700,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     out.extend(_crowding_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
+    out.extend(_no_sources_lines(report.get("no_sources")))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
     out.extend(_code_markers_lines(report))
