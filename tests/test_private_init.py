@@ -147,6 +147,57 @@ def test_a_worktree_keeps_its_block_where_git_reads_it(tmp_path: Path, capsys) -
           exclude.BEGIN in (main_tree / ".git/info/exclude").read_text(encoding="utf-8"))
 
 
+def _main_and_worktree(tmp_path: Path) -> tuple[Path, Path]:
+    main_tree = _repo(tmp_path / "main")
+    _git(main_tree, "worktree", "add", "-q", "--detach", str(tmp_path / "wt"))
+    return main_tree, tmp_path / "wt"
+
+
+def test_shared_in_a_worktree_leaves_the_main_checkouts_private_install(
+        tmp_path: Path, capsys) -> None:
+    """The exclude file is one for every checkout (#608)."""
+    main_tree, worktree = _main_and_worktree(tmp_path)
+    _init(main_tree, capsys, "--private", "--for", "claude")
+    check("the main checkout is private", _status(main_tree) == [], _status(main_tree))
+
+    out = " ".join(_init(worktree, capsys, "--for", "claude", "--shared").split())
+    check("the block stays", exclude.read(exclude.find(main_tree)) is not None, out)
+    check("and git still sees nothing in the main checkout", _status(main_tree) == [],
+          _status(main_tree))
+    check("said, with the checkout it protects and the ways on",
+          "echolot's block stays" in out and str(main_tree.resolve()) in out
+          and "`git add -f`" in out and "block taken out" not in out, out)
+    check("this checkout's choice is shared", not hosts.load_private(worktree))
+    check("the main checkout's stays private", hosts.load_private(main_tree))
+
+
+def test_shared_in_a_worktree_takes_the_block_out_when_nothing_else_needs_it(
+        tmp_path: Path, capsys) -> None:
+    main_tree, worktree = _main_and_worktree(tmp_path)
+    _init(worktree, capsys, "--private", "--for", "claude")
+    out = _init(worktree, capsys, "--shared")
+    check("taken out, as in the main checkout", "block taken out" in out
+          and exclude.read(exclude.find(worktree)) is None, out)
+    check("git sees the layer in the worktree",
+          any(".claude/" in line for line in _status(worktree)), _status(worktree))
+
+
+def test_private_in_a_worktree_keeps_the_other_checkouts_paths(
+        tmp_path: Path, capsys) -> None:
+    main_tree, worktree = _main_and_worktree(tmp_path)
+    _init(main_tree, capsys, "--private", "--for", "claude,cursor")
+    out = " ".join(_init(worktree, capsys, "--private", "--for", "claude").split())
+    block = _block(main_tree)
+    check("the main checkout's pointer stays in the block",
+          "/.cursor/rules/echolot.mdc" in block, block)
+    check("git sees nothing in either checkout",
+          _status(main_tree) == [] and _status(worktree) == [],
+          (_status(main_tree), _status(worktree)))
+    check("and init says the file is read in the other checkout",
+          "same paths are hidden in the other checkout too" in out
+          and str(main_tree.resolve()) in out, out)
+
+
 # --- later runs -----------------------------------------------------------------
 
 def test_a_plain_init_stays_private_and_writes_the_block_anew(tmp_path: Path, capsys) -> None:

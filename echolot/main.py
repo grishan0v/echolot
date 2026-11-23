@@ -3940,7 +3940,26 @@ def _private_repo(args, target: Path):
     asked = getattr(args, "private", None)
     if asked is False:
         repo = exclude_mod.find(target)
-        if repo is not None and exclude_mod.remove(repo):
+        if repo is None or exclude_mod.read(repo) is None:
+            return False, None
+        # Git reads one exclude file in every checkout of a repository. With
+        # a private install in another one, the block is what keeps that
+        # install from git, and taking it out from here undid a person's
+        # private setup in a directory nobody ran `init` in (#608).
+        others = exclude_mod.private_elsewhere(repo)
+        if others:
+            import textwrap
+            print("\n" + textwrap.fill(
+                f"≠ {repo.show()}: echolot's block stays. Git reads this file "
+                f"in every checkout of the repository, and the block keeps the "
+                f"private install in {', '.join(str(o) for o in others)} from "
+                f"git. Here git still does not see what init wrote: `git add -f` "
+                f"adds it, or `echolot init --shared` in "
+                f"{'that checkout' if len(others) == 1 else 'those checkouts'} "
+                f"first takes the block out for all of them.",
+                width=80, initial_indent="  ", subsequent_indent="    ",
+                break_on_hyphens=False, break_long_words=False))
+        elif exclude_mod.remove(repo):
             print(f"\n  ↓ {repo.show()}: echolot's block taken out — what a private "
                   f"install wrote is still here, and git sees it now")
         return False, None
@@ -3966,8 +3985,26 @@ def _private_targets(target: Path, chosen: list) -> list[Path]:
 
 def _keep_from_git(repo, patterns: list[str]) -> None:
     from . import exclude as exclude_mod
+    # The block is written anew on every private `init`, so that a path no
+    # release installs any more drops out. With a private install in another
+    # checkout, the same file keeps that one from git as well, and its paths
+    # stay (#608).
+    others = exclude_mod.private_elsewhere(repo)
+    if others:
+        patterns = (exclude_mod.read(repo) or []) + patterns
     said = exclude_mod.write(repo, patterns)
     print(f"\n  {said}")
+    shared = exclude_mod.checkouts(repo) if not said.startswith("!") else []
+    if shared:
+        import textwrap
+        print(textwrap.fill(
+            f"Git reads this file in every checkout of the repository, so the "
+            f"same paths are hidden in the "
+            f"{'other checkout' if len(shared) == 1 else f'{len(shared)} other checkouts'} "
+            f"too: "
+            f"{', '.join(str(c) for c in shared)}.",
+            width=80, initial_indent="  ", subsequent_indent="  ",
+            break_on_hyphens=False, break_long_words=False))
     if not said.startswith("!"):
         print("  A private install: git sees none of it in this clone. "
               "`echolot init --shared`\n  hands it to the team.")

@@ -200,6 +200,14 @@ which installs the same files and keeps all of them out of git.
   out and does what a plain `init` does: the `.gitignore` lines, the
   permission in `settings.json`. The files stay where they are, and git
   sees them from then on.
+- **One exclude file for every checkout.** Git has no exclude file of a
+  worktree's own: the main checkout and each linked worktree read the same
+  `info/exclude`, and the block hides its paths in all of them. So
+  `--shared` leaves the block in place while another checkout has a
+  private install, says which, and names the ways on: `git add -f`, or
+  `--shared` in that checkout first. A private `init` keeps the other
+  private installs' paths in the block, and says that the paths are hidden
+  in the other checkouts too.
 - **Outside a git repository** there is nothing to keep from git: `init
   --private` says so and installs as usual.
 
