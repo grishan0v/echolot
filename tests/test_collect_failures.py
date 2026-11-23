@@ -118,3 +118,35 @@ def test_a_trace_that_goes_away_is_skipped(tmp_path: Path, monkeypatch) -> None:
     check("the two left are copied, numbered without a hole",
           [p["path"].name for p in got]
           == ["startup_iter000.perfetto-trace", "startup_iter001.perfetto-trace"], got)
+
+
+# A build that printed a D8 warning long before its test failed, as an SM-A515F
+# round did (#521): the warning holds `error: Could`, and came first.
+D8_THEN_FAILED = """\
+> Task :app:mergeExtDexBenchmark
+WARNING: /home/u/.gradle/caches/isoparser-1.9.41.jar: D8: Invalid stack map table at instruction 12, error: Could not assign java.lang.Object to int
+w: file:///work/app/src/main/java/Foo.kt:12:5 'bar' is deprecated. Error: none
+> Task :benchmark:connectedBenchmarkAndroidTest
+com.example.benchmark.StartupBenchmark > startup[SM-A515F - 13] FAILED
+        com.example.benchmark.SetupHelper$SetupException: setup failed: HTTP 400
+        at com.example.benchmark.SetupHelper.run(SetupHelper.kt:40)
+Tests on SM-A515F - 13 failed: There was 1 failure(s).
+"""
+
+
+def test_a_build_warning_is_not_the_cause_of_a_failed_test() -> None:
+    gist = runner.failure_gist(1, D8_THEN_FAILED,
+                               "FAILURE: Build failed with an exception.\n"
+                               "* What went wrong:\n"
+                               "Execution failed for task ':benchmark:connectedBenchmarkAndroidTest'.\n")
+    check("the gist is what the test threw",
+          gist.startswith("com.example.benchmark.SetupHelper$SetupException: setup failed: "
+                          "HTTP 400"), gist)
+    lines = runner.failure_lines(D8_THEN_FAILED, "")
+    check("and the warnings are not among the lines shown",
+          not any(ln.startswith(("WARNING", "w: ")) for ln in lines), lines)
+
+
+def test_a_lowercase_error_still_speaks_when_nothing_was_thrown() -> None:
+    gist = runner.failure_gist(1, "", "adb: error: failed to get feature set: no devices\n")
+    check("adb's own line", gist.startswith("adb: error: failed to get feature set"), gist)
