@@ -83,6 +83,10 @@ _LISTED = re.compile(r"^DALVIK THREADS \((?P<n>\d+)\):")
 # What the drop box writes where it cut an entry to its size limit. A dump of
 # hundreds of threads reaches that limit.
 _TRUNCATED = re.compile(r"^\[\[TRUNCATED\]\]\s*$")
+# Where a source stopped writing one thread's stack: the Crashlytics tools
+# give most threads of an event cut after eighteen or nineteen frames, and
+# say so with this line.
+_OMITTED = re.compile(r"^\s*\.{3}\s*(?:\d+\s+)?(?:more\s+)?frames?\s+omitted\s*(?:\.{3})?\s*$")
 # The record's own furniture: block rules, the thread count above a block, and
 # the runtime's note about how long suspending everything took. Skipped by
 # name so that a line which is genuinely new still reaches the unread count.
@@ -362,6 +366,10 @@ class Thread:
     # Kept rather than dropped: a format that grew a line we do not read should
     # say so out loud.
     unread: list[str] = field(default_factory=list)
+    # How many frames were read before the source wrote `... frames omitted
+    # ...` and stopped: the stack goes on below, and nothing here says how.
+    # None when the stack was given whole.
+    cut: int | None = None
 
     @property
     def top(self) -> str:
@@ -651,6 +659,12 @@ def _read_body(line: str, thread: Thread, source: Source) -> bool:
     if source.native.match(line):
         thread.native.append(line.strip())
         return True
+    if _OMITTED.match(line):
+        # The source stopped writing the stack here. Read as one more line
+        # nothing understood, it was only a count at the end of the report,
+        # and the thread was judged on a top with its bottom missing.
+        thread.cut = len(thread.frames) + len(thread.native)
+        return True
     if not source.lock_on_signature:
         denied = source.lock.match(line)
         if denied:
@@ -828,6 +842,13 @@ IDLE: list[tuple[str, tuple[str, ...]]] = [
         "java.util.TimerThread.mainLoop",
         "com.google.android.gms.dynamite.zza.run",
         "okhttp3.internal.concurrent.TaskRunner",
+        # The frame that waits, not the watchdog's `run` under it: a watchdog
+        # that fired closes the socket from `timedOut()` with `run` still on
+        # the stack, and every frame of that is a library's, so a mask on
+        # `run` would strike out the one moment it did something. The
+        # substring covers the platform's copy, `com.android.okhttp.okio`.
+        "okio.AsyncTimeout.awaitTimeout",
+        "okio.AsyncTimeout$Companion.awaitTimeout",
     )),
     ("waiting on a descriptor", (
         "__epoll_pwait",
@@ -840,6 +861,32 @@ IDLE: list[tuple[str, tuple[str, ...]]] = [
         "java.lang.Thread.sleep",
     )),
 ]
+
+# A call that is under way, read off the managed frames. `__ppoll` under them
+# is a socket read in progress rather than a loop waiting for events: a TLS
+# handshake, a request waiting for its response. Such a thread waits for the
+# network on somebody's behalf, and when the main thread is queued behind a
+# lock it holds, it is the thread a reader is sent to.
+#
+# Not `SocketInputStream.socketRead0` on its own: OkHttp's HTTP/2 reader
+# (`Http2Reader.nextFrame` under `Http2Connection$ReaderRunnable`) waits in
+# the same read for as long as a connection is open, and it is idle.
+CALL_IN_PROGRESS = (
+    "okhttp3.internal.connection.RealCall.",
+    "okhttp3.RealCall.",
+    "okhttp3.internal.connection.ConnectPlan.",
+    "okhttp3.internal.connection.RealConnection.connect",
+    "okhttp3.internal.http1.Http1ExchangeCodec.",
+    "com.android.okhttp.internal.huc.HttpURLConnectionImpl.",
+    "ConscryptEngineSocket.startHandshake",
+    "ConscryptFileDescriptorSocket.startHandshake",
+    "java.net.Socket.connect",
+)
+
+# The runtime's thread that writes the dump is runnable in every dump it
+# writes. That is a property of its stack: this reader does not know which
+# signal the dump answered.
+_WRITING_THE_DUMP = ("SignalCatcher::HandleSigQuit", "DumpForSigQuit")
 
 
 def idle_reason(thread: Thread, ours: Ownership | None = None) -> str | None:
@@ -858,13 +905,23 @@ def idle_reason(thread: Thread, ours: Ownership | None = None) -> str | None:
     binder thread. Struck out, each of those was missing from the working
     threads the reader is sent to for a holder. A native mask has every
     managed frame above it, since managed code runs called from native.
+
+    A call in progress is work too (see `CALL_IN_PROGRESS`), and a stack the
+    source cut short is never struck out by a native mask: that mask judges
+    by every managed frame, and the ones below the cut may be the app's. A
+    managed mask judges by the frames above itself, which a cut below does
+    not take away.
     """
+    if thread.state == "runnable" and any(
+            mark in line for line in thread.native for mark in _WRITING_THE_DUMP):
+        return "runtime housekeeping"
     if thread.state in ("blocked", "runnable"):
         return None
     ours = ours or Ownership()
 
     def busy(frames: list[str]) -> bool:
-        return any(ours.claims(f) or "Binder.execTransact" in f for f in frames)
+        return any(ours.claims(f) or "Binder.execTransact" in f
+                   or any(call in f for call in CALL_IN_PROGRESS) for f in frames)
 
     for reason, masks in IDLE:
         if thread.name == "main" and reason != "looper idle":
@@ -876,7 +933,7 @@ def idle_reason(thread: Thread, ours: Ownership | None = None) -> str | None:
                 break
         else:
             if any(mask in line for line in thread.native for mask in masks) \
-                    and not busy(thread.frames):
+                    and thread.cut is None and not busy(thread.frames):
                 return reason
     return None
 
@@ -1501,6 +1558,8 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
         else:
             out += [f"State `{main.state}`, standing on:", ""]
         out += ["```"] + _stack(main, ours) + ["```", ""]
+        if main.cut is not None:
+            out += [f"The source cut this stack after {main.cut} frames.", ""]
 
     if report.threads and not any(t.own(ours) for t in of_interest(report)):
         # Said as narrowly as it is checked. "Not this project's code" would
@@ -1514,6 +1573,14 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 "freeze is inside something nobody here wrote, and there is no "
                 "line of yours to open — which is a finding, and not the same "
                 "as an empty report.", ""]
+        cut = [t for t in of_interest(report) if t.cut is not None]
+        if cut:
+            # A stack cut short says nothing about its bottom, and the bottom
+            # is where the app's frames would be.
+            out += [f"Unless it is below a cut: the source cut {len(cut)} of "
+                    f"these stacks short, first **{cut[0].name}** after "
+                    f"{cut[0].cut} frames, and what called into them is not "
+                    f"in the file.", ""]
         near = _nearest_libraries(report)
         if near:
             # A library is not a wall. The app configures WorkManager, chose
@@ -1542,6 +1609,10 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 # The top said what the thread was standing on; this says
                 # what it was doing. Both, because they read differently.
                 line += f" — on top: `{thread.top}`"
+            if thread.cut is not None:
+                # What it was doing may be below the cut, and so may the
+                # app's frame that would have said who asked for it.
+                line += f" — stack cut after {thread.cut} frames"
             out.append(line)
         if len(ranked) > 12:
             out.append(f"- … and {len(ranked) - 12} more")
@@ -1751,6 +1822,7 @@ def summary(report: Report,
             "idle": idle_reason(main_thread, ours),
             "denied": None if not main_thread.lock else main_thread.lock.cls,
             "stack": _stack(main_thread, ours),
+            "cut": main_thread.cut,
         },
         # `where` is the frame nearest to the app — its own, else a library's
         # — and `top` what the thread stood on; `stack` is the same cut the
@@ -1760,7 +1832,9 @@ def summary(report: Report,
             {"name": t.name, "state": t.state,
              "where": t.nearest(ours),
              "top": t.top,
-             "stack": _stack(t, ours)}
+             "stack": _stack(t, ours),
+             # Frames read before the source cut the stack; null when whole.
+             "cut": t.cut}
             for t in doing(report, busy, chains(report))
         ],
         # Whether this file can name a lock chain at all — see `lock_notes`.

@@ -136,14 +136,23 @@ frame where the library was entered: `Gson.fromJson` under the adapter's
 quiet app and three hundred on a busy one, nearly all asleep, and striking out
 the idle ones is most of the work: loopers waiting in `nativePollOnce`, pools
 waiting on a queue for work, coroutine workers parked, runtime daemons and the
-runtime's own housekeeping, binder pools, a `Timer`, OkHttp's `TaskRunner` and
-the GMS dynamite loop idling, threads waiting on a descriptor in `epoll`,
-`ppoll` or a `Selector`, and threads asleep — `Thread.sleep`, a futex, a
-pthread condition. A blocked thread is never struck out, whatever its stack
-says, and neither is a runnable one. Nor is a thread with work above the idle
-frame: a frame of the app's, or `Binder.execTransact` serving a call — a
-`Timer` running the app's task, the finalizer daemon in an app's
-`finalize()`, a binder thread inside a provider's `query`. The main thread is
+runtime's own housekeeping, binder pools, a `Timer`, OkHttp's `TaskRunner`,
+okio's watchdog waiting for a timeout and the GMS dynamite loop idling,
+threads waiting on a descriptor in `epoll`, `ppoll` or a `Selector`, and
+threads asleep — `Thread.sleep`, a futex, a pthread condition. A blocked
+thread is never struck out, whatever its stack says, and neither is a
+runnable one, except the `Signal Catcher` writing the dump itself
+(`SignalCatcher::HandleSigQuit`). Nor is a thread with work above the idle
+frame: a frame of the app's, `Binder.execTransact` serving a call, or a
+network call under way — OkHttp's `RealCall` or `ConnectPlan`, a TLS
+handshake, `Socket.connect` — such as a `Timer` running the app's task, the
+finalizer daemon in an app's `finalize()`, a binder thread inside a
+provider's `query`, or a worker in a TLS handshake reading the socket in
+`ppoll`. OkHttp's HTTP/2 reader waits in the same read for as long as a
+connection is open, and is still struck out. A stack the source cut short
+(`... frames omitted ...`) is never struck out on its native top alone, since
+the app's frames may be below the cut; it is listed with "stack cut after N
+frames", and `--json` has the count as `cut`. The main thread is
 idle only at its looper. A thread queued on a lock is listed once, under its
 chain. The rest are listed by the frame nearest the app — its own where there
 is one, a library's where there is not — with the top frame beside it. The top
