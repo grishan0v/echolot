@@ -874,6 +874,12 @@ The whole point of repeating is the **Runs** column:
 The first row reproduces, the second happened once. Without that column they
 look equally convincing and the agent goes off investigating an accident.
 
+The recordings are put in one order first, by file name with numbers read as
+numbers (`_iter2` before `_iter10`), whatever order the paths were given in:
+the same set is the same report. That is the order `collect` recorded them in,
+and the order of every `spread.values` list. The pid and window times in the
+header are the first recording's, and the header says so.
+
 Two warnings come out of merging:
 
 - the runner prints the `am start -W` spread and flags it above 30% — the
