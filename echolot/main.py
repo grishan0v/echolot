@@ -1974,6 +1974,7 @@ def _environment_info(tp, package: str = "", mapped: bool = False) -> dict:
             "max_celsius": round(hot["celsius"], 1)
             if hot.get("celsius") is not None else None,
             "hottest_zone": hot.get("zone"),
+            **_sampled_before(one, "_thermal_win"),
             # A hot device is not evidence of anything on its own. A cooling
             # device above zero is the kernel saying it took capacity away.
             "throttled": bool(throttle.get("level")),
@@ -1991,6 +1992,7 @@ def _environment_info(tp, package: str = "", mapped: bool = False) -> dict:
         env["memory"] = {
             "available_mb_min": round(avail["bytes"] / 1e6, 1)
             if avail.get("bytes") is not None else None,
+            **_sampled_before(one, "_meminfo_win", "key = 'MemAvailable'"),
             # A running total, so the window's cost is the difference across
             # it — and a single sample has no difference to give.
             "major_faults": int(faults["n"])
@@ -2009,6 +2011,17 @@ def _environment_info(tp, package: str = "", mapped: bool = False) -> dict:
     env["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if env[k] is None)
     return env
+
+
+def _sampled_before(one, view: str, where: str = "1") -> dict:
+    """`{"sampled_before_ms": N}` when no sample of the view fell inside the
+    window and the value read is the last one before it opened, N ms before;
+    else nothing. A short window between two samples a second apart reads
+    the state that held over it, and says how old the reading was (#617)."""
+    got = one(f"SELECT (SELECT ts_start FROM _window) - MAX(ts) AS ns "
+              f"FROM {view} WHERE {where}")
+    ns = got.get("ns")
+    return {"sampled_before_ms": round(ns / 1e6, 1)} if ns is not None and ns > 0 else {}
 
 
 # What ART writes when it opens a dex file, as a child of the

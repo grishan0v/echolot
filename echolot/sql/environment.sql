@@ -63,15 +63,27 @@ USING SPAN_JOIN(_on_cpu PARTITIONED cpu, _cpu_freq PARTITIONED cpu);
 -- Two different facts, and only the second one is evidence. A hot device is
 -- not necessarily a slowed device; a cooling device above zero is the kernel
 -- saying out loud that it took capacity away.
+--
+-- A temperature is a value that holds until the next sample too, and the
+-- samples come about a second apart. Read only inside the window, a window
+-- shorter than that held one by chance: of six hot starts and taps of
+-- 394–776 ms, four said the device state was not recorded, though the trace
+-- held 3–10 samples a second apart (#617). So the last sample at or before
+-- the window opened counts for it, as the cooling level's does below, and
+-- `ts` says how old it was.
 DROP VIEW IF EXISTS _thermal_win;
 CREATE VIEW _thermal_win AS
 -- trace_processor names the track after the zone and appends what kind of
 -- track it is. The zone is the part a human recognises.
-SELECT REPLACE(t.name, ' Temperature', '') AS zone, c.value / 1000.0 AS celsius
+SELECT REPLACE(t.name, ' Temperature', '') AS zone, c.value / 1000.0 AS celsius,
+       c.ts AS ts
 FROM counter c
 JOIN counter_track t ON c.track_id = t.id
 WHERE t.type = 'thermal_temperature'
-  AND c.ts >= {{ts_start}} AND c.ts <= {{ts_end}};
+  AND c.ts <= {{ts_end}}
+  AND c.ts >= COALESCE((SELECT MAX(b.ts) FROM counter b
+                        WHERE b.track_id = c.track_id AND b.ts <= {{ts_start}}),
+                       {{ts_start}});
 
 -- A cooling level holds until the device's next sample, as a clock does, and
 -- is read the same way: intervals first, the window after. Filtered by ts
@@ -94,17 +106,20 @@ WHERE dur > 0;
 
 -- --- memory ----------------------------------------------------------------
 --
--- Polled once a second, so a short window holds one sample or none. One
--- sample is still worth printing and zero samples must read as "not
--- recorded"; the CLI tells them apart by the count, which is why it is
--- selected alongside the value.
+-- Polled once a second, so a short window holds one sample or none. Free
+-- memory holds until the next sample, like a temperature above: the last
+-- sample at or before the window opened counts for it, and a recording
+-- without the source is what reads as "not recorded" (#617).
 DROP VIEW IF EXISTS _meminfo_win;
 CREATE VIEW _meminfo_win AS
-SELECT t.name AS key, c.value AS value
+SELECT t.name AS key, c.value AS value, c.ts AS ts
 FROM counter c
 JOIN counter_track t ON c.track_id = t.id
 WHERE t.type = 'meminfo'
-  AND c.ts >= {{ts_start}} AND c.ts <= {{ts_end}};
+  AND c.ts <= {{ts_end}}
+  AND c.ts >= COALESCE((SELECT MAX(b.ts) FROM counter b
+                        WHERE b.track_id = c.track_id AND b.ts <= {{ts_start}}),
+                       {{ts_start}});
 
 -- Major faults are a running total, so the window's cost is the difference
 -- across it and needs two samples to exist at all.
