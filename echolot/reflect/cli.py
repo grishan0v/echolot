@@ -189,9 +189,11 @@ def cmd_reflect(args) -> int:
             print(f"config ignored: {e}", file=sys.stderr)
     runs = recorder.read(project / recorder.LOG_FILE)
 
-    out_dir = Path(args.out)
-    if not out_dir.is_absolute():
-        out_dir = project / out_dir
+    # The same rule as -c above: an explicit -o is a path from here, as every
+    # other command reads one; only the default belongs to the project.
+    # Joined to --project, `-o r-out` run from a folder of one's own wrote an
+    # untracked directory into the analysed app's checkout (#548).
+    out_dir = Path(args.out) if args.out else project / ".echolot" / "reflect"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     reports = []

@@ -55,6 +55,23 @@ def test_an_explicit_config_is_read_from_here(tmp_path: Path, monkeypatch) -> No
           said[-600:])
 
 
+def test_an_explicit_out_is_a_path_from_here(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "app"
+    _log(project)
+    here = tmp_path / "audit"
+    here.mkdir()
+    monkeypatch.chdir(here)
+    code, said = _reflect("--from-log", "--project", str(project), "-o", "r-out")
+    check("the reports land where reflect was run",
+          code == 0 and sorted(p.suffix for p in (here / "r-out").glob("*")) == [".json", ".md"],
+          said[-600:])
+    check("and the project is left untouched", not (project / "r-out").exists())
+    code, said = _reflect("--from-log", "--project", str(project))
+    check("without -o they go under the project, as before",
+          code == 0 and any((project / ".echolot" / "reflect").glob("*.json")), said[-600:])
+    check("and not here", not (here / ".echolot").exists())
+
+
 def test_ids_that_share_a_minute_get_names_of_their_own() -> None:
     short = reflect_cli._short_ids(["019a0f19-d1c2-7a00-0000", "019a0f19-fe40-7b00-0000",
                                     "abcdef12-0000"])
