@@ -542,6 +542,11 @@ until a newer set of traces exists. A file that does not parse, or one that
 holds what `collect` never writes there, such as text where it writes a time,
 gives no line: it describes no run, and the next `collect` writes it anew.
 
+Ctrl-C, or **Stop** in `echolot ui`, puts the phone back as a failure does
+and ends with one line, `collect interrupted after 2 of 5 repeats: their 2
+traces are kept in .echolot/traces`, and exit code 130. A trace whose copy
+from the phone was cut short is deleted, so the traces kept are whole ones.
+
 The run log, `.echolot/log/runs.jsonl`, keeps the same cause and fix at the
 head of the run's `error`, followed by as much of the full message as fits in
 the 800 characters it keeps.

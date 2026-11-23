@@ -4159,6 +4159,13 @@ def cmd_collect(args) -> int:
               f"does not reach the macrobenchmark: it runs as many iterations "
               f"as its own measureRepeated asks for, and every trace it writes "
               f"is collected.", file=sys.stderr)
+    aside: list[Path] = []
+
+    def set_aside(d: Path) -> None:
+        aside.append(d)
+        if whose is not None:
+            hunt_mod.record_traces(project, d, n=whose)
+
     try:
         results = runner.collect(
             package=str(package),
@@ -4172,11 +4179,21 @@ def cmd_collect(args) -> int:
             # recorded it: inside one, the previous round — its baseline, and
             # what the next report is compared against. One recorded outside
             # it stays out of its record, whoever pushes it aside.
-            on_set_aside=lambda d: (hunt_mod.record_traces(project, d, n=whose)
-                                    if whose is not None else None),
+            on_set_aside=set_aside,
             progress=progress.update,
             planted=planted,
         )
+    except KeyboardInterrupt:
+        # Ctrl-C, or Stop in `echolot ui`, which asks the same way. The
+        # runner has unwound by now: the phone is put back and the traces
+        # pulled are on disk. What is left to say is how far it got, in one
+        # line; a traceback through subprocess was the last thing a person
+        # saw (#484). The progress file is left unfinished on purpose:
+        # `status` reads that, with the process gone, as interrupted.
+        print(f"\n{_interrupted_line(progress.state, out_dir, project, aside)}",
+              file=sys.stderr)
+        recorder.failed("interrupted")
+        return 130
     except runner.RunnerError as e:
         print(f"collection error: {e}", file=sys.stderr)
         # The log is what `reflect` reads after the session, the file is
@@ -4243,6 +4260,25 @@ def _whose_set(before: dict[str, Any] | None, scenario: str, inside: int | None)
     if before and before.get("scenario") == scenario and "hunt" in before:
         return before["hunt"]
     return inside
+
+
+def _interrupted_line(state: dict, out_dir: Path, project: Path, aside: list[Path]) -> str:
+    """What `collect` says when it is interrupted: how far it got, and where
+    the traces are."""
+    where = _shown_path(out_dir, project)
+    done, total = state.get("done") or 0, state.get("iterations")
+    if not total:
+        # Gradle mode: the macrobenchmark drives the repeats, and its traces
+        # are gathered only once it has finished.
+        return ("collect interrupted while the macrobenchmark ran: no trace was "
+                "collected")
+    if done:
+        return (f"collect interrupted after {done} of {total} repeats: "
+                f"{'its trace is' if done == 1 else f'their {done} traces are'} "
+                f"kept in {where}")
+    before = (f"; the set that was there before is in {_shown_path(aside[0], project)}"
+              if aside else "")
+    return f"collect interrupted before the first of {total} repeats was recorded: no trace was kept{before}"
 
 
 def _planted(cfg: Config, root: Path):

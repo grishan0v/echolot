@@ -1528,8 +1528,14 @@ def _launch(device: str, activity: str) -> dict:
 
 def _pull(device: str, out_path: Path) -> dict:
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    _run(["adb", "-s", device, "pull", DEVICE_TRACE, str(out_path)],
-         timeout=300)
+    try:
+        _run(["adb", "-s", device, "pull", DEVICE_TRACE, str(out_path)],
+             timeout=300)
+    except KeyboardInterrupt:
+        # Ctrl-C in the middle of the copy leaves part of a trace under the
+        # repeat's name, and the next `analyze` would read it as one (#484).
+        out_path.unlink(missing_ok=True)
+        raise
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RunnerError(
             f"the trace did not arrive or is empty: {out_path}. "

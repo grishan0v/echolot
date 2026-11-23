@@ -5,6 +5,7 @@ trace that goes away before it is copied.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -19,7 +20,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from echolot import recorder, runner  # noqa: E402
 from echolot.main import main  # noqa: E402
 from tests.support import check  # noqa: E402
-from tests.test_collect_fake_adb import GRADLE_CONFIG, no_adb, wrapper  # noqa: E402,F401
+from tests.test_collect_fake_adb import (  # noqa: E402,F401
+    CONFIG,
+    GRADLE_CONFIG,
+    FakeAdb,
+    kind,
+    no_adb,
+    old_set,
+    wrapper,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -150,3 +159,62 @@ def test_a_build_warning_is_not_the_cause_of_a_failed_test() -> None:
 def test_a_lowercase_error_still_speaks_when_nothing_was_thrown() -> None:
     gist = runner.failure_gist(1, "", "adb: error: failed to get feature set: no devices\n")
     check("adb's own line", gist.startswith("adb: error: failed to get feature set"), gist)
+
+
+class _CtrlC(FakeAdb):
+    """An adb that is interrupted at the `when`-th call of one kind."""
+
+    def __init__(self, at: str, when: int):
+        super().__init__()
+        self.at, self.when, self.seen = at, when, 0
+
+    def __call__(self, args, stdin=None, timeout=120) -> str:
+        if kind(list(args)) == self.at:
+            self.seen += 1
+            if self.seen == self.when:
+                if self.at == "pull":
+                    Path(args[-1]).write_bytes(b"half a trace")
+                raise KeyboardInterrupt
+        return super().__call__(args, stdin=stdin, timeout=timeout)
+
+
+def _interrupted(tmp_path: Path, monkeypatch, capsys, at: str, when: int):
+    monkeypatch.setattr(runner, "_run", _CtrlC(at, when))
+    monkeypatch.delenv("ANDROID_SERIAL", raising=False)
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with recorder.isolated():
+        code = main(["collect"])
+    return code, capsys.readouterr().err
+
+
+def test_an_interrupted_collect_says_how_far_it_got(tmp_path, monkeypatch, capsys) -> None:
+    """Ctrl-C during the third repeat ended in thirty lines of traceback (#484)."""
+    code, err = _interrupted(tmp_path, monkeypatch, capsys, "start", 3)
+    check("exit 130, as a shell says for Ctrl-C", code == 130, err[-600:])
+    check("no traceback", "Traceback" not in err and "KeyboardInterrupt" not in err, err)
+    check("one line with the count and where the traces are",
+          "collect interrupted after 2 of 3 repeats: their 2 traces are kept in "
+          ".echolot/traces" in err, err)
+    traces = sorted(p.name for p in (tmp_path / ".echolot" / "traces").glob("*.perfetto-trace"))
+    check("the two finished traces are kept",
+          traces == ["startup_iter000.perfetto-trace", "startup_iter001.perfetto-trace"],
+          traces)
+    progress = json.loads((tmp_path / runner.PROGRESS_FILE).read_text(encoding="utf-8"))
+    check("the progress file is left unfinished, for status to read as interrupted",
+          progress.get("finished") is None and progress.get("done") == 2, progress)
+
+
+def test_half_a_pulled_trace_is_not_kept(tmp_path, monkeypatch, capsys) -> None:
+    old = old_set(tmp_path / ".echolot" / "traces")
+    code, err = _interrupted(tmp_path, monkeypatch, capsys, "pull", 1)
+    check("exit 130", code == 130, err[-600:])
+    traces = tmp_path / ".echolot" / "traces"
+    check("no trace under the repeat's name",
+          not list(traces.glob("*.perfetto-trace")), list(traces.iterdir()))
+    aside = [d for d in traces.iterdir() if d.is_dir()]
+    check("the set before it was moved aside, whole",
+          len(aside) == 1 and sorted(p.name for p in aside[0].iterdir()) == old, aside)
+    check("and the line says where it went",
+          "before the first of 3 repeats was recorded: no trace was kept; the set "
+          f"that was there before is in .echolot/traces/{aside[0].name}" in err, err)
