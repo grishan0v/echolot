@@ -134,6 +134,12 @@ CONDITIONS: tuple[Condition, ...] = (
 
 KEYS = tuple(c.key for c in CONDITIONS)
 _FROM_COLLECT = tuple(c.key for c in CONDITIONS if c.source == "collect")
+# What else `collect` keeps beside a trace, for the report rather than for
+# `compare`'s conditions, each read on its own (`kept`): `cooldown`, the
+# `runner.cooldown` the repeat waited for and the reading before it, or null
+# when it was off (#522); `markers_in_build`, the temporary markers `collect`
+# found in the build on the phone before it recorded (#536).
+_ALSO = ("cooldown", "markers_in_build")
 
 # What a detector's `@needs` source is fed by in the recording's config, so
 # that a difference there names the detectors that read it. Composable names
@@ -168,7 +174,8 @@ def write(trace: str | Path, facts: dict[str, Any]) -> None:
     from . import __version__
 
     body = {"echolot": __version__,
-            **{k: facts.get(k) for k in _FROM_COLLECT}}
+            **{k: facts.get(k) for k in _FROM_COLLECT},
+            **{k: facts[k] for k in _ALSO if k in facts}}
     try:
         sidecar(trace).write_text(json.dumps(body, ensure_ascii=False, indent=1) + "\n",
                                   encoding="utf-8")
@@ -188,6 +195,22 @@ def read(trace: str | Path) -> dict[str, Any]:
         return {}
     return {k: body[k] for k in _FROM_COLLECT
             if isinstance(body.get(k), str)}
+
+
+_ABSENT = object()
+
+
+def kept(trace: str | Path, key: str, default: Any = _ABSENT) -> Any:
+    """One of the other facts `collect` kept beside `trace` (`_ALSO`), as it
+    wrote it; `default` (None unless given) when the account does not hold the
+    key, which tells "kept as null" from "never kept"."""
+    try:
+        body = json.loads(sidecar(trace).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        body = None
+    if isinstance(body, dict) and key in body:
+        return body[key]
+    return None if default is _ABSENT else default
 
 
 # --- what the trace says it asked for -----------------------------------------

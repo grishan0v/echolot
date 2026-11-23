@@ -1040,6 +1040,31 @@ def set_aside(out_dir: Path, name: str,
     return aside
 
 
+# --- what collect kept beside a trace, read back for analyze -----------------
+#
+# Whether `runner.cooldown` was on, and how warm the device was before each
+# repeat, are facts of the recording that the trace does not hold. The report
+# told a reader to "let it cool and record again" after a set that had cooled
+# to 35 °C before every repeat and throttled all the same (#522). `collect`
+# keeps them in the account beside each trace (recording.py).
+def cooldown_record(trace: Path) -> dict | None:
+    """What `collect` kept about the cooldown of the repeat that recorded `trace`.
+
+    `{"on": True, "max_c", "sensor", "before_c"}` when it was on, `{"on": False}`
+    when collect recorded the trace with it off, None when nothing says: a
+    trace from gradle mode, from an older echolot, or recorded by hand.
+    """
+    unknown = object()
+    cooldown = recording.kept(trace, "cooldown", unknown)
+    if cooldown is unknown:
+        return None
+    if not isinstance(cooldown, dict):
+        return {"on": False}
+    before = cooldown.get("before_c")
+    return {"on": True, "max_c": cooldown.get("max_c"), "sensor": cooldown.get("sensor"),
+            "before_c": before if isinstance(before, (int, float)) else None}
+
+
 RESET_POLICIES = ("force-stop", "none")
 
 
@@ -1316,6 +1341,7 @@ def collect(package: str, out_dir: Path, iterations: int,
     switched = (composenames.Names(package, dev, run=_run, log=log) if names
                 else contextlib.nullcontext())
     with stabilize.Settled(section, dev, run=_run, log=log, notify=tell) as settled, switched:
+        cooling = settled.cooldown
         if settled.cooldown is not None and reset == "force-stop":
             log("  the app is stopped before each wait, and stopped again if it "
                 "is running by the recording")
@@ -1410,8 +1436,12 @@ def collect(package: str, out_dir: Path, iterations: int,
             # the previous set has to make room, and not a moment earlier.
             make_room()
             info.update(_pull(dev, out))
-            recording.write(out, {"runner": mode, "reset_policy": reset,
-                                  "app_at_stop": was})
+            recording.write(out, {
+                "runner": mode, "reset_policy": reset, "app_at_stop": was,
+                "cooldown": None if cooling is None else {
+                    "max_c": cooling.max_c, "sensor": cooling.sensor,
+                    "before_c": (round(settled.last_c, 1)
+                                 if settled.last_c is not None else None)}})
             results.append(info)
 
             extra = ""

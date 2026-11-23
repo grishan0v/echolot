@@ -405,12 +405,71 @@ def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
             "available_mb_min": min(avail) if avail else None,
             "major_faults": round(median(faults)) if faults else None,
         }
+    out["cooldown"] = _merge_cooldown([e.get("cooldown") for e in envs])
     out["sampling"] = _merge_sampling([e.get("sampling") for e in envs])
     out["compose_names"] = _merge_compose_names([e.get("compose_names") for e in envs])
     out["compile"] = _merge_compile([e.get("compile") for e in envs])
     out["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if out[k] is None)
     return out
+
+
+def _merge_cooldown(blocks: list[dict[str, Any] | None]) -> dict[str, Any] | None:
+    """`runner.cooldown` across the repeats, as `collect` kept it beside the set.
+
+    `{"on": True, "max_c", "sensor", "before_c_max"}` when every repeat waited
+    for it, `{"on": False}` when collect recorded every one with it off, and
+    None when any repeat has no record or the repeats differ: then the report
+    cannot say how the set was cooled (#522).
+    """
+    if not blocks or any(not isinstance(b, dict) for b in blocks):
+        return None
+    on = [b for b in blocks if b.get("on")]
+    if not on:
+        return {"on": False}
+    if len(on) < len(blocks):
+        return None
+    limits = [b["max_c"] for b in on if isinstance(b.get("max_c"), (int, float))]
+    before = [b["before_c"] for b in on if isinstance(b.get("before_c"), (int, float))]
+    return {"on": True, "max_c": max(limits) if limits else None,
+            "sensor": on[0].get("sensor"),
+            "before_c_max": max(before) if before else None}
+
+
+def _throttled_line(thermal: dict[str, Any], cooldown: dict[str, Any] | None) -> str:
+    """The warning for a set the kernel throttled, with what to do about it.
+
+    What to do depends on how the set was cooled, which `collect` keeps beside
+    it (#522). Cooled before every repeat and throttled all the same, the
+    scenario heats the device itself, and recording again after a longer
+    wait throttles again. Recorded without cooling, the setting that does it
+    is named.
+    """
+    where = thermal.get("throttle_device")
+    runs = thermal.get("throttled_runs")
+    head = ("> ⚠️ The kernel throttled the device during this window"
+            + (f" (`{where}`)" if where else "")
+            + (f", in {runs} repeats" if runs else ""))
+    if cooldown and cooldown.get("on"):
+        limit = cooldown.get("max_c")
+        sensor = cooldown.get("sensor")
+        # Merged over the set, the warmest start; one repeat's own otherwise.
+        before = cooldown.get("before_c_max", cooldown.get("before_c"))
+        cooled = ("`runner.cooldown` was on"
+                  + (f": {sensor} at or below {limit:g} °C before each repeat"
+                     if isinstance(limit, (int, float)) else "")
+                  + (f", {before:.0f} °C at most" if isinstance(before, (int, float)) else ""))
+        return (f"{head}, though {cooled}. The scenario itself heats this device, "
+                f"and cooling longer before each repeat would not change it: the "
+                f"numbers are the app on a slowed machine. Compare them only with "
+                f"sets recorded the same way, on the same device.")
+    tail = ". Capacity was taken away while these numbers were measured, so they are the app on a slowed machine. "
+    if cooldown is not None:
+        return (f"{head}{tail}The set was recorded without `runner.cooldown`: set it "
+                f"(`max_c` under it, the temperature each repeat waits for) and record "
+                f"again before comparing anything to them.")
+    return (f"{head}{tail}Let it cool and record again before comparing anything to "
+            f"them; `runner.cooldown` waits for that before each repeat.")
 
 
 def _merge_compile(blocks: list[dict[str, Any] | None]) -> dict[str, Any] | None:
@@ -1244,16 +1303,7 @@ def _environment_lines(env: dict[str, Any], unbuilt: bool = False) -> list[str]:
     out.extend(_compile_lines(env.get("compile")))
 
     if thermal and thermal.get("throttled"):
-        where = thermal.get("throttle_device")
-        runs = thermal.get("throttled_runs")
-        out.append(
-            "> ⚠️ The kernel throttled the device during this window"
-            + (f" (`{where}`)" if where else "")
-            + (f", in {runs} repeats" if runs else "")
-            + ". Capacity was taken away while these numbers were measured, "
-              "so they are the app on a slowed machine. Let it cool and "
-              "record again before comparing anything to them."
-        )
+        out.append(_throttled_line(thermal, env.get("cooldown")))
 
     # Absence is a third answer and has to look like one. Without this the
     # header simply says nothing about the device, which reads as a device
