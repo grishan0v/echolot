@@ -1495,6 +1495,7 @@ def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None)
     # separate branches should not have to be merged by hand.
     window["main_thread"] = _main_thread_budget(tp, window)
     window["crowding"] = _crowding_info(tp)
+    window["frames"] = _frames_info(tp, window)
 
     for key, glob in (("start", cfg.scenario_start), ("end", cfg.scenario_end)):
         if glob == NO_ANCHOR:
@@ -2089,6 +2090,34 @@ def _main_thread_budget(tp, window: dict) -> dict | None:
     # explained" and "most of it was not looked at".
     out["accounted_pct"] = round(accounted / duration * 100, 1) if duration else None
     return out
+
+
+def _frames_info(tp, window: dict) -> dict | None:
+    """How many frames the app drew in the window, by the frame timeline.
+
+    The frames `frame_jank` counts as its denominator, kept for the window
+    itself. In a frame-paced scenario — a scripted scroll or drag recorded
+    for a fixed time — a build that janks draws fewer frames in the same
+    window, and every row of work done once a frame shrinks with them: five
+    times fewer frames read as fourteen improvements that held (#566).
+    `compare` reads this to say so. None without a frame timeline.
+    """
+    lo, hi = window.get("ts_start"), window.get("ts_end")
+    if lo is None or hi is None:
+        return None
+    try:
+        rows = tp.query(f"""
+            SELECT (SELECT COUNT(*) FROM actual_frame_timeline_slice) AS seen,
+                   (SELECT COUNT(*) FROM actual_frame_timeline_slice a
+                    JOIN _proc p ON p.upid = a.upid
+                    WHERE a.surface_frame_token IS NOT NULL AND a.dur > 0
+                      AND a.ts < {int(hi)} AND a.ts + a.dur > {int(lo)}) AS n
+        """)
+    except Exception:  # a trace_processor without the table: no timeline
+        return None
+    if not rows or not rows[0]["seen"]:
+        return None
+    return {"count": rows[0]["n"]}
 
 
 def _crowding_info(tp) -> dict | None:
