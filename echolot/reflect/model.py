@@ -124,6 +124,10 @@ class SubAgent:
     started: str | None = None
     ended: str | None = None
     final_text: str = ""          # what came back up
+    # Which carrier `final_text` came from: "hand-back", "notification",
+    # "result" or "last text"; "pending" while the host has said a hand-back
+    # will come and none has.
+    returned_via: str | None = None
     usage: Usage = field(default_factory=Usage)
     thinking_blocks: int = 0
     source: str | None = None     # path of its transcript, if separate

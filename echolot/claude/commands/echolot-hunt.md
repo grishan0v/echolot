@@ -123,8 +123,12 @@ construction. Say so, and pass the agent `--defaults` for its first look.
 ## The run
 
 Hand the work to the `perf-hunter` subagent, and **wait for it** —
-`run_in_background: false`. Its conclusion is the whole output of this
-command; there is nothing useful to do while it runs.
+`run_in_background: false`, where the tool that starts it has that
+parameter. Some hosts always run a subagent in the background and hand its
+answer back into this conversation themselves; there, do nothing until the
+answer arrives — no other work, and no closing message that promises to come
+back. Its conclusion is the whole output of this command; there is nothing
+useful to do while it runs.
 
 Say it here because the tool's own default is the other way. Backgrounded, the
 turn ends with a promise to come back, and whether a next turn ever arrives is

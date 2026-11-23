@@ -56,6 +56,13 @@ _SLASH = re.compile(r"<command-name>\s*(/[^<\s]+)\s*</command-name>")
 _SLASH_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
 _TASK_ID = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
 _TASK_RESULT = re.compile(r"<result>(.*?)</result>", re.S)
+# A notification that is no answer: the host saying the subagent is still at
+# work and will hand its report back later (#540).
+_NOT_REPORTED = re.compile(r"has not reported yet|will deliver its report", re.I)
+# The hand-back itself, as it reaches the main transcript.
+_AGENT_MESSAGE = re.compile(
+    r"<agent-message\s+from=[\"']?([^\"'\s>]+)[\"']?[^>]*>(.*?)(?:</agent-message>|\Z)", re.S)
+_HANDBACK_TAG = re.compile(r"^\s*\[Subagent hand-back\]\s*")
 _ANSWER_PAIR = re.compile(r'"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"')
 _SKILL_DIR = re.compile(r"Base directory for this skill:\s*(\S+)")
 _RECOMMENDED = re.compile(r"recommend|рекоменд", re.I)
@@ -260,6 +267,9 @@ class _Pass:
         # of each counter and add them up once at the end.
         self.per_msg: dict[str, Usage] = {}
         self.last_assistant_text = ""
+        # The subagent's own `SubagentHandback` call: its message is what it
+        # returned, whatever it said in plain text before it.
+        self.handback: str | None = None
         # The older layout's inline subagent rows, kept apart: their tokens,
         # thinking and last words went into the main context's, and the
         # report quoted a subagent as what the main context concluded.
@@ -365,6 +375,10 @@ class _Pass:
             self._agent_started(call, inp, ts)
         elif call.tool == "Skill":
             self._skill(inp.get("skill"))
+        elif call.tool == "SubagentHandback" and self.sub is not None \
+                and isinstance(inp.get("message"), str) and inp["message"].strip():
+            self.handback = inp["message"]
+            self.sub.ended = ts or self.sub.ended
 
     def _agent_started(self, call: Call, inp: dict[str, Any], ts: str) -> None:
         placeholder = SubAgent(
@@ -432,7 +446,14 @@ class _Pass:
             self.session.asks.extend(_asks_from(
                 self.open_asks.pop(use_id), call, ts, text, tr, row_agent))
         elif call.tool == "Agent":
-            _agent_result(call, text, tr, ts, self.session, self.pending_agents)
+            if call.is_error:
+                # Refused by the host — a hook, a permission screen: no
+                # subagent ran. `env_friction` lists the refusal; kept as a
+                # subagent too, it was a run of 0 s whose brief, quoted in
+                # the error, held every field of the conclusion (#541).
+                _agent_refused(call, self.session, self.pending_agents)
+            else:
+                _agent_result(call, text, tr, ts, self.session, self.pending_agents)
 
     def finish(self) -> None:
         target = self.sub.usage if self.sub else self.session.usage
@@ -441,12 +462,34 @@ class _Pass:
         if self.inline is not None:
             for u in self.inline_msg.values():
                 self.inline.usage.add(u)
-        if self.sub is not None and self.last_assistant_text:
-            self.sub.final_text = clip(self.last_assistant_text, FINAL_TEXT_LIMIT)
+        if self.sub is not None:
+            self._returned()
         elif self.sub is None and self.agent == MAIN and self.last_assistant_text:
             # The main context's own last word, kept the way a subagent's is:
             # for a session without a hunt it is the whole result.
             self.session.final_text = clip(self.last_assistant_text, FINAL_TEXT_LIMIT)
+
+
+    def _returned(self) -> None:
+        """What this subagent handed up, from the carrier that holds it.
+
+        Its own `SubagentHandback` first, then the hand-back as the main
+        transcript received it, then its last plain text. A host that runs
+        the subagent in the background says it will hand the report back;
+        where that never came, the last plain text is a progress line —
+        "Waiting for the clean build to install…" — and no answer (#540).
+        """
+        sub = self.sub
+        if sub is None:
+            return
+        if self.handback is not None:
+            sub.final_text = clip(self.handback, FINAL_TEXT_LIMIT)
+            sub.returned_via = "hand-back"
+        elif sub.returned_via in ("hand-back", "pending"):
+            return
+        elif self.last_assistant_text:
+            sub.final_text = clip(self.last_assistant_text, FINAL_TEXT_LIMIT)
+            sub.returned_via = sub.returned_via or "last text"
 
 
 def _call_from_use(block: dict[str, Any], ts: str, agent: str) -> Call:
@@ -507,10 +550,24 @@ def _user_text(text: str, ts: str, row: dict[str, Any], session: Session,
         if tid:
             sub = _find_subagent(session, tid.group(1))
             if sub is not None:
-                if res:
-                    sub.final_text = clip(res.group(1).strip(), FINAL_TEXT_LIMIT)
-                sub.ended = ts
+                if res and _NOT_REPORTED.search(res.group(1)):
+                    if sub.returned_via != "hand-back":
+                        sub.returned_via = "pending"
+                elif sub.returned_via != "hand-back":
+                    if res:
+                        sub.final_text = clip(res.group(1).strip(), FINAL_TEXT_LIMIT)
+                        sub.returned_via = "notification"
+                    sub.ended = ts
         return
+    m = _AGENT_MESSAGE.search(text)
+    if m and _HANDBACK_TAG.match(m.group(2)):
+        sub = _find_subagent(session, m.group(1))
+        if sub is not None:
+            sub.final_text = clip(_HANDBACK_TAG.sub("", m.group(2), count=1).strip(),
+                                  FINAL_TEXT_LIMIT)
+            sub.returned_via = "hand-back"
+            sub.ended = ts
+            return
     m = _SKILL_DIR.search(text)
     if m:
         name = Path(m.group(1)).name
@@ -552,6 +609,13 @@ def _asks_from(questions: list[dict[str, Any]], call: Call, ts: str,
     return out
 
 
+def _agent_refused(call: Call, session: Session,
+                   pending_agents: dict[str, SubAgent]) -> None:
+    sub = pending_agents.pop(call.id, None)
+    if sub is not None and sub in session.subagents:
+        session.subagents.remove(sub)
+
+
 def _agent_result(call: Call, text: str, tr: Any, ts: str, session: Session,
                   pending_agents: dict[str, SubAgent]) -> None:
     sub = pending_agents.pop(call.id, None)
@@ -561,9 +625,11 @@ def _agent_result(call: Call, text: str, tr: Any, ts: str, session: Session,
         sub.id = str(tr["agentId"])
         if tr.get("status") and "async" not in str(tr["status"]):
             sub.final_text = clip(text, FINAL_TEXT_LIMIT)
+            sub.returned_via = "result"
             sub.ended = ts
     else:
         # A synchronous agent: the return value is the tool result itself and
         # the transcript, if any, is inline (isSidechain rows).
         sub.final_text = clip(text, FINAL_TEXT_LIMIT)
+        sub.returned_via = "result"
         sub.ended = ts
