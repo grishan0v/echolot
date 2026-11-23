@@ -389,14 +389,14 @@ def test_inside_an_investigation_the_commands_take_its_scenario(tmp_path: Path, 
     write(tmp_path, TWO)
     monkeypatch.chdir(tmp_path)
     run("hunt", "--scenario", "loaded", "the feed got slower")
-    code, _, err = run("analyze", str(trace))
+    code, _, err = run("analyze", str(trace), "--hunt", "1")
     rep = json.loads((tmp_path / ".echolot/out/loaded/report.json").read_text(encoding="utf-8"))
     check("analyze measured the investigation's scenario, and said so",
           code == 0 and rep["scenario"] == "loaded"
           and "[i] scenario loaded, the open investigation's" in err, err[-400:])
     code, out, _ = run("report", "--window")
     check("report reads its report", code == 0 and "Screen.loaded" in out, out[:400])
-    code, _, err = run("analyze", str(trace), "--scenario", "first_frame")
+    code, _, err = run("analyze", str(trace), "--scenario", "first_frame", "--hunt", "1")
     check("--scenario still wins", code == 0
           and (tmp_path / ".echolot/out/first_frame/report.json").is_file()
           and "the open investigation's" not in err, err[-400:])
@@ -412,10 +412,42 @@ def test_collect_inside_an_investigation_records_its_scenario(tmp_path: Path,
                      "runner": {"iterations": 2}})
     monkeypatch.chdir(tmp_path)
     run("hunt", "--scenario", "warm", "warm start got slower")
-    code, _, err = run("collect")
+    code, _, err = run("collect", "--hunt", "1")
     names = sorted(p.name for p in (tmp_path / ".echolot/traces").glob("*.perfetto-trace"))
     check("the investigation's traces", code == 0
           and names == ["warm_iter000.perfetto-trace"], (names, err[-400:]))
+
+
+def test_outside_an_investigation_the_commands_take_the_first(tmp_path: Path, trace: Path,
+                                                              monkeypatch) -> None:
+    """#498: a baseline recorded with a scroll investigation open was recorded
+    and measured as the scroll. Without `--hunt` a run is outside it, and
+    takes the first scenario as any run outside one does."""
+    from echolot import hunt as hunt_mod
+    write(tmp_path, TWO)
+    monkeypatch.chdir(tmp_path)
+    run("hunt", "--scenario", "loaded", "the feed got slower")
+    code, _, err = run("analyze", str(trace))
+    check("the first, and the run said it is outside the investigation", code == 0
+          and (tmp_path / ".echolot/out/first_frame/report.json").is_file()
+          and not (tmp_path / ".echolot/out/loaded").exists()
+          and "[i] scenario first_frame, the first of 2" in err
+          and '[i] outside investigation #1, "the feed got slower"' in err, err[-600:])
+    check("and nothing of it was filed", not (tmp_path / ".echolot/hunts/1/reports").exists()
+          and not hunt_mod.load(tmp_path).get("analyzes"), hunt_mod.load(tmp_path))
+
+    fake = FakeAdb()
+    monkeypatch.setattr(runner, "_run", fake)
+    monkeypatch.delenv("ANDROID_SERIAL", raising=False)
+    write(tmp_path, {"project": {"package": "com.example.app"},
+                     "scenarios": {"cold": {}, "warm": {"runner": {"iterations": 1}}},
+                     "runner": {"iterations": 2}})
+    run("hunt", "--scenario", "warm", "warm start got slower")
+    code, _, err = run("collect")
+    names = sorted(p.name for p in (tmp_path / ".echolot/traces").glob("*.perfetto-trace"))
+    check("collect records the first scenario's traces", code == 0
+          and names == ["cold_iter000.perfetto-trace", "cold_iter001.perfetto-trace"],
+          (names, err[-400:]))
 
 
 def test_a_concluded_investigation_picks_no_scenario(tmp_path: Path, trace: Path,

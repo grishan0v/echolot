@@ -320,6 +320,20 @@ An investigation is about one scenario too: `echolot hunt --scenario
 feed_scroll "<question>"` opens it on that one, and inside it the commands
 take its scenario when no `--scenario` is given.
 
+Inside it means said so. `collect --hunt <n>` and `analyze --hunt <n>` run
+inside investigation `<n>`, the open one: the round `collect` pushes aside is
+recorded under it, `analyze` files a copy of its report there, both count as
+its work, and its scenario is the default. Without `--hunt` a run is outside
+any investigation, whatever is open: nothing of it is filed, the
+investigation is not counted as worked on, the first scenario is the default,
+and stderr says `[i] outside investigation #<n>`. A cold-start baseline
+recorded with a scroll investigation open used to be filed into it, renew it
+as worked on that day, and in a config with several scenarios be measured as
+the scroll (#498). A `--hunt` that names a number not open exits 2 before
+anything is recorded. A round of the investigation that a run outside it
+pushes aside is still recorded under the investigation: it is its evidence,
+whoever moved it.
+
 `echolot status` lists each scenario on a line of its own, with its traces
 and its latest report, and marks the open investigation's. Its next step
 names the scenario, `--scenario feed_scroll`: the open investigation's, else

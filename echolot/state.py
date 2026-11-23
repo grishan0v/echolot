@@ -260,9 +260,10 @@ def _as_collect_writes(p: dict) -> bool:
     """Whether each field read off the progress file holds what `collect`
     writes there, or nothing: a time for `started`, which it always writes,
     and for `finished` once the run ended; a process id for `pid`; a whole
-    number for `done` and `exit`; text for `scenario`, `cooling` and
-    `error`. Every echolot that writes this file, 0.8.0 on, writes those:
-    the times from `time.time()`, the process id from `os.getpid()`.
+    number for `done` and `exit`, and for `hunt`, the investigation the run
+    was started inside; text for `scenario`, `cooling` and `error`. Every
+    echolot that writes this file, 0.8.0 on, writes those: the times from
+    `time.time()`, the process id from `os.getpid()`.
 
     Text in `started`, or in `finished` with `exit` set, ended `echolot` and
     the start page of `echolot ui` in a traceback, and so did `Infinity`,
@@ -283,6 +284,7 @@ def _as_collect_writes(p: dict) -> bool:
             and (p.get("finished") is None or _moment(p["finished"]))
             and (pid is None or (_holds(pid, int) and 0 < pid <= _PID_MAX))
             and _holds(p.get("done"), int) and _holds(p.get("exit"), int)
+            and _holds(p.get("hunt"), int)
             and all(_holds(p.get(k), str) for k in ("scenario", "cooling", "error")))
 
 
@@ -527,29 +529,43 @@ def by_hand(st: dict) -> tuple[str, str]:
     `analyze` over them once it has.
 
     What `next` says after "or by hand", and what `echolot ui` offers to copy.
+    With an investigation open, the step is its next one, and the line runs
+    inside it (`--hunt N`): `next` says `resume-or-new` rather than this
+    when it is not clear that the human is still on it.
     """
     traces = st["traces"]
     # With several scenarios, the one this step is about, by name: the open
     # investigation's, else the first (see `project_state`).
     scenario = (st.get("config") or {}).get("scenario") if st.get("scenarios") else None
+    hunt = st.get("hunt") or {}
+    n = hunt.get("n") if hunt.get("status") == "open" else None
     if not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
-        return "collect", collect_line_for(scenario, (st.get("config") or {}).get("runner"))
-    return "analyze", analyze_line(traces.get("files"), scenario)
+        return "collect", collect_line_for(scenario, (st.get("config") or {}).get("runner"), n)
+    return "analyze", analyze_line(traces.get("files"), scenario, n)
 
 
-def collect_line_for(scenario: str | None = None, runner: str | None = None) -> str:
+def collect_line_for(scenario: str | None = None, runner: str | None = None,
+                     hunt: int | None = None) -> str:
     """`echolot collect` for a scenario, named when the config has several.
 
     No `-n` for a macrobenchmark (`runner.mode: gradle`): its own
     `measureRepeated` decides how many times it runs, and `collect` says the
     flag does not reach it. The line offered it all the same (#520, #551).
+
+    `hunt` is the investigation the step is part of: `--hunt N` files the
+    run under it, and without it the run is outside any (#498).
     """
     count = "" if runner == "gradle" else " -n 5"
     return f"echolot collect -c echolot.yml{count}" + (
-        f" --scenario {shlex.quote(scenario)}" if scenario else "")
+        f" --scenario {shlex.quote(scenario)}" if scenario else "") + _inside(hunt)
 
 
-def analyze_line(files: list[str] | None, scenario: str | None = None) -> str:
+def _inside(hunt: int | None) -> str:
+    return f" --hunt {hunt}" if hunt else ""
+
+
+def analyze_line(files: list[str] | None, scenario: str | None = None,
+                 hunt: int | None = None) -> str:
     """`echolot analyze` over the repeats of one scenario, each file named.
 
     `.echolot/traces/` keeps every scenario's set, since re-recording one
@@ -560,7 +576,7 @@ def analyze_line(files: list[str] | None, scenario: str | None = None) -> str:
     sandbox, where trace_processor cannot start. With no scenario to name
     the files by, the line says what to put there.
     """
-    named = f" --scenario {shlex.quote(scenario)}" if scenario else ""
+    named = (f" --scenario {shlex.quote(scenario)}" if scenario else "") + _inside(hunt)
     if not files:
         return ("echolot analyze <each trace of the scenario in "
                 ".echolot/traces, named> -c echolot.yml" + named)

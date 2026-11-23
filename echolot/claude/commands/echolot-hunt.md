@@ -59,26 +59,36 @@ chosen already, and `echolot hunt` names it.
 
 **The investigation.** First, are you carrying on the one already open? Yes
 when the human chose "carry on" at the door (`echolot hunt --resume` has run),
-or when `echolot hunt` shows an open investigation that the human's words
-continue — "keep going", the same symptom in the same sitting. When you
-cannot tell, ask with `AskUserQuestion`: carry on, or a new investigation.
-Carrying on, open nothing. Otherwise open one now, before anything is
-recorded or analysed for this question:
+or when the door sent you here with no words of theirs: a bare `/echolot` in
+the same sitting, where `next` said `hunt`. With their words and one open
+that they have not chosen between, ask with `AskUserQuestion`: a new
+investigation, with their words, first; carry on, second. Never decide it
+from how much the words sound like the open question. Carrying on, open
+nothing. Otherwise open one now, before anything is recorded or analysed for
+this question:
 
 ```bash
 echolot hunt "<what regressed, in the human's words>" --since "<the change, or unknown>"
 ```
 
-Everything from here on is filed under it: each `collect` notes the round it
-set aside, each `analyze` keeps a copy of its report, and from the second
-round on `echolot compare` reads those copies — with no investigation open it
-has nothing to compare. Its last lines name the loop, which needs an agent:
-that is the rest of this command, so do not start `/echolot` again.
+That closes the one that was open, as `abandoned` — the word for one that came
+to nothing. When the recap showed it had reports, ask the human first what it
+came to, and if it came to something, record that before opening the new one:
+`echolot hunt --done "<what it came to>"`.
+
+From here on, every `collect` and `analyze` for this question carries
+`--hunt <n>`, the number `opened #<n>` printed. That is what files it under
+the investigation: each `collect --hunt <n>` notes the round it set aside,
+each `analyze --hunt <n>` keeps a copy of its report, and from the second
+round on `echolot compare` reads those copies. A run without the flag is
+outside any investigation, files nothing, and says so on stderr. Its last
+lines name the loop, which needs an agent: that is the rest of this command,
+so do not start `/echolot` again.
 
 With several scenarios, add `--scenario <name>` to the command: the
 investigation is about that scenario, only its traces move aside, and every
-`collect`, `analyze` and `report` inside it takes that scenario without the
-flag.
+`collect --hunt <n>`, `analyze --hunt <n>` and `report` inside it takes that
+scenario without the flag.
 
 Opening one moves the scenario's traces that are loose in `.echolot/traces/`
 into a directory beside them, and says where on stderr:
@@ -95,7 +105,7 @@ is, ask them to fix `echolot.yml`, and stop — record nothing, and do not call
 `perf-hunter`.
 
 **Traces.** None that show it? Capture them now that the investigation is
-open, so they are filed under it: `echolot collect -c echolot.yml -n 5`. With
+open, so they are filed under it: `echolot collect -c echolot.yml -n 5 --hunt <n>`. With
 a runner config that is new or was just changed, make the first run a cheap
 one where the mode allows it: in `launch` and `command` mode that is `-n 1`.
 In `gradle` mode the macrobenchmark sets its own iteration count and `-n`
@@ -150,8 +160,9 @@ Pass the agent:
 - what regressed and against what: "it was 3 s, now it is 7 s"
 - after which change — or the word "unknown", said explicitly
 - that the investigation is open, and its number (`opened #<n>` when it
-  opened, `echolot hunt --list` otherwise): every `analyze` it runs is filed
-  there, and `echolot compare` reads from it
+  opened, `echolot hunt --list` otherwise): every `collect` and `analyze` it
+  runs carries `--hunt <n>` and is filed there, and `echolot compare` reads
+  from it
 - with several scenarios, which one the investigation is about: its commands
   take it without `--scenario`
 - whether the config's thresholds are trustworthy for this hunt (see above),
@@ -172,7 +183,7 @@ place, the report says which reads it did not replace.
 
 Do not re-record in the main context, and do not move the traces the agent
 is about to compare against. If a re-record is needed, it happens inside the
-loop, and `echolot collect` sets the previous set aside itself, into
+loop, and `echolot collect --hunt <n>` sets the previous set aside itself, into
 `.echolot/traces/<scenario>-<stamp>/`, and records it under the investigation.
 Only traces analysed outside `.echolot/traces` need a copy first — a
 benchmark's output directory is cleaned by gradle on the next run, and a
@@ -231,7 +242,8 @@ Every time, whatever the answer: an interim conclusion, "clean", or "the
 config needs fixing" is what this investigation came to, and
 `echolot hunt --list` shows it beside the question from then on. Left open, a
 finished hunt
-stays the open one: every later `analyze`, about any question, is filed under
-it, and the next `/echolot` asks whether to carry on with work that is over.
+stays the open one: the next `/echolot` asks whether to carry on with work
+that is over, and the next hunt closes it as `abandoned`, as if it had come to
+nothing.
 If the human wants more rounds, that is a new investigation, and the traces
 this one left are where it starts.

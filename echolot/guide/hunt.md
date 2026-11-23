@@ -39,13 +39,20 @@ echolot hunt "cold start was 3s, now 7s" --since "the tab redesign"
 
 That pushes the previous set of traces aside so this hunt cannot inherit them,
 and reports whether the last one left temporary markers in the sources. Every
-round and every report from here on is filed under it — which is what
-`echolot compare` reads from the second round on; with nothing open it has
-nothing to compare.
+`collect` and `analyze` for it from here on carries `--hunt <n>`, the number
+it printed as `opened #<n>`: that files each round and each report under it —
+which is what `echolot compare` reads from the second round on. A run without
+the flag is outside any investigation and files nothing; with nothing filed,
+compare has nothing to compare.
+
+It also closes the investigation that was open, as `abandoned`. If that one
+came to something, ask the human what, and record it first:
+`echolot hunt --done "<what it came to>"`.
 
 With several scenarios, add `--scenario <name>`: the investigation is about
-that one, only its traces move aside, and every `collect`, `analyze` and
-`report` inside it takes that scenario without the flag.
+that one, only its traces move aside, and every `collect --hunt <n>`,
+`analyze --hunt <n>` and `report` inside it takes that scenario without the
+flag.
 
 If `echolot hunt` reported markers left by the previous investigation,
 remove them before recording: `echolot mark --remove` takes out what
@@ -58,8 +65,10 @@ gets a warning at the top of its report, naming the markers the traces hold
 and the code no longer has.
 
 Open nothing when you are carrying on the one already open: the human chose
-to (`echolot hunt --resume` has run), or `echolot hunt` shows an open
-investigation that the human's words continue. When you cannot tell, ask.
+to (`echolot hunt --resume` has run). With an investigation open and the
+human's words naming a question, ask before opening a new one — a new
+investigation with their words first, carry on second — however close the
+words sound to the open question.
 
 The traces it pushes aside go to a directory beside them, named on stderr:
 `previous run set aside: N trace(s) → .echolot/traces/<scenario>-<stamp>/`.
@@ -72,7 +81,7 @@ opened nothing and moved no traces aside. Show that error to the human as it
 is, ask them to fix `echolot.yml`, and stop — record nothing, and do not
 start the loop.
 
-**Traces.** None? `echolot collect -c echolot.yml -n 5`, once the
+**Traces.** None? `echolot collect -c echolot.yml -n 5 --hunt <n>`, once the
 investigation is open. Repeats are not belt-and-braces: a single run cannot
 tell a regression from a spike. With a runner config that is new or just
 changed, make the first run a cheap one where the mode allows it: `-n 1` in
@@ -109,7 +118,7 @@ regression means `--defaults`.
 Run `echolot guide loop` first and follow it: it is your guide to the loop.
 Traces: <each trace file by name, from the directory `echolot hunt` set aside or from .echolot/traces>
 Regressed: <what, against what>, after <the change, or "unknown">
-Investigation #<n> is open: every `analyze` you run is filed under it, and `echolot compare` reads from it.
+Investigation #<n> is open: pass `--hunt <n>` to every `collect` and `analyze`, so `echolot compare` reads what they file.
 Thresholds: <the config's can be trusted | start with `echolot analyze --defaults`>
 Doctor passed at <time>: do not run it again.
 Instrumentation: <what `echolot domains --root .` found | none: start with `echolot mark`, not with reading the app>
@@ -157,9 +166,9 @@ close with the text:
 echolot hunt --done "TextLayout:initLayout on the main thread, :feature:profile — confidence high"
 ```
 
-Left open, a finished hunt stays the open one: every later `analyze` is filed
-under it, and the next visit is asked whether to carry on with work that is
-over. `echolot hunt --show <n>` prints a verdict as text, and with `--html`
+Left open, a finished hunt stays the open one: the next visit is asked
+whether to carry on with work that is over, and the next hunt closes it as
+`abandoned`, as if it had come to nothing. `echolot hunt --show <n>` prints a verdict as text, and with `--html`
 writes it as a page for a person.
 
 Then show the conclusion as it is: do not retell it, and do not pad it with

@@ -34,10 +34,20 @@ echolot status --next   # the same as one word, for switching on
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | build `echolot.yml` — run `echolot guide setup` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |
-| `resume-or-new` | an investigation was left open. Show `echolot hunt` and ask the human: carry on (`echolot hunt --resume`, then `echolot guide hunt` inside it), or start a new one (`echolot guide hunt`, which opens it) |
+| `resume-or-new` | an investigation was left open. Show `echolot hunt` and ask the human: carry on (`echolot hunt --resume`, then `echolot guide hunt` inside it), start a new one (`echolot guide hunt`, which opens it), or a new report outside it (`collect`, then `analyze`, both without `--hunt`) |
 | `init-force` | files in `.claude/` may carry edits made here, and `echolot init --all` would overwrite them. Run `echolot init`, show the files it marks `≠`, and ask the human: overwrite them (`echolot init --all`), or keep them. Either way, go on as for `hunt` |
 | `fix-settings` | `.claude/settings.json` does not parse, and no flag of `init` can fix it. Show the `layer` line — it says what to merge in — and tell the human to fix the file by hand, then go on as for `hunt` |
 | `hunt` | find the regression — run `echolot guide hunt` |
+
+A request in words is not always a hunt. An ANR, a freeze or a crash
+console's issue is `echolot anr <the report's file> --root .`; traces already
+on disk with no device are `echolot analyze` over them, then `echolot report`;
+a measurement with nothing to blame — a baseline, "just measure" — is
+`echolot collect`, then `echolot analyze` over what it printed. All three run
+outside any investigation: no `--hunt`, nothing filed, the open one left as it
+was. Only a regression to find is a hunt, and with an investigation open the
+human is asked first whether to carry on with it or start a new one: opening a
+new one closes it.
 
 ## The order of work
 
@@ -49,7 +59,8 @@ echolot analyze <trace...> -c echolot.yml  # the report
 
 A config can name several scenarios under `scenarios:`, and `echolot status`
 lists them. `collect`, `analyze` and `report` then take `--scenario <name>`,
-and inside an open investigation its scenario without the flag.
+and inside an open investigation (`--hunt <n>` for `collect` and `analyze`)
+its scenario without the flag.
 
 `analyze` writes `.echolot/out/report.json` for you and `report.md` for humans,
 in `.echolot/out/<scenario>/` for each of several scenarios.

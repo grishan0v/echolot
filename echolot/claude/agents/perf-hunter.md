@@ -69,20 +69,25 @@ happens at the door and not here. Do not open or close one either — the
 command that called you opened it before anything was recorded, and closes it
 with your conclusion.
 
-It is open while you work, and that is what the loop stands on: every
-`analyze` files a copy of its report under it — the line ending
-`(this investigation's copy)` says where — and `echolot compare` with no
-arguments reads the last two rounds among them.
+It is open while you work, and that is what the loop stands on. Every
+`collect` and `analyze` you run carries `--hunt <n>`, the number you were
+handed: then each `analyze` files a copy of its report under it — the line
+ending `(this investigation's copy)` says where — and `echolot compare` with
+no arguments reads the last two rounds among them. A run without the flag is
+outside the investigation: nothing of it is filed, compare does not see it,
+and stderr says `[i] outside investigation #<n>`. A `--hunt` that names a
+number no longer open exits 2 before it records or reads anything: stop and
+say so in your conclusion.
 
 The investigation is about one scenario, too. In a config that names
-several, `collect`, `analyze`, `calibrate` and `report` take it without
-`--scenario`, and stderr says so:
+several, `collect --hunt <n>`, `analyze --hunt <n>`, `calibrate` and `report`
+take it without `--scenario`, and stderr says so:
 `[i] scenario <name>, the open investigation's: --scenario picks another`.
 Do not pass another. A round recorded for a second scenario is another
 journey, and `compare` refuses to hold two scenarios against each other.
 
 **Do not re-record over the traces you analysed.** They are the baseline.
-`echolot collect` keeps them for you: it moves the previous set out of
+`echolot collect --hunt <n>` keeps them for you: it moves the previous set out of
 `.echolot/traces` into `.echolot/traces/<scenario>-<stamp>/` and records that
 directory against the open investigation, so you keep no list of your own and
 make no copy — a copy only doubles the traces, and a set you moved yourself
@@ -132,7 +137,7 @@ waiting for one.
     context already paid for it)
    round = 1
 
-1. report = echolot analyze <traces> -c echolot.yml
+1. report = echolot analyze <traces> -c echolot.yml --hunt <n>
    read .echolot/out/report.json — the schema is what `echolot guide report`
    prints, do not discover it by hand
    report.markers.rows is every AGENTTMP_ name and every `domains` name,
@@ -184,7 +189,8 @@ waiting for one.
    a side as the cell says. Hundreds means another round will not settle
    it: say the move is below what these runs resolve.
    "nothing to compare" means no investigation is open in the project the
-   config names, and nothing kept the previous round's report. Analyze the
+   config names, or the rounds ran without `--hunt <n>`, and nothing kept the
+   previous round's report. Analyze the
    set `collect` put aside again with -o .echolot/out/previous, then, from
    the directory echolot.yml is in, compare the two by path —
    echolot compare .echolot/out/previous/report.json .echolot/out/report.json
@@ -212,7 +218,8 @@ waiting for one.
      re-record: a recording nobody analyses costs minutes on the device
    build and install the app with the markers in it, unless runner.mode is
      gradle: launch and command modes record the build on the phone
-   copy the current traces aside, re-record, round += 1
+   re-record, round += 1: echolot collect -c echolot.yml --hunt <n>, which
+     sets the current traces aside itself
    (cleanup: echolot mark --remove takes out what --apply put in)
 
 6. cleanup: remove every AGENTTMP_ marker — always
@@ -222,8 +229,11 @@ The commands you will reach for, so that `--help` is not a round trip:
 
 ```
 echolot doctor -q                                  three lines, four with Codex; the full run is about 10 KB
-echolot analyze <traces> -c echolot.yml            report → .echolot/out/ next to the config
-echolot analyze <traces> -c echolot.yml -o <dir>   the same, elsewhere; it files a copy for
+echolot collect -c echolot.yml --hunt <n>          a round: the set before it moves aside,
+                                                   recorded under investigation <n>
+echolot analyze <traces> -c echolot.yml --hunt <n> report → .echolot/out/ next to the config,
+                                                   and a copy filed under <n> for compare
+echolot analyze … --hunt <n> -o <dir>              the same, elsewhere; it files a copy for
                                                    compare too, so a round runs one or the other
 echolot analyze … --defaults                       every detector, built-in thresholds
 echolot analyze … --set main_thread_block.min_slice_ms=4
