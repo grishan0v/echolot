@@ -195,3 +195,87 @@ def test_an_exit_1_that_is_an_answer_is_no_friction() -> None:
     sig = _sig(s, "env_friction")
     check("a pipeline's exit is its last stage's, and diff's 2 is an error",
           sig is not None and sum(r["count"] for r in sig.rows) == 2, sig and sig.rows)
+
+
+def test_echolot_is_a_call_only_where_the_shell_runs_it() -> None:
+    strings = ['echo "next: echolot collect -n 5"',
+               "sed -n '/### echolot report/p' notes.md",
+               "gh issue view 529 -R grishan0v/echolot --json title,body",
+               'gh issue list -R grishan0v/echolot --state all --search "reflect"',
+               "grep -n 'echolot analyze' docs/reflect.md"]
+    for line in strings:
+        check(f"{line!r} runs no echolot", facts_mod.subcommands(line) == [],
+              facts_mod.subcommands(line))
+    calls = {
+        "echolot collect -n 5": ["collect"],
+        "~/.local/bin/echolot analyze a.perfetto-trace": ["analyze"],
+        ".venv/bin/echolot report --plain": ["report"],
+        "ECHOLOT_NO_RECORD=1 echolot doctor -q": ["doctor"],
+        'N=$(echolot names --json | wc -l); echo "$(echolot status)"': ["names", "status"],
+        "bash -c 'echolot analyze a.perfetto-trace'": ["analyze"],
+        "python3 -m echolot analyze a.perfetto-trace": ["analyze"],
+        'echo "step 2" && echolot collect -n 5 | tail -3': ["collect"],
+    }
+    for line, want in calls.items():
+        check(f"{line!r} runs {want}", facts_mod.subcommands(line) == want,
+              facts_mod.subcommands(line))
+    s = _session([_bash(1, 'echo "… echolot collect …"', out="Exit code 2\n", error=True),
+                  _bash(2, "echolot collect -n 5")])
+    calls_found = facts_mod.echolot_calls(s)
+    check("an echo's exit code is not echolot's",
+          [(c.sub, c.exit) for c in calls_found] == [("collect", 0)],
+          [(c.sub, c.exit) for c in calls_found])
+    check("and a config read off a quoted path keeps its spaces",
+          facts_mod.echolot_calls(_session([_bash(
+              1, 'echolot analyze t.perfetto-trace -c "my app/echolot.yml"')]))[0].config
+          == "my app/echolot.yml")
+
+
+def test_a_trace_is_opened_by_what_runs_and_not_by_a_word_on_the_line() -> None:
+    def rows(calls: list[Call]) -> list[str]:
+        sig = _sig(_session(calls), "trace_opened_directly")
+        return [r["how"] for r in sig.rows]
+
+    check("a path that names trace_processor is no opening", rows([_bash(
+        1, "ls ~/.local/pipx/venvs/echolot/lib/python3.14/site-packages/perfetto/"
+           "trace_processor")]) == [])
+    check("nor is copying the trace",
+          rows([_bash(1, "cp .echolot/traces/a.perfetto-trace /tmp/keep/")]) == [])
+    check("nor a note about trace_processor written through a heredoc", rows([_bash(
+        1, "cat > notes.md <<'MD'\nfrom perfetto.trace_processor import TraceProcessor\nMD")]) == [])
+    script = ("cat > verify2.py <<'EOF'\nfrom perfetto.trace_processor import TraceProcessor\n"
+              "import sys\ntp = TraceProcessor(trace=sys.argv[1])\nEOF")
+    check("a script written to open the trace, then run, is", rows([
+        _bash(1, script),
+        _bash(2, "python3 -I verify2.py .echolot/traces/coldStart_iter000.perfetto-trace")])
+        == ["ran verify2.py, written to open the trace"])
+    write = Call(id="w", ts=_ts(1), tool="Write", path="/work/app/verify.py", input={
+        "file_path": "/work/app/verify.py",
+        "content": "from perfetto.trace_processor import TraceProcessor\n"})
+    check("so is one written by Write", rows([write, _bash(2, "python3 -I verify.py")])
+          == ["ran verify.py, written to open the trace"])
+    check("python fed through a heredoc is code that ran", rows([_bash(
+        1, "python3 - <<'EOF'\nimport perfetto.trace_processor as tp\nEOF")])
+        == ["code through a heredoc"])
+    check("and strings on the trace file reads it",
+          rows([_bash(1, "strings -n 8 .echolot/traces/a.perfetto-trace | grep track_event")])
+          == ["strings on the trace file"])
+
+
+def test_only_the_projects_own_config_is_written() -> None:
+    def written(calls: list[Call]) -> list[str]:
+        return [w["file"] for w in facts_mod.config_writes(_session(calls))]
+
+    check("a copy into another directory is no write of the config", written([
+        _bash(1, "mkdir -p /tmp/x && cp echolot.yml /tmp/x/echolot.yml"),
+        _bash(2, "cp local.yml work-b/local.yml"),
+        _bash(3, "cat > /tmp/x/echolot.yml <<'YML'\nscenario: {name: a}\nYML")]) == [])
+    check("a Write of a copy is not either", written([Call(
+        id="w", ts=_ts(1), tool="Write", path="/work/app/work-a/echolot.yml",
+        input={"content": "scenario: {name: a}\n"})]) == [])
+    check("the project's own is, however it is written", written([
+        _bash(1, "cp /tmp/x/echolot.yml ."),
+        _bash(2, "cat > echolot.yml <<'YML'\nscenario: {name: a}\nYML"),
+        Call(id="w", ts=_ts(3), tool="Write", path="/work/app/local.yml",
+             input={"content": "device: {serial: x}\n"})]) == ["echolot.yml", "echolot.yml",
+                                                             "local.yml"])

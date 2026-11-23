@@ -178,6 +178,18 @@ moved to the background did not fail — the command never ran, or is still
 running. Those are left out of `echolot_failures` and counted as friction
 under kinds of their own in `env_friction`.
 
+**A call is what the shell runs.** A command line is split the way a shell
+splits it, and `echolot` counts where it is the command — at the start, after
+`;`, `&&`, `|`, inside `$(…)`, behind `FOO=1` or `time`, or as a path to the
+binary such as `~/.local/bin/echolot` — and not where it is text handed to
+another command: `echo "… echolot collect …"`, `sed -n '/echolot report/p'`
+and `gh … -R owner/echolot` are no calls. The same goes for the trace: it is
+opened directly when something runs on it — `trace_processor_shell`, python
+whose code opens it (with `-c`, through a heredoc, or a script written in the
+session and then run), a tool that reads its bytes such as `strings` — and
+not when a path merely names `trace_processor`. And a config write is one to
+the project's own `echolot.yml` or `local.yml`, not to a copy elsewhere.
+
 ## What it cannot see, honestly
 
 `instrumentation.allowed` governs temporary instrumentation. A fix the human
