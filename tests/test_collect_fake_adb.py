@@ -208,7 +208,7 @@ def test_reset_policy_runs_what_it_announces(tmp_path, adb, value, stops, warned
                    name="startup", log=said.append)
     check(f"{stops} force-stops for {value!r}",
           adb.kinds().count("force-stop") == stops, adb.kinds())
-    notes = [line for line in said if "reset_policy" in line]
+    notes = [line for line in said if "is not supported" in line]
     check("warned exactly when the value was not one of the two", bool(notes) == warned, said)
     if warned:
         check("and the warning says what runs", "Using force-stop" in notes[0], notes)
@@ -282,9 +282,10 @@ def test_a_repeat_that_was_stopped_and_did_not_start_cold_says_so(
     check("the result carries it", results[0].get("not_cold") is True, results)
 
 
-def test_without_a_stop_a_warm_launch_is_nobodys_business(tmp_path, adb):
-    """`reset_policy: none` promises no cold start, and gets no line for its
-    second repeat finding the app in front."""
+def test_without_a_stop_a_warm_launch_is_not_called_a_failed_cold_start(tmp_path, adb):
+    """`reset_policy: none` promises no cold start: its second repeat finding
+    the app in front is not a cold start gone wrong. It is a repeat that
+    started nothing, and says that instead (#593)."""
     adb.script["start"] = [am_start("COLD"), am_start("HOT", 0)]
     lines: list[str] = []
     results = runner.collect(PACKAGE, tmp_path / "traces", 2,
@@ -293,8 +294,49 @@ def test_without_a_stop_a_warm_launch_is_nobodys_business(tmp_path, adb):
     check("no stop, no HOME, no look for the process", "force-stop" not in adb.kinds()
           and "look" not in adb.kinds()
           and not any("KEYCODE_HOME" in " ".join(c) for c in adb.calls), adb.calls)
-    check("and nothing said", not [s for s in lines if "not a cold start" in s]
+    check("and nothing said of a cold start", not [s for s in lines if "not a cold start" in s]
           and not any(r.get("not_cold") for r in results), (lines, results))
+    check("the second repeat started nothing, and says so",
+          [r.get("no_launch", False) for r in results] == [False, True]
+          and any("this trace holds no launch" in s for s in lines), (lines, results))
+
+
+# What an SM-A515F printed with the app already in front (#593).
+AM_START_IN_FRONT = (f"Starting: Intent {{ cmp={ACTIVITY} }}\nStatus: ok\n"
+                     f"LaunchState: UNKNOWN (0)\nActivity: {ACTIVITY}\nTotalTime: 0\n"
+                     f"WaitTime: 12\nComplete\n")
+
+
+def test_launch_without_a_reset_flags_every_repeat_that_started_nothing(
+        tmp_path, monkeypatch, capsys):
+    """Five repeats of `UNKNOWN (0)`, no `[!]` anywhere, and one unmarked line at
+    the end: a set that looked recorded and held no launch (#593)."""
+    fake = FakeAdb(script={"start": [am_start("COLD"), AM_START_IN_FRONT]})
+    monkeypatch.setattr(runner, "_run", fake)
+    (tmp_path / "echolot.yml").write_text(CONFIG + "  reset_policy: none\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with recorder.isolated():
+        code = main(["collect"])
+    out, err = capsys.readouterr()
+    check("exit 0: the traces are there", code == 0, err[-600:])
+    check("said before recording that only the first can measure a launch",
+          "only the first of these 3 can record a launch" in err
+          and err.find("only the first") < err.find("[1/3]"), err)
+    check("each repeat that started nothing is marked",
+          err.count("[!] am start -W measured no start: the app was still in front") == 2, err)
+    check("and the end line is marked and names those traces",
+          "[!] 2 of 3 repeats started nothing" in err
+          and "(startup_iter001.perfetto-trace, startup_iter002.perfetto-trace)" in err, err)
+    check("the TotalTime line does not repeat it", "launches report TotalTime: 0" not in err, err)
+    check("the three paths are still printed",
+          len([ln for ln in out.splitlines() if ln.endswith(".perfetto-trace")]) == 3, out)
+
+
+def test_one_repeat_without_a_reset_is_not_warned(tmp_path, adb):
+    lines: list[str] = []
+    runner.collect(PACKAGE, tmp_path / "traces", 1, section={"reset_policy": "none"},
+                   name="startup", log=lines.append)
+    check("one repeat can measure its launch", not [s for s in lines if "[!]" in s], lines)
 
 
 def test_an_unmeasured_launch_is_said_once_and_as_unmeasured(tmp_path, adb):

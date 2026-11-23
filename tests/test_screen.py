@@ -192,12 +192,14 @@ def test_a_launch_that_measured_no_start_on_an_unlocked_screen_is_kept_and_said(
 def test_without_a_force_stop_an_unknown_launch_is_not_read_against_the_screen(
         tmp_path, adb) -> None:
     """`reset_policy: none` launches into an app that may be in front, and
-    the system answers `UNKNOWN` for a launch that started nothing."""
+    the system answers `UNKNOWN` for a launch that started nothing. The
+    screen is not the reason, and the line says what is (#593)."""
     adb.script["start"] = [AM_START_UNMEASURED]
     said: list[str] = []
     runner.collect(PACKAGE, tmp_path / "traces", 1, section={"reset_policy": "none"},
                    name="startup", log=said.append)
     check("no read after the launch", adb.kinds()[-3:] == ["start", "wait", "pull"],
           adb.kinds())
-    check("and no line about it", not any("measured no start" in line for line in said),
-          said)
+    check("and the line blames the app in front, not the screen",
+          any("measured no start: the app was still in front" in line for line in said)
+          and not any("with the screen on" in line for line in said), said)

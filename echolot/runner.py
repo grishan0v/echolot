@@ -1296,6 +1296,14 @@ def collect(package: str, out_dir: Path, iterations: int,
         log(f"  sampling callstacks at {hz} Hz (runner.sampling): the app "
             f"runs slower for it, so compare this set only with another "
             f"sampled at the same rate")
+    if mode == "launch" and reset == "none" and iterations > 1:
+        # Nothing stops the app between repeats, so from the second one on it
+        # is still in front and `am start -W` starts nothing: a set that
+        # looks recorded and holds one launch at most (#593).
+        log(f"  [!] runner.reset_policy: none in launch mode: nothing stops the app "
+            f"between repeats, so only the first of these {iterations} can record a "
+            f"launch; the others find it still in front. For {iterations} cold "
+            f"starts, use reset_policy: force-stop")
     # A launch behind a dark, locked screen starts nothing that can be
     # measured (screen.py). Read before anything is touched, and again
     # before each repeat: a set that waits to cool can outlast the screen.
@@ -1378,10 +1386,13 @@ def collect(package: str, out_dir: Path, iterations: int,
             # After a force-stop `UNKNOWN` is a launch the system measured no
             # start for. A screen that went dark or locked since the check
             # explains it, and the set stops before the trace takes a name;
-            # on a screen that is on and unlocked the line says so.
-            unmeasured = (mode == "launch" and reset == "force-stop"
-                          and str(info.get("launch_state", "")).startswith("UNKNOWN"))
-            if unmeasured:
+            # on a screen that is on and unlocked the line says so. Without a
+            # stop, `UNKNOWN` or a `TotalTime: 0` is the app still in front from
+            # the repeat before: this trace holds no launch (#593).
+            unmeasured = (mode == "launch"
+                          and (str(info.get("launch_state", "")).startswith("UNKNOWN")
+                               or (reset == "none" and info.get("total_time_ms") == 0)))
+            if unmeasured and reset == "force-stop":
                 now = screen.read(dev, _run)
                 if now.dark or now.locked:
                     _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
@@ -1412,7 +1423,12 @@ def collect(package: str, out_dir: Path, iterations: int,
                 f"{info['size'] / 1e6:.1f} MB{extra}")
             if again:
                 log("      " + _stopped_again_line(package, again, waited))
-            if unmeasured:
+            if unmeasured and reset == "none":
+                info["no_launch"] = True
+                log("      [!] am start -W measured no start: the app was still in "
+                    "front, and with reset_policy: none nothing stopped it, so this "
+                    "trace holds no launch")
+            elif unmeasured:
                 log("      [!] am start -W measured no start, with the screen on and "
                     "unlocked: this trace may hold none")
             if restarted:
