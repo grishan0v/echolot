@@ -209,7 +209,7 @@ def test_collect_records_the_scenario_with_its_runner(tmp_path: Path, monkeypatc
     monkeypatch.chdir(tmp_path)
     code, _, err = run("collect", "--scenario", "warm")
     check("exit 0", code == 0, err[-600:])
-    names = sorted(p.name for p in (tmp_path / ".echolot/traces").iterdir())
+    names = sorted(p.name for p in (tmp_path / ".echolot/traces").glob("*.perfetto-trace"))
     check("the scenario's traces, as many as its runner asks",
           names == ["warm_iter000.perfetto-trace", "warm_iter001.perfetto-trace"], names)
     check("and its reset: nothing stopped between launches",

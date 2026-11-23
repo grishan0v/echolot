@@ -40,6 +40,15 @@ included; another scenario's traces stay, and so do those of a scenario whose
 name merely begins with this one's: re-recording `startup` leaves
 `startup_warm_*` alone.
 
+Beside each trace it records, `collect` keeps a short account of how it
+recorded it, `<trace>.recording.json`: the runner, the reset policy, and
+whether the force-stop before the repeat found the app still running. The
+trace cannot say any of that itself, and `analyze` carries it into the
+report's `recording` block, where `compare` sets it against the other side's
+(see [How the two were recorded](compare.md#how-the-two-were-recorded)). It
+moves with its trace when a set is set aside; copy it along if you move
+traces by hand, or that set's runner reads as unknown.
+
 ## Three modes
 
 ```yaml

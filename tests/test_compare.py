@@ -1138,8 +1138,18 @@ def test_an_unmeasured_side_is_never_called_cool() -> None:
     hot = report([det("d", [row("A", 140.0)])], environment=env(1800.0, throttled=True))
     unmeasured = report([det("d", [row("A", 100.0)])],
                         environment=env(None, throttled=None))
-    w = warned(compare(hot, unmeasured))
+    cmp = compare(hot, unmeasured)
+    w = warned(cmp)
     check("no claim about the side that was not measured",
           "environment-thermal" not in w, str(w))
     check("and the missing platform state is still said",
           "environment" in w, str(w))
+    # What the measured side says of itself is a fact either way, and
+    # silence there was the riskiest case (#533): one sentence of its own,
+    # which says the other side cannot be ruled out rather than that it ran cool.
+    said = " ".join(x["text"] for x in cmp["warnings"]
+                    if x["id"] == "environment-thermal-one-side")
+    check("the throttling said, on its own id",
+          "throttled the device during the before round" in said
+          and "cannot be ruled out there" in said and "not the other" not in said,
+          cmp["warnings"])

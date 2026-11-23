@@ -228,6 +228,29 @@ class Detector:
     plain_why: str = ""
     plain_clean: str = ""
 
+    @property
+    def sha(self) -> str:
+        """What this detector reads the trace with, as twelve hex digits (#507).
+
+        Its queries, the columns that name its rows and the stdlib modules it
+        includes: what decides its rows. Comment lines and the run of the
+        whitespace do not count, so a sentence reworded in `@why` leaves it
+        as it was, and its thresholds do not either, since the report carries
+        those itself and `compare` names any that moved. Two reports whose
+        detector has the same `sha` read the trace the same way; `compare`
+        gives no verdict on the rows of one whose `sha` differs, since a move
+        there may be the tool's.
+        """
+        import hashlib
+
+        def code(text: str) -> str:
+            lines = [ln for ln in text.splitlines() if not ln.strip().startswith("--")]
+            return " ".join(" ".join(lines).split())
+
+        body = "\n".join([code(self.sql), code(self.intervals_sql), code(self.samples_sql),
+                          ",".join(self.identity), ",".join(self.modules)])
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
+
     @classmethod
     def from_file(cls, path: Path) -> "Detector":
         text = path.read_text(encoding="utf-8")
@@ -442,7 +465,14 @@ def toolchain_info(bin_path: str | None = None,
     reads the report next. They would search their history for a flag nobody
     typed while the answer sat in a file beside the config.
     """
-    info: dict[str, Any] = {"perfetto_package": None,
+    from . import __version__
+
+    # `echolot`: which echolot wrote the report (#507). Two versions that
+    # differ in a detector read one trace differently, and `compare` used to
+    # take that for a change in the app — 11 rows that held between two
+    # reports of the very same fifteen traces.
+    info: dict[str, Any] = {"echolot": __version__,
+                            "perfetto_package": None,
                             "trace_processor": None,
                             "source": "pinned",
                             "binary": None}

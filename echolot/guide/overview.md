@@ -67,7 +67,11 @@ echolot compare <before.json> <after.json> # or name the two reports
 `compare` answers the other half of the question the report cannot: which rows
 appeared, which grew, and whether the repeats support calling that a change.
 Read `holds` before acting on a row — `false` means the runs disagree among
-themselves by more than the row moved.
+themselves by more than the row moved. Read the warnings above the table
+first: under `version`, `detector-changed` or `same-traces` a row has no
+verdict because the tool, not the app, may have moved it — analyze both sides'
+traces with one echolot; under `recording` the two sides were recorded
+differently, and a row can move for that reason alone.
 
 ## When a sandbox is in the way
 

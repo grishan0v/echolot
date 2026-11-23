@@ -174,7 +174,16 @@ def _report(rep: Path) -> dict | None:
         "fired": s.get("detectors_fired"), "run": s.get("detectors_run"),
         "runs": len(r.get("traces") or []) or 1,
         "config_sha": c.get("sha"), "defaults": c.get("defaults"),
+        # Which echolot wrote it, for `status` to say when it was another
+        # (#507). Text, or nothing for a report from before it was kept.
+        "echolot": _stamp(r.get("toolchain")),
     }
+
+
+def _stamp(toolchain) -> str | None:
+    """`toolchain.echolot` when it is text; None for anything else."""
+    v = toolchain.get("echolot") if isinstance(toolchain, dict) else None
+    return v if isinstance(v, str) else None
 
 
 def _as_written(r: dict) -> bool:

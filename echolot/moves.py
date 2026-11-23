@@ -117,6 +117,13 @@ _UNLIKE = {
     "sampling": "stack sampling was not on the same way",
     "compose_names": "composable names were recorded on one side only",
     "compile": "the app was compiled differently",
+    "environment-thermal-one-side": "the phone slowed down from heat on one side, and the "
+                                    "other side's heat was not recorded",
+    "recording": "the two sides were not recorded the same way",
+    "recording-mixed": "one side's recordings were not all made the same way",
+    "recording-unknown": "how one side was recorded is not known",
+    "version": "different versions of echolot read them",
+    "detector-changed": "some checks read the recordings differently on the two sides",
 }
 
 

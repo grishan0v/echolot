@@ -171,8 +171,9 @@ def test_a_launch_behind_a_lock_that_came_down_stops_at_that_repeat(tmp_path, ad
     kinds = adb.kinds()
     check("the second recording waited out and removed, and never pulled",
           kinds.count("pull") == 1 and kinds[-2:] == ["screen", "rm"], kinds)
-    check("the first repeat's trace is kept",
-          sorted(p.name for p in out.iterdir()) == ["startup_iter000.perfetto-trace"],
+    check("the first repeat's trace is kept, with the account collect keeps beside it",
+          sorted(p.name for p in out.iterdir())
+          == ["startup_iter000.perfetto-trace", "startup_iter000.perfetto-trace.recording.json"],
           list(out.iterdir()))
 
 
