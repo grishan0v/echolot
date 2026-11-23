@@ -710,10 +710,32 @@ def install_tasks(root: Path, package: str | None) -> list[str]:
             for v in sorted(found, key=_rank)]
 
 
+def _read_id(facts: Facts) -> str | None:
+    """The applicationId the draft config names: the chosen variant's, else the module's."""
+    chosen = preferred(facts.variants)
+    return (chosen or {}).get("application_id") or (facts.app or {}).get("application_id")
+
+
+def _id_note(facts: Facts) -> None:
+    """Say when an app module was found and its applicationId was not read.
+
+    Added here, with the other notes, so `render` prints it under "## Notes".
+    `skeleton` used to add it, and `render` calls `skeleton` after it has
+    printed that section: the note was never shown, and every further
+    `skeleton` of the same facts added it once more (#550).
+    """
+    if facts.app and not _read_id(facts):
+        where = facts.app.get("build_script") or "build.gradle"
+        facts.notes.append(f"the applicationId could not be read from {where}: it is set "
+                           f"through a constant or a convention plugin. The config below holds "
+                           f"a placeholder")
+
+
 def describe(root: Path, *, devices: bool = True) -> Facts:
     facts = Facts(root=str(root))
     _app_and_variants(root, facts)
     _profileable_note(facts)
+    _id_note(facts)
     facts.benchmarks = benchmarks_of(root)
     facts.allowed = allowed_paths(root)
     if devices:
@@ -745,7 +767,7 @@ def skeleton(facts: Facts) -> list[str]:
     """An echolot.yml to start from, every value with where it came from."""
     app = facts.app or {}
     chosen = preferred(facts.variants)
-    read_id = (chosen or {}).get("application_id") or app.get("application_id")
+    read_id = _read_id(facts)
     where = app.get("build_script") or "build.gradle"
     others = [v["name"] for v in facts.variants if chosen and v["name"] != chosen["name"]]
     bench = facts.benchmarks[0] if facts.benchmarks else None
@@ -779,10 +801,8 @@ def skeleton(facts: Facts) -> list[str]:
                + (f' — the others: {", ".join(others[:6])}' if others else "") + why + '"']
     else:
         # Not read is not derived: a constant or a convention plugin sets it,
-        # and a placeholder written as `derived` was taken on trust.
-        facts.notes.append(f"the applicationId could not be read from {where}: it is set "
-                           f"through a constant or a convention plugin. The skeleton holds a "
-                           f"placeholder")
+        # and a placeholder written as `derived` was taken on trust. The note
+        # that says so is `describe`'s: this reads the facts, never adds to them.
         out = ["project:",
                "  package: com.example.app",
                '  process: "com.example.app*"',

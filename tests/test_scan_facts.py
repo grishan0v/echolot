@@ -103,6 +103,19 @@ def test_an_application_id_not_read_is_no_derived_value(tmp_path: Path) -> None:
     check("and said in the notes", any("applicationId could not be read" in n for n in facts.notes))
 
 
+def test_the_application_id_note_is_printed_once(tmp_path: Path) -> None:
+    """#550: `skeleton` added the note after `render` had printed the Notes."""
+    script = GROOVY.replace('applicationId = "com.example.app"', "applicationId = AppConfig.ID")
+    facts = scan.describe(repo(tmp_path, script), devices=False)
+    text = scan.render(facts)
+    notes = text.split("## Notes", 1)[1].split("## A config", 1)[0] if "## Notes" in text else ""
+    check("under ## Notes", "applicationId could not be read" in notes, text)
+    scan.skeleton(facts)
+    scan.render(facts)
+    check("and kept once, however often the draft is drawn",
+          sum("applicationId could not be read" in n for n in facts.notes) == 1, facts.notes)
+
+
 def test_the_skeleton_takes_one_benchmark_class(tmp_path: Path) -> None:
     root = repo(tmp_path)
     (root / "benchmark/src/main/java/com/example/benchmark/StartupBenchmark.kt").unlink()
