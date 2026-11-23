@@ -46,6 +46,7 @@ from typing import Any
 
 from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
 
+from . import atomic
 from . import compare as compare_mod
 from . import hunt as hunt_mod
 from . import codex, layer, plugin, recorder, sandbox, state, table, when
@@ -863,10 +864,10 @@ def cmd_analyze(args) -> int:
 
     out_dir = _out_dir(args.out, cfg)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "report.json").write_text(
-        report_mod.to_json(rep), encoding="utf-8")
-    (out_dir / "report.md").write_text(
-        report_mod.to_markdown(rep), encoding="utf-8")
+    # Both in full before either is in place, report.json last: a full disk
+    # or a kill leaves the directory as it was, never an empty report (#579).
+    atomic.write_all([(out_dir / "report.md", report_mod.to_markdown(rep)),
+                      (out_dir / "report.json", report_mod.to_json(rep))])
 
     root = _project_root(cfg)
     # The page is of the report beside it. Asked for, it is written. One that
@@ -879,9 +880,9 @@ def cmd_analyze(args) -> int:
     again = not args.html and page.is_file()
     if args.html or again:
         last = out_dir.resolve() == _out_dir(cfg.report_dir, cfg).resolve()
-        page.write_text(
-            report_page.render(rep, where=_shown_path(out_dir / "report.json", root), last=last),
-            encoding="utf-8")
+        atomic.write_text(
+            page, report_page.render(rep, where=_shown_path(out_dir / "report.json", root),
+                                     last=last))
     # A value a person confirmed, changed since the investigation opened:
     # the report is about a window they did not agree to. Said before the
     # report, where a reader who stops at its first lines still sees it, and
@@ -1238,13 +1239,12 @@ def cmd_compare(args) -> int:
 
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "comparison.json").write_text(
-            report_mod.to_json(cmp), encoding="utf-8")
-        (out_dir / "comparison.md").write_text(text, encoding="utf-8")
+        atomic.write_all([(out_dir / "comparison.md", text),
+                          (out_dir / "comparison.json", report_mod.to_json(cmp))])
         print(f"\n\u2192 {out_dir/'comparison.md'}\n\u2192 {out_dir/'comparison.json'}",
               file=sys.stderr)
         if reading is not None and (args.html or again):
-            page.write_text(compare_page.render(cmp), encoding="utf-8")
+            atomic.write_text(page, compare_page.render(cmp))
             print(f"\u2192 {page}  (" + ("the same comparison as a page: open it in a browser" if args.html else
                                          "it stood there from an earlier comparison: written again from this one")
                   + ")", file=sys.stderr)
@@ -2909,7 +2909,7 @@ def _write_answer(project: Path, config: str, hunt: dict[str, Any]) -> Path:
     reports = hunt_mod.archived_reports(project, hunt)
     text = answer_page.render(hunt, reports, again=_check_again_line(project, config, hunt, reports))
     page.parent.mkdir(parents=True, exist_ok=True)
-    page.write_text(text, encoding="utf-8")
+    atomic.write_text(page, text)
     return page
 
 
@@ -4900,9 +4900,9 @@ def cmd_report(args) -> int:
         # report.html, and an investigation's 003.json gives 003.html.
         page = path.with_suffix(".html")
         try:
-            page.write_text(
-                report_page.render(rep, where=_shown_path(path, project), last=not args.report),
-                encoding="utf-8")
+            atomic.write_text(
+                page, report_page.render(rep, where=_shown_path(path, project),
+                                         last=not args.report))
         except OSError as e:
             print(f"error: {page}: cannot be written: {e.strerror or e}", file=sys.stderr)
             recorder.failed(f"report --html: {e.strerror or e}")
