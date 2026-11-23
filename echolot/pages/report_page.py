@@ -130,9 +130,16 @@ def _checks(report: dict[str, Any]) -> list[dict[str, Any]]:
 # that is calibrated from another column (`main_thread_outlier`: the longest
 # single occurrence) has its bar on another measure; a line on this axis would
 # be wrong for both.
+#
+# A check of that shape which `calibrate` leaves alone is named here instead:
+# `main_thread_block`'s bar is a frame, and a bar from a healthy tail
+# silenced 100 ms blocks (#509). Its line is still drawn.
+_UNCALIBRATED_FLOORS = {"main_thread_block": ("min_slice_ms", "self_ms")}
+
+
 @functools.lru_cache(maxsize=1)
 def _floors() -> dict[str, tuple[str, str]]:
-    out = {}
+    out = dict(_UNCALIBRATED_FLOORS)
     for d in load_detectors(plain.DETECTOR_DIR):
         if len(d.calibrations) == 1 and d.calibrations[0].column in ("self_ms", "total_ms"):
             out[d.id] = (d.calibrations[0].param, d.calibrations[0].column)

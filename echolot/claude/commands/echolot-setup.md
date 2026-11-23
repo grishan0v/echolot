@@ -231,7 +231,12 @@ echolot calibrate .echolot/traces/<scenario>_iter*.perfetto-trace -c echolot.yml
 set already put aside is under `.echolot/traces/<scenario>-<stamp>/`.
 
 The command prints a `detectors:` section with the reasoning attached. Show it
-to the human and explain what changed relative to the defaults.
+to the human and explain what changed relative to the defaults. A threshold
+whose healthy tail is lower than the default keeps the default; the line says
+by how much. Below it, the section tries itself on the same runs and says how
+many rows `analyze` would report with it, against now. Healthy runs should
+come out quiet: if a detector goes from a few rows to many, the section is too
+low for it, so leave that detector's number out.
 
 **Healthy means known-good, not merely current.** If the human came because
 something regressed, the traces you have are the regression: thresholds

@@ -4414,6 +4414,9 @@ def cmd_calibrate(args) -> int:
     # repeats: on five of the demo's cold starts it was 170.3 against 4.7
     # from one.
     per_run: dict[str, list[list[dict]]] = {d.id: [] for d in detectors}
+    # And with the thresholds in effect, as `analyze` would run them: what
+    # the proposal is weighed against once it is known (#509).
+    current: dict[str, list[list[dict]] | None] = {d.id: [] for d in detectors}
     failed: dict[str, int] = {d.id: 0 for d in detectors}
     windows: list[float] = []
 
@@ -4440,6 +4443,14 @@ def cmd_calibrate(args) -> int:
                 except Exception as e:
                     failed[d.id] += 1
                     print(f"[!] {d.id} on {trace}: {e}", file=sys.stderr)
+                    current[d.id] = None
+                    continue
+                if current[d.id] is not None:
+                    try:
+                        current[d.id].append(
+                            tp.query(d.render(overrides.get(d.id))[0]))
+                    except Exception:
+                        current[d.id] = None
 
     spread = ""
     if len(windows) > 1 and max(windows) > 2 * min(windows):
@@ -4482,7 +4493,10 @@ def cmd_calibrate(args) -> int:
     off_here = cfg.scenario_disabled if many else disabled
 
     skipped = 0
+    below = 0
     measured = {d.id: d for d in detectors}
+    # What the section would set, threshold by threshold, for the check below.
+    proposed: dict[str, dict[str, Any]] = {}
     for d in shipped:
         if d.id in off_here:
             print(f"{pad}  {d.id}: false")
@@ -4494,11 +4508,15 @@ def cmd_calibrate(args) -> int:
         lines: list[str] = []
         if d.id in measured:
             for c in d.calibrations:
-                line, rare = _calibrated(c, d, given, per_run[d.id], failed[d.id],
-                                         total, args.min_sample,
-                                         shared=shared.get(d.id) or {}, whose=whose)
-                lines.append(line)
-                skipped += rare
+                got = _calibrated(c, d, given, per_run[d.id], failed[d.id],
+                                  total, args.min_sample,
+                                  shared=shared.get(d.id) or {}, whose=whose,
+                                  below_defaults=args.below_defaults)
+                lines.append(got.line)
+                skipped += got.rare
+                below += got.floored
+                if got.value is not None:
+                    proposed.setdefault(d.id, {})[c.param] = got.value
         # What the config sets and nothing here measured: masks, ratios, a
         # detector with no `@calibrate`. The numbers above were measured with
         # them, and dropped from the section, pasting it reset them all.
@@ -4511,6 +4529,13 @@ def cmd_calibrate(args) -> int:
                 print(pad + line)
 
     broken = [d.id for d in detectors if failed[d.id] == total]
+    if below:
+        print(f"\n# Thresholds kept at the default although the healthy runs' tail"
+              f"\n# is lower: {below}. Below the default, a healthy run of this"
+              f"\n# scenario fills the report with its own normal rows."
+              f"\n# --below-defaults proposes the lower numbers.")
+    _calibrate_check(args.traces, tp_binary, cfg, measured, overrides,
+                     proposed, current, total)
     if skipped:
         print(f"\n# Thresholds left uncalibrated: {skipped}. Not a failure — on"
               f"\n# a healthy run these phenomena are simply rare. Either keep"
@@ -4522,9 +4547,81 @@ def cmd_calibrate(args) -> int:
     return 1 if broken else 0
 
 
+def _calibrate_check(traces: list[str], tp_binary, cfg, measured: dict,
+                     overrides: dict, proposed: dict[str, dict[str, Any]],
+                     current: dict[str, list[list[dict]] | None],
+                     total: int) -> None:
+    """The proposal tried on the runs it came from (#509).
+
+    A threshold calibrated on healthy runs should leave those runs quiet, or
+    nearly. `topN` per run leaves up to N-1 rows above it in every run, and
+    across many runs those are different rows: their union, which is what
+    `analyze` folds the repeats into, grows with the number of runs. On 15
+    healthy cold starts a section once took `repeated_work` from 0 rows to
+    28, each found in one run of 15. So the detectors whose thresholds the
+    section moves run again with it, and the rows are counted as `analyze`
+    would count them, beside the count with the thresholds in effect now.
+    """
+    moved = {}
+    for det_id, values in proposed.items():
+        now = dict(overrides.get(det_id) or {})
+        after = {**now, **values}
+        if current.get(det_id) is None:
+            continue
+        if any(after.get(k, measured[det_id].params.get(k))
+               != now.get(k, measured[det_id].params.get(k)) for k in after):
+            moved[det_id] = after
+    if not moved:
+        return
+    runs: dict[str, list[list[dict]]] = {i: [] for i in moved}
+    for trace in traces:
+        try:
+            session = TraceSession(trace, tp_binary)
+        except ConfigError:
+            return
+        with session as tp:
+            try:
+                procs = _resolve_process(tp, cfg.process)
+                _setup_context(tp, cfg, procs[0]["upid"])
+            except ConfigError:
+                return
+            for det_id, after in list(moved.items()):
+                try:
+                    runs[det_id].append(
+                        tp.query(measured[det_id].render(after)[0]))
+                except Exception:
+                    moved.pop(det_id)
+    if not moved:
+        return
+
+    def count(det_id: str, per_run: list[list[dict]]) -> int:
+        return len(report_mod.merge_rows(per_run, measured[det_id].identity, total))
+
+    print(f"\n# On these {total} healthy run(s), with this section in place of"
+          f"\n# the thresholds in effect now, analyze would report:")
+    width = max(len(i) for i in moved)
+    for det_id in moved:
+        after_n = count(det_id, runs[det_id])
+        now_n = count(det_id, current[det_id] or [])
+        print(f"#   {det_id:<{width}}  {after_n} row(s), now {now_n}")
+    print("# A healthy run should come out quiet, or nearly: each row here is"
+          "\n# this scenario's normal work, and every later report of it will"
+          "\n# carry such rows. Many more than now means the section is too low.")
+
+
+class _Calibrated:
+    """One threshold's verdict: its line in the section, whether it was left
+    for rarity, whether the default was kept over a lower tail, and the number
+    the section sets for it, if any."""
+
+    def __init__(self, line: str, rare: int = 0, value: Any = None,
+                 floored: int = 0) -> None:
+        self.line, self.rare, self.value, self.floored = line, rare, value, floored
+
+
 def _calibrated(c, d, given: dict, runs: list[list[dict]], failed: int,
                 total: int, min_sample: int, *, shared: dict | None = None,
-                whose: str = "config") -> tuple[str, int]:
+                whose: str = "config", below_defaults: bool = False) -> _Calibrated:
     """One threshold's line in the section, and whether it was left for rarity.
 
     The statistic is taken over each run that has enough values and the
@@ -4539,19 +4636,29 @@ def _calibrated(c, d, given: dict, runs: list[list[dict]], failed: int,
     app, a cold start whose `min_abs_ms` had no tail to read from would have
     run on the first launch's 2.8 instead of the default 40 (#351). So the
     default is written down as a setting, and the line says what it covers.
+
+    The default is also a floor (#509). The shipped number says what is worth
+    a row on any device; a healthy run's tail below it says this scenario has
+    little of the kind, and a threshold set there reports that little as
+    findings: on 15 healthy cold starts, `repeated_work` at 2.4 against the
+    default 40 went from no rows to 28. `below_defaults` takes the lower
+    number all the same, and its line says how far below the default it is.
     """
-    def keep(why: str) -> str:
+    def keep(why: str, rare: int = 0, floored: int = 0) -> _Calibrated:
         if c.param in given:
-            return (f"    {c.param}: {_yaml_scalar(given[c.param])}    "
-                    f"# kept the {whose}'s value — {why}")
+            return _Calibrated(f"    {c.param}: {_yaml_scalar(given[c.param])}    "
+                               f"# kept the {whose}'s value — {why}",
+                               rare, given[c.param], floored)
         if shared and c.param in shared:
-            return (f"    {c.param}: {_yaml_scalar(d.params[c.param])}    "
-                    f"# kept the default over the {_yaml_scalar(shared[c.param])} "
-                    f"in detectors: — {why}")
-        return f"    # {c.param}: kept the default ({d.params[c.param]}) — {why}"
+            return _Calibrated(f"    {c.param}: {_yaml_scalar(d.params[c.param])}    "
+                               f"# kept the default over the "
+                               f"{_yaml_scalar(shared[c.param])} in detectors: — {why}",
+                               rare, d.params[c.param], floored)
+        return _Calibrated(f"    # {c.param}: kept the default "
+                           f"({d.params[c.param]}) — {why}", rare, None, floored)
 
     if failed == total:
-        return keep("the detector failed on every trace, see stderr"), 0
+        return keep("the detector failed on every trace, see stderr")
     need = max(min_sample, c.needs())
     values = [[r[c.column] for r in rows if r.get(c.column) is not None]
               for rows in runs]
@@ -4563,7 +4670,7 @@ def _calibrated(c, d, given: dict, runs: list[list[dict]], failed: int,
         # is more honest.
         most = max((len(v) for v in values), default=0)
         return keep(f"sample {most} per run at most, needs at least "
-                    f"{need}{failed_note}"), 1
+                    f"{need}{failed_note}", rare=1)
     raw = median([c.value(v) for v in enough])
     value = raw * c.factor
     value = int(round(value)) if c.column == "count" else round(value, 1)
@@ -4578,9 +4685,23 @@ def _calibrated(c, d, given: dict, runs: list[list[dict]], failed: int,
     # healthy run barely feeds this detector.
     if value < 1:
         return keep(f"{c.expr}={raw:.2f}, the tail of the distribution is "
-                    f"degenerate{failed_note}"), 1
-    return (f"    {c.param}: {value}    # {c.expr}={raw:.1f} × {c.factor}, "
-            f"{of}, {sample}{failed_note}"), 0
+                    f"degenerate{failed_note}", rare=1)
+    default = d.params.get(c.param)
+    lower = isinstance(default, (int, float)) and value < default
+    if lower and not below_defaults:
+        return keep(f"the healthy runs' tail gives {value} "
+                    f"({c.expr}={raw:.1f} × {c.factor}), {_times(default, value)} "
+                    f"lower{failed_note}", floored=1)
+    note = (f", {_times(default, value)} below the default {default}"
+            if lower else "")
+    return _Calibrated(f"    {c.param}: {value}    # {c.expr}={raw:.1f} × {c.factor}, "
+                       f"{of}, {sample}{failed_note}{note}", 0, value)
+
+
+def _times(big: float, small: float) -> str:
+    """How many times lower, rounded the way a reader compares: `16×`, `1.4×`."""
+    ratio = big / small
+    return f"{ratio:.0f}×" if ratio >= 3 else f"{ratio:.1f}×"
 
 
 def _yaml_scalar(value: Any) -> str:
@@ -5470,6 +5591,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="which of the config's scenarios the traces are (default: the first)")
     cal.add_argument("--min-sample", type=int, default=10,
                      help="below this many values no threshold is derived")
+    cal.add_argument("--below-defaults", action="store_true",
+                     help="propose a threshold below the shipped default too; "
+                          "without it, the default is kept")
     cal.set_defaults(func=cmd_calibrate)
 
     an = add("analyze", "pipeline", "<trace...>", "run the detectors, build a Marker Report",
