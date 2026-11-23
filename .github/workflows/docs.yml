@@ -33,7 +33,7 @@ permissions:
 # A pull request's build may give way to the next push; a deploy may not be
 # cut off halfway.
 concurrency:
-  group: docs-${{ github.ref }}
+  group: docs-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
