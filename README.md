@@ -137,15 +137,15 @@ _the names `domains` lists and the `AGENTTMP_` ones; medians per run, self time 
 
 | Marker | Runs | N | Self, ms | Total, ms | Max, ms | Threads |
 |---|---|---|---|---|---|---|
-| collection_load | 5/5 | 1 | 923.8 | 923.8 | 923.8 | (async) |
-| collection_mapping | 5/5 | 1 | 96.0 | 118.3 | 118.3 | arch_disk_io_1 |
+| collection_load | 5/5 | 1 | 923.8 | 923.8 | 971.63 | (async) |
+| collection_mapping | 5/5 | 1 | 96.0 | 118.3 | 132.5 | arch_disk_io_1 |
 
 ## Frames that missed their deadline
 _the platform classifies every frame itself, and says whose fault it was. The only detector that answers "which frames stuttered" rather than "where did the total go" — and it needs no instrumentation in the app at all._
 
 | Where | Runs | N | Total, ms | Max, ms | Evidence |
 |---|---|---|---|---|---|
-| App Deadline Missed | 5/5 | 4 | 427.51 | 130.89 | Self Jank · 4 of 19 frames · longest 188.7 ms |
+| App Deadline Missed | 5/5 | 4 | 427.51 | 172.0 | Self Jank · 4 of 19 frames · longest 188.7 ms |
 
 <sub>detector `frame_jank`, params: {'min_frames': 3, 'min_overrun_ms': 4}</sub>
 
@@ -154,10 +154,10 @@ _measured as SELF time, children subtracted — otherwise one event lands in the
 
 | Where | Runs | N | Self, ms | Total, ms | Max, ms | Evidence |
 |---|---|---|---|---|---|---|
-| inflate | 5/5 | 15 | 222.68 | 241.38 | 49.28 | com.example.app |
-| draw | 5/5 | 7 | 120.8 | 120.8 | 34.0 | com.example.app |
-| TextLayout:initLayout | 5/5 | 51 | 73.95 | 73.95 | 1.45 | com.example.app |
-| Lock contention on a monitor lock (owner tid: #) | 5/5 | 9 | 61.6 | 61.6 | 22.4 | com.example.app |
+| inflate | 5/5 | 15 | 222.68 | 241.38 | 86.2 | com.example.app |
+| draw | 5/5 | 7 | 120.8 | 120.8 | 38.08 | com.example.app |
+| TextLayout:initLayout | 5/5 | 51 | 73.95 | 73.95 | 1.62 | com.example.app |
+| Lock contention on a monitor lock (owner tid: #) | 5/5 | 9 | 61.6 | 61.6 | 25.09 | com.example.app |
 
 <sub>detector `main_thread_block`, params: {'min_slice_ms': 16}</sub>
 
@@ -175,7 +175,7 @@ _ART writes a "Lock contention on ..." slice with the owner's tid — ready-made
 
 | Where | Runs | N | Total, ms | Max, ms | In the code | Evidence |
 |---|---|---|---|---|---|---|
-| com.example.app | 5/5 | 9 | 61.6 | 22.4 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:61 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:61) |
+| com.example.app | 5/5 | 9 | 61.6 | 25.09 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:61 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:61) |
 
 <sub>detector `monitor_contention`, params: {'min_block_ms': 8, 'max_total_ms': 50, 'name_glob': 'Lock contention on a monitor lock*', 'name_glob_alt': 'monitor contention with owner*'}</sub>
 

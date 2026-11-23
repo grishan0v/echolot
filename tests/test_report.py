@@ -142,16 +142,16 @@ def test_repeats_without_platform_state_merge_to_not_recorded():
     check("and never becomes a zero", got["cpu"] is None, got)
 
 
-def test_a_spike_inside_a_row_that_is_always_there_is_smoothed_and_kept():
-    """The other half. A median does hide this one, and `spread` is why it is
-    still findable."""
+def test_a_spike_inside_a_row_that_is_always_there_is_kept():
+    """The other half. A median of each run's longest would hide this one, so
+    Max is the longest any run saw (#512), and `spread` has each run's."""
     runs = [one([row("draw", count=4, self_ms=120.0, max_ms=20.0)]),
             one([row("draw", count=4, self_ms=121.0, max_ms=890.0)]),
             one([row("draw", count=4, self_ms=119.0, max_ms=21.0)])]
     got = merged_rows(runs)["draw"]
 
-    check("the median does smooth the spike out of the column",
-          got["max_ms"] == 21.0, got)
+    check("Max is the spike, the self time stays the median",
+          got["max_ms"] == 890.0 and got["self_ms"] == 120.0, got)
     check("the runs column cannot help — the row is in every run",
           got["runs"] == "3/3", got)
     check("and the spike is still in the report, under spread",

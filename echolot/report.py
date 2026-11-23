@@ -41,7 +41,7 @@ HEADERS = {
     "detail": "Evidence",
 }
 
-# Columns averaged by median when repeats are merged.
+# Columns merged across repeats: by median, except `max_ms`, the largest.
 NUMERIC = ["count", "self_ms", "total_ms", "max_ms", "covered_ms"]
 
 # Columns whose per-run values survive the merge, in `spread`. The median alone
@@ -607,7 +607,11 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
                       if f.get(col) is not None]
             if not values:
                 continue
-            mid = round(median(values), 2)
+            # The longest occurrence is the longest any repeat saw: a median
+            # of each repeat's longest is the one number that hides a single
+            # slow occurrence, and printed under "Max" it read as one (#512).
+            # How long it was in the other repeats is in `spread.max_ms`.
+            mid = round(max(values) if col == "max_ms" else median(values), 2)
             # The median of an even number of counts is the mean of the middle
             # two, a float even when the two are equal: two repeats of one
             # trace printed `N 6.0` where one printed `6`. A whole one stays
