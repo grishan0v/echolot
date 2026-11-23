@@ -373,3 +373,15 @@ def test_a_marker_cut_short_in_one_repeat_holds_the_median_down() -> None:
     got = report_mod.aggregate(_marker_runs([1680.0, 1700.0, 400.0], {2}))
     row_ = got["markers"]["rows"][0]
     check("a floor", row_.get("unfinished") is True and row_["total_ms"] == 1680.0, row_)
+
+
+def test_a_bar_that_is_not_calibrated_still_opens_for_the_merge(tmp_path) -> None:
+    """#666 took `@calibrate` off `main_thread_block`, and its bar stopped
+    opening: a row under 16 ms in one repeat read as absent again (#505)."""
+    from echolot.main import DETECTOR_DIR
+    from echolot.tp import Detector
+    det = Detector.from_file(DETECTOR_DIR / "main_thread_block.sql")
+    check("min_slice_ms is a bar and not a calibration",
+          det.bars == ("min_slice_ms",) and not det.calibrations, (det.bars, det.calibrations))
+    check("and it is zero in the opened query", ">= 0 * 1000000" in " ".join(det.render_open().split())
+          or ">= 0*1000000" in det.render_open().replace(" ", ""), det.render_open()[-400:])
