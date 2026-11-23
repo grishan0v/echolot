@@ -670,7 +670,7 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 | `main_thread_block` | where the main thread spent its time | `location` — the slice name; `detail` is the thread's comm, always the main thread here, cut to 15 characters by the kernel |
 | `app_init` | what ran after the Application was created, before the first Activity | an Initializer or a library's section by name; `(no section)` is the ContentProviders and `Application.onCreate` nobody traced |
 | `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects |
-| `monitor_contention` | monitor contention | `places` names both sides of the lock in the checkout; `detail` carries the owner's tid |
+| `monitor_contention` | monitor contention | `places` names both sides of the lock in the checkout; `detail` is the row's longest wait that names both methods, or else the owner's tid with its thread and what it and the waiter were in |
 | `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |
 | `runnable_starvation` | thread ready but preempted | `state` names the row; on the main thread's row `detail` says who held its core — the app's own threads point at the app, other processes and idle cores at the device |
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}`; in a sampled recording, the method after `ours:` in `detail`, at the file `code` names |
