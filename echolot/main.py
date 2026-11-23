@@ -96,7 +96,8 @@ def cmd_probe(args) -> int:
     detectors match on (see `cmd_doctor`).
     """
     try:
-        return _probe(args, _tp_binary(args, _probe_config(args)))
+        cfg = _probe_config(args)
+        return _probe(args, _tp_binary(args, cfg), cfg)
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -111,8 +112,11 @@ def _probe_config(args) -> Config | None:
     pin. `analyze` stops on the same error; a look at a trace has no reason
     to.
     """
-    path = getattr(args, "config", None) or "echolot.yml"
+    named = getattr(args, "config", None)
+    path = named or "echolot.yml"
     if not Path(path).exists():
+        if named:
+            raise ConfigError(f"-c {named}: no such file")
         return None
     try:
         return Config.load(path)
@@ -124,7 +128,14 @@ def _probe_config(args) -> Config | None:
         return None
 
 
-def _probe(args, tp_binary: str | None) -> int:
+def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
+    process = args.process
+    if not process and cfg is not None:
+        named = cfg.get("project.process") or cfg.get("project.package")
+        if isinstance(named, str) and named:
+            process = named
+            print(f"[i] the process from {cfg.path}: {named} (--process names another)",
+                  file=sys.stderr)
     with TraceSession(args.trace, tp_binary, cut_ok=True) as tp:
         _say_cut(tp, args.trace)
         _require_named_processes(tp, args.trace)
@@ -149,7 +160,7 @@ def _probe(args, tp_binary: str | None) -> int:
             GROUP BY p.upid ORDER BY slices DESC LIMIT 15
         """)
 
-        if args.process:
+        if process:
             # A mask that matches nothing used to print an empty table and
             # exit 0. Everything else here shouts when the ground it checked
             # was empty — an anchor that never matched, a detector left out of
@@ -157,13 +168,13 @@ def _probe(args, tp_binary: str | None) -> int:
             # the same. The table above already lists what is there.
             matched = tp.query(
                 f"SELECT COUNT(*) AS n FROM process "
-                f"WHERE name GLOB '{sql_value(args.process)}'")
+                f"WHERE name GLOB '{sql_value(process)}'")
             if not (matched and matched[0]["n"]):
-                print(f"\nerror: no process matches '{args.process}' in this "
+                print(f"\nerror: no process matches '{process}' in this "
                       f"trace — pick one from the table above, or widen the "
                       f"mask.", file=sys.stderr)
                 return 2
-            print(f"\n## Threads of process {args.process}\n")
+            print(f"\n## Threads of process {process}\n")
             # Sorted by CPU rather than slice count: a thread with zero slices
             # and hundreds of milliseconds of Running is precisely the blind
             # spot setup is looking for. By slice count it would sit at the
@@ -182,7 +193,7 @@ def _probe(args, tp_binary: str | None) -> int:
                       AND ts.dur > 0) AS running_ms
                 FROM thread t
                 JOIN process p ON t.upid = p.upid
-                WHERE p.name GLOB '{sql_value(args.process)}'
+                WHERE p.name GLOB '{sql_value(process)}'
                 ORDER BY running_ms DESC, slices DESC LIMIT 25
             """)
 
@@ -192,27 +203,70 @@ def _probe(args, tp_binary: str | None) -> int:
             # second kind: a `beginAsyncSection` from wherever the screen
             # was first drawn. An async section has no thread, and the
             # column says so rather than leaving the cell blank.
-            _dump(tp, f"""
-                SELECT name AS slice, thread, COUNT(*) AS n,
-                       ROUND(MAX(dur)/1e6, 2) AS max_ms
-                FROM (
-                    SELECT s.name AS name, t.name AS thread, s.dur AS dur
-                    FROM slice s
-                    JOIN thread_track tt ON s.track_id = tt.id
-                    JOIN thread t ON tt.utid = t.utid
-                    JOIN process p ON t.upid = p.upid
-                    WHERE p.name GLOB '{sql_value(args.process)}'
-                    UNION ALL
-                    SELECT s.name, '{ASYNC_THREAD}', s.dur
-                    FROM slice s
-                    JOIN process_track pt ON s.track_id = pt.id
-                    JOIN process p ON pt.upid = p.upid
-                    WHERE p.name GLOB '{sql_value(args.process)}'
-                      AND pt.type = '{ASYNC_TRACK}'
-                )
-                GROUP BY name ORDER BY max_ms DESC LIMIT 25
-            """)
+            _anchor_candidates(tp, process)
+        else:
+            # The table alone, and nothing said, read as all probe does
+            # (#515): the threads and the candidates need the app's name.
+            print("\nTo see the app's threads and its longest slices, the candidates "
+                  "for the scenario's anchors: --process <a name from the table>, or "
+                  "-c <echolot.yml> whose project names it.")
     return 0
+
+
+# Lock waits: never an anchor, and their names run to 350 characters
+# (#515). The masks `monitor_contention` ships with.
+_NOT_ANCHORS = ("Lock contention on *", "monitor contention with owner*")
+
+
+def _anchor_candidates(tp, process: str) -> None:
+    """The process's longest slices, as anchors could name them.
+
+    A name with a number that differs in every recording — a frame's vsync
+    id in `Choreographer#doFrame 8538821`, a tid — matched nothing in the
+    next trace when it was taken as an anchor. Such names are folded the way
+    `names` folds them and shown as the glob to write (#515). Lock waits are
+    left out.
+    """
+    skip = " ".join(f"AND name NOT GLOB '{sql_value(g)}'" for g in _NOT_ANCHORS)
+    rows = tp.query(" ".join(f"""
+        SELECT name, MIN(thread) AS thread, COUNT(*) AS n, MAX(dur) AS dur
+        FROM (
+            SELECT s.name AS name, t.name AS thread, s.dur AS dur
+            FROM slice s
+            JOIN thread_track tt ON s.track_id = tt.id
+            JOIN thread t ON tt.utid = t.utid
+            JOIN process p ON t.upid = p.upid
+            WHERE p.name GLOB '{sql_value(process)}'
+            UNION ALL
+            SELECT s.name, '{ASYNC_THREAD}', s.dur
+            FROM slice s
+            JOIN process_track pt ON s.track_id = pt.id
+            JOIN process p ON pt.upid = p.upid
+            WHERE p.name GLOB '{sql_value(process)}'
+              AND pt.type = '{ASYNC_TRACK}'
+        )
+        WHERE name IS NOT NULL {skip}
+        GROUP BY name ORDER BY dur DESC LIMIT 2000
+    """.split()))
+    folded: dict[str, dict] = {}
+    for r in rows:
+        # The numbers `family` folds, written as `*`: a `#` the name had of
+        # its own, as in `Choreographer#doFrame`, stays.
+        glob = report_mod.NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*",
+                                     str(r["name"]))
+        seen = folded.get(glob)
+        if seen is None:
+            folded[glob] = {"slice": glob, "thread": r["thread"], "n": r["n"], "dur": r["dur"] or 0}
+        else:
+            seen["n"] += r["n"]
+            seen["dur"] = max(seen["dur"], r["dur"] or 0)
+    top = sorted(folded.values(), key=lambda x: -x["dur"])[:25]
+    table.show([{"slice": x["slice"], "thread": x["thread"], "n": x["n"],
+                 "max_ms": round(x["dur"] / 1e6, 2)} for x in top])
+    if any("*" in x["slice"] for x in top):
+        print("\nA `*` stands for a number that differs in every recording: write the "
+              "name as shown, a glob. One that matches a slice of every frame closes "
+              "the window at the first such slice after it opens.")
 
 
 # How trace_processor labels the tracks that `Trace.beginAsyncSection` writes
@@ -951,6 +1005,8 @@ def cmd_analyze(args) -> int:
     # or a kill leaves the directory as it was, never an empty report (#579).
     atomic.write_all([(out_dir / "report.md", report_mod.to_markdown(rep)),
                       (out_dir / "report.json", report_mod.to_json(rep))])
+    # Where it went, for `report` to name when its default is not there (#515).
+    recorder.note(report=str((out_dir / "report.json").resolve()))
 
     root = _project_root(cfg)
     # The page is of the report beside it. Asked for, it is written. One that
@@ -2786,7 +2842,10 @@ def cmd_names(args) -> int:
     # Cells are cut to fit a terminal, and only a terminal: a pipe or an
     # agent gets the whole name, and so does `--wide` on a screen.
     wide = args.wide or args.json or not sys.stdout.isatty()
-    sections, missed = _name_sections(families, args.min_ms * 1e6, pattern, prefix)
+    # The floor is for an inventory. With --grep the question is whether a
+    # name is there at all, and a 0-ms anchor slice hid below it (#515).
+    floor_ms = args.min_ms if args.min_ms is not None else (0.0 if pattern is not None else 1.0)
+    sections, missed = _name_sections(families, floor_ms * 1e6, pattern, prefix)
     if args.json:
         _names_json(args, procs[0], async_rows, sections, missed)
     else:
@@ -2897,20 +2956,24 @@ def _names_json(args, proc: dict, async_rows: list, sections: list, missed: list
         return {"family": fam, "n": d["n"], "total_ms": round(d["ns"] / 1e6, 1),
                 "threads": sorted(d["threads"]), "detectors": sorted(d["dets"]),
                 "excluded": sorted(d["skips"])}
+    # Every family unless --top says otherwise: the json is the inventory a
+    # script reads, and cut at the table's 15 it needed `--top 1310` (#515).
+    top = args.top
     print(json.dumps({
         "process": proc["name"], "pid": proc["pid"],
         "async_sections": sum(r["n"] for r in async_rows),
         "grep": args.grep,
-        "sections": [{"title": title, "shown": len(items[:args.top]), "total": len(items),
-                      "families": [family_json(f, d) for f, d in items[:args.top]]}
+        "sections": [{"title": title, "shown": len(items[:top]), "total": len(items),
+                      "families": [family_json(f, d) for f, d in items[:top]]}
                      for title, items in sections],
         "missed": [{"section": title, **family_json(f, d)}
-                   for title, f, d in missed[:args.top]],
+                   for title, f, d in missed[:top]],
     }, ensure_ascii=False, indent=2))
 
 
 def _names_text(args, async_rows: list, pattern, families: int, sections: list,
                 missed: list, wide: bool) -> None:
+    top = args.top or 15
     if async_rows:
         print(f"{sum(r['n'] for r in async_rows)} async section(s) on "
               f"{len(async_rows)} name(s), shown as thread `{ASYNC_THREAD}`: "
@@ -2928,8 +2991,8 @@ def _names_text(args, async_rows: list, pattern, families: int, sections: list,
         print(f"\n_Only families matching `{args.grep}`: {shown} of {families}._")
     for title, items in sections:
         print(f"\n## {title}\n")
-        _families_table(items[:args.top], wide=wide)
-        _note_dropped(len(items), args.top)
+        _families_table(items[:top], wide=wide)
+        _note_dropped(len(items), top)
 
     print("\n## Missed by the masks\n")
     if not missed:
@@ -2942,9 +3005,9 @@ def _names_text(args, async_rows: list, pattern, families: int, sections: list,
     table.show([
         {"section": title, "family": fam if wide else _clip(fam), "N": d["n"],
          "total, ms": f"{d['ns']/1e6:.1f}"}
-        for title, fam, d in missed[:args.top]
+        for title, fam, d in missed[:top]
     ])
-    _note_dropped(len(missed), args.top)
+    _note_dropped(len(missed), top)
 
 
 def group_families(rows, covered, skipped, keep: str | None = None) -> dict:
@@ -2982,8 +3045,10 @@ def _families_table(items, wide: bool = False) -> None:
     rows = []
     for fam, data in items:
         threads = sorted(data["threads"])
-        shown = ", ".join(threads if wide else threads[:2]) \
-            + (f" +{len(threads)-2}" if len(threads) > 2 and not wide else "")
+        # Five names at most even whole: 58 in one cell was no column (#515).
+        keep = 5 if wide else 2
+        shown = ", ".join(threads[:keep]) \
+            + (f" +{len(threads) - keep} more" if len(threads) > keep else "")
         marks = sorted(data["dets"])
         marks += [f"{d} (excluded)" for d in sorted(data["skips"])]
         rows.append({
@@ -5397,6 +5462,24 @@ def _report_dir(args) -> str:
     return cfg.report_dir
 
 
+def _last_written(project: Path, default: Path) -> Path | None:
+    """The report the last `analyze` that wrote one put elsewhere than
+    `default`, when it is still there; None otherwise. `report` reads the
+    scenario's own directory and nothing else, and after `analyze -o out/r1`
+    said only "report not found" (#515)."""
+    for run in reversed(recorder.read(project / recorder.LOG_FILE)):
+        if run.get("cmd") != "analyze" or run.get("exit") != 0:
+            continue
+        named = (run.get("facts") or {}).get("report")
+        if not isinstance(named, str):
+            continue
+        p = Path(named)
+        if p.resolve() == default.resolve() or not p.is_file():
+            return None
+        return p
+    return None
+
+
 def cmd_report(args) -> int:
     """Views of a report that is already on disk.
 
@@ -5413,6 +5496,13 @@ def cmd_report(args) -> int:
     project = project_of(args)
     try:
         path = Path(args.report) if args.report else project / _report_dir(args) / "report.json"
+        if not args.report and not path.exists():
+            elsewhere = _last_written(project, path)
+            if elsewhere is not None:
+                raise ConfigError(
+                    f"report not found: {path}. The last `analyze` wrote "
+                    f"{_shown_path(elsewhere, project)}, with -o: "
+                    f"`echolot report {_shown_path(elsewhere, project)}`")
         rep = _load_report(path)
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -5734,7 +5824,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     pr = add("probe", "agent", "<trace>", "what is inside the trace at all")
     pr.add_argument("trace")
-    pr.add_argument("--process", help="process name to break down in detail")
+    pr.add_argument("--process", help="process name to break down in detail "
+                                      "(default: project.process of the config)")
+    pr.add_argument("-c", "--config", default=None,
+                    help="the project config, for its process and trace_processor "
+                         "(default: echolot.yml in cwd, when there is one)")
     pr.set_defaults(func=cmd_probe)
 
     nm = add("names", "agent", "<trace>", "how slices are named and what the masks see")
@@ -5746,10 +5840,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="take the process and overridden masks from the config, "
                          "if present")
     nm.add_argument("--local", help="path to local.yml (defaults to alongside)")
-    nm.add_argument("--top", type=int, default=15,
-                    help="how many families to show per section")
-    nm.add_argument("--min-ms", type=float, default=1.0,
-                    help="relevance floor: shorter families are not shown")
+    nm.add_argument("--top", type=int, default=None,
+                    help="how many families to show per section (default: 15 in "
+                         "the table, every one with --json)")
+    nm.add_argument("--min-ms", type=float, default=None,
+                    help="relevance floor: shorter families are not shown (default: "
+                         "1 ms, none with --grep)")
     nm.add_argument("--grep", metavar="REGEX",
                     help="only families whose name matches, case-insensitive — "
                          "instead of a grep over a table whose cells were cut")
@@ -5783,8 +5879,13 @@ def build_parser() -> argparse.ArgumentParser:
                       help="the same findings in the shape an agent walks")
     an_r.set_defaults(func=cmd_anr)
 
-    dom = add("domains", "agent", "[--root <repo>]", "slice-to-code map and instrumentation coverage")
-    dom.add_argument("--root", default=".", help="repository root")
+    dom = add("domains", "agent", "[--root <repo>]", "slice-to-code map and instrumentation coverage",
+              description="Reads the repository's Kotlin and Java sources for the names "
+                          "its trace sections are given, and prints which code each "
+                          "name comes from and which modules have no sections at all. "
+                          "Reads no trace and no config; writes only its own line in "
+                          ".echolot/log/runs.jsonl.")
+    dom.add_argument("--root", default=".", help="repository root (default: the current directory)")
     dom.add_argument("--top", type=int, default=12,
                      help="how many modules to list when there is none")
     dom.set_defaults(func=cmd_domains)
@@ -5902,10 +6003,17 @@ def build_parser() -> argparse.ArgumentParser:
                           "local plugins, ~/.cursor/plugins/local")
     plg.set_defaults(func=cmd_plugin)
 
-    cal = add("calibrate", "agent", "<trace...>", "thresholds from known-healthy runs")
+    cal = add("calibrate", "agent", "<trace...>", "thresholds from known-healthy runs",
+              description="Runs the detectors over repeats of one scenario on a build "
+                          "known to be healthy, with their thresholds opened up, and "
+                          "prints a detectors: section of thresholds derived from what "
+                          "those runs measured. It does not edit the config: read the "
+                          "numbers and copy what you keep into echolot.yml.")
     cal.add_argument("traces", nargs="+",
                      help="repeats of ONE scenario on a healthy build")
-    cal.add_argument("-c", "--config", default="echolot.yml")
+    cal.add_argument("-c", "--config", default="echolot.yml",
+                     help="the project config, for the process and the scenario's window "
+                          "(default: echolot.yml in cwd)")
     cal.add_argument("--local", help="path to local.yml (defaults to alongside)")
     cal.add_argument("--scenario", metavar="NAME",
                      help="which of the config's scenarios the traces are (default: the first)")
@@ -6029,7 +6137,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "own line in .echolot/log/runs.jsonl, and with --html the "
                          "page beside the report. Default: "
                          ".echolot/out/report.json next to the config.")
-    rp.add_argument("report", nargs="?", help="a report.json (default: the last one)")
+    rp.add_argument("report", nargs="?",
+                    help="a report.json (default: the scenario's latest, in .echolot/out "
+                         "next to the config; one written with analyze -o is named here)")
     rp.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
     rp.add_argument("--scenario", metavar="NAME",
                     help="whose latest report, for a config with scenarios: (default: the first)")

@@ -61,7 +61,7 @@ SPREAD = ["self_ms", "total_ms", "max_ms"]
 # Names that differ only by numbers are one phenomenon: 'Lock contention (owner
 # tid: 1234)' and the same with tid 5678, `Choreographer#doFrame 55112` in one
 # run and `55120` in the next, worker-2 and worker-5 of one pool.
-_NUMBER = re.compile(r"0x[0-9a-fA-F]+|\d+")
+NUMBER = re.compile(r"0x[0-9a-fA-F]+|\d+")
 
 
 def family(name: str, keep: str | None = None) -> str:
@@ -87,7 +87,7 @@ def family(name: str, keep: str | None = None) -> str:
     if keep and name.startswith(keep):
         return name
     # One pass: the digits pass after the hex one rewrote its `0x#` as `#x#`.
-    return _NUMBER.sub(lambda m: "0x#" if m.group(0).startswith("0x") else "#", name)
+    return NUMBER.sub(lambda m: "0x#" if m.group(0).startswith("0x") else "#", name)
 
 
 # The numbers inside a name that the runtime picks anew in every run, and only
@@ -106,7 +106,7 @@ _RUNTIME = [
     # A frame's vsync id, and what a resync says beside it:
     # `Choreographer#doFrame 55112`, `… - resynced to 55120 in 21.1ms`.
     (re.compile(r"(Choreographer#doFrame\b.*)$"),
-     lambda m: _NUMBER.sub("#", m.group(1))),
+     lambda m: NUMBER.sub("#", m.group(1))),
     # A binder thread's pid: `binder:1234_5`.
     (re.compile(r"\b((?:Hw)?[Bb]inder:)\d+"), r"\g<1>#"),
     # The number of a pool's or an unnamed thread: `Thread-31`,
@@ -1910,6 +1910,13 @@ EVIDENCE_LEGEND = {
                           "project's own code: `none` where a whole stack had "
                           "nothing of it, `cut` where the stack ended in the "
                           "framework before its thread's start",
+    # "Max 1572 ms" beside "longest 89.1 ms" read as an error (#515): the two
+    # measure different things.
+    "frame_jank": "the kind of jank as the platform tags it, how many of the "
+                  "window's frames had it, and the longest of them from start "
+                  "to end. Total and Max are the time past each frame's "
+                  "deadline, which a frame queued behind others can run far "
+                  "beyond its own length",
 }
 
 
@@ -2167,9 +2174,77 @@ def markers_view(report: dict[str, Any], top: int = 15) -> str:
 
 
 def window_view(report: dict[str, Any]) -> str:
-    out = ["## Window", ""]
-    out.extend(_header_lines(report))
+    """`report --window`: the window's own numbers, in milliseconds.
+
+    It used to be the default view's header again, eleven lines of twelve
+    word for word (#515). What it gives instead is what the header rounds
+    to a percentage or leaves out: the process id and the trace's clock, the
+    anchors or the launch that bound it, the main thread's time in ms, the
+    frames of each repeat, how many threads were ready at once, and every
+    reason of the startup. The device, the mapping and the code markers
+    stay in the overview: they are not the window.
+    """
     w = report.get("window") or {}
+    out = ["## Window", ""]
+    traces = report.get("traces")
+    what = f"{len(traces)} runs, medians" if traces else f"`{report.get('trace')}`"
+    if report.get("scenario"):
+        what += f" · scenario `{report['scenario']}`"
+    out.append(f"**{what}**")
+    if w.get("process"):
+        line = f"Process `{w['process']}`"
+        if w.get("pid") is not None:
+            line += f" (pid {w['pid']}" + (" in the first repeat)" if traces else ")")
+        if isinstance(w.get("ts_start"), (int, float)) and isinstance(w.get("ts_end"), (int, float)):
+            line += (f", on the trace's clock from {w['ts_start'] / 1e9:.6f} s "
+                     f"to {w['ts_end'] / 1e9:.6f} s")
+        out.append(line)
+    if w.get("duration_ms") is not None:
+        line = f"Length: **{w['duration_ms']} ms**"
+        if w.get("duration_ms_min") is not None:
+            line += f", repeats from {w['duration_ms_min']} to {w['duration_ms_max']} ms"
+        out.append(line)
+    anchors = []
+    for key, label in (("start_anchor", "Start"), ("end_anchor", "End")):
+        a = w.get(key)
+        if isinstance(a, dict) and a:
+            hit = a.get("matches")
+            anchors.append(f"{label}: `{a.get('glob')}`, "
+                           + ("⚠️ 0 matches" if hit == 0 else f"{hit} match(es)")
+                           + (", ⚠️ never closed" if a.get("unfinished") else ""))
+    out.extend(anchors)
+    out.extend(launch_mod.lines(w))
+    alts = w.get("process_alternatives")
+    if alts:
+        names = ", ".join(f"`{a.get('name')}`" for a in alts if isinstance(a, dict))
+        out.append(f"Other processes the mask matched: {names}")
+    mt = w.get("main_thread")
+    if isinstance(mt, dict) and mt.get("window_ms"):
+        parts = [f"{label} {mt[key]} ms" for key, label in (
+            ("on_cpu", "on a CPU"), ("waiting_for_cpu", "waiting for a CPU"),
+            ("in_kernel", "blocked in the kernel"), ("sleeping", "sleeping"), ("other", "other"))
+            if mt.get(key)]
+        out.append("Main thread: " + " · ".join(parts)
+                   + f", {mt.get('accounted_ms')} of {mt['window_ms']} ms accounted for")
+        if mt.get("in_rows_ms") is not None:
+            out.append(f"In the findings: {mt['in_rows_ms']} ms ({mt.get('in_rows_pct')}%)")
+    frames = w.get("frames")
+    if isinstance(frames, dict) and frames.get("count") is not None:
+        line = f"Frames: {frames['count']}"
+        if frames.get("values"):
+            line += " (repeats " + ", ".join(str(v) for v in frames["values"]) + ")"
+        out.append(line)
+    crowd = w.get("crowding")
+    if isinstance(crowd, dict) and crowd.get("cores"):
+        out.append(f"Threads ready at once: at most {crowd.get('peak')} on {crowd['cores']} cores, "
+                   f"{crowd.get('above_cores_ms') or 0} ms with more ready than cores")
+    st = w.get("startup")
+    if isinstance(st, dict) and st.get("dur_ms") is not None:
+        reasons = st.get("reasons") if isinstance(st.get("reasons"), dict) else {}
+        parts = [f"{STARTUP_STATES.get(k, f'`{k}`')} {v} ms"
+                 for k, v in sorted(reasons.items(), key=lambda kv: -kv[1])]
+        out.append(f"Startup: {st.get('type') or ''} {st['dur_ms']} ms".replace("  ", " ")
+                   + (": " + " · ".join(parts) if parts else ""))
     inside = w.get("opened_inside")
     if inside and inside.get("material"):
         out.append(f"⚠️ opened with the main thread already blocked: `{inside['state']}` "
