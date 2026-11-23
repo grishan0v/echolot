@@ -327,3 +327,49 @@ def test_analyze_keeps_the_rows_below_the_bar_for_the_merge(tmp_path) -> None:
           report_mod.OPEN_ROWS not in next(
               d for d in report_mod.aggregate([single])["detectors"]
               if d["id"] == "main_thread_block"))
+def _marker_runs(totals: list[float], open_at: set[int]) -> list[dict]:
+    reps = []
+    for i, ms in enumerate(totals):
+        rows = [{"location": "collection_load", "count": 1, "self_ms": ms,
+                 "total_ms": ms, "max_ms": ms, "detail": "(async)",
+                 **({"unfinished": True} if i in open_at else {})}]
+        reps.append(report_mod.build(
+            f"t{i}", {"process": "p", "duration_ms": 1.0}, [],
+            markers={"prefix": "AGENTTMP_", "globs": ["AGENTTMP_*"], "rows": rows,
+                     "absent": []}))
+    return reps
+
+
+def test_a_marker_open_in_one_repeat_of_three_leaves_its_median_a_number() -> None:
+    """#513: the open repeat is the longest, so the median does not move
+    whatever it really took. The longest does: it is that repeat's."""
+    merged = report_mod.aggregate(_marker_runs([1680.0, 1500.0, 6100.0], {2}))
+    got = merged["markers"]["rows"][0]
+    check("the median is a number, and the open repeat is counted",
+          got["total_ms"] == 1680.0 and "total_ms" not in got.get("floors", [])
+          and "self_ms" not in got.get("floors", [])
+          and got["unfinished_runs"] == "1/3", got)
+    check("the longest is the open repeat's, so it is a floor (#512)",
+          got["max_ms"] == 6100.0 and got["floors"] == ["max_ms"], got)
+    md = report_mod.to_markdown(merged)
+    check("report.md prints no ≥ on the median, and one on the longest",
+          "≥ 1680" not in md and "≥ 6100.0" in md, md)
+    check("and says it did not close in one repeat",
+          "`collection_load` did not close in 1 of 3 repeats (there: ≥ 6100.0 ms). "
+          "Only the numbers marked ≥ depend on those repeats." in md, md)
+
+
+def test_a_marker_open_in_two_repeats_of_three_is_a_floor() -> None:
+    got = report_mod.aggregate(_marker_runs([1680.0, 5900.0, 6100.0], {1, 2}))
+    row_ = got["markers"]["rows"][0]
+    check("the median is a floor", row_.get("unfinished") is True
+          and row_["unfinished_runs"] == "2/3" and "total_ms" in row_["floors"], row_)
+    md = report_mod.to_markdown(got)
+    check("and printed as one", f"≥ {row_['total_ms']}" in md, md)
+
+
+def test_a_marker_cut_short_in_one_repeat_holds_the_median_down() -> None:
+    """Open below the middle: the real median could be higher, so a floor."""
+    got = report_mod.aggregate(_marker_runs([1680.0, 1700.0, 400.0], {2}))
+    row_ = got["markers"]["rows"][0]
+    check("a floor", row_.get("unfinished") is True and row_["total_ms"] == 1680.0, row_)

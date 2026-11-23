@@ -28,7 +28,8 @@ COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
 # side of the `code` column — see place.py — and `stacks` the json side of
 # what the evidence says the samples named — see stacks.py. `unfinished` is a
 # marker that never closed, which its numbers say with a `≥`.
-HIDDEN = {"spread", "places", "stacks", "unfinished", "parents", "variants", "fired"}
+HIDDEN = {"spread", "places", "stacks", "unfinished", "parents", "variants", "fired",
+          "floors", "unfinished_runs", "open_ms"}
 HEADERS = {
     "location": "Where",
     "runs": "Runs",
@@ -664,6 +665,52 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
     return sorted(out, key=_rank, reverse=True)
 
 
+# What an open marker's number is raised to, to see whether a merged number
+# depends on it. Larger than any duration a trace can hold.
+_UNBOUNDED = 1e12
+_FLOORED = ("self_ms", "total_ms", "max_ms")
+
+
+def _merged_floors(sections: list[dict[str, Any]], rows: list[dict[str, Any]],
+                   total: int) -> None:
+    """Which merged numbers of a marker are floors, from the repeats it was open in.
+
+    A marker that never closed in one repeat ran there to the end of the
+    window, so that repeat's number is a floor: the real one is that or more.
+    Whether the merged number is a floor too depends on where it sits. With
+    14 closed runs around 1.7 s and one open at 6.1 s, the median is the
+    same whatever the open run really took, and printing it as `≥` called a
+    measurement a bound (#513). So the merge is done again with every open
+    run's numbers raised as far as they go: a merged number that moves is a
+    floor, one that does not is exact.
+
+    `unfinished_runs` counts the repeats it was open in; `unfinished` and
+    `floors` say which numbers are floors, for the `≥` in the table.
+    """
+    opened: dict[str, list[dict[str, Any]]] = {}
+    for section in sections:
+        for row in section.get("rows") or []:
+            if row.get("unfinished"):
+                opened.setdefault(row["location"], []).append(row)
+    if not opened:
+        return
+    raised = [[{**r, **{c: _UNBOUNDED for c in _FLOORED if r.get(c) is not None}}
+               if r.get("unfinished") else r for r in section.get("rows") or []]
+              for section in sections]
+    upper = {r["location"]: r for r in merge_rows(raised, ("location",), total)}
+    for row in rows:
+        runs = opened.get(row["location"])
+        if not runs:
+            continue
+        row["unfinished_runs"] = f"{len(runs)}/{total}"
+        row["open_ms"] = [r.get("total_ms") for r in runs]
+        floors = [c for c in _FLOORED if row.get(c) is not None
+                  and upper[row["location"]].get(c) != row[c]]
+        if floors:
+            row["unfinished"] = True
+            row["floors"] = floors
+
+
 def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     """The markers table across repeats: the same fold as a detector's rows.
 
@@ -676,12 +723,7 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     seen = {row["location"] for s in sections for row in s.get("rows") or []}
     rows = merge_rows([s.get("rows") or [] for s in sections], ("location",), total,
                       counts=True)
-    # A marker that never closed in any repeat stays a floor in the merge.
-    open_in = {row["location"] for s in sections for row in s.get("rows") or []
-               if row.get("unfinished")}
-    for row in rows:
-        if row["location"] in open_in:
-            row["unfinished"] = True
+    _merged_floors(sections, rows, total)
     # Where each temporary marker sat, by the median of the repeats it was
     # found in, as every number of its row is.
     for row in rows:
@@ -2057,8 +2099,10 @@ def _markers_lines(markers: dict[str, Any]) -> list[str]:
                "_the names `domains` lists; medians per run_")
     out.append("")
     if rows:
-        # A marker that never closed is a floor, and the table says so.
-        shown = [{**r, **{c: f"≥ {r[c]}" for c in ("self_ms", "total_ms", "max_ms")
+        # A marker that never closed is a floor, and the table says so: in the
+        # columns that depend on the repeats it was open in, or in all three
+        # for a report of one recording, which has no `floors`.
+        shown = [{**r, **{c: f"≥ {r[c]}" for c in r.get("floors") or _FLOORED
                           if r.get(c) is not None}} if r.get("unfinished") else r
                  for r in rows]
         out.append(table.render(shown, order=COLUMNS,
@@ -2069,6 +2113,17 @@ def _markers_lines(markers: dict[str, Any]) -> list[str]:
             out.append("≥ — the marker never closed: its end did not run, or the "
                        "recording stopped first. The number runs to the end of "
                        "the window and is a floor.")
+            out.append("")
+        for r in rows:
+            k_n = short_runs(r.get("unfinished_runs"))
+            if k_n is None:
+                continue
+            there = ", ".join(f"≥ {ms} ms" for ms in r.get("open_ms") or [] if ms is not None)
+            out.append(f"`{r['location']}` did not close in {k_n[0]} of {k_n[1]} repeats"
+                       + (f" (there: {there})" if there else "")
+                       + (". Only the numbers marked ≥ depend on those repeats."
+                          if r.get("unfinished") else
+                          ". Its numbers above do not depend on those repeats."))
             out.append("")
     if absent:
         out.append("Not in the window: " + ", ".join(f"`{g}`" for g in absent)
