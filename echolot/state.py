@@ -158,7 +158,8 @@ def _report(rep: Path) -> dict | None:
     That is a file that is no JSON; one that is JSON and no object, where
     the first key read off a list, a number or a string ended `echolot` in a
     traceback (#460); and one that holds, in a field read here, what
-    `analyze` never writes there (`_as_written`).
+    `analyze` never writes there (`_as_written`), or detectors and rows
+    that `report` and `compare` cannot read (`misshapen`, #555).
     """
     if not rep.exists():
         return None
@@ -166,7 +167,7 @@ def _report(rep: Path) -> dict | None:
         r = json.loads(rep.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         r = None
-    if not isinstance(r, dict) or not _as_written(r):
+    if not isinstance(r, dict) or not _as_written(r) or ("detectors" in r and misshapen(r)):
         return {"path": rep, "error": "unreadable"}
     s, c = r.get("summary") or {}, r.get("config") or {}
     return {
@@ -200,6 +201,54 @@ def _as_written(r: dict) -> bool:
             and _holds((s or {}).get("detectors_run"), int)
             and _holds((c or {}).get("sha"), str)
             and _holds((c or {}).get("defaults"), bool))
+
+
+def misshapen(data: dict) -> str | None:
+    """The first part of a report that does not hold what `analyze` writes
+    there, in words, or None.
+
+    `analyze` writes `detectors` as a list of objects, each with its `id` as
+    text and its `rows` as a list of objects, and `markers` as an object
+    whose `rows` and `absent` are lists. Anything else came from a hand edit
+    or another tool, and ended `report`, `report --html`, `compare` and the
+    report page of `echolot ui` in a traceback or a 500 (#555): `"detectors":
+    "x"` read a letter as a detector, `"rows": {"a": 1}` asked for row 0.
+    """
+    dets = data.get("detectors")
+    if not isinstance(dets, list):
+        return f"`detectors` is {kind_of(dets)}, not a list"
+    for i, d in enumerate(dets):
+        if not isinstance(d, dict):
+            return f"detector {i + 1} is {kind_of(d)}, not an object"
+        name = d.get("id")
+        if not isinstance(name, str):
+            return f"detector {i + 1} has no `id` as text"
+        rows = d.get("rows")
+        if not isinstance(rows, list):
+            return f"the rows of {name} are {kind_of(rows)}, not a list"
+        if not all(isinstance(r, dict) for r in rows):
+            return f"a row of {name} is not an object"
+    m = data.get("markers")
+    if m is None:
+        return None
+    if not isinstance(m, dict):
+        return f"`markers` is {kind_of(m)}, not an object"
+    for key in ("rows", "absent"):
+        if m.get(key) is not None and not isinstance(m[key], list):
+            return f"`markers.{key}` is {kind_of(m[key])}, not a list"
+    if not all(isinstance(r, dict) for r in m.get("rows") or []):
+        return "a row of `markers` is not an object"
+    return None
+
+
+def kind_of(value: object) -> str:
+    """What a JSON value is, in the words a reader of the file would use."""
+    if value is None:
+        return "missing"
+    if isinstance(value, bool):
+        return "true or false"
+    return {dict: "an object", list: "a list", str: "text", int: "a number",
+            float: "a number"}.get(type(value), type(value).__name__)
 
 
 def _holds(value: object, kind: type) -> bool:

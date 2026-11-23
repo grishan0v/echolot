@@ -1237,6 +1237,11 @@ def _load_report(path: Path) -> dict:
             f"written by `echolot analyze`.")
     if "detectors" not in data:
         raise ConfigError(f"{path}: not a Marker Report — no `detectors` section")
+    wrong = state.misshapen(data)
+    if wrong:
+        raise ConfigError(
+            f"{path}: does not read as a Marker Report — {wrong}. It was edited by "
+            f"hand or written by another tool: run `echolot analyze` again to write it anew.")
     return data
 
 
