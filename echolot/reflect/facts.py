@@ -1164,14 +1164,81 @@ def gaps(session: Session, min_s: float = 120.0,
     by_agent: dict[str, list[tuple[float, str]]] = {}
     for c in session.calls:
         by_agent.setdefault(c.agent, []).append((ts_to_epoch(c.ts), describe(c)))
+    spans = _outstanding(session)
     for agent, events in by_agent.items():
         events.sort()
         for (t0, what), (t1, _) in zip(events, events[1:], strict=False):
             if t1 - t0 >= min_s:
+                why = _gap_reason(what)
+                if why != "waiting for the human to answer":
+                    why = _waited_on(session, spans, agent, t0, t1) or why
                 out.append({"agent": agent, "seconds": round(t1 - t0),
-                            "after": what, "why": _gap_reason(what)})
+                            "after": what, "why": why})
     out.sort(key=lambda g: -g["seconds"])
     return out[:keep] if keep else out
+
+
+_BG_ID = re.compile(r"(?:with ID|task id|task-id)[:\s]*([A-Za-z0-9_-]{4,})", re.I)
+_BG_HOST = re.compile(r"still running after \d+s|moved to the background|"
+                      r"running in background", re.I)
+
+
+def _outstanding(session: Session) -> list[tuple[float, float, str, str]]:
+    """What the session had started and not yet heard back from, with when.
+
+    Each: start, end, the label, and whose silence it explains — a subagent
+    explains everybody's but its own, a background shell its launcher's. A
+    subagent runs until its hand-back or notification; a background shell
+    until the notification that names its id; without one, to the end of
+    the session.
+    """
+    last = ts_to_epoch(session.ended) or max(
+        (ts_to_epoch(c.ts) for c in session.calls), default=0.0)
+    spans: list[tuple[float, float, str, str]] = []
+    for s in session.subagents:
+        if s.started:
+            end = ts_to_epoch(s.ended) if s.ended else last
+            spans.append((ts_to_epoch(s.started), end, "a subagent was running",
+                          f"!sub:{s.id}"))
+    notes = [(ts_to_epoch(t.ts), t.text) for t in session.turns if t.kind == "notification"]
+    for c in session.calls:
+        head = c.output_head or ""
+        if (c.input or {}).get("run_in_background") is not True and not _BG_HOST.search(head):
+            continue
+        start = ts_to_epoch(c.ts)
+        m = _BG_ID.search(head)
+        end = next((t for t, text in notes if t >= start and m and m.group(1) in text), last)
+        spans.append((start, end, "waiting on a background task", c.agent))
+    return spans
+
+
+def _waited_on(session: Session, spans: list[tuple[float, float, str, str]],
+               agent: str, t0: float, t1: float) -> str | None:
+    """Why a silence was waiting, from what was outstanding during it.
+
+    The call just before a silence says little about it: a 953-second one
+    followed a plain `Bash` while the subagent that call had started in the
+    background was at work, and was filed as unknown (#546). What counts is
+    what the session was waiting on for most of the silence. And a silence
+    that starts after the agent said its last word and ends when a message
+    comes in is the turn handed back — to the human, or to another session
+    that writes back.
+    """
+    half = (t1 - t0) / 2
+    for start, end, label, whose in spans:
+        if whose == f"!{agent}" or (not whose.startswith("!") and whose != agent):
+            continue
+        if min(t1, end) - max(t0, start) >= half:
+            return label
+    said = [ts_to_epoch(t.ts) for t in session.turns
+            if t.agent == agent and t.role == "assistant" and t0 <= ts_to_epoch(t.ts) <= t1]
+    heard = [ts_to_epoch(t.ts) for t in session.turns
+             if t.agent == agent and t.role == "user" and t0 <= ts_to_epoch(t.ts) <= t1]
+    for ta in said:
+        tu = next((t for t in sorted(heard) if t >= ta), None)
+        if tu is not None and tu - ta >= half:
+            return "waiting for the human or another session"
+    return None
 
 
 def _gap_reason(after: str) -> str:

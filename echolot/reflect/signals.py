@@ -1016,12 +1016,38 @@ def retries(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                   rows)
 
 
+# Commands whose exit 1 is an answer rather than an error: `diff` and `cmp`
+# say the files differ, the greps that nothing matched.
+_ANSWERS_WITH_1 = {"diff", "cmp", "grep", "egrep", "fgrep", "zgrep", "rg"}
+_EXIT_1 = re.compile(r"^\s*Exit code 1\b")
+
+
+def _answered(c) -> bool:
+    """A shell call that exited 1 because the command it ends with said "no".
+
+    The line's exit status is its last command's, and of a pipeline, its last
+    stage's: `cd x && diff a b` is diff's answer, `diff a b | head` is
+    head's. `diff` saying the files differ was filed as friction (#546).
+    """
+    if c.command is None or not _EXIT_1.match(c.output_head or ""):
+        return False
+    last = [seg for seg in re.split(r"\n|;|&&|\|\|", c.shell) if seg.strip()]
+    if not last:
+        return False
+    words = last[-1].split("|")[-1].split()
+    while words and (words[0] == "!" or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0])):
+        words = words[1:]
+    return bool(words) and Path(words[0]).name in _ANSWERS_WITH_1
+
+
 def env_friction(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     kinds: dict[str, list[dict[str, Any]]] = {}
     for c in s.calls:
         head = c.output_head or ""
         host = bool(_HOST.search(head))
         if not c.is_error and not host:
+            continue
+        if not host and _answered(c):
             continue
         if c.command is not None and RE_ECHOLOT.search(c.shell) and not host:
             continue   # echolot's own failures are a separate signal
@@ -1111,8 +1137,9 @@ def long_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                   f"{total} silence(s) of two minutes or more"
                   + (f", the {len(rows)} longest listed" if total > len(rows) else ""),
                   "A subagent running, the human answering, a build in the "
-                  "background, a device — the cause is read off the call before "
-                  "the silence. Listed so the wall time reads honestly.",
+                  "background, a device — the cause is read off what the session "
+                  "was waiting on during the silence, and failing that the call "
+                  "before it. Listed so the wall time reads honestly.",
                   [{"agent": g["agent"], "seconds": g["seconds"],
                     "why": g.get("why", "unknown"), "after": g["after"]}
                    for g in rows])
