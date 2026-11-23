@@ -157,7 +157,7 @@ _measured as SELF time, children subtracted — otherwise one event lands in the
 | inflate | 5/5 | 15 | 222.68 | 241.38 | 49.28 | com.example.app |
 | draw | 5/5 | 7 | 120.8 | 120.8 | 34.0 | com.example.app |
 | TextLayout:initLayout | 5/5 | 51 | 73.95 | 73.95 | 1.45 | com.example.app |
-| Lock contention on a monitor lock (owner tid: 12931) | 5/5 | 9 | 61.6 | 61.6 | 22.4 | com.example.app |
+| Lock contention on a monitor lock (owner tid: #) | 5/5 | 9 | 61.6 | 61.6 | 22.4 | com.example.app |
 
 <sub>detector `main_thread_block`, params: {'min_slice_ms': 16}</sub>
 

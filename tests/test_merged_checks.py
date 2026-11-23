@@ -162,3 +162,86 @@ def test_a_failed_detector_is_not_silent() -> None:
     md = report_mod.to_markdown(rep)
     check("a report where everything failed does not call the run clean",
           "No detector fired" not in md and "Failed: `frame_jank`" in md, md)
+
+
+def _lock(tid: int, self_ms: float) -> dict:
+    return row(f"Lock contention on a monitor lock (owner tid: {tid})", count=1,
+               self_ms=self_ms, total_ms=self_ms, max_ms=self_ms, detail="main")
+
+
+def test_one_wait_owned_by_another_tid_each_run_is_one_row() -> None:
+    """#504: the owner's tid is the runtime's choice, and a wait that happens
+    in every run is one row, 3/3, with the tids kept beside it."""
+    reps = [one([_lock(tid, ms)], det_id="main_thread_block")
+            for tid, ms in ((15427, 110.0), (10359, 120.0), (9001, 115.0))]
+    for rep in reps:
+        rep["detectors"][0]["identity"] = ["location", "detail"]
+    rows = report_mod.aggregate(reps)["detectors"][0]["rows"]
+    check("one row", len(rows) == 1, rows)
+    got = rows[0]
+    check("named without the tid",
+          got["location"] == "Lock contention on a monitor lock (owner tid: #)", got)
+    check("seen in every run, with the median of the three",
+          got["runs"] == "3/3" and got["self_ms"] == 115.0, got)
+    check("the tids as the trace had them are kept",
+          got["variants"]["location"] == sorted(
+              f"Lock contention on a monitor lock (owner tid: {t})"
+              for t in (15427, 10359, 9001)), got)
+
+
+def test_an_unnamed_thread_numbered_anew_each_run_is_one_row() -> None:
+    def cpu(name: str, ms: float) -> dict:
+        return row(name, count=0, total_ms=ms, covered_ms=0.0,
+                   detail="100% of CPU outside slices")
+    reps = [one([cpu(f"Thread-{n}", 250.0 + n)], det_id="uninstrumented_cpu")
+            for n in (31, 34, 39)]
+    rows = report_mod.aggregate(reps)["detectors"][0]["rows"]
+    check("one thread, three runs",
+          [(r["location"], r["runs"]) for r in rows] == [("Thread-#", "3/3")], rows)
+
+
+def test_two_owners_in_one_run_add_up() -> None:
+    reps = [one([_lock(1, 40.0), _lock(2, 60.0)]), one([_lock(3, 100.0)])]
+    got = report_mod.aggregate(reps)["detectors"][0]["rows"]
+    check("one row, two runs", len(got) == 1 and got[0]["runs"] == "2/2", got)
+    check("the first run's two stretches are one value, and the longest is kept",
+          got[0]["spread"]["self_ms"]["values"] == [100.0, 100.0]
+          and got[0]["spread"]["max_ms"]["values"] == [60.0, 100.0]
+          and got[0]["count"] == 1.5, got)
+
+
+def test_numbers_that_say_where_or_what_are_kept() -> None:
+    fold = report_mod.runtime_name
+    check("a frame's vsync id goes", fold("Choreographer#doFrame 55112")
+          == "Choreographer#doFrame #")
+    check("pool and binder threads lose their numbers",
+          [fold(n) for n in ("pool-3-thread-2", "binder:1234_5", "AsyncTask #2",
+                             "DefaultDispatcher-worker-3")]
+          == ["pool-#-thread-#", "binder:#_#", "AsyncTask #", "DefaultDispatcher-worker-#"])
+    note = ("monitor contention with owner Thread-3 (4455) at void "
+            "com.example.Store.put(java.lang.String)(Store.java:41) waiters=1 "
+            "blocking from java.lang.Object com.example.Store.get()(:-1)")
+    check("a lock note keeps its lines and loses the owner's numbers",
+          fold(note) == note.replace("Thread-3 (4455)", "Thread-# (#)")
+          .replace("waiters=1", "waiters=#"), fold(note))
+    check("a marker keeps its digits, by prefix or by name",
+          fold("AGENTTMP_fill_v4", keep="AGENTTMP_") == "AGENTTMP_fill_v4"
+          and fold("step_2", names={"step_2"}) == "step_2"
+          and fold("AGENTTMP_step_2", keep="AGENTTMP_") == "AGENTTMP_step_2")
+
+
+def test_a_frame_that_is_another_vsync_each_run_is_one_row_in_compare() -> None:
+    """#504's comment: ten `Choreographer#doFrame <N>`, one per run, were
+    twenty rows without a verdict in compare."""
+    def side(base: float) -> dict:
+        return report_mod.aggregate([
+            one([row(f"Choreographer#doFrame {55000 + i * 7}", count=1,
+                     self_ms=base + i, total_ms=base + i, max_ms=base + i,
+                     detail="main")], det_id="main_thread_block")
+            for i in range(5)])
+    cmp = compare_mod.build(side(4200.0), side(4200.0),
+                            before_path="b.json", after_path="a.json")
+    frames = [r for r in cmp["rows"] if "doFrame" in r["location"]]
+    check("one row on both sides, no vanished or appeared",
+          len(frames) == 1 and frames[0]["change"] not in ("vanished", "appeared"),
+          frames)

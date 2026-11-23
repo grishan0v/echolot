@@ -69,7 +69,7 @@ def test_the_planted_change_is_what_compare_puts_on_top(demo_report, demo_change
     check("the worker holds the lock longer, the main thread waits longer for it, "
           "and nothing else moved",
           moved == [("main_thread_block",
-                     f"Lock contention on a monitor lock (owner tid: {demo.TID_WORKER})",
+                     "Lock contention on a monitor lock (owner tid: #)",
                      compare.GREW, True),
                     ("monitor_contention", demo.APP_NAME, compare.GREW, True)], moved)
     check("and the two rounds are comparable", cmp["comparable"] is True, cmp["warnings"])
