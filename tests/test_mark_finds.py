@@ -199,3 +199,73 @@ def test_fork_join_pools_are_named_as_fork_join_names_them(tmp_path: Path) -> No
 def test_a_hyphen_in_a_kotlin_frame_is_read() -> None:
     got = place.parse_frame("void com.example.app.Repo.update-Wv2hJ0w(long)(Repo.kt:30)")
     check("parsed", got is not None and got[1:] == ("Repo.kt", 30), got)
+
+
+def test_a_bridge_the_compiler_added_is_not_recursion(tmp_path: Path) -> None:
+    """`Initializer<Unit>` gets a synthetic `create(Context): Object`, whose
+    frame carries the line of the class declaration (#526)."""
+    rel = "app/src/main/kotlin/com/example/CommonInitializer.kt"
+    write(tmp_path, rel, "package com.example\n"
+                         + "\n" * 7
+                         + "abstract class CommonInitializer : Initializer<Unit> {\n"   # 9
+                         + "\n" * 10
+                         + "    override fun create(context: Context) {\n"              # 20
+                         + "        setUp(context)\n"                                   # 21
+                         + "    }\n}\n")
+    pl = mark.plan_from_anr(tmp_path, [("com.example.CommonInitializer.create", rel, 21),
+                                       ("com.example.CommonInitializer.create", rel, 9)])
+    check("no recursion note", not any("calls itself" in n for n in pl.notes), pl.notes)
+    check("one row, for the function", [p.line for p in pl.proposals] == [20],
+          [(p.line, p.reason) for p in pl.proposals])
+    check("and no word of another build", not pl.notes, pl.notes)
+    write(tmp_path, rel, "package com.example\n\nclass Walker {\n"
+                         "    fun walk(n: Int) {\n"
+                         "        if (n > 0) walk(n - 1)\n"
+                         "    }\n"
+                         "}\n")
+    pl = mark.plan_from_anr(tmp_path, [("com.example.Walker.walk", rel, 5),
+                                       ("com.example.Walker.walk", rel, 5)])
+    check("while a function that does call itself is still said to",
+          any("calls itself" in n for n in pl.notes), pl.notes)
+
+
+EXPRESSIONS = """\
+package com.example.app.sync
+
+private fun <T> Task<T>.await() = runCatching { Tasks.await(this) }
+
+fun save(value: String) =
+    store.put(
+        value,
+    )
+
+object AppTracer {
+    fun <T> trace(name: String, block: () -> T): T =
+        block()
+}
+
+fun flush() {
+    save("x")
+}
+"""
+
+
+def test_an_expression_body_is_a_function_with_nothing_to_bracket(tmp_path: Path) -> None:
+    rel = "app/src/main/kotlin/com/example/app/sync/Sync.kt"
+    write(tmp_path, rel, EXPRESSIONS)
+    frames = [("com.example.app.sync.SyncKt.await", rel, 3),
+              ("com.example.app.sync.SyncKt.save", rel, 6),
+              ("com.example.app.sync.AppTracer.trace", rel, 12)]
+    pl = mark.plan_from_anr(tmp_path, frames)
+    reasons = [p.reason for p in pl.proposals]
+    check("each refused as an expression body",
+          all(r.startswith("an expression body") for r in reasons), reasons)
+    check("on the declaration's line", [p.line for p in pl.proposals] == [3, 5, 11],
+          [p.line for p in pl.proposals])
+    check("and on the right build, no word of another", not pl.notes, pl.notes)
+    pl = mark.plan_from_anr(tmp_path, [*frames, ("com.example.app.sync.SyncKt.flush", rel, 16)],
+                            unplaced=0)
+    check("a block-bodied function beside them still takes a pair",
+          pl.proposals[-1].applicable, pl.proposals[-1].reason)
+    check("a line past the expression is in no function",
+          mark.expression_body(EXPRESSIONS, ".kt", 10, "save") is None)

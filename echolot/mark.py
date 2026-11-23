@@ -1212,6 +1212,61 @@ def enclosing_block(text: str, suffix: str, line: int):
     return best
 
 
+# What can start a declaration that ends the expression of the one above it.
+_NEXT_DECL = re.compile(
+    r"^(?P<indent>[ \t]*)(?:@[\w.]+(?:\([^)]*\))?[ \t]*)*(?:[a-z]+[ \t]+)*"
+    r"(?:fun|class|object|interface|val|var|typealias|init)\b")
+
+
+def expression_body(text: str, suffix: str, line: int, name: str) -> int | None:
+    """The 1-based line of `fun name(…) = …` whose expression holds this line.
+
+    Kotlin's expression-bodied function — `private fun <T> Task<T>.await() =
+    runCatching { … }` — is a function with no block to bracket, and
+    `enclosing_block` finds none. Refused as "no function around that line",
+    such a frame counted as a sign of another build, and a file of them on
+    the build that froze was called someone else's.
+
+    The expression runs from the declaration to the next declaration at its
+    indentation or shallower, or to the end of the file.
+    """
+    if suffix != ".kt":
+        return None
+    clean = strip_noise(text)
+    lines = re.findall(r"[^\n]*\n|[^\n]+$", text)
+    offset = 0
+    for number, raw in enumerate(lines, 1):
+        if number > line:
+            break
+        found = _KOTLIN_FUN.match(raw)
+        if found and found.group("name").strip("`") == name:
+            close = _params_end(clean, offset + found.end() - 1)
+            # An optional return type, then the `=` that makes it an
+            # expression body. A `{` first is a block body, `enclosing_block`'s.
+            if close is not None and re.match(r"\s*(?::[^={};]*)?=(?!=)", clean[close + 1:]):
+                indent = len(raw) - len(raw.lstrip(" \t"))
+                end = next((n for n, later in enumerate(lines[number:], number + 1)
+                            if (m := _NEXT_DECL.match(later))
+                            and len(m.group("indent")) <= indent), len(lines) + 1)
+                if line < end:
+                    return number
+        offset += len(raw)
+    return None
+
+
+def _params_end(clean: str, paren_at: int) -> int | None:
+    """The index of the `)` that closes the parameter list opening at `paren_at`."""
+    depth = 0
+    for i in range(paren_at, len(clean)):
+        if clean[i] == "(":
+            depth += 1
+        elif clean[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
+
+
 def _annotated_composable(text: str, decl_line: int) -> bool:
     """Whether the declaration at this 1-based line carries `@Composable`."""
     lines = text.splitlines()
@@ -1385,10 +1440,50 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
     out = Plan(root=str(root), module=None, package=None)
     seen: set[str] = set()
     recurs: set[str] = set()
-    for symbol, rel, line in frames:
+    texts: dict[str, str | None] = {}
+
+    def text_of(rel: str) -> str | None:
+        if rel not in texts:
+            try:
+                texts[rel] = read_source(root / rel)
+            except OSError:
+                texts[rel] = None
+        return texts[rel]
+
+    def lands(symbol: str, rel: str, line: int) -> bool:
+        """Whether the line is in a function: a block, or an expression body."""
+        text = text_of(rel)
+        if text is None:
+            return False
+        suffix = Path(rel).suffix
+        if enclosing_block(text, suffix, line) is not None:
+            return True
+        wanted = frame_function(symbol, declared_functions(text, suffix))
+        return expression_body(text, suffix, line, wanted) is not None
+
+    # A method on the stack twice is not always one that calls itself. The
+    # compiler adds a bridge for a generic interface — `create(Context):
+    # Object` beside `create(Context): Unit` for `Initializer<Unit>` — and
+    # its frame carries the line of the class declaration: no function at
+    # all. Such a frame is the bridge and is passed over, rather than read as
+    # recursion and as a line from another build.
+    by_marker: dict[str, list[int]] = {}
+    for i, (symbol, _, line) in enumerate(frames):
+        if line is not None:
+            by_marker.setdefault(marker_for(symbol, prefix), []).append(i)
+    bridges: set[int] = set()
+    for same in by_marker.values():
+        if len(same) > 1:
+            inside = {i for i in same if lands(*frames[i])}
+            if inside:
+                bridges |= set(same) - inside
+
+    for i, (symbol, rel, line) in enumerate(frames):
         if line is None:
             out.notes.append(f"{symbol} — the frame carries no line, so there "
                              f"is nothing to find the block around")
+            continue
+        if i in bridges:
             continue
         marker = marker_for(symbol, prefix)
         if marker in seen:
@@ -1405,11 +1500,22 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
         seen.add(marker)
 
         path = root / rel
-        try:
-            text = read_source(path)
-        except OSError:
+        text = text_of(rel)
+        if text is None:
             continue
         block = enclosing_block(text, path.suffix, line)
+        expression = None if block is not None else expression_body(
+            text, path.suffix, line,
+            frame_function(symbol, declared_functions(text, path.suffix)))
+        if expression is not None:
+            # A function, with nothing to bracket. Not "no function": that
+            # reads as a line from another build, and counts as one below.
+            out.proposals.append(Proposal(
+                "anr_frame", rel, expression, f"{symbol.rsplit('.', 1)[-1]} — on "
+                f"the stack when it froze, at line {line}", marker, "anr",
+                gradle_module(path, root), applicable=False,
+                reason="an expression body: rewrite it as a block, or mark the caller"))
+            continue
         if block is None:
             out.proposals.append(Proposal(
                 "anr_frame", rel, line, f"{symbol.rsplit('.', 1)[-1]} — on the "
