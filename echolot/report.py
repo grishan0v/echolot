@@ -1667,7 +1667,11 @@ def to_markdown(report: dict[str, Any]) -> str:
     if report.get("scenario"):
         out.append(f"Scenario: `{report['scenario']}`")
     if w.get("process"):
-        out.append(f"Process: `{w['process']}` (pid {w.get('pid')})")
+        # Every cold start is a new process, so a set has as many pids as
+        # recordings: the one shown is the first's, and says so (#581).
+        first = (f" in `{Path(traces[0]).name.removesuffix('.perfetto-trace')}`, "
+                 f"the first of {len(traces)}") if traces and len(traces) > 1 else ""
+        out.append(f"Process: `{w['process']}` (pid {w.get('pid')}{first})")
     alts = w.get("process_alternatives")
     if alts:
         names = ", ".join(f"`{a['name']}`" for a in alts)

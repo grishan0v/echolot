@@ -874,7 +874,8 @@ def cmd_analyze(args) -> int:
         # conclusion along, and the "Runs" column separates the reproducible
         # from the one-off.
         # One recording is one repeat, however many times it is named (#565).
-        traces, same = _distinct_recordings(args.traces)
+        # In one order whatever order they were named in (#581).
+        traces, same = _distinct_recordings(sorted(args.traces, key=run_order))
         if same:
             print(f"[!] {report_mod.same_recording_said(same)}", file=sys.stderr)
         reports = [analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
@@ -991,6 +992,24 @@ def cmd_analyze(args) -> int:
             print(f"→ {again}  (this investigation's page stood there: written again "
                   f"with this round)", file=sys.stderr)
     return 0
+
+
+def run_order(path: str) -> tuple:
+    """Where a recording goes in a set: by its file name, numbers as numbers.
+
+    The same recordings named in another order made another report: the
+    header's trace, pid and window came from whichever was named first, and
+    every `spread.values` list was in the order given (#581). A shell glob
+    sorts by the locale, a script lists a directory in the file system's
+    order, an artifact unpacks in its own. The order has to be one, and it
+    has to keep its meaning: the values of `spread` are read as the run
+    index, and `collect` names its repeats `_iter000`, `_iter001`, … in the
+    order it recorded them. By name, then by the whole path for two sets
+    with the same names; `run10` after `run9`.
+    """
+    def natural(text: str) -> list:
+        return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", text)]
+    return natural(Path(path).name), natural(str(path))
 
 
 def _distinct_recordings(paths: list[str]) -> tuple[list[str], list[list[str]]]:
