@@ -211,7 +211,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
 | `compose_names` | one round was recorded with composable names and the other not, or only some of its repeats were. The names come with the app's Perfetto SDK loaded at its start, which cost a cold start 67 ms on the device it was measured on |
-| `compile` | the app was compiled differently in the two rounds, or in the repeats of one — see below |
+| `compile` | the app was compiled differently in the two rounds, or in the repeats of one, or — where the traces could not say how — the JIT compiled several times more methods on one side — see below |
 
 ### Two windows
 
@@ -294,8 +294,13 @@ is ART's own slice for the app's dex, read from each trace, so a build that
 changed under the same config is caught. The reason is part of it: the same
 filter from a profile background dexopt widened (`bg-dexopt`) is not the build
 the install brought (`install-dm`). A side whose traces held no state — the
-process was already running when the recording began — and a report from
-before the field get no warning.
+process was already running when the recording began, as in every scroll or
+drag recorded with the app up — says nothing about its filter, so the JIT's
+work in the window speaks instead: when the two sides' JIT-compiled methods
+are three times apart or more, and at least 50 methods apart, the warning
+names both counts. On an SM-A515F one scroll JIT-compiled 64 methods on its
+profile, 328 after `cmd package compile -m verify` and 2 after `-m speed`.
+A report from before the field gets no warning.
 
 `not-checked-before` and `not-checked-after` are about a detector rather than
 a number. `io_wait` reads why the kernel put a thread to sleep, and a round
