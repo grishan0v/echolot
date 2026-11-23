@@ -37,21 +37,29 @@ def project(tmp_path_factory) -> Path:
     return root
 
 
-# The limit set inside the process that writes, once the report is drawn up:
-# set at the start, trace_processor inherits it and dies of SIGXFSZ before
-# there is anything to write. `to_markdown` is first called for the writes.
+# The limit set inside the process that writes, for the writes alone. Set at
+# the start, trace_processor inherits it and dies of SIGXFSZ before there is
+# anything to write; left in place to the end, it also fails what runs at
+# exit — on CI, coverage writing its data file for this child, whose
+# traceback then ends stderr. So only the soft limit is lowered, when
+# `to_markdown` is first called (for the writes), and raised again once
+# echolot is done.
 CAPPED = """
 import resource, runpy, sys
 from echolot import report
 limit = int(sys.argv.pop(1))
+soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
 drawn = report.to_markdown
 def capped(*a, **k):
     if limit:
-        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, hard))
     return drawn(*a, **k)
 report.to_markdown = capped
 sys.argv[0] = "echolot"
-runpy.run_module("echolot.main", run_name="__main__")
+try:
+    runpy.run_module("echolot.main", run_name="__main__")
+finally:
+    resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
 """
 
 
