@@ -111,3 +111,69 @@ def test_an_entry_with_only_comments_tunes_nothing(tmp_path: Path) -> None:
     plan = {d.id: source for d, _, source in plan_detectors(cfg)}
     check("and the plan runs both on defaults",
           plan["main_thread_block"] == "default" and plan["gc_pressure"] == "default", plan)
+
+
+# --- keys the config does not know (#582) ---------------------------------------
+
+def _refused(path: Path) -> str:
+    with pytest.raises(ConfigError) as e:
+        Config.load(path)
+    return str(e.value)
+
+
+def test_scenario_written_for_scenarios_is_refused(tmp_path: Path) -> None:
+    """Two named scenarios under `scenario:` were one scenario called `run`."""
+    raw = {"project": BASE["project"], "scenario": {
+        "cold": {"start": {"name": "bindApplication"}, "end": {"name": "home_shown"}},
+        "scroll": {"start": {"name": "Feed.scroll"}, "end": {"name": "Feed.idle"}}}}
+    said = _refused(_config(tmp_path, raw))
+    check("the two names, and where they go",
+          "'cold', 'scroll' reads as a scenario's name" in said and "`scenarios:`" in said, said)
+
+
+def test_an_unknown_key_in_one_scenario_is_refused(tmp_path: Path) -> None:
+    raw = {**BASE, "scenario": {**BASE["scenario"], "budgetms": 800}}
+    said = _refused(_config(tmp_path, raw))
+    check("by name, with what it takes",
+          "scenario: no key 'budgetms'" in said and "budget_ms" in said, said)
+
+
+def test_an_unknown_section_is_refused_by_name(tmp_path: Path) -> None:
+    raw = {**BASE, "detectros": {"main_thread_block": {"min_slice_ms": 50}}}
+    said = _refused(_config(tmp_path, raw))
+    check("the section, and the known ones",
+          "no section 'detectros'" in said and "detectors" in said, said)
+
+
+def test_an_unknown_section_in_local_yml_names_local_yml(tmp_path: Path) -> None:
+    path = _config(tmp_path, BASE)
+    (tmp_path / "local.yml").write_text("runer:\n  device: R58\n", encoding="utf-8")
+    said = _refused(path)
+    check("local.yml named", "local.yml: no section 'runer'" in said, said)
+
+
+def test_setup_s_own_notes_still_load(tmp_path: Path) -> None:
+    cfg = Config.load(_config(tmp_path, {**BASE, "_source": "scan", "_evidence": "x",
+                                          "threads": {"own": ["DefaultDispatch*"]},
+                                          "scenario": {**BASE["scenario"], "_source": "x"}}))
+    check("loads", cfg.scenario_name == "fixture", cfg.scenario_name)
+
+
+@pytest.mark.parametrize("key, value", [
+    ("package", ["com.example.app", "com.example.other"]),
+    ("process", 12345),
+])
+def test_package_and_process_are_text(tmp_path: Path, key: str, value: object) -> None:
+    raw = {**BASE, "project": {**BASE["project"], key: value}}
+    said = _refused(_config(tmp_path, raw))
+    check("the key and the value", f"project.{key} must be one name" in said
+          and repr(value) in said, said)
+
+
+def test_a_section_written_twice_is_refused_with_both_lines(tmp_path: Path) -> None:
+    path = tmp_path / "echolot.yml"
+    path.write_text("project:\n  package: com.example.app\n"
+                    "scenario:\n  name: fixture\n"
+                    "project:\n  package: com.example.other\n", encoding="utf-8")
+    said = _refused(path)
+    check("the key and both lines", "'project' is written twice, on lines 1 and 5" in said, said)

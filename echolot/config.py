@@ -25,6 +25,34 @@ class ConfigError(Exception):
 NO_ANCHOR = "__echolot_no_anchor__"
 
 
+class _Repeated(yaml.YAMLError):
+    """A key written twice in one mapping."""
+
+
+class _Loader(yaml.SafeLoader):
+    """yaml's safe loader, refusing a key written twice in one mapping.
+
+    yaml keeps the last and says nothing: a second `project:` block with
+    another package won, and `analyze` then refused the recording because no
+    process matched a package the person did not know was in force (#582).
+    """
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
+        seen: dict[Any, int] = {}
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            line = key_node.start_mark.line + 1
+            try:
+                first = seen.get(key)
+            except TypeError:
+                continue  # an unhashable key: yaml says so itself
+            if first is not None:
+                raise _Repeated(f"the key {key!r} is written twice, on lines {first} "
+                                f"and {line}: keep one")
+            seen[key] = line
+        return super().construct_mapping(node, deep=deep)
+
+
 def _load_yaml(p: Path) -> Any:
     """A file that does not parse is a config error, said with the line.
 
@@ -33,7 +61,9 @@ def _load_yaml(p: Path) -> Any:
     """
     try:
         with p.open(encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+            return yaml.load(f, Loader=_Loader) or {}
+    except _Repeated as e:
+        raise ConfigError(f"{p}: {e}") from e
     except yaml.YAMLError as e:
         mark = getattr(e, "problem_mark", None)
         where = f" (line {mark.line + 1}, column {mark.column + 1})" if mark else ""
@@ -65,6 +95,44 @@ _SCENARIO_NAME = re.compile(r"[A-Za-z0-9][\w.-]*")
 # the name its key already gives, and the runner keys and the thresholds it
 # changes.
 _SCENARIO_KEYS = ("start", "end", "window", "budget_ms", "runner", "detectors")
+
+# The sections of echolot.yml and local.yml. A key that is none of these was
+# dropped without a word: `detectros:` ran on the built-in thresholds, and
+# `instrumentaton:` on no allowed paths (#582). `threads` is read by nobody
+# yet and documented as such; `tp_binary` is the older place of
+# `toolchain.tp_binary`. Keys that start with `_` are setup's own notes.
+_SECTIONS = ("project", "scenario", "scenarios", "runner", "detectors",
+             "instrumentation", "domains", "loop", "threads", "toolchain", "tp_binary")
+
+
+def _known_sections(raw: dict[str, Any], p: Path) -> None:
+    """Refuse a section echolot.yml or local.yml does not have, by name."""
+    unknown = [k for k in raw if k not in _SECTIONS and not str(k).startswith("_")]
+    if unknown:
+        raise ConfigError(
+            f"{p}: no section {', '.join(repr(k) for k in unknown)}. "
+            f"The sections are {', '.join(_SECTIONS)}")
+
+
+def _named_by_text(raw: dict[str, Any], p: Path) -> None:
+    """`project.package` and `project.process` are text, the glob a process matches.
+
+    A list given as the package was never looked at while `process` was set,
+    and a number given as the process was taken as the glob "12345".
+    """
+    project = raw.get("project")
+    if project is None:
+        return
+    if not isinstance(project, dict):
+        raise ConfigError(f"{p}: project must be a mapping with `package` and "
+                          f"`process` under it, got {project!r}")
+    for key in ("package", "process"):
+        value = project.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ConfigError(
+                f"{p}: project.{key} must be one name, written as text, got {value!r}"
+                + (". One package per config: name another app's in a config of its own"
+                   if isinstance(value, list) and key == "package" else ""))
 
 # `scenario.window: launch`: the window is how the app opens, as the platform
 # records it, and the trace says where it ends (see launch.py). The one window
@@ -146,6 +214,31 @@ def _anchor_named(node: Any) -> bool:
     return node is not None and str(node).strip() != ""
 
 
+def _one_scenario_keys(block: dict[str, Any]) -> None:
+    """The keys of a single `scenario:` block, checked as `scenarios:` checks its own.
+
+    `scenario:` written for `scenarios:` read the two scenario names under it
+    as keys of one scenario called `run`. The anchors went with them, and
+    the whole recording was measured: a complete report about something
+    other than the scenario (#582). A key that is a block with `start`,
+    `end` or `window` under it is most likely such a name, and is said so.
+    """
+    keys = ("name",) + _SCENARIO_KEYS
+    unknown = [k for k in block if k not in keys and not str(k).startswith("_")]
+    if not unknown:
+        return
+    named = [k for k in unknown if isinstance(block[k], dict)
+             and any(a in block[k] for a in ("start", "end", "window"))]
+    if named:
+        raise ConfigError(
+            f"scenario: {', '.join(repr(k) for k in named)} reads as a scenario's name: "
+            f"several scenarios go under `scenarios:`, each named by its key. "
+            f"`scenario:` holds one, with {', '.join(keys)}")
+    raise ConfigError(
+        f"scenario: no key {', '.join(repr(k) for k in unknown)} in a scenario. "
+        f"It takes {', '.join(keys)}")
+
+
 class Config:
     def __init__(self, raw: dict[str, Any], path: Path | None = None,
                  local_path: Path | None = None):
@@ -175,6 +268,8 @@ class Config:
         raw = _load_yaml(p)
         if not isinstance(raw, dict):
             raise ConfigError(f"{p}: expected a mapping at the top level")
+        _known_sections(raw, p)
+        _named_by_text(raw, p)
 
         local_path = Path(local) if local else p.parent / "local.yml"
         used_local = None
@@ -184,6 +279,8 @@ class Config:
             overlay = _load_yaml(local_path)
             if not isinstance(overlay, dict):
                 raise ConfigError(f"{local_path}: expected a mapping")
+            _known_sections(overlay, local_path)
+            _named_by_text(overlay, local_path)
             raw = merge(raw, overlay)
             used_local = local_path
         elif local:
@@ -454,6 +551,8 @@ class Config:
         many = self._many()
         if many is None:
             node = self.get("scenario")
+            if isinstance(node, dict):
+                _one_scenario_keys(node)
             return "scenario", node if isinstance(node, dict) else {}
         name = self.scenario_key or next(iter(many))
         return f"scenarios.{name}", many[name]

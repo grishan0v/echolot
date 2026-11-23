@@ -14,6 +14,15 @@ like any other and is replaced whole: a `runner.gradle_args` in local.yml
 drops the committed arguments rather than adding to them. When local.yml is
 applied, the CLI says so on stderr.
 
+Both files hold only these sections: `project`, `scenario`, `scenarios`,
+`runner`, `detectors`, `instrumentation`, `domains`, `loop`, `threads`,
+`toolchain`, and the older `tp_binary`. Any other key is refused by name, as
+is an unknown key inside `scenario:` and the same key written twice in one
+block. `scenario:` holding scenario names, each with its own `start` and
+`end`, is said to belong under `scenarios:`. `project.package` and
+`project.process` are one name each, written as text. Keys that start with
+`_` are setup's notes and are never refused.
+
 ## What the code reads today
 
 ```yaml

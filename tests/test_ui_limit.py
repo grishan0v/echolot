@@ -189,7 +189,7 @@ EDITS = {
     "the line first in its block": lambda t, line: _around(_around(t, f"{line}\n", ""), "scenario:\n", f"scenario:\n{line}\n"),
     "a comment on the scenario's own line": lambda t, line: _around(t, "scenario:\n", "scenario:    # the launch\n"),
     "other sections edited by hand": lambda t, line: t.replace("  iterations: 5", "  iterations:    7   # mine")
-    + "\n# the end\nreport_dir: .echolot/out\n",
+    + "\n# the end\nloop:\n  max_rounds: 3\n",
     "lines that end the Windows way": lambda t, line: t.replace("\n", "\r\n"),
     "no end to the last line": lambda t, line: t.rstrip("\n"),
     "the number changed by hand, as its comment says": lambda t, line: _around(t, line, line.replace("2000", "4500")),
@@ -285,8 +285,11 @@ def _copied(project: Project, path: Path) -> None:
 
 
 def _twice(project: Project, path: Path) -> None:
+    # The page's line turned off, as its comment says, and a limit of one's
+    # own below it. The same key written twice does not load at all (#582).
     line = project_setup.limit_line(2000)
-    path.write_text(path.read_text(encoding="utf-8").replace(line, f"{line}\n  budget_ms: 3000", 1), encoding="utf-8")
+    off = project_setup.limit_line(None)
+    path.write_text(path.read_text(encoding="utf-8").replace(line, f"{off}\n  budget_ms: 3000", 1), encoding="utf-8")
 
 
 def _broken(project: Project, path: Path) -> None:
@@ -302,7 +305,8 @@ DECLINES = {
     "a number that is no whole one": (_replaced(LINE, LINE.replace("2000", "2000.5")), "edited", "was changed by hand"),
     "a number with a leading zero, which YAML reads another way": (_replaced(LINE, LINE.replace("2000", "02000")), "edited",
                                                                    "was changed by hand"),
-    "the line twice": (_copied, "edited", "was changed by hand"),
+    # The same key twice in one block: the config does not load (#582).
+    "the line twice": (_copied, "broken", "does not load"),
     "the line inside a quoted value, a limit set below it": (_in_a_string, "edited", "was changed by hand"),
     "the line removed": (_gone, "removed", "is no longer in echolot.yml"),
     "the line moved to another block": (_moved, "moved", "is no longer under scenario:"),
