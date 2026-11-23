@@ -921,6 +921,14 @@ what this scenario can resolve, or bring the spread down first.
 inside". `inflate` at 12 → 31 occurrences and `loadAll` growing 73× at one
 occurrence are different bugs in different places.
 
+**`markers`** is the report's markers table paired across the two sides, in
+the shape of `rows` with `detector: "markers"`: the project's own sections,
+async ones included, which no detector reads. `calls` judges a marker's calls
+per run on their own — `before`, `after`, `moved`, `holds` — so a load that ran
+twice per run instead of once is a finding even when no detector row moved.
+`summary.markers_moved` counts the ones that moved by time or calls; in
+`comparison.md` they are the **Markers** section.
+
 **`matched_by`** is `exact` or `family`. Rows are paired by name first and by
 name family second — `arch_disk_io_0` and `arch_disk_io_3` are one pool.
 The family pass only fires when exactly one row on each side is unmatched;
@@ -937,7 +945,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `environment-thermal` | the kernel throttled the device during one round and not the other: that side is slower for a reason outside the code. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `compile` | the two rounds ran the app compiled differently — another `filter`, or the same filter from another profile (`reason`) — or one side's repeats did. Code compiled ahead of time runs faster than code the JIT compiles as the app runs, so a row can move for that reason alone. A side whose traces held no state (the process was already running) is judged by its JIT count instead: three times the other side's methods or more, and 50 or more apart, warns. A report from before the field gets no warning |
-| `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
+| `instrumentation` | markers that appeared, each named once, carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
 | `process` | two different apps. `comparable: false`, and every `holds` is `null` |
 | `window` | the two windows were not defined the same way: anchors against a launch window, a launch closed at its end against one that ran on to `reportFullyDrawn()`, or a side whose repeats did not agree. `comparable: false`. The command refuses the pair before any table is made; the warning is what another caller of the comparison sees |
 | `defaults` / `config` | one side used `--defaults`, or the config's hash changed; what the reports show changed (an anchor's glob, the config's path) is named |

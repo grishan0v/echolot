@@ -436,12 +436,16 @@ def _merge_sampling(samplings: list[dict[str, Any] | None]) -> dict[str, Any] | 
 
 
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
-               total: int) -> list[dict[str, Any]]:
+               total: int, *, counts: bool = False) -> list[dict[str, Any]]:
     """The rows of one detector across its repeats, folded to one row per identity.
 
     `per_run` is one list of rows per repeat, in report order. The repeat's
     index is what the `runs` column counts, and counting rows instead of
     repeats is how a detector with two rows per run once printed "6/3".
+
+    `counts` keeps the per-run `count` in `spread` too, beside the times.
+    The markers table asks for it: "one call became two" is the shape of
+    work done twice, and `compare` can only judge it from each run (#618).
     """
     groups: dict[tuple, list[tuple[int, dict]]] = {}
     for i, rows in enumerate(per_run):
@@ -483,6 +487,9 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
                     spread[col]["resolves_ms"] = reach
                     spread[col]["resolves_pct"] = (
                         round(reach / row[col] * 100, 1) if row[col] else None)
+        calls = [f["count"] for f in found if f.get("count") is not None]
+        if counts and calls:
+            spread["count"] = {"min": min(calls), "max": max(calls), "values": calls}
         if spread:
             row["spread"] = spread
         # Evidence comes from the worst repeat: that is where it says most.
@@ -519,7 +526,8 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     sections = [r.get("markers") or {} for r in reports]
     head = next((s for s in sections if s), {})
     seen = {row["location"] for s in sections for row in s.get("rows") or []}
-    rows = merge_rows([s.get("rows") or [] for s in sections], ("location",), total)
+    rows = merge_rows([s.get("rows") or [] for s in sections], ("location",), total,
+                      counts=True)
     # A marker that never closed in any repeat stays a floor in the merge.
     open_in = {row["location"] for s in sections for row in s.get("rows") or []
                if row.get("unfinished")}

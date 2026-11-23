@@ -68,6 +68,26 @@ Thread names are cut the same way wherever they appear: `uninstrumented_cpu`
 names threads, and `SyncAdapterThread-1` reaches the trace as
 `SyncAdapterThre`, fifteen characters.
 
+### Markers
+
+The report's markers table — the domains the config lists and the temporary
+markers, each measured every run whatever fired — is compared too, in a
+section of its own under the table:
+
+| Where | Before | After | Δ | N | Holds | Calls |
+|---|---|---|---|---|---|---|
+| loadCollection | 2079.4 ±19 | 4158.8 ±39 | **+2079.4 ×2.0** | 1 → 2 | yes, +2040.6 … +2100.6 | 1 → 2, yes, +1 … +1 |
+
+Its rows are paired by name and judged by self time as a detector's rows are.
+They matter most for an async section (`Trace.beginAsyncSection`): no detector
+reads one, since it has no thread to answer for, so the markers table is the
+only place it is measured. **Calls** judges the calls per run on their own: a
+load that ran twice per run instead of once is work done twice, and is listed
+when the medians are a whole call apart and more than the relative floor, with
+its range read from each run's count. The section lists the markers that moved
+by time or by calls; the header counts them as `markers moved`. A report
+written before the table existed is compared without it.
+
 ## The Holds column
 
 This is the column that decides whether a row is worth acting on. It gives
@@ -206,7 +226,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `detectors` | the two runs did not use the same set of detectors |
 | `detector-failed` | a detector failed on that side, with its error. It did not look there, so its rows on the other side are left out of the table rather than listed as gone or new, its params stay out of `thresholds`, and "Detectors that changed state" says `failed` |
 | `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording does not hold what they read, named with their reasons (see [When a detector could not look](analysing.md#when-a-detector-could-not-look)). Their rows are left out of the table on both sides rather than listed as gone or new, and "Detectors that changed state" says `not checked` |
-| `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. Only with that key in the config — without it they are ordinary appeared rows |
+| `instrumentation` | markers that appeared, each named once, carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. Only with that key in the config — without it they are ordinary appeared rows |
 | `environment` | the clock the two rounds ran at differs by the floor or more, 10% unless `--floor-pct` says otherwise, either way, or a side carries no clock at all, or a side read its clock or thermal state in only some of its repeats. Two rounds that recorded no platform state get no warning — see below |
 | `environment-thermal` | the kernel throttled the device during one round and not the other. Only when both sides recorded thermal state |
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
@@ -551,6 +571,12 @@ needs the slices under a row, or the sampled stacks, kept for both sides.
 `summary.not_compared` lists the detectors one side or both could not run,
 with each side's reason, `null` for a side that could. Their rows are not in
 `rows`, and `silent_both` does not name them.
+
+`markers` holds the report's markers table paired across the two sides, each
+row in the shape of `rows` with `detector: "markers"`, and, where both sides
+found it, `calls`: `before` and `after` (median calls per run), `delta`,
+`moved`, and `shift` (`low`, `high`) with `holds`, read from each run's count.
+`summary.markers_moved` counts the rows that moved by time or by calls.
 
 `change` is one of `appeared`, `grew`, `shrank`, `vanished`, `steady`, so an
 agent can take the rows worth looking at without parsing any numbers. As a
