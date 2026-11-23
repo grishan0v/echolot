@@ -22,6 +22,25 @@
 -- Only top-level slices count (depth = 0): nested ones sit inside their
 -- parent, so summing them counts the same time twice. Depth = 0 slices do not
 -- overlap each other, so there is no double counting among them.
+--
+-- A row measures the blind spot itself: `total_ms` is the thread's time on a
+-- CPU outside every top-level slice, `covered_ms` its time inside one, and the
+-- two add up to its time on a CPU. The bar is on the first. Ranked and
+-- compared on the whole of a thread's CPU, a stretch nobody named weighs no
+-- more than the work around it that somebody did: a 200 ms busy loop on a
+-- main thread with 2.3 s on a CPU would move its row by less than
+-- `compare`'s floor, and the plain verdict would call all 2.3 s work nothing
+-- names.
+--
+-- The share is a bar for the other threads only. On them it keeps the slivers
+-- between well-marked work out — a pool that names 90% of what it does is not
+-- where the next marker goes. The main thread is the window's own time, and
+-- its CPU outside every slice is where a regression in the app's own code
+-- hides first. On a large app's cold start its main thread was 72–80%
+-- covered in every run, so a 200 ms loop planted there with no section
+-- around it, 476 ms outside slices growing to 678, gave no row on either
+-- side: the better a thread is marked up, the longer a stretch the share let
+-- it hide. Its row stands on the time alone.
 
 --
 -- One row per thread name, not per thread. The kernel cuts a name to fifteen
@@ -34,10 +53,14 @@
 -- threads by name.
 
 WITH running AS (
-    SELECT thread_name, SUM(dur) AS running_ns
-    FROM _tstate_win
-    WHERE state = 'Running'
-    GROUP BY thread_name
+    -- `main` marks the name the process's main thread goes by: the thread
+    -- whose tid is the pid.
+    SELECT w.thread_name, SUM(w.dur) AS running_ns,
+           MAX(w.tid = p.pid)                              AS main
+    FROM _tstate_win w
+    CROSS JOIN _proc p
+    WHERE w.state = 'Running'
+    GROUP BY w.thread_name
 ),
 covered AS (
     -- _cpu_in_slice is prepared by the context: a SPAN_JOIN of on-CPU time
@@ -53,22 +76,27 @@ counted AS (
     SELECT thread_name, COUNT(*) AS slice_count
     FROM _slice_win
     GROUP BY thread_name
+),
+blind AS (
+    SELECT r.thread_name, r.running_ns, r.main,
+           COALESCE(c.sliced_ns, 0)                        AS sliced_ns,
+           r.running_ns - COALESCE(c.sliced_ns, 0)         AS outside_ns
+    FROM running r
+    LEFT JOIN covered c ON c.thread_name IS r.thread_name
 )
 SELECT
-    r.thread_name                                          AS location,
+    b.thread_name                                          AS location,
     COALESCE(n.slice_count, 0)                             AS count,
-    ROUND(r.running_ns / 1e6, 2)                           AS total_ms,
+    ROUND(b.outside_ns / 1e6, 2)                           AS total_ms,
     NULL                                                   AS max_ms,
-    ROUND(COALESCE(c.sliced_ns, 0) / 1e6, 2)               AS covered_ms,
-    ROUND(
-        100.0 * (r.running_ns - COALESCE(c.sliced_ns, 0)) / r.running_ns
-    ) || '% of CPU outside slices'                         AS detail
-FROM running r
-LEFT JOIN covered c ON c.thread_name IS r.thread_name
-LEFT JOIN counted n ON n.thread_name IS r.thread_name
-WHERE r.running_ns >= {{min_running_ms}} * 1000000
-  AND COALESCE(c.sliced_ns, 0) < r.running_ns * {{max_covered_pct}} / 100.0
-ORDER BY r.running_ns DESC
+    ROUND(b.sliced_ns / 1e6, 2)                            AS covered_ms,
+    ROUND(100.0 * b.outside_ns / b.running_ns)
+        || '% of CPU outside slices'                       AS detail
+FROM blind b
+LEFT JOIN counted n ON n.thread_name IS b.thread_name
+WHERE b.outside_ns >= {{min_running_ms}} * 1000000
+  AND (b.main OR b.sliced_ns < b.running_ns * {{max_covered_pct}} / 100.0)
+ORDER BY b.outside_ns DESC
 LIMIT 20;
 
 -- @intervals

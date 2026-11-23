@@ -300,8 +300,10 @@ means it waited — for work elsewhere, or for nothing at all — and the findin
 on the main thread do not say which. Work it waited for, if the report has it,
 is in the rows about other threads: `uninstrumented_cpu`, `io_wait`, a
 background `binder_txn`. A low share with the main thread mostly on a CPU
-means it ran code no row names: slices below the thresholds, or none at all —
-`echolot names` shows which, and `mark` names the rest.
+means it ran code no row names: slices below the thresholds — `echolot names`
+shows which. Its time outside every slice is `uninstrumented_cpu`'s row on
+the main thread once it clears that detector's bar, and `mark` names where
+markers go in it.
 
 **`window.crowding`** — the app's threads against the device's cores, moment
 by moment: `peak`, the most of them running or ready to run at once,
@@ -704,8 +706,14 @@ scheduler was slow to use it; neither doing less nor moving work fixes that.
 Background threads' rows carry the state alone.
 
 **`uninstrumented_cpu`** is the only one that finds a problem inside
-uninstrumented code. `covered_ms` far below `total_ms` means the thread worked
-outside every slice. Without callstack samples, what it did is unknown: this
+uninstrumented code. `total_ms` is the thread's time on a CPU outside every
+top-level slice, `covered_ms` its time inside one; the two add up to all of
+its CPU. Another thread is a row only when slices cover less than half of its
+CPU (`max_covered_pct`). The main thread is a row whenever its time outside
+slices clears the bar, however much of the rest is marked: that time is the
+window's, and a row on the main thread is the blind spot to take first.
+`compare` judges the row on `total_ms`, so a loop nobody named that grew is a
+row that grew. Without callstack samples, what it did is unknown: this
 is where adding `AGENTTMP_` instrumentation and re-recording makes sense, and
 there is no code behind the finding to look for.
 

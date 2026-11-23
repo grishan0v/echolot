@@ -462,16 +462,19 @@ def _f_waits(rows, ctx):
 
 
 def _f_cpu(rows, ctx):
+    # A row's time is the thread's CPU outside every slice, not all of its
+    # CPU: a main thread that names four fifths of what it does is a row for
+    # the fifth, and was not "busy for" that alone.
     top = rows[0]
-    unnamed = "mostly doing work that nothing in the recording names"
+    unnamed = "on work that nothing in the recording names"
     if len(rows) == 1:
-        return _sentence(f"{_name(top['location'])} was busy for {hum(_value(top))} "
-                         f"of processor time, {unnamed}", _runs(top, ctx))
+        return _sentence(f"{_name(top['location'])} spent {hum(_value(top))} "
+                         f"of processor time {unnamed}", _runs(top, ctx))
     total = sum(_value(r) for r in rows)
-    return (f"{len(rows)} threads or pools of threads were busy for {hum(total)} of "
-            f"processor time between them, {unnamed}. "
-            + _sentence(f"The busiest is {_name(top['location'])}: {hum(_value(top))}",
-                        _runs(top, ctx)))
+    return (f"{len(rows)} threads or pools of threads spent {hum(total)} of "
+            f"processor time between them {unnamed}. "
+            + _sentence(f"The largest part is on {_name(top['location'])}: "
+                        f"{hum(_value(top))}", _runs(top, ctx)))
 
 
 def _f_outlier(rows, ctx):

@@ -93,9 +93,9 @@ SAMPLES = {
         [row("worker_pool_0", 480.0, count=6, covered_ms=1.0, detail="99% of CPU outside slices"),
          row("worker_pool_1", 300.0, count=4, covered_ms=2.0, detail="98% of CPU outside slices")],
         "worth_a_look",
-        "2 threads or pools of threads were busy for 0.8 s of processor time between them, mostly "
-        "doing work that nothing in the recording names. The busiest is `worker_pool_0`: 0.5 s, "
-        "in all 3 launches."),
+        "2 threads or pools of threads spent 0.8 s of processor time between them on work that "
+        "nothing in the recording names. The largest part is on `worker_pool_0`: 0.5 s, in all "
+        "3 launches."),
     "main_thread_outlier": (
         [row("bindView", 280.0, count=2, max_ms=170.0, detail="median 0.3 ms of 80 · worst 566.7×")],
         "worth_a_look",
@@ -628,9 +628,8 @@ NEEDS ATTENTION   The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.8 tim
     The main thread waited 0.7 s for `worker_pool_#`, in all 3 launches. That is 36% of the launch.
     It was inside `loadConfig` at the time.
  ~  Work nobody can name
-    2 threads or pools of threads were busy for 0.8 s of processor time between them, mostly doing
-    work that nothing in the recording names. The busiest is `worker_pool_0`: 0.5 s, in all 3
-    launches.
+    2 threads or pools of threads spent 0.8 s of processor time between them on work that nothing in
+    the recording names. The largest part is on `worker_pool_0`: 0.5 s, in all 3 launches.
  ~  Calls to the system or to other apps
     `Sync Worker`, a background thread, spent 41 ms on calls to the system or to other apps, in all
     3 launches. The longest took 18 ms.
