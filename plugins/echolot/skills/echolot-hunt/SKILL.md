@@ -15,8 +15,9 @@ a host that does not list this skill; the loop's guide is the subagent's.
    3 s, now 7 s"), which traces show it, and **after which change**. Ask for
    the change even when the rest is clear. "Unknown" is an answer; not asking
    is not.
-3. **Open the investigation before anything is recorded**, unless you are
-   carrying on the one that is open:
+3. **Open the investigation before anything is recorded** unless
+   carrying on the open one. Else ask what that came to first;
+   `echolot hunt --done "<it>"` keeps it. Then:
 
    ```bash
    echolot hunt "<what regressed, in their words>" --since "<the change, or unknown>"
@@ -66,5 +67,5 @@ a host that does not list this skill; the loop's guide is the subagent's.
    `echolot hunt --done "<place> — <what happens there>; confidence <high|medium|low>"`.
 
    Then show the conclusion as it is. If it does not say the markers are
-   gone, check with the command `echolot guide hunt` gives. Say a low
+   gone, check as `echolot guide hunt` says. Say a low
    confidence out loud; a device finding wants a run on real hardware.

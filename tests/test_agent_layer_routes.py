@@ -42,6 +42,8 @@ from echolot.main import build_parser, main
 from echolot.state import next_kind, next_step, project_state
 from tests.support import check
 
+ROOT = Path(__file__).resolve().parent.parent
+
 CONFIG = ("project:\n  package: com.example.app\n  process: com.example.app\n"
           "scenario:\n  name: coldStart\n")
 
@@ -368,7 +370,9 @@ def test_the_hunt_command_opens_before_anything_is_recorded_and_closes_after() -
     opens = text.find('echolot hunt "<')
     collects = text.find("echolot collect")
     run_section = text.find("## The run")
-    closes = text.find("echolot hunt --done")
+    # The first `--done` before the run closes the investigation that was
+    # already open, once the human said what it came to (#497).
+    closes = text.find("echolot hunt --done", text.find("## Closing the investigation"))
     check("the command opens an investigation", opens >= 0)
     check("with the change", "--since" in text[opens:text.find("\n", opens)])
     check("before it records anything", 0 <= opens < collects, (opens, collects))
@@ -383,6 +387,92 @@ def test_the_skill_says_what_hunt_with_words_means_once() -> None:
     row = next(ln for ln in skill.splitlines() if ln.startswith("| `hunt`"))
     check("the hunt row says the investigation is opened and closed",
           "opens the investigation" in row and "closes" in row, row)
+
+
+# --- a request in the human's words (#497) ---------------------------------
+#
+# Every free-text request went to a new hunt, and `echolot hunt "<words>"`
+# closed whatever was open as `abandoned` without asking. "Record a baseline",
+# an ANR from Crashlytics and a question about last month's traces had no way
+# in. The door's routes, held to the commands they lead to.
+
+def _routes(text: str) -> dict[str, str]:
+    """The routes table of a door: its first bold words → the row."""
+    rows = {}
+    for ln in text.splitlines():
+        m = re.match(r"\| \*\*([^*]+)\*\*", ln)
+        if m:
+            rows[m.group(1).split(":")[0].strip()] = ln
+    return rows
+
+
+def _measure_block(text: str) -> str:
+    start = text.index("**Measure.**")
+    return text[start:text.index("\n## ", start)]
+
+
+@pytest.mark.parametrize("where", ["skill", "guide"])
+def test_each_kind_of_request_has_a_route_to_its_command(where: str) -> None:
+    from echolot.layer import GUIDE_DIR
+    text = (_read("skills/echolot/SKILL.md") if where == "skill"
+            else (GUIDE_DIR / "overview.md").read_text(encoding="utf-8"))
+    rows = _routes(text)
+    check("a route for each kind of request",
+          {"measure", "an ANR", "traces on disk, no device", "a regression"} <= set(rows), rows)
+    measure = rows["measure"] + (_measure_block(text) if where == "skill" else "")
+    check("a measurement records, reads and shows",
+          all(c in measure for c in ("echolot collect", "echolot analyze", "echolot report")),
+          measure)
+    check("outside any investigation: no `--hunt` in its commands, and none opened",
+          not re.search(r"echolot (collect|analyze)[^`\n]*--hunt", measure)
+          and 'echolot hunt "' not in measure and "without `--hunt`" in measure, measure)
+    check("an ANR goes to `echolot anr`, and an issue id alone is asked for its file",
+          "echolot anr" in rows["an ANR"] and "issue id alone" in rows["an ANR"], rows["an ANR"])
+    offline = rows["traces on disk, no device"]
+    check("traces on disk are read where they are",
+          "echolot analyze" in offline and "echolot report" in offline
+          and "No `collect`" in offline, offline)
+    regression = rows["a regression"]
+    check("a regression with an investigation open is a question, never a hunt at once",
+          "ask" in regression and "something new first" in regression
+          and 'echolot hunt "' not in regression, regression)
+
+
+def test_free_text_with_an_investigation_open_is_always_asked_about() -> None:
+    door = " ".join(_read("skills/echolot/SKILL.md").split())
+    check("no rule sends free text to a hunt without the question",
+          "<free text>` about slowness" not in door and "means the same" not in door, door[:0])
+    check("the rule that does ask holds whatever `next` says",
+          "free text with an investigation open is always this question, and never "
+          '`echolot hunt "<words>"` straight away' in door)
+    rows = [ln for ln in _read("skills/echolot/SKILL.md").splitlines()
+            if ln.startswith("| record and show a new report |")]
+    check("`resume-or-new` offers a new report outside the investigation", len(rows) == 1
+          and "outside the investigation" in rows[0] and "leave the investigation as it is"
+          in rows[0], rows)
+    plugin = " ".join((ROOT / "plugins/echolot/skills/echolot/SKILL.md")
+                      .read_text(encoding="utf-8").split())
+    check("the plugin's door sends a request to the same routes",
+          "Other words are a request, routed as `echolot guide` says" in plugin
+          and "a new report outside it" in plugin
+          and "free text about slowness" not in plugin, plugin)
+
+
+@pytest.mark.parametrize("where", ["command", "guide", "plugin", "door"])
+def test_an_open_investigation_is_asked_about_before_a_new_one_closes_it(where: str) -> None:
+    from echolot.layer import GUIDE_DIR
+    text = {"command": lambda: _read("commands/echolot-hunt.md"),
+            "guide": lambda: (GUIDE_DIR / "hunt.md").read_text(encoding="utf-8"),
+            "plugin": lambda: (ROOT / "plugins/echolot/skills/echolot-hunt/SKILL.md")
+            .read_text(encoding="utf-8"),
+            "door": lambda: _read("skills/echolot/SKILL.md")}[where]()
+    flat = " ".join(text.split())
+    asks = flat.find("came to")
+    opens = flat.find('echolot hunt "<')
+    check("it asks what the open one came to", asks >= 0, flat[:0])
+    check("and keeps an answer with `hunt --done` before the new one opens",
+          'echolot hunt --done "<' in flat[asks:] and (opens < 0 or asks < opens),
+          (asks, opens))
 
 
 def test_the_hunter_works_inside_the_investigation_and_does_not_open_one() -> None:

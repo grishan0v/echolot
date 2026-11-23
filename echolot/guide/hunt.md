@@ -30,8 +30,13 @@ opens slowly" is the cold start — and ask, with the scenarios as the options,
 when the words fit none of them or more than one. Carrying on the open
 investigation, its scenario is chosen already: `echolot hunt` names it.
 
-**The investigation.** Record what is being chased before you measure or
-record anything for it:
+**The investigation.** A new one closes the open one as `abandoned`, and its
+record then keeps the question with no answer. When `echolot hunt` shows one
+open and you are not carrying it on, ask the human what it came to first: an
+answer, even a partial one, closes it with
+`echolot hunt --done "<what it came to>"`.
+
+Record what is being chased before you measure or record anything for it:
 
 ```bash
 echolot hunt "cold start was 3s, now 7s" --since "the tab redesign"

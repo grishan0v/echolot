@@ -34,10 +34,24 @@ echolot status --next   # the same as one word, for switching on
 | `doctor` | run `echolot doctor`, show what failed, stop — no report is trustworthy until it passes |
 | `setup` | build `echolot.yml` — run `echolot guide setup` |
 | `fix-config` | show the parse error, ask the human to fix `echolot.yml`, stop |
-| `resume-or-new` | an investigation was left open. Show `echolot hunt` and ask the human: carry on (`echolot hunt --resume`, then `echolot guide hunt` inside it), or start a new one (`echolot guide hunt`, which opens it) |
+| `resume-or-new` | an investigation was left open. Show `echolot hunt` and ask the human: carry on (`echolot hunt --resume`, then `echolot guide hunt` inside it), start a new one (`echolot guide hunt`, which opens it, once the open one's answer is closed with `echolot hunt --done`), or record a new report outside it (`collect`, `analyze` and `report` without `--hunt`) |
 | `init-force` | files in `.claude/` may carry edits made here, and `echolot init --all` would overwrite them. Run `echolot init`, show the files it marks `≠`, and ask the human: overwrite them (`echolot init --all`), or keep them. Either way, go on as for `hunt` |
 | `fix-settings` | `.claude/settings.json` does not parse, and no flag of `init` can fix it. Show the `layer` line — it says what to merge in — and tell the human to fix the file by hand, then go on as for `hunt` |
 | `hunt` | find the regression — run `echolot guide hunt` |
+
+## A request in the human's words
+
+The human's words come before the state. Take the first route that fits:
+
+| the request | the route |
+|---|---|
+| **measure**: a baseline, "record and tell me what takes the time", no regression and no change to blame | `echolot collect -c echolot.yml -n 5`, `echolot analyze <the traces it printed, by name> -c echolot.yml`, `echolot report` — all without `--hunt`, and `--scenario <name>` on each with several scenarios. It opens no investigation and leaves an open one as it is |
+| **an ANR**: a Crashlytics or Play Console issue, a drop box entry, "the app froze" | `echolot anr <file> --root .`, then `echolot guide anr`. An issue id alone is not a file: ask for the export |
+| **traces on disk, no device** | `echolot analyze <those traces> -c echolot.yml`, then `echolot report`. No `collect`, no investigation |
+| **a regression**: it got slower, after something | with an investigation open (`echolot hunt` shows one), ask the human whether to carry on with it or start something new, something new first with their words; with none open, `echolot guide hunt` |
+
+Opening a new investigation closes the open one as `abandoned`. Ask first
+what it came to, and close an answer with `echolot hunt --done "<what it came to>"`.
 
 ## The order of work
 

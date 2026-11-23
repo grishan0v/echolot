@@ -35,8 +35,13 @@ enters the window; they remain callable directly for whoever knows where they
 are going. An argument wins over the state: `/echolot init` runs
 `echolot init` (not setup — a session once confused the two),
 `/echolot hunt <words>` starts a hunt with the words as the regression and
-without the `resume-or-new` question, and free text about slowness means the
-same.
+without the `resume-or-new` question. Other words are a request, routed by
+what it asks for: a measurement is `collect`, `analyze` and `report` outside
+any investigation; an ANR is `echolot anr`; a question about traces on disk
+is `analyze` and `report` on them; a regression is a hunt, and with an
+investigation open the human is asked first, whatever `next` says. Opening a
+new investigation closes the open one as `abandoned`, so the human is asked
+what it came to before that, and an answer is closed with `hunt --done`.
 
 They are listed in the order `next_kind` tries them, and the order is part of
 the design. A layer a newer echolot wrote comes before everything

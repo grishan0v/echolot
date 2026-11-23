@@ -41,19 +41,18 @@ Show the output to the human as it is, then act on its `next` line
 | `doctor` | `echolot doctor`: show what failed, and stop. A sandbox's refusal names its own way out |
 | `setup` | the `echolot-setup` skill, or `echolot guide setup` where the host does not list it |
 | `fix-config` | show the error, ask the human to fix `echolot.yml`, stop |
-| `resume-or-new` | show the recap `echolot` printed and ask: carry on (`echolot hunt --resume`, then the `echolot-hunt` skill), something new (the `echolot-hunt` skill with their question), or the report alone (`echolot report`) |
+| `resume-or-new` | show the recap `echolot` printed and ask: carry on (`echolot hunt --resume`, then the `echolot-hunt` skill), something new (the `echolot-hunt` skill with their question), a new report outside it (`echolot guide`), or the report alone (`echolot report`) |
 | `init-force` | files in `.claude/` differ from the package: ask, then `echolot init --for plugin` (`--for plugin,codex` in Codex); `.claude/` is the human's to remove; go on as for `hunt` |
 | `fix-settings` | show the `layer` line; the human fixes the file; go on as for `hunt` |
 | `hunt` | the `echolot-hunt` skill, or `echolot guide hunt` where the host does not list it |
 
 ## With an argument
 
-The argument wins over the state. `setup`, `hunt <words>` and `reflect` are
-the skills of those names; `hunt <words>`, or free text about slowness, starts
-a hunt with those words as the question, and the open investigation is not
-asked about. `init` is `echolot init --for plugin`, and `--for plugin,codex`
-in Codex. Any other word is the `echolot` command of that name: run it, show
-the output.
+The argument wins over the state. `setup`, `hunt <words>` (asking nothing
+about the open investigation) and `reflect` are the skills of those names. `init` is `echolot init --for plugin`
+(`--for plugin,codex` in Codex). A word naming an `echolot` command is that
+command: run it, show the output. Other words are a request, routed as
+`echolot guide` says.
 
 ## Asking the human
 

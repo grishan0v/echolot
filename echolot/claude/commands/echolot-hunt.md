@@ -62,8 +62,16 @@ when the human chose "carry on" at the door (`echolot hunt --resume` has run),
 or when `echolot hunt` shows an open investigation that the human's words
 continue — "keep going", the same symptom in the same sitting. When you
 cannot tell, ask with `AskUserQuestion`: carry on, or a new investigation.
-Carrying on, open nothing. Otherwise open one now, before anything is
-recorded or analysed for this question:
+Carrying on, open nothing.
+
+A new one closes the open one as `abandoned`, and its record then keeps the
+question with no answer. So when one is open and you are not carrying it on,
+ask with `AskUserQuestion` what it came to: an answer, even a partial one,
+is closed first with `echolot hunt --done "<what it came to>"`; "nothing" is
+left for the new one to close as `abandoned`.
+
+Then open one now, before anything is recorded or analysed for this
+question:
 
 ```bash
 echolot hunt "<what regressed, in the human's words>" --since "<the change, or unknown>"

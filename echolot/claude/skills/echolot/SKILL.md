@@ -59,7 +59,8 @@ and anything that drifted since. **Show that recap as it is**, then ask with
 | the human picks | what you do |
 |---|---|
 | carry on | `echolot hunt --resume`, then the `echolot-hunt` skill, saying the human chose to carry on: it works inside that investigation, with the question and the change it recorded |
-| something new | the `echolot-hunt` skill with their question: it asks for the change and opens the new investigation before anything is recorded for it |
+| something new | the `echolot-hunt` skill with their question: it asks what the open one came to, asks for the change, and opens the new investigation before anything is recorded for it |
+| record and show a new report | measure, outside the investigation — the "Measure" route under "With an argument" — and leave the investigation as it is |
 | just show the report | print `.echolot/out/report.md` — `.echolot/out/<scenario>/report.md`, the investigation's scenario, when the config names several — and stop |
 
 Lean towards "something new" when the recap shows a `!` line — the scenario
@@ -77,7 +78,15 @@ next investigation otherwise.
 When the human's own words already name a different question — `/echolot why
 does the list stutter` while the open investigation is about cold start — still
 ask, but offer "something new" first with their words filled in. A new
-formulation is sometimes a sharper version of the same hunt.
+formulation is sometimes a sharper version of the same hunt. This holds
+whatever `next` says: free text with an investigation open is always this
+question, and never `echolot hunt "<words>"` straight away.
+
+Opening a new investigation closes the open one as `abandoned`. Before that,
+ask what it came to: an answer, even a partial one, is closed with
+`echolot hunt --done "<what it came to>"` (or `--done --verdict <file>`), and
+only then is the new one opened. Otherwise its record keeps the question and
+loses the answer.
 
 Two things this is never asked about. Inside `perf-hunter`'s loop: it
 re-records and re-instruments on purpose, works inside an investigation it was
@@ -113,19 +122,41 @@ The argument wins over the state:
   updates **this** layer; the config is setup's job.
 - `/echolot setup` — the `echolot-setup` skill.
 - `/echolot hunt <words>` — a hunt for that question, and the
-  `resume-or-new` question is not asked: the words are what regressed. It
-  is the `echolot-hunt` skill with those words. The skill asks for the
-  change, opens the investigation with `echolot hunt "<words>" --since …` —
-  the same word in a shell, which does that half and nothing else — hands
-  the loop to `perf-hunter`, and closes the investigation with its answer.
-  `/echolot <free text>` about slowness ("why is startup slow", "the list
-  stutters since the redesign") means the same.
+  `resume-or-new` question is not asked: the human named the hunt. It
+  is the `echolot-hunt` skill with those words. The skill asks what an open
+  investigation came to before it is closed, asks for the change, opens the
+  investigation with `echolot hunt "<words>" --since …` — the same word in a
+  shell, which does that half and nothing else — hands the loop to
+  `perf-hunter`, and closes the investigation with its answer.
 - `/echolot doctor`, `/echolot status`, `/echolot analyze …` — run that
   command, show the output.
 - `/echolot reflect` — the `echolot-reflect` skill: how the last session
   went, what to change in the tool.
 
-Every argument after `/echolot` is a CLI verb of the same name, except
+Any other words are a request in the human's language. Read what it asks for,
+in this order, and take the first route that fits:
+
+| the request | the route |
+|---|---|
+| **measure**: a baseline, "record and tell me what takes the time", no regression and no change to blame | the "Measure" route below. It opens no investigation and leaves an open one as it is |
+| **an ANR**: a Crashlytics or Play Console issue, a drop box entry, an `anr` file, "the app froze" | the ANR section below, `echolot anr <file> --root .`. An issue id alone is not a file: ask for the export, and read nothing until it is here |
+| **traces on disk, no device**: "from last month's traces", "no phone today" | `echolot analyze <those traces> -c echolot.yml`, then `echolot report`. No `collect`, no investigation |
+| **a regression**: it got slower, after something | an investigation open (`echolot hunt` shows one): ask as `resume-or-new` says, something new first with their words. None open: the `echolot-hunt` skill with their words |
+
+**Measure.** Record, read, show — and nothing is filed under an investigation:
+
+```bash
+echolot collect -c echolot.yml -n 5
+echolot analyze .echolot/traces/<scenario>_iter*.perfetto-trace -c echolot.yml
+echolot report
+```
+
+All without `--hunt`: without it neither command files anything under an
+open investigation or makes it fresh. With several scenarios, match the request
+to one, as the `echolot-hunt` skill does, and pass `--scenario <name>` to all
+three. Show the report and stop.
+
+Every argument after `/echolot` that names a verb is that CLI verb, except
 `setup` — that one needs an agent and has no shell half. Where a verb has
 both, `/echolot X` runs `echolot X` and then whatever loop it needs.
 
@@ -320,7 +351,8 @@ percentiles against.
 
 The tool **localises one specific regression**: you know "it was 3 s, now it is
 7 s" and need to find where. It does not search for the unknown across a pile
-of traces.
+of traces. A question about traces already on disk is answered by `analyze`
+and `report` on those traces, not by an investigation.
 
 Networking in benchmarks is mocked on purpose — we hunt problems in code, not
 network speed.
