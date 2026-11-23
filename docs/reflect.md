@@ -33,7 +33,7 @@ Where things are looked for, when they are not where the defaults say:
 | `--project ROOT` | `.` | the application project the agent worked in — its run log, its config, its source tree |
 | `--transcripts DIR` | `~/.claude/projects/<slug>` | where Claude Code's transcripts are; naming it leaves Codex's sessions out |
 | `-c`, `--local` | `echolot.yml` in the project, `local.yml` beside it | the config the protocol checks read |
-| `-o DIR` | `.echolot/reflect` | where the reports go; relative to the project |
+| `-o DIR` | `.echolot/reflect` in the project | where the reports go; a path given here is from the current directory, like `-c` |
 | `--from-log` | off | ignore any transcript and read the run log alone — see below |
 
 ## Two sources

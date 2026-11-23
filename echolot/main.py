@@ -5514,7 +5514,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "from here, as everywhere else; without it, "
                          "echolot.yml in --project")
     rf.add_argument("--local", help="path to local.yml (defaults to alongside)")
-    rf.add_argument("-o", "--out", default=".echolot/reflect")
+    rf.add_argument("-o", "--out", metavar="DIR",
+                    help="where the reports go: a path from here, as everywhere "
+                         "else; without it, .echolot/reflect in --project")
     rf.set_defaults(func=cmd_reflect)
 
     web = add("ui", "yours", "", "a page in the browser: is the setup ready, check the app, the reports",
