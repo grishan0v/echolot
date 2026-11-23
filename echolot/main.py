@@ -2376,9 +2376,58 @@ def _crowding_info(tp) -> dict | None:
         FROM level""")
     if not rows or rows[0].get("peak") is None:
         return None
-    return {"threads": rows[0]["threads"], "cores": int(cores),
-            "peak": rows[0]["peak"],
-            "above_cores_ms": round((rows[0]["above_ns"] or 0) / 1e6, 2)}
+    out = {"threads": rows[0]["threads"], "cores": int(cores),
+           "peak": rows[0]["peak"],
+           "above_cores_ms": round((rows[0]["above_ns"] or 0) / 1e6, 2)}
+    outside = _outside_info(tp, int(cores))
+    if outside is not None:
+        out["outside"] = outside
+    return out
+
+
+def _outside_info(tp, cores: int) -> dict | None:
+    """How much of the CPUs' time in the window went to other processes, and to whom.
+
+    The crowd above counts the app's own threads, and `runnable_starvation`
+    says who held the main thread's core, which other processes do on a
+    quiet device too: 35–52% at rest, 42% with eight busy loops of the shell
+    user taking 68% of all eight cores (#596). Neither saw the load, and
+    the header put the app's waits down to its own work. So the window's
+    capacity, cores times its length, is split here by who ran on it: `pct`
+    is the share other processes took, with idle and the app left out, and
+    `top` the largest of them, processes of one name and uid together, as
+    eight `sh` of the shell user are one load. 13–17% on a quiet cold start.
+    """
+    rows = tp.query("""
+        WITH w AS (SELECT ts_start, ts_end FROM _window),
+        ran AS (
+            SELECT s.utid,
+                   MIN(CASE WHEN s.dur < 0 THEN w.ts_end ELSE s.ts + s.dur END, w.ts_end)
+                       - MAX(s.ts, w.ts_start) AS dur
+            FROM sched s CROSS JOIN w
+            WHERE s.utid != 0 AND s.dur != 0
+              AND s.ts < w.ts_end
+              AND CASE WHEN s.dur < 0 THEN w.ts_end ELSE s.ts + s.dur END > w.ts_start
+        )
+        SELECT COALESCE(p.name, t.name)        AS name,
+               p.uid                           AS uid,
+               COUNT(DISTINCT COALESCE(t.upid, -t.utid)) AS processes,
+               SUM(r.dur)                      AS ns
+        FROM ran r
+        JOIN thread t ON t.utid = r.utid
+        LEFT JOIN process p ON p.upid = t.upid
+        WHERE t.upid IS NULL OR t.upid != (SELECT upid FROM _proc)
+        GROUP BY 1, 2
+        ORDER BY ns DESC""")
+    span = (tp.query("SELECT ts_end - ts_start AS ns FROM _window") or [{}])[0].get("ns")
+    if not span or span <= 0 or not cores:
+        return None
+    capacity = cores * span
+    total = sum(r["ns"] or 0 for r in rows)
+    return {"pct": round(total / capacity * 100, 1),
+            "top": [{"name": r["name"], "uid": r["uid"], "processes": r["processes"],
+                     "pct": round((r["ns"] or 0) / capacity * 100, 1)}
+                    for r in rows[:3]]}
 
 
 def _spans_behind(tp, d, params: dict,

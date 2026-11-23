@@ -114,6 +114,7 @@ _UNLIKE = {
     "detectors": "not the same checks ran",
     "environment": "the phone's speed differed or could not be checked",
     "environment-thermal": "the phone ran hot during one of them",
+    "environment-load": "other apps kept the phone busy during one of them",
     "sampling": "stack sampling was not on the same way",
     "compose_names": "composable names were recorded on one side only",
     "compile": "the app was compiled differently",

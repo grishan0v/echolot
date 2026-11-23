@@ -285,13 +285,25 @@ def _merge_crowding(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
              if (r.get("window") or {}).get("crowding")]
     if not found:
         return None
-    return {
+    out = {
         "threads": round(median([c["threads"] for c in found])),
         "cores": max(c["cores"] for c in found),
         "peak": round(median([c["peak"] for c in found])),
         "above_cores_ms": round(median([c["above_cores_ms"] for c in found]), 2),
         "runs": f"{len(found)}/{len(reports)}",
     }
+    # Other processes' share: the median, like the rest, and the names from
+    # the repeat where they took most, which is where the load was clearest.
+    outside = [c["outside"] for c in found if c.get("outside")]
+    if outside:
+        worst = max(outside, key=lambda o: o.get("pct") or 0)
+        out["outside"] = {
+            "pct": round(median([o["pct"] for o in outside]), 1),
+            "pct_max": worst.get("pct"),
+            "top": worst.get("top") or [],
+            "runs": f"{len(outside)}/{len(reports)}",
+        }
+    return out
 
 
 def _merge_frames(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1017,19 +1029,73 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
     return out
 
 
+# The share of the CPUs' time in the window other processes may take before
+# the report says the device was busy (#596). 13–17% on quiet cold starts of
+# an SM-A515F, and 10% on the workshop app's; 80% with eight busy loops of
+# the shell user running.
+OUTSIDE_PCT = 40
+
+
+def outside_load(c: dict[str, Any] | None) -> dict[str, Any] | None:
+    """`crowding.outside` when other processes took enough of the CPUs to say so."""
+    outside = (c or {}).get("outside") or {}
+    pct = outside.get("pct")
+    return outside if pct is not None and pct >= OUTSIDE_PCT else None
+
+
+def outside_who(outside: dict[str, Any]) -> str:
+    """The largest load by name: `` `sh` (8 processes, uid 2000, 67.9%)``."""
+    top = (outside.get("top") or [None])[0]
+    if not top:
+        return ""
+    bits = []
+    if (top.get("processes") or 1) > 1:
+        bits.append(f"{top['processes']} processes")
+    if top.get("uid") is not None:
+        bits.append(f"uid {top['uid']}")
+    bits.append(f"{top.get('pct', 0):.0f}%")
+    return f"`{top.get('name')}` ({', '.join(bits)})"
+
+
 def _crowding_lines(c: dict[str, Any] | None) -> list[str]:
     """The app's threads against the cores, under the budget, when they outnumbered them.
 
     Nothing while there were never more threads ready than cores: then the
-    crowd explains no wait, and a line saying so would be read past.
+    crowd explains no wait, and a line saying so would be read past. With
+    other processes taking a large part of the CPUs, the wait is behind them
+    as well, and the line says so instead of putting it on the app (#596).
     """
     if not c or not c.get("above_cores_ms"):
         return []
+    outside = outside_load(c)
+    behind = (f"behind the app's own work and other processes', which took "
+              f"{outside['pct']:.0f}% of the CPUs' time" if outside
+              else "behind the app's own work")
     return [f"App threads: up to {c['peak']} running or ready at once on "
             f"{c['cores']} cores, more than {c['cores']} for "
             f"{c['above_cores_ms']:.0f} ms of the window. A thread of the app "
-            f"waiting for a CPU then waits behind the app's own work, and "
+            f"waiting for a CPU then waits {behind}, and "
             f"`runnable_starvation` says who held the main thread's core."]
+
+
+def _outside_lines(c: dict[str, Any] | None) -> list[str]:
+    """A warning when other processes took a large part of the CPUs in the window.
+
+    The share of the main thread's core others held is no measure of it: 35%
+    at rest, 42% with eight busy loops taking 68% of all eight cores. This is
+    the window's capacity, cores times its length, and the share of it that
+    went to processes other than the app.
+    """
+    outside = outside_load(c)
+    if not outside:
+        return []
+    who = outside_who(outside)
+    runs = short_runs(outside.get("runs"))
+    return [f"> ⚠️ Other processes took {outside['pct']:.0f}% of the CPUs' time "
+            f"in this window" + (f", most of it {who}" if who else "")
+            + (f", in {runs[0]} of {runs[1]} repeats" if runs else "")
+            + ". The app ran on a busy device, and its waits for a CPU below "
+              "are partly theirs. Record again with nothing else running."]
 
 
 def _in_rows_line(budget: dict[str, Any]) -> list[str]:
@@ -1634,6 +1700,7 @@ def to_markdown(report: dict[str, Any]) -> str:
 
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_crowding_lines(w.get("crowding")))
+    out.extend(_outside_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
 
     # An anchor that never matched silently collapses the window onto the whole
@@ -1912,6 +1979,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
                    f"process(es) matched the mask; the largest was taken")
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_crowding_lines(w.get("crowding")))
+    out.extend(_outside_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(_mapping_lines(report))

@@ -49,6 +49,7 @@ from typing import Any
 from . import launch as launch_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
+from . import report as report_mod
 from . import stats, table
 from .report import family, identity_of, metric_of, short_runs
 
@@ -561,6 +562,7 @@ def _check(before: dict, after: dict,
     out.extend(_environment_moved(before, after, floor_ratio))
     out.extend(recording_mod.moved(before, after))
     out.extend(_sampling_moved(before, after))
+    out.extend(_outside_moved(before, after))
     out.extend(_compose_names_moved(before, after))
     out.extend(_compile_moved(before, after))
 
@@ -948,6 +950,42 @@ def _environment_moved(before: dict, after: dict,
                     f"against each other.",
         })
     return out
+
+
+# How far apart, in points of the CPUs' time, the two sides' outside load
+# may be before it is a warning, once one of them was busy.
+OUTSIDE_GAP = 15
+
+
+def _outside_moved(before: dict, after: dict) -> list[dict[str, str]]:
+    """Whether other processes took a large part of the CPUs on one side (#596).
+
+    Eight busy loops of the shell user took 68% of all eight cores during one
+    round, and the comparison against a quiet round warned only that the
+    clock was lower. The window grew ×3.2 and 43% of the rows held, led by
+    the app's pools waiting for a CPU. Each report carries the share other
+    processes took (`window.crowding.outside`), and the two are set side by
+    side here as the clock is.
+    """
+    def of(rep: dict) -> dict:
+        return (((rep.get("window") or {}).get("crowding") or {}).get("outside")) or {}
+    ob, oa = of(before), of(after)
+    pb, pa = ob.get("pct"), oa.get("pct")
+    if pb is None or pa is None:
+        return []
+    if max(pb, pa) < report_mod.OUTSIDE_PCT or abs(pa - pb) < OUTSIDE_GAP:
+        return []
+    busy, quiet = ("after", "before") if pa > pb else ("before", "after")
+    who = report_mod.outside_who(oa if pa > pb else ob)
+    return [{
+        "id": "environment-load",
+        "text": f"Other processes took {max(pb, pa):.0f}% of the CPUs' time in "
+                f"the {busy} round's window and {min(pb, pa):.0f}% in the "
+                f"{quiet} round's" + (f", most of it {who}" if who else "")
+                + f". The {busy} round ran on a busy device, and a row that "
+                  f"grew there may have grown with the load. Record "
+                  f"that side again with nothing else running.",
+    }]
 
 
 def _sampling_moved(before: dict, after: dict) -> list[dict[str, str]]:

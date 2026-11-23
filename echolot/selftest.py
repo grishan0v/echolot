@@ -1061,8 +1061,12 @@ def _(report):
     # evidence than that.
     assert (row["state"], row["detail"]) == ("R", "state R"), row
     # The fixture never crowds the cores: no line about it in the header.
-    crowd = report["window"]["crowding"]
+    crowd = dict(report["window"]["crowding"])
+    # And other processes took little of the CPUs: `com.other.app`'s one
+    # stretch on CPU 5, 500 ms of 9 cores × 1005 ms.
+    outside = crowd.pop("outside")
     assert crowd == {"threads": 13, "cores": 9, "peak": 5, "above_cores_ms": 0.0}, crowd
+    assert outside["pct"] == 5.5 and outside["top"][0]["name"] == "com.other.app", outside
 
 
 @check("runnable_starvation: who held the core the main thread waited for")
@@ -1087,7 +1091,7 @@ def _(report):
     assert row["detail"] == (
         "state R · its core held by the app 60% (CrowdWorker most), other "
         "processes 27%, idle 13% · 3.7 other cores idle on average"), row
-    crowd = crowded["window"]["crowding"]
+    crowd = {k: v for k, v in crowded["window"]["crowding"].items() if k != "outside"}
     assert crowd == {"threads": 26, "cores": 10, "peak": 13, "above_cores_ms": 64.0}, crowd
 
 
