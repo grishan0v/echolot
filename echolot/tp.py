@@ -227,6 +227,11 @@ class Detector:
     plain_title: str = ""
     plain_why: str = ""
     plain_clean: str = ""
+    # Thresholds opened for the merge of repeats though no `@calibrate` line
+    # names them (`@bar: param, …`). A bar that is a fixed quantity, one
+    # frame, is not calibrated, and a row under it in one repeat is still
+    # there (#505); without this it read as absent again.
+    bars: tuple[str, ...] = ()
 
     @property
     def sha(self) -> str:
@@ -281,6 +286,7 @@ class Detector:
             intervals_sql=sections.get("intervals", ""),
             samples_sql=sections.get("samples", ""),
             needs=needs,
+            bars=tuple(b.strip() for b in meta.get("bar", "").split(",") if b.strip()),
             plain_title=meta.get("plain_title", ""),
             plain_why=meta.get("plain_why", ""),
             plain_clean=meta.get("plain_clean", ""),
@@ -289,14 +295,14 @@ class Detector:
     def render_open(self, overrides: dict[str, Any] | None = None) -> str:
         """The query with thresholds opened up — for measuring the distribution.
 
-        Calibrated thresholds are zeroed so HAVING lets everything through, and
+        Calibrated thresholds, and the `@bar`s, are zeroed so HAVING lets everything through, and
         LIMIT is stripped: a statistic over a truncated top twenty would be a
         statistic over the tail.
         """
         resolved = dict(self.params)
         resolved.update(overrides or {})
-        for c in self.calibrations:
-            resolved[c.param] = 0
+        for param in [c.param for c in self.calibrations] + list(self.bars):
+            resolved[param] = 0
         sql, _ = self.render(resolved)
         return _LIMIT_TAIL.sub("", sql)
 
