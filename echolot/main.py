@@ -4216,7 +4216,18 @@ def cmd_collect(args) -> int:
     timed = [r.get("total_time_ms") for r in results
              if isinstance(r.get("total_time_ms"), int)]
     times = [t for t in timed if t > 0]
-    if len(times) < len(timed):
+    # Without a stop between repeats, the app was still in front and nothing
+    # started: the traces look recorded and hold no launch (#593).
+    idle = [r for r in results if r.get("no_launch")]
+    if idle:
+        names = ", ".join(r["path"].name for r in idle)
+        print(f"\n[!] {len(idle)} of {len(results)} repeats started nothing: with "
+              f"runner.reset_policy: none the app was still in front, and "
+              f"{'this trace holds' if len(idle) == 1 else 'these traces hold'} no "
+              f"launch ({names}). Leave {'it' if len(idle) == 1 else 'them'} out of "
+              f"analyze, or record cold starts with reset_policy: force-stop.",
+              file=sys.stderr)
+    elif len(times) < len(timed):
         print(f"\nam start -W: {len(timed) - len(times)} of {len(timed)} "
               f"launches report TotalTime: 0 — the system timed no start "
               f"there, usually because the activity was already in front.",

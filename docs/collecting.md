@@ -88,7 +88,9 @@ HOME, `force-stop`, a wait for the app's process to be gone, the cooldown when
 `am start -W`, wait, pull. A cold start. With `reset_policy: none` nothing is
 reset between repeats, and that is not a warm start: the app is still in front
 from the repeat before, so `am start -W` has nothing to start and only the
-first repeat can measure one.
+first repeat can measure one. `collect` says so before it records more than
+one, marks each repeat that started nothing with `[!]`, and ends with a `[!]`
+line that names those traces: they hold no launch.
 
 HOME comes first because the app is still on screen from the repeat before.
 Stopped there, an app whose activity is bound to a service in a second
