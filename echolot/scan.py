@@ -488,7 +488,31 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
     """Every source with a MacrobenchmarkRule: the tests, what they measure, who they drive."""
     out = []
     by_module: dict[str, dict] = {}
-    for path in source_files(root):
+    sources = source_files(root)
+    # The project's constants, read only when a benchmark names one its own
+    # file does not declare. A large app keeps its section names in a
+    # constants object of another module (`TraceSectionMetric(AppTraces.
+    # LIST_SHOWN)`), and the file alone resolved none of them: the class
+    # measured nothing, and the draft's end anchor was "?" (#516). Its own
+    # file comes first, as `domains` would see the nearest declaration.
+    everywhere: dict[str, str | None] | None = None
+
+    def resolve(ident: str, consts: dict[str, str | None]) -> str | None:
+        nonlocal everywhere
+        simple = ident.rsplit(".", 1)[-1]
+        if simple in consts:
+            return consts[simple]
+        if everywhere is None:
+            texts = {}
+            for src in sources:
+                try:
+                    texts[src] = src.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+            everywhere = constants(texts)
+        return everywhere.get(simple)
+
+    for path in sources:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -506,11 +530,19 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
         # `benchmarks` went into the skeleton's class filter.
         code = _strip(text)
         cls = _CLASS.search(code)
-        metrics = []
-        for lit, ident in _METRIC.findall(text):
-            name = lit or consts.get(ident.rsplit(".", 1)[-1])
-            if name and name not in metrics:
-                metrics.append(_as_glob(name))
+        metrics: list[str] = []
+        unresolved: list[str] = []
+        # From the code: a metric in a comment measures nothing, and its
+        # name would otherwise be listed as a constant not found.
+        for lit, ident in _METRIC.findall(code):
+            name = lit or resolve(ident, consts)
+            if name:
+                if _as_glob(name) not in metrics:
+                    metrics.append(_as_glob(name))
+            elif ident not in unresolved:
+                # Kept by its identifier, so the draft can say which name to
+                # look up rather than only that one was not read.
+                unresolved.append(ident)
         # Each class keeps its own metrics, so the skeleton takes the class,
         # its test and its end anchor from one file.
         entry["classes"].append({
@@ -518,6 +550,7 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
             "name": (pkg.group(1) + "." if pkg else "") + (cls.group(1) if cls else path.stem),
             "tests": _TEST.findall(text),
             "metrics": metrics,
+            "unresolved": unresolved,
             "startup": "StartupTimingMetric" in text or "StartupMode" in text,
             # `StartupTimingMetric` by itself, apart from `StartupMode`:
             # whether the launch is what this class measures.
@@ -531,7 +564,7 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
                   or re.search(r'packageName\s*=\s*([\w.]+)', text))
         if target and not entry["package_name"]:
             val = target.group(1)
-            entry["package_name"] = val if '"' in target.group(0) else consts.get(val.rsplit(".", 1)[-1])
+            entry["package_name"] = val if '"' in target.group(0) else resolve(val, consts)
         if "StartupTimingMetric" in text or "StartupMode.COLD" in text:
             entry["startup"] = True
         mdir = path
@@ -844,6 +877,11 @@ def skeleton(facts: Facts) -> list[str]:
             '  window: {name: launch, _source: derived, _evidence: "the launcher Activity '
             f'{facts.app["launcher"]} in {facts.app["manifest"]}, started by the runner below; '
             + _THE_TRACE_DECIDES + '"}')
+    elif pick and pick.get("unresolved"):
+        out += [start,
+                '  end: {name: "?", _source: default, _evidence: "TraceSectionMetric('
+                f'{pick["unresolved"][0]}) in {pick["file"]}: its value was not read here. '
+                'Put the string it holds, or pick from `echolot probe`"}']
     else:
         out += [start,
                 '  end: {name: "?", _source: default, _evidence: "pick from `echolot probe` — '
@@ -887,9 +925,13 @@ def _kind_words(cls: dict) -> str:
     kind = cls.get("kind")
     if kind == SECTION:
         named = ", ".join(f"`{m}`" for m in cls.get("metrics") or [])
+        unread = ", ".join(f"`{m}`" for m in cls.get("unresolved") or [])
         words = ("measures a section (`TraceSectionMetric`): "
                  + (f"{named}, where its window can end" if named
                     else "its name is set elsewhere and was not read"))
+        if unread:
+            words += (f"; {unread}: " if named else f", by {unread}: ") + (
+                "a constant whose value was not found in the project")
         if cls.get("measures_launch"):
             words += ("; it measures the launch too (`StartupTimingMetric`), and the "
                       "section comes first")

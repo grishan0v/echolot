@@ -165,7 +165,8 @@ def test_a_section_alone_and_one_not_read_are_said_too(tmp_path: Path) -> None:
           "window can end\n" in text, text)
     check("a section whose name is a constant declared elsewhere",
           "openCart — measures a section (`TraceSectionMetric`): its name is set elsewhere "
-          "and was not read\n" in text, text)
+          "and was not read, by `Elsewhere.READY`: a constant whose value was not found in "
+          "the project\n" in text, text)
 
 
 def test_the_command_prints_the_kind_and_the_json_carries_it(tmp_path: Path) -> None:

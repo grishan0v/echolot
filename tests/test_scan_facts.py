@@ -116,6 +116,45 @@ def test_the_application_id_note_is_printed_once(tmp_path: Path) -> None:
           sum("applicationId could not be read" in n for n in facts.notes) == 1, facts.notes)
 
 
+def test_a_section_named_by_a_constant_of_another_module_is_read(tmp_path: Path) -> None:
+    """#516: the section names live in a constants object of another module."""
+    root = repo(tmp_path)
+    (root / "benchmark/src/main/java/com/example/benchmark/StartupBenchmark.kt").unlink()
+    _write(root, "core/tracing/src/main/java/com/example/tracing/AppTraces.kt",
+           "package com.example.tracing\nobject AppTraces {\n"
+           '  const val LIST_SHOWN = "list_shown"\n'
+           '  const val COLLECTION_LOAD = "collection_load"\n}\n')
+    _write(root, "benchmark/src/main/java/com/example/benchmark/ListBench.kt",
+           "package com.example.benchmark\nimport com.example.tracing.AppTraces\n"
+           "class ListBench {\n  @get:Rule val rule = MacrobenchmarkRule()\n  @Test\n"
+           "  fun listShown() = rule.measureRepeated(metrics = listOf(StartupTimingMetric(), "
+           "TraceSectionMetric(AppTraces.LIST_SHOWN), TraceSectionMetric(AppTraces.NOWHERE)), "
+           "startupMode = StartupMode.COLD) {}\n}\n")
+    facts = scan.describe(root, devices=False)
+    cls = facts.benchmarks[0]["classes"][0]
+    check("the constant's value, from the other module", cls["metrics"] == ["list_shown"], cls)
+    check("the one declared nowhere kept by its name",
+          cls["unresolved"] == ["AppTraces.NOWHERE"], cls)
+    text = "\n".join(scan.skeleton(facts))
+    check("and the draft ends at it", 'end: {name: "list_shown"' in text, text)
+    check("the summary names the one not read",
+          "`AppTraces.NOWHERE`: a constant whose value was not found" in scan.render(facts))
+
+
+def test_a_section_constant_not_found_is_named_in_the_draft(tmp_path: Path) -> None:
+    root = repo(tmp_path)
+    (root / "benchmark/src/main/java/com/example/benchmark/StartupBenchmark.kt").unlink()
+    _write(root, "benchmark/src/main/java/com/example/benchmark/ListBench.kt",
+           "package com.example.benchmark\nclass ListBench {\n"
+           "  @get:Rule val rule = MacrobenchmarkRule()\n  @Test\n"
+           "  fun listShown() = rule.measureRepeated(metrics = listOf("
+           "TraceSectionMetric(AppTraces.LIST_SHOWN))) {}\n}\n")
+    facts = scan.describe(root, devices=False)
+    text = "\n".join(scan.skeleton(facts))
+    check("no name guessed", 'end: {name: "?"' in text, text)
+    check("the identifier to look up", "TraceSectionMetric(AppTraces.LIST_SHOWN)" in text, text)
+
+
 def test_the_skeleton_takes_one_benchmark_class(tmp_path: Path) -> None:
     root = repo(tmp_path)
     (root / "benchmark/src/main/java/com/example/benchmark/StartupBenchmark.kt").unlink()
