@@ -58,6 +58,21 @@ def test_a_file_with_no_trace_data_is_said_so(tmp_path: Path) -> None:
           code == 2 and "old.json holds no process" in err and "try" not in err, err)
 
 
+@pytest.mark.parametrize("name, body", [("empty.perfetto-trace", b""),
+                                        ("report.json", b'{"schema": 1, "detectors": []}')])
+def test_probe_refuses_a_file_with_no_trace_data(tmp_path: Path, name: str,
+                                                 body: bytes) -> None:
+    """It printed an empty process table and exited 0, so `probe x &&
+    analyze x`, the cheapest check that a pulled file is a trace, passed
+    a file that holds nothing (#567)."""
+    path = tmp_path / name
+    path.write_bytes(body)
+    code, out, err = _run("probe", str(path))
+    check("the line analyze and names say, and exit 2",
+          code == 2 and f"{name} holds no process with a name" in err
+          and "_empty_" not in out, (code, out, err))
+
+
 def test_the_mask_s_source_is_the_one_named(trace: Path, tmp_path: Path) -> None:
     code, _, err = _run("names", str(trace), "--process", "com.typo*")
     check("a flag's mask is the flag's",
