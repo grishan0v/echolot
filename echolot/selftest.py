@@ -1337,6 +1337,76 @@ def _(report):
         assert said and "set aside" in said[0], said
 
 
+@check("collect: the app is stopped before the device cools, and again if it is "
+       "running by the recording")
+def _(report):
+    """Cooled with the app in front, a job the app had scheduled during the
+    wait was due by the force-stop, and the system started the process for it
+    at once: on an A51, 47 of 59 repeats that had waited for the device began
+    warm, and 0 of 51 that had not (#611). Stopped before the wait, and looked
+    for once more right before the recording, a set of 70 began cold 70 times.
+
+    Driven through `runner._run`, the runner's one door to adb, by a device
+    that is already cool and whose app is running again before the second
+    recording.
+    """
+    from . import runner
+    package, serial = "com.example.app", "emulator-5554"
+    look = f"pidof {package} || true"
+    asked: list[str] = []
+    found = ["", "4242\n"]
+
+    def adb(args, stdin=None, timeout=120):
+        args = list(args)
+        text = " ".join(args[4:]) if args[3:4] == ["shell"] else " ".join(args)
+        asked.append(text)
+        if text == "adb devices":
+            return f"List of devices attached\n{serial}\tdevice\n\n"
+        if text.startswith("pm path"):
+            return f"package:/data/app/{package}/base.apk\n"
+        if text == "dumpsys battery":
+            return "  level: 85\n  temperature: 300\n"
+        if text.startswith("dumpsys power"):
+            return ("  mWakefulness=Awake\n  mIsPowered=true\n  mStayOn=true\n"
+                    "    mShowingDream=false mDreamingLockscreen=false\n"
+                    "    isKeyguardShowing=false\n")
+        if text == look:
+            return found.pop(0)
+        if text.startswith("am start -W"):
+            return "Status: ok\nLaunchState: COLD\nTotalTime: 523\nComplete\n"
+        if args[3:4] == ["pull"]:
+            Path(args[-1]).write_bytes(b"a trace")
+        return ""
+
+    said: list[str] = []
+    real = runner._run
+    runner._run = adb
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            runner.collect(package, Path(tmp) / "traces", 2, name="run",
+                           section={"activity": f"{package}/.Main",
+                                    "cooldown": {"max_c": 34}},
+                           log=said.append)
+    finally:
+        runner._run = real
+    starts = [i for i, q in enumerate(asked) if q.startswith("perfetto -c")]
+    assert len(starts) == 2, asked
+    for n, (begin, end) in enumerate(zip([0, starts[0]], starts, strict=True)):
+        repeat = asked[begin:end]
+        stops = [i for i, q in enumerate(repeat) if "am force-stop" in q]
+        cool = max(i for i, q in enumerate(repeat) if q == "dumpsys battery")
+        assert stops and stops[0] < cool < repeat.index(look), (
+            f"repeat {n + 1}: the stop, the wait, then the last look: {repeat}")
+        assert len(stops) == n + 1, (
+            f"repeat {n + 1}: stopped again only when the look found the app: {repeat}")
+    assert any("stopped before each wait" in s for s in said), said
+    again = [s for s in said if "was running again" in s]
+    assert len(again) == 1 and "(pid 4242), and was stopped again" in again[0], said
+    assert said.index(again[0]) - 1 == next(
+        i for i, s in enumerate(said) if "[2/2]" in s), "under the second repeat's line"
+    assert not any("not a cold start" in s for s in said), said
+
+
 @check("collect: a failed scenario command says the line that failed and what to do")
 def _(report):
     """Gradle's useful half is on stdout, and the message showed stderr.
