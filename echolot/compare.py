@@ -137,6 +137,14 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
 
     rows.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
 
+    # Two processes, two windows, or a window that is not the scenario's: the
+    # numbers stay, because a wrong-looking table is more useful than a
+    # refusal, but a verdict that a move holds would claim a comparison that
+    # is not there (#534).
+    if not comparable:
+        for r in rows:
+            r["shift"], r["holds"] = None, None
+
     warnings.extend(_not_compared_warnings(before, after))
 
     planted = _planted(rows, temp_prefix)
@@ -271,26 +279,25 @@ def _check(before: dict, after: dict,
     # window runs on to the end of the recording, which is how ten detectors
     # once fired on a scenario that had not been cut out.
     for side, w in (("before", wb), ("after", wa)):
-        missed = [(key, a) for key in ("start", "end")
-                  if (a := w.get(f"{key}_anchor") or {}).get("matches") == 0]
-        if missed:
-            out.append({
-                "id": f"anchor-{side}",
-                "text": f"The {side} report's "
-                        + " and ".join(f"{key} anchor `{a.get('glob')}`"
-                                       for key, a in missed)
-                        + " never matched — its window is not the scenario's, "
-                          "and runs to the edge of the trace. Fix the config "
-                          "and analyze again.",
-            })
+        warning, broken = _anchor_warning(side, w)
+        if warning is not None:
+            out.append(warning)
+        # An anchor no repeat found leaves a window that is not the
+        # scenario's: every row is measured over the edge of the trace, and
+        # a verdict over that is a verdict about a different stretch (#534).
+        if broken:
+            comparable = False
 
     cb, ca = before.get("config") or {}, after.get("config") or {}
     if cb.get("sha") and ca.get("sha") and cb["sha"] != ca["sha"]:
+        seen = _config_moved(before, after)
         out.append({
             "id": "config",
-            "text": f"The config changed between the two: sha `{cb['sha']}` → "
-                    f"`{ca['sha']}`. Anchors, the process mask and thresholds "
-                    f"all live there.",
+            "text": "The config changed between the two: "
+                    + ("; ".join(seen) + f" (sha `{cb['sha']}` → `{ca['sha']}`)."
+                       if seen else
+                       f"sha `{cb['sha']}` → `{ca['sha']}`. Anchors, the "
+                       f"process mask and thresholds all live there."),
         })
     if bool(cb.get("defaults")) != bool(ca.get("defaults")):
         out.append({
@@ -359,6 +366,87 @@ def _check(before: dict, after: dict,
                     "are listed as appeared or gone for that reason alone.",
         })
     return out, comparable
+
+
+def _anchor_warning(side: str, w: dict) -> tuple[dict[str, str] | None, bool]:
+    """One side's anchors that did not match, worded from what its report says.
+
+    A merged report keeps the fewest matches of any repeat, so one repeat
+    without the anchor makes `matches` 0, and `missed` says how many repeats
+    that was (#594). One warm start in fifteen is not a broken anchor, and
+    "fix the config" sent the reader to the one file that was right. Only an
+    anchor that no repeat found is broken, and only that makes the pair not
+    comparable; even then the config is named only when the traces hold a
+    launch, since a set that held none was not the scenario's recordings.
+
+    The second value is whether an anchor matched in no repeat at all.
+    """
+    partial: list[str] = []
+    never: list[str] = []
+    for key in ("start", "end"):
+        a = w.get(f"{key}_anchor") or {}
+        if a.get("matches") != 0:
+            continue
+        label = f"{key} anchor `{a.get('glob')}`"
+        some = short_runs(a.get("missed"))
+        if some:
+            partial.append(f"{label} was not found in {some[0]} of {some[1]} "
+                           f"{side} repeats")
+        else:
+            never.append(label)
+    if not partial and not never:
+        return None, False
+    bits: list[str] = []
+    if never:
+        text = (f"The {side} report's " + " and ".join(never)
+                + " never matched in any repeat — its window is not the "
+                  "scenario's, and runs to the edge of the trace, so the Holds "
+                  "column stays empty.")
+        if w.get("startup") is None:
+            text += (" Its traces hold no app launch either: if the scenario "
+                     "starts the app, those recordings were not launches "
+                     "(check `runner.reset_policy` and what the runner said), "
+                     "and the config may be right. If it does not, fix the "
+                     "anchor in the config and analyze again.")
+        else:
+            text += " Fix the config and analyze again."
+        bits.append(text)
+    if partial:
+        text = ("The " + "; the ".join(partial)
+                + ". In those the window expanded to the whole trace, and their "
+                  "rows are in the medians.")
+        types = str((w.get("startup") or {}).get("type") or "")
+        if " and " in types:
+            text += (f" The set mixes starts ({types}): the repeats without the "
+                     f"anchor are likely the warm ones, without a process "
+                     f"start. Leave those traces out and analyze again.")
+        else:
+            text += (" Leave those traces out and analyze again, or check "
+                     "them against `probe`.")
+        bits.append(text)
+    return {"id": f"anchor-{side}", "text": " ".join(bits)}, bool(never)
+
+
+def _config_moved(before: dict, after: dict) -> list[str]:
+    """What the two reports themselves show changed in the config.
+
+    The hash says only that something did. The anchors and the config's path
+    are in both reports, and "end anchor `a` → `b`" explains a window that
+    moved on its own; thresholds are named by `_params_moved` already.
+    """
+    out: list[str] = []
+    cb, ca = before.get("config") or {}, after.get("config") or {}
+    if cb.get("path") and ca.get("path") and cb["path"] != ca["path"]:
+        out.append(f"config `{cb['path']}` → `{ca['path']}`")
+    wb, wa = before.get("window") or {}, after.get("window") or {}
+    for key in ("start", "end"):
+        gb = (wb.get(f"{key}_anchor") or {}).get("glob")
+        ga = (wa.get(f"{key}_anchor") or {}).get("glob")
+        if gb != ga and (gb or ga):
+            out.append(f"{key} anchor `{gb}` → `{ga}`"
+                       if gb and ga else
+                       f"{key} anchor `{gb or ga}` {'dropped' if gb else 'added'}")
+    return out
 
 
 # How far the clock may drift before the table below stops being about the
@@ -654,6 +742,7 @@ def _side(report: dict, path: str) -> dict[str, Any]:
         "runs": _runs(report),
         "generated_at": report.get("generated_at"),
         "config_sha": cfg.get("sha"),
+        "config_path": cfg.get("path"),
         "defaults": bool(cfg.get("defaults")),
     }
 

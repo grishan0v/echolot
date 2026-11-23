@@ -194,12 +194,12 @@ top, the way the Marker Report already states an anchor that never matched.
 
 | warning | why it matters |
 |---|---|
-| `process` | two different apps. `comparable: false`; nothing below is a comparison |
+| `process` | two different apps. `comparable: false`; nothing below is a comparison, and the Holds column stays empty |
 | `window` | the windows were not defined the same way. `comparable: false`. `echolot compare` refuses such a pair outright, see [Two windows](#two-windows); the warning is for a caller that builds the comparison itself |
 | `thresholds` | detector parameters differ. **appeared** and **gone** mean "the bar moved", so they say nothing about the app. Named parameter by parameter, with both values |
 | `defaults` | one side ran with `--defaults` and the other did not |
-| `config` | the config's hash changed between the two: anchors, process mask and thresholds all live there |
-| `anchor-before` / `anchor-after` | that side's start or end anchor never matched, so its window runs to the edge of the trace rather than the scenario's |
+| `config` | the config's hash changed between the two. What the reports themselves show changed is named — an anchor's glob (end anchor `list_shown_mark` → `list_shown`), the config's path — and the hash alone where nothing visible moved: anchors, process mask and thresholds all live there |
+| `anchor-before` / `anchor-after` | that side's start or end anchor never matched in any repeat, so its window runs to the edge of the trace rather than the scenario's: `comparable: false`, and the Holds column stays empty. With no launch in that side's traces either, the warning points at the runner (`runner.reset_policy`) rather than the config. An anchor missed in some repeats only — `not found in 1 of 15 after repeats` — keeps the pair comparable and names those repeats, the warm ones when the set mixes cold and warm starts, as the ones to leave out |
 | `runs` | different numbers of repeats. Holds allows for it; the ± beside each median does not, and the narrower side is the smaller sample |
 | `single` | one trace on a side: no spread, so the Holds column is empty throughout |
 | `few` | too few repeats to be 95% sure of any move, so the Holds column is empty throughout. How many are enough is under [the Holds column](#the-holds-column) |
@@ -512,7 +512,8 @@ needs the slices under a row, or the sampled stacks, kept for both sides.
   "comparable": true,
   "warnings": [ { "id": "thresholds", "text": "…" } ],
   "before": { "path": "…", "runs": 5, "generated_at": "…",
-              "config_sha": "a3f9c21b07de", "defaults": false },
+              "config_sha": "a3f9c21b07de", "config_path": "/…/echolot.yml",
+              "defaults": false },
   "after":  { "…": "the same shape" },
   "window": { "before_ms": 1184.0, "after_ms": 2960.4,
               "delta_ms": 1776.4, "ratio": 2.5 },

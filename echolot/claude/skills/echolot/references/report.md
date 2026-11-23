@@ -938,10 +938,10 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `compile` | the two rounds ran the app compiled differently — another `filter`, or the same filter from another profile (`reason`) — or one side's repeats did. Code compiled ahead of time runs faster than code the JIT compiles as the app runs, so a row can move for that reason alone. A side whose traces held no state, and a report from before the field, get no warning |
 | `instrumentation` | rows that appeared carry the config's `instrumentation.temp_prefix` — markers added between the rounds, a breakdown of a blind spot, not new work. Needs that key in the config |
-| `process` | two different apps. `comparable: false` |
+| `process` | two different apps. `comparable: false`, and every `holds` is `null` |
 | `window` | the two windows were not defined the same way: anchors against a launch window, a launch closed at its end against one that ran on to `reportFullyDrawn()`, or a side whose repeats did not agree. `comparable: false`. The command refuses the pair before any table is made; the warning is what another caller of the comparison sees |
-| `defaults` / `config` | one side used `--defaults`, or the config's hash changed |
-| `anchor-before` / `anchor-after` | that side's start or end anchor never matched: its window runs to the edge of the trace |
+| `defaults` / `config` | one side used `--defaults`, or the config's hash changed; what the reports show changed (an anchor's glob, the config's path) is named |
+| `anchor-before` / `anchor-after` | that side's start or end anchor never matched in any repeat: its window runs to the edge of the trace, `comparable: false` and every `holds` is `null`. With no launch in those traces either, the runner (`runner.reset_policy`) is named rather than the config. Missed in some repeats only (`not found in 1 of 15 after repeats`): still comparable, and the remedy is to leave those traces out — the warm ones, when the set mixes cold and warm starts |
 | `runs` / `single` | different repeat counts, or a single trace with no spread to test against |
 | `few` | too few repeats to be 95% sure of any move — four a side is always enough — so every `holds` is `null`. Record another round rather than read the moves as settled |
 | `detectors` | the two runs did not use the same set of detectors |
