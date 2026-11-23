@@ -827,7 +827,11 @@ class TraceSession:
     """
 
     def __init__(self, trace_path: str | Path, binary: str | None = None,
-                 extra: bytes | None = None):
+                 extra: bytes | None = None, *, cut_ok: bool = False):
+        self._tp = None
+        # Where the file ends inside its last packet, said; None for a file
+        # that is whole or that this cannot tell about. See `cut_short`.
+        self.cut: str | None = None
         try:
             from perfetto.trace_processor import (
                 TraceProcessor,
@@ -867,6 +871,21 @@ class TraceSession:
         # with `/` or `.` and has a colon in it as `resolver:args`, so
         # `run12:00.perfetto-trace` failed with `KeyError: 'run12'`.
         path = path.resolve()
+        # A recording that lost its tail: a pull that was interrupted, a full
+        # disk, a download that stopped early. trace_processor drops the
+        # unfinished packet without a word, and what the tail held went with
+        # it — in a launch recording, the process list, the last frames and
+        # the memory counters. The report on it looked sound, or `analyze`
+        # refused it with advice to change a project.process that was right
+        # (#568). Walked before trace_processor starts: it costs a read of
+        # each packet's length, a hundredth of a second for most traces.
+        self.cut = cut_short(path)
+        if self.cut and not cut_ok:
+            raise ConfigError(
+                f"{path}: {self.cut}. What a recording keeps at its end — the "
+                f"process list, the last frames, the memory counters — is "
+                f"gone with it, and a report on the rest reads as whole. Pull "
+                f"or copy it again, or leave it out and run again.")
 
         # The binary is settled before perfetto is asked to start it, and
         # handed over by path: left to perfetto, the pin would be downloaded
@@ -952,8 +971,11 @@ class TraceSession:
         return rows
 
     def close(self) -> None:
+        tp, self._tp = self._tp, None
+        if tp is None:
+            return
         try:
-            self._tp.close()
+            tp.close()
         except Exception:
             pass
 
@@ -962,6 +984,57 @@ class TraceSession:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def cut_short(path: Path) -> str | None:
+    """Where a recording ends inside its last packet, in words; None when it
+    does not, or when this cannot tell.
+
+    A trace file is a run of length-prefixed packets — field 1 of the `Trace`
+    message, each a 0x0A tag, a varint length and that many bytes — so a file
+    cut at any byte but a packet's last disagrees with the lengths it
+    declares. Only that shape is walked: a gzip, a JSON trace or a systrace
+    starts otherwise and is left to trace_processor, and so is a file whose
+    very first packet is unfinished, which trace_processor refuses by itself.
+    """
+    try:
+        size = path.stat().st_size
+        f = path.open("rb")
+    except OSError:
+        return None
+    pos = whole = 0
+    with f:
+        while pos < size:
+            f.seek(pos)
+            head = f.read(11)
+            if head[0] != 0x0A:
+                return None
+            length, used = _varint(head, 1)
+            if used is None and len(head) == 11:
+                return None                    # no length is that long: not a trace
+            if used is None or pos + used + length > size:
+                if not whole:
+                    return None
+                short = ("" if used is None
+                         else f", {pos + used + length - size:,} bytes short")
+                return (f"the recording is cut short: it ends at byte {size:,}, "
+                        f"inside its last packet{short} — it was not pulled or "
+                        f"written whole")
+            pos += used + length
+            whole += 1
+    return None
+
+
+def _varint(buf: bytes, at: int) -> tuple[int, int | None]:
+    """The varint at `at` and the bytes up to its end; None for the second
+    when `buf` ends before it does."""
+    value = shift = 0
+    for i in range(at, len(buf)):
+        value |= (buf[i] & 0x7F) << shift
+        if buf[i] < 0x80:
+            return value, i + 1
+        shift += 7
+    return value, None
 
 
 def _is_gzip(path: Path) -> bool:

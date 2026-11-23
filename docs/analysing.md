@@ -28,6 +28,15 @@ macrobenchmark's end marker. An anchor may name one. A detector never sees
 one, and an agent reading the `slices` column alone would have reported an
 app with two dozen named markers as uninstrumented.
 
+It is also the cheapest check that a pulled or downloaded file is a whole
+trace. A file with no trace data in it — an empty file, a `report.json` — is
+refused, exit 2, as `analyze` refuses it. A recording that lost its tail (a
+pull that was interrupted, a full disk, a download that stopped early) is
+listed with a warning first: trace_processor reads the packets before the cut
+and drops the rest without a word, and the end of a launch recording is where
+the process list and the last frames are. `names` warns the same way;
+`analyze` and `calibrate` refuse such a file by name. Pull or copy it again.
+
 ## `names` — how ART names things here
 
 Most detectors are structural: duration, thread, scheduler state, or a fact
