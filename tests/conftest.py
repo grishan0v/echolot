@@ -75,6 +75,16 @@ def no_agent_here(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_first_look(monkeypatch):
+    """`collect` reads its first repeat's trace with trace_processor (#536).
+    The traces a fake adb pulls are a line of text, which says nothing and
+    costs a trace_processor start each; a test that wants the look hands in
+    its own."""
+    from echolot import main
+    monkeypatch.setattr(main, "_scenario_ran", lambda cfg, trace, args=None: (None, None))
+
+
+@pytest.fixture(autouse=True)
 def keep_cwd():
     """Several cases chdir into a temp project, and one of them may fail there.
 

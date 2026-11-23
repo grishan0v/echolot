@@ -1185,6 +1185,14 @@ def _markers_against_code(rep: dict[str, Any], cfg: Config) -> None:
             "mode": mode,
             "install": install,
         }
+        # `collect` read the build on the phone before it recorded, and kept
+        # what it found beside the set: a build found to carry every one of
+        # them is not why the traces hold none (#536).
+        from . import runner
+        traces = [Path(t) for t in (rep.get("traces") or [rep.get("trace")]) if t]
+        found = [runner.markers_in_build(t) for t in traces]
+        if traces and all(f is not None and set(unbuilt) <= set(f) for f in found):
+            markers["unbuilt"]["in_build"] = True
         recorder.note(unbuilt_markers=len(unbuilt))
     if removed:
         markers["removed"] = {"names": removed, "mode": mode, "install": install}
@@ -1824,6 +1832,7 @@ def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None)
     window["main_thread"] = _main_thread_budget(tp, window)
     window["crowding"] = _crowding_info(tp)
     window["frames"] = _frames_info(tp, window)
+    window["drawn"] = _drawn_info(tp, window)
 
     for key, glob in (("start", cfg.scenario_start), ("end", cfg.scenario_end)):
         if glob == NO_ANCHOR:
@@ -2455,6 +2464,40 @@ def _frames_info(tp, window: dict) -> dict | None:
                       AND a.ts < {int(hi)} AND a.ts + a.dur > {int(lo)}) AS n
         """)
     except Exception:  # a trace_processor without the table: no timeline
+        return None
+    if not rows or not rows[0]["seen"]:
+        return None
+    return {"count": rows[0]["n"]}
+
+
+# The slices a drawn frame leaves on the app's threads, from the `gfx` and
+# `view` atrace categories `collect` records by default.
+_DRAWN = "(s.name GLOB 'DrawFrame*' OR s.name GLOB 'Choreographer#doFrame*')"
+
+
+def _drawn_info(tp, window: dict) -> dict | None:
+    """How many frames the app's threads drew in the window, by their slices.
+
+    A scenario that never reached its screen draws nothing: a list behind a
+    full-screen error state, swiped for 40 s, left 0 `DrawFrames` on the
+    RenderThread of every repeat, and the report blamed an old build for the
+    markers that were missing (#536). Read from atrace rather than from the
+    frame timeline, which `collect` does not record. None when no process in
+    the trace drew anything, which says the categories were not recorded.
+    """
+    lo, hi = window.get("ts_start"), window.get("ts_end")
+    if lo is None or hi is None:
+        return None
+    try:
+        rows = tp.query(f"""
+            SELECT (SELECT COUNT(*) FROM slice s WHERE {_DRAWN}) AS seen,
+                   (SELECT COUNT(*) FROM slice s
+                    JOIN thread_track tt ON tt.id = s.track_id
+                    JOIN thread t USING (utid)
+                    JOIN _proc p ON p.upid = t.upid
+                    WHERE {_DRAWN} AND s.ts < {int(hi)} AND s.ts + s.dur > {int(lo)}) AS n
+        """)
+    except Exception:  # a trace without thread tracks
         return None
     if not rows or not rows[0]["seen"]:
         return None
@@ -4188,6 +4231,7 @@ def cmd_collect(args) -> int:
             on_set_aside=set_aside,
             progress=progress.update,
             planted=planted,
+            check_first=lambda trace: _scenario_ran(cfg, trace, args),
         )
     except KeyboardInterrupt:
         # Ctrl-C, or Stop in `echolot ui`, which asks the same way. The
@@ -4277,6 +4321,46 @@ def _whose_set(before: dict[str, Any] | None, scenario: str, inside: int | None)
     if before and before.get("scenario") == scenario and "hunt" in before:
         return before["hunt"]
     return inside
+
+
+def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str | None]:
+    """Whether the first repeat's scenario got where it was going: `(stop, note)`.
+
+    One quick read of the trace `collect` just pulled, with the window
+    `analyze` would cut (#536). The round stops when the app drew no frame in
+    it, or when the end anchor opened and never closed: the scenario never
+    reached its screen, and the repeats after it would record the same. An
+    end anchor that did not occur at all is said and the round goes on, since
+    a name that is wrong in the config reads the same. A trace this cannot
+    read says nothing: `analyze` will.
+    """
+    import io
+
+    # What analyze would say on the way is analyze's to say: collect's output
+    # keeps to the repeats.
+    try:
+        with contextlib.redirect_stderr(io.StringIO()), \
+                TraceSession(trace, _tp_binary(args, cfg) if args is not None else None) as tp:
+            procs = _resolve_process(tp, cfg.process, str(trace))
+            bounds = _setup_context(tp, cfg, procs[0]["upid"], trace=str(trace))
+            window = _window_info(tp, cfg, procs,
+                                  bounds if "defined_by" in bounds else None)
+    except Exception:
+        return None, None
+    end = window.get("end_anchor") or {}
+    if end.get("unfinished"):
+        return (f"the end anchor `{end['glob']}` opened and never closed in its "
+                f"recording", None)
+    drawn = window.get("drawn")
+    if drawn is not None and drawn.get("count") == 0:
+        return (f"{window.get('process') or 'the app'} drew no frame in the scenario's "
+                f"window", None)
+    if end and end.get("matches") == 0 and not end.get("before_start"):
+        return None, (f"the end anchor `{end['glob']}` did not occur in repeat 1: the "
+                      f"scenario may not have reached its end, or the name in the "
+                      f"config is not the one the app writes (`echolot probe` on this "
+                      f"trace says which)")
+    return None, None
 
 
 def _interrupted_line(state: dict, out_dir: Path, project: Path, aside: list[Path]) -> str:

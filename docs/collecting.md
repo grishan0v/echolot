@@ -550,6 +550,16 @@ until a newer set of traces exists. A file that does not parse, or one that
 holds what `collect` never writes there, such as text where it writes a time,
 gives no line: it describes no run, and the next `collect` writes it anew.
 
+In launch and command modes `collect` reads the first repeat's trace before
+it records the rest, with the window `analyze` would cut. When the app drew
+no frame in it, or the end anchor opened and never closed, the scenario did
+not reach its screen (no network, an error screen, a dialog in the way), and
+every repeat after it would record the same: the round stops there, with that
+reason and nothing kept. With `-n 1` the trace is kept and marked `[!]`. An
+end anchor that did not occur at all is marked and the round goes on, since a
+wrong name in the config reads the same; `echolot probe` on the trace says
+which.
+
 Ctrl-C, or **Stop** in `echolot ui`, puts the phone back as a failure does
 and ends with one line, `collect interrupted after 2 of 5 repeats: their 2
 traces are kept in .echolot/traces`, and exit code 130. A trace whose copy

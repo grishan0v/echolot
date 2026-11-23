@@ -349,6 +349,15 @@ frame timeline (`count`; merged, the median with each run's in `values`).
 drag the window is the gesture's length, and a build that janks draws fewer
 frames in it, so work done once a frame shrinks with them.
 
+**`window.drawn`** — how many frames the app's threads drew in the window, by
+their `DrawFrame` and `Choreographer#doFrame` slices (`count`; merged, the
+median, with `none`, the repeats that drew nothing, out of `runs`). `null`
+when nothing in the trace drew a frame, which says the categories were not
+recorded. A repeat that drew none never reached its screen: the markdown says
+so first, and nothing else in that report is about the scenario. Look at the
+phone, not at the code. `collect` reads the same on its first repeat and stops
+the round there.
+
 **`window.startup`** — the app's launch as Perfetto's standard library
 measures it, when the trace holds one: `type` (cold, warm, hot), `dur_ms` from
 the intent to the first frame, and `reasons`, every millisecond of it given to
@@ -420,7 +429,10 @@ again; in gradle mode `collect` builds it, so recording again is the whole
 step. A fresh round that still holds none of them means the scenario does
 not run the code they wrap. A name the code puts together at run time
 (`"AGENTTMP_load_$id"`) counts as there when a trace name starts with its
-fixed part.
+fixed part. `in_build: true` says `collect` read the build on the phone
+before it recorded and found every one of them there: the scenario did not
+run the code they wrap, and there is nothing to rebuild. When the app drew no
+frame in any repeat, the markdown says the same.
 
 `removed` appears when the traces hold prefixed names that no string in the
 code makes any more, tagged or not: `mark --remove` took them out after the
