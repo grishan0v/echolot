@@ -1716,12 +1716,18 @@ def collect(package: str, out_dir: Path, iterations: int,
             _run(["adb", "-s", dev, "shell", "perfetto", "-c", "-", "--txt",
                   "-o", DEVICE_TRACE, "--background" if names else "--background-wait"],
                  stdin=config, timeout=120)
+            recording_since = time.monotonic()
             if names:
                 time.sleep(TRACK_EVENT_START_S)
 
             info: dict = {}
             if mode == "launch":
+                began = time.monotonic()
                 info = _launch(dev, activity)
+                # The recording runs `duration_ms` from its start, and the
+                # intent is sent some way into it: a launch that took the
+                # rest ends after the trace does (#921).
+                info["recorded_after_ms"] = round(duration_ms - (began - recording_since) * 1000)
             else:
                 spent = run_command(command, timeout=duration_ms // 1000 + 300,
                                     knob="runner.duration_ms",
@@ -1794,6 +1800,9 @@ def collect(package: str, out_dir: Path, iterations: int,
             if restarted:
                 info["not_cold"] = True
                 notes.append("[!] " + _not_cold_line(package, left))
+            outlasted = _outlasted_line(info, duration_ms)
+            if outlasted:
+                notes.append(outlasted)
             # Where the launch ended, against where it was started (#909).
             # Said when it ended elsewhere, unless the repeat before ended
             # there too: a splash that hands over to the app's main activity
@@ -2058,6 +2067,23 @@ def proc_starts(device: str | None) -> str:
     the other is the only one left (#915)."""
     serial = f" -s {device}" if device else ""
     return f"adb{serial} logcat -b events -d | grep am_proc_start"
+
+
+def _outlasted_line(info: dict, duration_ms: int) -> str | None:
+    """The line under a repeat whose launch took longer than the recording
+    had left after the intent (#921), or None.
+
+    A debug build of a large app cold-starts in about 11 s against the 12 s
+    default: `am start -W` said 11,195 ms and nothing else was said, and
+    `analyze` then refused the whole set as holding no launch.
+    """
+    took, left = info.get("total_time_ms"), info.get("recorded_after_ms")
+    if not isinstance(took, int) or not isinstance(left, int) or took < left:
+        return None
+    return (f"[!] am start -W took {took:,} ms, and the recording held only "
+            f"{max(left, 0) / 1000:.1f} s after the intent: the trace ends before the "
+            f"launch's first frame, and `analyze` leaves it out. Raise "
+            f"`runner.duration_ms` (now {duration_ms:,})")
 
 
 def ungranted(device: str, package: str) -> list[str]:

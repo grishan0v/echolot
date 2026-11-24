@@ -1072,7 +1072,18 @@ refusal says a permission dialog took it and names the command that grants
 the permission (see
 [A permission dialog over the launch](collecting.md#a-permission-dialog-over-the-launch)),
 and otherwise it says `collect` started the app and the platform recorded no
-launch of it. The detectors read this window as they read any other.
+launch of it.
+
+A launch the recording stopped in the middle of is in the trace with no end,
+and Perfetto's startup table leaves it out: a debug build of a large app that
+cold-starts in about 11 s, recorded with the default `runner.duration_ms` of
+12,000, used to read as holding no launch, and one such repeat failed the whole
+set (#921). `analyze` says the launch had not ended, with where it began in the
+recording and how long the recording was, leaves that repeat out of the set and
+names it in the header, and refuses only a set none of whose launches ended.
+`collect` says it under the repeat when `am start -W` took longer than the
+recording had left after the intent. Raise `runner.duration_ms` for such an
+app. The detectors read this window as they read any other.
 Reports of two launch windows that closed differently are not compared; see
 [compare](compare.md#two-windows).
 
