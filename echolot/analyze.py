@@ -179,6 +179,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         cooled = runner.cooldown_record(Path(trace))
         if cooled is not None:
             environment["cooldown"] = cooled
+        environment["debuggable"] = _debuggable(
+            tp, package or str(procs[0].get("name") or "").split(":")[0], trace)
         markers = _markers_info(tp, cfg)
         # Every slice name of the window, for `compare` to set against the
         # other set's (#610). The merge keeps what it needs of it.
@@ -1163,6 +1165,23 @@ def _sampled_before(one, view: str, where: str = "1") -> dict:
               f"FROM {view} WHERE {where}")
     ns = got.get("ns")
     return {"sampled_before_ms": round(ns / 1e6, 1)} if ns is not None and ns > 0 else {}
+
+
+def _debuggable(tp, package: str, trace) -> bool | None:
+    """Whether the app's build was debuggable (#925): the trace's own package
+    list when it recorded one (`android.packages_list`, which a
+    Macrobenchmark's config holds), else what `collect` read of the installed
+    package and kept beside the trace; None when neither says."""
+    if package:
+        try:
+            rows = tp.query(f"SELECT debuggable FROM package_list "
+                            f"WHERE package_name = {sql_value(package)} LIMIT 1")
+        except Exception:  # a trace_processor without the table
+            rows = []
+        if rows and rows[0].get("debuggable") is not None:
+            return bool(rows[0]["debuggable"])
+    kept = recording_mod.kept(trace, "debuggable")
+    return kept if isinstance(kept, bool) else None
 
 
 # What ART writes when it opens a dex file, as a child of the
