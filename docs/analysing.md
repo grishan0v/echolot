@@ -403,7 +403,7 @@ view that writes a file, the page beside the report:
 
 ```bash
 echolot report                                 # what fired: one line per detector
-echolot report --detector monitor_contention   # its rows, longest first, five of them
+echolot report --detector monitor_contention   # its rows by median × share of runs, five of them
 echolot report -d main_thread_block --top 12   # more rows; -d repeats for several detectors
 echolot report --window                        # the anchors or the launch, the main thread, the device
 echolot report --markers                       # the Markers table, fifteen rows of it
@@ -420,6 +420,24 @@ scenarios keeps each one's latest report in `.echolot/out/<scenario>/`, and
 location at 60 characters and the evidence at 100; `--wide` keeps both
 whole. `--json` keeps everything and cuts only the rows, and only when
 `--top` says how many.
+
+A detector's rows come in one order everywhere — `report.json`, `report.md`,
+the overview's top row and the views — and over a set of repeats it is not
+the order of the median alone. A row's median is taken over the repeats that
+found it, so a 200 ms spike in one repeat of five has a median of 200 ms and
+came before 60 ms in all five; a view that shows the first five rows showed
+the spikes. Rows are ranked by the median times the share of the repeats
+that found them: the spike counts for 40 ms, the steady row for 60. One
+trace, or a row every repeat found, is ranked by its median as before. The
+view says what it cut, and how much of that one repeat alone found:
+
+```text
+_Showing 5 of 38; of the 33 left, 15 were found in one run of 5. `--top 38` for all._
+```
+
+The cut is the view's. `report.md`, which a terminal prints and the GitHub
+Action puts in the job summary, and `report.json`, which `compare`, the
+`--json` views and the Action read, keep every row.
 
 ### What `analyze` prints
 
@@ -704,9 +722,10 @@ with one: how long the scenario takes, against its limit where one is set
 ("against a time limit of 500 ms. Find what makes it slower than the limit"),
 and what to find. The warnings at the top of the report come next, in its own
 words, an anchor that matched nothing first: they say how far its numbers can
-be trusted. The ticked checks follow as the evidence, the four largest rows of
-each and a line saying how many more it has; the agent reads the rest from
-the report.
+be trusted. The ticked checks follow as the evidence, the first four rows of
+each in the report's order, a row every recording found before a longer one
+found once, and a line saying how many more it has; the agent reads the rest
+from the report.
 
 The button beside **Dig deeper** ticks where to start: the checks that need
 attention, or with none of those the two that found the largest thing. With

@@ -347,3 +347,49 @@ def test_the_naming_reference_reads_compose_rows():
           flat[-3000:])
     check("and where to see them until a detector ranks them",
           "echolot names <trace> --grep '\\.kt:'" in flat, flat[-3000:])
+
+
+def _step(text: str, first: str, then: str) -> str:
+    """One numbered step of the loop's protocol, from its line to the next's."""
+    start = text.find(first)
+    end = text.find(then, start + 1)
+    check(f"the protocol has {first!r} and then {then!r}", 0 <= start < end, text[:400])
+    return " ".join(text[start:end].split())
+
+
+def test_the_loops_first_step_reads_the_views_and_never_report_json():
+    """Step 1 told the loop to read report.json with `echolot guide report` as
+    its schema, while the command list below said `echolot report` instead of
+    jq over it. On a large app's cold start that was 239 KB of json and 60 KB
+    of guide before the first hypothesis; the overview is 3.5 KB (#493)."""
+    text = _read(LOOP)
+    one = _step(text, "1. report = echolot analyze", "\n2. ")
+    check("it reads the overview analyze prints",
+          "the overview `echolot report` prints" in one, one)
+    check("then each detector that fired, and the markers, one command each",
+          "echolot report -d <id>" in one and "echolot report --markers" in one, one)
+    check("and nothing else",
+          "That is all step 1 reads" in one and "never cat it" in one, one)
+    check("the guide is for one field, after the first hypothesis",
+          "not before the first hypothesis" in one, one)
+    for told in re.finditer(r"\bread\b[^.\n]*?report\.json", text):
+        check("no line tells it to read report.json", False, told.group(0))
+    check("nor to read the guide whole", "read .echolot/out/report.json" not in text
+          and "the schema is what `echolot guide report`" not in text, one)
+    two = _step(text, "2. check the config", "\n3. ")
+    check("step 2 reads the overview's warnings, the fields behind them in --window --json",
+          "The overview says each of these in a ⚠️ line" in two
+          and "echolot report --window --json" in two, two)
+
+
+def test_the_main_thread_reads_thresholds_off_the_overview():
+    """The command that hands the loop its brief read `params_source` out of
+    report.json; the plugin's hunt and the guide read the `thresholds` column
+    of `echolot report`. One reading, in every text (#493)."""
+    command = _flat(HUNT_COMMAND)
+    check("the command reads the thresholds column",
+          "the `thresholds` column of `echolot report`" in command
+          and "in the last `report.json`" not in command, command)
+    check("as the guide does", "`thresholds` column of `echolot report`" in _flat(GUIDE_HUNT))
+    check("and the plugin's hunt",
+          "`thresholds` column of `echolot report`" in _flat(PLUGIN / "echolot-hunt" / "SKILL.md"))
