@@ -989,7 +989,47 @@ def read(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any]) -> 
         check = _check(str(did), by_before.get(did), by_after.get(did), by_check.get(did, []), ctx, why)
         checks.append((_order(check, place), check))
     out["checks"] = [check for _, check in sorted(checks, key=lambda pair: pair[0])]
+    _with_checks(verdict, out["checks"], ctx)
     return out
+
+
+# The ways a check can move that are called a change, each as the verdict says it.
+_WAY = {WORSE: "worse", NEW: "new", BETTER: "better", GONE: "gone"}
+
+
+def _with_checks(verdict: dict[str, Any], checks: list[dict[str, Any]], ctx: _Ctx) -> None:
+    """A verdict of no clear change names the checks that did move (#920).
+
+    The window is a sum of everything in it, and work after startup or work
+    that overlaps a block can hide a move inside it: a 500 ms wait joined
+    on the main thread in a library's `onCreate` grew a launch that ended
+    on `reportFullyDrawn` by 7%, under the fifth, while two checks went
+    0.9 s to 1.3 s and 0.3 s to 0.7 s, every launch of one side past every
+    launch of the other. The headline said "No clear change" over a list
+    with two checks worse. The verdict stays no change: a move under the
+    fifth is not called one, for the reason `SHARE` gives. It says the
+    checks that moved, so that the headline and the list agree."""
+    if verdict.get("movement") != NO_CHANGE or verdict.get("headline") != "No clear change":
+        return
+    moved = [c for c in checks if c["movement"] in _WAY]
+    if not moved:
+        return
+    verdict["checks_moved"] = [c["id"] for c in moved]
+    verdict["headline"] = (f"No clear change in the {ctx.noun}, but "
+                           + ("one check moved" if len(moved) == 1 else f"{len(moved)} checks moved"))
+
+    def said(c: dict[str, Any]) -> str:
+        sides = c.get("main") or {k: c[k]["ms"] for k in ("before", "after")}
+        b, a = ({"ms": sides[k]} for k in ("before", "after"))
+        return f"{c['title']}, {_WAY[c['movement']]}: {_amount(b)} to {_amount(a)}"
+    but = (f"But {'this check' if len(moved) == 1 else 'these checks'} moved, every {ctx.noun} of one side "
+           f"past every {ctx.noun} of the other: " + "; ".join(said(c) for c in moved) + ".")
+    measured = f"Measured on {ctx.a_side}."
+    text = str(verdict.get("text") or "")
+    if text.endswith(measured):
+        verdict["text"] = _said(text[:-len(measured)].rstrip(), but, measured)
+    else:
+        verdict["text"] = _said(text, but)
 
 
 def annotate(cmp: dict[str, Any], before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:

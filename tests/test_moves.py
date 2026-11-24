@@ -544,6 +544,36 @@ def test_two_builds_compiled_differently_get_no_direction():
           same["verdict"])
 
 
+def test_no_clear_change_names_the_checks_that_moved():
+    """#920: a 500 ms wait in a library's `onCreate` grew a launch that ended
+    on `reportFullyDrawn` by 7%, under the fifth, while two checks moved for
+    sure; the headline said "No clear change" over a list with both worse."""
+    launches_b, launches_a = (4200.0, 4214.0, 4230.0), (4490.0, 4505.0, 4520.0)
+    before = report([entry("main_thread_block", [steady("bindApplication", 900)]),
+                     entry("main_thread_waits", [steady("worker_pool_#", 300)]),
+                     entry("gc_pressure")], launches=launches_b)
+    after = report([entry("main_thread_block", [steady("bindApplication", 1300)]),
+                    entry("main_thread_waits", [steady("worker_pool_#", 700)]),
+                    entry("gc_pressure")], launches=launches_a)
+    got = reading(before, after)
+    v = got["verdict"]
+    check("still no change by the window", v["movement"] == moves.NO_CHANGE and v["by"] == "window", v)
+    check("and the headline says the checks moved",
+          v["headline"] == "No clear change in the launch, but 2 checks moved", v["headline"])
+    titles = {c["id"]: c["title"] for c in got["checks"]}
+    check("each named, with its two sums, before how many launches", v["text"].endswith(
+        f"But these checks moved, every launch of one side past every launch of the other: "
+        f"{titles['main_thread_block']}, worse: 0.9 s to 1.3 s; {titles['main_thread_waits']}, worse: 0.3 s to "
+        "0.7 s. Measured on 3 launches before and 3 after."), v["text"])
+    check("by id for a reader that is not a person",
+          sorted(v["checks_moved"]) == ["main_thread_block", "main_thread_waits"], v)
+    quiet = reading(before, report([entry("main_thread_block", [steady("bindApplication", 900)]),
+                                    entry("main_thread_waits", [steady("worker_pool_#", 300)]),
+                                    entry("gc_pressure")], launches=launches_a))["verdict"]
+    check("no check moved: the headline as ever", quiet["headline"] == "No clear change"
+          and "checks_moved" not in quiet, quiet)
+
+
 # --- the reading as a whole -------------------------------------------------------------
 
 
