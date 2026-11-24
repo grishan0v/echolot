@@ -404,17 +404,30 @@ def _by_frames(b: dict[str, Any], a: dict[str, Any], ctx: _Ctx) -> tuple[str, st
     return (BETTER if a["share"] < b["share"] else WORSE), ""
 
 
-def _by_window(b: dict[str, Any], a: dict[str, Any], ctx: _Ctx) -> dict[str, Any]:
+def _by_window(b: dict[str, Any], a: dict[str, Any], ctx: _Ctx,
+               tested: dict[str, Any] | None = None) -> dict[str, Any]:
     """Better, worse or no clear change, by the window's length: the
     movement, the headline, what the window did (`took`) and why that is not
-    a change (`why`). `few` when the launches are too few for any."""
+    a change (`why`). `few` when the launches are too few for any.
+
+    `tested` is `compare`'s window (#532): when its runs gave the move a
+    range and the move does not hold, no change is called however far the
+    medians are, so the verdict and the Holds beside the window in the
+    table cannot disagree. A move that holds is not called a change by that
+    alone: the same build on two days was up to 18% apart with every launch
+    of one day slower than every launch of the other, a move that holds and
+    is not the app's, which is what the fifth is for. Without a range — too
+    few runs, a report that keeps no per-run windows — the rule is the one
+    above alone."""
     was, now = plain.hum(b["ms"]), plain.hum(a["ms"])
     pct = _percent(b["ms"], a["ms"])
     fast, slow = (a, b) if a["ms"] < b["ms"] else (b, a)
     far = abs(a["ms"] - b["ms"]) >= SHARE * slow["ms"]
     # More than half of the faster side's launches beat the fastest of the slower.
     agree = fast["ms"] < slow["low_ms"]
-    if ctx.enough and far and agree:
+    shift = (tested or {}).get("shift")
+    unsure = shift is not None and (tested or {}).get("holds") is False
+    if ctx.enough and far and agree and not unsure:
         faster = a["ms"] < b["ms"]
         gap = plain.hum(abs(a["ms"] - b["ms"]))
         return {"movement": BETTER if faster else WORSE,
@@ -436,10 +449,20 @@ def _by_window(b: dict[str, Any], a: dict[str, Any], ctx: _Ctx) -> dict[str, Any
     elif not far:
         why = (f"The same app differs by that much between two rounds of recordings, so a change under "
                f"{SHARE:.0%} is not counted.")
-    else:
+    elif not agree:
         why = (f"That is more than {SHARE:.0%}, but single {ctx.plural} of the two sides overlap, so it is "
                "not counted as a change.")
+    else:
+        why = (f"That is more than {SHARE:.0%}, but the {ctx.plural} of each side scatter too much to be "
+               f"{stats.CONFIDENCE_PCT}% sure of it: the move lies anywhere from {_signed(shift['low_ms'])} "
+               f"to {_signed(shift['high_ms'])}, so it is not counted as a change. More {ctx.plural} a side "
+               "would settle it.")
     return {"movement": NO_CHANGE, "headline": "No clear change", "took": took, "why": why, "few": False}
+
+
+def _signed(ms: float) -> str:
+    """`+1.2 s`, `-80 ms`: a move with its sign, as a person says it."""
+    return ("-" if ms < 0 else "+") + plain.hum(abs(ms))
 
 
 def _said(*parts: str) -> str:
@@ -519,7 +542,7 @@ def _verdict(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
                         "between them, so no check below is called better or worse: what moved is the "
                         "tool's or the config's."}
     measured = f"Measured on {ctx.a_side}."
-    w = _by_window(b, a, ctx)
+    w = _by_window(b, a, ctx, cmp.get("window"))
     out["by"] = "window"
     by_window = {**out, "movement": w["movement"], "headline": w["headline"],
                  "text": _said(w["took"], w["why"], "" if w["few"] else measured)}

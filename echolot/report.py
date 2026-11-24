@@ -409,19 +409,27 @@ def _merge_startup(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     one every repeat agrees on, or all of them named: a set that mixes cold
     starts with warm ones is two measurements, and a median over both is
     neither.
+
+    Each repeat's own numbers stay beside the medians, in the order of
+    `traces`, so that `compare` can ask of the startup what it asks of a
+    row (#532): `values` its length in each repeat that had one, and
+    `reason_values` each reason's, a reason the repeat did not have as 0.
     """
     found = [r["window"]["startup"] for r in reports
              if (r.get("window") or {}).get("startup")]
     if not found:
         return None
     names = sorted({name for s in found for name in s.get("reasons") or {}})
-    reasons = {name: round(median([(s.get("reasons") or {}).get(name, 0.0) for s in found]), 2)
-               for name in names}
+    each = {name: [(s.get("reasons") or {}).get(name, 0.0) for s in found] for name in names}
+    reasons = {name: round(median(values), 2) for name, values in each.items()}
     types = sorted({s.get("type") or "unknown" for s in found})
+    order = sorted(reasons, key=lambda name: (-reasons[name], name))
     out: dict[str, Any] = {
         "type": types[0] if len(types) == 1 else " and ".join(types),
         "dur_ms": round(median([s["dur_ms"] for s in found]), 2),
-        "reasons": dict(sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "values": [s["dur_ms"] for s in found],
+        "reasons": {name: reasons[name] for name in order},
+        "reason_values": {name: each[name] for name in order},
     }
     for key in ("from_window_start_ms", "from_window_end_ms", "in_window_ms"):
         out[key] = round(median([s.get(key) or 0.0 for s in found]), 2)
@@ -1314,6 +1322,11 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"]["duration_ms"] = round(median(windows), 2)
         merged["window"]["duration_ms_min"] = min(windows)
         merged["window"]["duration_ms_max"] = max(windows)
+        # Every repeat's window, in the order of `traces`: what `compare`
+        # tests the window's move with, as it tests a row's (#532). The
+        # median, shortest and longest alone could not say whether two sets
+        # differ by more than their own runs do.
+        merged["window"]["values"] = windows
         merged["window"]["main_thread"] = _merge_budget(reports)
         merged["window"]["crowding"] = _merge_crowding(reports)
         merged["window"]["frames"] = _merge_frames(reports)

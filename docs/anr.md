@@ -18,11 +18,13 @@ writes is its own line in `.echolot/log/runs.jsonl` under the working
 directory — the run log every command keeps, which `ECHOLOT_NO_RECORD=1`
 switches off.
 
-Three places produce the same artifact, and the frames in them are identical:
+Three places produce the same artifact, and the frames in them are identical;
+an agent's Crashlytics tool gives a fourth, smaller one:
 
 | source | how to get it | what it adds |
 |---|---|---|
 | Crashlytics | export from the issue page | version and build, unminified frames |
+| Crashlytics, through an agent's tool | an event, as the tool returns it | the build's revision and Crashlytics' own reading — and **one thread**, see [below](#a-crashlytics-event-from-an-agents-tool) |
 | Play Console | an ANR cluster in Android Vitals | nothing extra, and **no lock ownership** — see below |
 | the device itself | `adb shell dumpsys dropbox --print data_app_anr` | **the reason** — `Subject: Input dispatching timed out …` |
 
@@ -35,7 +37,7 @@ The thread signature differs per source — Crashlytics writes
 so the reader decides which it is from how the file announces its threads.
 Zero threads is never reported as a clean bill: it exits 2, with the reason, on
 a file that is not there, on one in which nothing announces a thread the way
-any of the three sources does, and on one that reads as a source and yields no
+any of the sources above does, and on one that reads as a source and yields no
 threads.
 
 > [!IMPORTANT]
@@ -47,6 +49,62 @@ threads.
 > and the report names that class and says the holder is not in the file. If
 > you can get the same freeze out of Crashlytics or off a device, that export
 > is worth more.
+
+### A Crashlytics event from an agent's tool
+
+An agent reaches Crashlytics through a tool — an MCP server's
+`crashlytics_batch_get_events` and the like — and gets an event, not the
+console's export. `anr` reads that too, saved to a file as the tool returned
+it, in any of three forms:
+
+| form | what it looks like |
+|---|---|
+| YAML, as the tools print it | `- name: …`, `issue: \|`, `threads: \|` over `Thread: main` and `at …` lines; most fields are a small YAML document inside a string |
+| JSON, in the API's shape | one event, a list of them, or `{"events": […]}`; `threads` is a list of `{name, frames: [{symbol, file, line}]}`, or the same text as above |
+| the thread text alone | `Thread: main`, then `at android.os.MessageQueue.next (MessageQueue.java:355)`, `at __epoll_pwait`, `... frames omitted ...` |
+
+The file is told from a dump by the fields only an event has (`threads`,
+`eventId`, `bundleOrPackage`, `buildStamp`, `processState`, `blameFrame`), and
+the thread text by its `Thread:` lines. From a file of several events — what a
+batch call returns — the first is read and the report says how many there
+were: give `anr` one event per file.
+
+What an event adds over a dump is printed under the header: the issue's title
+and subtitle, which is Crashlytics' own reading of the mechanism ("ANR
+triggered by a deadlock involving the main thread"); whether the app was in
+the foreground or the background (`processState`); the revision the build was
+made from (`buildStamp`), which is then held against the checkout (see [From a
+frame to a file](#from-a-frame-to-a-file)); and the names of the custom keys
+the app set. Only their names: some values identify a user or a session, and a
+report is not where to copy them — read the ones you need in the event.
+`exceptions`, `logs` and `breadcrumbs` are not read. `--json`: `event`.
+
+What it takes away is most of what this reader is for. In the shape the tools
+give, an event holds **one thread** — the one Crashlytics blamed — with no
+state, no tid and no lock note; of 30 events taken from one app's top issues,
+29 had exactly one thread, one had none, and 25 of the 29 stacks were cut
+after 18 or 19 frames.
+Its frames are read as any source's are: the main thread is found by its name
+or by `ActivityThread.main`, an idle looper and a garbage collection read as
+they do in a dump, a cut stack is counted, and the frames are placed in the
+checkout. No state is made up: the report says the input has none. But no lock
+chain can come out of it — who held the monitor a thread wanted, what the
+threads it does not carry were doing, and what the other side of a binder call
+was doing are not in it. The report says so first under what it does not say,
+and names where the full dump is: the console's export of the same event, or
+the device's own record. An event whose one thread is a worker says that the
+main thread is not in it, rather than reading as if the worker were the whole
+story.
+
+> [!IMPORTANT]
+> **When the question is a lock, ask for the export.** A deadlock is two
+> threads and a monitor, and an event as the tools give it has one thread and
+> no monitor. When Crashlytics' subtitle says "deadlock", the report says so,
+> and the console's export of the event — or the device's record — is the
+> input that can answer it.
+
+An event with no thread in it exits 2 and says that is what it was, and so
+does a Crashlytics export with no thread.
 
 ### Making one on purpose
 
@@ -206,7 +264,9 @@ The device's own record does. A machine where `system_server` and
 that blocked itself, and the table is the only thing in a report that can tell
 them apart. The markdown shows the six busiest rows; `--json` has the table.
 
-**Then what it cannot say.** No reason, when the source has none — and the
+**Then what it cannot say.** For a Crashlytics event from an agent's tool,
+first, the threads, states and locks it does not carry, and where the full
+dump is. No main thread, when the file has none. No reason, when the source has none — and the
 sentence names the kind of file that was read and points at the one record that
 carries a reason. No durations at all — a dump is one moment, and how long
 anything took comes from a trace. For a main thread stopped for a collection,
@@ -276,6 +336,12 @@ declares until the build's mapping names it back, as the next section says.
 > placed at that declaration with "line 35 is past the end of the file:
 > inlined code, placed at `fill`" (`--json`: `at` and `inlined`), `mark
 > --from-anr` proposes that function, and neither counts it as another build.
+>
+> A Crashlytics event from an agent's tool names the revision the build was
+> made from. With it, the report says over the placed frames whether this
+> checkout is that commit, and when it is not, the command that checks it
+> out — `git worktree add --detach <dir> <revision>`, then `--root <dir>`
+> (`--json`: `code.checkout`, `code.is_the_build`).
 
 ### A minified build
 

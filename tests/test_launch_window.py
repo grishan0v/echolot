@@ -23,7 +23,7 @@ from echolot import fixture, selftest  # noqa: E402
 from echolot import launch as launch_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config, ConfigError  # noqa: E402
-from echolot.main import _startup_info, analyze_trace  # noqa: E402
+from echolot.analyze import _startup_info, analyze_trace  # noqa: E402
 
 APP = "com.example.app"
 PROJECT = {"package": APP, "process": APP}

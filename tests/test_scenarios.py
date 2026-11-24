@@ -626,14 +626,14 @@ def test_one_scenario_keeps_its_thresholds_at_the_top(tmp_path: Path) -> None:
 
 
 def test_a_detector_no_scenario_has_is_refused_wherever_it_is_named() -> None:
-    from echolot.main import plan_detectors
+    from echolot.analyze import plan_detectors
     cfg = config(with_thresholds({}, {"frame_jnk": False}))
     with pytest.raises(ConfigError, match=r"scenarios\.loaded\.detectors: no detector 'frame_jnk'"):
         plan_detectors(cfg)
 
 
 def test_params_source_says_whose_the_thresholds_are() -> None:
-    from echolot.main import plan_detectors
+    from echolot.analyze import plan_detectors
     cfg = config(with_thresholds(
         {"main_thread_block": {"min_slice_ms": 30}, "binder_txn": {"skip_glob": "*x*"}},
         {"binder_txn": {"min_txn_ms": 7}, "io_wait": {"min_io_wait_ms": 25}})).select("loaded")

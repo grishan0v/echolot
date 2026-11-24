@@ -391,7 +391,9 @@ def _rule(noun: str, plural: str) -> str:
     tail = (f'<p class="small sub measure">What a check found is added up as a typical {noun} has it: something '
             f"seen in one {noun} of three adds nothing. The verdict at the top is decided the same way, by the "
             f"whole {noun}: a change of at least {share}, with more than half of the faster side's {plural} "
-            f"beating the fastest {noun} of the slower side. A window that runs to the end of the recording is as "
+            f"beating the fastest {noun} of the slower side, and, where both reports keep each {noun}'s window, a "
+            f"move that holds as the technical comparison's rows do, 95% sure. A window that runs to the end of "
+            f"the recording is as "
             f"long as the recording, and is judged by the share of frames the app made late instead, the same way "
             f"and by at least one frame in a hundred.</p>")
     return kit.fold("How a movement is decided", listed + tail)

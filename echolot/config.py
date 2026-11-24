@@ -171,8 +171,8 @@ def _section_keys(raw: dict[str, Any], p: Path, section: str,
 
 def runner_keys() -> tuple[str, ...]:
     """The keys of `runner:`, kept beside the code that reads each one."""
-    from . import composenames, runner, stabilize
-    return runner.KEYS + stabilize.KEYS + composenames.KEYS
+    from . import composenames, power, runner, stabilize
+    return runner.KEYS + stabilize.KEYS + composenames.KEYS + power.KEYS
 
 
 def _keys_of_sections(raw: dict[str, Any], p: Path) -> None:
@@ -894,7 +894,7 @@ class Config:
         return str(block.get("name") or "run")
 
     def context_params(self, upid: int) -> dict[str, Any]:
-        """upid is resolved against the trace in main.py — see _resolve_process."""
+        """upid is resolved against the trace in analyze.py — see _resolve_process."""
         return {
             "upid": upid,
             "scenario_start": self.scenario_start,

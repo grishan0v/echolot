@@ -118,6 +118,10 @@ turns those frames into a marker plan, which is a better first round than
 rather than where instrumentation usually belongs. A report whose frames read
 `a.b.run(SourceFile:3)` is a minified build's: give `anr` that build's
 `mapping.txt` with `--mapping`, or as `project.mapping`, before reading it.
+A Crashlytics event from an agent's tool, saved to a file as it came, reads
+too, and holds one thread with no state or lock note: no chain can come out of
+it, and when the question is a lock the console's export of that event is the
+input to ask the human for.
 
 Two things to carry into the loop below. If the main thread was **idle**
 (`nativePollOnce`), it was not the culprit and its top frame is Android's
