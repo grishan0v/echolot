@@ -58,6 +58,8 @@ from . import check, codex, hosts, ignore, job, layer, plain, ready, recorder, s
 from . import scan as scan_mod
 from .config import LAUNCH as LAUNCH_WINDOW
 from .config import Config, ConfigError
+from .config import PACKAGE
+from .runner import MODE
 
 JOB = "setup"
 STEP = "init"
@@ -416,11 +418,11 @@ def first_check(project: Path, st: dict[str, Any], lines: list[dict[str, Any]]) 
     if st.get("report") or st.get("collect") or traces.get("count") or st.get("hunt"):
         return None
     try:
-        if str(cfg.runner.get("mode", "launch")) != "launch":
+        if str(cfg.value(MODE)) != "launch":
             return None
     except ConfigError:
         return None
-    package = str(cfg.get("project.package") or "")
+    package = str(cfg.value(PACKAGE) or "")
     try:
         tasks = scan_mod.install_tasks(project, package)
     except OSError:

@@ -30,7 +30,7 @@ from . import place as place_mod
 from . import recording as recording_mod
 from . import report as report_mod
 from . import stacks as stacks_mod
-from .config import LAUNCH, NO_ANCHOR, WHOLE, Config, ConfigError
+from .config import LAUNCH, NO_ANCHOR, PACKAGE, WHOLE, Config, ConfigError
 from .tp import TraceSession, load_detectors, render_sql, sql_value, toolchain_info
 
 
@@ -137,7 +137,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     # Refused here, like a threshold of the wrong kind: before a trace is opened.
     budget_ms = cfg.scenario_budget_ms
     results = []
-    package = str(cfg.get("project.package") or "")
+    package = str(cfg.value(PACKAGE) or "")
     # The build's R8 mapping, read before the trace is opened: a path that is
     # not there is the config's mistake, and is said before any work is done.
     mapping = cfg.mapping
@@ -604,7 +604,7 @@ def _own_composables(tp, cfg: Config) -> None:
         "SELECT DISTINCT name FROM _slice_win "
         "WHERE is_main_thread = 1 AND name GLOB '* ([A-Za-z]*.kt:[0-9]*)'")]
     root = cfg.sources if cfg.path or cfg.root_override else None
-    own = place_mod.own_composables(names, root, cfg.get("project.package"))
+    own = place_mod.own_composables(names, root, cfg.value(PACKAGE))
     tp.exec_script("DROP TABLE IF EXISTS _compose_own;")
     tp.exec_script("CREATE TABLE _compose_own (name TEXT PRIMARY KEY);")
     if own:

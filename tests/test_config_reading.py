@@ -216,12 +216,18 @@ def test_a_misspelled_key_in_local_yml_names_local_yml(tmp_path: Path) -> None:
     check("local.yml named", "local.yml: no key 'devise' under runner" in said, said)
 
 
-def test_every_runner_key_and_setup_s_notes_still_load(tmp_path: Path) -> None:
-    from echolot.config import runner_keys
-    block = {k: None for k in runner_keys()} | {"_evidence": "x", "_source": "scan"}
-    cfg = Config.load(_config(tmp_path, {**BASE, "runner": block,
-                                         "project": {**BASE["project"], "_source": "derived"}}))
-    check("loads", set(cfg.runner) == set(block), cfg.runner)
+def test_every_declared_key_and_setup_s_notes_still_load(tmp_path: Path) -> None:
+    """A config that sets every declared key, in every section, loads (#828)."""
+    from echolot.config import DECLARED_SECTIONS, declared
+    raw: dict = {**BASE}
+    for section in DECLARED_SECTIONS:
+        raw[section] = {k.name: None for k in declared(section)} | {"_source": "scan"}
+    raw["project"] |= BASE["project"]
+    cfg = Config.load(_config(tmp_path, raw))
+    check("loads", set(cfg.runner) == set(raw["runner"]), cfg.runner)
+    scenarios = {"project": BASE["project"], "scenarios": {"cold": {
+        "start": {"name": "AppStart"}, "runner": {k.name: None for k in declared("runner")}}}}
+    Config.load(_config(tmp_path / "many", scenarios))
 
 
 def test_the_example_and_what_scan_drafts_still_load(tmp_path: Path) -> None:
@@ -239,24 +245,88 @@ def test_the_example_and_what_scan_drafts_still_load(tmp_path: Path) -> None:
         check(f"the {name} draft loads", Config.load(draft).runner.get("mode") is not None)
 
 
-def test_each_runner_key_read_is_one_the_config_knows() -> None:
-    """The lists sit beside the code that reads each key. A key read and not
-    listed would be refused before it is ever read."""
+_ROOT = Path(__file__).resolve().parent.parent / "echolot"
+
+
+def _sources() -> dict[str, str]:
+    return {str(p.relative_to(_ROOT)): p.read_text(encoding="utf-8")
+            for p in sorted(_ROOT.rglob("*.py"))}
+
+
+def test_every_module_that_declares_keys_is_imported_before_the_table_is_read() -> None:
+    """A declaration only counts once its module has run. A module that
+    declares keys and is not in `_DECLARING` would have them refused by a
+    config loaded before anything imported it."""
     import re as re_
-    from echolot.config import runner_keys
-    from echolot.runner import RECORDING_KNOBS
-    root = Path(__file__).resolve().parent.parent / "echolot"
-    read = set()
-    pattern = re_.compile(r'(?:section\.get\(|_positive\(section, |_listed\(section, )"(\w+)"')
-    for name in ("runner.py", "stabilize.py", "composenames.py", "power.py", "main.py",
-                 "check.py", "ready.py"):
-        read |= set(pattern.findall((root / name).read_text(encoding="utf-8")))
-    read |= set(RECORDING_KNOBS)
-    check("every one listed", read <= set(runner_keys()), sorted(read - set(runner_keys())))
-    from echolot import stabilize
-    # `knobs_of` reads its two switches in a loop over their names.
-    check("and each listed is read", set(runner_keys()) <= read | set(stabilize.KEYS),
-          sorted(set(runner_keys()) - read))
+    from echolot import config
+    declaring = {name.removesuffix(".py") for name, text in _sources().items()
+                 if name != "config.py" and re_.search(r"^\w+ = key\(", text, re_.M)}
+    check("each one listed", declaring == set(config._DECLARING),
+          sorted(declaring ^ set(config._DECLARING)))
+
+
+def test_no_key_of_a_declared_section_is_read_around_its_declaration() -> None:
+    """Every key of these sections is read through its declaration: `Key.read`,
+    `Config.value` or `Config.written`, never `cfg.get("runner.mode")` or
+    `section.get("mode", "launch")` with a default of its own (#828). A raw
+    read is how `runner.min_battery` came to be read and not allowed (#834)."""
+    import re as re_
+    from echolot.config import DECLARED_SECTIONS, keys_of
+    dotted = re_.compile(r'\.get\("(?:%s)\.(\w+)"' % "|".join(DECLARED_SECTIONS))
+    runner_names = "|".join(keys_of("runner"))
+    raw_runner = re_.compile(r'(?:section|runner|\.runner|\(cfg\.runner or \{\}\))'
+                             r'\.get\("(%s)"' % runner_names)
+    found = []
+    for name, text in _sources().items():
+        if name == "config.py":
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            for m in (*dotted.finditer(line), *raw_runner.finditer(line)):
+                if "instrumentation.temp_prefix" in m.group(0):
+                    continue  # moved to `Config.temp_prefix` with #829
+                found.append(f"{name}:{number}: {m.group(0)}")
+    check("none", not found, found)
+
+
+def test_a_key_nobody_declared_cannot_be_read(tmp_path: Path) -> None:
+    cfg = Config.load(_config(tmp_path, BASE))
+    with pytest.raises(KeyError, match="runner.nosuch is read but not declared"):
+        cfg.get("runner.nosuch")
+    check("a declared one reads", cfg.get("project.package") == "com.example.app")
+    check("a section reads", cfg.get("scenario.name") == "fixture")
+
+
+def test_each_declared_key_is_read_and_documented() -> None:
+    """A key the code declares is read somewhere, by the code or by the agent
+    its skill speaks to, and the skill's reference names it."""
+    import re as re_
+    from echolot.config import declared
+    sources = _sources()
+    text = "\n".join(sources.values())
+    reference = (_ROOT / "claude" / "skills" / "echolot" / "references" / "config.md"
+                 ).read_text(encoding="utf-8")
+    constants = {}
+    for source in sources.values():
+        for m in re_.finditer(r'^(\w+) = key\("(\w+)", "(\w+)"', source, re_.M):
+            constants[(m.group(2), m.group(3))] = m.group(1)
+    by_the_agent = {"loop.on_exhausted", "instrumentation.cleanup"}
+    unread, undocumented = [], []
+    for k in declared():
+        constant = constants[(k.section, k.name)]
+        uses = len(re_.findall(rf"\b{constant}\b", text))
+        if uses < 2 and k.dotted not in by_the_agent:
+            unread.append(k.dotted)
+        if not re_.search(rf"`{k.name}`|`{re_.escape(k.dotted)}`|^ +{k.name}:", reference, re_.M):
+            undocumented.append(k.dotted)
+    check("each read", not unread, unread)
+    check("each in references/config.md", not undocumented, undocumented)
+
+
+def test_each_declared_default_is_of_its_kind() -> None:
+    from echolot.config import declared
+    wrong = [k.dotted for k in declared()
+             if k.default is not None and not k.kind.accepts(k.default)]
+    check("none", not wrong, wrong)
 
 
 def test_min_battery_loads_in_echolot_yml_and_local_yml_and_is_read(tmp_path: Path) -> None:
