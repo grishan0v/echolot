@@ -4178,6 +4178,12 @@ def cmd_init(args) -> int:
     return _init_finish(args, target, chosen, rule)
 
 
+def cmd_uninit(args) -> int:
+    """`init` backwards, and the markers with it: see uninit.py."""
+    from . import uninit
+    return uninit.run(_where(args), args)
+
+
 def _init_finish(args, target: Path, chosen: list, rule: str | None) -> int:
     """How every `init` ends, whichever clients it chose.
 
@@ -5164,7 +5170,8 @@ def cmd_ui(args) -> int:
 # alphabetical. A verb missing from here is caught by the self-check.
 # The agent's half is ordered by the working flow. `anr` comes before `probe`
 # because a report from the field arrives before there is a trace to probe.
-ORDER = ("status", "ui", "init", "plugin", "hunt", "doctor", "collect", "analyze", "compare",
+ORDER = ("status", "ui", "init", "uninit", "plugin", "hunt", "doctor", "collect", "analyze",
+         "compare",
          "guide", "report", "scan", "anr", "probe", "names", "domains", "mark",
          "calibrate", "explain", "reflect")
 
@@ -5554,6 +5561,29 @@ def build_parser() -> argparse.ArgumentParser:
                           ".gitignore lines are meant to be committed; undoes "
                           "--private")
     ini.set_defaults(func=cmd_init)
+
+    # `init` backwards (#562). It shows the plan first and removes nothing
+    # without a yes: typed on a terminal, `--yes` anywhere else.
+    uni = add("uninit", "yours", "", "take echolot out of the project: what init wrote, "
+              "and the markers", description="Shows what echolot put into the project "
+              "and takes it out: the .claude/ layer, echolot's permission, its section in "
+              "each agent's file, Codex's rule, the .gitignore lines or the private block, "
+              "and the temporary markers. Files edited here, the config and the record "
+              "of the work stay unless asked.")
+    uni.add_argument("--into", default=None,
+                     help="the project (default: the one whose echolot.yml is here or "
+                          "in a folder above, else here)")
+    uni.add_argument("--yes", action="store_true",
+                     help="go ahead without asking — needed where there is no terminal")
+    uni.add_argument("--dry-run", action="store_true",
+                     help="show what would be taken out, and take out nothing")
+    uni.add_argument("--all", dest="force", action="store_true",
+                     help="the files of the layer edited here too, and an edited Codex "
+                          "rule, as `init --all` overwrites them")
+    uni.add_argument("--data", action="store_true",
+                     help="echolot.yml, local.yml and all of .echolot/ too: traces, "
+                          "reports, investigations, the run log")
+    uni.set_defaults(func=cmd_uninit, interactive=True)
 
     # The plugin, for each agent, beside the layer `init` installs: both put
     # echolot where an agent reads it. `cursor` is the one a command does,

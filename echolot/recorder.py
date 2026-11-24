@@ -38,6 +38,7 @@ LOG_FILE = LOG_DIR / "runs.jsonl"
 _facts: dict[str, Any] = {}
 _root: Path | None = None
 _reason: str | None = None
+_skipped = False
 
 
 def note(**facts: Any) -> None:
@@ -89,6 +90,17 @@ def at(root: Path | str | None) -> None:
     _root = Path(root) if root is not None else None
 
 
+def skip() -> None:
+    """This run leaves no line.
+
+    `uninit` alone calls it, once it has taken `.echolot/` out of the
+    project: the line `main` writes after every command would create the
+    folder again the moment it went, with a log of one run in it (#562).
+    """
+    global _skipped
+    _skipped = True
+
+
 def log_file(root: Path | None = None) -> Path:
     """Where this invocation's line goes. `at()` decides; cwd is the fallback."""
     return (root or _root or Path.cwd()) / LOG_FILE
@@ -107,19 +119,22 @@ class isolated:
     """
 
     def __enter__(self):
-        global _reason
+        global _reason, _skipped
         self._saved = dict(_facts)
         self._saved_root = _root
         self._saved_reason = _reason
+        self._saved_skipped = _skipped
         _facts.clear()
         _reason = None
+        _skipped = False
         return self
 
     def __exit__(self, *exc):
-        global _reason
+        global _reason, _skipped
         _facts.clear()
         _facts.update(self._saved)
         _reason = self._saved_reason
+        _skipped = self._saved_skipped
         at(self._saved_root)
         return False
 
@@ -195,8 +210,14 @@ def session(env: Any = None) -> tuple[str | None, str | None]:
 
 def record(args: Any, argv: list[str] | None, started: float,
            exit_code: int | None, error: BaseException | None = None) -> None:
-    global _reason
+    global _reason, _skipped
     if os.environ.get("ECHOLOT_NO_RECORD"):
+        _skipped = False
+        return
+    if _skipped:
+        _facts.clear()
+        _reason = None
+        _skipped = False
         return
     try:
         entry: dict[str, Any] = {
@@ -250,6 +271,7 @@ def record(args: Any, argv: list[str] | None, started: float,
     finally:
         _facts.clear()
         _reason = None
+        _skipped = False
 
 
 def read(path: Path | None = None) -> list[dict[str, Any]]:

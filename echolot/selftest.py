@@ -7932,6 +7932,138 @@ def _(report):
             f"a plain `init` wrote the choice over: {hosts_mod.load_choice(project)}"
 
 
+def _tree(project: Path) -> dict[str, bytes | None]:
+    """Every file under a project with its bytes, and every folder as None."""
+    return {p.relative_to(project).as_posix(): (None if p.is_dir() else p.read_bytes())
+            for p in sorted(project.rglob("*"))}
+
+
+def _uninit(project: Path, **flags) -> tuple[int, str]:
+    """`uninit` on a project as the parser would call it, and what it printed."""
+    import argparse
+    import io
+    from .main import cmd_uninit
+    args = argparse.Namespace(into=str(project), yes=False, dry_run=False, force=False,
+                              data=False, interactive=False)
+    for key, value in flags.items():
+        setattr(args, key, value)
+    out = io.StringIO()
+    with recorder.isolated(), contextlib.redirect_stdout(out), \
+            contextlib.redirect_stderr(out):
+        code = cmd_uninit(args)
+    return code, out.getvalue()
+
+
+@check("uninit: init then uninit leaves a project as it was, and keeps a file "
+       "edited there until --all")
+def _(report):
+    """`init` writes into a project in a dozen places, and `uninit` is the
+    one command that takes all of them out again (#562).
+
+    The project here has its own `.gitignore`, its own `settings.json` and
+    its own `AGENTS.md`, and every agent is chosen, so `init` writes into
+    every place it can. The claim is the whole tree: after `uninit`, every
+    file holds the bytes it held before `init`, and nothing `init` made is
+    left, `.echolot/` included. A file of the layer edited in between is
+    named and kept, with the manifest that describes it, and `--all` takes
+    it; and without a yes, nothing moves.
+    """
+    import argparse
+    import io
+    import json as _json
+    from .main import cmd_init
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        (project / ".git").mkdir()
+        (project / ".gitignore").write_text("build/\n", encoding="utf-8")
+        (project / "AGENTS.md").write_text("# The team's rules\n", encoding="utf-8")
+        (project / ".claude").mkdir()
+        # In the layout `init` writes a merged file in: without git there
+        # is no committed copy for `uninit` to put back.
+        (project / ".claude" / "settings.json").write_text(_json.dumps(
+            {"hooks": {"Stop": []}}, indent=2) + "\n", encoding="utf-8")
+        before = _tree(project)
+        with _cursor_may_refuse(), recorder.isolated(), \
+                contextlib.redirect_stdout(io.StringIO()):
+            cmd_init(argparse.Namespace(
+                into=str(project), force=False, no_doctor=True,
+                for_hosts="claude,agents,codex,gemini,cursor,copilot"))
+        installed = _tree(project)
+        assert installed != before, "init wrote nothing"
+
+        code, said = _uninit(project)
+        assert code == 1 and "--yes" in said, f"exit {code} without a yes:\n{said}"
+        assert _tree(project) == installed, "uninit removed something without a yes"
+        code, said = _uninit(project, dry_run=True)
+        assert code == 0 and _tree(project) == installed, said
+
+        skill = project / ".claude" / "skills" / "echolot" / "SKILL.md"
+        skill.write_text(skill.read_text(encoding="utf-8") + "\n# ours\n", encoding="utf-8")
+        code, said = _uninit(project, yes=True)
+        assert code == 0, said
+        assert skill.is_file() and "≠ .claude/skills/echolot/SKILL.md" in said, \
+            f"an edited file went, or went unsaid:\n{said}"
+        assert (project / ".claude" / "echolot-layer.json").is_file(), \
+            "the manifest went while a file it describes stayed"
+        assert not (project / ".claude" / "agents").exists(), said
+
+        code, said = _uninit(project, yes=True, force=True)
+        assert code == 0, said
+        after = _tree(project)
+        assert after == before, (
+            "init then uninit --all left the project otherwise than it was: "
+            f"added {sorted(set(after) - set(before))}, "
+            f"gone {sorted(set(before) - set(after))}, "
+            f"changed {sorted(k for k in before if k in after and before[k] != after[k])}")
+
+
+@check("uninit: the record of the work and the config stay unless --data, and a "
+       "section between the project's lines leaves them as they were")
+def _(report):
+    """What `uninit` keeps unless asked, and how it takes a section out (#562).
+
+    Traces and reports are the person's, so `.echolot/` stays with them, and
+    so does the `.gitignore` line that keeps them from git: taking it away
+    beside a folder of traces is how they reach a commit. The saved choice of
+    agents goes, since `init` wrote it. `--data` takes the rest. And a
+    section a person pasted between their own lines comes out with the lines
+    around it as they were before the paste, line endings included.
+    """
+    from . import hosts as hosts_mod
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        (project / ".git").mkdir()
+        (project / ".echolot" / "traces").mkdir(parents=True)
+        (project / ".echolot" / "traces" / "cold-1.perfetto-trace").write_bytes(b"x")
+        (project / ".echolot" / "hosts.json").write_text('{"hosts": ["agents"]}\n',
+                                                          encoding="utf-8")
+        (project / "echolot.yml").write_text("project:\n  process: a.b\n",
+                                             encoding="utf-8")
+        from . import ignore as ig
+        ig.ensure(project)
+        ours = hosts_mod.section(hosts_mod.BY_KEY["agents"].render())
+        team = "# Rules\r\n\r\nOne.\r\n\r\nTwo.\r\n"
+        (project / "AGENTS.md").write_bytes(
+            ("# Rules\r\n\r\nOne.\r\n\r\n" + ours.replace("\n", "\r\n")
+             + "\r\n\r\nTwo.\r\n").encode("utf-8"))
+
+        code, said = _uninit(project, yes=True)
+        assert code == 0, said
+        assert (project / "AGENTS.md").read_bytes() == team.encode("utf-8"), \
+            repr((project / "AGENTS.md").read_bytes())
+        assert (project / ".echolot" / "traces" / "cold-1.perfetto-trace").is_file()
+        assert not (project / ".echolot" / "hosts.json").exists(), \
+            "the choice init saved stayed"
+        assert (project / "echolot.yml").is_file(), "the config went without --data"
+        assert "/.echolot/" in (project / ".gitignore").read_text(encoding="utf-8"), \
+            "the line that keeps the traces from git went while they stayed"
+
+        code, said = _uninit(project, yes=True, data=True)
+        assert code == 0, said
+        left = sorted(_tree(project))
+        assert left == [".git", "AGENTS.md"], left
+
+
 @check("CLI: every verb is grouped by audience and shown in --help")
 def _(report):
     """The header of `--help` is generated, so nothing can quietly fall out.
