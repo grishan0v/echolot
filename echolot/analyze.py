@@ -742,6 +742,7 @@ def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None)
     window["crowding"] = _crowding_info(tp)
     window["frames"] = _frames_info(tp, window)
     window["drawn"] = _drawn_info(tp, window)
+    window["boot_receivers"] = _boot_receivers(tp, window)
 
     for key, glob in (("start", cfg.scenario_start), ("end", cfg.scenario_end)):
         if glob == NO_ANCHOR:
@@ -1426,6 +1427,43 @@ def _drawn_info(tp, window: dict) -> dict | None:
     if not rows or not rows[0]["seen"]:
         return None
     return {"count": rows[0]["n"]}
+
+
+# The receivers the system runs in an app when it takes the app out of the
+# stopped state a force-stop left it in (#910): `BOOT_COMPLETED` and
+# `LOCKED_BOOT_COMPLETED`, as ActivityThread names the slice of each.
+BOOT_RECEIVERS = "broadcastReceiveComp: *BOOT_COMPLETED*"
+
+
+def _boot_receivers(tp, window: dict) -> list[dict] | None:
+    """The app's `BOOT_COMPLETED` receivers the main thread ran in the window,
+    with their time: work of the reset, not of the start (#910).
+
+    On Android 15 `am force-stop` leaves the package stopped, and its next
+    start takes it out of that state: system_server sends `PACKAGE_UNSTOPPED`,
+    and the app is sent `BOOT_COMPLETED` (and `LOCKED_BOOT_COMPLETED` when it
+    is direct-boot aware). The receiver runs on the main thread between
+    `bindApplication` and the first activity's start. In 25 of 25 Wikipedia
+    cold starts on an SM-F711B it was there, 2.1–6.1 ms; a user whose process
+    the system reclaimed gets none of it on the next start. An app that
+    schedules work, opens a database or syncs in its boot receiver has that
+    measured into every cold start `collect` records, and a hunt would look
+    for it in the code as if it were the start.
+
+    By name, from the slices of the window's process. None when there are
+    none.
+    """
+    lo, hi = window.get("ts_start"), window.get("ts_end")
+    if lo is None or hi is None:
+        return None
+    rows = tp.query(f"""
+        SELECT name, COUNT(*) AS n, SUM(MAX(dur, 0)) AS ns FROM _slice
+        WHERE is_main_thread = 1 AND name GLOB '{BOOT_RECEIVERS}'
+          AND ts >= {int(lo)} AND ts < {int(hi)}
+        GROUP BY name ORDER BY name
+    """)
+    return [{"name": r["name"], "count": r["n"], "ms": round(r["ns"] / 1e6, 2)}
+            for r in rows] or None
 
 
 def _crowding_info(tp) -> dict | None:

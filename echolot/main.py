@@ -777,11 +777,22 @@ def cmd_analyze(args) -> int:
                                             use_defaults=args.defaults, tp_source=tp_source,
                                             below_bar=True),
             jobs)
+        # A launch that ended on another activity than most of the set's is
+        # another journey: left out, and named (#909).
+        reports, elsewhere, mixed = _one_journey(reports)
+        if elsewhere:
+            print(f"[!] {report_mod.elsewhere_said(elsewhere, len(reports))}",
+                  file=sys.stderr)
+        traces = [r["trace"] for r in reports]
         rep = report_mod.aggregate(reports)
         if same:
             rep["same_recording"] = same
         if warm:
             rep["not_cold"] = warm
+        if elsewhere:
+            rep["ended_elsewhere"] = elsewhere
+        if mixed:
+            rep.setdefault("window", {})["activities"] = mixed
     except (ConfigError, hunt_mod.NotOpen) as e:
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
@@ -1030,6 +1041,72 @@ def _cold_only(paths: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
         else:
             kept.append(path)
     return (kept, warm) if kept else (paths, [])
+
+
+def _one_journey(reports: list[dict[str, Any]]) -> tuple[
+        list[dict[str, Any]], list[dict[str, Any]], dict[str, int] | None]:
+    """The repeats to merge, those left out as having ended on another
+    activity, and how many ended on each activity when none can be left out
+    (#909).
+
+    A launch ends on the activity the app drew when it was done, which is not
+    always the one started: Wikipedia opens the page read last on its own when
+    that was less than a day ago, and 2 of its 13 cold starts ended on
+    `PageActivity` in 497 and 572 ms against 273–317 for the feed, with
+    WebView's start inside. A set holding both said `Repeat windows diverged
+    2.1x` and nothing of which repeats or why; a set with one of them said
+    nothing at all. Those are two journeys, so the one fewer repeats took is
+    left out, and named.
+
+    Which one that is, is the set's to say: a splash that hands over to the
+    main activity ends every launch on another activity than the one started,
+    and that is the app's start. Where as many repeats ended on two, the one
+    `collect` started is read; with no such one to go by, every repeat is,
+    and the count says the medians mix two journeys.
+
+    Where each launch ended is `am start -W`'s word, kept beside the trace by
+    `collect`, and the trace's last `performCreate:` inside the window where
+    it is not: a set recorded before `collect` kept it, or by a macrobenchmark.
+    A repeat with neither is read: there is nothing to tell it by.
+    """
+    from collections import Counter
+
+    from . import runner
+
+    def ended(report: dict[str, Any]) -> tuple[str | None, str | None]:
+        rec = runner.launch_record(Path(report["trace"])) or {}
+        drawn = (runner.activity_class(rec.get("activity"))
+                 or (report.get("window") or {}).get("activity"))
+        return drawn, runner.activity_class(rec.get("asked"))
+
+    seen = [ended(r) for r in reports]
+    counts = Counter(a for a, _ in seen if a)
+    if len(counts) < 2:
+        return reports, [], None
+    top = max(counts.values())
+    leaders = [a for a, n in counts.items() if n == top]
+    asked = {s for _, s in seen if s}
+    if len(leaders) > 1:
+        leaders = [a for a in leaders if a in asked]
+    if len(leaders) != 1:
+        return reports, [], dict(counts.most_common())
+    kept: list[dict[str, Any]] = []
+    left: list[dict[str, Any]] = []
+    for report, (drawn, _) in zip(reports, seen, strict=True):
+        if drawn is None or drawn == leaders[0]:
+            kept.append(report)
+            continue
+        rec = runner.launch_record(Path(report["trace"])) or {}
+        left.append({"trace": report["trace"], "activity": drawn,
+                     "repeat": rec.get("repeat") or _repeat_of(report["trace"]),
+                     "others": leaders[0]})
+    return kept, left, None
+
+
+def _repeat_of(trace: str) -> int | None:
+    """The repeat a trace `collect` named is, from its name: `_iter000` is 1."""
+    m = re.search(r"_iter(\d+)", Path(trace).name)
+    return int(m.group(1)) + 1 if m else None
 
 
 def _markers_against_code(rep: dict[str, Any], cfg: Config) -> None:
@@ -3329,6 +3406,11 @@ def cmd_collect(args) -> int:
                   file=sys.stderr)
     if aside:
         print(f"\n[!] {_aside_said(aside, len(results), iterations)}", file=sys.stderr)
+    # Where the launches ended, when not all of them on the activity started
+    # (#909).
+    elsewhere = runner.activities_said(results)
+    if elsewhere:
+        print(f"\n[!] {elsewhere[0].upper()}{elsewhere[1:]}.", file=sys.stderr)
 
     for r in results:
         print(r["path"])
@@ -3400,15 +3482,36 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
     if drawn is not None and drawn.get("count") == 0:
         return (f"{window.get('process') or 'the app'} drew no frame in the scenario's "
                 f"window", None)
+    notes = []
     if end and end.get("matches") == 0 and not end.get("before_start"):
         near = end.get("near") or []
         held = (f"; the trace holds {', '.join(f'`{n}`' for n in near)}, which "
                 f"{'reads' if len(near) == 1 else 'read'} like it" if near else "")
-        return None, (f"the end anchor `{end['glob']}` did not occur in repeat 1: the "
-                      f"scenario may not have reached its end, or the name in the "
-                      f"config is not the one the app writes (`echolot probe` on this "
-                      f"trace says which){held}")
-    return None, None
+        notes.append(f"the end anchor `{end['glob']}` did not occur in repeat 1: the "
+                     f"scenario may not have reached its end, or the name in the "
+                     f"config is not the one the app writes (`echolot probe` on this "
+                     f"trace says which){held}")
+    boot = _boot_said(window.get("boot_receivers"))
+    if boot:
+        notes.append(boot)
+    return None, ("; ".join(notes) or None)
+
+
+def _boot_said(rows: list[dict] | None) -> str | None:
+    """What `collect` says when the first repeat's main thread ran the app's
+    `BOOT_COMPLETED` receiver inside the window (#910), or None.
+
+    Said once, at the first repeat: every repeat after a force-stop runs it on
+    Android 15, and the report says it again with its time over the set.
+    """
+    if not rows:
+        return None
+    named = ", ".join(f"`{r['name'].split(': ', 1)[-1]}` {r['ms']} ms" for r in rows)
+    return (f"repeat 1 ran the app's boot receiver on its main thread inside the "
+            f"window ({named}): on Android 15 a force-stop leaves the app stopped, "
+            f"and its next start is sent BOOT_COMPLETED, so every repeat stopped "
+            f"before it will run it, and a user's cold start, after the system "
+            f"reclaimed the process, does not. analyze names it with its time")
 
 
 def _interrupted_line(state: dict, out_dir: Path, project: Path, aside: list[Path]) -> str:

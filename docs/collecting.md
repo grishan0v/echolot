@@ -85,7 +85,10 @@ of the set it was and which recording of that repeat (`attempt`, 2 and on for
 one recorded again), `am start -W`'s `state` (`COLD`, `WARM`, `HOT`; `null` in
 command mode) and `total_time_ms`, `cold` (`true` for a stopped app that
 started cold, `false` for one that did not, `null` where there is nothing to
-judge by), and `notes`, the lines `collect` printed under the repeat. Before,
+judge by), `activity` and `asked`, the activity the launch ended on as `am
+start -W` named it and the one it started (`null` in command mode; see
+[A launch that ended elsewhere](#a-launch-that-ended-elsewhere)), and `notes`,
+the lines `collect` printed under the repeat. Before,
 they were in its output alone, and an agent that had cut that output with
 `tail` recorded a whole round again to read them back. `echolot` reads them
 off the set with no device and prints a `starts` line:
@@ -190,6 +193,48 @@ cold ones, a glob that took the whole directory say, it leaves it out of the
 medians and says which: `Left out: startup_iter001-warm.perfetto-trace
 (WARM)`, in its output, in `report.md` under the runs, and in `report.json`
 as `not_cold`. A set made only of such traces is read as given.
+
+#### A launch that ended elsewhere
+
+A launch ends on the activity the app drew when it was done, and that is not
+always the one `am start` started. Wikipedia opens the page read last by
+itself when that was less than a day ago: 2 of its 13 cold starts on an
+SM-F711B ended on `PageActivity`, in 497 and 572 ms against 273–317 for the
+feed, with WebView's start inside, and both were recorded as an ordinary
+`COLD`. A splash, a login gate or an onboarding redirect does the same.
+`am start -W` names the activity in its `Activity:` line, in the short form
+(`com.example.app/.MainActivity`); `collect` keeps it beside the trace with
+the one it started, and a repeat that ended elsewhere gets a line under its
+own:
+
+```
+  [1/10] cold_start_iter000.perfetto-trace  13.9 MB, am start -W: 572 ms (COLD)
+      the launch ended on org.wikipedia.page.PageActivity, not on the org.wikipedia.main.MainActivity it started: the app went on to another activity by itself
+```
+
+The line is said once while the repeats after it end on the same activity: a
+splash that hands over to the main activity ends every launch elsewhere, and
+that is the app's start. At the end of the set a `[!]` line counts where the
+launches ended when they did not all end on one activity (`PageActivity in
+repeat 1, MainActivity in the other 9`), or says that every launch ended on
+another activity than the one started.
+
+Such a repeat is not recorded again, as a warm one is. Which repeat is the
+odd one out is the set's to say and not the activity started's: Wikipedia's
+was the first of its set, and a splash's set ends elsewhere every time.
+`analyze` reads the activity most repeats ended on, the one started where as
+many ended on each, and leaves the others out by name: `Left out:
+cold_start_iter000.perfetto-trace (repeat 1, ended on
+org.wikipedia.page.PageActivity); the other 9 ended on
+org.wikipedia.main.MainActivity`, in its output, in `report.md` and in
+`report.json` as `ended_elsewhere`. For a set `collect` recorded before it
+kept this, or one a macrobenchmark recorded, it reads the trace's last
+`performCreate:` inside the window instead; a trace from before Android 12
+names no activity there, and is read. With as many on each and none of them
+the one started, every repeat is read and the report says the medians mix two
+journeys. To measure the start alone, record it where nothing sends the app
+elsewhere: for Wikipedia, before a scenario that reads a page, not right
+after it.
 
 The scenario that needs nothing more is `scenario.window: launch`: its window
 is the launch this mode starts, and the trace says where it ends, so nobody
@@ -743,6 +788,68 @@ Four gradle failures come with the one thing that fixes them:
 | `ERRORS (not suppressed): EMULATOR, …` | the benchmark refuses the device or its state | fix the state, or `…androidx.benchmark.suppressErrors=` with the names it lists, `EMULATOR,LOW-BATTERY` for one in `runner.gradle_args` |
 | `No online devices found` / `no devices/emulators found` / `device offline` | gradle found no device it could use | `adb devices` should list one as `device`; a serial named with `--device` or `runner.device` reaches gradle as `ANDROID_SERIAL` and has to be one of those listed |
 | `INSTALL_FAILED` / `signatures do not match` | the APK did not install | uninstall the app from the device first — a build signed differently cannot go over the one that is there |
+
+## Android 15: what a force-stop adds to a cold start
+
+On Android 15 `am force-stop` leaves a package in the stopped state, and the
+app's next start takes it out of it: system_server sends `PACKAGE_UNSTOPPED`,
+and the app is sent `BOOT_COMPLETED` (and `LOCKED_BOOT_COMPLETED` when it is
+direct-boot aware), as after a reboot. An app with a receiver for it runs that
+receiver on its main thread between `bindApplication` and its first activity.
+In 25 of 25 Wikipedia cold starts on an SM-F711B the window held
+`broadcastReceiveComp: android.intent.action.BOOT_COMPLETED`, 2.1–6.1 ms. A
+user whose process the system reclaimed gets none of it on the next start.
+`reset_policy: force-stop` and a startup macrobenchmark stop the app before
+every repeat, so every repeat runs it.
+
+`collect` says so under the first repeat when its window holds the receiver,
+with its time, and the report says it above the findings, over the set:
+
+```
+> ⚠️ The main thread ran the app's `BOOT_COMPLETED` receiver inside the window: `broadcastReceiveComp: android.intent.action.BOOT_COMPLETED` 2.63 ms (2.13–6.1), in 9 of 9 repeats. On Android 15 `am force-stop` leaves an app stopped, …
+```
+
+`report.json` keeps it as `window.boot_receivers`. Its time is inside the
+window, the medians and the rows: it is the reset's work, not the start's,
+and nothing to look for in the start's code. For Wikipedia that is a few
+milliseconds; an app that schedules work, opens a database or syncs in its
+boot receiver has all of that in every cold start recorded this way.
+
+The shell has no reset for an app that is not debuggable that both leaves the
+package unstopped and makes the next start cold. The nearest is `am kill`,
+which kills the app's process without stopping the package. Its price, on the
+SM-F711B (Android 15):
+
+- it kills nothing while the app is in front, nor 0.3 s after HOME; one second
+  after HOME it did, and the next launch was `COLD`. It prints nothing either
+  way, so whatever runs it has to look with `pidof`;
+- it leaves the app's alarms and jobs in place, which a force-stop cancels:
+  the system may start the process for one of them before the launch, and the
+  start is warm;
+- the package is stopped already when the round begins if anything
+  force-stopped it before, and the first start carries the receiver all the
+  same.
+
+It is a `command`-mode recipe, not a `reset_policy`, so `collect` neither
+stops nor checks anything: the command says whether the start was cold.
+
+```yaml
+scenarios:
+  cold_start_unstopped:
+    window: launch
+    runner:
+      mode: command
+      reset_policy: none
+      command: >
+        adb shell input keyevent KEYCODE_HOME && sleep 1 &&
+        adb shell am kill com.example.app && sleep 0.5 &&
+        ! adb shell pidof com.example.app &&
+        adb shell am start -W -n com.example.app/.MainActivity | grep -q 'LaunchState: COLD'
+```
+
+A repeat whose kill left the process there, or whose launch was not cold,
+fails the command, and `collect` stops at it. Otherwise read the receiver's
+time off the report and leave it out of what you look for.
 
 ## `pm clear` is deliberately unsupported
 

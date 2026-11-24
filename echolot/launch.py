@@ -198,8 +198,34 @@ def facts(tp, window: dict[str, Any], found: dict[str, Any]) -> dict[str, Any]:
         if first and first[0]["ts"] is not None:
             budget["before_process_ms"] = round(
                 max(0, first[0]["ts"] - window["ts_start"]) / 1e6, 2)
-    return {"defined_by": found["defined_by"],
-            "report_fully_drawn": found["report_fully_drawn"]}
+    out = {"defined_by": found["defined_by"],
+           "report_fully_drawn": found["report_fully_drawn"]}
+    drawn = ended_on(tp, window)
+    if drawn:
+        out["activity"] = drawn
+    return out
+
+
+def ended_on(tp, window: dict[str, Any]) -> str | None:
+    """The activity the launch ended on, as the trace has it: the class of the
+    main thread's last `performCreate:` inside the window (#909).
+
+    A launch the app took on to another activity by itself creates both, the
+    one started first: on Wikipedia's, `performCreate:…MainActivity` and then
+    `…PageActivity`, the page it opened on its own. Android 12 and on name the
+    class in that slice; an older trace has none, and says nothing here.
+    """
+    start, end = window.get("ts_start"), window.get("ts_end")
+    if start is None or end is None:
+        return None
+    rows = tp.query(f"""
+        SELECT name FROM _slice
+        WHERE is_main_thread = 1 AND name GLOB 'performCreate:*'
+          AND ts >= {start} AND ts < {end}
+        ORDER BY ts DESC LIMIT 1
+    """)
+    name = rows[0]["name"].split(":", 1)[1].strip() if rows else ""
+    return name or None
 
 
 # --- what the report says about it ------------------------------------------------
@@ -255,16 +281,22 @@ def lines(window: dict[str, Any]) -> list[str]:
     head = "Window: the launch as the platform records it, from the intent to "
     source = window.get("report_fully_drawn")
     if by == FULLY_DRAWN and source == SYSTEM_SERVER:
-        return [head + "`reportFullyDrawn` as system_server records it. The "
-                       "app's own slice of that call is not in the trace."]
-    if by == FULLY_DRAWN:
-        return [head + "the end of the app's `reportFullyDrawn` call, which "
-                       "came after the first frame."]
-    if source:
-        return [head + "the launch's end, its first frame. `reportFullyDrawn` "
-                       "was called before that frame, so it closes nothing."]
-    return [head + "the launch's end, its first frame. The trace holds no "
-                   "`reportFullyDrawn` call after the launch began."]
+        line = head + ("`reportFullyDrawn` as system_server records it. The "
+                       "app's own slice of that call is not in the trace.")
+    elif by == FULLY_DRAWN:
+        line = head + ("the end of the app's `reportFullyDrawn` call, which "
+                       "came after the first frame.")
+    elif source:
+        line = head + ("the launch's end, its first frame. `reportFullyDrawn` "
+                       "was called before that frame, so it closes nothing.")
+    else:
+        line = head + ("the launch's end, its first frame. The trace holds no "
+                       "`reportFullyDrawn` call after the launch began.")
+    # Where the launch ended, when the trace says (#909): a launch the app
+    # took on to another screen by itself ran on through that screen.
+    if window.get("activity") and not window.get("activities"):
+        line += f" The launch ended on `{window['activity']}`."
+    return [line]
 
 
 # --- whether two reports measured one window ---------------------------------------

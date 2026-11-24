@@ -1141,6 +1141,75 @@ def _merge_drawn(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
             "runs": len(counts)}
 
 
+def _merge_boot_receivers(reports: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """The app's `BOOT_COMPLETED` receivers across the repeats (#910): per
+    receiver, its median time over the repeats that ran it, the least and the
+    most, and in how many it ran."""
+    total = len(reports)
+    by_name: dict[str, list[float]] = {}
+    for r in reports:
+        for row in (r.get("window") or {}).get("boot_receivers") or []:
+            by_name.setdefault(row["name"], []).append(row["ms"])
+    return [{"name": name, "ms": round(median(ms), 2), "ms_min": min(ms), "ms_max": max(ms),
+             "runs": f"{len(ms)}/{total}"}
+            for name, ms in sorted(by_name.items())] or None
+
+
+def elsewhere_said(left: list[dict[str, Any]], read: int) -> str:
+    """The sentence for the launches `analyze` left out as having ended on
+    another activity than the rest of the set (#909)."""
+    k = len(left)
+    names = [Path(e["trace"]).name for e in left]
+    shown = [Path(e["trace"]).name if names.count(Path(e["trace"]).name) == 1
+             else "/".join(Path(e["trace"]).parts[-2:]) for e in left]
+    named = ", ".join(
+        f"`{name}` ("
+        + (f"repeat {e['repeat']}, " if e.get("repeat") else "")
+        + f"ended on `{e['activity']}`)" for name, e in zip(shown, left, strict=True))
+    others = left[0].get("others")
+    where = f"; the other {read} ended on `{others}`" if others else ""
+    return (f"Left out: {named}{where}. Those are two journeys: an app that opens "
+            f"another screen by itself (a page read last, a login, an onboarding) "
+            f"ends its launch there, and the window runs on through it. The numbers "
+            f"are over the other {read}. To read {'it' if k == 1 else 'them'}, "
+            f"analyze {'it' if k == 1 else 'them'} by name, alone.")
+
+
+def _activities_lines(w: dict[str, Any]) -> list[str]:
+    """Launches that ended on different activities, as many on each, so that
+    none could be left out (#909)."""
+    counts = w.get("activities")
+    if not counts:
+        return []
+    total = sum(counts.values())
+    each = ", ".join(f"`{a}` in {n}" for a, n in counts.items())
+    return [f"> ⚠️ The launches ended on different activities: {each} of {total}. "
+            f"The app went on to another screen by itself in some of them, so these "
+            f"are two journeys, and the medians below mix them. Analyze each by name."]
+
+
+def _boot_lines(w: dict[str, Any]) -> list[str]:
+    """What the report says of the app's `BOOT_COMPLETED` receivers inside its
+    window (#910): their time is the reset's, not the start's."""
+    rows = w.get("boot_receivers")
+    if not rows:
+        return []
+    said = []
+    for row in rows:
+        spread = (f" ({row['ms_min']}–{row['ms_max']})"
+                  if row.get("ms_min") is not None and row["ms_min"] != row["ms_max"] else "")
+        runs = row.get("runs")
+        where = f", in {runs.split('/')[0]} of {runs.split('/')[1]} repeats" if runs else ""
+        said.append(f"`{row['name']}` {row['ms']} ms{spread}{where}")
+    return [f"> ⚠️ The main thread ran the app's `BOOT_COMPLETED` receiver inside the "
+            f"window: {'; '.join(said)}. On Android 15 `am force-stop` leaves an app "
+            f"stopped, and its next start is sent `BOOT_COMPLETED`; `collect`'s "
+            f"`reset_policy: force-stop` and a startup macrobenchmark stop the app "
+            f"before every repeat. A user's cold start, after the system reclaimed "
+            f"the process, runs none of it: it is the reset's work, not the start's, "
+            f"and nothing to look for in the start's code."]
+
+
 def undrawn(report: dict[str, Any]) -> tuple[int, int] | None:
     """(repeats in which the app drew no frame, repeats that could tell), when any."""
     d = (report.get("window") or {}).get("drawn")
@@ -1333,6 +1402,7 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         merged["window"]["crowding"] = _merge_crowding(reports)
         merged["window"]["frames"] = _merge_frames(reports)
         merged["window"]["drawn"] = _merge_drawn(reports)
+        merged["window"]["boot_receivers"] = _merge_boot_receivers(reports)
         merged["window"]["startup"] = _merge_startup(reports)
         merged["window"].update(_merge_window_checks(reports))
 
@@ -2166,6 +2236,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
     if report.get("not_cold"):
         out.append(f"> ⚠️ {not_cold_said(report['not_cold'], len(traces or [None]))}")
+    if report.get("ended_elsewhere"):
+        out.append(f"> ⚠️ {elsewhere_said(report['ended_elsewhere'], len(traces or [None]))}")
     if report.get("scenario"):
         out.append(f"Scenario: `{report['scenario']}`")
     if w.get("process"):
@@ -2427,6 +2499,8 @@ def _window_warning_lines(w: dict[str, Any]) -> list[str]:
             f"below is the tail of it rather than the whole. Move "
             f"`scenario.start` earlier to see the cause."
         )
+    out.extend(_activities_lines(w))
+    out.extend(_boot_lines(w))
     return out
 
 
@@ -2587,6 +2661,8 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
         out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
     if report.get("not_cold"):
         out.append(f"> ⚠️ {not_cold_said(report['not_cold'], len(traces or [None]))}")
+    if report.get("ended_elsewhere"):
+        out.append(f"> ⚠️ {elsewhere_said(report['ended_elsewhere'], len(traces or [None]))}")
     out.extend(_diverged_lines(w))
     anchors = []
     for key, label in (("start_anchor", "start"), ("end_anchor", "end")):
