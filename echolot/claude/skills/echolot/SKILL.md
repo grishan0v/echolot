@@ -153,6 +153,11 @@ echolot analyze <trace> -c echolot.yml
 
 `analyze` writes `.echolot/out/report.json` (for you) and `report.md` (for
 humans), next to the config. Read the **json** — it has a stable schema.
+What it prints to you is the overview `echolot report` prints — the window,
+every warning that the numbers are not about the scenario, a line per
+detector — not `report.md`, which is a terminal's; `echolot report -d <id>`
+is one detector's rows. `--full` prints the whole report and is never the
+way in.
 
 No config? That is `next: setup`. No idea what is in the trace?
 `echolot probe <trace> --process '<package>*'`.

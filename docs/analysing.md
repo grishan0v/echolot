@@ -421,6 +421,32 @@ location at 60 characters and the evidence at 100; `--wide` keeps both
 whole. `--json` keeps everything and cuts only the rows, and only when
 `--top` says how many.
 
+### What `analyze` prints
+
+In a terminal `analyze` prints the whole `report.md`, as it always did.
+Anywhere else — a pipe, a script, an agent — it prints what `echolot report`
+prints with no view named, and says so in its last line; the files are the
+same either way. An agent reads what a command prints into its context: on
+a large app's cold start the whole report was 35 KB, 466 lines, in every
+round of a hunt, and the layer then had it read the report again with
+`echolot report`. The overview keeps every warning the whole report puts
+above its findings — an anchor that missed in some repeats, repeats whose
+windows diverged, repeats of different processes, a window that opened
+inside a wait — and its pointers name the report's path whenever
+`echolot report` with no path would read another one: an `-o` elsewhere, a
+config with several scenarios, a run from outside the config's directory.
+
+```bash
+echolot analyze traces/*.perfetto-trace | head        # the overview, about 35 lines
+echolot analyze traces/*.perfetto-trace --full > r.md # the whole report, into a pipe too
+```
+
+The test is the one `names` makes, turned the other way: the screen gets what
+fits a screen, a pipe gets what its reader acts on, and nothing either leaves
+out is out of reach. `reflect` of one session follows the same rule: outside
+a terminal it prints the row `--all` gives that session, and `--full` the
+whole report.
+
 ### One recording, one repeat
 
 `analyze` counts each recording once, however it was named. A path given

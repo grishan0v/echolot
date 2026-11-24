@@ -2,6 +2,10 @@
 
 `echolot analyze` writes two files into `.echolot/out/` next to the config:
 `report.json` for you and `report.md` for humans. One set of data, two formats.
+It prints `report.md` only to a terminal. Anywhere else — a pipe, an agent —
+it prints what `echolot report` prints with no view named: the window, the
+warnings above the findings, a line per detector, and the commands for the
+rest. `--full` prints the whole report there too.
 A relative `-o` is taken from the config's directory, so running from a build
 folder full of traces still lands the report in the project. A config that
 names several scenarios keeps a directory per scenario,

@@ -92,13 +92,16 @@ def skipped(why: str | None) -> bool:
 
 
 @contextlib.contextmanager
-def _cursor_may_refuse():
-    """Cursor's sandbox refusing a `.cursor/` is a skip; anything else is not."""
+def _cursor_may_refuse(env: dict[str, str] | None = None):
+    """Cursor's sandbox refusing a `.cursor/` is a skip; anything else is not.
+
+    `env` stands in for the environment, for the check of this rule: the
+    environment doctor runs in may carry another agent's marks (#700)."""
     from . import sandbox
     try:
         yield
     except PermissionError as e:
-        if sandbox.host() == sandbox.CURSOR and ".cursor" in str(e.filename or e):
+        if sandbox.host(env) == sandbox.CURSOR and ".cursor" in str(e.filename or e):
             raise Skipped("Cursor's sandbox refuses to create .cursor/ in a "
                           "temporary project") from None
         raise
@@ -2750,28 +2753,26 @@ def _(report):
 def _(report):
     """Cursor's sandbox refuses a `.cursor/` it did not make. A check that
     writes one says so there and is not a failure; the same refusal anywhere
-    else, or another error there, still is."""
-    from . import selftest as st
+    else, or another error there, still is.
 
-    def refused(_report):
-        with st._cursor_may_refuse():
-            raise PermissionError(1, "Operation not permitted", "/tmp/x/.cursor")
+    Both environments are named here rather than set: the one doctor runs in
+    may carry another agent's marks, and Codex's, which `sandbox.host()`
+    reads first, failed this check whenever Codex ran doctor (#700)."""
+    from . import selftest as st
+    cursor = {"CURSOR_SANDBOX": "seatbelt"}
+
+    def refused_in(env):
+        def refused(_report):
+            with st._cursor_may_refuse(env):
+                raise PermissionError(1, "Operation not permitted", "/tmp/x/.cursor")
+        return refused
 
     def other(_report):
-        with st._cursor_may_refuse():
+        with st._cursor_may_refuse(cursor):
             raise PermissionError(1, "Operation not permitted", "/tmp/x/.idea")
 
-    before = os.environ.get("CURSOR_SANDBOX")
-    try:
-        os.environ["CURSOR_SANDBOX"] = "seatbelt"
-        inside = dict(st.run_checks({}, [("refused", refused), ("other", other)]))
-        del os.environ["CURSOR_SANDBOX"]
-        outside = dict(st.run_checks({}, [("refused", refused)]))
-    finally:
-        if before is None:
-            os.environ.pop("CURSOR_SANDBOX", None)
-        else:
-            os.environ["CURSOR_SANDBOX"] = before
+    inside = dict(st.run_checks({}, [("refused", refused_in(cursor)), ("other", other)]))
+    outside = dict(st.run_checks({}, [("refused", refused_in({}))]))
     assert st.skipped(inside["refused"]) and "Cursor's sandbox" in inside["refused"], inside
     assert inside["other"] and not st.skipped(inside["other"]), inside
     assert outside["refused"] and not st.skipped(outside["refused"]), outside
@@ -4089,6 +4090,66 @@ def _(report):
         after = hunt_mod.load(project)
         assert code == 0 and (project / ".echolot/hunts/1/reports/001.json").is_file(), said[-400:]
         assert after["analyzes"] == 1 and after["touched_at"] != _STALE, after
+
+
+@check("analyze: outside a terminal it prints the overview `report` prints, "
+       "and --full the whole report")
+def _(report):
+    """`analyze` printed the whole report wherever its output went, and an
+    agent reads what a command prints into its context: on a large app's
+    cold start that was 35 KB, 466 lines, in every round of a hunt, of a
+    report the layer then has it read again with `echolot report` (#492).
+    Outside a terminal — a pipe, an agent, this check's StringIO — it is the
+    overview `echolot report` prints for the same report, word for word, and
+    a line that says where the rest is; `--full` is the whole report, as a
+    terminal gets it.
+
+    `analyze_trace` hands back this check's own report, so no trace is read.
+    """
+    import copy
+    import io
+    import json
+
+    from . import main as main_mod
+    from . import report as report_mod
+
+    def run(argv: list[str]) -> str:
+        out, err = io.StringIO(), io.StringIO()
+        with recorder.isolated(), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = main_mod.main(argv)
+        assert code == 0, f"`echolot {' '.join(argv)}` exited {code}: {err.getvalue()[-400:]}"
+        return out.getvalue()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp).resolve()
+        (project / "echolot.yml").write_text(
+            "project:\n  process: com.example.app\nscenario:\n  name: coldStart\n",
+            encoding="utf-8")
+        trace = project / "a.perfetto-trace"
+        trace.write_bytes(b"a trace")
+        real, here = main_mod.analyze_trace, Path.cwd()
+        main_mod.analyze_trace = lambda *a, **kw: copy.deepcopy(report)
+        try:
+            # From the config's directory, the way the layer runs it: there
+            # `echolot report` with no path reads what `analyze` just wrote.
+            os.chdir(project)
+            piped = run(["analyze", str(trace)])
+            shown = run(["report"])
+            full = run(["analyze", str(trace), "--full"])
+            written = json.loads((project / ".echolot/out/report.json").read_text(encoding="utf-8"))
+        finally:
+            os.chdir(here)
+            main_mod.analyze_trace = real
+
+    assert "# Marker Report" not in piped, f"a pipe got the whole report: {piped[:300]}"
+    assert piped.startswith(shown), (
+        f"a pipe got something other than `echolot report`'s overview:\n{piped[:600]}\n"
+        f"---\n{shown[:600]}")
+    assert "`analyze --full` prints it" in piped[len(shown):], (
+        f"the overview does not say where the rest is: {piped[len(shown):]!r}")
+    assert full == report_mod.to_markdown(written) + "\n", (
+        f"--full is not the whole report: {full[:300]}")
 
 
 @check("collect: a run outside the open investigation leaves it as it was, and "

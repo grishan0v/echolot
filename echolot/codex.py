@@ -4,8 +4,11 @@ Codex reads it, and the copies its /import leaves behind.
 Codex runs commands in a sandbox with no network, and echolot needs localhost
 (sandbox.py says why). One rule runs the `echolot` command outside it and
 nothing else, and `init --for codex` writes that rule into
-`.codex/rules/echolot.rules` (#191). Three things decide whether it works, and
-`doctor` and `status` say each of them:
+`.codex/rules/echolot.rules` (#191). Two more beside it run `./gradlew` and
+`adb` outside it the same way, which an investigation needs to rebuild the
+app and put it on the phone, and which `echolot ui` grants a Codex it starts
+through this file (#454). Three things decide whether it works, and `doctor`
+and `status` say each of them:
 
 - the file. It is echolot's alone, so `init` writes it whole, and an edit
   made here is kept the way `init` keeps an edited file of the `.claude/`
@@ -70,12 +73,44 @@ prefix_rule(
         "python3 -m echolot doctor",
     ],
 )
+
+# An investigation also rebuilds the app and puts it on the phone, and both
+# need what the sandbox refuses: Gradle downloads, and writes under ~/.gradle;
+# adb talks to its server on localhost. So these two run outside it the same
+# way, each as a command line of its own, without asking each time.
+prefix_rule(
+    pattern = ["./gradlew"],
+    decision = "allow",
+    justification = "an investigation rebuilds the app: Gradle needs the network and ~/.gradle",
+    match = [
+        "./gradlew :app:installDebug",
+    ],
+    not_match = [
+        "gradle installDebug",
+    ],
+)
+
+prefix_rule(
+    pattern = ["adb"],
+    decision = "allow",
+    justification = "an investigation drives the phone: adb needs its server on localhost",
+    match = [
+        "adb devices",
+        "adb shell am force-stop com.example.app",
+    ],
+)
 """
 
 # Hashes of the rule files earlier releases wrote. When RULE_FILE changes, the
 # hash of the text it had goes here: a file that still matches one is ours and
 # untouched, and `init` brings it up to date instead of keeping it as an edit.
-_EARLIER: frozenset[str] = frozenset()
+_EARLIER: frozenset[str] = frozenset({
+    # 0.10.0 to 0.17.0: the `echolot` rule alone, without `./gradlew` and `adb`.
+    "05580ba107b3b63e211a1d7a5ce071d139f4685b5b586876e25e994ac2fec95f",
+})
+
+# What an investigation runs outside the sandbox, as the rules name each.
+COMMANDS = ("echolot", "./gradlew", "adb")
 
 
 def _sha(text: str) -> str:
@@ -100,6 +135,32 @@ def rule_state(project: Path) -> str:
     if text == RULE_FILE:
         return "current"
     return "stale" if _sha(text) in _EARLIER else "edited"
+
+
+def lets_out(text: str) -> list[str]:
+    """Which of `COMMANDS` a rules file lets out of the sandbox, in their
+    order: a `prefix_rule` each, not commented out, whose pattern is that one
+    word and whose decision is `allow`, read as `sandbox.lets_echolot_out`
+    reads the first."""
+    calls = sandbox._calls(sandbox._uncommented(text), "prefix_rule")
+    out = []
+    for word in COMMANDS:
+        pattern = re.compile(r"""\bpattern\s*=\s*\[\s*(["'])""" + re.escape(word) + r"""\1\s*,?\s*\]""")
+        for call in calls:
+            decision = sandbox._DECISION.search(call)
+            if pattern.search(call) and decision and decision.group(2) == "allow":
+                out.append(word)
+                break
+    return out
+
+
+def project_lets_out(project: Path) -> list[str]:
+    """What the project's own `.codex/rules/echolot.rules` lets out, as it
+    is now; nothing when it is not there or does not read."""
+    try:
+        return lets_out((project / RULE_PATH).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return []
 
 
 def write_rule(project: Path, force: bool = False) -> tuple[str, OSError | None]:
@@ -399,6 +460,11 @@ def one_line(project: Path, keys: list[str],
         line = (f"NO RULE — nothing lets echolot out of the sandbox → "
                 f"`{a['command']}`, run outside it: the sandbox keeps .codex/ "
                 f"read-only")
+    if a["state"] == "stale" and not (verdict == "current" and a["own"]):
+        # The project's own file as an older echolot wrote it, whichever rule
+        # Codex reads now: it lets echolot out, and not what an
+        # investigation runs besides.
+        line += f" · {RULE_SHOWN} here is from an older echolot → `{a['command']}`"
     if a["copies"]:
         line += (f" · {len(a['copies'])} copies of echolot's skills that nothing "
                  f"keeps current (`echolot doctor` lists them)")
@@ -456,6 +522,9 @@ def print_status(project: Path, keys: list[str],
              f"for the commands it runs. Or, for every project: "
              f"{sandbox.CODEX_RULE} in {home_rules(env)}echolot.rules.",
              first="  → ", rest="    ")
+    if a["state"] == "stale" and not (verdict in ("current", "untrusted") and a["own"]):
+        _say(f"{RULE_SHOWN} here is from an older echolot: `{a['command']}` brings "
+             f"it up to date.", first="  → ", rest="    ")
     if a["copies"]:
         print("\n  Copies of echolot's skills that nothing keeps current:")
         for rel in a["copies"]:

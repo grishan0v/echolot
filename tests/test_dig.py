@@ -184,8 +184,13 @@ def test_the_request_of_an_agent_started_from_the_page():
     check("which investigation it works in", rest[1] == "- The investigation is open: #4, opened for this question by "
           "the page. Carry on in it, do not open another, and close it at the end. Run every `collect` and "
           "`analyze` in it with `--hunt 4`: without it nothing is filed under it.")
-    check("on which recordings", rest[2] == "- Its first evidence is the 3 recordings behind the report, moved aside "
-          "when it opened, into `.echolot/traces/coldStart-20261122-101500/`. Do not record them again.")
+    check("round 1 is the recordings set aside, filed as one round by one analyze naming them all; every later "
+          "round records anew", rest[2] == (
+        "- Round 1's evidence is the 3 recordings behind the report, moved aside when it opened, into "
+        "`.echolot/traces/coldStart-20261122-101500/`: file them as one round, with a single `echolot analyze "
+        "--hunt 4` that names all 3 trace files there (it takes files, not a folder), and do not record them again. "
+        "Every later round records anew, once markers are in: build and install the app, then "
+        "`echolot collect --hunt 4` and `echolot analyze --hunt 4`."), rest[2])
     check("after which change", rest[3] == "- After which change: unknown.")
     check("what it may do, and that the rest is refused", rest[4] == "- You may run `echolot`, `./gradlew` and `adb` "
           "without asking, and edit files under `app/src/main` and `feature/*/src/main`, and `.echolot/verdict.json`. "
@@ -195,9 +200,15 @@ def test_the_request_of_an_agent_started_from_the_page():
                      "refusal costs a turn.")
     check("and how it ends", rest[6] == "- Close the investigation with your verdict, as /echolot-hunt says: "
           "`echolot hunt --done --verdict .echolot/verdict.json`.")
+    one = dig.facts(4, (".echolot/traces/coldStart-20261122-101500", 1))[1]
+    check("one recording set aside is said as one", one.startswith("- Round 1's evidence is the recording behind the "
+          "report,") and "file it with `echolot analyze --hunt 4` and the trace file there (it takes files, not a "
+          "folder), and do not record it again. Every later round records anew" in one, one)
     bare = dig.unattended(2, None, [""])
-    check("with no recordings set aside, the first round records them; the whole project is named so",
-          "No recordings were set aside when it opened" in bare and "edit files under `.`" in bare)
+    check("with no recordings set aside, round 1 records them and every later round anew; the whole project is "
+          "named so", "- No recordings were set aside when it opened: round 1 records them, with `echolot collect "
+          "--hunt 2` and then `echolot analyze --hunt 2`, and every later round records anew, once markers are in: "
+          "build and install the app, then the same two." in bare and "edit files under `.`" in bare, bare)
 
 
 def test_the_investigation_s_question_is_one_line_its_page_can_head():

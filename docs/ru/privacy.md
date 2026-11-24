@@ -49,7 +49,8 @@ Codex и Cursor — это просто текст: четыре скилла, �
 - файлы для выбранных вами агентов при `echolot init`: слой `.claude/`, блок
   между маркерами `<!-- echolot -->` в `AGENTS.md`, `GEMINI.md` или
   `.github/copilot-instructions.md`, `.cursor/rules/echolot.mdc`, а для Codex
-  — `.codex/rules/echolot.rules`, выпускающий `echolot` из песочницы;
+  — `.codex/rules/echolot.rules`, выпускающий из песочницы `echolot`,
+  `./gradlew` и `adb`;
 - на время расследования — временные маркеры трассировки в исходниках,
   разрешённых в `instrumentation.allowed`. Команда `echolot mark --remove`
   удаляет их.
@@ -62,7 +63,11 @@ Codex и Cursor — это просто текст: четыре скилла, �
 - `~/.cache/echolot/` (или `$XDG_CACHE_HOME/echolot`) при включённом
   `runner.compose_names`: библиотека трассировки;
 - `~/.cursor/plugins/local/echolot` — только при явном запуске `echolot plugin
-  cursor`.
+  cursor`;
+- когда **Dig deeper** запускает Codex, сам Codex отмечает проект как
+  доверенный в ваших `~/.codex/config.toml` и хранит запись сессии в
+  `~/.codex/sessions/`, как для любой вашей сессии; экран перед запуском
+  говорит об этом.
 
 На телефоне `collect` пишет в один файл
 `/data/misc/perfetto-traces/echolot.pftrace` и скачивает его в проект;
@@ -115,7 +120,7 @@ PyPI, Claude Code и Codex загружают плагин из
 рамках сессии. Этот трафик относится к самому агенту и регулируется условиями
 его провайдера. То же верно, когда агента запускает `echolot ui`
 ([Агент со страницы](ui.md#агент-со-страницы)): это ваш собственный Claude Code
-под вашей учётной записью, и echolot передаёт ему только запрос.
+или Codex под вашей учётной записью, и echolot передаёт ему только запрос.
 
 ## Вопросы
 

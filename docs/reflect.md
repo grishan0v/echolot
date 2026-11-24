@@ -25,6 +25,10 @@ changes. When a run covers more than one session (`--all`, or `--since` that
 finds several) it also writes `summary.md` and `summary.json` beside them: a
 row per session and how often each signal fired, which is where a signal
 that fires in most sessions shows up as a design item rather than a note.
+One session's whole report is printed to a terminal only, the way `analyze`
+prints its own ([What `analyze` prints](analysing.md#what-analyze-prints)):
+anywhere else it is that session's row of the summary, 15–36 KB less in an
+agent's context, and `--full` prints the whole report there too.
 
 Where things are looked for, when they are not where the defaults say:
 
