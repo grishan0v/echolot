@@ -8,6 +8,8 @@
 -- @param: max_covered_pct = 50 % — and, on any thread but the main one, the
 --       share of its CPU time inside slices it may have at most. Not
 --       calibrated: a share means the same on any device
+-- @fires: total_ms >= {{min_running_ms}}
+--       AND (location = 'main' OR covered_ms < (total_ms + covered_ms) * {{max_covered_pct}} / 100.0)
 -- @calibrate: min_running_ms = top10(total_ms) * 1.5
 -- @column: location — the thread's name; a pool's threads are one row, the
 --       kernel having cut them to one name; `main` for the main thread,
@@ -131,10 +133,7 @@ SELECT
         || '% of CPU outside slices'                       AS detail
 FROM blind b
 LEFT JOIN counted n ON n.thread_name IS b.thread_name
-WHERE b.outside_ns >= {{min_running_ms}} * 1000000
-  AND (b.main OR b.sliced_ns < b.running_ns * {{max_covered_pct}} / 100.0)
-ORDER BY b.outside_ns DESC
-LIMIT 20;
+ORDER BY b.outside_ns DESC;
 
 -- @intervals
 --
