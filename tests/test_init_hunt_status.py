@@ -643,3 +643,46 @@ def test_hunt_waits_for_a_running_collect(tmp_path: Path, monkeypatch, finished:
     check("the open investigation stays open", h["n"] == 1 and h["status"] == "open", h)
     check("its repeats stay where the collect writes them",
           sorted((project / ".echolot" / "traces").glob("*.perfetto-trace")) == loose)
+
+
+@pytest.mark.parametrize("case", ["baseline-after-close", "own-round-before-close",
+                                  "outside-while-open", "inside-while-open",
+                                  "unsaid-after-close"])
+def test_a_new_investigation_files_the_loose_set_only_under_its_own(
+        tmp_path: Path, monkeypatch, case: str) -> None:
+    """#718: the set moved aside goes on the previous record only when it
+    was recorded for it."""
+    root = tmp_path / "p"
+    root.mkdir()
+    (root / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    monkeypatch.chdir(root)
+    _run("hunt", "cold start slow")
+    if case in ("baseline-after-close", "own-round-before-close", "unsaid-after-close"):
+        _run("hunt", "--done", "Firebase init on main")
+    traces = root / ".echolot" / "traces"
+    traces.mkdir(parents=True, exist_ok=True)
+    closed = hunt_mod.load(root).get("closed_at")
+    stamp = (time.time() + 5 if case.endswith("after-close")
+             else (hunt_mod._epoch(closed) - 60 if closed else time.time()))
+    for i in range(5):
+        trace = traces / f"coldStart_iter00{i}.perfetto-trace"
+        trace.write_bytes(b"x")
+        os.utime(trace, (stamp, stamp))
+    inside = case in ("own-round-before-close", "inside-while-open")
+    (root / runner.PROGRESS_FILE).parent.mkdir(parents=True, exist_ok=True)
+    progress = {"scenario": "coldStart", "pid": 1, "iterations": 5, "done": 5, "exit": 0,
+                "started": stamp - 30, "finished": stamp, "hunt": 1 if inside else None}
+    if case == "unsaid-after-close":
+        del progress["hunt"]  # a collect from before it wrote where it ran
+    (root / runner.PROGRESS_FILE).write_text(json.dumps(progress), encoding="utf-8")
+    code, _, err = _run("hunt", "scroll jank in list")
+    check("opened #2", code == 0 and hunt_mod.load(root)["n"] == 2, err)
+    check("and the set was moved aside all the same",
+          not list(traces.glob("*.perfetto-trace")))
+    first = hunt_mod.find(root, "1")
+    _, out, _ = _run("hunt", "--show", "1")
+    if inside:
+        check("its own round is filed under it", len(first.get("traces") or []) == 1, first)
+    else:
+        check("a set recorded outside it is not", not first.get("traces"), first)
+        check("and --show says so", "traces: none recorded" in out, out)
