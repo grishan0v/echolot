@@ -7643,6 +7643,115 @@ def _(report):
         )
 
 
+# --- echolot ui ------------------------------------------------------------
+
+
+@check("ui: a reload of what a press drew sends the browser where that press is made, "
+       "and starts nothing")
+def _(report):
+    """A page a press drew stays in the address bar under the press's
+    address: the screen before an agent starts, a refusal. A reload, or a
+    step back to it in the history, reads that address, and the server
+    answered a bare 405 with no way back to anything (#811). The screen
+    before an agent starts goes back to the report it came from, where Dig
+    deeper is pressed; what is done to an agent, to its investigation's
+    page; the rest, to the start page. A read starts nothing and writes
+    nothing.
+    """
+    from . import ready, ui
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        site = ui.Site(project=root, config="echolot.yml", token="selftest", port=1,
+                       src=ready.Sources(scan=lambda here: None, pick_device=lambda serial: ""))
+        for path, home in (("dig/ask", "report"), ("dig/ask/coldStart", "report/coldStart"),
+                           ("dig/with/codex/ask", "report"), ("dig/start", "report"), ("dig/stop", ""),
+                           ("check", ""), ("check/stop", ""), ("setup", ""), ("limit", "")):
+            for method in ("GET", "HEAD"):
+                reply = ui.answer(site, method, f"/selftest/{path}", {"Host": site.host})
+                assert reply.status == 303 and dict(reply.headers).get("Location") == f"/selftest/{home}", \
+                    (method, path, reply.status, reply.headers)
+        # A press of a read-only address is still no request for it.
+        reply = ui.answer(site, "POST", "/selftest/report", {"Host": site.host, "Origin": site.origin}, b"")
+        assert reply.status == 405, reply.status
+        assert not any(root.iterdir()), sorted(p.name for p in root.iterdir())
+
+
+@check("ui: the phone that keeps a recording from starting is said whole, what to do "
+       "included, on every page that says it, and no red line is named")
+def _(report):
+    """The reason a recording cannot start is said beside a button that
+    cannot be pressed: on the start page, under the ready lines, and also
+    where those lines are not drawn, on the screen before an agent starts,
+    beside the answer's Check again, on the page that refuses a press. It
+    was the ready line's first sentence and "The line marked red says what
+    to do.", which on those pages pointed at nothing (#867). It is the line
+    whole, the phone's own advice included: here, `collect`'s words for no
+    phone at all.
+    """
+    from . import check as check_mod
+    from . import ready, runner
+    saved = runner._run
+    runner._run = lambda argv, **kw: "List of devices attached\n\n"
+    try:
+        phone = ready.phone(None, None, {}, ready.Sources(scan=lambda here: None, pick_device=runner.pick_device))
+    finally:
+        runner._run = saved
+    computer = ready._line(ready.GREEN, "This computer", "is ready.", [])
+    app = ready._line(ready.GREEN, "The app", "can be measured.", [])
+    said = check_mod._stops_recording([computer, phone, app])
+    assert phone["tone"] == ready.RED and said == f"{phone['lead']} {phone['text']}", (phone, said)
+    assert said == ("The phone is not ready: adb sees no devices at all. Plug in a phone or start an "
+                    "emulator."), said
+    assert "marked red" not in said, said
+    assert check_mod._stops_recording([computer, {**phone, "tone": ready.GREEN}, app]) is None
+
+
+@check("ui: the time limit is set in an echolot.yml the page did not write: a press changes "
+       "the number on its line, or adds the line, and every other byte stays")
+def _(report):
+    """The field under the time limit was offered only for a config that
+    began with the two lines the page writes at its top: a config written by
+    hand, by `scan` or by an agent lost it with no word, and so did one with
+    several scenarios (#818). Which file the page may change is now a matter
+    of what it holds. A `budget_ms` line keeps its comment and its spacing
+    and gets a new number; an empty field turns it into a comment, which the
+    next press turns back; a scenario with no limit gets the page's own line
+    as the first of its keys. Every other byte of the file stays.
+    """
+    from . import project_setup, time_limit
+    hand = ("# the team's config\nproject:\n  package: com.example.app\n  process: com.example.app\n\n"
+            "scenario:\n  name: coldStart   # the launch\n  window: launch\n  budget_ms: 500    # agreed\n\n"
+            "runner:\n  mode: launch\n")
+
+    def press(root: Path, ms: int | None) -> dict:
+        found = time_limit.reading(root, "echolot.yml")
+        assert found is not None and found["can"], found
+        time_limit.write(root, "echolot.yml", {"limit_ms": ms, "scenario": None, "seen": found["seen"],
+                                               "rest": found["rest"], "back": "start"})
+        return found
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = root / "echolot.yml"
+        path.write_text(hand, encoding="utf-8")
+        assert press(root, 2000)["line"] == 9
+        assert path.read_text(encoding="utf-8") == hand.replace("budget_ms: 500", "budget_ms: 2000"), \
+            path.read_text(encoding="utf-8")
+        assert Config.load(path).scenario_budget_ms == 2000
+        press(root, None)
+        assert path.read_text(encoding="utf-8") == hand.replace("  budget_ms: 500", "  # budget_ms: 2000"), \
+            path.read_text(encoding="utf-8")
+        assert Config.load(path).scenario_budget_ms is None
+        press(root, 800)
+        assert path.read_text(encoding="utf-8") == hand.replace("budget_ms: 500", "budget_ms: 800")
+        none = hand.replace("  budget_ms: 500    # agreed\n", "")
+        path.write_text(none, encoding="utf-8")
+        press(root, 1500)
+        assert path.read_text(encoding="utf-8") == none.replace(
+            "scenario:\n", "scenario:\n" + project_setup.limit_line(1500) + "\n", 1), path.read_text(encoding="utf-8")
+        assert Config.load(path).scenario_budget_ms == 1500
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor

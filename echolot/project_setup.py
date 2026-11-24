@@ -82,9 +82,10 @@ HEADER = ("# Written by `echolot ui` from what `echolot scan` read in this repos
 
 # The line of the time limit, under the scenario's window: the number with a
 # comment of the page's own, or, with no limit, the same key commented out.
-# `echolot/time_limit.py` rewrites this one line later, and only while it
-# still reads so: other words here would make the page leave alone every file
-# it wrote before them.
+# `echolot/time_limit.py` rewrites this one line later as it is written here,
+# seconds and all, and any other `budget_ms` line by its number alone: other
+# words here would leave the lines the page wrote before them with comments
+# that a press no longer brings up to date.
 LIMIT_SET = "  budget_ms: {ms}  # the time limit, {words}: change the number to change it"
 LIMIT_OFF = ("  # budget_ms: {ms}  # a time limit in milliseconds: take the first `#` off, and the report holds "
              "the launch against it")

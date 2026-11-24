@@ -417,6 +417,33 @@ def test_what_is_not_a_read_needs_the_servers_own_origin_and_the_token(project, 
                 check("and it says what the address does take", got.get("Allow") == "GET", got)
 
 
+def test_a_read_of_a_press_s_address_sends_the_browser_where_the_press_is_made(project):
+    """A page a press drew, a refusal or the screen before an agent starts,
+    stays in the address bar under the press's address. A reload of it, or a
+    step back to it, reads that address. It used to answer a bare 405 with
+    no way back (#811); every such address now sends the browser on to a
+    page the server draws, and starts nothing."""
+    project.ready()
+    site = site_of(project)
+    names = {"scenario": "coldStart", "client": "codex", "n": "1", "k": "1"}
+    def files(root):
+        return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+    before = files(project.root)
+    presses = [r for r in ui.ROUTES if r.method != "GET"]
+    check("there are presses to read", len(presses) > 5, [r.name for r in presses])
+    for route in presses:
+        path = route.path.format(**names)
+        for method in ("GET", "HEAD"):
+            reply = get(site, path, method=method)
+            where = dict(reply.headers).get("Location", "")
+            check(f"{method} {path}: sent on, not refused", reply.status == 303
+                  and where.startswith(f"/{site.token}/") and not reply.body, (reply.status, reply.headers))
+        landed = get(site, where[len(f"/{site.token}/"):].split("#")[0])
+        check(f"{path}: to a page that is drawn, with a way on", landed.status in (200, 404)
+              and "<h1" in landed.body, (where, landed.status, landed.body[:200]))
+    check("nothing was written or started", files(project.root) == before)
+
+
 def test_a_request_that_changes_something_is_one_entry_and_is_guarded(project, monkeypatch):
     """What the next step adds: a route with another method. It is reached
     through the same checks and no other way."""
@@ -438,7 +465,8 @@ def test_a_request_that_changes_something_is_one_entry_and_is_guarded(project, m
                            Sec_Fetch_Site="same-origin")
         check("and runs for the server's own page", status == 200 and done == [{}], (status, done))
         status, got, _ = ask(server, f"/{site.token}/record")
-        check("a read of it is no request for it", status == 405 and got.get("Allow") == "POST" and len(done) == 1)
+        check("a read of it is no request for it: it sends the browser to the start page", status == 303
+              and got.get("Location") == f"/{site.token}/" and len(done) == 1, (status, got))
         check("and a form of a page is sent to it by that name", site.url("record") == f"/{site.token}/record")
 
 
@@ -727,9 +755,9 @@ def test_no_phone(project, adb):
         "in the way: The phone is not ready: adb sees no devices at all. Plug in a phone or start an emulator."), text)
     again = [a for a in page.all("a", "btn") if a.text == "Refresh"][0]
     check("Refresh is the one step of the screen", "primary" in again.attrs["class"])
-    check("and the button waits for the phone, with the reason beside it",
+    check("and the button waits for the phone, with the reason and what to do beside it",
           "disabled" in page.one("button", id="check-go").attrs and page.one("p", id="check-hint").text
-          == "The phone is not ready: adb sees no devices at all. The line marked red says what to do.",
+          == "The phone is not ready: adb sees no devices at all. Plug in a phone or start an emulator.",
           page.one("p", id="check-hint").text)
     check("what scan says of the devices is under All settings",
           "none attached" in setting(page, "The phone").text, setting(page, "The phone").text)
@@ -972,10 +1000,13 @@ def test_all_settings_of_a_launch_window(project):
     page = start(project.ready())
     check("it is a fold, closed", page.one("details", id="settings").attrs.get("open") is None)
     fold = page.one("details", id="settings")
-    check("nothing in it can be changed but the number of launches, which belongs to the button",
-          [(i.attrs.get("name"), i.attrs.get("form"), i.attrs.get("value")) for i in fold.all("input")]
-          == [("launches", "check-form", "3")] and not fold.all("select") and not fold.all("textarea")
-          and not fold.all("button"), [i.attrs for i in fold.all("input")])
+    # The config is one written by hand, and its limit is on a line of its
+    # own: the page sets it as it sets the limit of a file it wrote (#818).
+    check("nothing in it can be changed but the number of launches, which belongs to the button, and the time limit",
+          [(i.attrs.get("name"), i.attrs.get("form"), i.attrs.get("value")) for i in fold.all("input")
+           if i.attrs.get("type") != "hidden"] == [("launches", "check-form", "3"), ("limit", None, "0.5")]
+          and not fold.all("select") and not fold.all("textarea")
+          and [b.text for b in fold.all("button")] == ["Set the limit"], [i.attrs for i in fold.all("input")])
     check("the build, and whether to measure on it, in scan's words",
           "benchmark. Measure on it: yes — release-like and profileable. It installs as com.example.app."
           in setting(page, "Build to measure").text, setting(page, "Build to measure").text)

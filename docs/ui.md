@@ -66,8 +66,9 @@ says what was not found.
 The limit is one line of the file, under the scenario's window, with a
 comment of the page's own; with no limit the same line is there commented
 out. Most people know the number only once the first report says "No time
-limit is set", so the page can set or change it later in that line, and
-nowhere else: see [The time limit, later](#the-time-limit-later).
+limit is set", so the page can set or change it later, in that line or in
+the limit's line of any `echolot.yml`: see
+[The time limit, later](#the-time-limit-later).
 
 **Something else**, one screen or one action, stays an agent's setup: it has
 to learn from the code how to get there and where the wait begins and ends.
@@ -115,31 +116,40 @@ there.
 
 The same sentence with its field, "It should take no longer than … seconds",
 stands beside the verdict of the report the page shows, and under **All
-settings › Time limit**, with the limit in force in it. **Set the limit**
-writes the number; an empty field takes the limit off, and the line goes back
-to its commented-out form.
+settings › Time limit**, with the limit in force in it and the line of
+`echolot.yml` a press changes. **Set the limit** writes the number; an empty
+field takes the limit off.
 
-A press changes exactly one line of `echolot.yml`: the `budget_ms` line the
-page wrote when it set the project up. Every other byte of the file stays as
-it is, your comments and blank lines included. The file is written beside
-the old one, loaded the way every command loads it, and only then put in its
-place, so nothing ever reads half of it.
+Which file the page may change is a matter of what it holds, not of who wrote
+it: a config written by hand, by `echolot scan` or by an agent gets the field
+as the page's own does, and so does each scenario of a config that names
+several (the report of a scenario sets that scenario's limit). A press
+changes exactly one line of `echolot.yml`, or adds one:
 
-The page changes that line only while it still reads as the page wrote it:
-`budget_ms` two spaces in, under `scenario:`, a whole number of milliseconds,
-then the page's own comment and nothing else on the line. The number may be
-one you typed there yourself, and the first `#` of the commented-out line may
-be gone: both comments ask for exactly that. Where anything else is the case
-the page changes nothing, says why in a sentence, and shows the line to edit:
+- a `budget_ms` line under the scenario gets the new number, and keeps
+  everything else on it, your comment and your spacing included. An empty
+  field turns it into a comment, `# budget_ms: 500`, which the next press with
+  a number turns back. The line the page wrote itself is written as the page
+  writes it, its seconds brought up to date;
+- `budget_ms` commented out under the scenario is that line: a press takes
+  the `#` off;
+- a scenario with no `budget_ms` at all gets the page's own line, as the
+  first of its keys and at their indentation;
+- a scenario written on one line, `{name: coldStart, budget_ms: 500}`, gets
+  the new number; the page cannot take that limit off, and says so.
 
-- the line was changed by hand in any other way (a word added, its spacing,
-  a number that is not a whole one), moved out of `scenario:`, copied, or
-  removed;
-- another line of the file sets the limit too;
-- the page did not write this `echolot.yml`: it does not begin with the two
-  lines the page puts at its top, so a config written by hand or by an agent
-  is never touched;
-- the config names several scenarios;
+Every other byte of the file stays as it is, your comments, blank lines and
+the order of the keys included. The file is written beside the old one, read
+back first (it has to say what it said before with that one limit changed,
+for every scenario), loaded the way every command loads it, and only then put
+in its place, so nothing ever reads half of it.
+
+The page changes nothing, says why in a sentence, and names the line to edit
+where:
+
+- the scenario is written on one line with no limit in it, or its limit is
+  not a number on its own line: on the line below the key, or taken from an
+  anchor elsewhere;
 - `local.yml` beside it sets the limit, which wins over `echolot.yml`;
 - `echolot.yml` is a link to another file or has a second name, does not
   load, or `echolot ui` was started with `-c` and reads another file;
@@ -179,7 +189,7 @@ the line says so.
 
 | what is in the way | the line says |
 |---|---|
-| no phone, several, or one that has not allowed debugging | the sentence `collect` stops with; the phone's line under **Ready**, marked red, says what to do |
+| no phone, several, or one that has not allowed debugging | the phone's line under **Ready** as it is: the sentence `collect` stops with, and what to do |
 | an app a recording would not show, or one with debuggable builds only | the same, from the app's line |
 | the project is not set up, the config does not load, or there is no `echolot.yml` and the page cannot [set one up](#setting-a-project-up) | that the step under **What to do next** comes first |
 | a setup is still under way | that echolot is checking this computer, and the button comes once it is done |
@@ -346,7 +356,8 @@ things in sentences; the terminal's own lines are here:
 - how many runs, and for how long each records; with a macrobenchmark, that
   the benchmark decides;
 - the time limit, `budget_ms`, with the field that sets or changes it where
-  the page wrote the file, and otherwise why not and the line to edit;
+  the file holds it on a line of its own, whoever wrote it, and otherwise why
+  not and the line to edit;
 - the thresholds: how many checks run on the config's, and each one with
   where it comes from: built-in, set in the config, set for this scenario,
   or switched off;
@@ -580,13 +591,20 @@ the page it opened and by nothing else:
   limit a number of seconds from 0.1 to 60, a ticked check one the report on
   disk has and that found something. The one file a setup creates is
   `echolot.yml` in the project's folder, whatever a form says, and the one
-  file **Set the limit** changes is that same file, one line of it. What the
+  file **Set the limit** changes is that same file, one line of it, and the
+  scenario it names is one the config has. What the
   page saw of it travels as two fingerprints, which are compared and never
   opened. A client named in an address is one the page starts, Claude Code
   or Codex. An agent's command line is built from the config and the report
   alone.
 - It serves the pages it draws and no file. No address is turned into a path
   on disk.
+- An address a form is sent to is no page. Read, by a reload of what a press
+  drew or by a step back to it in the history, it starts nothing and sends
+  the browser where that press is made: the screen before an agent starts
+  goes back to its report, where **Dig deeper** is pressed again; **Stop**,
+  **Take the markers out** and **Close the investigation** to the agent's
+  answer; the rest to the start page.
 - A page fetches nothing from anywhere else: no font, no script, no image.
   The browser is told to hold it to that. A page the server serves may do two
   things a report written to disk may not: send a form to the server it came
@@ -631,8 +649,8 @@ file before the press:
 | `.echolot/log/setup.json`, `setup.init.log` | that run of `init`: its state, and what it printed |
 
 **Set the limit** writes one file, `echolot.yml`, and one line of it: the
-`budget_ms` line the page wrote. Nothing else is written, not even a file
-beside it that stays.
+scenario's `budget_ms` line, or that line added where there was none. Nothing
+else is written, not even a file beside it that stays.
 
 The commands themselves write what they always write: the recordings, the
 report, the comparison, their own lines in `.echolot/log/runs.jsonl`. The

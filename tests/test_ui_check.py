@@ -377,8 +377,8 @@ def blocked(project: Project, site: ui.Site | None = None, echolot: Echolot | No
 def test_no_phone(project, adb):
     adb.listing = ""
     why = blocked(project.ready())
-    check("in the words collect stops with", why == (
-        "The phone is not ready: adb sees no devices at all. The line marked red says what to do."), why)
+    check("in the words collect stops with, what to do included", why == (
+        "The phone is not ready: adb sees no devices at all. Plug in a phone or start an emulator."), why)
 
 
 def test_several_phones(project, adb):
@@ -401,7 +401,8 @@ def test_an_app_that_cannot_be_measured(project):
     why = blocked(project.app(profileable=False).config().agents().doctor())
     check("a recording would show nothing of it", why == (
         f"{APP} cannot be measured yet: a release-like build of it shows nothing of the app in a recording. "
-        "The line marked red says what to do."), why)
+        "Add <profileable android:shell=\"true\" /> inside <application> in "
+        "app/src/main/AndroidManifest.xml, then build and install it again."), why)
 
 
 def test_an_app_with_debug_builds_only(project):
@@ -1060,9 +1061,14 @@ def test_the_answers_button_while_a_check_runs_and_when_it_cannot(project, demo_
     (project.root / ".echolot" / "log" / "check.json").unlink()
     (project.root / ".echolot" / "log" / "collect.json").unlink()
     adb.listing = ""
-    place = read(get(site, "answer").body).one("div", id="check-again-action")
-    check("with no phone it is disabled, with the reason", "disabled" in place.one("button").attrs
-          and place.one("p").text.startswith("The phone is not ready"))
+    answer = read(get(site, "answer").body)
+    place = answer.one("div", id="check-again-action")
+    # The answer's page draws no ready lines: the sentence says what to do
+    # itself, and names no red line (#867).
+    check("with no phone it is disabled, with the reason and what to do", "disabled" in place.one("button").attrs
+          and place.one("p").text == "The phone is not ready: adb sees no devices at all. Plug in a phone or start "
+          "an emulator.", place.one("p").text)
+    check("and no word of a line marked red on the page", "marked red" not in answer.text)
 
 
 def test_an_investigation_that_filed_nothing_has_nothing_to_compare_with(project, demo_report):
@@ -1225,7 +1231,8 @@ def test_the_addresses_of_a_press_take_no_read_and_the_others_no_press(project):
     site, echolot = serving(project.ready())
     for path in ("check", "check/stop"):
         reply = get(site, path)
-        check(f"{path}: a read of it starts nothing", reply.status == 405 and dict(reply.headers)["Allow"] == "POST")
+        check(f"{path}: a read of it starts nothing, and sends the browser to the start page", reply.status == 303
+              and dict(reply.headers)["Location"] == f"/{site.token}/", (reply.status, reply.headers))
     check("how far a run is can only be read", press(site, "check/state").status == 405)
     check("nothing started", not echolot.ran and job.read(project.root, "check") is None)
 
@@ -1241,7 +1248,7 @@ def test_reading_writes_nothing_with_a_run_on_show(project):
 
 def test_without_the_addresses_of_a_press_the_page_reads_only(project, monkeypatch):
     project.ready()
-    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith("check")])
+    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith(("check", "limit"))])
     page = page_of(site_of(project))
     check("no button, no form, no field", not page.all("form") and not page.all("button", id="check-go") and not page.all("input"))
     check("the step is a command to copy again", page.one("code", id="next-cmd").text == "echolot collect -c echolot.yml -n 5")

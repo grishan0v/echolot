@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`echolot ui` sets or changes the time limit it wrote (#485).
+"""`echolot ui` sets or changes the time limit (#485), in any `echolot.yml` (#818).
 
 What is pinned here:
 
@@ -8,6 +8,10 @@ What is pinned here:
   - that a press rewrites exactly one line, the `budget_ms` line the page
     wrote, and that every other byte of the file stays, on files with
     comments, blank lines, other keys and odd spacing around that line;
+  - that the field is offered by what the file holds, not by who wrote it:
+    a config by hand, with its own comment on the line, with no limit
+    yet, with several scenarios; and that a press changes that one line,
+    or adds it, and keeps every other byte;
   - each reason the page leaves the file alone, said in a sentence, with
     nothing written; a number that is none; a file that changed between the
     page and the press; a press sent twice;
@@ -44,6 +48,7 @@ from echolot.config import Config  # noqa: E402
 from echolot.pages import kit, limit_page, report_page, start_page  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_report_page import REACHING_OUT, _blocks, known, make, read  # noqa: E402
+from tests.test_ui import HEAD as HEAD_OF_TESTS  # noqa: E402
 from tests.test_ui import LAUNCH, PAGES, SEVERAL, Adb, Project, get, running, setting, site_of  # noqa: E402
 from tests.test_ui_check import Echolot, a_run, files, press, send  # noqa: E402
 from tests.test_ui_setup import serving as setting_up  # noqa: E402
@@ -217,13 +222,19 @@ def test_a_press_rewrites_that_one_line_and_every_other_byte_stays(project, edit
           Config.load(path).scenario_budget_ms == 1500)
 
 
-# --- where the page declines -------------------------------------------------------------------------
+# --- the field by what the file holds, not by who wrote it (#818) -----------------------------------
 
 def _replaced(old: str, new: str):
     def edit(project: Project, path: Path) -> None:
         text = path.read_text(encoding="utf-8")
         check("the edit applies", old in text, old)
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return edit
+
+
+def _whole(text: str):
+    def edit(project: Project, path: Path) -> None:
+        path.write_text(text, encoding="utf-8")
     return edit
 
 
@@ -261,7 +272,7 @@ def _bom(project: Project, path: Path) -> None:
 
 def _in_a_string(project: Project, path: Path) -> None:
     """The page's line as part of a quoted value, with a limit of the same number set by hand below it:
-    YAML reads that limit, and rewriting the line would change the name instead."""
+    YAML reads that limit, and rewriting the line in the string would change the note instead."""
     text = path.read_text(encoding="utf-8")
     path.write_text(text.replace(LINE, f'  _note: "set by hand,\n{LINE}\n  "\n  budget_ms:    2000', 1), encoding="utf-8")
     check("a config that loads", Config.load(path).scenario_budget_ms == 2000)
@@ -275,11 +286,8 @@ def _moved(project: Project, path: Path) -> None:
 
 
 def _moved_off(project: Project, path: Path) -> None:
-    """The page's line with no limit in it, a comment, moved under `runner:`.
-
-    A limit set there no longer loads (`runner:` refuses a key it does not
-    have, #737), so the page says the file is broken; the comment still
-    loads, and the page says where it went."""
+    """The page's line with no limit in it, a comment, moved under `runner:`. Taking its `#` off would
+    give `runner:` a key it does not have, so it is not the limit's line: one is added under `scenario:`."""
     text = path.read_text(encoding="utf-8")
     line, off = project_setup.limit_line(2000), project_setup.limit_line(None)
     text = text.replace(line + "\n", "", 1).replace("  mode: launch\n", f"  mode: launch\n{off}\n", 1)
@@ -309,29 +317,146 @@ def _broken(project: Project, path: Path) -> None:
 
 
 LINE = project_setup.limit_line(2000)
+BY_HAND = HEAD_OF_TESTS + "scenario:\n  name: coldStart   # the launch\n  window: launch\n\n# the phone\nrunner:\n  mode: launch\n"
+
+# What the file holds, and the line a press of 1.5 s leaves in it: changed in place, or added (`+`).
+BY_CONTENT = {
+    "the page's first lines removed": (_header_gone, project_setup.limit_line(1500)),
+    "a mark an editor put before the first line": (_bom, project_setup.limit_line(1500)),
+    "a word added to the page's line": (_replaced(LINE, LINE + " (ours)"),
+                                        LINE.replace("2000", "1500") + " (ours)"),
+    "a comment of one's own on it": (_replaced(LINE, "  budget_ms: 2000  # mine"), "  budget_ms: 1500  # mine"),
+    "its spacing changed": (_replaced(LINE, LINE.replace("budget_ms: ", "budget_ms:  ")),
+                            LINE.replace("budget_ms: 2000", "budget_ms:  1500")),
+    "a space after it": (_replaced(LINE, LINE + " "), LINE.replace("2000", "1500") + " "),
+    "a number that is no whole one": (_replaced(LINE, "  budget_ms: 2000.5"), "  budget_ms: 1500"),
+    "a number with a leading zero, which YAML reads another way": (_replaced(LINE, "  budget_ms: 02000"),
+                                                                   "  budget_ms: 1500"),
+    "the page's line inside a quoted value, a limit set below it": (_in_a_string, "  budget_ms:    1500"),
+    "another line turned off, a limit of one's own below it": (_twice, "  budget_ms: 1500"),
+    "a config written by hand": (_by_hand, "  budget_ms: 1500"),
+    "several scenarios, the limit of the first": (_several, "    budget_ms: 1500"),
+    "a limit taken off by hand, as a comment": (_replaced(LINE, "  #budget_ms: 500   # mine"), "  budget_ms: 1500   # mine"),
+    "the line removed": (_gone, "+" + project_setup.limit_line(1500)),
+    "the line with no limit moved to another block": (_moved_off, "+" + project_setup.limit_line(1500)),
+    "a config written by hand with no limit": (_whole(BY_HAND), "+" + project_setup.limit_line(1500)),
+    "keys indented by four": (_whole(BY_HAND.replace("\n  ", "\n    ")),
+                              "+    " + project_setup.limit_line(1500).lstrip(" ")),
+    "no limit, and lines that end the Windows way": (_whole(BY_HAND.replace("\n", "\r\n")),
+                                                     "+" + project_setup.limit_line(1500)),
+}
+
+
+def _one_line(before: str, after: str) -> list[tuple[str, str]]:
+    """What changed from one text to the other, line by line: a line changed
+    is `(old, new)`, a line added `("", new)`, with its ending."""
+    a, b = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    if len(b) == len(a) + 1:
+        at = next((i for i, (x, y) in enumerate(zip(a, b, strict=False)) if x != y), len(a))
+        return [("", b[at])] if a == b[:at] + b[at + 1:] else [("?", "?")]
+    return [(x, y) for x, y in zip(a, b, strict=True) if x != y] if len(a) == len(b) else [("?", "?")]
+
+
+@pytest.mark.parametrize("name", list(BY_CONTENT))
+def test_the_field_is_offered_by_what_the_file_holds_and_a_press_changes_that_one_line(project, name):
+    edit, wanted = BY_CONTENT[name]
+    path = written(project, "2")
+    project.traces().report(data=known())
+    edit(project, path)
+    if name.startswith("several"):
+        project.report(".echolot/out/coldStart", data=known())
+    before = path.read_bytes()
+    site, _ = served(project)
+    page = page_of(site)
+    check(f"{name}: the field on the start page", page.all("form", id=FORM), setting(page, "Time limit").text)
+    hint = the_form(page).one("p", id=f"{limit_page.ID}-h").text
+    check(f"{name}: it names the line a press writes", re.search(r"A press (changes line|adds one line to echolot\.yml"
+                                                                 r", budget_ms under scenarios?[.\w]*: as line) [0-9]+",
+                                                                 hint), hint)
+    report = page_of(site, "report")
+    check(f"{name}: and beside the verdict", report.all("form", id=FORM))
+    check(f"{name}: taken", set_limit(site, "1.5", page).status == 303)
+    after = path.read_bytes()
+    changed = _one_line(before.decode("utf-8"), after.decode("utf-8"))
+    eol = "\r\n" if b"\r\n" in before else "\n"
+    expected = ("", wanted[1:] + eol) if wanted.startswith("+") else None
+    check(f"{name}: one line changed or added, every other byte as it was", len(changed) == 1
+          and (changed[0] == expected if expected else changed[0][1].rstrip("\r\n") == wanted), changed)
+    check(f"{name}: the config loads, with the limit and everything else as it read before",
+          Config.load(path).scenario_budget_ms == 1500)
+    check(f"{name}: the same press again writes nothing", set_limit(site, "1.5", page).status == 303
+          and path.read_bytes() == after)
+
+
+def test_a_limit_of_ones_own_is_taken_off_as_a_comment_and_put_back(project):
+    path = written(project)
+    path.write_text(LAUNCH.replace("  budget_ms: 500", "  budget_ms: 500    # agreed with the team"), encoding="utf-8")
+    site, _ = served(project)
+    check("the field holds it", limit_row(site).one("input", name="limit").attrs.get("value") == "0.5")
+    check("taken off", set_limit(site, "").status == 303 and Config.load(path).scenario_budget_ms is None)
+    check("the line is a comment, with its number and its words",
+          the_line(path.read_text(encoding="utf-8")) == "  # budget_ms: 500    # agreed with the team")
+    check("set again", set_limit(site, "0.8").status == 303 and Config.load(path).scenario_budget_ms == 800)
+    check("the `#` is gone and the words stay",
+          path.read_text(encoding="utf-8") == LAUNCH.replace("  budget_ms: 500", "  budget_ms: 800    # agreed with the team"))
+
+
+def test_a_limit_beside_other_keys_on_one_line_is_changed_and_not_taken_off(project):
+    path = written(project)
+    path.write_text(HEAD_OF_TESTS + "scenario: {name: coldStart, window: launch, budget_ms: 500}\n", encoding="utf-8")
+    site, _ = served(project)
+    hint = the_form(page_of(site)).one("p", id=f"{limit_page.ID}-h").text
+    check("the field, and no word of an empty one", "or empty" not in hint and "changes line 5" in hint, hint)
+    check("taken", set_limit(site, "2").status == 303)
+    check("the number and nothing else", path.read_text(encoding="utf-8")
+          == HEAD_OF_TESTS + "scenario: {name: coldStart, window: launch, budget_ms: 2000}\n")
+    before = files(project.root)
+    reply = set_limit(site, "")
+    check("taking it off is refused in words", reply.status == 409 and "delete budget_ms there"
+          in read(reply.body).text.replace("`", ""), reply.body[:400])
+    check("and nothing was written", files(project.root) == before)
+
+
+def test_several_scenarios_the_report_of_another_sets_its_own(project):
+    path = written(project)
+    path.write_text(SEVERAL, encoding="utf-8")
+    project.report(".echolot/out/coldStart", data=known())
+    project.report(".echolot/out/feedScroll", data=known())
+    site, _ = served(project)
+    report = page_of(site, "report/feedScroll")
+    form = the_form(report)
+    check("the form names its scenario", sent_by(form).get("scenario") == "feedScroll", sent_by(form))
+    check("and the line it adds", "budget_ms under scenarios.feedScroll: as line" in form.text, form.text)
+    reply = set_limit(site, "3", report)
+    check("taken, and the browser is sent back to that scenario's report", reply.status == 303
+          and dict(reply.headers)["Location"] == f"/{site.token}/report/feedScroll#{limit_page.ID}", reply.headers)
+    check("its limit is set", Config.load(path, scenario="feedScroll").scenario_budget_ms == 3000)
+    check("and the other's is as it was", Config.load(path, scenario="coldStart").scenario_budget_ms == 500)
+    check("one line added, under its name", path.read_text(encoding="utf-8") == SEVERAL.replace(
+        "  feedScroll:\n", "  feedScroll:\n    " + project_setup.limit_line(3000).lstrip(" ") + "\n", 1))
+    before = files(project.root)
+    reply = set_limit(site, "3", report, scenario="nowhere")
+    check("a scenario the config does not name is refused", reply.status == 409
+          and "names no scenario nowhere" in read(reply.body).text.replace("`", "") and files(project.root) == before)
+
+
+# --- where the page declines -------------------------------------------------------------------------
+
 DECLINES = {
-    "a word added to the line": (_replaced(LINE, LINE + " (ours)"), "edited", "was changed by hand"),
-    "a comment of one's own on it": (_replaced(LINE, "  budget_ms: 2000  # mine"), "edited", "was changed by hand"),
-    "its spacing changed": (_replaced(LINE, LINE.replace("budget_ms: ", "budget_ms:  ")), "edited", "was changed by hand"),
-    "a space after it": (_replaced(LINE, LINE + " "), "edited", "was changed by hand"),
-    "a number that is no whole one": (_replaced(LINE, LINE.replace("2000", "2000.5")), "edited", "was changed by hand"),
-    "a number with a leading zero, which YAML reads another way": (_replaced(LINE, LINE.replace("2000", "02000")), "edited",
-                                                                   "was changed by hand"),
     # The same key twice in one block: the config does not load (#582).
     "the line twice": (_copied, "broken", "does not load"),
-    "the line inside a quoted value, a limit set below it": (_in_a_string, "edited", "was changed by hand"),
-    "the line removed": (_gone, "removed", "is no longer in echolot.yml"),
     "the line moved to another block": (_moved, "broken", "does not load"),
-    "the line with no limit moved to another block": (_moved_off, "moved", "is no longer under scenario:"),
-    "another line sets the limit too": (_twice, "twice", "that one counts"),
-    "the page's first lines removed": (_header_gone, "foreign", "The page did not write this echolot.yml"),
-    "a config written by hand": (_by_hand, "foreign", "The page did not write this echolot.yml"),
-    "several scenarios": (_several, "several", "names several scenarios"),
     "a limit in local.yml": (_local, "local", "local.yml, beside echolot.yml, sets the limit too"),
     "a link to another file": (_link, "link", "is a link to another file"),
     "a second name for the file": (_hard_link, "link", "has another name as well"),
-    "a mark an editor put before the first line": (_bom, "foreign", "The page did not write this echolot.yml"),
     "a file that does not load": (_broken, "broken", "does not load"),
+    "the scenario on one line, in braces, with no limit": (
+        _whole(HEAD_OF_TESTS + "scenario: {name: coldStart, window: launch}\n"), "shape", "not written as a block of keys"),
+    "the limit on the line below its key": (_replaced(LINE, "  budget_ms:\n    2000"), "shape",
+                                            "not written as a block of keys"),
+    "the limit from an anchor": (_whole(HEAD_OF_TESTS + "runner:\n  mode: launch\n  duration_ms: &d 20000\n\n"
+                                        "scenario:\n  name: coldStart\n  window: launch\n  budget_ms: *d\n"),
+                                 "shape", "not written as a block of keys"),
 }
 
 
@@ -341,9 +466,6 @@ def test_where_the_page_declines_it_says_why_and_writes_nothing(project, name):
     path = written(project, "2")
     project.traces().report(data=known())
     edit(project, path)
-    if reason == "several":
-        # The report of the scenario the page is about, where `analyze` puts it.
-        project.report(".echolot/out/coldStart", data=known())
     found = time_limit.reading(project.root, str(path))
     check(f"{name}: declined, for its reason", found is not None and not found["can"] and found["reason"] == reason, found)
     site, _ = served(project)
@@ -354,6 +476,8 @@ def test_where_the_page_declines_it_says_why_and_writes_nothing(project, name):
         row = setting(page, "Time limit")
         check(f"{name}: the row says why, then the line to edit as before", words in row.one("p", id=f"{limit_page.ID}-no").text
               and re.search(r"(edit that line|A line) under scenarios?[.\w]*: in echolot\.yml", row.text), row.text)
+        if reason == "shape":
+            check(f"{name}: and which line it is", f"It is line {found['line']} of echolot.yml" in row.text, row.text)
         report = page_of(site, "report")
         quiet = report.one("p", id=f"{limit_page.ID}-no")
         check(f"{name}: beside the verdict, one quiet sentence with the line to edit", words in quiet.text
@@ -489,12 +613,16 @@ def test_a_press_writes_that_one_file_and_nothing_else(project):
 def test_nothing_from_the_form_is_a_path_or_a_piece_of_yaml(project):
     path = written(project)
     site, _ = served(project)
-    reply = set_limit(site, "2", back="../../elsewhere", config="/tmp/x.yml", path="other.yml",
-                      scenario="x: 1", budget_ms="9999")
+    before = files(project.root)
+    for name in ("x: 1", "../../etc/passwd", "coldStart\nbudget_ms: 1"):
+        reply = set_limit(site, "2", scenario=name)
+        check(f"a scenario {name!r} the config does not name is refused, and nothing is written",
+              reply.status in (400, 409) and files(project.root) == before, reply.status)
+    reply = set_limit(site, "2", back="../../elsewhere", config="/tmp/x.yml", path="other.yml", budget_ms="9999")
     check("taken, and a page name it does not know sends the browser to the start",
           reply.status == 303 and dict(reply.headers)["Location"] == f"/{site.token}/#{limit_page.ID}")
     check("one file changed, by one number", Config.load(path).scenario_budget_ms == 2000
-          and not (project.root / "other.yml").exists() and "x: 1" not in path.read_text(encoding="utf-8"))
+          and not (project.root / "other.yml").exists() and "9999" not in path.read_text(encoding="utf-8"))
 
 
 def test_the_request_is_refused_as_every_other_press_is(project):
@@ -530,8 +658,10 @@ def test_the_request_is_refused_as_every_other_press_is(project):
         check("and the server's own page is taken", status == 303 and headers["Location"] == f"/{site.token}/#{limit_page.ID}"
               and Config.load(path).scenario_budget_ms == 2000, (status, headers))
     site = site_of(project)
+    before = files(project.root)
     reply = get(site, "limit")
-    check("a read of its address changes nothing", reply.status == 405 and dict(reply.headers)["Allow"] == "POST")
+    check("a read of its address changes nothing, and sends the browser to the start page", reply.status == 303
+          and dict(reply.headers)["Location"] == f"/{site.token}/" and files(project.root) == before)
 
 
 # --- the report is the old one until the recordings are read again -----------------------------------
@@ -655,7 +785,7 @@ def test_all_settings_says_the_limit_is_the_one_thing_it_changes(project):
     page = page_of(served(project)[0])
     intro = page.one("details", id="settings").all("p", "small")[0].text
     check("the fold's first sentence names the limit and its line", "but the number of launches" in intro
-          and "and the time limit, in the one line of echolot.yml the page wrote for it" in intro, intro)
+          and "and the time limit, in the one line of echolot.yml that holds it" in intro, intro)
 
 
 def test_each_state_is_one_page_with_ids_of_its_own(project):
@@ -682,7 +812,8 @@ def test_each_state_is_one_page_with_ids_of_its_own(project):
 
 def test_reading_writes_nothing_in_any_state_of_the_limit(project, tmp_path_factory):
     for name, build in {"no limit": lambda p: written(p), "a limit": lambda p: written(p, "2"),
-                        "declined": lambda p: _by_hand(p, written(p, "2")),
+                        "declined": lambda p: _local(p, written(p, "2")),
+                        "by hand": lambda p: _by_hand(p, written(p, "2")),
                         "behind": lambda p: (written(p, "2"), p.traces().report(data=no_limit_report()))}.items():
         root = tmp_path_factory.mktemp("state")
         os.chdir(root)
