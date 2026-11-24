@@ -327,6 +327,36 @@ def test_analyze_keeps_the_rows_below_the_bar_for_the_merge(tmp_path) -> None:
           report_mod.OPEN_ROWS not in next(
               d for d in report_mod.aggregate([single])["detectors"]
               if d["id"] == "main_thread_block"))
+
+
+def test_analyze_keeps_what_it_found_under_the_bar_in_no_repeat(tmp_path) -> None:
+    """#715: what a report leaves out under its threshold is kept as `below`,
+    for `compare` to look a row the other side reports up in."""
+    from echolot import fixture, selftest
+    from echolot.config import Config
+    from echolot.main import analyze_trace
+
+    trace = tmp_path / "f.perfetto-trace"
+    trace.write_bytes(fixture.build())
+    cfg = Config(selftest.FIXTURE_CONFIG)
+    for n in (1, 2):
+        reps = [analyze_trace(trace, cfg, below_bar=True,
+                              cli_overrides={"main_thread_block": {"min_slice_ms": 200}})
+                for _ in range(n)]
+        det = next(d for d in report_mod.aggregate(reps)["detectors"] if d["id"] == "main_thread_block")
+        under = {r["location"]: r for r in det["below"]["rows"]}
+        reported = {r["location"] for r in det["rows"]}
+        check(f"{n} recording(s): `collection_mapping`, 120 ms under a bar of 200, is kept under it",
+              "collection_mapping" in under and under["collection_mapping"]["runs"] == f"{n}/{n}"
+              and "collection_mapping" not in reported, det["below"])
+        check(f"{n} recording(s): nothing reported is kept twice, nothing under the floor, no evidence",
+              not reported & set(under) and det["below"]["floor_ms"] == report_mod.BELOW_FLOOR_MS
+              and all(max(r["spread"]["self_ms"]["values"] if "spread" in r else [r["self_ms"]])
+                      >= report_mod.BELOW_FLOOR_MS for r in under.values())
+              and not any("stacks" in r for r in under.values()), det["below"])
+    old = report_mod.aggregate([analyze_trace(trace, cfg)])
+    check("without the open query there is nothing to say under the bar",
+          all("below" not in d for d in old["detectors"]))
 def _marker_runs(totals: list[float], open_at: set[int]) -> list[dict]:
     reps = []
     for i, ms in enumerate(totals):
@@ -431,3 +461,23 @@ def test_one_recordings_pool_adds_up_and_pairs_with_a_sets() -> None:
     check("one paired row", [r["location"] for r in pool] == ["pool-#"], pool)
     check("neither gone nor new",
           pool[0]["change"] not in (compare_mod.VANISHED, compare_mod.APPEARED), pool[0])
+
+
+def test_a_folded_row_adds_up_its_names_under_the_bar_too() -> None:
+    """#715: `owner tid: #` reported from the one tid over the bar, against a
+    `below` of every tid, read as grew. With the open rows the folded row is
+    every name it stands for, in one recording and in a set."""
+    over, under = _lock(4455, 30.0), _lock(4202, 12.0)
+    for n in (1, 3):
+        reps = [_below([over], [over, under]) for _ in range(n)]
+        got = report_mod.aggregate(reps)["detectors"][0]
+        lock = got["rows"][0]
+        check(f"{n} recording(s): the reported row adds up both tids", len(got["rows"]) == 1
+              and lock["location"] == "Lock contention on a monitor lock (owner tid: #)"
+              and lock["self_ms"] == 42.0, lock)
+        check(f"{n} recording(s): and names both", lock["variants"]["location"] == [
+            "Lock contention on a monitor lock (owner tid: 4202)",
+            "Lock contention on a monitor lock (owner tid: 4455)"], lock)
+        check(f"{n} recording(s): neither is kept under the bar again", got["below"]["rows"] == [], got["below"])
+    alone = report_mod.aggregate([_below([over], [over])])["detectors"][0]["rows"][0]
+    check("a name with nothing more under the bar keeps what it had", alone["self_ms"] == 30.0, alone)

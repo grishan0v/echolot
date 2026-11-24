@@ -667,7 +667,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     what that returned beside its rows for the merge of a set (#505): a row
     one repeat reports may have been there below the bar in another, and
     only this tells it from a row that was not there at all. The merge takes
-    it out again, see `report.merge_rows`.
+    it out again, see `report.merge_rows`, and keeps what lies under the bar
+    in no repeat's report as the detector's `below` (#715).
     """
     plan = plan_detectors(cfg, cli_overrides=cli_overrides, use_defaults=use_defaults)
     # Refused here, like a threshold of the wrong kind: before a trace is opened.
@@ -1042,7 +1043,7 @@ def cmd_analyze(args) -> int:
         reports = parallel.in_order(
             traces, lambda t: analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
                                             use_defaults=args.defaults, tp_source=tp_source,
-                                            below_bar=len(traces) > 1),
+                                            below_bar=True),
             jobs)
         rep = report_mod.aggregate(reports)
         if same:

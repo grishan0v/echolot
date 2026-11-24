@@ -1154,3 +1154,56 @@ def test_an_unmeasured_side_is_never_called_cool() -> None:
           "throttled the device during the before round" in said
           and "cannot be ruled out there" in said and "not the other" not in said,
           cmp["warnings"])
+
+
+# --- a row under the bar on the other side (#715) ---------------------------------------
+
+
+def _binder(total, runs, max_ms=26.0):
+    values = [total - 4.0, total, total + 4.0][:runs]
+    return {"location": "com.example.app", "thread": "main thread", "count": 87, "total_ms": total,
+            "max_ms": max_ms, "runs": f"{runs}/{runs}",
+            "spread": {"total_ms": {"min": min(values), "max": max(values), "values": values}}}
+
+
+def _binder_report(rows, below):
+    d = det("binder_txn", rows, identity=["location", "thread"])
+    if below is not None:
+        d["below"] = {"floor_ms": 5.0, "rows": below}
+    return report([d])
+
+
+def test_a_row_still_there_under_the_bar_after_is_judged_on_what_it_measured() -> None:
+    """#715: 111 ms of calls before, 83 ms after with none over 14.4 ms, read
+    as gone and the whole 111 ms saved."""
+    before = _binder_report([_binder(110.0, 3)], [])
+    after = _binder_report([], [_binder(83.0, 3, max_ms=4.1)])
+    cmp = compare(before, after)
+    got = cmp["rows"][0]
+    check("shrank by what it measured, not gone with its whole total",
+          got["change"] == compare_mod.SHRANK and got["delta_ms"] == -27.0, got)
+    check("and the side it was found under the bar on is named", got["under_bar"] == "after", got)
+    check("the counts say so", cmp["summary"]["vanished"] == 0 and cmp["summary"]["moved"] == 1,
+          cmp["summary"])
+    md = compare_mod.to_markdown(cmp)
+    check("the table marks the cell", "*(under the bar)*" in md and "**gone**" not in md, md)
+
+
+def test_a_row_under_the_bar_before_is_not_new() -> None:
+    before = _binder_report([], [_binder(83.0, 3, max_ms=4.1)])
+    after = _binder_report([_binder(110.0, 3)], [])
+    got = compare(before, after)["rows"][0]
+    check("grew, from under the bar", got["change"] == compare_mod.GREW and got["under_bar"] == "before"
+          and got["delta_ms"] == 27.0, got)
+
+
+def test_a_row_not_under_the_bar_either_is_gone_and_an_old_report_is_read_as_before() -> None:
+    before = _binder_report([_binder(110.0, 3)], [])
+    gone = compare(before, _binder_report([], []))["rows"][0]
+    check("not found with the thresholds open: gone", gone["change"] == compare_mod.VANISHED
+          and "under_bar" not in gone and gone["delta_ms"] == -110.0, gone)
+    old = compare(before, _binder_report([], None))["rows"][0]
+    check("a side that did not look under its bar cannot say otherwise", old["change"] == compare_mod.VANISHED, old)
+    other = compare(before, _binder_report([], [{**_binder(83.0, 3), "location": "com.example.app:bg"}]))
+    check("only the same thing is looked up", [r["change"] for r in other["rows"]] == [compare_mod.VANISHED],
+          other["rows"])

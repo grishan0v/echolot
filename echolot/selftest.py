@@ -4682,6 +4682,29 @@ def _(report):
     assert only["error"] == "boom", only["error"]
 
 
+@check("compare: a row the other side has under its bar is compared with that, not called gone")
+def _(report):
+    """A row is dropped from a report when it misses the threshold. With the
+    after side's bar above every slice, every slice is still there: `analyze`
+    keeps what its open query found as `below`, and `compare` looks a row up
+    there before it calls it gone and counts all of it as saved (#715)."""
+    from . import compare
+    from . import report as rep
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        before = rep.aggregate([_analyze(trace, Config(FIXTURE_CONFIG), below_bar=True)])
+        after = rep.aggregate([_analyze(trace, Config(FIXTURE_CONFIG), below_bar=True, cli_overrides={
+            "main_thread_block": {"min_slice_ms": 1e6}})])
+    det = next(d for d in after["detectors"] if d["id"] == "main_thread_block")
+    assert not det["rows"] and (det.get("below") or {}).get("rows"), (
+        f"a bar over every slice: no row, and the slices under it kept: {det.get('below')}")
+    cmp = compare.build(before, after, before_path="before.json", after_path="after.json")
+    blocks = [r for r in cmp["rows"] if r["detector"] == "main_thread_block"]
+    assert blocks and all(r["change"] == compare.STEADY and r.get("under_bar") == "after"
+                          for r in blocks), [(r["location"], r["change"], r.get("under_bar")) for r in blocks]
+
+
 # The window's own sets, stored once per session rather than recomputed on
 # every reference (#486), and the scripts that make them.
 WINDOW_TABLES = ("_slice", "_slice_win", "_child_sum", "_aslice_win", "_tstate_win")
