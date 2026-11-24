@@ -96,7 +96,7 @@ def open_processor(binary: str, connect: Callable[[str], Any]) -> Any:
     first — is stopped and another started on another port, `tpshell.TRIES`
     in all (#807): nothing had been sent to whatever answered in its place.
     """
-    from . import tpshell
+    from . import sandbox, tpshell
 
     group = getattr(_joined, "group", None)
     check_joined()
@@ -120,6 +120,19 @@ def open_processor(binary: str, connect: Callable[[str], Any]) -> Any:
         if group is not None:
             group.add(tp)
         tp.client = connect(tp.shell.address)
+    except tpshell.CONNECTION as e:
+        # The trace is fed to the shell over its socket. A shell that stops
+        # meanwhile, or cannot be reached, is `Failed` in words that say so
+        # (#873) — unless the run was stopped, which closed it, or the error
+        # is the trace file's own or a sandbox's, which are said elsewhere.
+        try:
+            check_joined()
+            if isinstance(e, OSError) and (e.filename is not None or sandbox.refused(e)):
+                raise
+            failed = tpshell.lost(tp.shell, e)
+        finally:
+            close(tp)
+        raise failed from e
     except BaseException:
         close(tp)
         raise

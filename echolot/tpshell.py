@@ -42,10 +42,14 @@ that drew the port in between.
 
 A shell that does not come up is `Failed`, in words that say which binary,
 how it ended — its exit code, or that it did not answer in time — and what
-it printed (#872). Not an `Exception`, for the reason `orphans.Stopped` is
-not one: every detector's query is read under an `except Exception`, and a
-trace_processor that is gone is not one query's failure. It ends the
-command with one `error:` line and exit 2, whatever was reading.
+it printed (#872). So is one that stops while its trace is read, killed by
+the system for memory as a rule, now that a set's traces are read side by
+side (#873): how it ended and what it printed. Not an `Exception`, for the
+reason `orphans.Stopped` is not one: every detector's query is read under
+an `except Exception`, and a trace_processor that is gone is not one
+query's failure. It read as the failure of every check after it, in a
+report that exited 0. `Failed` ends the command with one `error:` line and
+exit 2, whatever was reading, and nothing written that reads as whole.
 """
 
 from __future__ import annotations
@@ -101,9 +105,10 @@ class Failed(BaseException):
     """
 
 
-# What trace_processor prints as its server starts, which says nothing about
-# why it stopped: left out of what it printed.
-_STARTING = "[HTTP] Starting HTTP server on "
+# What trace_processor prints as it serves — a line for each request its
+# server takes, and how far the load is — which says nothing about why it
+# stopped: left out of what it printed.
+_SERVING = ("[HTTP]", "Loading trace ")
 # How many of the last lines it printed an error quotes.
 _LINES = 8
 
@@ -207,15 +212,37 @@ def _answers(port: int) -> bool:
 
 def printed(out: str, err: str) -> str:
     """What a shell printed, as a sentence an error ends with: its last
-    lines, stderr's then stdout's, without the line every start prints."""
+    lines, stderr's then stdout's, without what it prints as it serves."""
     lines = [ln.strip() for text in (err, out) for ln in text.splitlines()]
-    lines = [ln[:300] for ln in lines if ln and not ln.startswith(_STARTING)]
+    lines = [ln[:300] for ln in lines
+             if ln and not ln.startswith(_SERVING[1]) and _SERVING[0] not in ln]
     if not lines:
         return "It printed nothing."
     shown = lines[-_LINES:]
     head = ("It printed:" if len(shown) == len(lines)
             else f"The last {len(shown)} lines it printed:")
     return head + "".join(f"\n  {ln}" for ln in shown)
+
+
+# The errors a session's connection to its shell ends in: a socket's, and
+# http.client's for an answer cut off (IncompleteRead, RemoteDisconnected).
+CONNECTION = (OSError, http.client.HTTPException)
+
+
+def lost(shell: Shell, error: BaseException) -> Failed:
+    """What a connection error from a session's shell means, as `Failed`:
+    the shell stopped — how, and what it printed — or it runs and could not
+    be reached.
+
+    Asked before the shell is closed, which would stop it either way, and
+    given a moment to end: a shell killed from outside drops its socket a
+    little before it can be reaped.
+    """
+    how = shell.ended(within=0.25)
+    if how is not None:
+        return Failed(f"trace_processor stopped while it read this trace: it "
+                      f"{how}. {shell.last_words()}")
+    return Failed(f"could not reach trace_processor: {str(error) or type(error).__name__}")
 
 
 def _process_tree():
@@ -242,9 +269,10 @@ class Shell:
         self._held = True
         self.asked = 0
         self.waited: float | None = None
-        # How it ended, once it ended on its own: kept when it is closed,
-        # for the error that names it.
+        # How it ended and what it printed, once it ended on its own: kept
+        # when it is closed, for the error that names it.
         self.exit_code: int | None = None
+        self._last_words: str | None = None
         self._proc: subprocess.Popen | None = None
         self._job: Any = None
         self._out = self._err = None
@@ -352,6 +380,13 @@ class Shell:
             return f"was killed by signal {-code}{name}"
         return f"exited with code {code}"
 
+    def last_words(self) -> str:
+        """What the shell printed, as `printed` says it: kept from the moment
+        it was closed, or read now while it is open."""
+        if self._last_words is not None:
+            return self._last_words
+        return printed(*self._output())
+
     def listens(self) -> bool | None:
         """Whether the shell says it listens on 127.0.0.1 at its port: False
         when it says another process holds the port, None until it has
@@ -399,6 +434,10 @@ class Shell:
             _, terminate = _process_tree()
             with contextlib.suppress(Exception):
                 terminate(proc, self._job)
+        return self._output()
+
+    def _output(self) -> tuple[str, str]:
+        """What the shell has printed so far, on stdout and on stderr."""
         out = []
         for f in (self._out, self._err):
             try:
@@ -417,6 +456,7 @@ class Shell:
             code = proc.poll()
             if code is not None and self.exit_code is None:
                 self.exit_code = code
+                self._last_words = printed(*self._output())
             with contextlib.suppress(Exception):
                 _, terminate = _process_tree()
                 terminate(proc, job)
