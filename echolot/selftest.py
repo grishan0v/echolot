@@ -2075,6 +2075,72 @@ def _(report):
         assert shown == ["1/3"] * 4 + ["2/3", "3/3"], said
 
 
+def main_thread_trace(path: Path, slices: list[tuple[str, float, float]],
+                      launched_as: str | None = None) -> Path:
+    """A trace of `com.example.app` (pid 7300) whose main thread ran from 130
+    to 900 ms and left `slices`, `(name, start_ms, dur_ms)` side by side, and
+    nothing else: what the window's frames are read from, and nothing to blur
+    it. With `launched_as`, system_server records a launch from 100 to 400 ms
+    that completed as that package's: the app's own, or the permission
+    dialog's that came up over it (#810)."""
+    pid, app, system = 7300, "com.example.app", 1000
+    builder = fixture.TraceProtoBuilder()
+    fixture.process_tree(builder, [(pid, app, {pid: app}),
+                                   (system, "system_server", {system: "system_server"})])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {0: [
+        (fixture.ms(130), next(seq), "sched", "swapper/0", 0, fixture.R, app, pid),
+        (fixture.ms(900), next(seq), "sched", app, pid, fixture.S, "swapper/0", 0)]}
+    for ts, order, kind, name in fixture._flatten(
+            [(name, at, dur, []) for name, at, dur in sorted(slices, key=lambda s: s[1])],
+            [], seq):
+        by_cpu[0].append((ts, order, "print", pid,
+                          f"B|{pid}|{name}\n" if kind == "B" else f"E|{pid}\n"))
+    if launched_as:
+        name = "launchingActivity#1"
+        for at, buf in ((100, f"S|{system}|{name}|1"), (400, f"F|{system}|{name}|1"),
+                        (400, f"B|{system}|{name}:completed:{launched_as}"),
+                        (400, f"E|{system}")):
+            by_cpu[0].append((fixture.ms(at), next(seq), "print", system, buf + "\n"))
+    fixture.ftrace(builder, by_cpu)
+    path.write_bytes(builder.serialize())
+    return path
+
+
+# A cold start whose first frame comes after `activityStart`, and a window
+# cut from `bindApplication` to it: the app's start up to its first Activity,
+# which draws nothing because nothing was drawn yet (#849).
+BEFORE_FIRST_FRAME = [("bindApplication", 140, 60), ("activityStart", 210, 5),
+                      ("Choreographer#doFrame 1", 260, 20), ("Choreographer#doFrame 2", 300, 10)]
+BIND_TO_ACTIVITY = {"project": {"package": "com.example.app", "process": "com.example.app"},
+                    "scenario": {"name": "bind", "start": {"name": "bindApplication"},
+                                 "end": {"name": "activityStart"}}}
+
+
+@check("analyze: a window that closes before the app's first frame is not one where "
+       "the scenario drew nothing")
+def _(report):
+    """A window from `bindApplication` to `activityStart` closes before any
+    frame of a cold start, and `analyze` said of it that the app drew no
+    frame and the scenario did not reach its screen; `collect` stopped its
+    round on the same reading, so it could never be recorded with more than
+    one repeat (#849). A frame there was none of yet says nothing. A window
+    the app drew nothing in after its first frame still does (#536)."""
+    from . import report as report_mod
+    with tempfile.TemporaryDirectory() as tmp:
+        early = _analyze(main_thread_trace(Path(tmp) / "bind.perfetto-trace",
+                                           BEFORE_FIRST_FRAME), Config(BIND_TO_ACTIVITY))
+        assert early["window"]["drawn"] is None, early["window"]["drawn"]
+        assert "drew no frame" not in report_mod.to_markdown(early), "nothing said"
+        late = _analyze(main_thread_trace(Path(tmp) / "list.perfetto-trace", [
+            *BEFORE_FIRST_FRAME, ("list_open", 400, 1), ("list_shown", 700, 1)]),
+            Config({**BIND_TO_ACTIVITY, "scenario": {
+                "name": "list", "start": {"name": "list_open"},
+                "end": {"name": "list_shown"}}}))
+        assert late["window"]["drawn"] == {"count": 0}, late["window"]["drawn"]
+        assert "The app drew no frame in its recording" in report_mod.to_markdown(late)
+
+
 @check("collect: a round its first repeat stops leaves the set before where it was")
 def _(report):
     """The first trace is read before the rest are recorded, and a round whose
@@ -2195,11 +2261,16 @@ def _(report):
         assert _cold_only([paths[1]]) == ([paths[1]], []), "alone, it is read as given"
 
 
-def _collect_ending(ended: list[str], n: int, where: Path,
-                    started: str = ".Main") -> tuple[list[dict], list[str]]:
+def _collect_ending(ended: list[str], n: int, where: Path, started: str = ".Main",
+                    dump: str = "", pulled: bytes = b"a trace",
+                    **kw) -> tuple[list[dict], list[str]]:
     """`runner.collect` of `n` cold launches of `com.example.app/<started>` on
     a fake device whose `am start -W` says each ended on the next of `ended`,
-    in the short form a phone prints: the recordings made, and what was said."""
+    in the short form a phone prints, or as the component given where it
+    holds a `/`: the recordings made, and what was said. `dump` is what
+    `dumpsys package` answers, and every call of it is said as `dumpsys`;
+    `pulled` is every trace the device hands over, and `kw` goes to
+    `collect` as it is."""
     from . import runner
     package, serial = "com.example.app", "emulator-5554"
     ended = list(ended)
@@ -2217,10 +2288,14 @@ def _collect_ending(ended: list[str], n: int, where: Path,
                     "    isKeyguardShowing=false\n")
         if text.startswith("am start -W"):
             to = ended.pop(0) if len(ended) > 1 else ended[0]
-            return (f"Status: ok\nLaunchState: COLD\nActivity: {package}/{to}\n"
+            to = to if "/" in to else f"{package}/{to}"
+            return (f"Status: ok\nLaunchState: COLD\nActivity: {to}\n"
                     f"TotalTime: 523\nComplete\n")
+        if text == f"dumpsys package {package}":
+            said.append("dumpsys")
+            return dump
         if args[3:4] == ["pull"]:
-            Path(args[-1]).write_bytes(b"a trace")
+            Path(args[-1]).write_bytes(pulled)
         return ""
 
     said: list[str] = []
@@ -2228,7 +2303,8 @@ def _collect_ending(ended: list[str], n: int, where: Path,
     runner._run = adb
     try:
         made = runner.collect(package, where, n, name="run",
-                              section={"activity": f"{package}/{started}"}, log=said.append)
+                              section={"activity": f"{package}/{started}"}, log=said.append,
+                              **kw)
     finally:
         runner._run = real
     return made, said
@@ -2304,6 +2380,168 @@ def _(report):
     assert said in report_mod.overview(got), "and in the overview analyze prints"
     plain = report["window"]
     assert plain.get("boot_receivers") is None and "activity" not in plain, plain
+
+
+# A permission dialog's component as `am start -W` names it, and what
+# `dumpsys package` lists of an app's permissions on an SM-A515F (Android 13),
+# cut to the sections `runner.ungranted` reads (#810).
+_DIALOG = ("com.google.android.permissioncontroller/"
+           "com.android.permissioncontroller.permission.ui.GrantPermissionsActivity")
+_PERMISSIONS_DUMP = """\
+Packages:
+  Package [com.example.app] (2c4e3f1):
+    requested permissions:
+      android.permission.INTERNET
+      android.permission.CAMERA
+      android.permission.POST_NOTIFICATIONS
+    install permissions:
+      android.permission.INTERNET: granted=true
+    User 0: ceDataInode=4321 installed=true hidden=false suspended=false stopped=false
+      gids=[3003]
+      runtime permissions:
+        android.permission.CAMERA: granted=false, flags=[ USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED]
+        android.permission.POST_NOTIFICATIONS: granted=false, flags=[ USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED]
+        android.permission.ACCESS_FINE_LOCATION: granted=true, flags=[ USER_SET]
+      disabledComponents:
+        com.example.app.Unused
+"""
+
+
+@check("collect: a launch a permission dialog took is said as the dialog's, with the "
+       "command that grants the permission")
+def _(report):
+    """A debug build that asks for `POST_NOTIFICATIONS` before its first frame,
+    on Android 13 and never granted: the dialog comes up over the app and the
+    platform's launch ends on it, every repeat (#810). The line under the
+    repeat said the app went on to another activity by itself, and `analyze`
+    then sent a person who had recorded with `runner.mode: launch` to set it.
+    The permissions the app holds ungranted are read once, kept with each
+    repeat the dialog took, and the grant command names the likely one."""
+    from . import runner
+    grant = "`adb shell pm grant com.example.app android.permission.POST_NOTIFICATIONS`"
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([_DIALOG], 3, Path(tmp), dump=_PERMISSIONS_DUMP)
+        under = [s.strip() for s in said if "permission dialog took" in s]
+        assert len(under) == 1 and said.index(next(
+            s for s in said if "permission dialog took" in s)) - 1 == next(
+            i for i, s in enumerate(said) if "[1/3]" in s), said
+        assert under[0].startswith("[!] a permission dialog took the launch: it ended on "
+                                   "com.google.android.permissioncontroller's "
+                                   "GrantPermissionsActivity"), under
+        assert grant in under[0] and "`android.permission.CAMERA` ungranted too" in under[0], under
+        assert not any("by itself" in s for s in said), said
+        assert said.count("dumpsys") == 1, "read once, at the first launch it took"
+        kept = [runner.launch_record(r["path"]) for r in made]
+        assert all(k["ungranted"] == ["android.permission.CAMERA",
+                                      "android.permission.POST_NOTIFICATIONS"]
+                   for k in kept), kept
+        end = runner.activities_said(made) or ""
+        assert end.startswith("a permission dialog took every launch of the 3") \
+            and grant in end, end
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([".Main"], 2, Path(tmp), dump=_PERMISSIONS_DUMP)
+        assert "dumpsys" not in said and not any("permission" in s for s in said), said
+        assert "ungranted" not in runner.launch_record(made[0]["path"]), "only when it took one"
+
+
+class _Startups:
+    """What `launch.find` asks of a trace_processor, answered for a trace of
+    `process` whose launches are `startups`."""
+
+    def __init__(self, process: str, startups: list[dict]):
+        self.process, self.startups = process, startups
+
+    def exec_script(self, sql: str) -> None:
+        pass
+
+    def query(self, sql: str) -> list[dict]:
+        if "FROM android_startups" in sql:
+            return self.startups
+        return [{"name": self.process}] if "FROM _proc" in sql else []
+
+
+@check("launch window: a trace whose launch a permission dialog took says so, and does "
+       "not send a launch-mode recording to set the launch mode")
+def _(report):
+    """The trace's launch was `com.google.android.permissioncontroller`'s, and
+    the error said to record with `runner.mode: launch`, which is how it had
+    been recorded (#810). The dialog is named from the trace's launches, or
+    from the activity `collect` kept beside the trace where the trace holds
+    none, and the grant command from the permissions it kept with it."""
+    from . import launch as launch_mod
+    from . import recording
+    dialog = {"startup_id": 1, "ts": 100, "ts_end": 900, "own": 0,
+              "package": "com.google.android.permissioncontroller"}
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "startup_iter000.perfetto-trace"
+        trace.write_bytes(b"a trace")
+        try:
+            launch_mod.find(_Startups("com.example.app", [dialog]), 1, str(trace))
+        except launch_mod.NoLaunch as e:
+            said = str(e)
+        else:
+            raise AssertionError("a trace with the dialog's launch only has no window")
+        assert said.startswith("no launch of com.example.app in trace "
+                               "startup_iter000.perfetto-trace: its launch is "
+                               "com.google.android.permissioncontroller's. A permission "
+                               "dialog came up over the app"), said
+        assert "`adb shell pm grant com.example.app <permission>`" in said \
+            and launch_mod.NOTIFICATIONS in said and "runner.mode" not in said, said
+        recording.write(trace, {"runner": "launch", "launch": {
+            "activity": _DIALOG, "ungranted": ["android.permission.POST_NOTIFICATIONS"]}})
+        try:
+            launch_mod.find(_Startups("com.example.app", []), 1, str(trace))
+        except launch_mod.NoLaunch as e:
+            said = str(e)
+        assert ("its launch is com.google.android.permissioncontroller's" in said
+                and "`adb shell pm grant com.example.app "
+                    "android.permission.POST_NOTIFICATIONS`" in said), said
+        recording.write(trace, {"runner": "launch", "launch": {"activity": None}})
+        try:
+            launch_mod.find(_Startups("com.example.app", []), 1, str(trace))
+        except launch_mod.NoLaunch as e:
+            said = str(e)
+        assert "permission" not in said and "does that" not in said \
+            and "`collect` started the app inside this recording" in said, said
+
+
+@check("collect: under `window: launch` a first repeat a permission dialog took stops "
+       "the round, and the stop names the dialog")
+def _(report):
+    """The first look at repeat 1 read the window `analyze` would cut, and a
+    trace with no launch of the app made it say nothing: all five repeats of
+    a round the dialog took were recorded, and `analyze` refused each (#810).
+    It stops there now with `analyze`'s reason; a window cut by anchors is
+    measured with the dialog up, and its round goes on."""
+    import argparse
+
+    from . import runner
+    from .main import _scenario_ran
+    launch_cfg = Config({**BIND_TO_ACTIVITY, "scenario": {"name": "run", "window": "launch"}})
+    # On the binary this run checks, as every trace a check opens is.
+    on_binary = argparse.Namespace(tp_binary=_binary)
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = main_thread_trace(Path(tmp) / "dialog.perfetto-trace", BEFORE_FIRST_FRAME,
+                                  launched_as="com.google.android.permissioncontroller")
+        body = trace.read_bytes()
+        out = Path(tmp) / "traces"
+        try:
+            _collect_ending([_DIALOG], 3, out, dump=_PERMISSIONS_DUMP, pulled=body,
+                            check_first=lambda t: _scenario_ran(launch_cfg, t, on_binary))
+        except runner.RunnerError as e:
+            said = str(e)
+        else:
+            raise AssertionError("a round whose first launch the dialog took goes on")
+        assert said.startswith("repeat 1 of 3: no launch of com.example.app in trace "
+                               "run_iter000.perfetto-trace: its launch is "
+                               "com.google.android.permissioncontroller's"), said
+        assert ("`adb shell pm grant com.example.app android.permission.POST_NOTIFICATIONS`"
+                in said), said
+        assert not list(out.glob("*.perfetto-trace")), "nothing kept"
+        made, _ = _collect_ending([_DIALOG], 2, out, dump=_PERMISSIONS_DUMP, pulled=body,
+                                  check_first=lambda t: _scenario_ran(
+                                      Config(BIND_TO_ACTIVITY), t, on_binary))
+        assert len(made) == 2, "anchors cut a window the dialog leaves alone"
 
 
 def _powered(plugged: bool, level: int, saver: str = "0") -> str:

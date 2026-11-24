@@ -3420,8 +3420,11 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
     it, or when the end anchor opened and never closed: the scenario never
     reached its screen, and the repeats after it would record the same. An
     end anchor that did not occur at all is said and the round goes on, since
-    a name that is wrong in the config reads the same. A trace this cannot
-    read says nothing: `analyze` will.
+    a name that is wrong in the config reads the same. Under `window: launch`
+    the round stops when the trace holds no launch of the app, with the
+    reason `analyze` would give: a permission dialog that took the first
+    launch takes every one after it (#810). Any other trace this cannot read
+    says nothing: `analyze` will.
     """
     import io
 
@@ -3434,6 +3437,11 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
             bounds = _setup_context(tp, cfg, procs[0]["upid"], trace=str(trace))
             window = _window_info(tp, cfg, procs,
                                   bounds if "defined_by" in bounds else None)
+    except launch_mod.NoLaunch as e:
+        # `window: launch` and no launch of the app in the first repeat: a
+        # permission dialog that took it takes every launch until it is
+        # granted, and no repeat after it would hold a window (#810).
+        return str(e).rstrip("."), None
     except Exception:
         return None, None
     end = window.get("end_anchor") or {}

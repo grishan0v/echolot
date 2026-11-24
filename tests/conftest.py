@@ -89,9 +89,18 @@ def no_first_look(monkeypatch):
     """`collect` reads its first repeat's trace with trace_processor (#536).
     The traces a fake adb pulls are a line of text, which says nothing and
     costs a trace_processor start each; a test that wants the look hands in
-    its own."""
+    its own. A fake that hands over a real trace gets the real look: the
+    self-check that a permission dialog stops a launch round does (#810)."""
     from echolot import main
-    monkeypatch.setattr(main, "_scenario_ran", lambda cfg, trace, args=None: (None, None))
+    real = main._scenario_ran
+
+    def look(cfg, trace, args=None):
+        try:
+            text = Path(trace).read_bytes().isascii()
+        except OSError:
+            text = True
+        return (None, None) if text else real(cfg, trace, args)
+    monkeypatch.setattr(main, "_scenario_ran", look)
 
 
 @pytest.fixture(autouse=True)
