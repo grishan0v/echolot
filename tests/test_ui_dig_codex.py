@@ -296,6 +296,38 @@ def test_a_codex_that_cannot_start_leaves_claude_code_alone(project):
           and not echolot.ran and codex_.argv is None)
 
 
+def test_a_codex_that_cannot_start_says_why_beside_claude_code(project):
+    """#819: Codex installed and signed in, the project set up for Claude Code
+    alone. The page offered Claude Code and never said a word of Codex, the
+    reason it had read included."""
+    (project.root / codex.RULE_PATH).unlink()
+    site, _, _ = serving(project, clients=(SIGNED_IN, CODEX_IN))
+    lacks = dig_codex.ready(project.root)
+    check("what Codex lacks names the file and the command that writes it",
+          lacks.startswith("Not yet for Codex: this project has no `.codex/rules/echolot.rules`")
+          and "`echolot init --for " in lacks and lacks.endswith(", in a terminal in the project's folder, writes it."),
+          lacks)
+    report = page(get(site, "report"))
+    dialog = report.one("dialog", "ask")
+    check("the dialog still starts Claude Code", report.one("button", id="ask-start").text == "Start it from here"
+          and "Claude Code, the one on this computer, does it" in dialog.text, dialog.text)
+    check("and says, beneath, why not Codex", [p.text for p in dialog.all("p", "dig-aside")]
+          == [lacks.replace("`", "")], [p.text for p in dialog.all("p", "dig-aside")])
+    consent = page(press(site, "dig/ask", ticked("main_thread_waits")))
+    check("the screen before Claude Code starts says it too", [p.text for p in consent.all("p", "dig-aside")]
+          == [lacks.replace("`", "")] and blocks(consent)["Who does it"].startswith("Claude Code"))
+    check("with no button to a screen that would refuse it, and Start the one next step",
+          not consent.all("form", "dig-other")
+          and consent.one("button", id="dig-start").attrs["class"] == "btn primary press")
+    other = page(press(site, "dig/with/codex/ask", ticked("main_thread_waits")))
+    check("Codex's own screen says it once, in its callout", "Not yet for Codex" in other.one("div", id="dig-why").text
+          and not other.all("p", "dig-aside"))
+    absent = dig.Client(key="codex", why="Codex is not installed on this computer: there is no `codex` command here.")
+    site, _, _ = serving(project, clients=(SIGNED_IN, absent))
+    check("a Codex that is not installed is not mentioned", not page(get(site, "report")).one("dialog", "ask").all(
+        "p", "dig-aside") and not page(press(site, "dig/ask", ticked("main_thread_waits"))).all("p", "dig-aside"))
+
+
 @pytest.mark.parametrize("clients", ["both", "codex not installed"])
 def test_with_no_folder_to_mark_no_client_is_offered_and_the_folder_is_said_once(project, clients):
     """#813 and #863: with `instrumentation.allowed` naming no folder, the

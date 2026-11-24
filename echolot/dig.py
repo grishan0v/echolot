@@ -32,7 +32,7 @@ What is decided here and nowhere else, for Claude Code:
   nothing has moved; and once it ended, how, with what it left in the code.
 
 And for every client: which ones the page offers, in which order (`offer`),
-what it says of the ones it cannot start (`reasons`), what all of
+what it says of the ones it cannot start (`reasons`, `aside`), what all of
 them need alike, a folder in `instrumentation.allowed` (`unplaced`), and
 everything after a press that is the same for all of them.
 
@@ -1008,6 +1008,17 @@ def reasons(offered: Sequence[tuple[Client, str | None]], key: str | None = None
     said = [why for c, why in offered if why and (c.program or c.key == key)] \
         or [why for _, why in offered if why]
     return list(dict.fromkeys(said))
+
+
+def aside(offered: Sequence[tuple[Client, str | None]], key: str | None = None) -> list[str]:
+    """Where a client can start: why each other client on this computer
+    cannot, besides the one `key` names, whose screen says it. The reasons a
+    client was not offered were read and never said, so a person who set
+    up one client did not learn what the other needs (#819). A client that
+    is not installed is left out: nothing says it is wanted."""
+    if not any(why is None for _, why in offered):
+        return []
+    return list(dict.fromkeys(why for c, why in offered if why and c.program and c.key != key))
 
 
 def pick(offered: Sequence[tuple[Client, str | None]], key: str | None = None) -> tuple[Client, str | None] | None:

@@ -8036,13 +8036,41 @@ def _(report):
             assert whys[0] and whys[0] == whys[1] == dig.unplaced(st), whys
             assert "names no folder" in whys[0] and "under `instrumentation:`" in whys[0] \
                 and "`allowed: [\"app/src/main\"" in whys[0], whys[0]
-            assert dig.reasons(offered) == [whys[0]], dig.reasons(offered)
+            assert dig.reasons(offered) == [whys[0]] and dig.aside(offered) == [], dig.reasons(offered)
             ask = dig_page.report_parts([], "/t/dig/ask", False, dig.reasons(offered), who=[])["ask"]
             assert "ask-start" not in ask and ask.count("names no folder") == 1, ask
             (root / "echolot.yml").write_text((root / "echolot.yml").read_text(encoding="utf-8").replace(
                 "instrumentation:\n  allowed: []\n", "") + 'instrumentation:\n  allowed: ["app/src/main"]\n',
                 encoding="utf-8")
             assert [why for _, why in dig.offer(root, [claude, codex_], st, [])] == [None, None]
+
+
+@check("ui: where one agent can start, Dig deeper says why each other one on this computer "
+       "cannot")
+def _(report):
+    """The page read why it could not start Codex, and said it only when it
+    could start no agent at all: a project set up for Claude Code alone never
+    learned that Codex needed `.codex/rules/echolot.rules`, nor which command
+    writes it (#819). Where one client can start, the dialog and the screen
+    before the start say why each other one installed here cannot. One that
+    is not installed is not named: nothing says it is wanted.
+    """
+    from . import codex, dig, dig_codex
+    from .pages import dig_page
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _dig_project(root, '["app/src/main"]')
+        (root / codex.RULE_PATH).unlink()
+        lacks = dig_codex.ready(root)
+        assert lacks and "`.codex/rules/echolot.rules`" in lacks and "`echolot init --for " in lacks, lacks
+        claude = dig.Client(program="/bin/claude", key="claude")
+        offered = [(claude, None), (dig.Client(program="/bin/codex", key="codex"), lacks)]
+        assert dig.aside(offered) == [lacks] and dig.aside(offered, "codex") == [], dig.aside(offered)
+        ask = dig_page.report_parts([], "/t/dig/ask", True, None, who=["Claude Code"], aside=dig.aside(offered))["ask"]
+        assert 'id="ask-start"' in ask and 'class="small sub dig-aside"' in ask \
+            and "<code>.codex/rules/echolot.rules</code>" in ask, ask
+        absent = dig.Client(key="codex", why="Codex is not installed on this computer.")
+        assert dig.aside([(claude, None), (absent, absent.why)]) == []
 
 
 # --- the run ---------------------------------------------------------------

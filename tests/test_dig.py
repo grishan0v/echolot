@@ -200,7 +200,7 @@ def test_what_the_page_says_of_clients_it_cannot_start():
     claude = dig.Client(program="/c", key="claude")
     codex_ = dig.Client(program="/x", key="codex")
     absent = dig.Client(key="codex", why="Codex is not installed on this computer: there is no `codex` command here.")
-    folder = "no folder"
+    folder, rules = "no folder", "Not yet for Codex: no rules."
     check("#863: a reason both share, said once", dig.reasons([(claude, folder), (codex_, folder)]) == [folder])
     check("a client that is not installed is no reason beside one that is",
           dig.reasons([(claude, folder), (absent, absent.why)]) == [folder])
@@ -209,6 +209,13 @@ def test_what_the_page_says_of_clients_it_cannot_start():
     check("and where none is installed, every one says so", dig.reasons([(dig.Client(why="no claude"), "no claude"),
                                                                         (absent, absent.why)])
           == ["no claude", absent.why])
+    check("#819: where one can start, why the other on this computer cannot",
+          dig.aside([(claude, None), (codex_, rules)]) == [rules])
+    check("not on the screen of the one that cannot, which says it itself",
+          dig.aside([(claude, None), (codex_, rules)], "codex") == [])
+    check("nothing of a client that is not installed", dig.aside([(claude, None), (absent, absent.why)]) == [])
+    check("and nothing aside where none can start: those are the reasons",
+          dig.aside([(claude, folder), (codex_, rules)]) == [])
 
 
 # --- the request ----------------------------------------------------------------------------------
