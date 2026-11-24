@@ -1,14 +1,16 @@
 """A trace_processor that fails is one sentence and exit 2.
 
 One model for every way it fails (tpshell.Failed): a shell that does not
-start (#872), and one that stops while its trace is read (#873). The error
-names the trace, the binary or how the shell ended, and quotes what it
-printed; no command ends in a traceback, and none writes a report that
-reads as whole.
+start (#872), one that stops while its trace is read (#873), and a socket
+error while it runs, which is tried once more first (#871). The error names
+the trace, the binary or how the shell ended, and quotes what it printed;
+no command ends in a traceback, and none writes a report that reads as
+whole.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import signal
 import sys
@@ -153,3 +155,87 @@ def test_what_a_shell_printed_leaves_out_what_it_prints_as_it_serves() -> None:
     assert tpshell.printed("", "[HTTP] Starting HTTP server on [::1]:5000\n") == "It printed nothing."
     many = "".join(f"line {i}\n" for i in range(20))
     assert tpshell.printed(many, "").startswith("The last 8 lines it printed:\n  line 12")
+
+
+def _enobufs(monkeypatch, owner, name: str, times: int) -> list[int]:
+    """`owner.name` raising ENOBUFS on its first `times` calls, as a machine
+    short of sockets does now and then (#871). The calls, as they end."""
+    real = getattr(owner, name)
+    calls = [0]
+
+    def flaky(*a, **k):
+        calls[0] += 1
+        if calls[0] <= times:
+            raise OSError(errno.ENOBUFS, "No buffer space available")
+        return real(*a, **k)
+
+    monkeypatch.setattr(owner, name, flaky)
+    return calls
+
+
+def _http():
+    from perfetto.trace_processor.http import TraceProcessorHttp
+    return TraceProcessorHttp
+
+
+@pytest.mark.parametrize("where", ["port", "parse"])
+def test_one_socket_error_while_a_session_starts_is_tried_again(
+        app: Path, monkeypatch, where: str) -> None:
+    owner, name = (tpshell, "_free_port") if where == "port" else (_http(), "parse")
+    calls = _enobufs(monkeypatch, owner, name, 1)
+    with tp_mod.TraceSession(app / "coldStart_iter000.perfetto-trace") as tp:
+        assert tp.query("SELECT 1 AS one") == [{"one": 1}]
+    assert calls[0] >= 2
+
+
+def test_one_socket_error_on_a_query_is_asked_again(app: Path, monkeypatch) -> None:
+    with tp_mod.TraceSession(app / "coldStart_iter000.perfetto-trace") as tp:
+        calls = _enobufs(monkeypatch, _http(), "execute_query", 1)
+        assert tp.query("SELECT 2 AS two") == [{"two": 2}]
+        assert calls[0] == 2
+
+
+@pytest.mark.parametrize("where", ["port", "query"])
+def test_a_socket_error_that_comes_back_names_the_trace_and_the_socket(
+        app: Path, monkeypatch, where: str) -> None:
+    trace = app / "coldStart_iter000.perfetto-trace"
+    said = (f"{trace.resolve()}: could not reach trace_processor, tried twice: [Errno "
+            f"{errno.ENOBUFS}] No buffer space available. The machine's sockets failed, "
+            f"not the trace: run again, with fewer traces at once (-j 2) if many are "
+            f"read side by side.")
+    if where == "port":
+        _enobufs(monkeypatch, tpshell, "_free_port", 2)
+        with pytest.raises(tpshell.Failed) as e:
+            tp_mod.TraceSession(trace)
+        assert str(e.value) == said
+        return
+    with tp_mod.TraceSession(trace) as tp:
+        shell = tp._tp.shell
+        _enobufs(monkeypatch, _http(), "execute_query", 2)
+        with pytest.raises(tpshell.Failed) as e:
+            tp.query("SELECT 1")
+        assert str(e.value) == said
+        assert shell.pid is not None, "a shell that runs is the session's to close"
+
+
+def test_analyze_writes_its_report_through_one_socket_error(
+        app: Path, tmp_path: Path, monkeypatch, capsys) -> None:
+    """The third shell of a set read side by side could not draw its port:
+    the whole set ended with the bare errno and no report (#871)."""
+    real = tpshell._free_port
+    calls = [0]
+
+    def third():
+        calls[0] += 1
+        if calls[0] == 3:
+            raise OSError(errno.ENOBUFS, "No buffer space available")
+        return real()
+
+    monkeypatch.setattr(tpshell, "_free_port", third)
+    out = tmp_path / "out"
+    traces = sorted(str(t) for t in app.glob("coldStart_iter00*.perfetto-trace"))
+    code = cli(["analyze", "-c", str(app / "echolot.yml"), "-o", str(out), "-j", "3", *traces])
+    err = capsys.readouterr().err
+    assert code == 0, err
+    assert calls[0] == len(traces) + 1
+    assert (out / "report.json").exists()

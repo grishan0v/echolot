@@ -59,6 +59,7 @@ import shutil
 import subprocess
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1129,14 +1130,14 @@ class TraceSession:
         # (tpshell.py, #487).
         self._signals = orphans.hold_signals()
         try:
-            self._tp = orphans.open_processor(
-                binary, lambda address: TraceProcessor(
-                    trace=_then(path, extra), remote=address))
+            self._tp = self._open(binary, lambda address: TraceProcessor(
+                trace=_then(path, extra), remote=address))
         except tpshell.Failed as e:
             self.close()
-            # A shell that would not start: the binary's fault, or the
-            # machine's, and never the trace's — but the trace is what the
-            # person is looking at, so it is named too (#872).
+            # A shell that would not start, or stopped, or could not be
+            # reached: the binary's fault, or the machine's, and never the
+            # trace's — but the trace is what the person is looking at, so
+            # it is named too (#872).
             raise tpshell.Failed(f"{path}: {e}") from e
         except TraceProcessorException as e:
             self.close()
@@ -1178,6 +1179,32 @@ class TraceSession:
         if stopped:
             self.close()
             raise ConfigError(stopped)
+
+    @staticmethod
+    def _open(binary: str, connect):
+        """`orphans.open_processor`, tried once more after a socket error
+        while no shell had stopped (#871).
+
+        A machine short of sockets refuses one now and then — `[Errno 55]
+        No buffer space available`, with three `analyze` of a dozen shells
+        each — while the port is drawn or the trace is fed to the shell. It
+        ended the whole set with that line alone, no trace named and nothing
+        said of trace_processor, and the same command passed a moment later.
+        The second try starts a shell of its own: nothing of the first one's
+        is reused.
+        """
+        try:
+            return orphans.open_processor(binary, connect)
+        except tpshell.Failed as e:
+            if e.again is None:
+                raise
+        time.sleep(tpshell.PAUSE)
+        try:
+            return orphans.open_processor(binary, connect)
+        except tpshell.Failed as e:
+            if e.again is None:
+                raise
+            raise tpshell.Failed(tpshell.gave_up(e)) from e
 
     def _stopped_short(self, path: Path) -> str | None:
         """What to say when the load ended before the tables a trace ends with.
@@ -1225,18 +1252,26 @@ class TraceSession:
         error it read as the failure of each detector in turn — "⚠️ Failed:
         IncompleteRead(0 bytes read)", "[Errno 54] Connection reset by
         peer" — in a report written whole with exit 0, or as a traceback
-        out of the window's setup.
+        out of the window's setup. A shell that still runs is asked once
+        more, over a new connection, as a start is tried once more (#871).
         """
         orphans.check_joined()
         tp = self._tp
-        try:
-            return tp.query(sql)
-        except tpshell.CONNECTION as e:
-            orphans.check_joined()
-            shell = getattr(tp, "shell", None)
-            if shell is None:
-                raise
-            raise tpshell.Failed(f"{self.path}: {tpshell.lost(shell, e)}") from e
+        for again in (False, True):
+            try:
+                return tp.query(sql)
+            except tpshell.CONNECTION as e:
+                orphans.check_joined()
+                shell = getattr(tp, "shell", None)
+                if shell is None:
+                    raise
+                failed = tpshell.lost(shell, e)
+                if failed.again is None:
+                    raise tpshell.Failed(f"{self.path}: {failed}") from e
+                if again:
+                    raise tpshell.Failed(f"{self.path}: {tpshell.gave_up(failed)}") from e
+                tp.reconnect()
+        raise AssertionError("the second try returns or raises")
 
     def close(self) -> None:
         tp, self._tp = self._tp, None

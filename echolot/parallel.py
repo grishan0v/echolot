@@ -20,7 +20,10 @@ looked like one trace at a time:
   own error, as before: the first one in the order given, after what the
   traces before it printed. The traces after it are not waited for — their
   sessions are closed, and what they printed is dropped, as it was never
-  printed before.
+  printed before. A trace_processor that fails is such a failure too, said
+  with the trace it was reading (tpshell.Failed); a socket error while it
+  runs is tried once more first, since a dozen shells at once is when a
+  machine runs short of sockets (#871).
 - **The end.** Ctrl-C, SIGTERM and SIGHUP reach Python's main thread only,
   and a worker's trace_processor is out of their reach (orphans.py). The
   main thread holds the signals for the whole run and closes every session
