@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import fixture, recorder  # noqa: E402
 from echolot.config import NO_ANCHOR, Config, ConfigError  # noqa: E402
-from echolot.main import DETECTOR_DIR, _note_detectors, main, plan_detectors  # noqa: E402
+from echolot.analyze import DETECTOR_DIR, plan_detectors  # noqa: E402
+from echolot.main import _note_detectors, main  # noqa: E402
 from echolot.tp import load_detectors  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -247,8 +248,8 @@ def test_each_runner_key_read_is_one_the_config_knows() -> None:
     root = Path(__file__).resolve().parent.parent / "echolot"
     read = set()
     pattern = re_.compile(r'(?:section\.get\(|_positive\(section, |_listed\(section, )"(\w+)"')
-    for name in ("runner.py", "stabilize.py", "composenames.py", "main.py", "check.py",
-                 "ready.py"):
+    for name in ("runner.py", "stabilize.py", "composenames.py", "power.py", "main.py",
+                 "check.py", "ready.py"):
         read |= set(pattern.findall((root / name).read_text(encoding="utf-8")))
     read |= set(RECORDING_KNOBS)
     check("every one listed", read <= set(runner_keys()), sorted(read - set(runner_keys())))
@@ -256,6 +257,61 @@ def test_each_runner_key_read_is_one_the_config_knows() -> None:
     # `knobs_of` reads its two switches in a loop over their names.
     check("and each listed is read", set(runner_keys()) <= read | set(stabilize.KEYS),
           sorted(set(runner_keys()) - read))
+
+
+def test_min_battery_loads_in_echolot_yml_and_local_yml_and_is_read(tmp_path: Path) -> None:
+    """`collect` tells a person on a low battery to set `runner.min_battery: 0`
+    in local.yml, and 0.18.0 refused that config as an unknown key (#834)."""
+    from echolot import power
+    cfg = Config.load(_config(tmp_path / "shared", {**BASE, "runner": {"min_battery": 10}}))
+    check("echolot.yml", power.floor(cfg.runner) == 10, cfg.runner)
+    path = _config(tmp_path / "local", BASE)
+    (tmp_path / "local" / "local.yml").write_text("runner:\n  min_battery: 0\n", encoding="utf-8")
+    cfg = Config.load(path)
+    check("local.yml", power.floor(cfg.runner) == 0, cfg.runner)
+    raw = {"project": BASE["project"], "scenarios": {"cold": {
+        "start": {"name": "AppStart"}, "end": {"name": "Screen.firstFrame"},
+        "runner": {"min_battery": 5}}}}
+    check("a scenario's runner", power.floor(Config.load(_config(tmp_path / "s", raw)).runner) == 5)
+
+
+def _config_examples() -> list[tuple[str, int, str]]:
+    """Every YAML example in the docs, the READMEs and the skill that is a
+    config or a piece of one: each of its top-level keys is a section."""
+    import re as re_
+    from echolot.config import _SECTIONS
+    root = Path(__file__).resolve().parent.parent
+    files = sorted((root / "docs").rglob("*.md")) + sorted(root.glob("README*.md"))
+    files += sorted((root / "echolot" / "claude").rglob("*.md"))
+    found = []
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        for m in re_.finditer(r"^```ya?ml\n(.*?)^```", text, re_.S | re_.M):
+            try:
+                data = yaml.safe_load(m.group(1))
+            except yaml.YAMLError:
+                continue
+            if isinstance(data, dict) and data and all(k in _SECTIONS for k in data):
+                found.append((str(path.relative_to(root)),
+                              text.count("\n", 0, m.start()) + 1, m.group(1)))
+    return found
+
+
+def test_every_config_example_in_the_docs_loads(tmp_path: Path) -> None:
+    """The runner examples in both collecting.md set `min_battery`, and
+    neither loaded in 0.18.0 (#834)."""
+    examples = _config_examples()
+    check("some found", len(examples) > 20, len(examples))
+    refused = []
+    for i, (where, line, text) in enumerate(examples):
+        path = tmp_path / str(i) / "echolot.yml"
+        path.parent.mkdir()
+        path.write_text(text, encoding="utf-8")
+        try:
+            Config.load(path)
+        except ConfigError as e:
+            refused.append(f"{where}:{line}: {e}")
+    check("every one loads", not refused, refused)
 
 
 def test_an_unknown_section_is_refused_by_name(tmp_path: Path) -> None:

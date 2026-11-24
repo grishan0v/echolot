@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import fixture, plain, selftest  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import analyze_trace  # noqa: E402
+from echolot.analyze import analyze_trace  # noqa: E402
 from tests.support import check  # noqa: E402
 
 FT = fixture.FT

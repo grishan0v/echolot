@@ -168,7 +168,7 @@ def test_the_hunt_texts_let_collect_set_the_last_round_aside():
 
 
 def test_the_report_example_runs_every_shipped_detector():
-    from echolot.main import DETECTOR_DIR
+    from echolot.analyze import DETECTOR_DIR
     from echolot.tp import load_detectors
     shipped = len(load_detectors(DETECTOR_DIR))
     text = _read(REFS / "report.md")

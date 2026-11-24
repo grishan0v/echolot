@@ -16,7 +16,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot.main import _detector_masks, _names_text, build_parser  # noqa: E402
+from echolot.analyze import _detector_masks  # noqa: E402
+from echolot.main import _names_text, build_parser  # noqa: E402
 from tests.support import check  # noqa: E402
 
 

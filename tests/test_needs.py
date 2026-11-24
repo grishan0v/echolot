@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.support import check  # noqa: E402
 
 from echolot import needs as needs_mod  # noqa: E402
-from echolot.main import DETECTOR_DIR  # noqa: E402
+from echolot.analyze import DETECTOR_DIR  # noqa: E402
 from echolot.tp import Detector, load_detectors, parse_meta  # noqa: E402
 
 # What every shipped detector reads, from reading its query. The ones that read
