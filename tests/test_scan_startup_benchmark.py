@@ -8,9 +8,11 @@ writes one trace for each repeat, and the launch window reads such traces.
 
 Here: the draft a class that measures the launch gets, that it loads, which
 class is taken among several, and that the drafted config records in
-`gradle` mode and analyses under the launch window. Every draft that is not
-that class's is held byte for byte to what it was before. Which kind a class
-is, and what the description says of it, is in `test_scan_benchmark_kinds.py`.
+`gradle` mode and analyses under the launch window. Every draft of one class
+that is not that class's is held byte for byte to what it was before. Which
+kind a class is, and what the description says of it, is in
+`test_scan_benchmark_kinds.py`; several classes are a scenario each, in
+`test_scan_benchmark_scenarios.py` (#517).
 """
 
 from __future__ import annotations
@@ -154,12 +156,12 @@ UNCHANGED = {
     "a section, in a class that measures the launch too":
         ({"HomeBenchmark": SECTION}, SECTION_DRAFT),
     "StartupMode alone":
-        ({"ScrollBenchmark": MODE},
-         "  name: scrollFeed\n" + QUESTION + _gradle("ScrollBenchmark")),
-    # Its file has the metric's name in an import and in a comment.
+        ({"MemoryBenchmark": MODE},
+         "  name: openFeed\n" + QUESTION + _gradle("MemoryBenchmark")),
+    # Its file has the metrics' names in an import and in a comment.
     "StartupMode alone, with the metric named and not constructed":
-        ({"ScrollBenchmark": NAMED_ONLY},
-         "  name: scrollFeed\n" + QUESTION + _gradle("ScrollBenchmark")),
+        ({"MemoryBenchmark": NAMED_ONLY},
+         "  name: openFeed\n" + QUESTION + _gradle("MemoryBenchmark")),
     "none of the three":
         ({"ClickBenchmark": PLAIN},
          "  name: openCart\n" + QUESTION + _gradle("ClickBenchmark")),
@@ -173,8 +175,6 @@ UNCHANGED = {
          f'in {BENCH_DIR}/StartupBenchmark.kt: its value was not read here. Put the string it '
          'holds, or pick from `echolot probe`"}\n' + _gradle("StartupBenchmark")),
     "no benchmark at all": ({}, NO_BENCHMARK_DRAFT),
-    # The class with a section and a cold start is taken first, as it was.
-    "every kind in one module": (EVERY, SECTION_DRAFT),
 }
 
 
@@ -197,24 +197,42 @@ def test_the_repository_of_the_other_scan_tests_drafts_what_it_did(tmp_path: Pat
           text == HEAD + expected + TAIL, text)
 
 
-# --- which class, among several ---------------------------------------------------
+# --- which class first, among several ---------------------------------------------
+#
+# Several classes are a scenario each (#517), and the first is the one
+# `collect` and `analyze` take when none is named: the order the one class
+# used to be picked in.
+
+def _first(text: str) -> str:
+    """The first scenario under `scenarios:`, by its name."""
+    lines = text.splitlines()
+    return lines[lines.index("scenarios:") + 1].strip().rstrip(":")
+
 
 def test_a_class_that_measures_the_launch_comes_before_startup_mode_alone(tmp_path: Path) -> None:
-    # ScrollBenchmark.kt is read first, and was the class taken.
-    text = draft(tmp_path, ScrollBenchmark=MODE, StartupBenchmark=LAUNCH)
-    check("the startup benchmark is the one drafted, whole", text == LAUNCH_DRAFT, text)
+    # MemoryBenchmark.kt is read first.
+    text = draft(tmp_path, MemoryBenchmark=MODE, StartupBenchmark=LAUNCH)
+    check("the startup benchmark first, with its window", _first(text) == "StartupBenchmark"
+          and LAUNCH_WINDOW.replace("  window:", "    window:") in text, text)
 
 
 def test_and_before_a_class_that_names_none(tmp_path: Path) -> None:
     text = draft(tmp_path, ClickBenchmark=PLAIN, StartupBenchmark=LAUNCH)
-    check("the startup benchmark, as before, now with its window", text == LAUNCH_DRAFT, text)
+    check("the startup benchmark first", _first(text) == "StartupBenchmark", text)
 
 
 def test_two_startup_benchmarks_keep_the_order_they_are_read_in(tmp_path: Path) -> None:
     text = draft(tmp_path, StartupBenchmark=LAUNCH,
                  ColdStartBenchmark=LAUNCH.replace("StartupBenchmark", "ColdStartBenchmark"))
-    check("the first file's class", "class=com.example.benchmark.ColdStartBenchmark" in text
-          and f"StartupTimingMetric in {BENCH_DIR}/ColdStartBenchmark.kt" in text, text)
+    check("the first file's class first", _first(text) == "ColdStartBenchmark"
+          and text.index(f"StartupTimingMetric in {BENCH_DIR}/ColdStartBenchmark.kt")
+          < text.index(f"StartupTimingMetric in {BENCH_DIR}/StartupBenchmark.kt"), text)
+
+
+def test_every_kind_in_one_module_puts_the_section_first(tmp_path: Path) -> None:
+    text = draft(tmp_path, **EVERY)
+    check("the class with a section and a cold start, as the one class taken was",
+          _first(text) == "HomeBenchmark", text)
 
 
 # --- recorded by the benchmark, analysed under the launch window ---------------------

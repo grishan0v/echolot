@@ -7,8 +7,13 @@ is what is measured. The mode says how each repeat begins: a scroll
 benchmark that passes `startupMode = StartupMode.COLD` has it and measures
 no launch.
 
+A class that measures frames and not the launch is a kind of its own
+(#517): a scroll, as a rule, whose `TraceSectionMetric` is a section inside
+it, not where "ready" is.
+
 Here: what is recorded for each class, and what the printed description
-says of it. The draft each kind gets is in `test_scan_startup_benchmark.py`.
+says of it. The draft each kind gets is in `test_scan_startup_benchmark.py`,
+and the draft of several classes in `test_scan_benchmark_scenarios.py`.
 """
 
 from __future__ import annotations
@@ -46,20 +51,23 @@ def klass(name: str, test: str, metrics: str, mode: bool = True, head: str = "")
             "}\n")
 
 
-# The three kinds, and a class that is none of them.
+# The four kinds, and a class that is none of them.
 LAUNCH = klass("StartupBenchmark", "startup", "StartupTimingMetric()")
 SECTION = klass("HomeBenchmark", "openHome",
                 'StartupTimingMetric(), TraceSectionMetric("home_shown")')
-MODE = klass("ScrollBenchmark", "scrollFeed", "FrameTimingMetric()")
-PLAIN = klass("ClickBenchmark", "openCart", "FrameTimingMetric()", mode=False)
+# A scroll benchmark that starts each repeat cold, as its usual form is.
+FRAMES = klass("ScrollBenchmark", "scrollFeed", "FrameTimingMetric()")
+MEMORY = "MemoryUsageMetric(MemoryUsageMetric.Mode.Last)"
+MODE = klass("MemoryBenchmark", "openFeed", MEMORY)
+PLAIN = klass("ClickBenchmark", "openCart", MEMORY, mode=False)
 
-EVERY = {"StartupBenchmark": LAUNCH, "HomeBenchmark": SECTION,
-         "ScrollBenchmark": MODE, "ClickBenchmark": PLAIN}
+EVERY = {"StartupBenchmark": LAUNCH, "HomeBenchmark": SECTION, "ScrollBenchmark": FRAMES,
+         "MemoryBenchmark": MODE, "ClickBenchmark": PLAIN}
 
-# A scroll benchmark whose file has both metrics' names, and constructs neither.
-NAMED_ONLY = klass("ScrollBenchmark", "scrollFeed", "FrameTimingMetric()",
+# A class whose file has two metrics' names, and constructs neither.
+NAMED_ONLY = klass("MemoryBenchmark", "openFeed", MEMORY,
                    head="import androidx.benchmark.macro.StartupTimingMetric\n"
-                        "// metrics = listOf(StartupTimingMetric())\n"
+                        "// metrics = listOf(StartupTimingMetric(), FrameTimingMetric())\n"
                         "/* TraceSectionMetric(READY) */\n")
 
 # A section whose name is a constant declared in another file.
@@ -89,22 +97,28 @@ def test_each_class_says_whether_it_measures_the_launch(tmp_path: Path) -> None:
     got = by_name(tmp_path, **EVERY)
     check("StartupTimingMetric by itself, apart from StartupMode",
           {n: c["measures_launch"] for n, c in got.items()}
-          == {"StartupBenchmark": True, "HomeBenchmark": True,
-              "ScrollBenchmark": False, "ClickBenchmark": False}, got)
-    check("and the kind of each: a section first, then the launch, then the mode alone",
+          == {"StartupBenchmark": True, "HomeBenchmark": True, "ScrollBenchmark": False,
+              "MemoryBenchmark": False, "ClickBenchmark": False}, got)
+    check("FrameTimingMetric by itself too",
+          {n: c["measures_frames"] for n, c in got.items()}
+          == {"StartupBenchmark": False, "HomeBenchmark": False, "ScrollBenchmark": True,
+              "MemoryBenchmark": False, "ClickBenchmark": False}, got)
+    check("and the kind of each: frames first, a section, the launch, the mode alone",
           {n: c["kind"] for n, c in got.items()}
           == {"StartupBenchmark": "launch", "HomeBenchmark": "section",
-              "ScrollBenchmark": "startup_mode", "ClickBenchmark": None}, got)
+              "ScrollBenchmark": "frames", "MemoryBenchmark": "startup_mode",
+              "ClickBenchmark": None}, got)
     check("`startup` is what it was: the metric or the mode",
           {n: c["startup"] for n, c in got.items()}
-          == {"StartupBenchmark": True, "HomeBenchmark": True,
-              "ScrollBenchmark": True, "ClickBenchmark": False}, got)
+          == {"StartupBenchmark": True, "HomeBenchmark": True, "ScrollBenchmark": True,
+              "MemoryBenchmark": True, "ClickBenchmark": False}, got)
 
 
 def test_a_metric_imported_or_commented_out_measures_nothing(tmp_path: Path) -> None:
-    got = by_name(tmp_path, ScrollBenchmark=NAMED_ONLY)["ScrollBenchmark"]
-    check("no launch measured, and no section named", (got["measures_launch"], got["kind"])
-          == (False, "startup_mode"), got)
+    got = by_name(tmp_path, MemoryBenchmark=NAMED_ONLY)["MemoryBenchmark"]
+    check("no launch measured, no frames, and no section named",
+          (got["measures_launch"], got["measures_frames"], got["kind"])
+          == (False, False, "startup_mode"), got)
 
 
 def test_java_constructs_the_metric_with_new(tmp_path: Path) -> None:
@@ -129,6 +143,71 @@ def test_a_section_whose_name_was_not_read_is_still_a_section(tmp_path: Path) ->
           (got["kind"], got["metrics"], got["measures_launch"]) == ("section", [], True), got)
 
 
+# --- a class that measures frames (#517) ------------------------------------------
+
+# A scroll as a team writes one: it starts cold, names a section of the app's
+# and marks its phases in the test itself.
+SCROLL = ("package com.example.benchmark\n\n"
+          "import androidx.tracing.trace\n\n"
+          'private const val PHASE_SCROLL = "phase_scroll"\n\n'
+          "class ListScrollBenchmark {\n"
+          "    @get:Rule val rule = MacrobenchmarkRule()\n\n"
+          "    @Test\n"
+          "    fun scroll() = rule.measureRepeated(\n"
+          '        packageName = "com.example.app.beta",\n'
+          "        metrics = listOf(FrameTimingMetric(), TraceSectionMetric(Rows.BIND)),\n"
+          "        startupMode = StartupMode.COLD,\n"
+          "        iterations = 5,\n"
+          "        setupBlock = { startActivityAndWait() },\n"
+          "    ) {\n"
+          "        traced(PHASE_SCROLL) { list.fling(Direction.DOWN) }\n"
+          '        trace(label = "settle") { device.waitForIdle() }\n'
+          "        traced(Phases.FLING_BACK) { list.fling(Direction.UP) }\n"
+          "    }\n\n"
+          "    private fun traced(name: String, block: () -> Unit) = trace(name, block)\n"
+          "}\n")
+
+
+def test_a_scroll_that_starts_cold_and_names_a_section_measures_frames(tmp_path: Path) -> None:
+    got = by_name(tmp_path, ListScrollBenchmark=SCROLL)["ListScrollBenchmark"]
+    # It was a `section`, with `startup` set, and the draft took it for the
+    # cold start: its section became the end of a window from bindApplication.
+    check("frames, not a section and not a cold start",
+          (got["kind"], got["measures_frames"], got["measures_launch"], got["startup"])
+          == ("frames", True, False, True), got)
+    check("the sections the test writes, a constant by its value or as written, and no "
+          "parameter", got["traced"] == ["phase_scroll", "settle", "Phases.FLING_BACK"], got)
+
+
+def test_frames_beside_the_launch_are_a_startup_benchmark(tmp_path: Path) -> None:
+    both = klass("StartupBenchmark", "startup", "StartupTimingMetric(), FrameTimingMetric()")
+    got = by_name(tmp_path, StartupBenchmark=both)["StartupBenchmark"]
+    check("the launch is what it measures", (got["kind"], got["measures_frames"])
+          == ("launch", True), got)
+
+
+def test_the_description_says_frames_and_where_the_tests_sections_are(tmp_path: Path) -> None:
+    root = project(tmp_path, ListScrollBenchmark=SCROLL, StartupBenchmark=LAUNCH)
+    script = root / "benchmark/build.gradle"
+    script.write_text(script.read_text(encoding="utf-8").replace(
+        "com.example.benchmark", "com.example.app.beta.benchmark"), encoding="utf-8")
+    text = scan.render(scan.describe(root, devices=False))
+    check("the module names each kind, the cold start first, and its own process",
+          "`:benchmark` — drives `com.example.app.beta`, a cold start and frame timing; its "
+          "own process is `com.example.app.beta.benchmark`\n" in text, text)
+    check("the scroll's line: the whole trace, and the test's own sections",
+          "scroll — measures frames (`FrameTimingMetric`) and not the launch: its window is "
+          "the whole trace, one repeat of its measure block; `phase_scroll`, `settle`, "
+          "`Phases.FLING_BACK`, written by the test itself, are in the benchmark's own process "
+          "`com.example.app.beta.benchmark`, not the app's, and no window's end\n" in text, text)
+
+
+def test_a_module_of_one_scroll_is_frame_timing_and_no_cold_start(tmp_path: Path) -> None:
+    text = scan.render(scan.describe(project(tmp_path, ScrollBenchmark=FRAMES), devices=False))
+    check("frame timing alone, though the class starts cold",
+          "`:benchmark` — drives `com.example.app.beta`, frame timing; " in text, text)
+
+
 # --- the description --------------------------------------------------------------
 
 def test_the_description_says_which_kind_each_class_is(tmp_path: Path) -> None:
@@ -144,10 +223,14 @@ def test_the_description_says_which_kind_each_class_is(tmp_path: Path) -> None:
               "HomeBenchmark.kt): openHome — measures a section (`TraceSectionMetric`): "
               "`home_shown`, where its window can end; it measures the launch too "
               "(`StartupTimingMetric`), and the section comes first"), lines["HomeBenchmark"])
-    check("StartupMode alone", lines["ScrollBenchmark"].endswith(
-        "ScrollBenchmark.kt): scrollFeed — sets `StartupMode` and names no "
+    check("frames, though it starts cold", lines["ScrollBenchmark"].endswith(
+        "ScrollBenchmark.kt): scrollFeed — measures frames (`FrameTimingMetric`) and not the "
+        "launch: its window is the whole trace, one repeat of its measure block"),
+        lines["ScrollBenchmark"])
+    check("StartupMode alone", lines["MemoryBenchmark"].endswith(
+        "MemoryBenchmark.kt): openFeed — sets `StartupMode` and names no "
         "`StartupTimingMetric`: it may measure no launch, so its window needs an end picked "
-        "from a probe"), lines["ScrollBenchmark"])
+        "from a probe"), lines["MemoryBenchmark"])
     check("none of the three, which may be a shared helper's doing",
           lines["ClickBenchmark"].endswith(
               "ClickBenchmark.kt): openCart — names no `StartupTimingMetric`, "
@@ -186,5 +269,6 @@ def test_the_command_prints_the_kind_and_the_json_carries_it(tmp_path: Path) -> 
     check("and in the facts", (classes["StartupBenchmark"]["kind"],
                                classes["StartupBenchmark"]["measures_launch"],
                                classes["ScrollBenchmark"]["kind"],
-                               classes["ScrollBenchmark"]["measures_launch"])
-          == ("launch", True, "startup_mode", False), classes)
+                               classes["ScrollBenchmark"]["measures_launch"],
+                               classes["MemoryBenchmark"]["kind"])
+          == ("launch", True, "frames", False, "startup_mode"), classes)

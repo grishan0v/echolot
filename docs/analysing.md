@@ -18,8 +18,12 @@ real trace rather than from someone's memory.
 
 A mask that matches several processes is read as `analyze` reads it: the one
 with the most slices, with a line on stderr naming the others. The mask
-`scan` writes, `com.example.app*`, also matches a macrobenchmark's own runner,
+`com.example.app*` also matches a macrobenchmark's own runner,
 `com.example.app.benchmark`, and its threads and slices are not the app's.
+So `scan`, where a benchmark module's own package begins with the app's,
+drafts the app's process by its exact name, and keeps the mask only where a
+manifest of the project declares another process of the app (`:remote`),
+which only the mask reaches. Its `_evidence` says which, and why.
 
 The thread table is sorted by **CPU time, not slice count**. A thread with zero
 slices and hundreds of milliseconds of Running is exactly the blind spot you

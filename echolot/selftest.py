@@ -4760,6 +4760,87 @@ def _(report):
     assert facts.allowed == ["app/src/main"], facts.allowed
 
 
+@check("scan: a benchmark whose own package begins with the app's is left out of the process")
+def _(report):
+    """`com.example.app*` matched the benchmark's own process too (#467).
+
+    Android Studio's template names a benchmark module after the app,
+    `com.example.app.benchmark`, and every trace it wrote held two processes
+    the draft's mask matched: `analyze` took the app and said so in the
+    header of every report, about a process the newcomer reading it had
+    never heard of. A GLOB cannot leave one name out and keep the rest, so
+    the draft names the app's exactly where no manifest of the project
+    declares another process of the app, and keeps the mask where one does.
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        (root / "benchmark/build.gradle").write_text(
+            "plugins { id 'com.android.test' }\n"
+            "android { namespace = 'com.example.app.beta.benchmark'\n"
+            "  productFlavors { beta { } }\n buildTypes { benchmark { } } }\n", encoding="utf-8")
+        exact = "\n".join(scan.skeleton(scan.describe(root, devices=False)))
+        lib = root / "core/src/main"
+        lib.mkdir(parents=True)
+        (lib / "AndroidManifest.xml").write_text(
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+            '<service android:name=".Sync" android:process=":remote" /></application></manifest>\n',
+            encoding="utf-8")
+        masked = "\n".join(scan.skeleton(scan.describe(root, devices=False)))
+    assert '  process: "com.example.app.beta"\n' in exact, exact
+    assert ("the benchmark's own, `com.example.app.beta.benchmark` (namespace in "
+            "benchmark/build.gradle), begins with it, and no manifest here declares another "
+            "process of the app") in exact, exact
+    assert '  process: "com.example.app.beta*"\n' in masked, masked
+    assert "`:remote` in core/src/main/AndroidManifest.xml" in masked, masked
+
+
+@check("scan: a scenario for each benchmark class, a scroll's window the whole trace")
+def _(report):
+    """A startup class and a scroll class were one scenario, the start (#517).
+
+    The scroll was listed as a test and left, and a scroll that starts cold
+    and names a section was taken for the cold start, its section the end
+    of a window from bindApplication. Each class is now a scenario of its
+    own, its class the filter laid over one gradle runner. A class that
+    measures frames and not the launch gets the whole trace, and its draft
+    says that the sections the test writes are the benchmark's process.
+    """
+    from . import scan
+    from .config import NO_ANCHOR, Config
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        # Read before the startup class, and the one taken when it was.
+        (root / "benchmark/src/main/java/ListScrollBenchmark.kt").write_text(
+            "package com.example.benchmark\n"
+            "import androidx.benchmark.macro.junit4.MacrobenchmarkRule\n"
+            "class ListScrollBenchmark {\n"
+            "  @Test\n  fun scroll() = rule.measureRepeated(packageName = \"com.example.app.beta\",\n"
+            "    metrics = listOf(FrameTimingMetric(), TraceSectionMetric(\"row_bind\")),\n"
+            "    startupMode = StartupMode.COLD) { traced(\"PHASE_FLING\") { fling() } }\n"
+            "}\n", encoding="utf-8")
+        facts = scan.describe(root, devices=False)
+        text = "\n".join(scan.skeleton(facts))
+        described = scan.render(facts)
+        path = root / "echolot.yml"
+        path.write_text(text + "\n", encoding="utf-8")
+        first = Config.load(path)
+        scroll = Config.load(path, scenario="ListScrollBenchmark")
+    kinds = {c["name"].rsplit(".", 1)[-1]: c["kind"] for c in facts.benchmarks[0]["classes"]}
+    assert kinds == {"ListScrollBenchmark": "frames", "StartupBenchmark": "section"}, kinds
+    assert first.scenarios == ["StartupBenchmark", "ListScrollBenchmark"], first.raw
+    assert first.scenario_name == "StartupBenchmark" and first.scenario_end == "home_shown", text
+    assert scroll.scenario_window == "whole" and scroll.scenario_end == NO_ANCHOR, text
+    assert scroll.runner["gradle_args"] == [
+        "-Pandroid.testInstrumentationRunnerArguments.class=com.example.benchmark."
+        "ListScrollBenchmark"], scroll.runner
+    assert "`PHASE_FLING`, which the test writes itself, is a slice of the benchmark's own " \
+           "process" in text, text
+    assert "drives `com.example.app.beta`, a cold start and frame timing" in described, described
+
+
 @check("scan: the build types androidx.baselineprofile adds are variants, and its benchmark one is measured on")
 def _(report):
     """No build script names them, and `scan` read only the scripts.

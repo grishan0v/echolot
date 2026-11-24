@@ -400,18 +400,47 @@ the launch it drove, so its scenario can be `scenario.window: launch`, as in
 [A window that is the launch](analysing.md#a-window-that-is-the-launch).
 `echolot scan` drafts that window with this runner for a benchmark class
 that measures the launch: one that constructs `StartupTimingMetric` and
-names no `TraceSectionMetric`. The other classes keep the draft they had:
+names no `TraceSectionMetric`. The other classes get theirs by what they
+measure:
 
 | the class | what `scan` drafts for its window |
 |---|---|
+| measures frames (`FrameTimingMetric`) and not the launch | `window: whole`: each trace the benchmark writes is one repeat of its measure block. A `TraceSectionMetric` beside it is a section inside the scroll, not its end, and a section the test writes itself (`trace(…)`, a `traced(…)` helper) is a slice of the benchmark's own process, which no window is read from; the `_evidence` names them |
 | measures the launch (`StartupTimingMetric`) and names no section | `window: launch` |
 | names a section (`TraceSectionMetric`) | `start: bindApplication` and the section as `end`: it is the developer's own statement of where "ready" is, so it comes before the launch |
-| only sets `StartupMode` | `start: bindApplication` and an `end` to pick from a probe: a scroll benchmark starts cold too, and measures no launch |
+| only sets `StartupMode` | `start: bindApplication` and an `end` to pick from a probe: it may measure no launch |
 
-`scan` says which of the three each class is, and takes one that measures
-the launch before one that only sets `StartupMode`. It reads the class's own
-file: a benchmark whose metrics are listed in a shared helper names none of
-the three there, and keeps an `end` to pick. A section named by a constant,
+`scan` says which kind each class is, and names each kind in the module's
+line: `drives com.example.app, a cold start and frame timing`. It reads the
+class's own file: a benchmark whose metrics are listed in a shared helper
+names none of them there, and keeps an `end` to pick.
+
+A module with one class is one `scenario:`. A module with several is a
+scenario for each under `scenarios:`, named after its class, with the class
+filter in the scenario's own `runner.gradle_args` and the task in the
+`runner:` they share:
+
+```yaml
+scenarios:
+  StartupBenchmark:
+    window: {name: launch, _source: derived, _evidence: "StartupTimingMetric in …"}
+    runner:
+      gradle_args:
+        - "-Pandroid.testInstrumentationRunnerArguments.class=com.example.benchmark.StartupBenchmark"
+  ListScrollBenchmark:
+    window: {name: whole, _source: derived, _evidence: "FrameTimingMetric in …"}
+    runner:
+      gradle_args:
+        - "-Pandroid.testInstrumentationRunnerArguments.class=com.example.benchmark.ListScrollBenchmark"
+
+runner:
+  mode: gradle
+  gradle_task: ":benchmark:connectedBenchmarkAndroidTest"
+```
+
+The first is the one `collect` and `analyze` take without `--scenario`: a
+class that measures the launch before one that only sets `StartupMode`, and
+one that measures frames last, though it starts each repeat cold. A section named by a constant,
 `TraceSectionMetric(AppTraces.LIST_SHOWN)`, is looked up in the class's file
 first and then across the project's sources, so a constants object in
 another module is read too. When no declaration is found, the draft keeps
@@ -480,7 +509,9 @@ runner:
 Each scenario holds its window, and the runner keys it changes, laid over
 `runner:` for it alone: here the cold start is launched by `collect`, and the
 scroll is driven by a command, five times each. The same macrobenchmark task
-can serve both with another class in `gradle_args`.
+can serve both with another class in `gradle_args`, and `echolot scan` drafts
+it that way for a benchmark module with several classes: see
+[`gradle`](#gradle--the-macrobenchmark-writes-its-own).
 
 Each scenario may carry thresholds of its own. Two journeys of one app can
 differ two- or threefold in how long their slices and waits normally run, so

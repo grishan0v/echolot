@@ -155,7 +155,7 @@ def test_a_section_constant_not_found_is_named_in_the_draft(tmp_path: Path) -> N
     check("the identifier to look up", "TraceSectionMetric(AppTraces.LIST_SHOWN)" in text, text)
 
 
-def test_the_skeleton_takes_one_benchmark_class(tmp_path: Path) -> None:
+def test_each_scenario_takes_one_benchmark_class(tmp_path: Path) -> None:
     root = repo(tmp_path)
     (root / "benchmark/src/main/java/com/example/benchmark/StartupBenchmark.kt").unlink()
     _write(root, "benchmark/src/main/java/com/example/benchmark/ScrollBench.kt",
@@ -168,10 +168,16 @@ def test_the_skeleton_takes_one_benchmark_class(tmp_path: Path) -> None:
            'rule.measureRepeated(metrics = listOf(TraceSectionMetric("HomeReady")), '
            "startupMode = StartupMode.COLD) {}\n}\n")
     text = "\n".join(scan.skeleton(scan.describe(root, devices=False)))
-    check("the test, the anchor and the filter are one class's",
-          "name: coldStart" in text and "StartupBench.kt" in text
-          and "class=com.example.benchmark.StartupBench\"" in text and "ScrollBench" not in text,
-          text)
+    # A scenario each since #517, and no piece of one in the other's block.
+    blocks = text.split("\nrunner:")[0].split("scenarios:\n")[1].split("\n  ScrollBench:\n")
+    check("the cold start first: its anchor and its filter",
+          blocks[0].startswith("  StartupBench:\n") and 'end: {name: "HomeReady"' in blocks[0]
+          and "class=com.example.benchmark.StartupBench\"" in blocks[0]
+          and "ScrollBench" not in blocks[0], text)
+    check("then the scroll: its window and its filter",
+          "window: {name: whole" in blocks[1] and "ScrollBench.kt" in blocks[1]
+          and "class=com.example.benchmark.ScrollBench\"" in blocks[1]
+          and "StartupBench" not in blocks[1] and "HomeReady" not in blocks[1], text)
 
 
 def test_every_module_is_allowed_and_build_logic_is_not(tmp_path: Path) -> None:
