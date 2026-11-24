@@ -6,8 +6,8 @@ detectors' table from each detector's `@title`, the questions from the
 script's own list. These checks draw every picture again and compare, so a
 committed file cannot drift from its source unnoticed, and they hold the
 README to the way it shows them: a wide picture and a narrow one, each
-following the page's theme from inside, and the words of each table in its
-alt text.
+following the page's theme from inside, a one-sentence alt text, and the
+words of each table folded under it.
 """
 from __future__ import annotations
 
@@ -49,15 +49,16 @@ def test_the_committed_pictures_are_what_the_script_draws():
             f"what it writes")
 
 
-def test_translated_readmes_use_their_pictures_and_alts():
+def test_translated_readmes_use_their_pictures_and_words():
     render = _render()
     default, langs = render._load_languages()
     for code, info in langs.items():
         if code == default or "tables" not in info:
             continue
         readme = (ROOT / info["readme"]).read_text(encoding="utf-8")
-        assert render.with_alts(readme, lang=code) == readme, (
-            f"{info['readme']}: table alt text is out of date — run `python docs/assets/render.py`"
+        assert render.with_words(readme, lang=code) == readme, (
+            f"{info['readme']}: the tables' words are out of date — "
+            f"run `python docs/assets/render.py`"
         )
         assert "prefers-color-scheme" not in readme
         assert "#gh-dark-mode-only" not in readme and "#gh-light-mode-only" not in readme
@@ -130,17 +131,32 @@ def test_no_picture_is_chosen_by_the_system_theme():
         "PyPI shows both pictures of a #gh-*-mode-only pair")
 
 
-def test_each_table_says_its_words_in_its_alt_text():
+def test_each_table_says_its_words_under_it():
     """A screen reader, a search and a page with its images off get the
-    table in words. render.py writes them; this fails when the README's
-    copy is not what it would write."""
+    table in words, folded under the picture. render.py writes them; this
+    fails when the README's copy is not what it would write."""
     render = _render()
     readme = _readme()
-    assert render.with_alts(readme) == readme, (
-        "the tables' alt text is out of date — run `python docs/assets/render.py`")
-    for words in ("/echolot why is cold start slow",
-                  "main_thread_block: Where the main thread spent its time."):
+    assert render.with_words(readme) == readme, (
+        "the tables' words are out of date — run `python docs/assets/render.py`")
+    for words in ("`/echolot why is cold start slow`",
+                  "- `main_thread_block`: Where the main thread spent its time\n"):
         assert words in readme, words
+
+
+@pytest.mark.parametrize("lang", ["en", "ru"])
+def test_a_tables_alt_text_is_one_sentence(lang):
+    """The alt text was the whole table: 966 characters for the detectors,
+    which a screen reader says in one breath with no way to skip a row, and
+    which reads as a wall of text wherever the alt is shown. It names the
+    table; the rows are the text under the picture (#411)."""
+    render = _render()
+    _, langs = render._load_languages()
+    readme = (ROOT / langs[lang]["readme"]).read_text(encoding="utf-8")
+    alts = re.findall(r'<img alt="([^"]*)" src="[^"]*/(?:ask|detectors)-wide\.svg"', readme)
+    assert len(alts) == len(render.tables(lang)), alts
+    for said in alts:
+        assert len(said) <= 100 and said.count(".") == 1 and said.endswith("."), said
 
 
 def test_the_detectors_table_is_every_detector_by_its_title():

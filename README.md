@@ -10,11 +10,15 @@
   <a href="https://pypi.org/project/echolot/"><img alt="Python versions" src="https://img.shields.io/badge/3.10--3.14-blue?logo=python&logoColor=white&label=python"></a>
   <a href="https://github.com/grishan0v/echolot/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <br>
-  <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Claude Code: plugin" src="https://img.shields.io/badge/Claude_Code-plugin-brightgreen?logo=claude&logoColor=white"></a>
-  <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Codex: plugin" src="https://img.shields.io/badge/Codex-plugin-brightgreen"></a>
-  <a href="https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md#installing-the-plugin"><img alt="Cursor: plugin" src="https://img.shields.io/badge/Cursor-plugin-brightgreen?logo=cursor&logoColor=white"></a>
+  <a href="https://grishan0v.github.io/echolot/agent-layer/#installing-the-plugin"><img alt="Claude Code: plugin" src="https://img.shields.io/badge/Claude_Code-plugin-brightgreen?logo=claude&logoColor=white"></a>
+  <a href="https://grishan0v.github.io/echolot/agent-layer/#installing-the-plugin"><img alt="Codex: plugin" src="https://img.shields.io/badge/Codex-plugin-brightgreen"></a>
+  <a href="https://grishan0v.github.io/echolot/agent-layer/#installing-the-plugin"><img alt="Cursor: plugin" src="https://img.shields.io/badge/Cursor-plugin-brightgreen?logo=cursor&logoColor=white"></a>
 </p>
 <p align="center">
+  <a href="https://grishan0v.github.io/echolot/">Docs</a> ·
+  <a href="https://github.com/grishan0v/echolot/releases">Releases</a> ·
+  <a href="https://github.com/grishan0v/echolot/blob/main/CONTRIBUTING.md">Contributing</a>
+  <br>
   <b>English</b> · <a href="https://github.com/grishan0v/echolot/blob/main/README.ru.md">Русский</a>
 </p>
 <br>
@@ -27,6 +31,11 @@
   places temporary markers itself.
 - **Works with your agent.** A plugin for Claude Code, Codex and Cursor; any
   other agent via `echolot guide`.
+
+A large Kotlin app's cold start, five repeats with default thresholds: twelve
+detectors fired with 255 rows. `report.json` keeps them all in about 240 KB,
+and the overview the agent reads first is about 3.5 KB. Fifteen cold starts
+are read in about nine seconds.
 
 ## Quick start
 
@@ -57,14 +66,24 @@ Open the agent in your Android project and say what is wrong:
 <p>
   <picture>
     <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ask-narrow.svg">
-    <img alt="What to type in the agent, by the problem you arrive with. First time in a project: /echolot (sets it up: echolot.yml from the repository and a probe trace). Cold start got slower: /echolot why is cold start slow. Scrolling stutters: /echolot the feed janks on scroll (a scroll scenario in echolot.yml, and Android 12+). “App isn't responding”: /echolot the app froze, see anr.txt (the report from Crashlytics, Play Console or dumpsys dropbox)." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ask-wide.svg" width="880">
+    <img alt="What to type in the agent, by the problem you arrive with." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ask-wide.svg" width="880">
   </picture>
 </p>
+
+<details>
+<summary>The table as text</summary>
+
+- First time in a project: `/echolot` (sets it up: echolot.yml from the repository and a probe trace)
+- Cold start got slower: `/echolot why is cold start slow`
+- Scrolling stutters: `/echolot the feed janks on scroll` (a scroll scenario in echolot.yml, and Android 12+)
+- “App isn't responding”: `/echolot the app froze, see anr.txt` (the report from Crashlytics, Play Console or dumpsys dropbox)
+
+</details>
 
 With the plugin, the command is `/echolot:echolot` in Claude Code,
 `$echolot` in Codex and `/echolot` in Cursor. Without it, `echolot init` puts `/echolot` into the
 project's `.claude/` and points other agents at `echolot guide`; see
-[The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md).
+[The agent layer](https://grishan0v.github.io/echolot/agent-layer/).
 
 ## Without an agent
 
@@ -94,20 +113,39 @@ something becomes a section of the report:
 <p>
   <picture>
     <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-narrow.svg">
-    <img alt="The detectors, and what each one catches. main_thread_block: Where the main thread spent its time. main_thread_outlier: Single occurrences far longer than the same work usually takes. app_init: What ran after the Application was created, before the first Activity. anr_risk: Stretches where the main thread never got back to the message queue. anr: ANRs the system recorded during this trace. monitor_contention: Monitor contention. binder_txn: Long binder transactions. io_wait: Threads the kernel put to sleep waiting for the disk. runnable_starvation: CPU preemption (runnable but not running). main_thread_waits: The main thread's waits on the app's own threads. main_thread_kernel_waits: The main thread held in the kernel by the app's own threads. gc_pressure: Garbage collector pressure. frame_jank: Frames that missed their deadline. composables: The app's composables, by the composition time they hold. uninstrumented_cpu: Blind spots: threads burning CPU with no instrumentation. repeated_work: The same work reached from more than one place." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-wide.svg" width="880">
+    <img alt="The detectors, and what each one catches." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/detectors-wide.svg" width="880">
   </picture>
 </p>
+
+<details>
+<summary>The table as text</summary>
+
+- `main_thread_block`: Where the main thread spent its time
+- `main_thread_outlier`: Single occurrences far longer than the same work usually takes
+- `app_init`: What ran after the Application was created, before the first Activity
+- `anr_risk`: Stretches where the main thread never got back to the message queue
+- `anr`: ANRs the system recorded during this trace
+- `monitor_contention`: Monitor contention
+- `binder_txn`: Long binder transactions
+- `io_wait`: Threads the kernel put to sleep waiting for the disk
+- `runnable_starvation`: CPU preemption (runnable but not running)
+- `main_thread_waits`: The main thread's waits on the app's own threads
+- `main_thread_kernel_waits`: The main thread held in the kernel by the app's own threads
+- `gc_pressure`: Garbage collector pressure
+- `frame_jank`: Frames that missed their deadline
+- `composables`: The app's composables, by the composition time they hold
+- `uninstrumented_cpu`: Blind spots: threads burning CPU with no instrumentation
+- `repeated_work`: The same work reached from more than one place
+
+</details>
 
 ## What you get
 
 `report.md` for you and `report.json` for the agent, in `.echolot/out/`.
 The agent reads it through `echolot report`: an overview of one line per
 detector, and each detector's rows one command away, ranked by the median
-times the share of repeats that found them. On a large Kotlin app's cold start, five repeats
-with default thresholds, twelve detectors fired with 255 rows; `report.json`
-keeps them all in about 240 KB, and the overview the agent reads is about
-3.5 KB. The repeats of a set are read side by side, each in a
-trace_processor of its own: fifteen cold starts in about nine seconds.
+times the share of repeats that found them. The repeats of a set are read
+side by side, each in a trace_processor of its own.
 `echolot analyze --html` adds `report.html`: the same report in plain words as
 a page, one file that opens from disk. `echolot hunt --show --html`
 writes an investigation the same way: what the agent found, where, and what to change.
@@ -212,27 +250,45 @@ of an app that does not exist, built by code.
 
 The first command that needs `trace_processor` downloads it once: 11–16 MB,
 checked against its SHA-256. Offline or behind a proxy, see
-[Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md).
+[Determinism](https://grishan0v.github.io/echolot/determinism/).
 
 ## Documentation
 
-[grishan0v.github.io/echolot](https://grishan0v.github.io/echolot/), or the
-same pages [on GitHub](https://github.com/grishan0v/echolot/tree/main/docs):
-[Collecting](https://github.com/grishan0v/echolot/blob/main/docs/collecting.md) ·
-[ANRs](https://github.com/grishan0v/echolot/blob/main/docs/anr.md) ·
-[Marking](https://github.com/grishan0v/echolot/blob/main/docs/mark.md) ·
-[The page in the browser](https://github.com/grishan0v/echolot/blob/main/docs/ui.md) ·
-[Analysing](https://github.com/grishan0v/echolot/blob/main/docs/analysing.md) ·
-[Comparing](https://github.com/grishan0v/echolot/blob/main/docs/compare.md) ·
-[Calibrating](https://github.com/grishan0v/echolot/blob/main/docs/calibrate.md) ·
-[Determinism](https://github.com/grishan0v/echolot/blob/main/docs/determinism.md) ·
-[The agent layer](https://github.com/grishan0v/echolot/blob/main/docs/agent-layer.md) ·
-[Privacy](https://github.com/grishan0v/echolot/blob/main/docs/privacy.md) ·
-[Terms of use](https://github.com/grishan0v/echolot/blob/main/docs/terms.md) ·
-[Detectors](https://github.com/grishan0v/echolot/blob/main/docs/detectors.md) ·
-[Reflect](https://github.com/grishan0v/echolot/blob/main/docs/reflect.md)
+[grishan0v.github.io/echolot](https://grishan0v.github.io/echolot/), with a
+search, or the same pages [on GitHub](https://github.com/grishan0v/echolot/tree/main/docs):
+[Collecting](https://grishan0v.github.io/echolot/collecting/) ·
+[ANRs](https://grishan0v.github.io/echolot/anr/) ·
+[Marking](https://grishan0v.github.io/echolot/mark/) ·
+[The page in the browser](https://grishan0v.github.io/echolot/ui/) ·
+[Analysing](https://grishan0v.github.io/echolot/analysing/) ·
+[Comparing](https://grishan0v.github.io/echolot/compare/) ·
+[Calibrating](https://grishan0v.github.io/echolot/calibrate/) ·
+[Determinism](https://grishan0v.github.io/echolot/determinism/) ·
+[The agent layer](https://grishan0v.github.io/echolot/agent-layer/) ·
+[Privacy](https://grishan0v.github.io/echolot/privacy/) ·
+[Terms of use](https://grishan0v.github.io/echolot/terms/) ·
+[Detectors](https://grishan0v.github.io/echolot/detectors/) ·
+[Reflect](https://grishan0v.github.io/echolot/reflect/)
 
-Questions and ideas: [Discussions](https://github.com/grishan0v/echolot/discussions).
+## Help and contributing
+
+echolot is alpha software, as its classifier on PyPI says
+(`Development Status :: 3 - Alpha`), and it changes from release to release:
+[Releases](https://github.com/grishan0v/echolot/releases) lists what each one
+changed.
+
+- **A question, or an idea not ready to be an issue:**
+  [Discussions](https://github.com/grishan0v/echolot/discussions).
+- **A bug or an improvement:** an [issue](https://github.com/grishan0v/echolot/issues),
+  from its template. Every open issue is a card on the
+  [Echolot Roadmap](https://github.com/users/grishan0v/projects/1).
+- **A change of your own:**
+  [CONTRIBUTING](https://github.com/grishan0v/echolot/blob/main/CONTRIBUTING.md)
+  says how to run the checks and open a pull request. Everyone taking part
+  follows the [Code of Conduct](https://github.com/grishan0v/echolot/blob/main/CODE_OF_CONDUCT.md).
+- **A vulnerability:** privately, the way
+  [SECURITY](https://github.com/grishan0v/echolot/blob/main/SECURITY.md) says,
+  not in an issue.
 
 ## License
 

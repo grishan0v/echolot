@@ -8244,12 +8244,14 @@ def _(report):
 def _(report):
     """Reachable from the README or from the index the README points at.
 
-    Two link forms have to count. The README is also the PyPI long
+    Three link forms have to count. The README is also the PyPI long
     description, where a relative path resolves against pypi.org, so its links
-    are absolute; docs/README.md is only ever read on GitHub, so its links are
-    relative. An earlier version of this check knew only the relative form and
-    passed vacuously — it went green on a README that linked nothing at all,
-    and a later one still did, letting a complete index stand in for it.
+    are absolute, and since #406 they name a document's page on the site,
+    `https://<site>/name/`, which is built from docs/name.md; docs/README.md
+    is only ever read on GitHub, so its links are relative. An earlier version
+    of this check knew only the relative form and passed vacuously — it went
+    green on a README that linked nothing at all, and a later one still did,
+    letting a complete index stand in for it.
     """
     import re as _re
     from .layer import CLAUDE_DIR
@@ -8262,13 +8264,16 @@ def _(report):
     if not readme.exists() or not (root / "docs").is_dir():
         return
 
-    # (docs/name.md) and (https://github.com/…/docs/name.md) alike, plus the
-    # index's own (name.md) written from inside docs/.
+    # (docs/name.md) and (https://github.com/…/docs/name.md) alike, the
+    # site's (https://….github.io/echolot/name/), plus the index's own
+    # (name.md) written from inside docs/.
     def links(path, bare=False):
         if not path.exists():
             return set()
         text = path.read_text(encoding="utf-8")
         found = set(_re.findall(r"\((?:[^)\s]*/)?docs/([\w-]+\.md)\)", text))
+        found |= {f"{name}.md" for name in _re.findall(
+            r"\(https://[\w.-]+\.github\.io/[\w-]+/([\w-]+)/(?:#[^)\s]*)?\)", text)}
         if bare:
             found |= set(_re.findall(r"\(([\w-]+\.md)\)", text))
         return found

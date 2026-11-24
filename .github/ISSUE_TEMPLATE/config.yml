@@ -1,5 +1,10 @@
-blank_issues_enabled: true
+# Every issue starts from a form: docs/planning.md sorts an issue by the
+# sections its template asks for, and a blank one has none of them.
+blank_issues_enabled: false
 contact_links:
+  - name: Read the documentation
+    url: https://grishan0v.github.io/echolot/
+    about: Collecting, analysing and comparing traces, what each detector catches, and how the agent uses them.
   - name: Ask a question
     url: https://github.com/grishan0v/echolot/discussions/categories/q-a
     about: How to do something, or why a report says what it says.

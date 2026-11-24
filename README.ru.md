@@ -10,11 +10,15 @@
   <a href="https://pypi.org/project/echolot/"><img alt="Python versions" src="https://img.shields.io/badge/3.10--3.14-blue?logo=python&logoColor=white&label=python"></a>
   <a href="https://github.com/grishan0v/echolot/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <br>
-  <a href="https://github.com/grishan0v/echolot/blob/main/docs/ru/agent-layer.md#установка-плагина"><img alt="Claude Code: плагин" src="https://img.shields.io/badge/Claude_Code-plugin-brightgreen?logo=claude&logoColor=white"></a>
-  <a href="https://github.com/grishan0v/echolot/blob/main/docs/ru/agent-layer.md#установка-плагина"><img alt="Codex: плагин" src="https://img.shields.io/badge/Codex-plugin-brightgreen"></a>
-  <a href="https://github.com/grishan0v/echolot/blob/main/docs/ru/agent-layer.md#установка-плагина"><img alt="Cursor: плагин" src="https://img.shields.io/badge/Cursor-plugin-brightgreen?logo=cursor&logoColor=white"></a>
+  <a href="https://grishan0v.github.io/echolot/ru/agent-layer/#установка-плагина"><img alt="Claude Code: плагин" src="https://img.shields.io/badge/Claude_Code-plugin-brightgreen?logo=claude&logoColor=white"></a>
+  <a href="https://grishan0v.github.io/echolot/ru/agent-layer/#установка-плагина"><img alt="Codex: плагин" src="https://img.shields.io/badge/Codex-plugin-brightgreen"></a>
+  <a href="https://grishan0v.github.io/echolot/ru/agent-layer/#установка-плагина"><img alt="Cursor: плагин" src="https://img.shields.io/badge/Cursor-plugin-brightgreen?logo=cursor&logoColor=white"></a>
 </p>
 <p align="center">
+  <a href="https://grishan0v.github.io/echolot/ru/">Документация</a> ·
+  <a href="https://github.com/grishan0v/echolot/releases">Релизы</a> ·
+  <a href="https://github.com/grishan0v/echolot/blob/main/CONTRIBUTING.md">Участие в разработке</a>
+  <br>
   <a href="https://github.com/grishan0v/echolot/blob/main/README.md">English</a> · <b>Русский</b>
 </p>
 <br>
@@ -23,6 +27,8 @@
 - **Один и тот же ответ при каждом запуске.** Зафиксированная версия `trace_processor`: один и тот же трейс всегда даёт одинаковый отчёт.
 - **Не требует кода трассировки.** Работает с приложениями вообще без вызовов `trace {}`; при необходимости сам расставляет временные маркеры.
 - **Работает с вашим агентом.** Плагин для Claude Code, Codex и Cursor; любой другой агент — через `echolot guide`.
+
+Холодный старт большого Kotlin-приложения, пять повторов с порогами по умолчанию: сработали двенадцать детекторов с 255 строками. `report.json` хранит их все, около 240 КБ, а обзор, который агент читает первым, — около 3,5 КБ. Пятнадцать холодных стартов читаются примерно за девять секунд.
 
 ## Быстрый старт
 
@@ -52,11 +58,21 @@ Cursor также подхватывает плагины, установлен�
 <p>
   <picture>
     <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ru/ask-narrow.svg">
-    <img alt="Что написать агенту в зависимости от задачи. Первый раз в проекте: /echolot (настраивает проект: echolot.yml из кода и пробный трейс). Холодный старт замедлился: /echolot почему холодный старт медленный. Подтормаживает прокрутка: /echolot лента дёргается при прокрутке (нужен сценарий прокрутки в echolot.yml и Android 12+). «Приложение не отвечает»: /echolot приложение зависло, см. anr.txt (отчёт из Crashlytics, Play Console или dumpsys dropbox)." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ru/ask-wide.svg" width="880">
+    <img alt="Что написать агенту в зависимости от задачи." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ru/ask-wide.svg" width="880">
   </picture>
 </p>
 
-С плагином команда вызывается как `/echolot:echolot` в Claude Code, `$echolot` в Codex и `/echolot` в Cursor. Без плагина `echolot init` добавляет `/echolot` в `.claude/` проекта и направляет остальных агентов в `echolot guide`; подробнее см. [Слой агента](https://github.com/grishan0v/echolot/blob/main/docs/ru/agent-layer.md).
+<details>
+<summary>Таблица текстом</summary>
+
+- Первый раз в проекте: `/echolot` (настраивает проект: echolot.yml из кода и пробный трейс)
+- Холодный старт замедлился: `/echolot почему холодный старт медленный`
+- Подтормаживает прокрутка: `/echolot лента дёргается при прокрутке` (нужен сценарий прокрутки в echolot.yml и Android 12+)
+- «Приложение не отвечает»: `/echolot приложение зависло, см. anr.txt` (отчёт из Crashlytics, Play Console или dumpsys dropbox)
+
+</details>
+
+С плагином команда вызывается как `/echolot:echolot` в Claude Code, `$echolot` в Codex и `/echolot` в Cursor. Без плагина `echolot init` добавляет `/echolot` в `.claude/` проекта и направляет остальных агентов в `echolot guide`; подробнее см. [Слой агента](https://grishan0v.github.io/echolot/ru/agent-layer/).
 
 ## Без агента
 
@@ -84,14 +100,36 @@ echolot запускает 16 SQL-детекторов по Perfetto-трейс�
 <p>
   <picture>
     <source media="(max-width: 767px)" srcset="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ru/detectors-narrow.svg">
-    <img alt="Детекторы и что находит каждый из них. main_thread_block: На что главный поток потратил время. main_thread_outlier: Единичные срабатывания намного дольше обычного. app_init: Что запускалось после Application и до первой Activity. anr_risk: Отрезки, где главный поток не возвращался в очередь. anr: ANR, которые система зафиксировала в этом трейсе. monitor_contention: Конкуренция за мониторы (блокировки). binder_txn: Долгие binder-транзакции. io_wait: Потоки, усыплённые ядром в ожидании диска. runnable_starvation: Вытеснение CPU (готов к работе, но не выполняется). main_thread_waits: Ожидания главного потока на потоках приложения. main_thread_kernel_waits: Главный поток, удержанный в ядре потоками приложения. gc_pressure: Нагрузка от сборщика мусора (GC). frame_jank: Кадры, не уложившиеся в дедлайн. composables: Composable-функции приложения по времени композиции. uninstrumented_cpu: Слепые зоны: потоки грузят CPU без инструментирования. repeated_work: Одна и та же работа, вызываемая из разных мест." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ru/detectors-wide.svg" width="880">
+    <img alt="Детекторы и что находит каждый из них." src="https://raw.githubusercontent.com/grishan0v/echolot/main/docs/assets/ru/detectors-wide.svg" width="880">
   </picture>
 </p>
+
+<details>
+<summary>Таблица текстом</summary>
+
+- `main_thread_block`: На что главный поток потратил время
+- `main_thread_outlier`: Единичные срабатывания намного дольше обычного
+- `app_init`: Что запускалось после Application и до первой Activity
+- `anr_risk`: Отрезки, где главный поток не возвращался в очередь
+- `anr`: ANR, которые система зафиксировала в этом трейсе
+- `monitor_contention`: Конкуренция за мониторы (блокировки)
+- `binder_txn`: Долгие binder-транзакции
+- `io_wait`: Потоки, усыплённые ядром в ожидании диска
+- `runnable_starvation`: Вытеснение CPU (готов к работе, но не выполняется)
+- `main_thread_waits`: Ожидания главного потока на потоках приложения
+- `main_thread_kernel_waits`: Главный поток, удержанный в ядре потоками приложения
+- `gc_pressure`: Нагрузка от сборщика мусора (GC)
+- `frame_jank`: Кадры, не уложившиеся в дедлайн
+- `composables`: Composable-функции приложения по времени композиции
+- `uninstrumented_cpu`: Слепые зоны: потоки грузят CPU без инструментирования
+- `repeated_work`: Одна и та же работа, вызываемая из разных мест
+
+</details>
 
 ## Что вы получаете
 
 `report.md` для человека и `report.json` для агента в каталоге `.echolot/out/`.
-Агент читает его через `echolot report`: обзор по строке на детектор, а строки каждого детектора — одной командой, по медиане, умноженной на долю повторов, которые их нашли. На холодном старте большого Kotlin-приложения, пять повторов с порогами по умолчанию, сработали двенадцать детекторов с 255 строками; `report.json` хранит их все, около 240 КБ, а обзор, который читает агент, — около 3,5 КБ. Повторы набора читаются параллельно, каждый в своём trace_processor: пятнадцать холодных стартов — примерно за девять секунд. `echolot analyze --html` создаёт `report.html`: тот же отчёт простым языком в виде одного автономного файла, который открывается прямо с диска. `echolot hunt --show --html` аналогично оформляет расследование: что агент нашёл, где и что поменять.
+Агент читает его через `echolot report`: обзор по строке на детектор, а строки каждого детектора — одной командой, по медиане, умноженной на долю повторов, которые их нашли. Повторы набора читаются параллельно, каждый в своём trace_processor. `echolot analyze --html` создаёт `report.html`: тот же отчёт простым языком в виде одного автономного файла, который открывается прямо с диска. `echolot hunt --show --html` аналогично оформляет расследование: что агент нашёл, где и что поменять.
 `echolot compare --html` строит страницу сравнения двух отчётов: стало ли быстрее и какие проверки сдвинулись.
 `echolot ui` открывает локальную веб-страницу со статусом готовности окружения, кнопкой для записи и анализа приложения, отчётами и ответами агента.
 В проекте без конфигурации он сам создаст начальную конфигурацию для запуска приложения.
@@ -188,26 +226,33 @@ _names a thread that burns CPU with no slice around it. The agent does not guess
 - телефон или эмулятор с включённой отладкой по USB; Android 12+ для `frame_jank`
 - git 2.36 или новее для установки плагина в Claude Code
 
-Первая команда, которой нужен `trace_processor`, скачает его один раз: 11–16 МБ с проверкой SHA-256. Для работы офлайн или за прокси см. [Детерминизм](https://github.com/grishan0v/echolot/blob/main/docs/ru/determinism.md).
+Первая команда, которой нужен `trace_processor`, скачает его один раз: 11–16 МБ с проверкой SHA-256. Для работы офлайн или за прокси см. [Детерминизм](https://grishan0v.github.io/echolot/ru/determinism/).
 
 ## Документация
 
-[grishan0v.github.io/echolot/ru/](https://grishan0v.github.io/echolot/ru/), или те же страницы [на GitHub](https://github.com/grishan0v/echolot/tree/main/docs/ru):
-[Сбор трейсов](https://github.com/grishan0v/echolot/blob/main/docs/ru/collecting.md) ·
-[ANR](https://github.com/grishan0v/echolot/blob/main/docs/ru/anr.md) ·
-[Маркировка](https://github.com/grishan0v/echolot/blob/main/docs/ru/mark.md) ·
-[Страница в браузере](https://github.com/grishan0v/echolot/blob/main/docs/ru/ui.md) ·
-[Анализ](https://github.com/grishan0v/echolot/blob/main/docs/ru/analysing.md) ·
-[Сравнение](https://github.com/grishan0v/echolot/blob/main/docs/ru/compare.md) ·
-[Калибровка](https://github.com/grishan0v/echolot/blob/main/docs/ru/calibrate.md) ·
-[Детерминизм](https://github.com/grishan0v/echolot/blob/main/docs/ru/determinism.md) ·
-[Слой агента](https://github.com/grishan0v/echolot/blob/main/docs/ru/agent-layer.md) ·
-[Приватность](https://github.com/grishan0v/echolot/blob/main/docs/ru/privacy.md) ·
-[Условия использования](https://github.com/grishan0v/echolot/blob/main/docs/ru/terms.md) ·
-[Детекторы](https://github.com/grishan0v/echolot/blob/main/docs/ru/detectors.md) ·
-[Рефлексия](https://github.com/grishan0v/echolot/blob/main/docs/ru/reflect.md)
+[grishan0v.github.io/echolot/ru/](https://grishan0v.github.io/echolot/ru/), с поиском, или те же страницы [на GitHub](https://github.com/grishan0v/echolot/tree/main/docs/ru):
+[Сбор трейсов](https://grishan0v.github.io/echolot/ru/collecting/) ·
+[ANR](https://grishan0v.github.io/echolot/ru/anr/) ·
+[Маркировка](https://grishan0v.github.io/echolot/ru/mark/) ·
+[Страница в браузере](https://grishan0v.github.io/echolot/ru/ui/) ·
+[Анализ](https://grishan0v.github.io/echolot/ru/analysing/) ·
+[Сравнение](https://grishan0v.github.io/echolot/ru/compare/) ·
+[Калибровка](https://grishan0v.github.io/echolot/ru/calibrate/) ·
+[Детерминизм](https://grishan0v.github.io/echolot/ru/determinism/) ·
+[Слой агента](https://grishan0v.github.io/echolot/ru/agent-layer/) ·
+[Приватность](https://grishan0v.github.io/echolot/ru/privacy/) ·
+[Условия использования](https://grishan0v.github.io/echolot/ru/terms/) ·
+[Детекторы](https://grishan0v.github.io/echolot/ru/detectors/) ·
+[Рефлексия](https://grishan0v.github.io/echolot/ru/reflect/)
 
-Вопросы и идеи: [Обсуждения](https://github.com/grishan0v/echolot/discussions).
+## Помощь и участие
+
+echolot — альфа-версия, как и указано в его классификаторе на PyPI (`Development Status :: 3 - Alpha`), и он меняется от релиза к релизу: что изменилось в каждом, написано в [Releases](https://github.com/grishan0v/echolot/releases).
+
+- **Вопрос или идея, которая ещё не готова стать issue:** [Обсуждения](https://github.com/grishan0v/echolot/discussions).
+- **Ошибка или улучшение:** [issue](https://github.com/grishan0v/echolot/issues) по шаблону. Каждый открытый issue — карточка на [Echolot Roadmap](https://github.com/users/grishan0v/projects/1).
+- **Собственное изменение:** [CONTRIBUTING](https://github.com/grishan0v/echolot/blob/main/CONTRIBUTING.md) описывает, как запустить проверки и открыть pull request. Все участники следуют [Кодексу поведения](https://github.com/grishan0v/echolot/blob/main/CODE_OF_CONDUCT.md).
+- **Уязвимость:** приватно, как описано в [SECURITY](https://github.com/grishan0v/echolot/blob/main/SECURITY.md), а не в issue.
 
 ## Лицензия
 

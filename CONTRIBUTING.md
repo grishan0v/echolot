@@ -12,6 +12,10 @@ sorts it, and which decisions an idea is checked against first.
 Questions, and ideas that are not ready to be an issue yet, go to
 [Discussions](https://github.com/grishan0v/echolot/discussions).
 
+Issues, pull requests and Discussions all follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). A breach of it goes privately to the
+address it gives, the same one [SECURITY.md](SECURITY.md) names.
+
 ## Working on the tool
 
 ```bash
