@@ -87,6 +87,21 @@ NO_LIMIT = "no_limit"
 SHARE = 0.15
 FLOOR_MS = 150.0
 
+# The verdict's own words. Its levels are the checks' levels, for their
+# colours, but it judges one thing, the window against the time limit, and
+# the checks judge their rows: a red "Needs attention" above a list with no
+# check that needs attention read as a contradiction (#824). So the headline
+# says which limit it is about.
+VERDICT_WORD = {NEEDS_ATTENTION: "Over the limit", WORTH_A_LOOK: "A little over",
+                FINE: "Within the limit", NO_LIMIT: "No time limit",
+                NOT_CHECKED: "Not checked"}
+
+
+def verdict_word(level: Any) -> str:
+    """What the verdict's level says, in words of the time limit."""
+    return VERDICT_WORD.get(level) or str(level or "unknown").replace("_", " ").capitalize()
+
+
 # The verdict: a launch up to a quarter over its budget is "worth a look", more
 # is "needs attention". The median of three recordings of one healthy build
 # moved from -4% to +14% (5th to 95th percentile), so a quarter is about twice
@@ -944,9 +959,6 @@ def annotate(report: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # for a terminal
 
-_LABEL = {NEEDS_ATTENTION: "NEEDS ATTENTION", WORTH_A_LOOK: "WORTH A LOOK",
-          MOVE_MARKER: "A MARKER TO MOVE", NO_LIMIT: "NO TIME LIMIT",
-          FINE: "FINE", NOT_CHECKED: "NOT CHECKED"}
 _MARK = {NEEDS_ATTENTION: "!", WORTH_A_LOOK: "~"}
 
 
@@ -969,7 +981,7 @@ def render(report: dict[str, Any], width: int | None = None) -> str:
                              subsequent_indent=rest) or [first.rstrip()]
 
     v = report["verdict"]
-    label = _LABEL.get(v["level"]) or str(v["level"]).upper().replace("_", " ")
+    label = verdict_word(v["level"]).upper()
     # A window that is not the scenario's is said before anything else.
     lines = (wrap(v["warning"], f"{'WINDOW':<18}", " " * 18) + [""]) if v.get("warning") else []
     lines += wrap(v["text"], f"{label:<18}", " " * 18)

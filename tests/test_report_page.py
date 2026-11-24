@@ -345,7 +345,7 @@ def test_the_verdict_is_the_reports_first_sentence_and_the_rest():
                                          "Measured on 3 launches, from 1.9 to 2.0 s.", main_.one("p", "lead").text)
     pill = main_.one("span", "lg")
     check("the level: its word, its tint and its icon together",
-          pill.text == "Needs attention" and "red" in pill.attrs["class"] and pill.all("svg"), pill.attrs)
+          pill.text == "Over the limit" and "red" in pill.attrs["class"] and pill.all("svg"), pill.attrs)
     check("the scenario beside it", "coldStart" in pill.parent.text)
 
 
@@ -1052,7 +1052,7 @@ def test_analyze_html_writes_the_page_beside_the_report(project):
     page = (out / "report.html").read_text(encoding="utf-8")
     check("the page is that report's, and names it as the project does",
           page == report_page.render(rep, where=".echolot/out/report.json", last=True))
-    check("red at the top", read(page).one("main").one("span", "lg").text == "Needs attention")
+    check("red at the top", read(page).one("main").one("span", "lg").text == "Over the limit")
     check("nothing in it points outside", not outside(page), outside(page))
 
     code, text, err = run("report", "--html")

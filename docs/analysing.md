@@ -757,7 +757,7 @@ trace: the verdict on top, one item for each check that found something, and
 the rest as a count.
 
 ```
-NEEDS ATTENTION   The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.8 times as long.
+OVER THE LIMIT    The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.8 times as long.
 
  !  The screen waits for background work
     The main thread waited 0.7 s for `arch_disk_io_#`, in all 3 launches. That is 36% of the launch.
@@ -823,9 +823,11 @@ says only the part blocked inside a slice, and that the rest is not counted. A
 journey that an end anchor closed used to count the idle part in full, and a
 WebView's thread waking the idle looper read as seconds of waiting.
 
-The verdict sets the launch against `scenario.budget_ms`: within it is fine, up
-to a quarter over is worth a look, more is needs attention. Nothing fails
-either way, since there is no gate. With no budget the verdict says how long the
+The verdict sets the launch against `scenario.budget_ms`: within it is green,
+up to a quarter over is yellow, more is red. Its words are of the limit, "within
+the limit", "a little over", "over the limit", and not the checks' words: a red
+"needs attention" at the top of a list with no check that needs attention read
+as a contradiction (#824). Nothing fails either way, since there is no gate. With no budget the verdict says how long the
 launch takes and that no limit is set, and its level is "no time limit", in
 grey: green always means that something was looked at and found fine. [`echolot ui`](ui.md#setting-a-project-up)
 takes the limit in a field when it writes a project's first config.

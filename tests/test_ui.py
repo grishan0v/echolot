@@ -1150,7 +1150,7 @@ def test_the_report_is_drawn_from_the_file_when_it_is_asked_for(project):
     page = read(get(site).body)
     card = page.one("ul", "reps").one("li")
     check("the start page gives its first line and its level",
-          card.one("span", "st").text == "Needs attention" and "The launch takes 1.9 s." in card.text, card.text)
+          card.one("span", "st").text == "Over the limit" and "The launch takes 1.9 s." in card.text, card.text)
     check("and how it was made, in sentences", "Made from 3 launches. 3 of the 6 checks found something." in card.text,
           card.text)
     check("status's line of it is under All settings", "report: .echolot/out/report.json" in
@@ -1227,7 +1227,7 @@ def test_a_report_from_before_the_plain_keys(project):
     project.ready().traces().report(data=old)
     site = site_of(project)
     card = read(get(site).body).one("ul", "reps").one("li")
-    check("it is read as `report --plain` reads it", card.one("span", "st").text == "Needs attention"
+    check("it is read as `report --plain` reads it", card.one("span", "st").text == "Over the limit"
           and "The launch takes 1.9 s. You allowed 0.5 s" in card.text, card.text)
     page = read(get(site, "report").body)
     check("and its page has a level for every check", len(page.all("div", "tr")) == 6

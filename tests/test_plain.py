@@ -669,7 +669,7 @@ def known():
 
 
 KNOWN_VIEW = """\
-NEEDS ATTENTION   The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.8 times as long.
+OVER THE LIMIT    The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.8 times as long.
 
  !  The screen waits for background work
     The main thread waited 0.7 s for `worker_pool_#`, in all 3 launches. That is 36% of the launch.
@@ -752,7 +752,7 @@ def test_a_report_is_read_as_it_says_when_it_carries_the_reading():
     rep = plain.annotate(known())
     rep["verdict"]["text"] = "Written by another version."
     check("its words, not worked out again",
-          plain.render(rep, width=100).startswith("NEEDS ATTENTION   Written by another version."))
+          plain.render(rep, width=100).startswith("OVER THE LIMIT    Written by another version."))
 
 
 def test_a_report_from_before_the_key_says_why_once_for_all_the_silent_checks():
@@ -775,7 +775,7 @@ def test_the_terminal_view_wraps_to_the_width_it_is_given():
 def test_nothing_to_look_at_reads_as_a_verdict_and_a_count():
     rep = make([entry("gc_pressure", []), entry("anr", [])], duration=400.0, budget=500.0)
     check("fine, and the count", plain.render(rep, width=100) == (
-        "FINE              The launch takes 0.4 s. You allowed 0.5 s, so it is within the limit.\n"
+        "WITHIN THE LIMIT  The launch takes 0.4 s. You allowed 0.5 s, so it is within the limit.\n"
         "\n ok 2 checks are fine"), plain.render(rep, width=100))
 
 
@@ -1032,3 +1032,15 @@ def test_a_merged_table_heads_max_as_any_runs():
     one = report_mod._table([{"location": "activityStart", "count": 1, "total_ms": 65.86,
                               "max_ms": 65.86}])
     check("one recording: Max", "| Max, ms |" in one and "any run" not in one, one)
+
+
+def test_the_verdict_speaks_of_the_limit_not_of_the_checks():
+    """A red "Needs attention" headline above a list whose filter read "Needs
+    attention 0" (#824): the verdict judges the window against the limit, and
+    its words say so, apart from the words a check's level has."""
+    from echolot.pages import kit
+    for level in (plain.NEEDS_ATTENTION, plain.WORTH_A_LOOK, plain.FINE):
+        check(f"{level}: its own word", plain.verdict_word(level) != kit.word(level)
+              and plain.verdict_word(level) not in kit.WORD.values(), plain.verdict_word(level))
+    rep = plain.annotate(known())
+    check("the terminal says which limit", plain.render(rep, width=100).startswith("OVER THE LIMIT"))
