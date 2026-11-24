@@ -874,6 +874,28 @@ numbers are slower than what most users see. On the SM-A515F a large app's
 launch took ~1.4 s on its benchmark build and ~8.8 s on a debuggable build of
 it that nothing had compiled. `compare` warns when two rounds differ in it.
 
+## What the device was set to do
+
+Two settings of Developer options change what a repeat measures, and the
+trace carries neither, so `collect` reads them once a round and keeps them
+beside each trace (see [collecting](collecting.md)). The
+header says them only when they are not as a phone comes:
+
+```
+Animation scales: all three `5`, where a phone comes with 1: an animation lasts its length times its scale, and the frames that draw it, with the work behind them, change with it. Developer options set them back.
+> ⚠️ "Don't keep activities" was on: the system destroyed each activity as soon as it left the screen, so a return to the app created it again, a warm start where a phone without it starts hot. Switch it off in Developer options: `settings put` changes the setting and not the running system.
+```
+
+At 0 the scales turn animations off, and the line says that the work of
+drawing them is not in the numbers; a scale of 0 is how UI tests run, and it
+is said rather than refused. "Don't keep activities" is a warning where the
+scenario returns to a living process, as a `reset_policy: none` round or a
+command scenario does; for cold starts recorded with a force-stop it is a
+plain line, since a cold start creates its activity anyway. A set whose
+repeats split on either says in how many of them. A report of traces
+recorded before `collect` read these says nothing about them, which is not
+the same as a phone as it comes, and `compare` says so.
+
 ## From a row to a line, without `domains`
 
 Some rows name the code themselves. ART's contention slice carries both

@@ -391,6 +391,28 @@ scenario:
 (`launch` или `launch+reportFullyDrawn`), а `compare` запрещает сравнивать
 два отчёта с разными способами закрытия окна (см. [Два окна](compare.md#два-окна)).
 
+## Как был настроен телефон
+
+Две настройки из параметров разработчика меняют то, что измеряет повтор, а
+трейс не несёт ни одной, поэтому `collect` читает их раз за раунд и кладёт
+рядом с каждым трейсом (см. [Сбор трейсов](collecting.md)). Заголовок
+называет их, только когда они не такие, как у телефона из коробки:
+
+```
+Animation scales: all three `5`, where a phone comes with 1: an animation lasts its length times its scale, and the frames that draw it, with the work behind them, change with it. Developer options set them back.
+> ⚠️ "Don't keep activities" was on: the system destroyed each activity as soon as it left the screen, so a return to the app created it again, a warm start where a phone without it starts hot. Switch it off in Developer options: `settings put` changes the setting and not the running system.
+```
+
+Масштаб 0 выключает анимации, и строка говорит, что работы по их отрисовке в
+цифрах нет; так запускают UI-тесты, поэтому это сообщается, а не запрещается.
+«Не сохранять действия» — предупреждение там, где сценарий возвращается в
+живой процесс (раунд с `reset_policy: none` или сценарий-команда); для
+холодных стартов с force-stop это обычная строка: холодный старт и так
+создаёт активность. Если повторы набора расходятся, сказано, в скольких из
+них. Отчёт по трейсам, записанным до того, как `collect` начал это читать,
+о настройках молчит — это не то же, что телефон из коробки, и `compare` так и
+говорит.
+
 ## От строки к файлу без `domains`
 
 `analyze` автоматически привязывает к исходникам строки с фреймами

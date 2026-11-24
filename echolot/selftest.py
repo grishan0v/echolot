@@ -2378,6 +2378,90 @@ def _(report):
     assert "recording-mixed" not in {w["id"] for w in cmp["warnings"]}, cmp["warnings"]
 
 
+def _set_to(scale: float | None, dont_keep: bool | None, runner: str = "launch") -> dict:
+    """The fixture's block as four repeats of a round on a device whose
+    animation scales are all `scale` and "Don't keep activities" `dont_keep`;
+    None for both is a `collect` from before they were read."""
+    from . import recording as recording_mod
+    device = {} if scale is None and dont_keep is None else {
+        "animation_scales": {"window": scale, "transition": scale, "animator": scale},
+        "always_finish_activities": dont_keep}
+    return recording_mod.merge([{"runner": runner, "reset_policy": "force-stop",
+                                 "app_at_stop": "running", **device}] * 4)
+
+
+@check("compare says when the device's animation scales or \"Don't keep activities\" differ")
+def _(report):
+    """A list scroll on an SM-A515F with all three animation scales at 5 on
+    one side and 1 on the other gave 5 to 17 rows that held and no warning
+    (#612); "Don't keep activities" turns a return to a living process into a
+    warm start (#616). Both are said, and the verdicts stand. A set from a
+    `collect` before they were read cannot say them: that is said, and never
+    taken for the same settings."""
+    from . import compare as compare_mod
+
+    def said(before: dict, after: dict) -> tuple[dict[str, str], dict[str, bool | None]]:
+        cmp = compare_mod.build(
+            _side_with({"main_thread_block": SLOWER[0]}, recording=before),
+            _side_with({"main_thread_block": SLOWER[1]}, recording=after),
+            before_path="a.json", after_path="b.json")
+        return ({w["id"]: w["text"] for w in cmp["warnings"]},
+                {r["detector"]: r["holds"] for r in cmp["rows"]})
+
+    text, holds = said(_set_to(5.0, True), _set_to(1.0, False))
+    assert ("the device's animation scales all three `5` before and all three `1` after"
+            in text.get("recording", "")), text
+    assert '"Don\'t keep activities" on before and off after' in text["recording"], text
+    assert holds == {"main_thread_block": True}, holds
+    text, _ = said(_set_to(1.0, False), _set_to(1.0, False))
+    assert not {"recording", "recording-unknown"} & set(text), text
+    text, _ = said(_set_to(None, None), _set_to(1.0, False))
+    assert "recording" not in text, text
+    assert "does not say the device's animation scales" in text.get("recording-unknown", ""), text
+    text, _ = said(_set_to(None, None), _set_to(None, None))
+    assert not {"recording", "recording-unknown"} & set(text), text
+
+
+@check("the header says when animations were scaled or \"Don't keep activities\" was on")
+def _(report):
+    """Nothing for a phone as it comes, nor for a set nobody read the
+    settings of; a line for scales that are not 1, and a warning for the
+    option where the scenario returns to the app rather than starting it
+    cold."""
+    from . import report as report_mod
+    plain = report_mod.to_markdown({**report, "recording": _set_to(1.0, False)})
+    assert "Animation scales" not in plain and "Don't keep activities" not in plain, plain
+    old = report_mod.to_markdown({**report, "recording": _set_to(None, None)})
+    assert "Animation scales" not in old and "Don't keep activities" not in old, old
+    rec = {**_set_to(5.0, True), "runner": "command", "reset_policy": "none"}
+    head = report_mod.to_markdown({**report, "recording": rec})
+    assert "Animation scales: all three `5`, where a phone comes with 1" in head, head[:3000]
+    assert '> ⚠️ "Don\'t keep activities" was on' in head, head[:3000]
+    cold = report_mod.to_markdown({**report, "recording": _set_to(1.0, True)})
+    assert "A cold start creates its activity anyway" in cold, cold[:3000]
+    assert '> ⚠️ "Don\'t keep activities"' not in cold, cold[:3000]
+
+
+@check("\"Don't keep activities\" is read from ActivityManager, not from the setting")
+def _(report):
+    """`settings put global always_finish_activities 0` changed the setting
+    and not ActivityManager: `dumpsys activity` still said
+    `mAlwaysFinishActivities=true`, and starts stayed warm. The dump prints
+    that line only while the option is on, so a dump without it is off
+    whatever the setting says. A scale never set animates at 1."""
+    from . import recording as recording_mod
+    head = "ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)\n"
+    stored = ("window_animation_scale=5.0\ntransition_animation_scale=null\n"
+              "animator_duration_scale=0.5\nalways_finish_activities={}\n")
+    got = recording_mod.parse_settings(stored.format(0) + head + "  mAlwaysFinishActivities=true\n")
+    assert got == {"animation_scales": {"window": 5.0, "transition": 1.0, "animator": 0.5},
+                   "always_finish_activities": True}, got
+    got = recording_mod.parse_settings(stored.format(1) + head)
+    assert got["always_finish_activities"] is False, got
+    got = recording_mod.parse_settings("")
+    assert got == {"animation_scales": None, "always_finish_activities": None}, got
+
+
 @check("compare says throttling on one side when the other has no thermal record")
 def _(report):
     """Nothing is claimed about the side nobody measured; what the measured
