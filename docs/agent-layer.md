@@ -939,6 +939,12 @@ every other route, with the verdict. When the agent ends without one, the
 investigation stays open, and the page's **Close the investigation** closes it
 with `echolot hunt --done` and a sentence on what came of it.
 
+While a `collect` records a round for the open investigation, neither a new
+question nor `hunt --done` (with or without `--verdict`) goes ahead: both exit 2
+and say how far the collect got. Closed under it, the round was no part of the
+conclusion, and its `analyze --hunt` was refused once it finished. A collect
+outside the investigation, or for another one, does not hold `--done`.
+
 ### Closing with a verdict
 
 `echolot hunt --done "<text>"` keeps one string, and a string can be read and
