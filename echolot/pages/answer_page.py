@@ -183,6 +183,21 @@ def _rounds(reports: verdict_mod.Reports) -> list[tuple[int, dict[str, Any] | No
     return [(n, reports[n]) for n in sorted(reports)]
 
 
+def _none_recorded(hunt: dict[str, Any], rounds: int) -> bool:
+    """Whether the investigation has rounds and recorded none of them itself:
+    no `collect --hunt` ran in it, so what its rounds read was recorded
+    before it opened or outside it. An agent started by Dig deeper that
+    answers from the recordings behind the report it was handed files them
+    as round 1 and records nothing, and the page said "1 round" as if it had
+    (#823). A record that does not count its recordings says nothing."""
+    collects = hunt.get("collects")
+    return bool(rounds) and isinstance(collects, int) and not isinstance(collects, bool) and collects == 0
+
+
+def _its(rounds: int) -> str:
+    return "its round" if rounds == 1 else f"its {rounds} rounds"
+
+
 def _causes(verdict: dict[str, Any]) -> list[dict[str, Any]]:
     out = []
     for c in _list(verdict.get("causes")):
@@ -414,8 +429,15 @@ def _table(causes: list[dict[str, Any]], more: list[dict[str, Any]]) -> str:
 
 
 def _how_long(hunt: dict[str, Any], rounds: int, is_open: bool) -> str:
-    """Beside the state: how many rounds, and how long it was open."""
-    said = "no round yet" if not rounds else _count(rounds, "round") + (" so far" if is_open else "")
+    """Beside the state: how many rounds, and how long it was open. Rounds of
+    recordings made outside it are no work of its own, and are not counted
+    as that (#823)."""
+    if not rounds:
+        said = "no round yet"
+    elif _none_recorded(hunt, rounds):
+        said = "no new recording" + (" yet" if is_open else "")
+    else:
+        said = _count(rounds, "round") + (" so far" if is_open else "")
     took = _between(hunt.get("opened_at"), hunt.get("closed_at")) if not is_open else None
     return said + (f" · {_lasted(took)}" if took else "")
 
@@ -678,8 +700,11 @@ def _timeline(rounds: list[tuple[int, dict[str, Any] | None]], hunt: dict[str, A
     if not rounds:
         return ('<p class="small sub measure">No round is on record yet. The first one appears here once the app '
                 "has been recorded and the recordings analysed.</p>")
-    return ('<p class="small sub measure">One round is one pass of the same loop: record the app, read the report, '
-            "decide where to look next. While an agent works, this list is what fills in.</p>"
+    loop = ("One round is one pass of the same loop: record the app, read the report, decide where to look next.")
+    if _none_recorded(hunt, len(rounds)):
+        loop = (f"Nothing was recorded in this investigation: {_its(len(rounds))} read recordings made before it "
+                "opened, or outside it.")
+    return (f'<p class="small sub measure">{loop} While an agent works, this list is what fills in.</p>'
             '<ol class="timeline">'
             + "".join(_round(n, report, hunt.get("opened_at"), cited) for n, report in rounds) + "</ol>")
 
@@ -702,6 +727,9 @@ def _about(hunt: dict[str, Any], rounds: list[tuple[int, dict[str, Any] | None]]
         rows.append(("Closed", e(_stamp(hunt["closed_at"], local)) + (f", after {e(_lasted(took))}" if took else "")))
     recordings = sum(_runs(report) for _, report in rounds if report is not None)
     work = _count(len(rounds), "round") + (f", {_count(recordings, 'recording')} in all" if recordings else "")
+    if _none_recorded(hunt, len(rounds)):
+        work += (", none of them recorded in this investigation: they were made before it opened, or outside it"
+                 if recordings else ", nothing recorded in this investigation")
     filed = hunt.get("reports")
     if isinstance(filed, int) and not isinstance(filed, bool) and filed > len(rounds):
         gone = filed - len(rounds)

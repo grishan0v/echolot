@@ -624,6 +624,24 @@ def test_ended_with_a_verdict_lands_on_the_answer(project):
     check("and the start page has nothing to say of it", not page(get(site, "")).all("div", id="dig-on"))
 
 
+def test_an_answer_from_the_recordings_it_was_handed_is_no_round_of_its_own(project):
+    """It filed the recordings behind the report as round 1, recorded
+    nothing, and answered: the page said "1 round" (#823)."""
+    site, _, _ = serving(project, {"do": "verdict", "rounds": 1, "handed": 1})
+    reply = press(site, "dig/start", ticked("main_thread_waits"))
+    answer = page(get(site, dict(reply.headers)["Location"][len(f"/{site.token}/"):]))
+    beside = answer.one("main").all("div", "rowf")[0].one("span", "sub").text
+    check("beside the state, no new recording, not a round", beside.startswith("no new recording")
+          and "round" not in beside, beside)
+    check("and its rounds say what they read", "Nothing was recorded in this investigation: its round read "
+          "recordings made before it opened, or outside it." in answer.text)
+    site, _, _ = serving(project, {"do": "verdict", "rounds": 2, "handed": 1})
+    reply = press(site, "dig/start", ticked("main_thread_waits"))
+    answer = page(get(site, dict(reply.headers)["Location"][len(f"/{site.token}/"):]))
+    check("one that recorded a round of its own counts them as before",
+          answer.one("main").all("div", "rowf")[0].one("span", "sub").text.startswith("2 rounds"))
+
+
 def test_an_investigation_closed_with_words_and_no_verdict(project):
     site, _, _ = serving(project, {"do": "text", "rounds": 1})
     press(site, "dig/start", ticked("main_thread_waits"))

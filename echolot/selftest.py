@@ -7996,6 +7996,30 @@ def _(report):
         assert Config.load(path).scenario_budget_ms == 1500
 
 
+@check("ui: an investigation that recorded nothing itself is not said to have taken a round")
+def _(report):
+    """An agent started by Dig deeper that answers from the recordings
+    behind the report it was handed files them as round 1, records nothing,
+    and closes the investigation. Its page said "1 round" beside the state,
+    as if it had recorded the app once (#823). With no `collect --hunt` in
+    the investigation it says "no new recording", and the rounds say what
+    they read. One recording in it, and the rounds are counted as before.
+    """
+    from .pages import answer_page
+    hunt = {"n": 1, "question": "Why is the launch slow?", "status": "concluded", "scenario": "coldStart",
+            "opened_at": "2026-11-01T09:00:00+00:00", "closed_at": "2026-11-01T09:04:00+00:00",
+            "collects": 0, "analyzes": 1, "reports": 1,
+            "conclusion": "The store is read on the main thread. It waits for the disk."}
+    page = answer_page.render(hunt, {1: report})
+    assert '<span class="small sub">no new recording · 4 min</span>' in page, page[:2000]
+    assert "Nothing was recorded in this investigation: its round read recordings made before it opened, " \
+           "or outside it." in page
+    assert '<span class="small sub">1 round' not in page
+    page = answer_page.render({**hunt, "collects": 1}, {1: report})
+    assert '<span class="small sub">1 round · 4 min</span>' in page, page[:2000]
+    assert "Nothing was recorded in this investigation" not in page
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor

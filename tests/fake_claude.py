@@ -15,6 +15,8 @@ the child it is told to leave.
 
     "do": "verdict" | "rounds" | "text" | "fail" | "budget" | "ask" | "hang" | "nothing"
     "rounds": how many rounds it records first (2)
+    "handed": how many of those rounds read the recordings it was handed,
+              filed with no `collect` in the investigation (0)
     "markers": put a temporary marker into this file first
     "child_pipe": a pipe a child it leaves running says its pid into, and
                   holds open while it runs
@@ -75,14 +77,17 @@ def _report(n: int) -> dict[str, Any]:
     return data
 
 
-def _round(project: Path, n: int) -> None:
+def _round(project: Path, n: int, recorded: bool = True) -> None:
     """One round as an agent's `collect` and `analyze` leave it: a set of
-    traces filed, a report written and filed, the record touched."""
+    traces filed, a report written and filed, the record touched. Not
+    `recorded`, it is a round of the recordings the agent was handed:
+    `analyze` alone."""
     from echolot import hunt
     out = project / ".echolot" / "out"
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.json").write_text(json.dumps(_report(n)), encoding="utf-8")
-    hunt.touch(project, collect=True)
+    if recorded:
+        hunt.touch(project, collect=True)
     hunt.record_report(project, out)
     hunt.touch(project, analyze=True)
 
@@ -121,7 +126,7 @@ def prepare(project: Path, plan: dict[str, Any]) -> None:
     if plan.get("markers"):
         _mark(project, plan["markers"])
     for n in range(1, int(plan.get("rounds", 2)) + 1):
-        _round(project, n)
+        _round(project, n, recorded=n > int(plan.get("handed", 0)))
 
 
 def act(ns: argparse.Namespace, project: Path, plan: dict[str, Any], out: Any) -> int:

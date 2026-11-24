@@ -1072,9 +1072,13 @@ bytes. From the top:
 
 - **The verdict**: the first sentence of `summary` as the headline, the rest
   under it, and how many rounds the investigation took. A round is one report
-  it filed. Under it, what the build was set against: the reference's report
-  and build, or "No reference", which says the causes are where the build
-  spends its time and none is shown to be what changed.
+  it filed. An investigation that recorded nothing itself, with no
+  `collect --hunt` in it, says "no new recording" in place of that count:
+  its rounds read recordings made before it opened, as an agent from
+  **Dig deeper** does when it answers from the report it was handed. Under
+  it, what the build was set against: the reference's report and build, or
+  "No reference", which says the causes are where the build spends its time
+  and none is shown to be what changed.
 - **A split bar**, when the verdict names a piece with `inside` and that row
   is still in its report: the piece against the rest of the window.
 - **A table of causes**, in the order the agent gave them: what happens, where

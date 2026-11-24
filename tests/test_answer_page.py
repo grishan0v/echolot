@@ -586,6 +586,42 @@ def test_an_open_investigation_shows_its_rounds_as_its_progress(states):
     check("and the top bar has only what is known", empty.one("span", "crumb").text == "coldStart")
 
 
+def test_rounds_it_recorded_nothing_for_are_not_called_its_work(states):
+    """An agent that answers from the recordings behind the report it was
+    handed files them as round 1 and records nothing; the page said "1
+    round" all the same (#823). Nothing ran `collect` in it, and the page
+    says that instead."""
+    hunt, reports = copy.deepcopy(states["many"])
+    hunt["collects"] = 0
+    page = read(answer_page.render(hunt, {1: reports[1]}))
+    check("beside the state, no new recording in place of a count of rounds",
+          top(page).one("span", "sub").text == "no new recording · 18 min 35 s", top(page).text)
+    rounds = fold(page, "How it got there, round by round")
+    said = rounds.all("p")[0].text
+    check("the rounds say what they read", said.startswith(
+        "Nothing was recorded in this investigation: its round read recordings made before it opened, or outside "
+        "it."), said)
+    check("and the round itself is still there, the evidence the answer cites",
+          [li.all("b")[0].text for li in rounds.one("ol").all("li")] == ["Round 1"])
+    about = dict((d.one("dt").text, d.one("dd").text) for d in fold(page, "About this investigation").one("dl").all("div"))
+    check("about it, the recordings are counted and none is its own",
+          about["Rounds"].startswith("1 round, 5 recordings in all, none of them recorded in this investigation: "
+                                     "they were made before it opened, or outside it"), about["Rounds"])
+    hunt, reports = copy.deepcopy(states["open"])
+    hunt["collects"] = 0
+    page = read(answer_page.render(hunt, reports))
+    said = page.one("section").all("p")[0].text
+    check("an open one has recorded nothing yet", top(page).one("span", "sub").text == "no new recording yet"
+          and said.startswith("Nothing was recorded in this investigation: its 2 rounds read"), said)
+    hunt, reports = copy.deepcopy(states["many"])
+    hunt["collects"] = 1
+    check("one recording in it, and the rounds are counted as they were",
+          top(read(answer_page.render(hunt, reports))).one("span", "sub").text == "2 rounds · 18 min 35 s")
+    del hunt["collects"]
+    check("and a record that does not count them claims nothing",
+          top(read(answer_page.render(hunt, reports))).one("span", "sub").text == "2 rounds · 18 min 35 s")
+
+
 def test_an_investigation_left_unfinished_says_so(states):
     page = page_of(states["left"])
     check("its state", page.one("span", "st").text == "Investigation left unfinished")
