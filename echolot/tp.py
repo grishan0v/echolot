@@ -8,7 +8,17 @@ A detector is a self-contained .sql file with metadata in its header:
     -- @param: min_slice_ms = 16
     -- @identity: location, detail
 
-@param values are defaults. The project config overrides them.
+@param values are defaults. The project config overrides them. A number is
+followed by its unit and a string by nothing, and what the parameter means
+comes after a dash, on as many lines as it takes:
+
+    -- @param: min_overrun_ms = 4 ms — how far past its deadline a frame
+    --       has to finish to count as late
+    -- @param: name_glob = *GC — GLOB over slice names: the collections
+
+@column says what one column of the rows means in this detector, the same
+way: `-- @column: max_ms — the worst frame's overrun`. A detector names every
+column its query returns. Both are what `echolot explain` prints (#494).
 
 @identity names the columns that tell one row of the result from another —
 what the query GROUP BYs, as it reaches the report. It defaults to `location`
@@ -64,6 +74,12 @@ _LIMIT_TAIL = re.compile(r"\bLIMIT\s+\d+\s*;?\s*$", re.IGNORECASE)
 # the first of them straight after the first query, so that the first still
 # ends in its LIMIT.
 _SECTION = re.compile(r"^--\s*@(intervals|samples)\s*$", re.MULTILINE)
+# Where the words begin in `@param` and `@column`: a dash with space before
+# it, and space or the end of the line after it, the words then going on
+# below. A GLOB has no use for an em dash, and a hyphen it may well hold.
+_MEANING = re.compile(r"\s+—(?:\s+|$)")
+# A number and its unit: `4 ms`, `1.5 ×`, `50 %`.
+_WITH_UNIT = re.compile(r"^([-+]?\d+(?:\.\d+)?)\s+(\S+)$")
 
 
 @dataclass(frozen=True)
@@ -125,18 +141,50 @@ def _percentile(values: list[float], p: int) -> float:
     return ordered[low] + (ordered[high] - ordered[low]) * (k - low)
 
 
+@dataclass
+class Header:
+    """What a detector's comment header says, as `parse_header` reads it."""
+    meta: dict[str, str] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
+    calibrations: list[Calibration] = field(default_factory=list)
+    # Per parameter, what its number is counted in: `ms`, `frames`; empty
+    # for a string, and for a number whose header does not say.
+    units: dict[str, str] = field(default_factory=dict)
+    # Per parameter, and per column of the rows, what it means in words.
+    meanings: dict[str, str] = field(default_factory=dict)
+    columns: dict[str, str] = field(default_factory=dict)
+
+
 def parse_meta(text: str):
+    """The header's keys, parameters and calibrations: `parse_header`, less
+    the words."""
+    h = parse_header(text)
+    return h.meta, h.params, h.calibrations
+
+
+def _meaning(value: str) -> tuple[str, str]:
+    """`value — meaning`, split at the dash: what is left of it, and the words
+    after it, empty when it has none."""
+    head, *rest = _MEANING.split(value, maxsplit=1)
+    return head.strip(), (rest[0].strip() if rest else "")
+
+
+def parse_header(text: str) -> Header:
     """Parses a detector's comment header.
 
     A key's value may span several lines: a line shaped `--   text` with no
     `@key:` of its own counts as a continuation. A blank `--` line ends the
     continuation, so notes placed after the params do not get glued onto @why.
     The header ends at the first line that is not a comment.
+
+    A `@param` or a `@column` line goes on the same way, into what the
+    parameter or the column means.
     """
-    meta: dict[str, str] = {}
-    params: dict[str, Any] = {}
-    calibrations: list[Calibration] = []
-    current: str | None = None
+    h = Header()
+    meta, params, calibrations = h.meta, h.params, h.calibrations
+    # Where a continuation goes: a key of `meta`, or a parameter's or a
+    # column's words.
+    current: tuple[str, str] | None = None
 
     for line in text.splitlines():
         stripped = line.strip()
@@ -153,8 +201,22 @@ def parse_meta(text: str):
                 if "=" not in value:
                     raise ValueError(f"@param without '=': {value}")
                 name, raw = value.split("=", 1)
-                params[name.strip()] = _coerce(raw.strip())
-                current = None
+                name = name.strip()
+                raw, h.meanings[name] = _meaning(raw.strip())
+                # A number the unit follows; anything else is the value as it
+                # stands, a mask with its spaces, or a number nobody gave a unit.
+                n = _WITH_UNIT.match(raw)
+                params[name], h.units[name] = ((_coerce(n.group(1)), n.group(2)) if n
+                                               else (_coerce(raw), ""))
+                current = ("param", name)
+            elif key == "column":
+                name, words = _meaning(value)
+                if not re.fullmatch(r"\w+", name):
+                    raise ValueError(f"@column: expected 'name — what it means', got: {value}")
+                if name in h.columns:
+                    raise ValueError(f"@column: {name} is said twice")
+                h.columns[name] = words
+                current = ("column", name)
             elif key == "module":
                 # A stdlib module the query needs. Kept out of the SQL body
                 # because a detector is run as one statement, and an INCLUDE
@@ -179,7 +241,7 @@ def parse_meta(text: str):
                 current = None
             else:
                 meta[key] = value
-                current = key
+                current = ("meta", key)
             continue
 
         if _META_BLANK.match(line):
@@ -188,13 +250,15 @@ def parse_meta(text: str):
 
         cont = _META_CONT.match(line)
         if cont and current:
-            meta[current] = f"{meta[current]} {cont.group(1)}".strip()
+            kind, key = current
+            into = {"meta": meta, "param": h.meanings, "column": h.columns}[kind]
+            into[key] = f"{into[key]} {cont.group(1)}".strip()
 
     for c in calibrations:
         if c.param not in params:
             raise ValueError(
                 f"@calibrate refers to a @param that does not exist: {c.param}")
-    return meta, params, calibrations
+    return h
 
 
 # Which columns name a row when nothing says otherwise.
@@ -232,6 +296,13 @@ class Detector:
     # frame, is not calibrated, and a row under it in one repeat is still
     # there (#505); without this it read as absent again.
     bars: tuple[str, ...] = ()
+    # The header in words (#494): what each parameter is counted in and
+    # means, and what each column of the rows means, in the query's order.
+    # Read by `explain`; a test refuses a shipped detector that leaves one
+    # unsaid, and `doctor` one whose columns are not the query's.
+    units: dict[str, str] = field(default_factory=dict)
+    meanings: dict[str, str] = field(default_factory=dict)
+    columns: dict[str, str] = field(default_factory=dict)
 
     @property
     def sha(self) -> str:
@@ -260,7 +331,8 @@ class Detector:
     def from_file(cls, path: Path) -> "Detector":
         text = path.read_text(encoding="utf-8")
         try:
-            meta, params, calibrations = parse_meta(text)
+            header = parse_header(text)
+            meta, params, calibrations = header.meta, header.params, header.calibrations
             needs = needs_mod.parse(meta.get("needs"))
         except ValueError as e:
             raise ValueError(f"{path.name}: {e}") from e
@@ -290,6 +362,9 @@ class Detector:
             plain_title=meta.get("plain_title", ""),
             plain_why=meta.get("plain_why", ""),
             plain_clean=meta.get("plain_clean", ""),
+            units=header.units,
+            meanings=header.meanings,
+            columns=header.columns,
         )
 
     def render_open(self, overrides: dict[str, Any] | None = None) -> str:

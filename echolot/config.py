@@ -228,7 +228,7 @@ def _detectors_section(node: Any, where: str) -> dict[str, Any]:
             f"{where}.{name}: {said} is not a setting. Every detector "
             f"runs unless the config turns it off: leave `{name}` out to "
             f"run it on its shipped thresholds, write thresholds under it "
-            f"to tune it (`echolot explain` lists them), or `{name}: "
+            f"to tune it (`echolot explain {name}` lists them), or `{name}: "
             f"false` to turn it off.")
     return node
 

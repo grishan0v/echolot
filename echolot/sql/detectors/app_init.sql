@@ -5,9 +5,22 @@
 --       libraries write themselves; the rest is one row that says how much
 --       nobody named.
 -- @needs: atrace:am
--- @param: min_stretch_ms = 80
+-- @param: min_stretch_ms = 80 ms — how long the stretch from the end of
+--       makeApplication to the end of bindApplication has to be for any of
+--       its rows to be reported. One bar for the whole result, not per row
 -- @bar: min_stretch_ms
 -- @identity: location
+-- @column: location — a section in the stretch by its name, an androidx.startup
+--       Initializer opened out of `Startup`; `class initialization (ART)` for
+--       ART's section per class; `(no section)` for the time no section holds
+-- @column: count — occurrences of that section in the stretch
+-- @column: self_ms — its time less the sections inside it; on the
+--       `(no section)` row, the stretch less every section in it
+-- @column: total_ms — its time with the sections inside it
+-- @column: max_ms — its longest occurrence
+-- @column: detail — what the row is: an Initializer, one run inside another,
+--       ART's classes, a section under bindApplication; on `(no section)`,
+--       what runs there and writes nothing
 -- @plain_title: What runs before the first screen is created
 -- @plain_why: Libraries and the app's own setup code run before anything can
 --       be shown, so the time they take is added to the time until the first

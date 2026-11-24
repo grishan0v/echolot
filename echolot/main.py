@@ -6070,13 +6070,52 @@ def _report_cmd(path: str | None) -> str:
 
 
 def cmd_explain(args) -> int:
-    for d in load_detectors(DETECTOR_DIR):
-        print(f"{d.id}\n  {d.title}")
-        if d.why:
-            print(f"  why: {d.why}")
-        if d.params:
-            print(f"  params: {d.params}")
-        print()
+    """One detector in words, with the values this project runs it on; or the
+    list of them, a line each (#494). See explain.py."""
+    from . import explain as explain_mod
+
+    detectors = load_detectors(DETECTOR_DIR)
+    chosen = detectors
+    if args.detector is not None:
+        found = explain_mod.find(detectors, args.detector)
+        if found is None:
+            said = explain_mod.unknown(args.detector, detectors)
+            print(said, file=sys.stderr)
+            recorder.failed(said.splitlines()[0].removeprefix("error: "))
+            return 2
+        chosen = [found]
+    if _named_config_missing(args):
+        return 2
+    # The config's values, planned the way `analyze` plans them, so what is
+    # printed is what the next run uses; and refused where `analyze` would
+    # refuse it, rather than shown as the shipped numbers it would not run.
+    plan, own, config, scenario = None, {}, None, None
+    if Path(args.config).is_file():
+        try:
+            cfg = Config.load(args.config, args.local, scenario=args.scenario)
+            _pick_scenario(cfg, args.scenario)
+            plan = plan_detectors(cfg, detectors=detectors)
+        except ConfigError as e:
+            print(f"error: {e}", file=sys.stderr)
+            recorder.failed(str(e))
+            return 2
+        own, config = cfg.scenario_overrides, args.config
+        scenario = cfg.scenario_name if len(cfg.scenarios) > 1 else None
+    elif args.scenario is not None:
+        said = (f"--scenario {args.scenario}: there is no {args.config} here to "
+                f"name scenarios")
+        print(f"error: {said}", file=sys.stderr)
+        recorder.failed(said)
+        return 2
+    entries = explain_mod.entries(chosen, plan, own)
+    if args.json:
+        print(json.dumps(explain_mod.document(entries, config, scenario),
+                         ensure_ascii=False, indent=2))
+    elif args.detector is None:
+        print(explain_mod.listing(entries, config, scenario))
+    else:
+        print(explain_mod.one(entries[0], config, scenario,
+                              width=explain_mod.terminal_width()))
     return 0
 
 
@@ -6650,7 +6689,26 @@ def build_parser() -> argparse.ArgumentParser:
                         t for t in layer.guide_topics() if t != "overview")))
     gd.set_defaults(func=cmd_guide)
 
-    ex = add("explain", "agent", "", "the detectors and their parameters")
+    ex = add("explain", "agent", "[<detector>]",
+             "one detector: what it reads, its thresholds and the values in force, its columns",
+             description="With a detector: what the trace has to hold for it, each "
+                         "threshold with its unit, what it means and the value the "
+                         "next `analyze` runs it with here — the default, the config's "
+                         "or the scenario's — and what each column of its rows means. "
+                         "Without one: the detectors, a line each. Read off the "
+                         "detectors' own files and the config; opens no trace.")
+    ex.add_argument("detector", nargs="?",
+                    help="a detector's id, as `explain` lists them (default: the list)")
+    ex.add_argument("-c", "--config", default="echolot.yml",
+                    help="the project config, for the values in force (default: "
+                         "echolot.yml in cwd, when there is one)")
+    ex.add_argument("--local", help="path to local.yml (defaults to alongside)")
+    ex.add_argument("--scenario", metavar="NAME",
+                    help="the scenario whose thresholds to show, for a config with "
+                         "several (default: the open investigation's, else the first)")
+    ex.add_argument("--json", action="store_true",
+                    help="the same as json: each detector's thresholds with value, "
+                         "unit, source and meaning, and its columns")
     ex.set_defaults(func=cmd_explain)
 
     sc = add("scan", "agent", "[--root <repo>]",

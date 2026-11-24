@@ -3,9 +3,19 @@
 -- @why: the thread is ready to work but the scheduler will not let it in. The
 --       slice is "long" not because the code is heavy but because something
 --       else held the core — and for the main thread the row says what
--- @param: min_runnable_ms = 20
+-- @param: min_runnable_ms = 20 ms — the time a thread has to spend ready to
+--       run and not running, in one state, summed, to be a row
 -- @calibrate: min_runnable_ms = top10(total_ms) * 1.5
 -- @identity: location, state
+-- @column: location — the thread's name
+-- @column: count — the stretches it spent in that state in the window
+-- @column: total_ms — their time, summed
+-- @column: max_ms — the longest one
+-- @column: state — `R`, preempted, or `R+`, woken and not yet run
+-- @column: detail — on the main thread only: who held the core it was put
+--       on next — the app's own threads, other processes, or nobody — with
+--       the app's thread that held it longest, then how many of the other
+--       cores stood idle meanwhile. Empty on other threads
 -- @plain_title: Waiting for a free processor core
 -- @plain_why: A thread that is ready to work but finds no free processor core
 --       has to stand still. That wait comes from how busy the phone is, not

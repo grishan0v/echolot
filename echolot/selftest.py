@@ -316,6 +316,32 @@ def _(report):
             f"that reason no longer holds")
 
 
+@check("every detector's rows hold the columns its header explains, and no other")
+def _(report):
+    # `echolot explain` says what each column of a detector's rows means, from
+    # the `@column` lines in its header (#494). Those are words beside a query,
+    # and nothing else ties the two: a column the query gained would reach the
+    # report with nobody saying what it is, and one it lost would go on being
+    # explained. Held against the rows themselves, on the one trace where
+    # every detector has some; anr_risk's need its bar lowered to the
+    # fixture's size. What the report adds to a row after the query — the
+    # place in the code, the samples, a merge's bookkeeping — is not the
+    # query's, and not counted.
+    from .main import DETECTOR_DIR
+    from .report import HIDDEN
+    from .tp import load_detectors
+
+    added = HIDDEN | {"code", "runs"}
+    lowered = _lowered_bar()
+    for d in load_detectors(DETECTOR_DIR):
+        got = rows(lowered if d.id in SILENT_ON_FIXTURE else report, d.id)
+        assert got, f"{d.id}: no rows on the fixture to hold its columns against"
+        returned = list(dict.fromkeys(k for r in got for k in r if k not in added))
+        assert set(returned) == set(d.columns), (
+            f"{d.id}: the query returns {returned}, the header explains "
+            f"{list(d.columns)}")
+
+
 # --- where the window went --------------------------------------------------
 
 @check("the window budget adds up to the window, exactly")

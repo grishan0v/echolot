@@ -211,6 +211,13 @@ def test_the_sample_detector_would_pass_the_check_on_shipped_ones():
     sample = re.search(r"```sql\n(-- @id: my_detector.*?)```", _read(DETECTORS_MD), re.S)
     check("the page opens with a sample detector", sample, DETECTORS_MD)
     check("which ends in its LIMIT", _LIMIT_TAIL.search(sample.group(1)), sample.group(1))
+    # And holds the words `tests/test_explain.py` asks of a shipped one (#494).
+    from echolot.tp import parse_header
+    h = parse_header(sample.group(1))
+    check("its threshold says what it means, in what unit",
+          all(h.meanings[p] and h.units[p] for p in h.params), (h.units, h.meanings))
+    check("and a line explains each column its query returns",
+          list(h.columns) == ["location", "count", "total_ms", "max_ms", "detail"], h.columns)
 
 
 def test_the_intervals_sample_stands_for_what_its_rows_count():

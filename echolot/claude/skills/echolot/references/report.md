@@ -739,6 +739,10 @@ How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 
 ## The detectors
 
+`echolot explain <id>` is one of them on a screen, read off its own file: what
+the trace has to hold for it, each threshold with its unit and the value this
+project runs it with, and what each column of its rows means there.
+
 | id | what it catches | what to hook onto |
 |---|---|---|
 | `main_thread_block` | where the main thread spent its time | `location` — the slice name; `detail` is the thread's comm, always the main thread here, cut to 15 characters by the kernel |

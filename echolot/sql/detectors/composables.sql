@@ -6,10 +6,25 @@
 --       is counted here with what it calls, down to the next composable of the
 --       app's own
 -- @needs: composable_names
--- @param: min_self_ms = 8
--- @param: name_glob = * ([A-Za-z]*.kt:[0-9]*)
+-- @param: min_self_ms = 8 ms — the composition time a composable of the
+--       app's own has to hold, as self_ms below, to be a row
+-- @param: name_glob = * ([A-Za-z]*.kt:[0-9]*) — GLOB over slice names: a
+--       composable call as runtime-tracing names it, `Name (File.kt:line)`
 -- @calibrate: min_self_ms = top10(self_ms) * 1.5
 -- @identity: location
+-- @column: location — the composable, as runtime-tracing names it: its
+--       qualified name and the file and line it is declared at
+-- @column: count — its calls in the window; not recompositions, since seven
+--       calls can be seven icons
+-- @column: total_ms — its calls end to end, the app's own composables nested
+--       in them included
+-- @column: self_ms — bends the contract: its calls less the app's own
+--       composables nested in them, the library's composables under it
+--       counted in. Adds up across the rows without counting a moment twice
+-- @column: max_ms — its longest call
+-- @column: detail — what composed the calls, with how many each: `in a first
+--       composition`, `in a frame` (a recomposition), `during measure` (a
+--       lazy list composing its items), `elsewhere`
 -- @plain_title: Parts of the screen that take long to build
 -- @plain_why: When a screen is built, some of its parts can take much longer
 --       than the rest. This shows which of the app's own parts take the time.
@@ -31,8 +46,8 @@
 -- composables nested in them, the library's staying in. On that start the
 -- navigation host held 29 ms of its 42, an icon painter called seven times
 -- 19 ms. Like self time, it adds up across the rows without counting
--- anything twice. `total_ms` is the calls end to end, the nested ones
--- included, and `max_ms` the longest call.
+-- anything twice. The other columns keep their meaning; the `@column` lines
+-- above say each.
 --
 -- Which composables are the app's own is the checkout's to say, and the
 -- trace's names do not: `_compose_own` is filled before the detectors run,

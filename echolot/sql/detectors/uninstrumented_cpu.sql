@@ -3,9 +3,24 @@
 -- @why: names a thread that burns CPU with no slice around it.
 --       The agent does not guess — it is handed the fact "thread T ran for
 --       340 ms, zero slices". That is exactly where adding trace{} pays off.
--- @param: min_running_ms = 50
--- @param: max_covered_pct = 50
+-- @param: min_running_ms = 50 ms — a thread's time on a CPU outside every
+--       top-level slice, which has to reach this to be a row
+-- @param: max_covered_pct = 50 % — and, on any thread but the main one, the
+--       share of its CPU time inside slices it may have at most. Not
+--       calibrated: a share means the same on any device
 -- @calibrate: min_running_ms = top10(total_ms) * 1.5
+-- @column: location — the thread's name; a pool's threads are one row, the
+--       kernel having cut them to one name
+-- @column: count — slices on threads of that name in the window, at any
+--       depth: 0 is a thread nobody instrumented
+-- @column: total_ms — bends the contract: its time on a CPU outside every
+--       top-level slice, the blind spot itself
+-- @column: max_ms — empty: a blind spot has no single occurrence
+-- @column: covered_ms — its time on a CPU inside a top-level slice; with
+--       total_ms, all of its time on a CPU
+-- @column: detail — the share of its CPU time outside slices; in a sampled
+--       recording, then what the samples there named, `ours:` the nearest
+--       method of the app's own
 -- @plain_title: Work nobody can name
 -- @plain_why: Some threads keep the processor busy, but nothing in the
 --       recording says what for. When the app is slow because of them, the
@@ -23,9 +38,8 @@
 -- parent, so summing them counts the same time twice. Depth = 0 slices do not
 -- overlap each other, so there is no double counting among them.
 --
--- A row measures the blind spot itself: `total_ms` is the thread's time on a
--- CPU outside every top-level slice, `covered_ms` its time inside one, and the
--- two add up to its time on a CPU. The bar is on the first. Ranked and
+-- A row measures the blind spot itself, `total_ms` and `covered_ms` as their
+-- `@column` lines say, and the bar is on the first. Ranked and
 -- compared on the whole of a thread's CPU, a stretch nobody named weighs no
 -- more than the work around it that somebody did: a 200 ms busy loop on a
 -- main thread with 2.3 s on a CPU would move its row by less than

@@ -4,9 +4,20 @@
 --       disk, and a thread of the app is what lets it out. No slice names
 --       that time, and `io_wait` takes only the disk
 -- @needs: platform_state
--- @param: min_total_ms = 16
+-- @param: min_total_ms = 16 ms — the time the main thread spent in such
+--       sleeps that one thread of the app ended, summed, for it to be a row
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location
+-- @column: location — the thread of the app that ended the sleeps, its
+--       digits folded: `arch_disk_io_#`
+-- @column: count — the main thread's sleeps in the kernel, not on the disk,
+--       that this thread ended
+-- @column: total_ms — their time, summed
+-- @column: max_ms — the longest one
+-- @column: detail — what the waking thread was inside when it woke the main
+--       thread, with its share of the row; then where the main thread was,
+--       the same way; then the kernel function, when a userdebug kernel
+--       names it
 -- @plain_title: The main thread held up inside the system
 -- @plain_why: Sometimes the phone's operating system puts the main thread, the
 --       one that draws the screen, to sleep until another thread of the app
