@@ -259,6 +259,19 @@ For a project whose macrobenchmark measures the launch, `scan` drafts the
 same window with the [`gradle`](#gradle--the-macrobenchmark-writes-its-own)
 runner.
 
+The activity this mode starts is `runner.activity`: a component,
+`com.example.app.demo/com.example.app.MainActivity`, or a class's full name,
+`com.example.app.MainActivity`, which starts in `project.package` — so the
+line holds for every variant, whatever suffix its package has. A name that
+starts with a dot is refused: the manifest reads it under the app's
+namespace, and a package with a suffix is another name. Left out, the
+device is asked for the package's launcher. A debug build with a leak
+detector has two, and the device then answers with its chooser: `collect`
+stops, lists the launchers the device has, and names the one the project's
+own manifest declares as the line to write. `scan` writes the key in the
+launch draft, the enabled launcher of the app's manifest by its full name —
+an `<activity-alias>` by the alias, the component the launcher opens.
+
 `am start -W` prints `TotalTime`, which the runner reports — an independent
 check that the window in the report is plausible. `TotalTime: 0` is the
 system saying it timed no start, usually because the activity was already in

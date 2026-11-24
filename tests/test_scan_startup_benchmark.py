@@ -139,9 +139,14 @@ NO_BENCHMARK_DRAFT = (
     'reportFullyDrawn when that comes later, and the report says which (window.defined_by)"}\n'
     "\nrunner:\n"
     "  mode: launch\n"
+    # The launcher by name, so a debug build's second one does not make the
+    # device answer with its chooser (#930).
+    '  activity: "com.example.app.MainActivity"\n'
     "  iterations: 5\n"
     "  duration_ms: 20000\n"
-    '  _evidence: "no MacrobenchmarkRule in the tree; force-stop + am start"\n')
+    '  _evidence: "no MacrobenchmarkRule in the tree; force-stop + am start of the launcher in '
+    "app/src/main/AndroidManifest.xml, by name: a build with a second launcher, a leak detector's "
+    "in a debug build, would otherwise start the system's chooser\"\n")
 
 UNCHANGED = {
     # A section is the developer's own statement of where "ready" is, so it

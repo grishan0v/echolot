@@ -81,7 +81,7 @@ own, with `echolot scan`'s words under it, and the step stays the one under
 | what `scan` found | the page says |
 |---|---|
 | no module with a launcher Activity | that no Android app is in this folder |
-| an `applicationId` set through a constant or a convention plugin | that it could not read the app's name from the build files |
+| an `applicationId`, or a suffix of the build to measure, set in a way `scan` does not read (a constant or an enum entry of `buildSrc` or `build-logic` it does read) | that it could not read the app's name from the build files |
 | a macrobenchmark that measures a section of its own, or names no metric `scan` reads | that where it begins and ends has to be picked from a trial recording |
 
 A macrobenchmark that measures the launch (`StartupTimingMetric`) is set up

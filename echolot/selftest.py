@@ -4451,6 +4451,247 @@ def _(report):
     assert install == [":app:installBenchmarkRelease", ":app:installRelease"], install
 
 
+_LAUNCHER_FILTER = ('<intent-filter><action android:name="android.intent.action.MAIN" />'
+                    '<category android:name="android.intent.category.LAUNCHER" /></intent-filter>')
+
+
+def _build_logic_repo(root: Path) -> None:
+    """A Kotlin app whose build code decides its package: an included
+    `build-logic` registers the flavours, one for each entry of an enum, in a
+    convention plugin the app applies by a catalog alias, and the build types
+    take their suffix from another enum. The launcher is an alias of a
+    trampoline, beside a second alias that is off."""
+    (root / "settings.gradle.kts").write_text(
+        'pluginManagement { includeBuild("build-logic") }\ninclude(":app")\n', encoding="utf-8")
+    (root / "gradle").mkdir()
+    (root / "gradle/libs.versions.toml").write_text(
+        '[versions]\nagp = "8.7.0"\n\n[plugins]\n'
+        'example-android-application = { id = "example.android.application" }\n'
+        'example-android-application-flavors = { id = "example.android.application.flavors" }\n',
+        encoding="utf-8")
+    logic = root / "build-logic/convention"
+    (logic / "src/main/kotlin/com/example/build").mkdir(parents=True)
+    (logic / "build.gradle.kts").write_text(
+        "plugins { `kotlin-dsl` }\n"
+        "gradlePlugin {\n  plugins {\n"
+        '    register("androidApplicationFlavors") {\n'
+        "      id = libs.plugins.example.android.application.flavors.get().pluginId\n"
+        '      implementationClass = "AndroidApplicationFlavorsConventionPlugin"\n    }\n  }\n}\n',
+        encoding="utf-8")
+    (logic / "src/main/kotlin/AndroidApplicationFlavorsConventionPlugin.kt").write_text(
+        "import com.example.build.configureFlavors\n"
+        "class AndroidApplicationFlavorsConventionPlugin : Plugin<Project> {\n"
+        "    override fun apply(target: Project) {\n"
+        "        with(target) { extensions.configure<ApplicationExtension> { configureFlavors(this) } }\n"
+        "    }\n}\n", encoding="utf-8")
+    (logic / "src/main/kotlin/com/example/build/AppFlavor.kt").write_text(
+        "package com.example.build\n\n"
+        "enum class FlavorDimension { contentType }\n\n"
+        '@Suppress("EnumEntryName")\n'
+        "enum class AppFlavor(val dimension: FlavorDimension, val applicationIdSuffix: String? = null) {\n"
+        '    demo(FlavorDimension.contentType, applicationIdSuffix = ".demo"),\n'
+        "    prod(FlavorDimension.contentType),\n}\n\n"
+        "fun configureFlavors(\n    commonExtension: CommonExtension<*, *, *, *, *, *>,\n"
+        "    block: ProductFlavor.(flavor: AppFlavor) -> Unit = {},\n) {\n"
+        "    commonExtension.apply {\n"
+        "        FlavorDimension.entries.forEach { dimension -> flavorDimensions += dimension.name }\n"
+        "        productFlavors {\n"
+        "            AppFlavor.entries.forEach { flavor ->\n"
+        "                register(flavor.name) {\n"
+        "                    dimension = flavor.dimension.name\n"
+        "                    block(this, flavor)\n"
+        "                    if (this is ApplicationProductFlavor && flavor.applicationIdSuffix != null) {\n"
+        "                        applicationIdSuffix = flavor.applicationIdSuffix\n"
+        "                    }\n                }\n            }\n        }\n    }\n}\n",
+        encoding="utf-8")
+    (logic / "src/main/kotlin/com/example/build/AppBuildType.kt").write_text(
+        "package com.example.build\n\n"
+        'enum class AppBuildType(val applicationIdSuffix: String? = null) {\n    DEBUG(".debug"),\n'
+        "    RELEASE,\n}\n", encoding="utf-8")
+    app = root / "app"
+    (app / "src/main/java/com/example/app").mkdir(parents=True)
+    (app / "build.gradle.kts").write_text(
+        "import com.example.build.AppBuildType\n\n"
+        "plugins {\n    alias(libs.plugins.example.android.application)\n"
+        "    alias(libs.plugins.example.android.application.flavors)\n}\n\n"
+        "android {\n"
+        '    namespace = "com.example.app"\n'
+        '    defaultConfig { applicationId = "com.example.app" }\n'
+        "    buildTypes {\n"
+        "        debug { applicationIdSuffix = AppBuildType.DEBUG.applicationIdSuffix }\n"
+        "        release { applicationIdSuffix = AppBuildType.RELEASE.applicationIdSuffix }\n"
+        "    }\n}\n", encoding="utf-8")
+    (app / "src/main/AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+        '<activity android:name=".TrampolineActivity" android:exported="false" />'
+        '<activity-alias android:name=".IconAlt" android:targetActivity=".TrampolineActivity" '
+        f'android:enabled="false" android:exported="true">{_LAUNCHER_FILTER}</activity-alias>'
+        '<activity-alias android:name=".Launcher" android:targetActivity=".TrampolineActivity" '
+        f'android:exported="true">{_LAUNCHER_FILTER}</activity-alias>'
+        '</application></manifest>\n', encoding="utf-8")
+    (app / "src/main/java/com/example/app/TrampolineActivity.kt").write_text(
+        "package com.example.app\nclass TrampolineActivity\n", encoding="utf-8")
+
+
+def _build_src_repo(root: Path) -> None:
+    """A Groovy app whose applicationId and a flavour's suffix are constants
+    of `buildSrc`, and whose `qa` build type takes its suffix from somewhere
+    nothing here reads."""
+    (root / "buildSrc/src/main/kotlin").mkdir(parents=True)
+    (root / "buildSrc/build.gradle.kts").write_text("plugins { `kotlin-dsl` }\n", encoding="utf-8")
+    (root / "buildSrc/src/main/kotlin/AppConfig.kt").write_text(
+        'object AppConfig {\n    const val APPLICATION_ID = "com.example.app"\n'
+        '    const val FREE_SUFFIX = ".free"\n}\n', encoding="utf-8")
+    app = root / "app"
+    (app / "src/main/java/com/example/app").mkdir(parents=True)
+    (app / "build.gradle").write_text(
+        "plugins { id 'com.android.application' }\n"
+        "android {\n"
+        "    namespace 'com.example.app'\n"
+        "    defaultConfig { applicationId AppConfig.APPLICATION_ID }\n"
+        "    flavorDimensions 'tier'\n"
+        "    productFlavors {\n"
+        "        free { dimension 'tier'; applicationIdSuffix AppConfig.FREE_SUFFIX }\n"
+        "        paid { dimension 'tier' }\n"
+        "    }\n"
+        "    buildTypes {\n"
+        "        debug { applicationIdSuffix '.debug' }\n"
+        "        qa { initWith debug; applicationIdSuffix rootProject.ext.qaSuffix }\n"
+        "    }\n}\n", encoding="utf-8")
+    (app / "src/main/AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+        f'<activity android:name=".MainActivity">{_LAUNCHER_FILTER}</activity>'
+        '</application></manifest>\n', encoding="utf-8")
+    (app / "src/main/java/com/example/app/MainActivity.kt").write_text(
+        "package com.example.app\nclass MainActivity\n", encoding="utf-8")
+
+
+@check("scan: the flavours a convention plugin registers for each entry of an enum are the app's, "
+       "and every variant's package carries the suffixes the build code gives it")
+def _(report):
+    """Read off the script alone, an app that keeps its build logic in an
+    included build had no flavours and one package: every variant installed
+    as the base applicationId, the debug one too, and the draft named a
+    package no phone had (#816). The suffixes are the arguments of enum
+    entries, and the flavours are registered in a loop over another enum by a
+    plugin the app applies through its version catalog's alias.
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _build_logic_repo(root)
+        facts = scan.describe(root, devices=False)
+        text = scan.render(facts)
+    names = {v["name"]: v["application_id"] for v in facts.variants}
+    assert names == {"demoDebug": "com.example.app.demo.debug", "prodDebug": "com.example.app.debug",
+                     "demoRelease": "com.example.app.demo", "prodRelease": "com.example.app"}, names
+    assert [f["dimension"] for f in facts.flavors] == ["contentType", "contentType"], facts.flavors
+    assert "the plugin `example.android.application.flavors`" in text, text
+    assert "`AppBuildType.DEBUG.applicationIdSuffix` in build-logic/" in text, text
+    # Which one the draft names, and the packages the others install as.
+    assert "  package: com.example.app.demo" in text and "  _source: derived" in text, text
+    assert "install as 4 packages in all" in text, text
+    assert not any(v.get("unread") for v in facts.variants), facts.variants
+
+
+@check("scan: a suffix the script takes from a constant of buildSrc is read, and one it cannot read "
+       "is said, not dropped")
+def _(report):
+    """A constant is read where the build code declares it; a suffix set any
+    other way leaves the package unread rather than a base name passed off as
+    the variant's. When the variant to start from is one of those, the draft
+    is no longer `derived`, and says how to find the package (#816).
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _build_src_repo(root)
+        facts = scan.describe(root, devices=False)
+        script = root / "app/build.gradle"
+        script.write_text(script.read_text(encoding="utf-8").replace(
+            "qa { initWith debug;", "release { applicationIdSuffix rootProject.ext.storeSuffix }\n"
+                                    "        qa { initWith debug;"), encoding="utf-8")
+        unread = scan.describe(root, devices=False)
+        draft = "\n".join(scan.skeleton(unread))
+    by = {v["name"]: v for v in facts.variants}
+    assert facts.app["application_id"] == "com.example.app", facts.app
+    assert by["freeDebug"]["application_id"] == "com.example.app.free.debug", by["freeDebug"]
+    assert by["freeRelease"]["application_id"] == "com.example.app.free", by["freeRelease"]
+    assert by["paidQa"]["unread"] == ["`applicationIdSuffix = rootProject.ext.qaSuffix` "
+                                      "in buildTypes.qa of app/build.gradle"], by["paidQa"]
+    assert not by["paidRelease"].get("unread"), by["paidRelease"]
+    assert any("rootProject.ext.qaSuffix" in n and "pm list packages" in n for n in facts.notes), facts.notes
+    assert "  _source: default" in draft and "not read: `applicationIdSuffix = rootProject.ext.storeSuffix`" \
+        in draft, draft
+
+
+@check("scan: the launch draft names the launcher it starts, by its full class name, an alias by the alias")
+def _(report):
+    """A debug build with a leak detector has a second launcher, and the
+    device answers a package with two with its chooser: collect stopped, and
+    the config `scan` drafted had no `runner.activity` to settle it (#930).
+    The draft names the app's own launcher, the one that is enabled, by the
+    name `am start` takes: an alias's own, never the trampoline behind it.
+    A class's full name, so the line holds for every variant's package.
+    """
+    from . import runner, scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _build_logic_repo(root)
+        facts = scan.describe(root, devices=False)
+        draft = "\n".join(scan.skeleton(facts))
+        (root / "echolot.yml").write_text(draft, encoding="utf-8")
+        named = runner.ACTIVITY.read(Config.load(root / "echolot.yml").runner)
+    assert facts.app["launcher"] == ".TrampolineActivity", facts.app
+    assert facts.app["activity"] == "com.example.app.Launcher", facts.app
+    assert '  activity: "com.example.app.Launcher"' in draft, draft
+    assert named == "com.example.app.Launcher", named
+
+
+@check("collect: several launchers are listed and the project's own is named; runner.activity takes a class name")
+def _(report):
+    """`… has more than one launcher activity … Set runner.activity` was all
+    the error said, with nothing to set it to (#930). It lists what the device
+    has and names the one the project's manifest declares. And a class's
+    full name in `runner.activity` starts in the configured package, which a
+    suffix of the variant's makes another name than the namespace.
+    """
+    from . import runner
+    answers = {
+        "resolve-activity": "priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false\n"
+                            "android/com.android.internal.app.ResolverActivity\n",
+        "query-activities": "2 activities found:\n  Activity #0:\n    priority=0 preferredOrder=0\n"
+                            "    com.example.app.demo.debug/com.example.app.Launcher\n"
+                            "  Activity #1:\n    priority=0 preferredOrder=0\n"
+                            "    com.example.app.demo.debug/leakcanary.internal.activity.LeakLauncherActivity\n",
+    }
+    real = runner._run
+    runner._run = lambda args, **kw: next(v for k, v in answers.items() if k in args)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _build_logic_repo(root)
+            try:
+                runner.resolve_activity("SERIAL", "com.example.app.demo.debug", root)
+            except runner.RunnerError as e:
+                said = str(e)
+            else:
+                raise AssertionError("the chooser was taken for the app's launcher")
+    finally:
+        runner._run = real
+    assert "com.example.app.demo.debug/leakcanary.internal.activity.LeakLauncherActivity" in said, said
+    assert 'declares com.example.app.Launcher, so `activity: "com.example.app.Launcher"`' in said, said
+    assert runner.started("com.example.app.Launcher", "com.example.app.demo") == \
+        "com.example.app.demo/com.example.app.Launcher"
+    assert runner.started("com.example.app/.Main", "com.example.app.demo") == "com.example.app/.Main"
+    try:
+        runner.started(".Launcher", "com.example.app.demo")
+    except runner.RunnerError as e:
+        assert "full name" in str(e), e
+    else:
+        raise AssertionError("a name under the namespace was started under the package")
+
+
 # --- the markers table -----------------------------------------------------
 
 @check("markers: every planted name is measured, whatever the detectors say")

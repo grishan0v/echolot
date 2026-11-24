@@ -208,7 +208,8 @@ ITERATIONS = key("runner", "iterations", INTEGER, 5,
 DEVICE = key("runner", "device", TEXT, None,
              "The serial of the device to record on; `--device` wins over it.")
 ACTIVITY = key("runner", "activity", TEXT, None,
-               "The activity launch mode starts; the launcher's when left out.")
+               "The activity launch mode starts, `pkg/Class` or a class's full name; "
+               "the launcher's when left out.")
 COMMAND = key("runner", "command", TEXT, None,
               "What command mode runs on the host for each repeat.")
 DURATION_MS = key("runner", "duration_ms", NUMBER, 12000,
@@ -863,7 +864,27 @@ def _where(planted: Planted, lacking: list[str], shown: int = 5) -> str:
     return "; ".join(said)
 
 
-def resolve_activity(device: str, package: str) -> str:
+def started(activity: str, package: str) -> str:
+    """The component `am start -n` takes, from what `runner.activity` holds.
+
+    `pkg/Class` as it is, and a class's full name in the package, which is
+    how `scan` writes the key: one line that holds for every variant, while
+    the package differs by a suffix from one to the next (#816, #930). A name
+    that starts with a dot is the manifest's shorthand, under the namespace
+    and not the package, which a suffix makes two names: it is refused.
+    """
+    activity = activity.strip()
+    if "/" in activity:
+        return activity
+    if activity.startswith("."):
+        raise RunnerError(
+            f"runner.activity: {activity} starts with a dot, which the manifest reads "
+            f"under the app's namespace, and a package with a suffix is not that name. "
+            f"Write the class's full name, or the component as `{package}/<the class>`.")
+    return f"{package}/{activity}"
+
+
+def resolve_activity(device: str, package: str, root: Path | None = None) -> str:
     out = _run(["adb", "-s", device, "shell", "cmd", "package",
                 "resolve-activity", "--brief", package], timeout=60)
     activity = out.strip().splitlines()[-1].strip() if out.strip() else ""
@@ -876,11 +897,62 @@ def resolve_activity(device: str, package: str) -> str:
     # `android/com.android.internal.app.ResolverActivity`. Taken as the app's,
     # every repeat started the chooser and measured nothing of the app.
     if activity.split("/", 1)[0] != package:
-        raise RunnerError(
-            f"{package} has more than one launcher activity, and the device "
-            f"answered with {activity} instead of one of them. Set "
-            f"runner.activity to the one the scenario starts.")
+        raise RunnerError(several_launchers(device, package, activity, root))
     return activity
+
+
+def launchers_on(device: str, package: str) -> list[str]:
+    """The launcher activities the device has for `package`, as components.
+
+    `cmd package query-activities` for MAIN and LAUNCHER in the package:
+    each match prints its component on a line of its own, after a line of
+    numbers with `--brief`. An Android that does not know the command, or
+    any failure of it, is no list: the error it serves says what it can
+    without one.
+    """
+    try:
+        out = _run(["adb", "-s", device, "shell", "cmd", "package", "query-activities",
+                    "--brief", "-a", "android.intent.action.MAIN",
+                    "-c", "android.intent.category.LAUNCHER", package], timeout=60)
+    except RunnerError:
+        return []
+    found: list[str] = []
+    for line in out.splitlines():
+        text = line.strip()
+        if re.fullmatch(r"[\w.]+/[\w.$]+", text) and text.split("/", 1)[0] == package:
+            full = component(text)
+            if full and full not in found:
+                found.append(full)
+    return found
+
+
+def several_launchers(device: str, package: str, answered: str, root: Path | None) -> str:
+    """The error for a package the device has several launchers for: which
+    they are, and the one the project's own manifest declares (#930).
+
+    It used to say only that there were several. On a debug build with a
+    leak detector the second is the detector's, and which of the two was the
+    app's was left to whoever read the error, with no list to read it from.
+    """
+    found = launchers_on(device, package)
+    ours: list[str] = []
+    if root is not None and found:
+        from . import scan
+        try:
+            app = scan.app_module(root, scan.Facts(root=str(root)))
+        except OSError:
+            app = None
+        declared = set((app or {}).get("launcher_components") or [])
+        ours = [c for c in found if c.split("/", 1)[1] in declared]
+    said = f"{package} has more than one launcher activity, and the device answered with {answered}"
+    if found:
+        said += " instead of one of them: " + ", ".join(found)
+    said += ". Set runner.activity to the one the scenario starts"
+    if len(ours) == 1:
+        cls = ours[0].split("/", 1)[1]
+        said += (f": the project's own manifest declares {cls}, so `activity: \"{cls}\"` "
+                 f"under `runner:`")
+    return said + "."
 
 
 # A package name and an atrace category are both substituted between quotes in
@@ -1494,7 +1566,9 @@ def collect(package: str, out_dir: Path, iterations: int,
                 f"is not there prints an error and exits 0, and every trace "
                 f"would hold the device and no app. A gradle-mode round "
                 f"uninstalls the app it tested when it ends.")
-        activity = ACTIVITY.read(section) or resolve_activity(dev, package)
+        named = ACTIVITY.read(section)
+        activity = (started(str(named), package) if named
+                    else resolve_activity(dev, package, Path(PROJECT_ROOT.read(section))))
         log(f"device {dev}, activity {activity}")
     else:
         log(f"device {dev}, scenario: {command}")
