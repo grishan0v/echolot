@@ -521,7 +521,7 @@ def _not_compared_warnings(before: dict, after: dict) -> list[dict[str, str]]:
         return [{
             "id": "not-checked-both",
             "text": f"{count} detector(s) could not run on either side, because "
-                    f"neither recording holds what they read. {why} They are "
+                    f"neither side holds what they read. {why} They are "
                     f"left out of the comparison.",
         }]
     for side in ("before", "after"):
@@ -532,7 +532,7 @@ def _not_compared_warnings(before: dict, after: dict) -> list[dict[str, str]]:
         out.append({
             "id": f"not-checked-{side}",
             "text": f"{count} detector(s) could not run on the {side} side, "
-                    f"because that recording does not hold what they read. "
+                    f"because that side does not hold what they read. "
                     f"{why} Their rows are left out of the table rather than "
                     f"called gone or new, and a detector that could not run on "
                     f"one side is not compared on the other.",

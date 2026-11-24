@@ -69,7 +69,7 @@ from .analyze import (
     analyze_trace,
     plan_detectors,
 )
-from .config import Config, ConfigError
+from .config import WHOLE_TRACE, Config, ConfigError
 from .pages import answer_page
 from .pages import compare_page
 from .pages import report_page
@@ -451,6 +451,31 @@ def _pick_scenario(cfg: Config, asked: str | None, inside: bool | None = None) -
     _note_scenario(cfg, asked)
 
 
+def _whole_trace(cfg: Config, asked: str | None) -> None:
+    """`analyze --whole-trace`: the window is the whole trace, and the
+    report's scenario is `whole-trace`, none of the config's (#519).
+
+    For a recording made outside the scenarios — a scroll recorded by hand,
+    a teammate's trace — which used to be measured by letting the config's
+    anchors miss: the report then opened with a warning that its numbers
+    were not about the scenario, under the scenario's name. Here nothing is
+    missed and nothing is warned about, and the header says what the window
+    is.
+
+    `--scenario` picks the window of one of the config's scenarios, and is
+    refused beside it: the two are two answers to where the window is.
+    """
+    if asked is not None:
+        raise ConfigError(
+            f"--whole-trace and --scenario {asked} are two answers to where the "
+            f"window is: keep one. --whole-trace measures the whole trace, as a "
+            f"scenario of its own called `{WHOLE_TRACE}`, on the config's "
+            f"top-level thresholds")
+    _ = cfg.scenarios  # a scenario the config cannot mean is refused as on any run
+    cfg.whole_trace = True
+    recorder.note(scenario=WHOLE_TRACE)
+
+
 def _working_in(cfg: Config, asked: int | None) -> dict[str, Any] | None:
     """The investigation this `collect` or `analyze` runs inside, by `--hunt N`;
     None for a run outside any, which says so when one is open.
@@ -584,7 +609,10 @@ def cmd_analyze(args) -> int:
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
         inside = _working_in(cfg, args.hunt)
-        _pick_scenario(cfg, args.scenario, inside=inside is not None)
+        if getattr(args, "whole_trace", False):
+            _whole_trace(cfg, args.scenario)
+        else:
+            _pick_scenario(cfg, args.scenario, inside=inside is not None)
         if args.root:
             if not Path(args.root).is_dir():
                 raise ConfigError(f"--root {args.root}: no such directory")
@@ -788,7 +816,7 @@ def _latest_here(out_dir: Path, cfg: Config) -> bool:
     overview's pointers name the report's path — `-o` elsewhere, a scenario
     `report` might not pick, a build directory the agent ran from.
     """
-    if cfg.path is None or cfg.get("scenarios") is not None:
+    if cfg.path is None or cfg.get("scenarios") is not None or cfg.whole_trace:
         return False
     home = Path(cfg.path).resolve().parent
     return (Path.cwd().resolve() == home
@@ -1069,6 +1097,15 @@ def _same_window(before: dict, after: dict, before_path: Path, after_path: Path)
     defined was cut by anchors.
     """
     apart = launch_mod.differ(before, after)
+    if apart and launch_mod.WHOLE in (launch_mod.definition(before),
+                                      launch_mod.definition(after)):
+        # The whole trace against a scenario's window (#519): one side is
+        # about everything the app did while its recording ran.
+        raise ConfigError(
+            f"these two reports cannot be compared: {apart} ({before_path} "
+            f"against {after_path}). To compare them, analyze both sets the "
+            f"same way: both with `--whole-trace`, or both with the "
+            f"scenario's window")
     if apart:
         raise ConfigError(
             f"these two reports cannot be compared: {apart} ({before_path} "
@@ -1223,6 +1260,11 @@ def cmd_compare(args) -> int:
 
         before_path, after_path = _compare_pair(args, project)
         before, after = _load_report(before_path), _load_report(after_path)
+        # The whole trace is a scenario of its own name, `whole-trace`, and
+        # what sets it apart from a scenario's report is its window: that is
+        # said first, with how to make the two alike (#519).
+        if launch_mod.WHOLE in (launch_mod.definition(before), launch_mod.definition(after)):
+            _same_window(before, after, before_path, after_path)
         _same_scenario(before, after, before_path, after_path)
         _same_window(before, after, before_path, after_path)
         # The comparison goes beside the scenario's own report.
@@ -5153,6 +5195,11 @@ def build_parser() -> argparse.ArgumentParser:
                     metavar="DETECTOR.PARAM=VALUE",
                     help="override one threshold for this run only, e.g. "
                          "--set main_thread_block.min_slice_ms=16; repeatable")
+    an.add_argument("--whole-trace", action="store_true",
+                    help="take the whole trace as the window, for a recording made "
+                         "outside the config's scenarios: no anchor is looked for, "
+                         "the report's scenario is `whole-trace`, and it goes to "
+                         ".echolot/out/whole-trace")
     an.add_argument("--defaults", action="store_true",
                     help="ignore the config's detectors section: every detector, "
                          "built-in thresholds. To see what the shipped numbers "

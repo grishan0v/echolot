@@ -3153,6 +3153,88 @@ def _(report):
         assert compared(same, same) == (True, []), compared(same, same)
 
 
+# --- the whole trace (#519) ------------------------------------------------
+#
+# `analyze --whole-trace`, and a scenario with `window: whole`: a recording
+# made outside the config's scenarios, measured without letting its anchors
+# miss. The window is the trace's own first and last moments, and the one
+# window a report may call the whole trace.
+
+def _whole(build=fixture.build, scenario: dict | None = None) -> tuple[dict, dict]:
+    """A trace analysed over its whole length, and the trace's own bounds.
+
+    Under `--whole-trace` by default; with `scenario`, a config whose
+    scenario names the window instead."""
+    from .tp import TraceSession
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "whole.perfetto-trace"
+        trace.write_bytes(build())
+        cfg = Config({**FIXTURE_CONFIG, "scenario": scenario or FIXTURE_CONFIG["scenario"]})
+        cfg.whole_trace = scenario is None
+        got = _analyze(trace, cfg)
+        with TraceSession(trace, _binary) as tp:
+            bounds = tp.query("SELECT start_ts AS ts_start, end_ts AS ts_end FROM trace_bounds")[0]
+    return got, bounds
+
+
+@check("whole trace: the window is the trace, named so, with no anchor to miss")
+def _(report):
+    from . import report as report_mod
+    got, bounds = _whole()
+    w = got["window"]
+    assert (w["ts_start"], w["ts_end"]) == (bounds["ts_start"], bounds["ts_end"]), (w, bounds)
+    assert w["defined_by"] == "whole" and "report_fully_drawn" not in w, w
+    # The config's anchors are not looked for: there is nothing to miss.
+    assert w["start_anchor"] is None and w["end_anchor"] is None, w
+    assert got["scenario"] == "whole-trace", got["scenario"]
+    text = report_mod.to_markdown(got)
+    head = text.split("\n## ", 1)[0]
+    assert "The window is the whole trace" in head, head
+    assert "Scenario window" not in head and "anchor" not in head.lower(), head
+    # The startup the trace holds is described against it, as the platform's.
+    assert w["startup"]["dur_ms"] == 1065.0, w["startup"]
+    # `window: whole` in the config is the same window under the scenario's name.
+    named, _ = _whole(scenario={"name": "adhoc", "window": "whole"})
+    assert (named["window"]["ts_start"], named["window"]["ts_end"]) == (w["ts_start"], w["ts_end"])
+    assert named["scenario"] == "adhoc" and named["window"]["defined_by"] == "whole", named["window"]
+    # And the anchored report says none of it.
+    assert "defined_by" not in report["window"], report["window"]
+
+
+@check("whole trace: app_init with no start of the process in the window is not checked, not silent")
+def _(report):
+    from . import report as report_mod
+    got, _ = _whole(fixture.pool)
+    by_id = {d["id"]: d for d in got["detectors"]}
+    app_init = by_id["app_init"]
+    assert app_init["checked"] is False and app_init["rows"] == [], app_init
+    assert "no start of the app's process" in app_init["reason"], app_init["reason"]
+    # The activity manager's records were there: only the window lacks what
+    # the check reads, and `anr`, which reads the whole trace, looked.
+    assert "activity records" not in app_init["reason"], app_init["reason"]
+    assert by_id["anr"]["checked"] is True, by_id["anr"]
+    text = report_mod.to_markdown(got)
+    said = next(ln for ln in text.splitlines() if "what they read is not in this window" in ln)
+    assert "`app_init`" in said and not said.startswith("> ⚠️"), said
+    silent = next(ln for ln in text.splitlines() if ln.startswith("**Silent:**"))
+    assert "app_init" not in silent, silent
+    # A window that holds the start looks, as the fixture's own does.
+    assert next(d for d in report["detectors"] if d["id"] == "app_init")["checked"] is True
+
+
+@check("compare refuses the whole trace against a scenario's window")
+def _(report):
+    from . import compare as cmp_mod
+    whole, _ = _whole()
+    cmp = cmp_mod.build(report, whole, before_path="b.json", after_path="a.json")
+    said = [w["text"] for w in cmp["warnings"] if w["id"] == "window"]
+    assert cmp["comparable"] is False and said, cmp["warnings"]
+    assert "by the config's start and end anchors before" in said[0] \
+        and "as the whole trace" in said[0], said
+    again = cmp_mod.build(whole, whole, before_path="b.json", after_path="a.json")
+    assert again["comparable"] is True, again["warnings"]
+
+
 # --- anr, anr_risk ---------------------------------------------------------
 
 def _lowered_bar():

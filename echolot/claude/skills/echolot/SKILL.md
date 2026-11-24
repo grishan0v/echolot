@@ -281,9 +281,11 @@ them as a small json.
 
 **Silent detectors matter as much as firing ones.** They stay in the report
 with empty `rows`. Silence means that ground was checked and is clean — do not
-go there. Unless the detector says `checked: false`: the trace did not hold
-what it reads, `reason` says what, and its empty `rows` say nothing about the
-app. report.md names those apart from `Silent`.
+go there. Unless the detector says `checked: false`: the trace, or its window,
+did not hold what it reads, `reason` says what, and its empty `rows` say
+nothing about the app. report.md names those apart from `Silent`. A trace of
+another journey is `analyze <trace> --whole-trace`, not an edit of the
+config's anchors.
 
 **`self_ms` versus `total_ms`.** Self time, with children subtracted, is where
 the time actually went. `traversal` with `total_ms: 354` and `self_ms: 79` does

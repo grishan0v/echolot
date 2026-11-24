@@ -29,6 +29,12 @@ The bounds are computed here, in Python, between the two SQL passes:
 `context.sql` is kept to the old, stable tables on purpose, and the launch
 comes from a standard-library module. Everything after is unchanged. No
 detector reads an anchor; they read the window's two numbers.
+
+The other window with no anchor is the whole trace (#519): `window: whole`,
+or `analyze --whole-trace` for a recording made outside any scenario. Its
+`defined_by` is `whole`, and it is the one window a report may call the
+whole trace. One cut by anchors that matched nothing runs over the process's
+own first and last slices instead, and says so (#614).
 """
 
 from __future__ import annotations
@@ -43,6 +49,8 @@ from .tp import sql_value
 # config's anchors has no such key.
 LAUNCH = "launch"
 FULLY_DRAWN = "launch+reportFullyDrawn"
+# The whole trace, from its first moment to its last.
+WHOLE = "whole"
 
 # `window.report_fully_drawn`: where the call was read. None when the trace
 # holds no call after the launch began.
@@ -138,6 +146,29 @@ def find(tp, upid: int, trace: str | None = None) -> dict[str, Any]:
     }
 
 
+def whole(tp) -> dict[str, Any]:
+    """The bounds of the whole trace, as a window with nothing to cut it.
+
+    `trace_bounds`, the recording's own first and last moments, and not the
+    process's first and last slices: those are what a window whose anchors
+    matched nothing runs over, and that window is not the whole trace.
+    """
+    rows = tp.query("SELECT start_ts AS ts_start, end_ts AS ts_end FROM trace_bounds")
+    return {**rows[0], "defined_by": WHOLE}
+
+
+def is_launch(window: dict[str, Any]) -> bool:
+    """Whether the window is a launch: closed by the trace's launch, in one
+    way or, over repeats that disagreed, in two."""
+    by = window.get("defined_by")
+    return bool(by) and by != WHOLE
+
+
+def is_whole(window: dict[str, Any]) -> bool:
+    """Whether the window is the whole trace (`window: whole`, `--whole-trace`)."""
+    return window.get("defined_by") == WHOLE
+
+
 def facts(tp, window: dict[str, Any], found: dict[str, Any]) -> dict[str, Any]:
     """What a launch window says about itself in `report.json`.
 
@@ -151,7 +182,14 @@ def facts(tp, window: dict[str, Any], found: dict[str, Any]) -> dict[str, Any]:
     recording, so it is measured and named: from the window's start to the
     main thread's first state in it. Nothing for a process that was already
     there, as on a warm or hot start.
+
+    The whole trace says only what it is. Its start is no intent, and a main
+    thread with no state there may have been asleep since before the
+    recording began: that stretch is not named, and the budget's warning
+    about a window partly accounted for says the process started inside it.
     """
+    if found.get("defined_by") == WHOLE:
+        return {"defined_by": WHOLE}
     budget = window.get("main_thread")
     if budget:
         first = tp.query(
@@ -183,16 +221,23 @@ def merged(windows: list[dict[str, Any]], total: int) -> dict[str, Any]:
     out: dict[str, Any] = {"defined_by": " and ".join(kinds)}
     if len(kinds) > 1:
         out["defined_by_runs"] = {k: f"{defined.count(k)}/{total}" for k in kinds}
+    if kinds == [WHOLE]:
+        return out
     sources = [w.get("report_fully_drawn") for w in windows if w.get("defined_by")]
     out["report_fully_drawn"] = min(sources, key=(None, SYSTEM_SERVER, APP).index)
     return out
 
 
 def lines(window: dict[str, Any]) -> list[str]:
-    """What bounds a window that is the launch, where an anchored one names its anchors."""
+    """What bounds a window that is the launch or the whole trace, where an
+    anchored one names its anchors."""
     by = window.get("defined_by")
     if not by:
         return []
+    if by == WHOLE:
+        return ["The window is the whole trace, from its first moment to its "
+                "last: no scenario cut it, so every number below is about "
+                "everything the app did while the recording ran."]
     mixed = window.get("defined_by_runs")
     if mixed:
         closed = {FULLY_DRAWN: "on `reportFullyDrawn`", LAUNCH: "at the launch's end"}
@@ -234,6 +279,7 @@ _IN_WORDS = {
     ANCHORS: "by the config's start and end anchors",
     LAUNCH: "as the launch, closed at its end",
     FULLY_DRAWN: "as the launch, closed on `reportFullyDrawn`",
+    WHOLE: "as the whole trace (`--whole-trace` or `window: whole`)",
 }
 
 
@@ -252,6 +298,11 @@ def differ(before: dict[str, Any], after: dict[str, Any]) -> str | None:
     own in 15 traces of 35. Every row moves for that reason alone, and
     nothing else in two such reports says so: the scenario's name is the
     same, and a changed config only warns.
+
+    The whole trace against any other window is the same answer for a
+    larger reason: one side's rows are about the scenario, the other's about
+    everything the app did while its recording ran, as long as somebody let
+    it run (#519).
 
     A set whose repeats did not agree among themselves is no single
     definition, and is refused against anything.
