@@ -161,3 +161,99 @@ def test_a_comparison_cut_short_says_where(written, tmp_path):
 def test_no_file_is_absent_rather_than_a_fault(tmp_path):
     got = files.read_comparison(tmp_path / "comparison.json")
     check("absent", isinstance(got, files.Refusal) and got.absent, got)
+
+
+# --- hunt.json -----------------------------------------------------------------------------------
+
+
+def test_a_record_reads_back_as_it_was_written(tmp_path):
+    from echolot import hunt
+    written = hunt.open_new(tmp_path, "why is the first frame late?", scenario="coldStart")
+    got = files.read_hunt(hunt.path(tmp_path))
+    check("it carries the schema the reader reads", written["schema"] == files.HUNT_SCHEMA)
+    check("equal to what was written", got == json.loads(hunt.path(tmp_path).read_text(encoding="utf-8")) == written, got)
+
+
+RECORD = {"n": 2, "question": "q", "status": "open", "collects": 1, "analyzes": 0, "reports": 3,
+          "opened_at": "2026-11-24T10:00:00+00:00", "traces": ["a", "b"], "confirmed": {}}
+
+
+@pytest.mark.parametrize("field, value", [
+    ("n", 0), ("n", "x"), ("n", True), ("reports", "abc"), ("collects", -1), ("question", 5),
+    ("opened_at", 1763719200), ("traces", 7), ("confirmed", []), ("verdict", "yes"),
+])
+def test_a_field_of_a_record_of_the_wrong_type_reads_as_absent(tmp_path, field, value):
+    """The rest of the record still reads (#580)."""
+    (tmp_path / "hunt.json").write_text(json.dumps({**RECORD, field: value}), encoding="utf-8")
+    got = files.read_hunt(tmp_path / "hunt.json")
+    check("it reads", not isinstance(got, files.Refusal), got)
+    check("without that field, with the rest", field not in got
+          and {k: v for k, v in RECORD.items() if k != field} == {k: v for k, v in got.items() if k != field}, got)
+
+
+def test_a_trace_set_that_is_no_path_is_left_out(tmp_path):
+    (tmp_path / "hunt.json").write_text(json.dumps({**RECORD, "traces": ["a", 3, None, "b"]}), encoding="utf-8")
+    check("the paths are kept", files.read_hunt(tmp_path / "hunt.json")["traces"] == ["a", "b"])
+
+
+@pytest.mark.parametrize("data, said", [
+    (b"\xff\xfe{", "it is not UTF-8 text"),
+    (b"  ", "it is empty"),
+    (b'{"n": 1, "question": "q"', "it is not whole JSON at line 1"),
+    (b"[]", "it holds a list, not an object"),
+    (json.dumps({**RECORD, "schema": 2}).encode(), "a newer echolot wrote it, in schema 2; this one reads schema 1"),
+    (json.dumps({**RECORD, "schema": "1"}).encode(), "its schema number is text, not a whole number"),
+])
+def test_a_record_that_does_not_read_says_why(tmp_path, data, said):
+    (tmp_path / "hunt.json").write_bytes(data)
+    got = files.read_hunt(tmp_path / "hunt.json")
+    check(said, refused(got, said), got)
+
+
+def test_a_record_with_no_schema_number_is_one_written_before_it_had_one(tmp_path):
+    (tmp_path / "hunt.json").write_text(json.dumps(RECORD), encoding="utf-8")
+    check("it reads, as it is", files.read_hunt(tmp_path / "hunt.json") == RECORD)
+
+
+# --- runs.jsonl ----------------------------------------------------------------------------------
+
+
+RUN = {"ts": "2026-11-24T10:00:00+00:00", "cmd": "doctor", "argv": ["doctor"], "cwd": "/p", "exit": 0,
+       "ms": 812, "version": "0.18.0", "facts": {"checks": 219, "failed": [], "sandbox": "macos"}}
+
+
+def test_the_log_reads_back_as_it_was_written(tmp_path):
+    lines = [RUN, {**RUN, "cmd": "analyze", "facts": {"runs": 3}}]
+    (tmp_path / "runs.jsonl").write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
+    check("every line, in order", files.read_runs(tmp_path / "runs.jsonl") == lines)
+
+
+@pytest.mark.parametrize("field, value", [
+    ("ts", 5), ("cmd", ["a"]), ("argv", "doctor"), ("exit", True), ("exit", "0"), ("ms", "fast"),
+    ("version", 18), ("config", "x"), ("facts", [1]), ("error", {"a": 1}),
+])
+def test_a_field_of_a_run_of_the_wrong_type_is_dropped_and_the_line_kept(tmp_path, field, value):
+    (tmp_path / "runs.jsonl").write_text(json.dumps({**RUN, field: value}) + "\n", encoding="utf-8")
+    got = files.read_runs(tmp_path / "runs.jsonl")
+    check("the run without that field", got == [{k: v for k, v in RUN.items() if k != field}], got)
+
+
+@pytest.mark.parametrize("fact, value", [("failed", 2), ("checks", "219"), ("checks", False), ("sandbox", ["a"])])
+def test_a_self_checks_fact_of_the_wrong_type_is_dropped(tmp_path, fact, value):
+    """A `failed` that is a number was counted with `len` (#555)."""
+    (tmp_path / "runs.jsonl").write_text(json.dumps({**RUN, "facts": {**RUN["facts"], fact: value}}) + "\n",
+                                         encoding="utf-8")
+    got = files.read_runs(tmp_path / "runs.jsonl")
+    check("the fact is gone, the others kept",
+          got[0]["facts"] == {k: v for k, v in RUN["facts"].items() if k != fact}, got)
+
+
+def test_a_line_that_is_no_run_is_skipped_and_the_rest_read(tmp_path):
+    good = json.dumps(RUN).encode()
+    (tmp_path / "runs.jsonl").write_bytes(b"\n".join([good, b"\xff\xfe", b"[1, 2]", b"null", b"42", b"{cut",
+                                                      b"", good[: len(good) // 2], good]))
+    check("the two runs", files.read_runs(tmp_path / "runs.jsonl") == [RUN, RUN])
+
+
+def test_no_log_is_no_runs(tmp_path):
+    check("none", files.read_runs(tmp_path / "runs.jsonl") == [])

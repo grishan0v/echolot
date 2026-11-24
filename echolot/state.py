@@ -177,27 +177,15 @@ def project_state(project: Path, config: str = "echolot.yml",
     # The last self-check, whichever command ran it: `init` runs one too and
     # its facts carry `checks` like a doctor's. Read off `doctor` alone, a
     # passing check inside `init` left `next` pointing at the doctor before it.
+    # Its `failed`, `checks` and `sandbox` are as doctor writes them, or gone
+    # (`files.RUN`): a `failed` that is a number was counted with `len` (#555).
     st["last_doctor"] = st["last_analyze"] = None
     for run in recorder.read(project / recorder.LOG_FILE):
         if run.get("cmd") == "doctor" or "checks" in (run.get("facts") or {}):
-            st["last_doctor"] = _self_check(run)
+            st["last_doctor"] = run
         elif run.get("cmd") == "analyze":
             st["last_analyze"] = run
     return st
-
-
-def _self_check(run: dict) -> dict:
-    """A self-check's line with the facts `status`, `next` and the start page
-    read off it only as doctor writes them: `failed` a list, `checks` a
-    count, `sandbox` a name. A `failed` that is a number was counted with
-    `len`, and a `sandbox` that is a list looked up as a key (#555)."""
-    facts = run.get("facts")
-    if not facts:
-        return run
-    kinds = {"failed": list, "checks": int, "sandbox": str}
-    kept = {k: v for k, v in facts.items()
-            if k not in kinds or _holds(v, kinds[k])}
-    return {**run, "facts": kept}
 
 
 def _report(rep: Path) -> dict | None:
