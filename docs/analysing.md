@@ -397,7 +397,11 @@ says what it waits for, and the kernel names the thread that woke it. A row
 is a thread of the app that let the main thread go from sleeps it began inside
 its own work, with its digits folded, so that Room's `arch_disk_io_0` to `_3`
 are one row and every coroutine worker is `DefaultDispatch`, as the kernel's
-fifteen characters leave it. `detail` names the slice it waited longest in. On
+fifteen characters leave it. `detail` names the slice it waited longest in,
+then what the thread that let it go was doing over those waits (#418):
+`its thread: running 80%, waiting for a CPU 10%, …`. Running, the main
+thread's way went through that thread's code; anything else, that thread
+was held up too, and what held it up is the cause. On
 a large Kotlin app it blocked inside two SDKs' initializers until the thread
 loading SharedPreferences let it go, 58 ms on the median. Those traces caught
 the end of a start the system had begun on its own, right after a force-stop,

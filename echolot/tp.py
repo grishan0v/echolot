@@ -92,6 +92,9 @@ _WITH_UNIT = re.compile(r"^([-+]?\d+(?:\.\d+)?)\s+(\S+)$")
 # so that a sentence about a table is not taken for one.
 _WRITES = re.compile(r"\bCREATE\s+(OR\s+REPLACE\s+)?PERFETTO\s+TABLE\s+(\w+)",
                      re.IGNORECASE)
+# The same for a virtual table, `SPAN_JOIN`'s: it has no `OR REPLACE`, and
+# the drop in front of it does that job.
+_WRITES_VIRTUAL = re.compile(r"\bCREATE\s+VIRTUAL\s+TABLE\s+(\w+)", re.IGNORECASE)
 _OWN_NAME = re.compile(r"\b_det_\w+")
 _COMMENT = re.compile(r"--[^\n]*")
 
@@ -568,7 +571,10 @@ def _own_tables(det_id: str, first: str, sections: dict[str, str],
       a name two of them write, `anr`'s `_det_anr_risk` beside `anr_risk`.
     - `OR REPLACE`. The first query runs again in the same session: with its
       thresholds open for the merge of repeats, and once more per trace under
-      `calibrate`. A plain CREATE fails the second time.
+      `calibrate`. A plain CREATE fails the second time. A `SPAN_JOIN` of
+      two of its tables is a virtual table, which has no `OR REPLACE`: there
+      `DROP TABLE IF EXISTS` in front of it does that job, and its absence
+      is refused the same way (#417).
     - Every `_det_` name its queries read is one its own first query writes.
       A table holds what the last run of its detector left, which another
       detector's query cannot know.
@@ -577,20 +583,31 @@ def _own_tables(det_id: str, first: str, sections: dict[str, str],
     in the table, so `analyze` reads `@intervals` and `@samples` before it;
     see `analyze_trace`.
     """
+    text = _COMMENT.sub("", first)
+    found = sorted([(m.start(), m.group(2), bool(m.group(1)))
+                    for m in _WRITES.finditer(text)]
+                   + [(m.start(), m.group(1), None)
+                      for m in _WRITES_VIRTUAL.finditer(text)])
     written: list[str] = []
-    for m in _WRITES.finditer(_COMMENT.sub("", first)):
-        name = m.group(2)
+    for at, name, replaced in found:
         if name != f"_det_{det_id}" and not name.startswith(f"_det_{det_id}_"):
             raise ValueError(
                 f"{where}: its first query writes `{name}`. A table of a "
                 f"detector's own is named after it: `_det_{det_id}`, or "
                 f"`_det_{det_id}_` and more")
-        if not m.group(1):
+        if replaced is False:
             raise ValueError(
                 f"{where}: `{name}` is written with CREATE PERFETTO TABLE. "
                 f"The first query runs again in the same session, with its "
                 f"thresholds open, and a plain CREATE fails there: write "
                 f"CREATE OR REPLACE PERFETTO TABLE")
+        if replaced is None and not re.search(
+                rf"\bDROP\s+TABLE\s+IF\s+EXISTS\s+{name}\s*;", text[:at], re.IGNORECASE):
+            raise ValueError(
+                f"{where}: `{name}` is a virtual table and is not dropped "
+                f"before it is written. The first query runs again in the same "
+                f"session, and a virtual table has no OR REPLACE: write "
+                f"DROP TABLE IF EXISTS {name}; in front of it")
         written.append(name)
     for text in (first, *sections.values()):
         for name in _OWN_NAME.findall(_COMMENT.sub("", text)):

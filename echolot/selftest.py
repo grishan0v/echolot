@@ -542,6 +542,43 @@ def _(report):
         assert Detector.from_file(path).tables == ("_det_own_part",)
 
 
+@check("a detector's own SPAN_JOIN is dropped before it is written, and named after it")
+def _(report):
+    # `monitor_contention` and `main_thread_waits` split their waits by the
+    # other thread's states with a SPAN_JOIN of their own (#417, #418). A
+    # virtual table has no OR REPLACE, and the first query runs again in the
+    # session: without the drop in front, the second run fails.
+    from .analyze import DETECTOR_DIR
+    from .tp import Detector, load_detectors
+    shipped = {d.id: d.tables for d in load_detectors(DETECTOR_DIR)}
+    assert "_det_monitor_contention_held" in shipped["monitor_contention"], shipped
+    assert "_det_main_thread_waits_by" in shipped["main_thread_waits"], shipped
+    head = "-- @id: own\n-- @title: Own\n\n"
+    table = "CREATE OR REPLACE PERFETTO TABLE _det_own AS SELECT 1 AS p, 0 AS ts, 1 AS dur;\n"
+    join = "CREATE VIRTUAL TABLE {t} USING SPAN_JOIN(_det_own PARTITIONED p, _tstate_win PARTITIONED p);\n"
+    rows = "SELECT 'a' AS location FROM {t} LIMIT 20;\n"
+    cases = {
+        "is not dropped before it is written": table + join.format(t="_det_own_by")
+        + rows.format(t="_det_own_by"),
+        "named after it": table + "DROP TABLE IF EXISTS _det_other;\n"
+        + join.format(t="_det_other") + rows.format(t="_det_other"),
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "own.sql"
+        for said, body in cases.items():
+            path.write_text(head + body, encoding="utf-8")
+            try:
+                Detector.from_file(path)
+            except ValueError as e:
+                assert said in str(e), (said, str(e))
+            else:
+                raise AssertionError(f"read without a word: {body!r}")
+        path.write_text(head + table + "DROP TABLE IF EXISTS _det_own_by;\n"
+                        + join.format(t="_det_own_by") + rows.format(t="_det_own_by"),
+                        encoding="utf-8")
+        assert Detector.from_file(path).tables == ("_det_own", "_det_own_by")
+
+
 @check("slices outside the window stayed out of the report")
 def _(report):
     no_slice_named(report, "Bootstrap_OUTSIDE")   # 50 ms before the window
@@ -1063,11 +1100,14 @@ def _(report):
     `loadConfig` and once in `readSession`. One row for both, their digits
     folded, that names the slice it waited longest in. The third wakeup ended
     a sleep that began in the GC lock's contention, and a lock's wait is left
-    to the detectors of locks."""
+    to the detectors of locks. Each sleep is read by its own thread's states
+    (#418): the second slept 860..1094 and ran 4 ms before it let the main
+    thread go, the first ran 3 ms and the trace has nothing of it before."""
     row = only_row(report, "main_thread_waits")
     assert (row["location"], row["count"], row["total_ms"], row["max_ms"]) \
         == ("arch_disk_io_#", 2, 18.0, 12.0), row
-    assert row["detail"] == "blocked in readSession", row
+    assert row["detail"] == ("blocked in readSession · its threads: running 39%, "
+                             "asleep 44%, unknown 17%"), row
 
 
 @check("main_thread_waits: the looper's idle between messages is no wait")
@@ -1086,10 +1126,100 @@ def _(report):
         path = Path(tmp) / "looper.perfetto-trace"
         path.write_bytes(fixture.looper_waits())
         got = _analyze(path, cfg)
-    waits = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"])
+    # Where it waited; what the waking thread did meanwhile is the next check's.
+    waits = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"].split(" · ")[0])
              for r in rows(got, "main_thread_waits")]
     assert waits == [("Chrome_IOThread", 3, 26.0, 10.0, "blocked in animation"),
                      ("SharedPreferenc", 1, 20.0, 20.0, "blocked in activityStart")], waits
+
+
+# A start where the other side of each wait is in every state a thread can
+# be in (#417, #418), as `(name, from ms, to ms, children)` per thread and
+# `(cpu, ms, tid in, tid out, the state it left in)` for the scheduler.
+OTHER_PID = 7400
+OTHER_THREADS = {OTHER_PID: "com.example.app", 7401: "DefaultDispatch", 7402: "DefaultDispatch",
+                 7403: "StoreWriter", 7404: "Lonely", 7405: "ConfigLoader"}
+OTHER_LONG = ("monitor contention with owner StoreWriter (7403) at void "
+              "com.example.Store.update(java.lang.String)(Store.java:3) waiters=0 "
+              "blocking from java.lang.Object com.example.Store.find()(Store.java:4)")
+OTHER_SLICES = {
+    OTHER_PID: [("AppStart", 0, 400, [
+        # A wait for StoreWriter before the trace has any state of it.
+        ("Lock contention on a monitor lock (owner tid: 7403)", 50, 20, []),
+        # Asleep inside until ConfigLoader lets it go.
+        ("loadConfig", 100, 100, []),
+    ])],
+    # Two workers of one pool wait for StoreWriter at the same moment, one
+    # in each shape: 100..200 and 130..170.
+    7401: [("fetch", 90, 170, [
+        (OTHER_LONG, 100, 100, [("Lock contention on a monitor lock (owner tid: 7403)",
+                                 101, 98, [])])])],
+    7402: [("fetch", 120, 140, [
+        ("Lock contention on a monitor lock (owner tid: 7403)", 130, 40, [])])],
+    7403: [("writeAll", 40, 190, [])],
+    # An owner that is no thread of the process.
+    7404: [("refresh", 300, 50, [
+        ("Lock contention on a monitor lock (owner tid: 9999)", 310, 30, [])])],
+}
+OTHER_SCHED = [
+    (0, 0, OTHER_PID, 0, None), (0, 100, 0, OTHER_PID, fixture.S),
+    (0, 200, OTHER_PID, 0, None), (0, 400, 0, OTHER_PID, fixture.S),
+    # StoreWriter: running from 60, waiting for a CPU 120..140, in the kernel
+    # 145..155, asleep 160..175.
+    (3, 60, 7403, 0, None), (3, 120, 0, 7403, fixture.R), (3, 140, 7403, 0, None),
+    (3, 145, 0, 7403, fixture.D), (3, 155, 7403, 0, None), (3, 160, 0, 7403, fixture.S),
+    (3, 175, 7403, 0, None), (3, 220, 0, 7403, fixture.S),
+    # ConfigLoader: running 90..130, waiting for a CPU 130..150, in the kernel
+    # 151..170, asleep 171..190, running again until it wakes the main thread.
+    (5, 90, 7405, 0, None), (5, 130, 0, 7405, fixture.R), (5, 150, 7405, 0, None),
+    (5, 151, 0, 7405, fixture.D), (5, 170, 7405, 0, None), (5, 171, 0, 7405, fixture.S),
+    (5, 190, 7405, 0, None), (5, 200, 0, 7405, fixture.S),
+]
+
+
+def other_thread_trace(path: Path) -> Path:
+    """The start above as a trace, `com.example.app` at pid 7400."""
+    names = {**OTHER_THREADS, 0: "swapper"}
+    builder = fixture.TraceProtoBuilder()
+    fixture.process_tree(builder, [(OTHER_PID, OTHER_THREADS[OTHER_PID], OTHER_THREADS)])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {}
+    for cpu, at, tid_in, tid_out, left in OTHER_SCHED:
+        by_cpu.setdefault(cpu, []).append(
+            (fixture.ms(at), next(seq), "sched", names[tid_out], tid_out,
+             fixture.R if left is None else left, names[tid_in], tid_in))
+    by_cpu[5].append((fixture.ms(200) - 1, next(seq), "waking", 7405, OTHER_PID,
+                      names[OTHER_PID], 0))
+    for cpu, (tid, slices) in enumerate(OTHER_SLICES.items(), start=6):
+        for ts, order, kind, name in fixture._flatten(slices, [], seq):
+            by_cpu.setdefault(cpu, []).append(
+                (ts, order, "print", tid,
+                 f"B|{OTHER_PID}|{name}\n" if kind == "B" else f"E|{OTHER_PID}\n"))
+    fixture.ftrace(builder, by_cpu)
+    path.write_bytes(builder.serialize())
+    return path
+
+
+OTHER_CONFIG = {"project": {"package": "com.example.app", "process": "com.example.app"},
+                "scenario": {"name": "start"}}
+
+
+@check("main_thread_waits: what the thread that let the main thread go was doing meanwhile")
+def _(report):
+    """The main thread sleeps 100 ms inside `loadConfig` until ConfigLoader
+    lets it go, and ConfigLoader spent those 100 ms in each state a thread
+    has. Running, the way forward went through its code; anything else, it
+    was held up too, and its code is not the cost (#418). The fixture's
+    Room row reads two threads, each sleep by the one that ended it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        got = _analyze(other_thread_trace(Path(tmp) / "other.perfetto-trace"),
+                       Config(OTHER_CONFIG))
+    row = only_row(got, "main_thread_waits")
+    assert (row["location"], row["count"], row["total_ms"]) == ("ConfigLoader", 1, 100.0), row
+    assert row["detail"] == ("blocked in loadConfig · its thread: running 42%, "
+                             "waiting for a CPU 20%, in the kernel 19%, asleep 19%"), row
+    assert only_row(report, "main_thread_waits")["detail"].endswith(
+        " · its threads: running 39%, asleep 44%, unknown 17%"), rows(report, "main_thread_waits")
 
 
 @check("main_thread_waits: a row written before #926 is read by its waits, not its idle time")
@@ -1309,6 +1439,54 @@ def _(report):
     assert waiter["detail"].startswith("monitor contention with owner Thread-3"), waiter
     main = one_row(report, "monitor_contention", "main")
     assert (main["count"], main["total_ms"]) == (2, 42.0), main
+
+
+@check("monitor_contention: what the lock's owner was doing while the thread waited")
+def _(report):
+    """Running, the critical section is long; waiting for a CPU, the owner
+    held the lock in the queue for a core; in the kernel or asleep, it waited
+    for something else while it held this (#417). Two workers of one pool
+    wait for StoreWriter at once, 100..200 and 130..170, and each wait is
+    split by StoreWriter's states over its own time: a join of both waits
+    against the owner's states in one go drops a part of the second without
+    a word. The main thread waited for StoreWriter before the trace had any
+    state of it, which is `unknown`; Lonely's owner is no thread of the
+    process, and its row says nothing of it. The shares come after the
+    slice's name, and both of its frames are still placed, and still shown
+    when a view cuts the evidence short."""
+    from . import place
+    from . import report as report_mod
+    with tempfile.TemporaryDirectory() as tmp:
+        got = _analyze(other_thread_trace(Path(tmp) / "other.perfetto-trace"),
+                       Config(OTHER_CONFIG))
+        src = Path(tmp) / "checkout" / "com" / "example"
+        src.mkdir(parents=True)
+        (src / "Store.java").write_text(
+            "package com.example;\npublic class Store {\n"
+            "    public void update(String key) { }\n"
+            "    public Object find() { return null; }\n}\n", encoding="utf-8")
+        place.annotate(got, Path(tmp) / "checkout", None)
+    pool = one_row(got, "monitor_contention", "DefaultDispatch")
+    assert (pool["count"], pool["total_ms"], pool["max_ms"]) == (2, 140.0, 100.0), pool
+    said = " · owner: running 46%, waiting for a CPU 21%, in the kernel 14%, asleep 18%"
+    assert pool["detail"] == OTHER_LONG + said, pool["detail"]
+    assert [p["symbol"] for p in pool.get("places") or []] == [
+        "com.example.Store.update", "com.example.Store.find"], pool.get("places")
+    main = one_row(got, "monitor_contention", "main")
+    assert main["detail"] == ("Lock contention on a monitor lock (owner tid: 7403) · owner "
+                              "StoreWriter in writeAll · waiting in AppStart · owner: "
+                              "running 50%, unknown 50%"), main["detail"]
+    lonely = one_row(got, "monitor_contention", "Lonely")
+    assert lonely["detail"] == ("Lock contention on a monitor lock (owner tid: 9999) · "
+                                "waiting in refresh"), lonely["detail"]
+    view = report_mod.detector_view(got, "monitor_contention")
+    line = next(ln for ln in view.splitlines() if ln.startswith("| DefaultDispatch"))
+    assert line.endswith(f"| monitor contention with …{said} |"), line
+    # On the fixture: two owners of the main thread's locks, one running,
+    # one asleep; LockWaiter's owner is no thread of the process.
+    assert one_row(report, "monitor_contention", "main")["detail"].endswith(
+        " · owner: running 71%, asleep 29%"), rows(report, "monitor_contention")
+    assert "owner:" not in one_row(report, "monitor_contention", "LockWaiter")["detail"]
 
 
 @check("repeated_work: the boundary moves when a mask does")

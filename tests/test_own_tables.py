@@ -79,6 +79,46 @@ def test_what_is_refused_as_the_file_is_read(tmp_path: Path, body: str, said: st
           "own.sql" in str(e.value) and said in str(e.value), str(e.value))
 
 
+SPAN = ("CREATE OR REPLACE PERFETTO TABLE _det_own AS SELECT 1 AS p, 0 AS ts, 1 AS dur;\n"
+        "{drop}CREATE VIRTUAL TABLE {t}\n"
+        "USING SPAN_JOIN(_det_own PARTITIONED p, _tstate_win PARTITIONED p);\n")
+
+
+def test_a_span_join_of_its_own_is_dropped_before_it_is_written(tmp_path: Path) -> None:
+    """A virtual table has no OR REPLACE; the drop in front of it does that
+    job (#417)."""
+    d = _read(tmp_path, SPAN.format(drop="DROP TABLE IF EXISTS _det_own_by;\n", t="_det_own_by")
+              + ROWS.format(t="_det_own_by"))
+    check("both tables, in the order it writes them",
+          d.tables == ("_det_own", "_det_own_by"), d.tables)
+
+
+@pytest.mark.parametrize("body, said", [
+    # Written without the drop: the second run in the session fails.
+    (SPAN.format(drop="", t="_det_own_by") + ROWS.format(t="_det_own_by"),
+     "`_det_own_by` is a virtual table and is not dropped before it is written"),
+    # Dropped after, which is no help.
+    (SPAN.format(drop="", t="_det_own_by") + "DROP TABLE IF EXISTS _det_own_by;\n"
+     + ROWS.format(t="_det_own"), "is not dropped before it is written"),
+    # Another detector's name, dropped or not.
+    (SPAN.format(drop="DROP TABLE IF EXISTS _det_other;\n", t="_det_other")
+     + ROWS.format(t="_det_other"), "named after it"),
+])
+def test_a_span_join_is_refused_as_a_table_is(tmp_path: Path, body: str, said: str) -> None:
+    with pytest.raises(ValueError) as e:
+        _read(tmp_path, body)
+    check("refused, with the file's name and the reason",
+          "own.sql" in str(e.value) and said in str(e.value), str(e.value))
+
+
+def test_the_shipped_span_joins_are_their_detectors_own() -> None:
+    tables = {d.id: d.tables for d in load_detectors(DETECTOR_DIR)}
+    check("monitor_contention's owner states",
+          "_det_monitor_contention_held" in tables["monitor_contention"], tables)
+    check("main_thread_waits' waking threads' states",
+          "_det_main_thread_waits_by" in tables["main_thread_waits"], tables)
+
+
 def test_a_sentence_about_a_table_is_not_one(tmp_path: Path) -> None:
     d = _read(tmp_path, "-- unlike CREATE PERFETTO TABLE _slice_win, or _det_other\n"
                         "CREATE OR REPLACE PERFETTO TABLE _det_own AS\n"

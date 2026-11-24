@@ -20,8 +20,10 @@
 --       thread ended
 -- @column: total_ms — their time, summed
 -- @column: max_ms — the longest one
--- @column: detail — the slice the main thread waited longest in:
---       `blocked in animation`
+-- @column: detail — the slice the main thread waited longest in, then what
+--       the thread that let it go was doing over its waits: `blocked in
+--       animation · its thread: running 80%, waiting for a CPU 10%, in
+--       the kernel 6%, asleep 4%`
 -- @plain_title: The screen waits for background work
 -- @plain_why: The main thread draws the screen and answers taps. While it
 --       is held up waiting for another thread of the app, it can do neither.
@@ -102,6 +104,7 @@ sleeps AS MATERIALIZED (
     SELECT MAX(s.ts, wn.ts_start)                                  AS ts,
            MIN(s.ts + s.dur, wn.ts_end) - MAX(s.ts, wn.ts_start)    AS dur,
            w.name                                                  AS waker,
+           w.utid                                                  AS utid,
            -- Where the main thread went to sleep: the deepest slice open
            -- then, the anchor that spans the window left out.
            (SELECT x.name FROM _slice_win x
@@ -122,7 +125,9 @@ sleeps AS MATERIALIZED (
 -- The thread and the slice under the names the runtime's numbers are
 -- folded out of, the same fold every detector groups by (#831). A sleep
 -- with no slice open is the idle looper's, and no wait (#926).
-SELECT s.ts, s.dur,
+-- `utid` is the thread that ended the sleep, the row's thread before the
+-- fold, for the join below.
+SELECT s.ts, s.dur, s.utid,
        COALESCE(fi.family, s.inside)                               AS inside,
        COALESCE(f.family, s.waker)                                 AS location
 FROM sleeps s
@@ -130,13 +135,73 @@ LEFT JOIN _name_family f  ON f.name = s.waker
 LEFT JOIN _name_family fi ON fi.name = s.inside
 WHERE s.inside IS NOT NULL AND s.inside NOT GLOB '{{lock_glob}}';
 
+-- What the thread that let the main thread go was doing while it slept
+-- (#418). The row names that thread, and the fix depends on its state. On
+-- a CPU, the main thread's way forward went through that thread's code:
+-- make it cheaper, or stop waiting for it. Waiting for a CPU, in the kernel
+-- or asleep, that thread was held up too, and its code is not the cost:
+-- what held it up is, `runnable_starvation`, `io_wait` or
+-- `monitor_contention` for that thread. Opening an article in the
+-- Wikipedia app, the main thread waited ~0.4 s inside `animation` until
+-- Chromium's IO thread let it go, and that thread slept through more than
+-- half of it and ran less than a fifth: it passed on what another thread
+-- had done, and its own code was not what the main thread waited for.
+--
+-- Each sleep is split by its own thread's states over its time, so a row
+-- that folds a pool reads each worker for the sleeps it ended. The main
+-- thread's sleeps do not overlap one another, and one thread's states do
+-- not either: partitioned by the thread that woke it, SPAN_JOIN has the
+-- input it needs. What no state covers is `unknown`: a thread the
+-- scheduler had not run yet in the recording.
+DROP TABLE IF EXISTS _det_main_thread_waits_by;
+CREATE VIRTUAL TABLE _det_main_thread_waits_by
+USING SPAN_JOIN(_det_main_thread_waits PARTITIONED utid, _tstate_win PARTITIONED utid);
+
 WITH grouped AS (
     SELECT location,
            COUNT(*)                                                AS count,
            SUM(dur)                                                AS total_ns,
-           MAX(dur)                                                AS max_ns
+           MAX(dur)                                                AS max_ns,
+           COUNT(DISTINCT utid)                                    AS threads
     FROM _det_main_thread_waits
     GROUP BY location
+),
+-- The waking threads' states over the row's waits.
+woke AS (
+    SELECT location,
+           TOTAL(CASE WHEN state = 'Running' THEN dur END)         AS running,
+           TOTAL(CASE WHEN state IN ('R', 'R+') THEN dur END)      AS queued,
+           TOTAL(CASE WHEN state IN ('D', 'DK') THEN dur END)      AS kernel,
+           TOTAL(CASE WHEN state = 'S' THEN dur END)               AS asleep
+    FROM _det_main_thread_waits_by
+    GROUP BY location
+),
+said AS (
+    SELECT g.location,
+           CASE WHEN g.threads > 1 THEN 'its threads: ' ELSE 'its thread: ' END
+           || SUBSTR(
+               CASE WHEN ROUND(100.0 * w.running / g.total_ns) >= 1
+                    THEN ', running ' || CAST(ROUND(100.0 * w.running / g.total_ns) AS INT) || '%'
+                    ELSE '' END
+            || CASE WHEN ROUND(100.0 * w.queued / g.total_ns) >= 1
+                    THEN ', waiting for a CPU '
+                         || CAST(ROUND(100.0 * w.queued / g.total_ns) AS INT) || '%'
+                    ELSE '' END
+            || CASE WHEN ROUND(100.0 * w.kernel / g.total_ns) >= 1
+                    THEN ', in the kernel ' || CAST(ROUND(100.0 * w.kernel / g.total_ns) AS INT) || '%'
+                    ELSE '' END
+            || CASE WHEN ROUND(100.0 * w.asleep / g.total_ns) >= 1
+                    THEN ', asleep ' || CAST(ROUND(100.0 * w.asleep / g.total_ns) AS INT) || '%'
+                    ELSE '' END
+            || CASE WHEN ROUND(100.0 * (g.total_ns - w.running - w.queued - w.kernel - w.asleep)
+                               / g.total_ns) >= 1
+                    THEN ', unknown '
+                         || CAST(ROUND(100.0 * (g.total_ns - w.running - w.queued - w.kernel
+                                                - w.asleep) / g.total_ns) AS INT) || '%'
+                    ELSE '' END, 3)                                AS woke
+    FROM grouped g
+    JOIN woke w USING (location)
+    WHERE ROUND(100.0 * (w.running + w.queued + w.kernel + w.asleep) / g.total_ns) >= 1
 ),
 -- The slice the main thread spent most of its waits in, per row.
 blocked_in AS (
@@ -153,9 +218,11 @@ SELECT
     g.count,
     ROUND(g.total_ns / 1e6, 2)                                     AS total_ms,
     ROUND(g.max_ns / 1e6, 2)                                       AS max_ms,
-    'blocked in ' || b.inside                                      AS detail
+    'blocked in ' || b.inside
+    || COALESCE(' · ' || w.woke, '')                               AS detail
 FROM grouped g
 JOIN blocked_in b USING (location)
+LEFT JOIN said w USING (location)
 ORDER BY total_ms DESC, location;
 
 -- @intervals

@@ -12,7 +12,7 @@ each detector's notes sit under a heading that is its id, which is how
 | `main_thread_block` | where the main thread spent its time | `location` — the slice name; `detail` is the thread's comm, always the main thread here, cut to 15 characters by the kernel |
 | `app_init` | what ran after the Application was created, before the first Activity | an Initializer or a library's section by name; `(no section)` is the ContentProviders and `Application.onCreate` nobody traced |
 | `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects; `thread` names the row, `detail` says what a cycle freed and how large the heap grew before one, or which collection a wait was for. Blind to a cold start's first ~2 s |
-| `monitor_contention` | monitor contention | the main thread's row is `main`; `threads` says how many threads a row adds up; `places` names both sides of the lock in the checkout; `detail` is the row's longest wait that names both methods, or else the owner's tid with its thread and what it and the waiter were in |
+| `monitor_contention` | monitor contention | the main thread's row is `main`; `threads` says how many threads a row adds up; `places` names both sides of the lock in the checkout; `detail` is the row's longest wait that names both methods, or else the owner's tid with its thread and what it and the waiter were in; then `owner:` and what the owner was doing over all of the row's waits, which says which fix applies |
 | `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms`; `detail` names who answered — `system_server 94%` — and the AIDL method where the recording has the `aidl` category; on the main thread `phase` says where in the launch, and `before the app's code` is the platform's own start |
 | `runnable_starvation` | thread ready but preempted | `state` names the row with the thread; the main thread's row is `main`, and on it `detail` says who held its core — the app's own threads point at the app, other processes and idle cores at the device |
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}`, `main` for the main thread; `threads` above one is a pool's CPU together; in a sampled recording, the method after `ours:` in `detail`, at the file `code` names |
@@ -22,7 +22,7 @@ each detector's notes sit under a heading that is its id, which is how
 | `anr` | an ANR the system recorded during the trace | `location` is the platform's own reason, `detail` the error id |
 | `repeated_work` | the same named work entered from more than one caller | `detail` names the callers; a `near miss` row means the occurrences are too unlike to be one work |
 | `main_thread_kernel_waits` | the main thread's uninterruptible sleeps that are not the disk, by the thread of the app that ended them | `location` is that thread, digits folded; `detail` says what it was inside when it woke the main thread (`waking inside dlopen: libfoo.so 61%`), then where the main thread was. Most often the process's memory-map lock; the trace cannot say which lock |
-| `main_thread_waits` | the main thread's waits: sleeps it began inside its own work, by the thread of the app that let it go | `location` is that thread, its digits folded (`arch_disk_io_#`, `DefaultDispatch`); `detail` names the slice it waited longest in (`blocked in animation`). A sleep with no slice open is the idle looper's, and the thread that ended it only posted the next message: it is no row, however often a WebView's thread does it. A report written before #926 counted it and says `idle` or `67% idle · 33% blocked in X`; only the blocked part was a wait. Lock waits, binder replies and `RenderThread` stay with their own detectors |
+| `main_thread_waits` | the main thread's waits: sleeps it began inside its own work, by the thread of the app that let it go | `location` is that thread, its digits folded (`arch_disk_io_#`, `DefaultDispatch`); `detail` names the slice it waited longest in (`blocked in animation`), then `its thread:` and what that thread was doing while the main thread slept. A sleep with no slice open is the idle looper's, and the thread that ended it only posted the next message: it is no row, however often a WebView's thread does it. A report written before #926 counted it and says `idle` or `67% idle · 33% blocked in X`; only the blocked part was a wait. Lock waits, binder replies and `RenderThread` stay with their own detectors |
 | `io_wait` | threads the kernel parked waiting for a block device | `thread` says `main` or `background`, and so does `detail`; there is no code to look at, only I/O to remove or move |
 | `composables` | a Compose app's own composables, by the composition time they hold | `code` is the declaration the name carries; `detail` says what composed the calls: `in a first composition`, a view composed for the first time; `in a frame`, a recomposition after state changed; `during measure`, a lazy list composing its items; `elsewhere`, anything else. Silent without `runtime-tracing` in the app |
 
@@ -155,6 +155,42 @@ run, the first one was populating the page cache, and that is a first-launch
 problem rather than a code one. And a thread in `D` that this detector does
 *not* claim was parked for something other than the disk. For the main
 thread, `main_thread_kernel_waits` says which of the app's threads let it out.
+
+### `monitor_contention`
+
+**`monitor_contention`** names who waited for a lock, and `places` both sides
+of it. What decides the fix is what the owner was doing while the thread
+waited, and the end of `detail` says it, over all of the row's waits:
+
+    … blocking from … · owner: running 60%, waiting for a CPU 25%, in the kernel 10%, asleep 5%
+
+**Running** — the critical section is long: make it shorter, or move work
+out from under the lock, at the owner's place in `places`. **Waiting for a
+CPU** — the owner held the lock in the queue for a core: a shorter section
+barely helps, fewer threads at once does; read `runnable_starvation` and
+`window.crowding` next. **In the kernel** or **asleep** — the owner waited for
+something else while it held this lock: the disk, another lock, a reply. An
+owner parked in `Unsafe.park` says the same from its frame; read `io_wait`,
+`binder_txn` and this detector's row for the owner's own thread. `unknown` is
+time the trace has no state of the owner for. A row with no `owner:` part
+has no state of any owner: a recording without `sched_switch`, or an owner
+that is no thread of the process.
+
+### `main_thread_waits`
+
+**`main_thread_waits`** names the thread of the app that let the main thread
+go. What it was doing while the main thread slept follows the slice:
+
+    blocked in loadConfig · its thread: running 80%, waiting for a CPU 10%, in the kernel 6%, asleep 4%
+
+**Mostly running** — the main thread's way went through that thread's code:
+make that code cheaper, or stop waiting for it; `uninstrumented_cpu` and the
+thread's own slices say where its time went. **Mostly anything else** — that
+thread was held up too, and its code is not the cost: what held it up is,
+`runnable_starvation`, `io_wait` or `monitor_contention` for that thread. A
+row that folds a pool (`its threads:`) reads each sleep by the worker that
+ended it. One hop only: the thread that held up the waking thread is not
+followed further.
 
 ### `main_thread_kernel_waits`
 
