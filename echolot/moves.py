@@ -204,10 +204,13 @@ def _size(rows: list[dict[str, Any]], runs: int) -> tuple[float, float, float]:
     return round(size, 2), round(low, 2), round(high, 2)
 
 
-def _side(det: dict[str, Any] | None, runs: int) -> dict[str, Any]:
+def _side(det: dict[str, Any] | None, runs: int,
+          under: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """One side of a check: what that report said of it. `blind` is a side
     that says nothing about the check: it did not run there, could not read
-    what it needs, failed, or the report is too old to say."""
+    what it needs, failed, or the report is too old to say. `under` is what
+    `compare` found of it under the bar on this side (`_under`): it adds to
+    the sum, and is no finding."""
     if det is None:
         return {"attention": plain.NOT_CHECKED, "ms": None, "findings": 0, "found": None,
                 "reason": "It did not run on this side.", "blind": True}
@@ -220,8 +223,28 @@ def _side(det: dict[str, Any] | None, runs: int) -> dict[str, Any]:
                            "found": words.get("found"),
                            "reason": words.get("reason") or (det.get("reason") if partly else None),
                            "blind": det.get("attention") == plain.NOT_CHECKED or partly}
-    if rows:
-        out["ms"], out["low_ms"], out["high_ms"] = _size(rows, runs)
+    if rows or under:
+        out["ms"], out["low_ms"], out["high_ms"] = _size([*rows, *(under or [])], runs)
+    return out
+
+
+def _under(rows: list[dict[str, Any]], side: str) -> list[dict[str, Any]]:
+    """The rows `compare` found under the bar on one side (#715), as rows of
+    that side's report: a time a launch, in the launches it was found in.
+    86 calls of 83 ms together after a fix are 83 ms of the check's sum,
+    where leaving them out counted the whole 111 ms before as saved."""
+    out = []
+    for r in rows:
+        face = r.get(side)
+        if r.get("under_bar") != side or not isinstance(face, dict):
+            continue
+        metric = r.get("metric") or "total_ms"
+        value = _number(face.get(metric))
+        if value is None:
+            continue
+        out.append({"location": r.get("location"), "_on_main": r.get("on_main"), metric: value,
+                    "runs": face.get("runs"),
+                    "spread": {metric: {"values": [v for v in face.get("values") or [] if _number(v) is not None]}}})
     return out
 
 
@@ -234,7 +257,8 @@ def _part(rows: list[dict[str, Any]], runs: int) -> dict[str, Any]:
 
 
 def _threads(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
-             ctx: "_Ctx") -> dict[str, dict[str, dict[str, Any]]] | None:
+             ctx: "_Ctx", under: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
+             ) -> dict[str, dict[str, dict[str, Any]]] | None:
     """A check's rows of the main thread and of the other threads, added up
     apart on each side; None unless it has rows of both.
 
@@ -243,10 +267,11 @@ def _threads(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
     workers, and the check's sum read as better: the cause went under the
     knock-on it had on a pool (#595).
     """
-    def split(det: dict[str, Any] | None, main: bool) -> list[dict[str, Any]]:
-        return [r for r in (det or {}).get("rows") or []
-                if plain._on_main(did, r, ctx.whose) == main]
-    parts = {"main": (split(db, True), split(da, True)), "rest": (split(db, False), split(da, False))}
+    def split(det: dict[str, Any] | None, extra: list[dict[str, Any]], main: bool) -> list[dict[str, Any]]:
+        return [r for r in (det or {}).get("rows") or [] if plain._on_main(did, r, ctx.whose) == main] + [
+            r for r in extra if bool(r.get("_on_main")) == main]
+    parts = {"main": (split(db, under[0], True), split(da, under[1], True)),
+             "rest": (split(db, under[0], False), split(da, under[1], False))}
     if not any(parts["main"]) or not any(parts["rest"]):
         return None
     return {name: {"before": _part(b, ctx.nb), "after": _part(a, ctx.na)}
@@ -729,7 +754,8 @@ def _few(ctx: _Ctx) -> str:
 def _check(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
            rows: list[dict[str, Any]], ctx: _Ctx, held: str | None = None) -> dict[str, Any]:
     """`held` is why the check is not compared, though it looked both times."""
-    b, a = _side(db, ctx.nb), _side(da, ctx.na)
+    under = (_under(rows, "before"), _under(rows, "after"))
+    b, a = _side(db, ctx.nb, under[0]), _side(da, ctx.na, under[1])
     title, why_it_matters, clean = _texts(da if da is not None else db)
     found = _findings(rows)
     why = ""
@@ -749,7 +775,7 @@ def _check(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
             movement = NEW if b["ms"] is None else WORSE
     text = _sentence(movement, why, b, a, found, clean, ctx)
     main = None
-    parts = _threads(did, db, da, ctx) if movement not in (NOT_CHECKED, FINE_BOTH, NOT_COMPARED) else None
+    parts = _threads(did, db, da, ctx, under) if movement not in (NOT_CHECKED, FINE_BOTH, NOT_COMPARED) else None
     if parts:
         mb, ma = parts["main"]["before"], parts["main"]["after"]
         if _moved(mb, ma, ctx)[0]:

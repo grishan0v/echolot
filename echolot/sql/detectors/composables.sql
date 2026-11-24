@@ -71,28 +71,32 @@
 -- A count alone cannot tell recomposing from composing many: seven calls of
 -- the icon painter were seven icons.
 
+-- The calls, each with the nearest call of the app's own around it and the
+-- nearest pass, are written down once as this detector's own table: both
+-- the rows below and the time they stand for (`@intervals`) are read from
+-- it (#490).
+CREATE OR REPLACE PERFETTO TABLE _det_composables AS
 WITH calls AS MATERIALIZED (
-    SELECT s.slice_id, s.name, s.dur
+    SELECT s.slice_id, s.name, s.ts, s.dur
     FROM _slice_win s
     JOIN _compose_own o ON o.name = s.name
     WHERE s.is_main_thread = 1
       AND s.name GLOB '{{name_glob}}'
-),
-nest AS MATERIALIZED (
-    SELECT c.slice_id,
-           -- The nearest call of the app's own that this one runs inside:
-           -- its time is that call's, less this one's.
-           (SELECT a.id FROM ancestor_slice(c.slice_id) a
-            JOIN calls p ON p.slice_id = a.id
-            ORDER BY a.depth DESC LIMIT 1)                         AS outer_id,
-           -- The nearest pass around it: what composed it is what that
-           -- pass sits under.
-           (SELECT a.id FROM ancestor_slice(c.slice_id) a
-            WHERE a.name = 'Compose:recompose'
-            ORDER BY a.depth DESC LIMIT 1)                         AS pass_id
-    FROM calls c
-),
-composed AS (
+)
+SELECT c.slice_id, c.name, c.ts, c.dur,
+       -- The nearest call of the app's own that this one runs inside:
+       -- its time is that call's, less this one's.
+       (SELECT a.id FROM ancestor_slice(c.slice_id) a
+        JOIN calls p ON p.slice_id = a.id
+        ORDER BY a.depth DESC LIMIT 1)                         AS outer_id,
+       -- The nearest pass around it: what composed it is what that
+       -- pass sits under.
+       (SELECT a.id FROM ancestor_slice(c.slice_id) a
+        WHERE a.name = 'Compose:recompose'
+        ORDER BY a.depth DESC LIMIT 1)                         AS pass_id
+FROM calls c;
+
+WITH composed AS (
     SELECT n.slice_id,
            CASE
                WHEN pp.name = 'Recomposer:recompose' THEN 'frame'
@@ -103,14 +107,13 @@ composed AS (
                     OR (p.id IS NOT NULL AND p.parent_id IS NULL) THEN 'first'
                ELSE 'elsewhere'
            END                                                     AS how
-    FROM nest n
+    FROM _det_composables n
     LEFT JOIN slice p ON p.id = n.pass_id
     LEFT JOIN slice pp ON pp.id = p.parent_id
 ),
 inner_time AS (
-    SELECT n.outer_id AS slice_id, SUM(c.dur) AS ns
-    FROM nest n
-    JOIN calls c USING (slice_id)
+    SELECT n.outer_id AS slice_id, SUM(n.dur) AS ns
+    FROM _det_composables n
     WHERE n.outer_id IS NOT NULL
     GROUP BY n.outer_id
 ),
@@ -124,7 +127,7 @@ grouped AS (
            SUM(w.how = 'frame')                                    AS in_frame,
            SUM(w.how = 'measure')                                  AS in_measure,
            SUM(w.how = 'elsewhere')                                AS elsewhere
-    FROM calls c
+    FROM _det_composables c
     JOIN composed w USING (slice_id)
     LEFT JOIN inner_time i USING (slice_id)
     GROUP BY c.name
@@ -148,35 +151,21 @@ LIMIT 20;
 
 -- @intervals
 --
--- A row stands for what `self_ms` counts: each of its calls, less the calls
--- of the app's own nested in it, which are their own rows' or under the bar.
--- The gaps before, between and after those, found by ordering them. They do
+-- A row stands for what `self_ms` counts, read off the calls the first
+-- query wrote down: each of its calls, less the calls of the app's own
+-- nested in it, which are their own rows' or under the bar. The gaps before, between and after those, found by ordering them. They do
 -- not overlap one another — one nested in another would have that one for
 -- its nearest — so the gaps are the call's own time exactly.
 
-WITH calls AS MATERIALIZED (
-    SELECT s.slice_id, s.name, s.ts, s.dur
-    FROM _slice_win s
-    JOIN _compose_own o ON o.name = s.name
-    WHERE s.is_main_thread = 1
-      AND s.name GLOB '{{name_glob}}'
-),
-nest AS MATERIALIZED (
-    SELECT c.slice_id, c.ts, c.dur,
-           (SELECT a.id FROM ancestor_slice(c.slice_id) a
-            JOIN calls p ON p.slice_id = a.id
-            ORDER BY a.depth DESC LIMIT 1)                         AS outer_id
-    FROM calls c
-),
-named AS MATERIALIZED (
+WITH named AS MATERIALIZED (
     SELECT c.slice_id, c.ts, c.ts + c.dur AS te
-    FROM calls c
-    JOIN _rows r ON r.location = c.name
+    FROM _det_composables c
+    WHERE c.name IN (SELECT location FROM _rows)
 ),
 kids AS MATERIALIZED (
     SELECT n.outer_id AS slice_id, n.ts AS cs, n.ts + n.dur AS ce,
            LAG(n.ts + n.dur) OVER (PARTITION BY n.outer_id ORDER BY n.ts) AS prev_end
-    FROM nest n
+    FROM _det_composables n
     JOIN named p ON p.slice_id = n.outer_id
 )
 SELECT COALESCE(k.prev_end, p.ts) AS ts, k.cs - COALESCE(k.prev_end, p.ts) AS dur

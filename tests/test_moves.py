@@ -381,6 +381,21 @@ def test_a_report_with_no_window_has_no_two_times():
           and v["headline"] == "No time to compare", v)
 
 
+def test_what_compare_found_under_the_bar_counts_in_the_sum_of_its_side():
+    """#715: 111 ms of calls before, the same calls at 83 ms after under the
+    bar, read as "went from 0.2 s to 49 ms", the 111 ms all saved."""
+    other = steady("com.example.app:bg", 49)
+    before = report([entry("binder_txn", [steady("com.example.app", 110), other])])
+    after = report([entry("binder_txn", [other],
+                          below={"floor_ms": 5.0, "rows": [steady("com.example.app", 83)]})])
+    item = reading(before, after)["checks"][0]
+    check("the sum after is what was under the bar plus the rest", item["after"]["ms"] == 87.0 + 53.0
+          and item["before"]["ms"] == 114.0 + 53.0, item)
+    check("and that is not a change", item["movement"] == moves.NO_CHANGE, item)
+    check("the row under the bar is no finding of that side", item["after"]["findings"] == 1
+          and item["findings"] == {"gone": 0, "new": 0, "kept": 2}, item)
+
+
 # --- the notes --------------------------------------------------------------------------
 
 

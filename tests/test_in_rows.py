@@ -206,7 +206,7 @@ def test_every_second_query_agrees_with_its_rows(monkeypatch, tmp_path) -> None:
 
 
 def test_anr_risk_stretches_are_its_rows(monkeypatch, tmp_path) -> None:
-    """Its second query repeats the steps of the first, so it is held to them.
+    """Its second query reads the stretches its first wrote down, held to them.
 
     The fixture holds no five-second stall; with the bar lowered it holds two
     stretches, and they cannot overlap, so their length is the rows' total.

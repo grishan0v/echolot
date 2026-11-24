@@ -115,3 +115,16 @@ def test_the_page_says_a_bar_is_a_pool_s_time_together() -> None:
           "8 threads together" in mark["notes"] and "threads added up: 8" in mark["tip"], mark)
     one, _ = report_page.chart_row(pooled("main", 120.0, 1), plain._Ctx(contention()), [], False)
     check("and nothing on one thread", not any("threads" in n for n in one["notes"]), one)
+
+
+def test_an_older_main_row_under_the_bar_is_found_as_main() -> None:
+    """A report written before #511 but after #715 keeps what it found under
+    its bar in `below`, the main thread's row there under the kernel's name.
+    The newer side's `main` row is looked up there, and found."""
+    old = report([{**det("monitor_contention", []),
+                   "below": {"floor_ms": 5.0,
+                             "rows": [pooled("com.example.app", 6.0, None)]}}],
+                 window={"process": "com.example.app", "duration_ms": 400.0})
+    got = compare(old, contention(pooled("main", 120.0, 1)))["rows"]
+    check("one row, from under the bar before",
+          [(r["location"], r.get("under_bar")) for r in got] == [("main", "before")], got)

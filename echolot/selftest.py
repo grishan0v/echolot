@@ -406,6 +406,49 @@ def _(report):
         b["in_rows_ms"] / b["window_ms"] * 100, 1), b
 
 
+@check("a detector's own tables are named after it, written over each run, "
+       "and read by none other")
+def _(report):
+    # A first query that finds its pieces in steps writes them down once, and
+    # its `@intervals` reads them rather than taking the steps again (#490).
+    # Every shipped detector that does so reads its tables there; and the
+    # three ways a table could go wrong are refused as the file is read.
+    from .main import DETECTOR_DIR
+    from .tp import Detector, load_detectors
+    writers = [d for d in load_detectors(DETECTOR_DIR) if d.tables]
+    assert writers, "no shipped detector writes its pieces down"
+    for d in writers:
+        assert any(t in d.intervals_sql for t in d.tables), (d.id, d.tables)
+    head = "-- @id: own\n-- @title: Own\n\n"
+    rows = "SELECT name AS location FROM {t} LIMIT 20;\n"
+    cases = {
+        "_slice_win": ("CREATE OR REPLACE PERFETTO TABLE _slice_win AS SELECT 1 AS x;\n"
+                       + rows.format(t="_slice_win")),
+        "CREATE OR REPLACE": ("CREATE PERFETTO TABLE _det_own AS SELECT 'a' AS name;\n"
+                              + rows.format(t="_det_own")),
+        "does not write": ("CREATE OR REPLACE PERFETTO TABLE _det_own AS SELECT 'a' AS name;\n"
+                           + rows.format(t="_det_own")
+                           + "\n-- @intervals\nSELECT ts, dur FROM _det_other;\n"),
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        for said, body in cases.items():
+            path = Path(tmp) / "own.sql"
+            path.write_text(head + body, encoding="utf-8")
+            try:
+                Detector.from_file(path)
+            except ValueError as e:
+                assert said in str(e), (said, str(e))
+            else:
+                raise AssertionError(f"read without a word: {body!r}")
+        # A sentence about a table is not one, and a name of its own is.
+        path = Path(tmp) / "own.sql"
+        path.write_text(head + "-- not CREATE PERFETTO TABLE _det_other, nor _det_x\n"
+                        "CREATE OR REPLACE PERFETTO TABLE _det_own_part AS "
+                        "SELECT 'a' AS name;\n" + rows.format(t="_det_own_part"),
+                        encoding="utf-8")
+        assert Detector.from_file(path).tables == ("_det_own_part",)
+
+
 @check("slices outside the window stayed out of the report")
 def _(report):
     no_slice_named(report, "Bootstrap_OUTSIDE")   # 50 ms before the window
@@ -4738,6 +4781,29 @@ def _(report):
     # The failure is still reported. Taking the description from a repeat
     # that ran must not turn into hiding that another one did not.
     assert only["error"] == "boom", only["error"]
+
+
+@check("compare: a row the other side has under its bar is compared with that, not called gone")
+def _(report):
+    """A row is dropped from a report when it misses the threshold. With the
+    after side's bar above every slice, every slice is still there: `analyze`
+    keeps what its open query found as `below`, and `compare` looks a row up
+    there before it calls it gone and counts all of it as saved (#715)."""
+    from . import compare
+    from . import report as rep
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "fixture.perfetto-trace"
+        trace.write_bytes(fixture.build())
+        before = rep.aggregate([_analyze(trace, Config(FIXTURE_CONFIG), below_bar=True)])
+        after = rep.aggregate([_analyze(trace, Config(FIXTURE_CONFIG), below_bar=True, cli_overrides={
+            "main_thread_block": {"min_slice_ms": 1e6}})])
+    det = next(d for d in after["detectors"] if d["id"] == "main_thread_block")
+    assert not det["rows"] and (det.get("below") or {}).get("rows"), (
+        f"a bar over every slice: no row, and the slices under it kept: {det.get('below')}")
+    cmp = compare.build(before, after, before_path="before.json", after_path="after.json")
+    blocks = [r for r in cmp["rows"] if r["detector"] == "main_thread_block"]
+    assert blocks and all(r["change"] == compare.STEADY and r.get("under_bar") == "after"
+                          for r in blocks), [(r["location"], r["change"], r.get("under_bar")) for r in blocks]
 
 
 # The window's own sets, stored once per session rather than recomputed on
