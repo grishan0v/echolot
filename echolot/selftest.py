@@ -8728,6 +8728,181 @@ def _(report):
         assert dig.aside([(claude, None), (absent, absent.why)]) == []
 
 
+def _compared_row(location: str, change: str, after: float | None, *, before: float | None = None,
+                  holds: bool | None = None, runs: str = "5/5", low: float | None = None,
+                  detail: str | None = None) -> dict:
+    """One row of a comparison.json, as `compare.build` writes it, with what
+    the request reads of it."""
+    row: dict = {"location": location, "detector": "main_thread_block", "metric": "self_ms", "change": change,
+                 "before": None if before is None else {"self_ms": before, "runs": runs},
+                 "after": None if after is None else {"self_ms": after, "runs": runs},
+                 "delta_ms": (after or 0.0) - (before or 0.0), "holds": holds,
+                 "shift": None if low is None else {"ms": (after or 0.0) - (before or 0.0), "low_ms": low,
+                                                     "high_ms": low + 80.0, "floor_ms": 12.0}}
+    if detail:
+        row["detail"] = detail
+    return row
+
+
+@check("ui: the request of Dig deeper carries what the scenario's last comparison found new in every "
+       "run or grown for sure, first and marked as such, and nothing of a comparison of another report")
+def _(report):
+    """The request carried the report's rows and nothing of what changed
+    since the report before it. In a field run the clearest evidence, a new
+    558 ms wait of the main thread, was the tenth of sixteen rows and Worth a
+    look, while the comparison against the report before had it new in 5 of
+    5 runs (#933). Where `echolot compare` left a comparison of this report
+    beside it, its rows new in every run and those that grew and hold come
+    after the question and the report's warnings, before the report's rows,
+    each marked. A row new in some runs only, one that moved and does not
+    hold, one that shrank, and a marker the hunt planted are left out; a
+    comparison whose newer side is another report, one that says the two
+    cannot be compared, or one whose bar moved says nothing of new rows.
+    """
+    import json
+
+    from . import dig, files
+    from .pages import report_page
+    picks = [c for c in report_page.checks(report) if c["hot"]][:1]
+    stamp = "2026-11-24T10:00:00+00:00"
+    rep = {**report, "generated_at": stamp}
+    where = ".echolot/out/report.json"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        out = root / ".echolot" / "out"
+        out.mkdir(parents=True)
+
+        def compared(rows: list[dict], *, of: str = stamp, comparable: bool = True,
+                     warnings: tuple[str, ...] = ()) -> str:
+            (out / "comparison.json").write_text(json.dumps({
+                "schema": files.COMPARISON_SCHEMA, "kind": "comparison", "comparable": comparable,
+                "warnings": [{"id": w, "text": w} for w in warnings],
+                "before": {"path": str(out / "earlier.json"), "runs": 5},
+                "after": {"path": str(out / "report.json"), "runs": 5, "generated_at": of}, "rows": rows}),
+                encoding="utf-8")
+            return dig.request_text(root, rep, picks, where)
+
+        plain = report_page.request_text(rep, picks, where, last=True)
+        rows = [_compared_row("inflate", "steady", 40.0, before=40.0, holds=False, low=-5.0),
+                _compared_row("Thread.sleep in an initializer", "appeared", 558.0, detail="the main thread waits"),
+                _compared_row("now and then", "appeared", 90.0, runs="2/5"),
+                _compared_row("loadConfig", "grew", 340.0, before=120.0, holds=True, low=180.0),
+                _compared_row("draw", "grew", 140.0, before=100.0, holds=False, low=-6.0),
+                _compared_row("bind", "shrank", 20.0, before=200.0, holds=True, low=-220.0),
+                _compared_row("AGENTTMP_parse", "appeared", 300.0)]
+        text = compared(rows)
+        new = "- new in 5 of 5 runs: Thread.sleep in an initializer · main_thread_block · 558 ms · the main thread waits"
+        grew = "- grew for sure: loadConfig · main_thread_block · 120 → 340 ms (+220 ms, at least +180 ms)"
+        head = dig.COMPARED_HEAD.format(source="`.echolot/out/comparison.md`, against `.echolot/out/earlier.json`")
+        block = "\n".join([head, new, grew])
+        assert block in text, text
+        assert text.index(block) < text.index(report_page.ROWS_HEAD), text
+        assert text.replace(block + "\n\n", "") == plain, text
+        for gone in ("now and then", "· draw ·", "bind", "AGENTTMP_", "inflate"):
+            assert gone not in text.split(report_page.ROWS_HEAD)[0], gone
+        # Nothing of a comparison of another report, of two that cannot be
+        # compared, or of no row that got worse.
+        assert compared(rows, of="2026-11-23T09:00:00+00:00") == plain
+        assert compared(rows, comparable=False) == plain
+        assert compared(rows[:1]) == plain
+        # The bar moved: a row it calls new says nothing; one that grew still holds.
+        moved = compared(rows, warnings=("thresholds",))
+        assert grew in moved and new not in moved, moved
+        # At most COMPARED_ROWS, and where the rest are.
+        many = compared([_compared_row(f"init{i}", "appeared", 100.0 + i) for i in range(dig.COMPARED_ROWS + 2)])
+        assert many.count("- new in 5 of 5 runs: init") == dig.COMPARED_ROWS \
+            and "- and 2 more in `.echolot/out/comparison.md`" in many, many
+        # The agent is handed the same, before what nobody there means.
+        copied = compared(rows)
+        handed = dig.request(rep, picks, where, 3, None, ["app/src/main"], project=root)
+        assert handed.startswith(copied + "\n\n") and "- The investigation is open: #3" in handed, handed
+
+
+@check("ui: Dig deeper starts no agent whose shell runs another echolot than the page's own, says "
+       "which and what to do, and puts the page's own first in the agent's PATH")
+def _(report):
+    """Dig deeper starts the person's own Claude Code or Codex, which runs
+    `echolot` through its shell: Codex in a login shell, Claude Code from a
+    snapshot of one that read the rc file. A page served by 0.17.0 started
+    Claude Code on a 0.14.1 from pipx, first in PATH, which stopped with no
+    answer (#704). The agent now gets the page's own folder first in PATH,
+    and before Start its shell is asked, the way the client asks it and with
+    that environment, which `echolot` it runs. Another one (another file,
+    and another version or none it says) is a reason that client cannot
+    start, with both named and what to do; one of this same version is this
+    one; the page's own is no reason. The report's dialog asks no shell.
+    """
+    import subprocess
+
+    from . import __version__, dig, job
+    saved_shell, saved_bin = dig._shell, dig.own_bin
+    asked: list[tuple[list[str], str]] = []
+
+    def shell_says(found: str, version: str | None = None):
+        def answer(argv, cwd, env):
+            asked.append((list(argv), env.get("PATH", "")))
+            if argv[1:] == ["--version"]:
+                return subprocess.CompletedProcess(argv, 0, stdout=f"echolot {version}\n" if version else "", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout=f"Welcome back!\n{dig._AT}{found}\n", stderr="")
+        return answer
+    claude = dig.Client(program="/bin/claude", key="claude")
+    codex_ = dig.Client(program="/bin/codex", key="codex")
+    if os.name != "posix":
+        # Claude Code and Codex run commands in no login shell there to ask.
+        assert dig.runs_own(claude, Path.cwd()) is None
+        return
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            own = root / "venv" / "bin"
+            own.mkdir(parents=True)
+            (own / "echolot").write_text("#!/bin/sh\n", encoding="utf-8")
+            (root / "link").symlink_to(own / "echolot")
+            dig.own_bin = lambda: own
+            dig._shell = shell_says("/opt/elsewhere/bin/echolot", "0.14.1")
+            for client, name in ((claude, "Claude Code"), (codex_, "Codex")):
+                asked.clear()
+                why = dig.runs_own(client, root)
+                assert why and why.startswith(f"Not with this echolot: {name} runs commands in your login shell, "
+                                              "and there `echolot` is `/opt/elsewhere/bin/echolot`, echolot 0.14.1, "
+                                              f"while this page is echolot {__version__} "
+                                              f"(`{dig._whole(own / 'echolot')}`).") \
+                    and f"Put `{dig._whole(own)}` first in your shell's PATH, or remove the other echolot" in why, why
+                argv, path = asked[0]
+                assert path.split(os.pathsep)[0] == os.fspath(own), path
+                assert argv[-1].endswith(dig.LOOK) and argv[1:3] == (["-c", "-l"] if name == "Claude Code"
+                                                                    else ["-lc", dig.LOOK]), argv
+            dig._shell = shell_says("/opt/elsewhere/bin/echolot", __version__)
+            assert dig.runs_own(claude, root) is None
+            dig._shell = shell_says("/opt/elsewhere/bin/echolot")
+            assert "an echolot that does not say its version" in (dig.runs_own(claude, root) or "")
+            asked.clear()
+            dig._shell = shell_says(str(root / "link"), "0.14.1")
+            assert dig.runs_own(claude, root) is None and len(asked) == 1, asked
+            dig._shell = shell_says("")
+            assert (dig.runs_own(codex_, root) or "").startswith("Not yet: Codex runs commands in your login shell, "
+                                                                 "and that shell has no `echolot` command")
+            dig._shell = shell_says("alias echolot='python -m echolot'")
+            assert "an alias or a function of your shell" in (dig.runs_own(claude, root) or "")
+            dig._shell = lambda argv, cwd, env: None
+            assert (dig.runs_own(claude, root) or "").startswith(
+                "The page could not tell which `echolot` Claude Code would run: the login shell it runs commands in "
+                f"did not answer within {dig.SHELL_S} s.")
+            # Last of the reasons, and asked only where the caller asks it.
+            dig._shell = shell_says("/opt/elsewhere/bin/echolot", "0.14.1")
+            st = _dig_project(root, '["app/src/main"]')
+            asked.clear()
+            assert dig.why_not(root, st, [], claude) is None and asked == []
+            assert dig.why_not(root, st, [], claude, shell=True) == dig.runs_own(claude, root)
+        # The job puts the folder first, once.
+        env = job._env({"path": ["/opt/own/bin"], "unset": []})
+        parts = env["PATH"].split(os.pathsep)
+        assert parts[0] == "/opt/own/bin" and parts.count("/opt/own/bin") == 1, env["PATH"]
+        assert job.path_first(["/a"], os.pathsep.join(["/b", "/a", "/c"])) == os.pathsep.join(["/a", "/b", "/c"])
+    finally:
+        dig._shell, dig.own_bin = saved_shell, saved_bin
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor

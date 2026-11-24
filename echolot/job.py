@@ -60,7 +60,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from . import files
 
@@ -293,12 +293,22 @@ def _end(proc: Any, clock: Callable[[], float]) -> None:
                 return
 
 
+def path_first(first: Sequence[str], path: str | None) -> str:
+    """`PATH` with these folders first, in this order, and each folder once."""
+    ahead = [str(p) for p in first if p]
+    rest = [p for p in (path or "").split(os.pathsep) if p and p not in ahead]
+    return os.pathsep.join([*ahead, *rest])
+
+
 def _env(step: dict[str, Any]) -> dict[str, str]:
     """What a command runs with: this process's environment, Python told to
-    say each line as it comes, and without the names the step asks to leave
-    out (`unset`)."""
+    say each line as it comes, without the names the step asks to leave out
+    (`unset`), and with the folders it asks for first in `PATH` (`path`)."""
     gone = set(step.get("unset") or ())
-    return {**{k: v for k, v in os.environ.items() if k not in gone}, "PYTHONUNBUFFERED": "1"}
+    env = {**{k: v for k, v in os.environ.items() if k not in gone}, "PYTHONUNBUFFERED": "1"}
+    if step.get("path"):
+        env["PATH"] = path_first(step["path"], env.get("PATH"))
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +579,8 @@ def run(project: Path, name: str, plan: dict[str, Any], *,
             step["tree"] = True
         if given.get("unset"):
             step["unset"] = [str(v) for v in given["unset"]]
+        if given.get("path"):
+            step["path"] = [str(v) for v in given["path"]]
         if given.get("tree") and isinstance(given.get("idle"), dict) and given["idle"].get("seconds"):
             step["idle"] = dict(given["idle"])
     state: dict[str, Any] = {"schema": files.JOB_SCHEMA, "job": name, "pid": os.getpid(), "started": clock(), "finished": None,

@@ -265,6 +265,213 @@ def test_the_request_of_an_agent_started_from_the_page():
           "build and install the app, then the same two." in bare and "edit files under `.`" in bare, bare)
 
 
+STAMP = "2026-11-24T10:00:00+00:00"
+WHERE = ".echolot/out/report.json"
+
+
+def compared_row(location: str, change: str, after: float | None, *, before: float | None = None,
+                 holds: bool | None = None, runs: str = "5/5", low: float | None = None, **more) -> dict:
+    return {"location": location, "detector": "main_thread_waits", "metric": "self_ms", "change": change,
+            "before": None if before is None else {"self_ms": before, "runs": runs},
+            "after": None if after is None else {"self_ms": after, "runs": runs},
+            "delta_ms": (after or 0.0) - (before or 0.0), "holds": holds,
+            "shift": None if low is None else {"ms": 1.0, "low_ms": low, "high_ms": low + 50.0, "floor_ms": 10.0},
+            **more}
+
+
+def comparison_beside(root: Path, rows: list[dict], *, of: str = STAMP, comparable: bool = True,
+                      warnings: tuple[str, ...] = ()) -> None:
+    out = root / ".echolot" / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "comparison.json").write_text(json.dumps({
+        "schema": dig.files_mod.COMPARISON_SCHEMA, "kind": "comparison", "comparable": comparable,
+        "warnings": [{"id": w, "text": w} for w in warnings],
+        "before": {"path": str(out / "earlier.json"), "runs": 5},
+        "after": {"path": str(out / "report.json"), "runs": 5, "generated_at": of}, "rows": rows}), encoding="utf-8")
+
+
+WORSE_ROWS = [compared_row("inflate", "steady", 40.0, before=40.0, holds=False, low=-5.0),
+              compared_row("Thread.sleep in an initializer", "appeared", 558.0, detail="the main thread waits"),
+              compared_row("now and then", "appeared", 90.0, runs="2/5"),
+              compared_row("loadConfig", "grew", 340.0, before=120.0, holds=True, low=180.0),
+              compared_row("draw", "grew", 140.0, before=100.0, holds=False, low=-6.0),
+              compared_row("bind", "shrank", 20.0, before=200.0, holds=True, low=-220.0),
+              compared_row("AGENTTMP_parse", "appeared", 300.0),
+              compared_row("PROBE_parse", "appeared", 300.0)]
+NEW = ("- new in 5 of 5 runs: Thread.sleep in an initializer · main_thread_waits · 558 ms · the main thread waits")
+GREW = "- grew for sure: loadConfig · main_thread_waits · 120 → 340 ms (+220 ms, at least +180 ms)"
+
+
+def test_the_request_carries_what_the_last_comparison_found_worse_first(tmp_path):
+    """#933: the comparison of this very report against the one before, its
+    rows new in every run and those that grew and hold, after the question
+    and the warnings and before the report's rows, each marked."""
+    report = {**known(), "generated_at": STAMP}
+    picks = [c for c in dig.report_page.checks(report) if c["key"] == "main_thread_waits"]
+    plain = dig.report_page.request_text(report, picks, WHERE)
+    comparison_beside(tmp_path, WORSE_ROWS)
+    text = dig.request_text(tmp_path, report, picks, WHERE)
+    head = dig.COMPARED_HEAD.format(source="`.echolot/out/comparison.md`, against `.echolot/out/earlier.json`")
+    block = "\n".join([head, NEW, GREW, "- new in 5 of 5 runs: PROBE_parse · main_thread_waits · 300 ms"])
+    check("the new and the grown, marked, in the comparison's order", block in text, text)
+    check("before the report's rows, after the question and the warnings",
+          text.index(block) < text.index(dig.report_page.ROWS_HEAD)
+          and text.index(dig.report_page.WARN_HEAD) < text.index(block), text)
+    check("and the rest of the request as it was", text.replace(block + "\n\n", "") == plain)
+    check("a planted marker of the config's prefix is no new work",
+          "PROBE_parse" not in dig.request_text(tmp_path, report, picks, WHERE, prefix="PROBE_")
+          and "AGENTTMP_parse" not in text)
+    handed = dig.request(report, picks, WHERE, 4, None, ["app/src/main"], project=tmp_path)
+    check("the agent is handed the same", handed.startswith(text + "\n\n"))
+
+
+@pytest.mark.parametrize("why, kw", [("of another report", {"of": "2026-11-23T09:00:00+00:00"}),
+                                     ("two that cannot be compared", {"comparable": False}),
+                                     ("the same recordings twice", {"warnings": ("same-traces",)})])
+def test_a_comparison_that_is_not_this_report_s_adds_nothing(tmp_path, why, kw):
+    report = {**known(), "generated_at": STAMP}
+    picks = [c for c in dig.report_page.checks(report) if c["key"] == "main_thread_waits"]
+    comparison_beside(tmp_path, WORSE_ROWS, **kw)
+    check(why, dig.request_text(tmp_path, report, picks, WHERE) == dig.report_page.request_text(report, picks, WHERE))
+
+
+def test_what_the_last_comparison_found_worse_and_what_it_leaves_out(tmp_path):
+    report = {**known(), "generated_at": STAMP}
+    check("no comparison beside the report", dig.worse(tmp_path, report, WHERE) is None)
+    comparison_beside(tmp_path, WORSE_ROWS)
+    check("a report that does not say when it was written is no report the comparison names",
+          dig.worse(tmp_path, known(), WHERE) is None)
+    comparison_beside(tmp_path, WORSE_ROWS[:1] + WORSE_ROWS[4:6])
+    check("nothing new in every run, and nothing grown for sure: nothing", dig.worse(tmp_path, report, WHERE) is None)
+    comparison_beside(tmp_path, WORSE_ROWS, warnings=("thresholds",))
+    moved = dig.worse(tmp_path, report, WHERE) or ""
+    check("the bar moved: a row it calls new says nothing, one that grew still holds",
+          GREW in moved and "- new in" not in moved, moved)
+    comparison_beside(tmp_path, [compared_row(f"init{i}", "appeared", 100.0 + i) for i in range(dig.COMPARED_ROWS + 3)])
+    many = dig.worse(tmp_path, report, WHERE) or ""
+    check("at most COMPARED_ROWS, and where the rest are", many.count("- new in 5 of 5 runs: init")
+          == dig.COMPARED_ROWS and many.endswith("- and 3 more in `.echolot/out/comparison.md`"), many)
+    one = compared_row("Thread.sleep", "appeared", 558.0, runs="")
+    one["after"].pop("runs")
+    comparison_beside(tmp_path, [one])
+    check("a row of a side with no runs to count was in every run", "- new in 5 of 5 runs: Thread.sleep"
+          in (dig.worse(tmp_path, report, WHERE) or ""))
+    (tmp_path / ".echolot" / "out" / "comparison.json").write_text("{", encoding="utf-8")
+    check("one that does not read adds nothing", dig.worse(tmp_path, report, WHERE) is None)
+
+
+# --- which echolot the agent runs (#704) ----------------------------------------------------------
+
+def shell_says(found: str, version: str | None = None, asked: list | None = None):
+    def answer(argv, cwd, env):
+        if asked is not None:
+            asked.append((list(argv), env.get("PATH", ""), cwd))
+        if argv[1:] == ["--version"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=f"echolot {version}\n" if version else "", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=f"Last login: today\n{dig._AT}{found}\n", stderr="")
+    return answer
+
+
+@pytest.fixture
+def own(tmp_path, monkeypatch) -> Path:
+    """The page's own echolot, as a test has it: a file in a folder of its own."""
+    home = tmp_path / "venv" / "bin"
+    home.mkdir(parents=True)
+    (home / "echolot").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(dig, "own_bin", lambda: home)
+    return home
+
+
+@pytest.mark.parametrize("key, name", [("claude", "Claude Code"), ("codex", "Codex")])
+def test_an_agent_whose_shell_runs_another_echolot_does_not_start(tmp_path, monkeypatch, own, key, name):
+    asked: list = []
+    monkeypatch.setattr(dig, "_shell", shell_says("/opt/elsewhere/bin/echolot", "0.14.1", asked))
+    why = dig.runs_own(dig.Client(program="/x", key=key), tmp_path)
+    check("it says which echolot the agent would run, and which the page is", why == (
+        f"Not with this echolot: {name} runs commands in your login shell, and there `echolot` is "
+        f"`/opt/elsewhere/bin/echolot`, echolot 0.14.1, while this page is echolot {dig.__version__} "
+        f"(`{dig._whole(own / 'echolot')}`). The investigation would run on another echolot than the page that "
+        f"reads it. Put `{dig._whole(own)}` first in your shell's PATH, or remove the other echolot, then come back."),
+        why)
+    argv, path, cwd = asked[0]
+    check("asked in the project's folder, with the page's own folder first in PATH",
+          cwd == tmp_path and path.split(os.pathsep)[0] == str(own), (cwd, path))
+    if key == "claude":
+        check("as Claude Code's shell runs it: a login shell, the rc file sourced first where there is one",
+              argv[1:3] == ["-c", "-l"] and argv[3].endswith(dig.LOOK), argv)
+    else:
+        check("as Codex runs it: the login shell", argv[1:] == ["-lc", dig.LOOK], argv)
+    check("and the other one asked its version", asked[1][0] == ["/opt/elsewhere/bin/echolot", "--version"])
+
+
+def test_the_page_s_own_echolot_or_one_of_its_version_is_no_reason(tmp_path, monkeypatch, own):
+    claude = dig.Client(program="/x", key="claude")
+    link = tmp_path / "bin" / "echolot"
+    link.parent.mkdir()
+    link.symlink_to(own / "echolot")
+    asked: list = []
+    monkeypatch.setattr(dig, "_shell", shell_says(str(link), "0.14.1", asked))
+    check("a link to the page's own is the page's own, with no version asked",
+          dig.runs_own(claude, tmp_path) is None and len(asked) == 1, asked)
+    monkeypatch.setattr(dig, "_shell", shell_says("/opt/elsewhere/bin/echolot", dig.__version__))
+    check("another install of this same version runs as this one", dig.runs_own(claude, tmp_path) is None)
+
+
+def test_what_the_page_says_where_the_shell_answers_otherwise(tmp_path, monkeypatch, own):
+    claude = dig.Client(program="/x", key="claude")
+    monkeypatch.setattr(dig, "_shell", shell_says("/opt/elsewhere/bin/echolot"))
+    check("an echolot that does not say its version is not taken for this one",
+          "`/opt/elsewhere/bin/echolot`, an echolot that does not say its version (`echolot --version`)"
+          in (dig.runs_own(claude, tmp_path) or ""))
+    monkeypatch.setattr(dig, "_shell", shell_says(""))
+    check("no echolot in the shell", (dig.runs_own(claude, tmp_path) or "").startswith(
+        "Not yet: Claude Code runs commands in your login shell, and that shell has no `echolot` command "
+        "(`") and f"Put `{dig._whole(own)}` first in your shell's PATH" in (dig.runs_own(claude, tmp_path) or ""))
+    monkeypatch.setattr(dig, "_shell", shell_says("alias echolot='python -m echolot'"))
+    check("an alias", "an alias or a function of your shell" in (dig.runs_own(claude, tmp_path) or ""))
+    monkeypatch.setattr(dig, "_shell", lambda argv, cwd, env: None)
+    check("a shell that does not answer", dig.runs_own(claude, tmp_path) == (
+        "The page could not tell which `echolot` Claude Code would run: the login shell it runs commands in did "
+        f"not answer within {dig.SHELL_S} s. Check that `{Path(dig.claude_shell('')[0]).name} -lic 'command -v "
+        "echolot'` answers in a terminal, by itself, then come back."))
+    monkeypatch.setattr(dig, "_shell", lambda argv, cwd, env: subprocess.CompletedProcess(argv, 1, "", "zsh: oops"))
+    check("one that says nothing the page reads", "said nothing the page could read" in (
+        dig.runs_own(claude, tmp_path) or ""))
+
+
+def test_claude_code_s_shell_is_its_snapshot_s(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.setattr(dig.Path, "home", classmethod(lambda cls: tmp_path))
+    check("no rc file: a login shell alone", dig.claude_shell("x") == ["/bin/zsh", "-c", "-l", "x"])
+    (tmp_path / ".zshrc").write_text("", encoding="utf-8")
+    check("with one, sourced first", dig.claude_shell("x") == [
+        "/bin/zsh", "-c", "-l", f"source {shlex.quote(str(tmp_path / '.zshrc'))} < /dev/null; x"])
+
+
+def test_the_shell_is_asked_last_and_only_where_the_caller_asks(tmp_path, monkeypatch, own):
+    monkeypatch.setattr(dig, "layer_missing", lambda project: [])
+    monkeypatch.setattr(dig.state, "next_kind", lambda st: "hunt")
+    path = config(tmp_path, '["app/src/main"]').path
+    st = {"config": {"path": str(path), "scenario": None}, "hunt": None, "collect": None}
+    asked: list = []
+    monkeypatch.setattr(dig, "_shell", shell_says("/opt/elsewhere/bin/echolot", "0.14.1", asked))
+    claude = dig.Client(program="/c", version="2.1.300")
+    check("the report's dialog asks no shell", dig.why_not(tmp_path, st, [], claude) is None and asked == [])
+    check("the screen before the start and the press do", dig.why_not(tmp_path, st, [], claude, shell=True)
+          == dig.runs_own(claude, tmp_path) and asked)
+    asked.clear()
+    st["hunt"] = {"status": "open", "question": "why"}
+    check("and not where another reason stands first", dig.why_not(tmp_path, st, [], claude, shell=True)
+          .startswith("Not now: an investigation is open") and asked == [])
+
+
+def test_the_job_puts_the_folders_it_is_given_first_in_path(monkeypatch):
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/opt/own/bin", "/bin"]))
+    env = job._env({"path": ["/opt/own/bin"], "unset": []})
+    check("first, and once", env["PATH"] == os.pathsep.join(["/opt/own/bin", "/usr/bin", "/bin"]), env["PATH"])
+    check("a step that names none keeps PATH as it is", job._env({})["PATH"] == os.environ["PATH"])
+
+
 def test_the_investigation_s_question_is_one_line_its_page_can_head():
     from tests.test_report_page import entry, make, row
     from echolot import plain

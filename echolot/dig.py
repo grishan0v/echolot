@@ -24,8 +24,11 @@ What is decided here and nowhere else, for Claude Code:
   limited to `instrumentation.allowed`, and a question with nobody there is
   refused rather than waited on (`--permission-prompts none`);
 - the request the agent is handed (`request`): the report's question,
-  warnings and rows (`pages/report_page.request_text`) and what a run with
-  nobody at the keyboard has to know;
+  warnings and rows (`pages/report_page.request_text`), what the scenario's
+  last comparison found worse (`worse`), and what a run with nobody at the
+  keyboard has to know;
+- which `echolot` the agent runs (`runs_own`): the page's own, first in its
+  `PATH`, and asked of its shell the way the client asks it;
 - what a run looks like now (`view`): the investigation's own record round by
   round, and between rounds the phase, from what the agent is running (a
   build, a recording, the phone) and not from anything it printed; how long
@@ -54,12 +57,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from . import __version__
 from . import check as check_mod
+from . import files as files_mod
 from . import hunt as hunt_mod
 from . import job, state
+from . import report as report_mod
 from . import when as when_mod
 from .check import Refusal, _stops_recording
-from .config import Config, ConfigError
+from .config import DEFAULT_PREFIX, Config, ConfigError
 from .mark import Markers, allowed_entry
 from .pages import report_page
 
@@ -173,6 +179,141 @@ def find() -> Client:
     account = next((str(known[key]) for key in ("email", "account", "orgName")
                     if isinstance(known.get(key), str) and known[key].strip()), None)
     return Client(program=program, version=version, account=account)
+
+
+# ---------------------------------------------------------------------------
+# which echolot the agent runs (#704)
+#
+# The agent runs `echolot` through its shell, and which one that is depends
+# on the person's shell, not on the page. Codex runs every command in a login
+# shell (`zsh -lc`), and Claude Code from a snapshot of one that read the rc
+# file too, with `PATH` as that shell left it. A field run whose page was
+# served by 0.17.0 started Claude Code on a 0.14.1 from pipx, first in `PATH`,
+# which stopped after about $0.10 with no answer. So the page puts its own
+# folder first in the agent's `PATH`, and before Start asks the client's
+# shell, with that same environment, which `echolot` it finds: a profile that
+# puts another folder first again is a reason the client cannot start.
+
+# What the shell is asked: which `echolot` it runs, after a mark no profile prints.
+_AT = "echolot-at:"
+LOOK = f'printf "%s\\n" "{_AT}$(command -v echolot)"'
+# How long a login shell may take to answer. One that takes longer holds
+# every command the agent runs as long.
+SHELL_S = 20
+
+
+def own_bin() -> Path:
+    """The folder of the page's own `echolot`: the one the Python that serves
+    the page is in, as it was started and not where a link leads, since a
+    virtual environment's `python` is a link to the one it was made from."""
+    return Path(sys.executable).absolute().parent
+
+
+def agent_env(unset: Sequence[str]) -> dict[str, str]:
+    """The environment an agent started from the page has: the page's own,
+    without the names its adapter leaves out, and with the page's own folder
+    first in `PATH`, as the job puts it (`job.path_first`)."""
+    env = {k: v for k, v in os.environ.items() if k not in unset}
+    env["PATH"] = job.path_first([os.fspath(own_bin())], env.get("PATH"))
+    return env
+
+
+def _in_shell(argv: list[str], cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(argv, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=SHELL_S,
+                              stdin=subprocess.DEVNULL, errors="replace")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+# How the page asks the agent's shell, and the `echolot` it finds, a question.
+# A test hands in its own: no test reads the shell of the computer it runs on.
+_shell: Callable[[list[str], Path, dict[str, str]], subprocess.CompletedProcess | None] = _in_shell
+
+
+def claude_shell(script: str) -> list[str]:
+    """A command line as Claude Code's shell runs it: the shell it uses
+    (`$SHELL` where that is zsh or bash, else the first of those it finds),
+    as a login shell, with the rc file sourced first, as its snapshot of
+    the shell is made."""
+    shell = os.environ.get("SHELL") or ""
+    if not any(name in Path(shell).name for name in ("zsh", "bash")):
+        shell = shutil.which("zsh") or shutil.which("bash") or "/bin/sh"
+    name = Path(shell).name
+    rc = Path.home() / (".zshrc" if "zsh" in name else ".bashrc" if "bash" in name else ".profile")
+    first = f"source {shlex.quote(os.fspath(rc))} < /dev/null; " if rc.is_file() else ""
+    return [shell, "-c", "-l", first + script]
+
+
+def login_shell() -> str:
+    """The person's login shell, as the system has it; `$SHELL` where it
+    says none."""
+    with contextlib.suppress(ImportError, KeyError, OSError):
+        import pwd
+        found = pwd.getpwuid(os.getuid()).pw_shell
+        if found:
+            return found
+    return os.environ.get("SHELL") or "/bin/sh"
+
+
+def _whole(path: Path) -> str:
+    """A path the person can put into a profile: whole, or from home."""
+    try:
+        return "~/" + path.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return os.fspath(path)
+
+
+def _same_file(a: str, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return False
+
+
+def runs_own(client: Client, project: Path) -> str | None:
+    """Why the agent would run another `echolot` than the page's own, in a
+    sentence; None when it runs this one. Asked of its shell the way the
+    client runs a command (the adapter's `shell`), in the project's folder,
+    with the environment the agent gets (`agent_env`). Another `echolot` of
+    this same version is this one, as far as the investigation can tell."""
+    if os.name != "posix":
+        return None
+    agent = adapter(client.key)
+    env = agent_env(agent.unset)
+    argv = agent.shell(LOOK)
+    said = _shell(argv, project, env)
+    own = own_bin() / "echolot"
+    asked = f"`{Path(argv[0]).name} {agent.login} 'command -v echolot'`"
+    first = f"Put `{_whole(own_bin())}` first in your shell's PATH"
+    marked = [line.strip()[len(_AT):].strip() for line in (said.stdout if said else "").splitlines()
+              if line.strip().startswith(_AT)]
+    if not marked:
+        how = f"did not answer within {SHELL_S} s" if said is None else "said nothing the page could read"
+        return (f"The page could not tell which `echolot` {agent.name} would run: the login shell it runs commands "
+                f"in {how}. Check that {asked} answers in a terminal, by itself, then come back.")
+    found = marked[-1]
+    if not found:
+        return (f"Not yet: {agent.name} runs commands in your login shell, and that shell has no `echolot` command "
+                f"({asked} finds none), so the agent could not run it. {first}, then come back.")
+    if found.startswith("/") and _same_file(found, own):
+        return None
+    ours = _version(__version__)
+    theirs = None
+    if found.startswith("/"):
+        told = _shell([found, "--version"], project, env)
+        theirs = _version(told.stdout if told else "")
+        if theirs is not None and theirs == ours:
+            return None
+    if not found.startswith("/"):
+        what = f"`{found}`, an alias or a function of your shell"
+    elif theirs is None:
+        what = f"`{_whole(Path(found))}`, an echolot that does not say its version (`echolot --version`)"
+    else:
+        what = f"`{_whole(Path(found))}`, echolot {'.'.join(str(part) for part in theirs)}"
+    return (f"Not with this echolot: {agent.name} runs commands in your login shell, and there `echolot` is {what}, "
+            f"while this page is echolot {__version__} (`{_whole(own)}`). The investigation would run on "
+            f"another echolot than the page that reads it. {first}, or remove the other echolot, then come back.")
 
 
 # ---------------------------------------------------------------------------
@@ -379,11 +520,133 @@ def unattended(n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> s
     ])
 
 
+# ---------------------------------------------------------------------------
+# what the scenario's last comparison found worse (#933)
+#
+# The request carries the report's rows, and the report says nothing of what
+# changed since the one before it. In a field run the clearest evidence, a new
+# 558 ms wait of the main thread, was the tenth of sixteen rows and "Worth a
+# look", while the comparison against the report before had it new in 5 of 5
+# runs. So where `echolot compare` left a comparison of this very report
+# beside it, the request carries its rows that are new in every run or grew
+# by more than the runs disagree, first and marked as such.
+
+# The most rows of the comparison the request carries: comparison.md has all.
+COMPARED_ROWS = 8
+COMPARED_HEAD = ("What got worse since the report before it, as `echolot compare` found it ({source}): rows new in "
+                 "every run, and rows that grew by more than the runs disagree. These come first:")
+# A comparison's warnings under which a row it calls new says nothing: the
+# bar moved, and a row can cross it with nothing in the app changed; or both
+# sides are the same recordings.
+_NEW_SAYS_NOTHING = ("thresholds", "defaults", "same-traces")
+
+
+def _rel(path: Path, project: Path) -> str:
+    try:
+        return path.resolve().relative_to(project.resolve()).as_posix()
+    except (OSError, ValueError):
+        return str(path)
+
+
+def _share_of(face: dict[str, Any] | None, runs: int) -> tuple[int, int]:
+    """In how many of how many runs a side found a row: its `runs`, or every
+    run of the side where it carries none."""
+    try:
+        k, n = (int(x) for x in str((face or {}).get("runs")).split("/"))
+    except ValueError:
+        return runs, runs
+    return k, n
+
+
+def _figure(value: Any) -> str:
+    return report_page._number(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else "?"
+
+
+def _worse_line(row: dict[str, Any], runs: int, new_counts: bool, prefix: str) -> str | None:
+    """One row of the comparison as the request gives it, marked, or None
+    for a row that is not new in every run and did not grow for sure."""
+    metric = str(row.get("metric") or "")
+    after, before = row.get("after") or {}, row.get("before") or {}
+    bits = [str(row.get("location")), str(row.get("detector") or "")]
+    if row.get("change") == "appeared":
+        k, n = _share_of(after, runs)
+        if not new_counts or k < n or str(row.get("location")).startswith(prefix):
+            return None
+        mark = "new in the one run" if n == 1 else f"new in {k} of {n} runs"
+        bits.append(f"{_figure(after.get(metric))} ms")
+    elif row.get("change") == "grew" and row.get("holds") is True:
+        shift = row.get("shift") or {}
+        mark = "grew for sure"
+        least = shift.get("low_ms")
+        bits.append(f"{_figure(before.get(metric))} → {_figure(after.get(metric))} ms "
+                    f"({row.get('delta_ms'):+g} ms" + (f", at least {least:+g} ms)" if isinstance(least, (int, float))
+                                                      else ")"))
+    else:
+        return None
+    if row.get("detail"):
+        bits.append(report_mod.clip(str(row["detail"]), report_page.REQUEST_DETAIL))
+    return f"- {mark}: " + " · ".join(b for b in bits if b)
+
+
+def worse(project: Path, report: dict[str, Any], where: str, prefix: str | None = None) -> str | None:
+    """The block of the request with what the scenario's last comparison
+    found worse: its rows new in every run after, and those that grew and
+    hold, in its own order, at most `COMPARED_ROWS`. None where there is no
+    comparison beside the report, where it does not read, where its newer
+    side is not this report (`compare` run on other files, or a new report
+    analysed since), where it says the two cannot be compared, or where no
+    row is either. A row new because the hunt planted a marker under
+    `prefix` is no new work, and is left out."""
+    base = Path(where)
+    base = base if base.is_absolute() else project / base
+    path = base.parent / "comparison.json"
+    found = files_mod.read_comparison(path)
+    if isinstance(found, files_mod.Refusal):
+        return None
+    stamp = report.get("generated_at")
+    if not stamp or (found.get("after") or {}).get("generated_at") != stamp or found.get("comparable") is False:
+        return None
+    said = {w.get("id") for w in found.get("warnings") or []}
+    if "same-traces" in said:
+        return None
+    runs = (found.get("after") or {}).get("runs") or 1
+    new_counts = not said & set(_NEW_SAYS_NOTHING)
+    lines = [line for line in (_worse_line(r, runs, new_counts, prefix or DEFAULT_PREFIX)
+                               for r in found.get("rows") or []) if line]
+    if not lines:
+        return None
+    table = _rel(path.with_name("comparison.md"), project)
+    before = (found.get("before") or {}).get("path")
+    source = f"`{table}`" + (f", against `{_rel(Path(before), project)}`" if before else "")
+    more = len(lines) - COMPARED_ROWS
+    return "\n".join([COMPARED_HEAD.format(source=source), *lines[:COMPARED_ROWS],
+                      *([f"- and {more} more in `{table}`"] if more > 0 else [])])
+
+
+def request_text(project: Path, report: dict[str, Any], picks: Sequence[dict[str, Any]], where: str,
+                 prefix: str | None = None) -> str:
+    """The request a person copies from the screen before the start, and the
+    first part of the one the agent is handed: the report's
+    (`report_page.request_text`), with what the last comparison found worse
+    (`worse`) after the question and the report's warnings, before its rows."""
+    text = report_page.request_text(report, picks, where, last=True)
+    block = worse(project, report, where, prefix)
+    if not block:
+        return text
+    head = "\n\n" + report_page.ROWS_HEAD
+    at = text.find(head)
+    return text[:at] + "\n\n" + block + text[at:] if at >= 0 else text + "\n\n" + block
+
+
 def request(report: dict[str, Any], picks: Sequence[dict[str, Any]], where: str, n: int,
-            aside: tuple[str, int] | None, paths: Sequence[str]) -> str:
+            aside: tuple[str, int] | None, paths: Sequence[str], project: Path | None = None,
+            prefix: str | None = None) -> str:
     """The request the started agent is handed: the one a person would copy,
+    with what the last comparison found worse where `project` is named,
     then what a run with nobody there has to know."""
-    return report_page.request_text(report, picks, where, last=True) + "\n\n" + unattended(n, aside, paths)
+    copied = (request_text(project, report, picks, where, prefix) if project is not None
+              else report_page.request_text(report, picks, where, last=True))
+    return copied + "\n\n" + unattended(n, aside, paths)
 
 
 # ---------------------------------------------------------------------------
@@ -435,10 +698,14 @@ def unplaced(st: dict[str, Any]) -> str | None:
     return None
 
 
-def why_not(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], client: Client) -> str | None:
+def why_not(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], client: Client, *,
+            shell: bool = False) -> str | None:
     """Why a press would start nothing now, in a sentence; None when it would
     start. The same reading before the press, for the page, and at the
-    press, against the project as it is then."""
+    press, against the project as it is then. With `shell`, last of all,
+    which `echolot` the agent's shell would run (`runs_own`): the screen
+    before the start asks it, and the press, and not the report's dialog,
+    which asks no phone either."""
     current = job.read(project, JOB)
     if current is not None and current["status"] == job.RUNNING:
         return "Not now: an agent is already digging into this app. Its page shows how far it is."
@@ -471,7 +738,10 @@ def why_not(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], clie
     collect = st.get("collect") or {}
     if collect.get("status") == "running":
         return "Not now: a recording is running, started from a terminal or by an agent. Wait for it to end."
-    return _stops_recording(lines)
+    stops = _stops_recording(lines)
+    if stops or not shell:
+        return stops
+    return runs_own(client, project)
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +783,7 @@ def start(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], report
     `run` runs a command of echolot's and waits for it, `spawn` starts the
     job's process: both are a test's to replace.
     """
-    why = why_not(project, st, lines, client)
+    why = why_not(project, st, lines, client, shell=True)
     if why:
         raise Refusal("The agent cannot start", why)
     agent = adapter(client.key)
@@ -541,9 +811,12 @@ def start(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], report
         raise Refusal("The investigation could not be opened", f"`echolot hunt` said: {said}", 500)
     n = int(opened["n"])
     aside = _aside(project, name, began)
-    text = report_page.request_text(report, picks, where, last=True) + "\n\n" + agent.unattended(n, aside, paths)
+    text = request_text(project, report, picks, where, cfg.temp_prefix) + "\n\n" + agent.unattended(n, aside, paths)
+    # The page's own folder first in its PATH: the `echolot` it runs is the
+    # page's, as far as its shell keeps that order (`runs_own`).
     step = {"id": STEP, "argv": agent.argv(str(client.program), text, paths, project),
-            "shown": agent.shown(paths, project), "tree": True, "unset": list(agent.unset)}
+            "shown": agent.shown(paths, project), "tree": True, "unset": list(agent.unset),
+            "path": [os.fspath(own_bin())]}
     idle = agent.idle(n)
     if idle:
         step["idle"] = idle
@@ -950,9 +1223,15 @@ class ClaudeCode:
     # It refuses a question nobody can answer and goes on: nothing waits, and
     # the job ends nothing for having been quiet.
     idle_s: float | None = None
+    # How a person asks a shell what it asks (`runs_own`): its snapshot reads
+    # the rc file, as an interactive shell does.
+    login = "-lic"
 
     def find(self) -> Client:
         return find()
+
+    def shell(self, script: str) -> list[str]:
+        return claude_shell(script)
 
     def ready(self, project: Path) -> str | None:
         """Why this project cannot have it now: the command that hunts and the
@@ -1034,15 +1313,16 @@ def find_all() -> list[Client]:
 
 
 def offer(project: Path, found: Sequence[Client], st: dict[str, Any],
-          lines: list[dict[str, Any]]) -> list[tuple[Client, str | None]]:
+          lines: list[dict[str, Any]], *, shell: bool = False) -> list[tuple[Client, str | None]]:
     """The clients found, each with why a press would start nothing with it
     now (None when it would), in the order the page offers them: the one the
     last run started from here used first, since that is the person's own
     choice, then the table's order, which puts the one whose edits its grant
-    keeps to the allowed folders first."""
+    keeps to the allowed folders first. `shell` asks each one's shell which
+    `echolot` it runs (`why_not`)."""
     last = ((job.read(project, JOB) or {}).get("what") or {}).get("client")
     order = sorted(found, key=lambda c: c.key != last)
-    return [(c, why_not(project, st, lines, c)) for c in order]
+    return [(c, why_not(project, st, lines, c, shell=shell)) for c in order]
 
 
 def reasons(offered: Sequence[tuple[Client, str | None]], key: str | None = None) -> list[str]:

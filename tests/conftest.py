@@ -85,6 +85,22 @@ def no_agent_here(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_shell_asked(monkeypatch):
+    """Before Start, the page asks the agent's login shell which `echolot`
+    it runs (#704). A test reads no shell of the computer it runs on: the
+    shell answers with the page's own `echolot`, and that one with the
+    page's version. A test that wants another answer hands in its own."""
+    import subprocess
+
+    from echolot import __version__, dig
+
+    def answer(argv, cwd, env):
+        said = f"echolot {__version__}\n" if argv[1:] == ["--version"] else f"{dig._AT}{dig.own_bin() / 'echolot'}\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=said, stderr="")
+    monkeypatch.setattr(dig, "_shell", answer)
+
+
+@pytest.fixture(autouse=True)
 def no_first_look(monkeypatch):
     """`collect` reads its first repeat's trace with trace_processor (#536).
     The traces a fake adb pulls are a line of text, which says nothing and

@@ -444,9 +444,15 @@ class Codex:
     key, name, program = KEY, NAME, PROGRAM
     unset = UNSET
     idle_s: float | None = IDLE_S
+    # How it runs every command, and how a person asks a shell the same.
+    login = "-lc"
 
     def find(self) -> Client:
         return find()
+
+    def shell(self, script: str) -> list[str]:
+        """A command line as Codex runs it: in the person's login shell."""
+        return [dig.login_shell(), self.login, script]
 
     def ready(self, project: Path) -> str | None:
         return ready(project)
