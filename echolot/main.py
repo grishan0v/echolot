@@ -4097,12 +4097,22 @@ def cmd_calibrate(args) -> int:
             _include_modules(tp, detectors)
             for d in detectors:
                 try:
-                    per_run[d.id].append(tp.query(d.render_open(overrides.get(d.id))))
+                    measured = tp.query(d.render_open(overrides.get(d.id)))
                 except Exception as e:
                     failed[d.id] += 1
                     print(f"[!] {d.id} on {trace}: {e}", file=sys.stderr)
                     current[d.id] = None
                     continue
+                if d.fires:
+                    # One query: every row it measured, each marked with
+                    # whether the thresholds in effect show it (#832).
+                    per_run[d.id].append([{k: v for k, v in r.items() if k != "over_bar"}
+                                          for r in measured])
+                    if current[d.id] is not None:
+                        current[d.id].append([{k: v for k, v in r.items() if k != "over_bar"}
+                                              for r in measured if r.get("over_bar")])
+                    continue
+                per_run[d.id].append(measured)
                 if current[d.id] is not None:
                     try:
                         current[d.id].append(

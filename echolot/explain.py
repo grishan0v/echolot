@@ -26,7 +26,7 @@ import textwrap
 from typing import Any
 
 from . import needs as needs_mod
-from .tp import Detector
+from .tp import _PLACEHOLDER, Detector
 
 
 def find(detectors: list[Detector], name: str) -> Detector | None:
@@ -90,10 +90,19 @@ def entries(detectors: list[Detector], plan: list[tuple] | None,
             "off": planned is not None and d.id not in planned,
             "needs": [{"id": n, "about": needs_mod.SOURCES[n].about} for n in d.needs],
             "params": params,
+            # Which rows a report shows, with this config's values in it
+            # (#832); None for a detector that drops the rest in its query.
+            "shown_when": _shown_when(d, overrides),
             "identity": list(d.identity),
             "columns": [{"name": c, "meaning": m} for c, m in d.columns.items()],
         })
     return out
+
+
+def _shown_when(d: Detector, overrides: dict[str, Any]) -> str | None:
+    """`@fires` with the values a run uses in place of its parameters."""
+    values = {**d.params, **overrides}
+    return _PLACEHOLDER.sub(lambda m: str(values.get(m.group(1))), d.fires) or None
 
 
 def document(entries_: list[dict[str, Any]], config: str | None,
@@ -173,6 +182,10 @@ def one(e: dict[str, Any], config: str | None, scenario: str | None,
             lines += para(p["meaning"], "      ")
     else:
         lines.append("No thresholds.")
+    if e.get("shown_when"):
+        lines += [""] + para(f"A row is shown when {e['shown_when']}. Every other "
+                             f"row it measured is kept under the bar, for the "
+                             f"merge of repeats and for `compare`.")
     lines += ["", f"Columns, a row per {' and '.join(e['identity'])}:"]
     pad = max((len(c["name"]) for c in e["columns"]), default=0) + 2
     for c in e["columns"]:

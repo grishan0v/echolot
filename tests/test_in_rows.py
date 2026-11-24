@@ -88,11 +88,13 @@ def test_a_detector_without_one_says_so(tmp_path: Path) -> None:
 
 
 def test_every_shipped_detector_has_one() -> None:
-    """And none of them lost its LIMIT to the split."""
+    """And none of them lost its LIMIT to the split. A detector with `@fires`
+    has none to lose: it keeps every row it measured (#832)."""
     for d in load_detectors(DETECTOR_DIR):
         check(f"{d.id}: a second query", d.intervals_sql.strip(), d.id)
-        check(f"{d.id}: the first still ends in its LIMIT",
-              _LIMIT_TAIL.search(d.sql) is not None, d.sql[-120:])
+        if not d.fires:
+            check(f"{d.id}: the first still ends in its LIMIT",
+                  _LIMIT_TAIL.search(d.sql) is not None, d.sql[-120:])
 
 
 # --- counting each moment once ---------------------------------------------

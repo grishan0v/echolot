@@ -311,6 +311,20 @@ class Detector:
     # frame, is not calibrated, and a row under it in one repeat is still
     # there (#505); without this it read as absent again.
     bars: tuple[str, ...] = ()
+    # `@fires`: the one predicate over the query's output columns that says a
+    # row is worth showing (#832), `{{param}}`s and all. A detector that has
+    # one measures every row and drops none: its query has no threshold in
+    # it, and `render` wraps it as `SELECT *, (<fires>) AS over_bar FROM
+    # (…)`. The threshold then decides which rows are shown, never which
+    # rows exist, so the merge of repeats, `compare`, `calibrate` and the
+    # main thread's account read every measurement, whatever the bar. Empty
+    # for a detector still on the old path, whose query filters its rows.
+    fires: str = ""
+    # `@shape`: the numeric parameters that decide what a row is, rather
+    # than whether it is shown: `main_thread_outlier`'s `factor`. Moving one
+    # changes the rows themselves. Every other numeric parameter of a
+    # detector with `@fires` appears in the predicate.
+    shape: tuple[str, ...] = ()
     # The header in words (#494): what each parameter is counted in and
     # means, and what each column of the rows means, in the query's order.
     # Read by `explain`; a test refuses a shipped detector that leaves one
@@ -339,7 +353,8 @@ class Detector:
             return " ".join(" ".join(lines).split())
 
         body = "\n".join([code(self.sql), code(self.intervals_sql), code(self.samples_sql),
-                          ",".join(self.identity), ",".join(self.modules)])
+                          ",".join(self.identity), ",".join(self.modules)]
+                         + ([code(self.fires)] if self.fires else []))
         return hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
 
     @classmethod
@@ -377,6 +392,8 @@ class Detector:
             tables=tables,
             needs=needs,
             bars=tuple(b.strip() for b in meta.get("bar", "").split(",") if b.strip()),
+            fires=meta.get("fires", ""),
+            shape=tuple(p.strip() for p in meta.get("shape", "").split(",") if p.strip()),
             plain_title=meta.get("plain_title", ""),
             plain_why=meta.get("plain_why", ""),
             plain_clean=meta.get("plain_clean", ""),
@@ -392,6 +409,9 @@ class Detector:
         LIMIT is stripped: a statistic over a truncated top twenty would be a
         statistic over the tail.
         """
+        if self.fires:
+            # Every row is in what `render` returns already.
+            return self.render(overrides)[0]
         resolved = dict(self.params)
         resolved.update(overrides or {})
         for param in [c.param for c in self.calibrations] + list(self.bars):
@@ -464,7 +484,7 @@ class Detector:
         resolved = dict(self.params)
         resolved.update(overrides or {})
         missing = {
-            m for m in _PLACEHOLDER.findall(self.sql) if m not in resolved
+            m for m in _PLACEHOLDER.findall(self.sql + self.fires) if m not in resolved
         }
         if missing:
             raise ValueError(
@@ -472,7 +492,22 @@ class Detector:
             )
         sql = _PLACEHOLDER.sub(
             lambda m: sql_value(resolved[m.group(1)]), self.sql)
+        if self.fires:
+            sql = self._wrapped(sql, resolved)
         return sql, resolved
+
+    def _wrapped(self, sql: str, resolved: dict[str, Any]) -> str:
+        """The query with its predicate as a column, `over_bar` (#832).
+
+        The last statement is the one that returns the rows; the ones before
+        it write the detector's own tables, and stay as they are. Its `LIMIT`
+        goes: a row the twentieth place cut off is a measurement like any.
+        """
+        *head, last = _split_statements(sql)
+        last = _LIMIT_TAIL.sub("", last).rstrip()
+        fires = _PLACEHOLDER.sub(lambda m: sql_value(resolved[m.group(1)]), self.fires)
+        rows = f"SELECT *, ({fires}) AS over_bar FROM (\n{last}\n)"
+        return ";\n".join([*head, rows]) + ";"
 
     def render_intervals(self, resolved: dict[str, Any]) -> str | None:
         """The second query, with the values the first one ran with.
