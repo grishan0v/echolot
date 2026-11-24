@@ -1292,8 +1292,10 @@ Two warnings come out of merging:
 - the report flags repeat windows that diverged more than twofold — those are
   not repeats of one scenario, and a median over them means nothing.
 
-The recordings are put in one order first, by file name with numbers read as
-numbers (`_iter2` before `_iter10`), whatever order the paths were given in:
-the same set is the same report. That is the order `collect` recorded them in,
-and the order of every `spread.values` list. The pid and window times in the
+The recordings are put in one order, whatever order the paths were given in:
+the same set is the same report. It is the order they were recorded in, by
+each trace's own clock, and for a set of which some trace does not say when,
+by directory and then by file name with numbers read as numbers (`_iter2`
+before `_iter10`), so that a set merged from several rounds keeps each round
+together (#848). It is the order of every `spread.values` list. The pid and window times in the
 header are the first recording's, and the header says so.
