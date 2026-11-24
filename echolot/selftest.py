@@ -675,7 +675,46 @@ def _(report):
     assert row["max_ms"] == 25.0, row
     assert row["count"] == 2, f"both sync transactions belong to the group: {row}"
     assert row["total_ms"] == 28.0, row
-    assert row["detail"] == "main thread", row
+    assert row["thread"] == "main thread", row
+
+
+@check("binder_txn: the evidence says who answered the calls, and the method where it is named")
+def _(report):
+    # The two calls are the binder driver's events, and trace_processor ties
+    # each to the thread that answered it; `android.binder` reads the process
+    # off that, and the method off the AIDL slice system_server opened inside
+    # its reply. The row used to say only which thread of the app waited.
+    # Shares of the row's time, 25 and 3 of 28 ms; keystore2 names no
+    # method, and its directory is left out (#514).
+    row = only_row(report, "binder_txn")
+    assert row["detail"] == ("main thread · to system_server "
+                             "IPackageManager.getPackageInfo 89%, keystore2 11%"), row
+
+
+@check("binder_txn, gc_pressure: a trace with nothing behind the slices gives the same rows, without the evidence")
+def _(report):
+    # An older device, or a recording made by something else: the binder
+    # slices came with no driver's events behind them, so no flow says who
+    # answered, and the runtime wrote no heap counter, so the standard
+    # library holds no collection. The modules load and are empty; the rows
+    # are the slices' as they always were, and say only what the slices say.
+    from .config import Config
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bare.perfetto-trace"
+        path.write_bytes(fixture.build(answered=False, heap=False))
+        bare = _analyze(path, Config(FIXTURE_CONFIG))
+
+    def numbers(rep, det):
+        return [{k: v for k, v in r.items() if k != "detail"} for r in rows(rep, det)]
+    for det in ("binder_txn", "gc_pressure"):
+        assert numbers(bare, det) == numbers(report, det), (det, rows(bare, det))
+    assert [r["detail"] for r in rows(bare, "binder_txn")] == ["main thread"], rows(bare, "binder_txn")
+    assert [r["detail"] for r in rows(bare, "gc_pressure")] == [None, None], rows(bare, "gc_pressure")
+    # And the main thread's time behind the rows is the same: `@intervals`
+    # finds the slices by the row's `thread`, whatever `detail` says.
+    covered = ("in_rows_ms", "in_rows_pct", "in_rows_uncounted")
+    assert ({k: bare["window"]["main_thread"].get(k) for k in covered}
+            == {k: report["window"]["main_thread"].get(k) for k in covered}), bare["window"]["main_thread"]
 
 
 @check("the async transaction is still visible as a long slice on main")
@@ -745,6 +784,33 @@ def _(report):
     # waitWhileAllocatingLocked appears on application threads when an
     # allocation stalls waiting for the collector. A real name from Android 14.
     assert "waitWhileAllocatingLocked" in locations(report, "gc_pressure")
+
+
+@check("gc_pressure: a cycle's evidence is what it freed and how large the heap grew before one")
+def _(report):
+    # Read by `android.garbage_collection` off the runtime's heap counter:
+    # 46 MB freed by the first cycle, which came after a burst to 64 MB, and
+    # 12 MB by each of the nineteen after it. Freed is a cycle's average, the
+    # heap the largest it was before any — the number that is there when a
+    # cold start's first two seconds hold no cycle at all (#514, #609). The
+    # thread is a column of its own and names the row.
+    got = [r for r in rows(report, "gc_pressure")
+           if r["location"] == "Background young concurrent copying GC"]
+    assert len(got) == 1, rows(report, "gc_pressure")
+    assert got[0]["thread"] == "HeapTaskDaemon", got[0]
+    assert got[0]["detail"] == "13.7 MB freed a cycle, the heap up to 64.0 MB", got[0]
+
+
+@check("gc_pressure: an allocation wait's evidence names the collection it waited for")
+def _(report):
+    # The first of the three waits, 700..760, falls on the cycles that start
+    # at 700; the other two fall on none. So one wait of 60 ms in 180, a
+    # third of the row, was for a young collection.
+    got = [r for r in rows(report, "gc_pressure")
+           if r["location"] == "waitWhileAllocatingLocked"]
+    assert len(got) == 1, rows(report, "gc_pressure")
+    assert got[0]["thread"] == fixture.THREADS[fixture.TID_MAIN], got[0]
+    assert got[0]["detail"] == "during Background young concurrent copying GC 33%", got[0]
 
 
 @check("main_thread_outlier: one occurrence far outside its own history")
