@@ -252,10 +252,37 @@ def test_its_events_are_read_back(tmp_path):
     found = dig_codex.result(tmp_path)
     check("its last message", dig_codex.last_words(found) == "Done, with what I had.")
     check("the tokens of its turn, read and written", dig_codex.cost(found) == "56,479 tokens", dig_codex.cost(found))
+    check("and how many of the read it read again from its cache", dig_codex.cached(found) == "49,280")
     check("what its sandbox refused or Codex declined, as it ran it, and a build that failed is none of it",
           dig.adapter("codex").denied(found) == ["git commit -am wip", "rm -rf /tmp/x", "echolot doctor -q",
                                                  "a change to /etc/hosts"], found["denied"])
     check("there is no spending cap to reach", not dig.adapter("codex").capped(found))
+
+
+def test_the_tokens_of_a_real_run_and_the_cached_share_of_them():
+    """What a real run of three rounds reported at the end of its turn: the
+    total is what it read and what it wrote (its reasoning is part of what it
+    wrote), and nearly all it read it read again from its cache."""
+    found = {"usage": {"input_tokens": 4492078, "cached_input_tokens": 4408832, "cache_write_input_tokens": 0,
+                       "output_tokens": 18834, "reasoning_output_tokens": 10179}}
+    check("the total, as before", dig_codex.cost(found) == "4,510,912 tokens", dig_codex.cost(found))
+    check("and the cached share of it", dig_codex.cached(found) == "4,408,832", dig_codex.cached(found))
+    for usage in ({**found["usage"], "cached_input_tokens": 0}, {"input_tokens": 9, "output_tokens": 1},
+                  {**found["usage"], "cached_input_tokens": True}, {"cached_input_tokens": 5}):
+        check(f"nothing of a cache where it says none, or no total: {usage}", dig_codex.cached({"usage": usage}) is None)
+    check("Claude Code's cost is in dollars, and says nothing of a cache",
+          dig.adapter("claude").cached({"total_cost_usd": 1.0}) is None)
+
+
+def test_the_sentence_on_what_it_spent_says_the_cached_share_only_where_there_is_one():
+    from echolot.pages import dig_page
+    said = dig_page._spent({"ran": 855.0, "cost": "4,510,912 tokens", "cached": "4,408,832", "client": "codex"})
+    check("the total, then the cached share of it", said == '<p class="small sub">It ran for 14 minutes and reports '
+          "4,510,912 tokens of usage, by its own count, 4,408,832 of them read again from its cache.</p>", said)
+    check("none: nothing more", dig_page._spent({"ran": 855.0, "cost": "10 tokens", "cached": None, "client": "codex"})
+          == '<p class="small sub">It ran for 14 minutes and reports 10 tokens of usage, by its own count.</p>')
+    check("Claude Code's as it was", dig_page._spent({"ran": 61.0, "cost": "$1.23", "cached": None, "client": "claude"})
+          == '<p class="small sub">It ran for a minute and reports $1.23 of usage, by its own estimate.</p>')
 
 
 def test_a_turn_that_failed_says_why_and_a_run_that_printed_nothing_has_nothing(tmp_path):

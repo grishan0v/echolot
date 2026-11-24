@@ -410,13 +410,15 @@ def _close(seen: dict[str, Any], link: Link) -> str:
 
 def _spent(seen: dict[str, Any]) -> str:
     """How long it ran, and what the client says it spent: Claude Code an
-    estimate in dollars, Codex the tokens it counted."""
+    estimate in dollars, Codex the tokens it counted, and of those, where it
+    says, how many it read again from its cache."""
     bits = []
     if seen.get("ran"):
         bits.append(f"It ran for {_minutes(seen['ran'])}")
     if seen.get("cost"):
         by = "by its own count" if seen.get("client") == "codex" else "by its own estimate"
-        bits.append(f"{'and ' if bits else 'It '}reports {seen['cost']} of usage, {by}")
+        bits.append(f"{'and ' if bits else 'It '}reports {seen['cost']} of usage, {by}"
+                    + (f", {seen['cached']} of them read again from its cache" if seen.get("cached") else ""))
     return f'<p class="small sub">{e(" ".join(bits) + ".")}</p>' if bits else ""
 
 

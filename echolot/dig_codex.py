@@ -395,12 +395,23 @@ def _read(event: dict[str, Any], found: dict[str, Any]) -> None:
 
 def cost(found: dict[str, Any] | None) -> str | None:
     """The tokens it used, as its last turn counts them: read and written,
-    the cached among the read."""
+    the cached among the read. Its reasoning is part of what it wrote."""
     usage = (found or {}).get("usage") or {}
     parts = [usage.get("input_tokens"), usage.get("output_tokens")]
     if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in parts):
         return None
     return f"{sum(parts):,} tokens"
+
+
+def cached(found: dict[str, Any] | None) -> str | None:
+    """How many of those it read again from its cache, where it says so and
+    there is a total to be part of. A real run of three rounds reported 4.5
+    million tokens, 4.4 million of them cached: the total alone reads as far
+    more than was spent. None for none at all."""
+    value = ((found or {}).get("usage") or {}).get("cached_input_tokens")
+    if cost(found) is None or not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        return None
+    return f"{value:,}"
 
 
 def last_words(found: dict[str, Any] | None) -> str:
@@ -465,6 +476,9 @@ class Codex:
 
     def cost(self, found: dict[str, Any] | None) -> str | None:
         return cost(found)
+
+    def cached(self, found: dict[str, Any] | None) -> str | None:
+        return cached(found)
 
     def denied(self, found: dict[str, Any] | None) -> list[str]:
         return list((found or {}).get("denied") or [])

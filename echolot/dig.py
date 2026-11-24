@@ -723,7 +723,8 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
                 if run.get("finished") or status == job.RUNNING else None),
         "shown": step.get("shown") or "", "log": step.get("log") or "",
         "phase": None, "quiet": None, "stuck": False, "stopping": False, "title": "", "text": "", "said": None,
-        "cost": None, "denied": [], "left": None, "can_close": False, "can_unmark": False, "capped": False,
+        "cost": None, "cached": None, "denied": [], "left": None, "can_close": False, "can_unmark": False,
+        "capped": False,
         "budget": what.get("budget_usd") if isinstance(what.get("budget_usd"), (int, float)) else BUDGET_USD,
         "who": who, "client": agent.key, "idle": idle, "ends_idle": agent.idle_s, "outside": None,
     }
@@ -739,6 +740,7 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
 
     found = agent.result(project)
     out["cost"], out["denied"], out["capped"] = agent.cost(found), agent.denied(found), agent.capped(found)
+    out["cached"] = agent.cached(found)
     answered = out["hunt_status"] == "concluded"
     words = agent.last_words(found)
     if status == job.DONE and out["verdict"]:
@@ -910,6 +912,10 @@ class ClaudeCode:
 
     def cost(self, found: dict[str, Any] | None) -> str | None:
         return cost(found)
+
+    def cached(self, found: dict[str, Any] | None) -> str | None:
+        """Its cost is in dollars, and says nothing of a cache."""
+        return None
 
     def denied(self, found: dict[str, Any] | None) -> list[str]:
         return denied(found)

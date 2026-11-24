@@ -428,8 +428,9 @@ def test_ended_without_a_verdict_reports_its_tokens(project):
     press(site, "dig/with/codex/start", ticked("main_thread_waits"))
     seen = panel(site)
     check("it says so", "Codex finished, and wrote down no answer." in seen.text, seen.text)
-    check("with the tokens it counted, and no money figure", "reports 186,550 tokens of usage, by its own count"
-          in seen.text and "$" not in seen.text, seen.text)
+    check("with the tokens it counted, how many it read again from its cache, and no money figure",
+          "reports 186,550 tokens of usage, by its own count, 150,016 of them read again from its cache." in seen.text
+          and "$" not in seen.text, seen.text)
     check("with its last words", seen.one("pre", "dig-said").text
           == "I looked at the report and the code, and have nothing to add.")
     check("and nothing changed outside the allowed folder, said once checked", seen.one("p", id="dig-outside").text
