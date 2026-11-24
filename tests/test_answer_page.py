@@ -949,3 +949,26 @@ def test_ids_are_unique_and_every_details_button_has_its_panel(states):
               all(len(t.all("h2", id="peek-title")) == 1 for t in page.all("template")))
         check(f"{name}: one headline", len(page.all("h1")) == 1)
         check(f"{name}: the panel is there exactly when there is a row to open", bool(page.all("dialog", "peek")) == bool(opens))
+
+
+def _round_cards(hunt, reports):
+    """Each round's card, by its number: the line of facts under its name."""
+    page = read(answer_page.render(hunt, reports))
+    section = next(d for d in page.all("details") if d.one("summary").text == "How it got there, round by round")
+    return {li.all("b")[0].text: li.one("div", "repcard").all("p")[0].text for li in section.one("ol").all("li")}
+
+
+@pytest.mark.parametrize("anchor, missed", [
+    ("start_anchor", {"matches": 0, "missed": "1/5"}),
+    ("start_anchor", {"matches": 0, "missed": "5/5"}),
+    ("end_anchor", {"matches": 1, "unfinished": True}),
+])
+def test_a_round_whose_window_is_not_the_scenarios_gives_it_no_time(states, anchor, missed):
+    hunt, reports = copy.deepcopy(states["many"])
+    reports[2]["window"][anchor] = {**reports[2]["window"][anchor], **missed}
+    cards = _round_cards(hunt, reports)
+    check("a round with no miss gives the launch its time",
+          cards["Round 1"].startswith("The launch takes 1.1 s · 5 launches recorded"), cards["Round 1"])
+    check("a round whose anchor missed gives none, and says it has no measured launch",
+          cards["Round 2"].startswith("No measured launch · 5 launches recorded")
+          and "takes" not in cards["Round 2"] and " s ·" not in cards["Round 2"], cards["Round 2"])
