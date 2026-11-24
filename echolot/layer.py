@@ -596,11 +596,41 @@ def _strays_said(found: list[str]) -> str:
 PRIVATE_NOTE = "private to this clone: git ignores what init wrote"
 
 
+def kept_from_git(project: Path) -> list[Path]:
+    """The files of a private install that say whether git ignores it: the
+    choice `init` saved, under `.echolot/`, and the layer's manifest. Every
+    private install writes the first, and both are echolot's alone, never
+    the team's."""
+    return [f for f in (hosts.choice_path(project), project / ".claude" / LAYER_MANIFEST)
+            if f.is_file()]
+
+
+def private_note(project: Path) -> str | None:
+    """What `echolot` says of a private install, asked of git: None where
+    `init --private` did not install.
+
+    It was said from the saved choice alone, and stood beside a layer git
+    saw whole: a folder named `android [v2]`, an exclude file `init` could
+    not write (#738).
+    """
+    if not hosts.load_private(project):
+        return None
+    from . import exclude  # late: git is asked only for a private install
+    repo = exclude.find(project)
+    seen = exclude.unseen(repo, kept_from_git(project)) if repo is not None else None
+    if not seen:
+        return PRIVATE_NOTE
+    return (f"private to this clone, and yet git sees what init wrote "
+            f"({seen[0].relative_to(project).as_posix()}) → "
+            f"`echolot init --private` hides it again")
+
+
 def one_line(project: Path) -> tuple[str, str]:
     """(verdict, one line) about the project's .claude/ layer — for -q."""
     verdict, line = _one_line(project)
-    if verdict not in ("absent", "newer") and hosts.load_private(project):
-        line += f" · {PRIVATE_NOTE}"
+    note = private_note(project) if verdict not in ("absent", "newer") else None
+    if note:
+        line += f" · {note}"
     found = strays(project)
     if found:
         line += (f" · {len(found)} copies of echolot's door in other agents' "
@@ -719,8 +749,11 @@ def _print_status(project: Path) -> str | None:
     if status["installed_by"]:
         print(f"  installed by echolot {status['installed_by']}, "
               f"this is {recorder.version()}")
-    if hosts.load_private(project):
+    note = private_note(project)
+    if note == PRIVATE_NOTE:
         print(f"  {PRIVATE_NOTE} — `echolot init --shared` hands it to the team")
+    elif note:
+        print(f"  {note}")
     if verdict == "current":
         print("  the layer is current.")
     elif verdict == "stale":
