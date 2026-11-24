@@ -17,6 +17,7 @@ that is not enough the fact is left out and the note says so.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -24,7 +25,7 @@ from typing import Any
 
 from . import mark
 from .config import DEFAULT_PREFIX
-from .domains import constants, gradle_module, source_files
+from .domains import SKIP_DIRS, constants, gradle_module, source_files
 
 # --- reading a build script as text -------------------------------------------
 
@@ -178,19 +179,57 @@ def app_module(root: Path, facts: Facts) -> dict[str, Any] | None:
     mdir = mark.module_dir_of(mf)
     script, stext = _build_script(mdir)
     stripped = android_block(_strip(stext))
+    default_config = block(stripped, "defaultConfig")
+    namespace = _value(stripped, "namespace")
+    started = launcher_components(text, namespace or mark.module_package(mdir, text))
     app = {
         "module": gradle_module(mf, root),
         "dir": mark._rel(mdir, root),
         "manifest": mark._rel(mf, root),
         "build_script": mark._rel(script, root) if script else None,
         "launcher": launchers[0],
-        "application_id": _value(block(stripped, "defaultConfig") or stripped, "applicationId"),
-        "namespace": _value(stripped, "namespace"),
+        # What `runner.activity` names: the first launcher that is enabled
+        # as the manifest has it, by its full name (#930).
+        "activity": next((c["name"] for c in started if c["enabled"] and c["name"]), None),
+        "launcher_components": [c["name"] for c in started if c["name"]],
+        "application_id": _value(default_config or stripped, "applicationId"),
+        "namespace": namespace,
         "process": _application_process(text),
         "profileable": bool(re.search(r"<profileable\b[^>]*android:shell\s*=\s*\"true\"", text)),
         "application_class": mark.application_class(text),
     }
+    expr = None if app["application_id"] or default_config is None \
+        else _assigned(default_config, "applicationId")
+    if expr:
+        app["application_id_expr"] = expr
     return app
+
+
+def launcher_components(manifest: str, namespace: str | None) -> list[dict[str, Any]]:
+    """Each component a launcher opens, in the manifest's order: its full
+    class name and whether it is enabled.
+
+    By its own `android:name`, an `<activity-alias>` by the alias: that is
+    the component `am start -n` starts and the one the device names, where
+    `launcher` names the class behind it. A name that starts with a dot, or
+    has none, is under the namespace; None when there is no namespace to
+    put it under.
+    """
+    out = []
+    for _, attrs in mark.launcher_elements(manifest):
+        name = mark._ANDROID_NAME.search(attrs)
+        if not name:
+            continue
+        raw = name.group(1)
+        if "." in raw.lstrip("."):
+            full = raw if not raw.startswith(".") else (f"{namespace}{raw}" if namespace else None)
+        else:
+            full = f"{namespace}.{raw.lstrip('.')}" if namespace else None
+        if "${" in raw:
+            full = None
+        out.append({"name": full,
+                    "enabled": not re.search(r'android:enabled\s*=\s*"false"', attrs)})
+    return out
 
 
 def _application_process(manifest: str) -> str | None:
@@ -231,16 +270,29 @@ def flavor_dimensions(stext: str) -> list[str]:
     return re.findall(r"[\"']([\w-]+)[\"']", m.group(0)) if m else []
 
 
-def flavors_of(stext: str) -> list[dict[str, Any]]:
+def flavors_of(stext: str, code: BuildCode | None = None) -> list[dict[str, Any]] | None:
+    """The flavours `productFlavors` declares, each with its dimension and
+    what it sets of the package. A value set to an expression keeps it as
+    `<key>_expr`, for `settle`. Flavours registered in a loop over an enum
+    are read from the enum (`_enum_flavors`); None when such a loop is not
+    one read here, for the caller to say so rather than to name a flavour
+    `forEach`, as reading its braces as blocks did."""
     body = block(stext, "productFlavors")
     if body is None:
         return []
+    if _ENUM_LOOP.search(body):
+        return _enum_flavors(body, code)
     out = []
     for name, inner in entries(body):
-        out.append({"name": name,
-                    "dimension": _value(inner, "dimension"),
-                    "application_id_suffix": _value(inner, "applicationIdSuffix"),
-                    "application_id": _value(inner, "applicationId")})
+        flavor: dict[str, Any] = {"name": name,
+                                  "dimension": _value(inner, "dimension"),
+                                  "application_id_suffix": _value(inner, "applicationIdSuffix"),
+                                  "application_id": _value(inner, "applicationId")}
+        for key, gradle in _GRADLE_KEY.items():
+            expr = None if flavor[key] is not None else _assigned(inner, gradle)
+            if expr:
+                flavor[key + "_expr"] = expr
+        out.append(flavor)
     return out
 
 
@@ -263,6 +315,13 @@ def build_types_of(stext: str, baseline_profile: bool = False) -> list[dict[str,
                 "minify": _flag(inner, "minifyEnabled"),
                 "init_with": _init_with(inner),
             }
+            expr = None if found[name]["application_id_suffix"] is not None \
+                else _assigned(inner, "applicationIdSuffix")
+            if expr:
+                # Read through the build code later (`settle`): set to an
+                # expression is set, and the build type it starts from with
+                # `initWith` no longer decides.
+                found[name]["application_id_suffix_expr"] = expr
     # `debug` and `release` exist whether or not the script names them.
     for name in ("debug", "release"):
         found.setdefault(name, {"name": name, "application_id_suffix": None,
@@ -287,6 +346,452 @@ def _flag(body: str, key: str) -> bool | None:
     kotlin = "is" + key[:1].upper() + key[1:]
     m = re.search(rf"\b(?:{re.escape(kotlin)}|{re.escape(key)})\s*=?\s*(true|false)\b", body)
     return None if not m else m.group(1) == "true"
+
+
+def _assigned(body: str, key: str) -> str | None:
+    """What a block sets `key` to when it is no string: the expression as
+    written, `AppBuildType.DEBUG.applicationIdSuffix` of `applicationIdSuffix
+    = AppBuildType.DEBUG.applicationIdSuffix`. None where the key is not set.
+    `x.key` is read, not set, and `key != null` compares."""
+    forms = (rf"(?<![.\w]){re.escape(key)}\s*=(?!=)\s*([^\n;]+)",
+             rf"(?<![.\w]){re.escape(key)}\s*\(\s*([^\n;]+?)\s*\)\s*(?:;|\n|$)",
+             rf"(?<![.\w]){re.escape(key)}[ \t]+([\w\"'][^\n;]*)")
+    found = [m for m in (re.search(f, body) for f in forms) if m]
+    if not found:
+        return None
+    return min(found, key=lambda m: m.start()).group(1).strip()
+
+
+# --- the project's own build code ---------------------------------------------
+
+# A project that keeps its build logic in code of its own — `buildSrc`, or an
+# included build such as `build-logic` — leaves part of what decides the
+# package there. The app's script sets `applicationIdSuffix = AppBuildType.
+# DEBUG.applicationIdSuffix`, and a convention plugin it applies registers the
+# product flavours in a loop over an enum. Read off the script alone, every
+# variant of such an app installed as its base applicationId and none had a
+# flavour: the drafted package was one no phone had (#816).
+#
+# Nothing is run here either. Three shapes are read, the ones such code has: a
+# string constant, the property of an enum's entry, and `productFlavors`
+# registered for each entry of an enum. A value set any other way is said to
+# be unread, never guessed.
+
+_BUILD_CODE_EXT = (".kt", ".kts", ".gradle", ".groovy", ".java")
+_INCLUDE_BUILD = re.compile(r"""\bincludeBuild\s*\(?\s*["']([^"']+)["']""")
+_TOML_TABLE = re.compile(r"^\s*\[([\w.-]+)\]\s*$", re.MULTILINE)
+_CATALOG_PLUGIN = re.compile(
+    r'^\s*([\w.-]+)\s*=\s*(?:\{[^}\n]*?\bid\s*=\s*"([^"]+)"|"([^":]+)(?::[^"]*)?")', re.MULTILINE)
+_ENUM = re.compile(r"\benum\s+class\s+(\w+)\s*")
+_ENUM_PARAM = re.compile(
+    r"^(?:@\w+(?:\([^)]*\))?\s*)*(?:(?:private|internal|public|protected|override|open)\s+)*"
+    r"(?:val|var)?\s*(\w+)\s*:\s*[^=]+?(?:=\s*(.+))?$", re.DOTALL)
+_ENUM_ENTRY = re.compile(r"^(?:@\w+(?:\([^)]*\))?\s*)*([A-Za-z_]\w*)\s*")
+_ENUM_LOOP = re.compile(
+    r"([A-Za-z_][\w.]*?)\s*\.\s*(?:values\s*\(\s*\)|entries)\s*\.\s*forEach\s*\{\s*(?:(\w+)\s*->)?")
+_FUN = re.compile(r"\bfun\s+(?:<[^>]*>\s*)?(?:[\w.]+\.)?(\w+)\s*\(")
+# A call by a bare name, `configureFlavors(this)`: not a declaration, not a member.
+_CALL = re.compile(r"(?<!fun )(?<![\w.])([A-Za-z_]\w*)\s*\(")
+_APPLIED = re.compile(
+    r"""(?<![\w.])id\s*\(?\s*["']([\w.-]+)["']"""
+    r"""|\bapply\s*\(?\s*plugin\s*(?::|=)\s*["']([\w.-]+)["']"""
+    r"""|\bapply\s*\(\s*["']([\w.-]+)["']\s*\)"""
+    r"""|\balias\s*\(\s*(\w+\.plugins\.[\w.]+?)(?:\.asProvider\(\))?\s*\)""")
+_REGISTERED_ID = re.compile(r"\bid\s*=\s*(\w+\.plugins\.[\w.]+?)(?:\.asProvider\(\))?\.get\(\)\.pluginId")
+_NO_DEFAULT = ("none", None)
+_GRADLE_KEY = {"application_id": "applicationId", "application_id_suffix": "applicationIdSuffix"}
+
+
+@dataclass
+class BuildCode:
+    """The project's build logic as text, each file with its comments out:
+    `buildSrc`, and the builds its settings include. `catalog` is each
+    `libs.plugins.<alias>` of the version catalogs with the plugin id it
+    stands for."""
+    texts: dict[str, str] = field(default_factory=dict)
+    catalog: dict[str, str] = field(default_factory=dict)
+    enums: dict[str, dict | None] = field(default_factory=dict)
+    consts: dict[str, str | None] = field(default_factory=dict)
+
+
+def build_code(root: Path) -> BuildCode:
+    """`buildSrc` and every build `settings.gradle(.kts)` includes, read once."""
+    dirs = [root / "buildSrc"]
+    for name in ("settings.gradle.kts", "settings.gradle"):
+        settings = root / name
+        if settings.is_file():
+            text = _strip(settings.read_text(encoding="utf-8", errors="replace"))
+            dirs += [root / d for d in _INCLUDE_BUILD.findall(text)]
+    top = root.resolve()
+    texts: dict[str, str] = {}
+    for d in dirs:
+        # Inside the project, and not the project itself: a build included
+        # from elsewhere is not this repository's to read.
+        if not d.is_dir() or top not in d.resolve().parents:
+            continue
+        for base, subdirs, names in os.walk(d):
+            # Gradle's output is a `build` folder of a module; under `src/`
+            # one is a package, `com.example.build`, and holds the code.
+            sources = "src" in Path(base).relative_to(d).parts
+            subdirs[:] = sorted(s for s in subdirs if not s.startswith(".")
+                                and (sources or s not in SKIP_DIRS))
+            for n in sorted(names):
+                if n.endswith(_BUILD_CODE_EXT):
+                    path = Path(base) / n
+                    try:
+                        texts[mark._rel(path, root)] = _strip(path.read_text(encoding="utf-8", errors="replace"))
+                    except OSError:
+                        continue
+    code = BuildCode(texts=texts, catalog=plugin_catalog(root))
+    code.enums = enums_of(texts)
+    code.consts = constants({Path(k): v for k, v in texts.items()})
+    return code
+
+
+def plugin_catalog(root: Path) -> dict[str, str]:
+    """`libs.plugins.<alias>` → plugin id, by the `[plugins]` of `gradle/*.versions.toml`.
+
+    `app-flavors = { id = "app.flavors" }` is `libs.plugins.app.flavors`,
+    the name a script's `alias(…)` uses and the id a convention plugin is
+    registered under.
+    """
+    out: dict[str, str] = {}
+    for toml in sorted((root / "gradle").glob("*.versions.toml")):
+        try:
+            text = toml.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        name = toml.name[:-len(".versions.toml")]
+        heads = list(_TOML_TABLE.finditer(text))
+        for i, head in enumerate(heads):
+            if head.group(1) != "plugins":
+                continue
+            body = text[head.end():heads[i + 1].start() if i + 1 < len(heads) else len(text)]
+            for m in _CATALOG_PLUGIN.finditer(body):
+                out[f"{name}.plugins.{re.sub(r'[-_]', '.', m.group(1))}"] = m.group(2) or m.group(3)
+    return out
+
+
+def _inside(text: str, i: int) -> str | None:
+    """What is between the bracket at `i` and the one that closes it, strings skipped."""
+    depth, k = 0, i
+    while k < len(text):
+        ch = text[k]
+        if ch in "\"'":
+            s = _STRING.match(text, k)
+            if s:
+                k = s.end()
+                continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+            if depth == 0:
+                return text[i + 1:k]
+        k += 1
+    return None
+
+
+def _split(text: str, sep: str = ",") -> list[str]:
+    """`text` cut at each `sep` outside brackets, strings and a type's `<…>`."""
+    out, stack, start, k = [], [], 0, 0
+    while k < len(text):
+        ch = text[k]
+        if ch in "\"'":
+            s = _STRING.match(text, k)
+            if s:
+                k = s.end()
+                continue
+        if ch in "([{":
+            stack.append(ch)
+        elif ch == "<" and k and (text[k - 1].isalnum() or text[k - 1] == "_"):
+            stack.append(ch)
+        elif ch in ")]}":
+            while stack and stack[-1] == "<":
+                stack.pop()
+            if stack:
+                stack.pop()
+        elif ch == ">" and stack and stack[-1] == "<" and text[k - 1] != "-":
+            stack.pop()
+        elif ch == sep and not stack:
+            out.append(text[start:k])
+            start = k + 1
+        k += 1
+    out.append(text[start:])
+    return [s.strip() for s in out if s.strip()]
+
+
+def _literal(raw: str) -> tuple[str, str | None]:
+    """An argument as written: ("text", s) for a string with nothing to
+    substitute, ("null", None), else ("expr", the expression)."""
+    raw = raw.strip()
+    m = re.fullmatch(r'"((?:[^"\\$]|\\.)*)"', raw) or re.fullmatch(r"'((?:[^'\\$]|\\.)*)'", raw)
+    if m:
+        return "text", m.group(1)
+    if raw == "null":
+        return "null", None
+    return "expr", raw
+
+
+def enums_of(texts: dict[str, str]) -> dict[str, dict | None]:
+    """Every `enum class` of the build code: its constructor's parameters
+    and, for each entry in order, the value each parameter takes — its own
+    argument, by position or by name, else the parameter's default.
+
+    `enum class AppFlavor(val dimension: Dim, val applicationIdSuffix:
+    String? = null) { demo(Dim.content, applicationIdSuffix = ".demo"),
+    prod(Dim.content) }` gives demo `.demo` and prod null. Two enums of one
+    name that differ are neither: None, as `constants` does with two
+    constants of one name.
+    """
+    out: dict[str, dict | None] = {}
+    for rel, text in texts.items():
+        for m in _ENUM.finditer(text):
+            i = m.end()
+            params: list[tuple[str, tuple[str, str | None]]] = []
+            if text.startswith("(", i):
+                inner = _inside(text, i)
+                if inner is None:
+                    continue
+                for raw in _split(inner):
+                    p = _ENUM_PARAM.match(raw)
+                    if p:
+                        params.append((p.group(1), _literal(p.group(2)) if p.group(2) else _NO_DEFAULT))
+                i += len(inner) + 2
+            j = text.find("{", i)
+            body = _balanced(text, j + 1) if j >= 0 else None
+            if body is None:
+                continue
+            entries: dict[str, dict[str, tuple[str, str | None]]] = {}
+            for raw in _split((_split(body, ";") or [""])[0]):
+                e = _ENUM_ENTRY.match(raw)
+                if not e:
+                    continue
+                args: dict[str, tuple[str, str | None]] = {}
+                rest = raw[e.end():]
+                if rest.startswith("("):
+                    for k, arg in enumerate(_split(_inside(rest, 0) or "")):
+                        named = re.match(r"(\w+)\s*=(?!=)\s*(.+)$", arg, re.DOTALL)
+                        if named:
+                            args[named.group(1)] = _literal(named.group(2))
+                        elif k < len(params):
+                            args[params[k][0]] = _literal(arg)
+                for name, default in params:
+                    if name not in args and default != _NO_DEFAULT:
+                        args[name] = default
+                entries[e.group(1)] = args
+            found = {"file": rel, "params": [p for p, _ in params], "entries": entries}
+            name = m.group(1)
+            out[name] = found if name not in out or out[name] == found else None
+    return out
+
+
+def resolve(expr: str, code: BuildCode | None, script: str = "",
+            depth: int = 0) -> tuple[str | None, str | None] | None:
+    """The string an expression of a build script holds, and the file of the
+    build code that says so (None for the script itself), or None when the
+    expression is no shape read here.
+
+    A string; `null`; `Enum.ENTRY.property`, the entry's argument for it,
+    and `Enum.ENTRY.name`; a constant, `CONST` or `Holder.CONST`, of the
+    build code or a `val` of the script. `(None, file)` is a value read as
+    null: `AppBuildType.RELEASE.applicationIdSuffix` of an entry that passes
+    none adds no suffix, and that is read, not unread.
+    """
+    e = re.sub(r"\s*!!$", "", expr.strip().rstrip(";").strip())
+    kind, value = _literal(e)
+    if kind != "expr":
+        return value, None
+    parts = e.split(".")
+    if depth > 3 or not all(re.fullmatch(r"[A-Za-z_]\w*", p) for p in parts):
+        return None
+    if code is not None and len(parts) >= 3:
+        enum = code.enums.get(parts[-3])
+        entry = (enum or {}).get("entries", {}).get(parts[-2])
+        if entry is not None:
+            if parts[-1] == "name":
+                return parts[-2], enum["file"]
+            if parts[-1] in entry:
+                kind, value = entry[parts[-1]]
+                if kind != "expr":
+                    return value, enum["file"]
+                deeper = resolve(value or "", code, script, depth + 1)
+                return (deeper[0], deeper[1] or enum["file"]) if deeper else None
+    simple = parts[-1]
+    local = re.search(rf'\b(?:val|var|def)\s+{simple}\s*(?::\s*String\s*)?=\s*(["\'])([^"\'$]*)\1', script)
+    if local and len(parts) == 1:
+        return local.group(2), None
+    if code is not None and code.consts.get(simple) is not None:
+        declared = re.compile(rf"\b(?:const\s+val|static\s+final\s+String|final\s+static\s+String)\s+{simple}\b")
+        where = next((rel for rel, text in code.texts.items() if declared.search(text)), None)
+        return code.consts[simple], where
+    return None
+
+
+def settle(d: dict[str, Any], key: str, code: BuildCode | None, script: str, where: str) -> None:
+    """Read `d[key]` through the build code where the script set it to an
+    expression (`<key>_expr`): the value it holds and where that was read
+    (`<key>_from`), else what was left unread (`<key>_unread`)."""
+    expr = d.get(key + "_expr")
+    if d.get(key) is not None or not expr:
+        return
+    found = resolve(expr, code, script)
+    if found is None:
+        d[key + "_unread"] = f"`{_GRADLE_KEY[key]} = {expr}` in {where}"
+        return
+    d[key] = found[0]
+    d[key + "_from"] = f"`{expr}`" + (f" in {found[1]}" if found[1] else "")
+
+
+def _applied(text: str, catalog: dict[str, str]) -> list[str]:
+    """The plugins a script or a plugin applies, by id: an alias of a version
+    catalog, `alias(libs.plugins.app.flavors)`, by the id the catalog gives it."""
+    out = []
+    for m in _APPLIED.finditer(text):
+        pid = m.group(1) or m.group(2) or m.group(3) or catalog.get(m.group(4), m.group(4))
+        if pid not in out:
+            out.append(pid)
+    return out
+
+
+def _plugins(code: BuildCode) -> dict[str, tuple[str, str]]:
+    """Plugin id → (file, text) of the build code that implements it: the
+    class a `gradlePlugin { plugins { … } }` registers with its id, and a
+    precompiled script plugin, `<id>.gradle.kts` under `src/main`."""
+    classes: dict[str, str] = {}
+    for text in code.texts.values():
+        registry = block(block(text, "gradlePlugin") or "", "plugins") or ""
+        for _, body in entries(registry):
+            cls = _value(body, "implementationClass")
+            pid = _value(body, "id")
+            if not pid:
+                m = _REGISTERED_ID.search(body)
+                pid = code.catalog.get(m.group(1), m.group(1)) if m else None
+            if cls and pid:
+                classes[pid] = cls.rsplit(".", 1)[-1]
+    out: dict[str, tuple[str, str]] = {}
+    for pid, cls in classes.items():
+        declares = re.compile(rf"\bclass\s+{re.escape(cls)}\b")
+        where = next(((rel, text) for rel, text in code.texts.items() if declares.search(text)), None)
+        if where:
+            out[pid] = where
+    for rel, text in code.texts.items():
+        name = rel.rsplit("/", 1)[-1]
+        if "/src/main/" in "/" + rel and name.endswith((".gradle.kts", ".gradle")):
+            out.setdefault(re.sub(r"\.gradle(?:\.kts)?$", "", name), (rel, text))
+    return out
+
+
+def _functions(code: BuildCode) -> dict[str, list[tuple[str, str]]]:
+    """Function name → (file, body) of each function of the build code that
+    has a block body. Not an `override`: a plugin's `apply` is Gradle's to
+    call, and taken by its name every `apply(…)` of a script reached every
+    plugin of the build."""
+    out: dict[str, list[tuple[str, str]]] = {}
+    for rel, text in code.texts.items():
+        for m in _FUN.finditer(text):
+            if re.search(r"\boverride\b[^\n]*$", text[max(0, m.start() - 80):m.start()]):
+                continue
+            params = _inside(text, m.end() - 1)
+            if params is None:
+                continue
+            k = m.end() + len(params) + 1
+            head = re.match(r"\s*(?::\s*[^{=\n]+)?\s*\{", text[k:])
+            body = _balanced(text, k + head.end()) if head else None
+            if body is not None:
+                out.setdefault(m.group(1), []).append((rel, body))
+    return out
+
+
+def reached(script: str, code: BuildCode) -> list[tuple[str, str, str | None]]:
+    """The build code a module's script runs, as (file, text, plugin): the
+    convention plugins it applies, by id or by catalog alias, the plugins
+    those apply, and the functions of the build code any of them calls.
+    `plugin` is the one the script applied to get there, None for a call
+    of its own (`configureFlavors(this)` in the script)."""
+    if not code.texts:
+        return []
+    plugins, functions = _plugins(code), _functions(code)
+    out: list[tuple[str, str, str | None]] = []
+    seen: set[tuple[str, str]] = set()
+    todo: list[tuple[str, str | None, int]] = [(script, None, 0)]
+    while todo:
+        text, via, depth = todo.pop(0)
+        if depth > 4:
+            continue
+        found = [(pid, *plugins[pid]) for pid in _applied(text, code.catalog) if pid in plugins]
+        called = set(_CALL.findall(text))
+        found += [(None, rel, body) for name in sorted(called & functions.keys())
+                  for rel, body in functions[name]]
+        for pid, rel, body in found:
+            if (rel, body) in seen:
+                continue
+            seen.add((rel, body))
+            out.append((rel, body, via or pid))
+            todo.append((body, via or pid, depth + 1))
+    return out
+
+
+def _enum_names(text: str, code: BuildCode | None) -> list[str] | None:
+    """`flavorDimensions` filled from an enum's entries, in their order: the
+    entries' names, or None where no such loop is there."""
+    if code is None:
+        return None
+    for m in _ENUM_LOOP.finditer(text):
+        inner = _balanced(text, m.end())
+        enum = code.enums.get(m.group(1).rsplit(".", 1)[-1])
+        if inner and "flavorDimensions" in inner and enum:
+            return list(enum["entries"])
+    m = re.search(r"\bflavorDimensions\s*(?:\+=|=|\.addAll\s*\()\s*(?:listOf\s*\()?\s*"
+                  r"([A-Za-z_][\w.]*?)\s*\.\s*(?:values\s*\(\s*\)|entries)", text)
+    enum = code.enums.get(m.group(1).rsplit(".", 1)[-1]) if m else None
+    return list(enum["entries"]) if enum else None
+
+
+def _enum_flavors(body: str, code: BuildCode | None) -> list[dict[str, Any]] | None:
+    """The flavours `productFlavors` registers for each entry of an enum, or
+    None where the loop is not the shape read here.
+
+    `AppFlavor.entries.forEach { f -> register(f.name) { dimension =
+    f.dimension.name; applicationIdSuffix = f.applicationIdSuffix } }`: a
+    flavour per entry, named by it, its dimension and suffix the entry's
+    arguments. A suffix set some other way is unread, said for each flavour.
+    """
+    loop = _ENUM_LOOP.search(body)
+    if not loop or code is None:
+        return None
+    enum = code.enums.get(loop.group(1).rsplit(".", 1)[-1])
+    var = loop.group(2) or "it"
+    inner = _balanced(body, loop.end())
+    reg = re.search(rf"\b(?:register|create|maybeCreate)\s*\(\s*{var}\s*\.\s*name\s*\)\s*(?:\.\s*apply\s*)?\{{",
+                    inner or "")
+    if not enum or inner is None or reg is None:
+        return None
+    each = _balanced(inner, reg.end()) or ""
+    out = []
+    for name, args in enum["entries"].items():
+        flavor: dict[str, Any] = {"name": name, "dimension": _value(each, "dimension"),
+                                  "application_id_suffix": None, "application_id": None,
+                                  "from": f"one for each entry of `{loop.group(1)}`, in {enum['file']}",
+                                  "file": enum["file"]}
+        for key, gradle in (("dimension", "dimension"), *((k, v) for k, v in _GRADLE_KEY.items())):
+            m = re.search(rf"(?<![.\w]){gradle}\s*=(?!=)\s*{var}\s*\.\s*(\w+)(\s*\.\s*name)?\b", each)
+            if m and m.group(1) in args:
+                kind, value = args[m.group(1)]
+                if m.group(2) and kind == "expr":
+                    value = (value or "").rsplit(".", 1)[-1]
+                elif kind == "expr":
+                    got = resolve(value or "", code)
+                    value = got[0] if got else None
+                    if not got:
+                        flavor[key + "_unread"] = (f"`{gradle}` of the flavour {name}, `{args[m.group(1)][1]}` "
+                                                   f"in {enum['file']}")
+                flavor[key] = value
+            elif key != "dimension" and _assigned(each, gradle):
+                flavor[key + "_unread"] = (f"`{gradle} = {_assigned(each, gradle)}` for each entry of "
+                                           f"`{loop.group(1)}` in {enum['file']}")
+        out.append(flavor)
+    return out
 
 
 # --- the androidx.baselineprofile plugin --------------------------------------
@@ -469,26 +974,77 @@ def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: li
     out = []
     for bt in build_types:
         # What `initWith` copies, read through the chain: see `inherited`.
-        suffix = inherited(bt, build_types, "application_id_suffix")
+        setter = _suffix_setter(bt, build_types)
+        suffix = (setter or {}).get("application_id_suffix")
         debuggable = inherited(bt, build_types, "debuggable")
         for combo in combos or []:
-            app_id = next((f["application_id"] for f in combo if f.get("application_id")), None) or base
+            owner = next((f for f in combo if f.get("application_id") or f.get("application_id_unread")),
+                         None)
+            app_id = (owner or {}).get("application_id") or base
             if app_id:
                 app_id += "".join(f.get("application_id_suffix") or "" for f in combo) \
                     + (suffix or "")
             words = [f["name"] for f in combo] + [bt["name"]]
             name = words[0] + "".join(w[:1].upper() + w[1:] for w in words[1:])
             minify, minified_by = minified(bt, build_types)
-            out.append({"name": name,
-                        "flavor": _flavor_word([f["name"] for f in combo]) or None,
-                        "flavor_names": [f["name"] for f in combo],
-                        "build_type": bt["name"], "application_id": app_id,
-                        "debuggable": debuggable,
-                        "measure": _measures({**bt, "debuggable": debuggable}),
-                        "minified": minify, "minified_by": minified_by,
-                        "mapping": mapping_path(app, name) if minify else None,
-                        "added_by": bt.get("added_by")})
+            variant = {"name": name,
+                       "flavor": _flavor_word([f["name"] for f in combo]) or None,
+                       "flavor_names": [f["name"] for f in combo],
+                       "build_type": bt["name"], "application_id": app_id,
+                       "debuggable": debuggable,
+                       "measure": _measures({**bt, "debuggable": debuggable}),
+                       "minified": minify, "minified_by": minified_by,
+                       "mapping": mapping_path(app, name) if minify else None,
+                       "added_by": bt.get("added_by")}
+            read, unread = _id_parts(app, owner, combo, setter)
+            if read:
+                variant["id_read"] = read
+            if unread:
+                variant["unread"] = unread
+            out.append(variant)
     return out
+
+
+def _suffix_setter(bt: dict, build_types: list[dict]) -> dict | None:
+    """The build type whose applicationIdSuffix a variant of `bt` takes: its
+    own where it sets one, a string or an expression, else the one it
+    starts from with `initWith`."""
+    by_name = {b["name"]: b for b in build_types}
+    seen: set[str] = set()
+    current: dict | None = bt
+    while current is not None and current["name"] not in seen:
+        seen.add(current["name"])
+        if current.get("application_id_suffix") is not None or current.get("application_id_suffix_expr"):
+            return current
+        current = by_name.get(current.get("init_with") or "")
+    return None
+
+
+def _id_parts(app: dict | None, owner: dict | None, combo: list[dict],
+              setter: dict | None) -> tuple[list[str], list[str]]:
+    """What of a variant's package was read from the project's build code,
+    and what was set there in a way not read, each in words for the draft's
+    evidence. A part the script writes as a string says nothing: the
+    applicationId's evidence names the script already."""
+    read: list[str] = []
+    unread: list[str] = []
+    holder = owner or app or {}
+    if holder.get("application_id_unread"):
+        unread.append(holder["application_id_unread"])
+    elif holder.get("application_id_from"):
+        read.append(f"applicationId `{holder['application_id']}`, {holder['application_id_from']}")
+    for f in combo:
+        if f.get("application_id_suffix_unread"):
+            unread.append(f["application_id_suffix_unread"])
+        elif f.get("application_id_suffix") and (f.get("file") or f.get("application_id_suffix_from")):
+            read.append(f"`{f['application_id_suffix']}` of the flavour {f['name']}, "
+                        + (f.get("application_id_suffix_from") or f"in {f['file']}"))
+    if setter and setter.get("application_id_suffix_unread"):
+        unread.append(setter["application_id_suffix_unread"])
+    elif setter and setter.get("application_id_suffix_from") and setter.get("application_id_suffix"):
+        read.append(f"`{setter['application_id_suffix']}` of buildTypes.{setter['name']}, "
+                    f"{setter['application_id_suffix_from']}")
+    return read, unread
 
 
 def _flavor_word(names: list[str]) -> str:
@@ -607,8 +1163,12 @@ def _as_glob(section: str) -> str:
     return escaped.replace("%", "*")
 
 
-def benchmarks_of(root: Path) -> list[dict[str, Any]]:
-    """Every source with a MacrobenchmarkRule: the tests, what they measure, who they drive."""
+def benchmarks_of(root: Path, build: BuildCode | None = None) -> list[dict[str, Any]]:
+    """Every source with a MacrobenchmarkRule: the tests, what they measure, who they drive.
+
+    A module's own flavours are read as the app's are (`module_flavors`): a
+    benchmark module that calls the build code's flavour function has the
+    app's flavours in its task names."""
     out = []
     by_module: dict[str, dict] = {}
     sources = source_files(root)
@@ -700,7 +1260,10 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
         whole = _strip(stext)
         s = android_block(whole)
         entry["runner_args"] = dict(_RUNNER_ARG.findall(s))
-        combos = flavor_combinations(flavors_of(s), flavor_dimensions(s)) or []
+        if build is None:
+            build = build_code(root)
+        flavors, dims = module_flavors(whole, s, build, entry["dir"], [])
+        combos = flavor_combinations(flavors, dims) or []
         entry["flavors"] = [_flavor_word([f["name"] for f in c]) for c in combos if c]
         # The plugin gives a test module `benchmarkRelease` and
         # `nonMinifiedRelease` whatever it declares, and the benchmark runs
@@ -903,8 +1466,9 @@ def allowed_paths(root: Path) -> list[str]:
     return sorted(seen)
 
 
-def _app_and_variants(root: Path, facts: Facts) -> None:
-    """The app module, its flavours and build types, and the variants they make."""
+def _app_and_variants(root: Path, facts: Facts, code: BuildCode | None = None) -> None:
+    """The app module, its flavours and build types, and the variants they
+    make, with what of them the project's build code sets (#816)."""
     facts.app = app_module(root, facts)
     whole = ""
     if facts.app and facts.app.get("build_script"):
@@ -913,14 +1477,65 @@ def _app_and_variants(root: Path, facts: Facts) -> None:
     plugin = bool(whole) and applies_baseline_profile(whole, catalog_aliases(root))
     if facts.app and plugin:
         facts.app["plugins"] = [BASELINE_PROFILE]
-    facts.flavors = flavors_of(stext)
+    code = code if code is not None else build_code(root)
+    script = (facts.app or {}).get("build_script") or "build.gradle"
+    flavors, dims = module_flavors(whole, stext, code, script, facts.notes)
+    facts.flavors = flavors
     facts.build_types = build_types_of(stext, plugin)
-    dims = flavor_dimensions(stext)
+    if facts.app:
+        settle(facts.app, "application_id", code, whole, f"defaultConfig of {script}")
+    for bt in facts.build_types:
+        settle(bt, "application_id_suffix", code, whole, f"buildTypes.{bt['name']} of {script}")
+    for f in facts.flavors:
+        for key in _GRADLE_KEY:
+            settle(f, key, code, whole, f"productFlavors.{f['name']} of {script}")
     facts.variants = variants_of(facts.app, facts.flavors, facts.build_types, dims)
     if facts.flavors and flavor_combinations(facts.flavors, dims) is None:
         facts.notes.append("the flavours span several dimensions and flavorDimensions could "
                            "not be read, so no variant is named: `./gradlew :app:tasks --all` "
                            "lists them")
+    unread = list(dict.fromkeys(u for v in facts.variants for u in v.get("unread") or []))
+    if unread and facts.app:
+        base = facts.app.get("application_id") or "<the applicationId>"
+        facts.notes.append(
+            "what decides the package is set where this does not read it: " + "; ".join(unread)
+            + f". The variants that take it install under a name not shown here — on a phone, "
+              f"`adb shell pm list packages {base}` lists the installed ones")
+
+
+def module_flavors(whole: str, stext: str, code: BuildCode, script: str,
+                   notes: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    """A module's flavours and their dimensions: those its script declares,
+    else those the build code it runs registers for it.
+
+    A flavour from the build code says where (`from`) and how the script
+    reaches it (`via`, the plugin it applies, None for a call of its own).
+    Flavours registered in a way not read are said in `notes`, and the
+    variants have none: a guess would be a variant no build has.
+    """
+    flavors = flavors_of(stext, code)
+    dims = flavor_dimensions(stext) or _enum_names(stext, code) or []
+    if flavors is None:
+        notes.append(f"productFlavors in {script} registers its flavours in a loop this does not "
+                     f"read, so the variants below have none: `./gradlew :app:tasks --all` lists them")
+        return [], dims
+    if flavors or block(stext, "productFlavors") is not None:
+        return flavors, dims
+    for rel, body, via in reached(whole, code):
+        if block(body, "productFlavors") is None:
+            continue
+        found = flavors_of(body, code)
+        how = f"the plugin `{via}` {script} applies" if via else f"a call in {script}"
+        if not found:
+            notes.append(f"productFlavors in {rel}, which {how} runs, is not read here, so the "
+                         f"variants below may lack flavours: `./gradlew :app:tasks --all` lists them")
+            return [], dims
+        for f in found:
+            f.setdefault("from", f"in {rel}")
+            f.setdefault("file", rel)
+            f["via"] = how
+        return found, flavor_dimensions(body) or _enum_names(body, code) or dims
+    return [], dims
 
 
 # More tasks than this is a list nobody picks from: a large Kotlin app whose
@@ -957,9 +1572,10 @@ def install_tasks(root: Path, package: str | None) -> list[str]:
     _app_and_variants(root, facts)
     if not facts.app:
         return []
+    # Nor one part of whose package was not read: its name here is not the one it has.
     found = [v for v in facts.variants
              if v.get("application_id") == package and v.get("debuggable") is not True
-             and not for_profiles(v)]
+             and not for_profiles(v) and not v.get("unread")]
     if len(found) > INSTALL_TASKS_SHOWN:
         # Too many: those of the build type to measure on, if they are few
         # enough. The plugin's build types doubled what installs as one
@@ -997,10 +1613,11 @@ def _id_note(facts: Facts) -> None:
 
 def describe(root: Path, *, devices: bool = True) -> Facts:
     facts = Facts(root=str(root))
-    _app_and_variants(root, facts)
+    code = build_code(root)
+    _app_and_variants(root, facts, code)
     # Before the notes: which flavour a benchmark module runs against
     # decides the variant the applicationId note reads.
-    facts.benchmarks = benchmarks_of(root)
+    facts.benchmarks = benchmarks_of(root, code)
     _benchmark_targets(facts)
     _profileable_note(facts)
     _id_note(facts)
@@ -1060,7 +1677,21 @@ def skeleton(facts: Facts) -> list[str]:
     # A build type no script names says where it came from.
     plugin = (f', whose {chosen["build_type"]} {chosen["added_by"]} adds'
               if chosen and chosen.get("added_by") else "")
-    if read_id:
+    plugin += "".join(f"; {part}" for part in (chosen or {}).get("id_read") or []).replace('"', "'")
+    if read_id and chosen and chosen.get("unread"):
+        # Part of the package is set where this does not read it (#816): the
+        # name below may lack a suffix, and a person picks theirs from what
+        # the phone has rather than taking a guess written as derived.
+        out = ["project:",
+               f"  package: {read_id}",
+               f'  process: "{read_id}*"',
+               *mapping,
+               "  _source: default",
+               f'  _evidence: "applicationId in {where}, variant {chosen["name"]}{plugin}; not read: '
+               + "; ".join(chosen["unread"]).replace('"', "'")
+               + f' — the package may be longer: `adb shell pm list packages {read_id}` lists the '
+                 f'installed ones; put yours' + why + '"']
+    elif read_id:
         out = ["project:",
                f"  package: {read_id}",
                f'  process: "{read_id}*"',
@@ -1146,6 +1777,16 @@ def skeleton(facts: Facts) -> list[str]:
             whose += "; missingDimensionStrategy runs it against " + ", ".join(sorted(_pinned(bench)))
         out += [f'  _evidence: "MacrobenchmarkRule in {pick["file"] if pick else bench["module"]}'
                 + whose + '"']
+    elif app.get("activity"):
+        # The launcher by name, not left for the device to resolve: a debug
+        # build with a leak detector has its launcher too, and the device
+        # then answers with its chooser (#930). A class name, so that the
+        # line holds for every variant's package.
+        out += ["runner:", "  mode: launch", f'  activity: "{app["activity"]}"',
+                "  iterations: 5", "  duration_ms: 20000",
+                '  _evidence: "no MacrobenchmarkRule in the tree; force-stop + am start of the '
+                f'launcher in {app["manifest"]}, by name: a build with a second launcher, a leak '
+                "detector's in a debug build, would otherwise start the system's chooser\""]
     else:
         out += ["runner:", "  mode: launch", "  iterations: 5", "  duration_ms: 20000",
                 '  _evidence: "no MacrobenchmarkRule in the tree; force-stop + am start"']
@@ -1154,6 +1795,29 @@ def skeleton(facts: Facts) -> list[str]:
     # confirms, and `mark` refused every site in them.
     out += [f'    - "{p}"' for p in facts.allowed]
     out += [f"  temp_prefix: {DEFAULT_PREFIX}", "  cleanup: always"]
+    return out
+
+
+def _build_code_words(facts: Facts) -> list[str]:
+    """What of the variants the project's build code says, under their table:
+    the flavours it registers, and each value of the script it was read for."""
+    app = facts.app or {}
+    script = app.get("build_script") or "build.gradle"
+    out: list[str] = []
+    coded = [f for f in facts.flavors if f.get("via")]
+    if coded:
+        out += ["", ", ".join(f"`{f['name']}`" for f in coded)
+                + f" {'is' if len(coded) == 1 else 'are'} not in {script}: the project's build code "
+                f"registers {'it' if len(coded) == 1 else 'them'}, {coded[0]['from']}, run by {coded[0]['via']}."]
+    said = []
+    for where, d in ([("defaultConfig", app)] + [(f"buildTypes.{b['name']}", b) for b in facts.build_types]
+                     + [(f"productFlavors.{f['name']}", f) for f in facts.flavors]):
+        for key, gradle in _GRADLE_KEY.items():
+            if d.get(key + "_from"):
+                said.append(f"{gradle} of {where} is {d[key + '_from']}: "
+                            + (f"`{d[key]}`" if d.get(key) is not None else "null, so none"))
+    if said:
+        out += ["", "Read from the project's build code: " + "; ".join(said) + "."]
     return out
 
 
@@ -1218,8 +1882,10 @@ def render(facts: Facts) -> str:
         out.append("| variant | installs as | debuggable | measure on it |")
         out.append("|---|---|---|---|")
         for v in facts.variants:
-            out.append(f"| {v['name']} | `{v.get('application_id') or '?'}` | "
+            # `+ ?`: part of the name is set where this does not read it.
+            out.append(f"| {v['name']} | `{v.get('application_id') or '?'}`{' + ?' if v.get('unread') else ''} | "
                        f"{'yes' if v.get('debuggable') else ('no' if v.get('debuggable') is False else '?')} | {v['measure']} |")
+        out += _build_code_words(facts)
         added = [b["name"] for b in facts.build_types if b.get("added_by") and b.get("implicit")]
         if added and app:
             out.append("")
@@ -1233,6 +1899,18 @@ def render(facts: Facts) -> str:
         if chosen:
             out.append("")
             out.append(f"Start from **{chosen['name']}**: {chosen['measure']}.")
+            packages = list(dict.fromkeys(v["application_id"] for v in facts.variants
+                                          if v.get("application_id") and not v.get("unread")))
+            if chosen.get("application_id") and len(packages) > 1:
+                # Which one is on the phone is not written anywhere this
+                # reads: the draft names the one to start from, and says how
+                # to see the others (#816).
+                out.append(f"It installs as `{chosen['application_id']}`"
+                           + (" and a part not read" if chosen.get("unread") else "")
+                           + f"; the variants install as {len(packages)} packages in all, "
+                           + ", ".join(f"`{p}`" for p in packages)
+                           + " — `adb shell pm list packages` on the phone says which are there, "
+                             "and `project.package` below is the one to change for another.")
             if chosen.get("minified"):
                 there = (Path(facts.root) / chosen["mapping"]).is_file()
                 script = (app or {}).get("build_script") or "build.gradle"

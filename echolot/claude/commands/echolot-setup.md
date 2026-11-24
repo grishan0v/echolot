@@ -47,7 +47,16 @@ it came from:
   the R8 mapping AGP writes for that variant when it is built. `gradle` mode
   builds it with the first collect; in `launch` mode it is there once the
   human builds the variant. Until then `analyze` says so at the top of the
-  report and leaves R8's names as they are
+  report and leaves R8's names as they are. What the project's own build
+  code decides is read too, `buildSrc` or an included `build-logic`: a
+  suffix or an applicationId that is a constant or an enum entry's argument,
+  and flavours a convention plugin registers for each entry of an enum; the
+  lines under the table say where each came from. A part set any other way
+  shows as `+ ?` in the table and in a note; when the variant to measure is
+  one of those, the draft's package says `_source: default` — ask the human
+  which package is on the phone (`adb shell pm list packages <base>`)
+  rather than taking the base name. With several packages, the line under
+  the table lists them all
 - the module with `MacrobenchmarkRule`, its test classes and methods, the
   package it drives (where its code takes the package at run time, the one
   the app module its `targetProjectPath` names installs as), the
@@ -64,9 +73,11 @@ it came from:
   what it could not read is an engine default and says `_source: default`
   (the start anchor, and an end it did not find, written `"?"`). For an app
   with a launcher Activity and no macrobenchmark there is nothing to find:
-  the skeleton holds `window: launch` with `runner.mode: launch`, the
-  scenario that needs no end anchor, and its `_evidence` says the trace
-  decides the end. A benchmark class that measures the launch and names no
+  the skeleton holds `window: launch` with `runner.mode: launch` and
+  `runner.activity`, the app's launcher by its full class name (a debug
+  build with a leak detector has a second one, and without the key the
+  device answers with its chooser), the scenario that needs no end anchor,
+  and its `_evidence` says the trace decides the end. A benchmark class that measures the launch and names no
   section gets the same window with `runner.mode: gradle`; one that only
   sets `StartupMode` may be a scroll that starts cold, and keeps the `"?"`.
   The

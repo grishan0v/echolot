@@ -461,21 +461,29 @@ def launcher_activities(text: str) -> list[str]:
     the same activity counted twice was "several launcher activities", an
     ambiguity that stopped `--apply` and that no flag could settle.
     """
+    out: list[str] = []
+    for _, attrs in launcher_elements(text):
+        chosen = _TARGET_ACTIVITY.search(attrs) or _ANDROID_NAME.search(attrs)
+        if chosen and simple_name(chosen.group(1)) not in {simple_name(n) for n in out}:
+            out.append(chosen.group(1))
+    return out
+
+
+def launcher_elements(text: str) -> list[tuple[str, str]]:
+    """Each `<activity>` and `<activity-alias>` a launcher opens, as (tag,
+    attributes), in the manifest's order: the rule `launcher_activities`
+    reads class names by, and `scan` the component `am start` takes."""
     text = _XML_COMMENT.sub("", text)
     opens = list(_ACTIVITY_OPEN.finditer(text))
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     for i, m in enumerate(opens):
         if m.group("closed"):
             continue
         stop = opens[i + 1].start() if i + 1 < len(opens) else len(text)
         close = re.compile(r"</" + m.group("tag") + r"\s*>").search(text, m.end(), stop)
         body = text[m.end():close.start() if close else stop]
-        if not (_ACTION_MAIN.search(body) and _CATEGORY_LAUNCHER.search(body)):
-            continue
-        attrs = m.group("attrs")
-        chosen = _TARGET_ACTIVITY.search(attrs) or _ANDROID_NAME.search(attrs)
-        if chosen and simple_name(chosen.group(1)) not in {simple_name(n) for n in out}:
-            out.append(chosen.group(1))
+        if _ACTION_MAIN.search(body) and _CATEGORY_LAUNCHER.search(body):
+            out.append((m.group("tag"), m.group("attrs")))
     return out
 
 

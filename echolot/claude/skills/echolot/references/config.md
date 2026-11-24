@@ -317,12 +317,12 @@ Every key the runner reads, and where it applies:
 | `atrace_categories` | launch, command | `am wm gfx view dalvik binder_driver res database` |
 | `buffer_kb` | launch, command | 131072 |
 | `device` | launch, command, gradle | the one device attached; `collect --device` overrides it. In gradle mode it reaches gradle as `ANDROID_SERIAL`, and without it the connected tests run on every device adb lists. Belongs in local.yml |
-| `activity` | launch | the launcher activity of `project.package`, asked of the device |
+| `activity` | launch | the launcher activity of `project.package`, asked of the device. A component, `pkg/Class`, or a class's full name, started in `project.package`; `scan` writes the latter. Where the device has several launchers, `collect` stops and lists them |
 | `command` | command | none — the mode needs it |
 | `gradle_task` | gradle | none — the mode needs it |
 | `gradle_args` | gradle | none |
 | `gradle` | gradle | `./gradlew` |
-| `project_root` | gradle | the config's directory; a relative path is taken from there, as `-o` is |
+| `project_root` | gradle, launch | the config's directory; a relative path is taken from there, as `-o` is. Launch mode reads the app's manifest there only to name its own launcher when the device has several |
 | `timeout_s` | gradle | 3600 — the whole gradle run, build included |
 | `cooldown` | launch, command, gradle | off. `max_c`, the °C each repeat waits for; `sensor`, one of `battery` (from `dumpsys battery`, the default), `cpu`, `gpu`, `skin` (from the thermal HAL); `timeout_s`, 600. In gradle mode once, before the task. Belongs in local.yml |
 | `fixed_performance` | launch, command, gradle | off; `true` asks for the platform's fixed performance mode and says whether any frequency limit moved |
