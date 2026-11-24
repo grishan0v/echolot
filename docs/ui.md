@@ -500,7 +500,9 @@ the agent ended says the page closed it after that, as in "It ended before it
 had an answer, and the investigation was closed from this page after that". It
 says the agent closed the investigation only when the agent did, while it ran;
 one closed by hand after it ended is said to be closed after that. What it
-tried and was refused is listed under the end.
+tried and was refused is listed under the end, each command as its first line,
+with whether it mattered: each refusal cost a turn, and a run with no answer
+may have been refused a step it needed.
 
 ### With Codex
 

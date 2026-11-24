@@ -611,6 +611,8 @@ def test_a_question_nobody_answered_is_refused_and_said(project):
     fold = seen.one("details")
     check("and what it was refused is listed", fold.one("summary").text == "What it was refused (2)"
           and [li.text for li in fold.all("li")] == ["AskUserQuestion", "Bash: git stash"], fold.text)
+    check("and that one of them may be why it has no answer (#821)",
+          "A step it needed may be among them, and so be why it has no answer." in fold.text, fold.text)
 
 
 def test_ended_with_a_verdict_lands_on_the_answer(project):
@@ -623,6 +625,22 @@ def test_ended_with_a_verdict_lands_on_the_answer(project):
         "Claude Code finished. Its answer is on this page.") and "reports $1.23 of usage" in seen.text, seen.text)
     check("nothing to close or clear", not seen.all("button"))
     check("and the start page has nothing to say of it", not page(get(site, "")).all("div", id="dig-on"))
+
+
+def test_a_refused_heredoc_is_one_line_and_said_not_to_matter(project):
+    """The fold held the whole verdict an agent tried to write with `cat`, a
+    large refused block that did not matter (#821)."""
+    heredoc = "cat > .echolot/verdict.json <<'EOF'\n" + json.dumps({"summary": "x" * 300}) + "\nEOF"
+    site, _, _ = serving(project, {"do": "verdict", "denied": [
+        {"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": heredoc}},
+        {"tool_name": "Bash", "tool_use_id": "t2", "tool_input": {"command": "x" * 200}}]})
+    press(site, "dig/start", ticked("main_thread_waits"))
+    fold = panel(site).one("details")
+    items = [li.text for li in fold.all("li")]
+    check("each refused command is its first line, a long one cut", items == [
+        "Bash: cat > .echolot/verdict.json <<'EOF' …", "Bash: " + "x" * 114 + " …"], items)
+    check("and the page says it did not keep it from its answer",
+          "None of it kept it from an answer: each refusal cost it a turn, and it went on." in fold.text, fold.text)
 
 
 def test_an_answer_from_the_recordings_it_was_handed_is_no_round_of_its_own(project):

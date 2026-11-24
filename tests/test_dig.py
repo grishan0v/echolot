@@ -245,10 +245,13 @@ def test_the_request_of_an_agent_started_from_the_page():
     check("what it may do, and that the rest is refused", rest[4] == "- You may run `echolot`, `./gradlew` and `adb` "
           "without asking, and edit files under `app/src/main` and `feature/*/src/main`, and `.echolot/verdict.json`. "
           "Everything else is refused: git, any other program, any other file. Do not commit anything.")
+    check("the verdict with the edit tool, since a heredoc that writes it is refused (#821)",
+          rest[5] == "- Write `.echolot/verdict.json` with your Write or Edit tool. A shell command that writes it, "
+                     "`cat >` or a heredoc, is refused like any other program.", rest[5])
     check("one command per call, since a loop or a chain with another program is refused",
-          rest[5] == "- Run one command per call: a loop, or a chain with another program, is refused, and each "
+          rest[6] == "- Run one command per call: a loop, or a chain with another program, is refused, and each "
                      "refusal costs a turn.")
-    check("and how it ends", rest[6] == "- Close the investigation with your verdict, as /echolot-hunt says: "
+    check("and how it ends", rest[7] == "- Close the investigation with your verdict, as /echolot-hunt says: "
           "`echolot hunt --done --verdict .echolot/verdict.json`.")
     one = dig.facts(4, (".echolot/traces/coldStart-20261122-101500", 1))[1]
     check("one recording set aside is said as one", one.startswith("- Round 1's evidence is the recording behind the "

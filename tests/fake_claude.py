@@ -186,7 +186,8 @@ def act(ns: argparse.Namespace, project: Path, plan: dict[str, Any], out: Any) -
                    "cleanup": "removed"}
         (project / VERDICT).write_text(json.dumps(verdict), encoding="utf-8")
         code = _echolot(project, "hunt", "--done", "--verdict", VERDICT)
-        _said(out, result="Done: the verdict is recorded." if code == 0 else f"hunt --done said {code}")
+        _said(out, result="Done: the verdict is recorded." if code == 0 else f"hunt --done said {code}",
+              permission_denials=plan.get("denied") or [])
         return 0
     _said(out, result="I looked at the report and the code, and have nothing to add.")
     return 0
