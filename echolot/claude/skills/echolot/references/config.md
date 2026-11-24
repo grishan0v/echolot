@@ -301,6 +301,7 @@ Every key the runner reads, and where it applies:
 | `fixed_performance` | launch, command, gradle | off; `true` asks for the platform's fixed performance mode and says whether any frequency limit moved |
 | `airplane_mode` | launch, command, gradle | off; `true` turns the radio off while the set runs |
 | `brightness` | launch, command, gradle | none; a screen level from 0 to 255, auto-brightness off |
+| `min_battery` | launch, command, gradle | 25. A phone not charging and under this percentage stops `collect` before anything is recorded; `0` turns the check off. In gradle mode only when the phone can be told. Belongs in local.yml |
 | `compose_names` | launch, command | off; `true` switches a Compose app's Perfetto SDK on for the set, so that `runtime-tracing` names its composables in the traces, and off after it. In gradle mode it is the benchmark's flag, `perfettoSdkTracing.enable=true` |
 
 In gradle mode the macrobenchmark makes the recording, so the keys that shape

@@ -1557,6 +1557,171 @@ def _(report):
         assert _cold_only([paths[1]]) == ([paths[1]], []), "alone, it is read as given"
 
 
+def _powered(plugged: bool, level: int, saver: str = "0") -> str:
+    """What the read before a repeat answers (screen.READ), cut to its lines:
+    the screen on and unlocked, the phone plugged in or not."""
+    return (f"  mWakefulness=Awake\n  mIsPowered={'true' if plugged else 'false'}\n"
+            f"  mBatteryLevel={level}\n  mStayOn=true\n    isKeyguardShowing=false\n"
+            f"low_power={saver}\n")
+
+
+def _collect_powered(reads: list[str], n: int, where: Path,
+                     section: dict | None = None) -> tuple[list[dict], list[str], list[str]]:
+    """`runner.collect` of `n` repeats on a fake device whose reads before the
+    set and before each repeat answer `reads` in order, the last for every read
+    after: the recordings made, what was said, and what adb was asked."""
+    from . import runner
+    package, serial = "com.example.app", "emulator-5554"
+    reads, asked = list(reads), []
+
+    def adb(args, stdin=None, timeout=120):
+        args = list(args)
+        text = " ".join(args[4:]) if args[3:4] == ["shell"] else " ".join(args)
+        asked.append(text)
+        if text == "adb devices":
+            return f"List of devices attached\n{serial}\tdevice\n\n"
+        if text.startswith("pm path"):
+            return f"package:/data/app/{package}/base.apk\n"
+        if text.startswith("dumpsys power"):
+            return reads.pop(0) if len(reads) > 1 else reads[0]
+        if text.startswith("am start -W"):
+            return "Status: ok\nLaunchState: COLD\nTotalTime: 523\nComplete\n"
+        if args[3:4] == ["pull"]:
+            Path(args[-1]).write_bytes(b"a trace")
+        return ""
+
+    said: list[str] = []
+    real = runner._run
+    runner._run = adb
+    try:
+        made = runner.collect(package, where, n, name="run",
+                              section={"activity": f"{package}/.Main", **(section or {})},
+                              log=said.append)
+    finally:
+        runner._run = real
+    return made, said, asked
+
+
+@check("collect: a phone that is not charging stops the set under runner.min_battery, "
+       "gets one line above it, and each trace keeps how it was powered")
+def _(report):
+    """An SM-A515F ran a whole session on battery, 49% to 45%, and a later
+    hunt on it from 44% to 39%: `collect` read `mIsPowered` before every
+    repeat for the screen's sake and said nothing of it, and the agent asked
+    adb itself (#524). Macrobenchmark refuses below 25%; launch and command
+    modes had no floor. A phone that charges, with battery saver off, gets no
+    line: the normal case stays quiet.
+    """
+    from . import recording, runner
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "low"
+        try:
+            _collect_powered([_powered(False, 20)], 3, out)
+        except runner.RunnerError as e:
+            said = str(e)
+        else:
+            raise AssertionError("a phone not charging at 20% was recorded")
+        assert "20%" in said and "runner.min_battery" in said, said
+        assert not out.exists() or not list(out.iterdir()), "nothing recorded under the floor"
+
+        made, said, _ = _collect_powered([_powered(False, 20)], 1, Path(tmp) / "off",
+                                         section={"min_battery": 0})
+        assert len(made) == 1, "min_battery: 0 turns the check off"
+
+        made, said, _ = _collect_powered([_powered(False, 50)], 2, Path(tmp) / "battery")
+        lines = [s for s in said if "power" in s]
+        assert len(lines) == 1 and "not charging, 50%" in lines[0], said
+        kept = [recording.read(r["path"]) for r in made]
+        assert all(k.get("power") == "not charging" and k.get("battery_saver") == "off"
+                   for k in kept), kept
+        assert recording.kept(made[0]["path"], "battery_level") == 50
+
+        made, said, _ = _collect_powered([_powered(True, 90)], 2, Path(tmp) / "charging")
+        assert not any("power" in s for s in said), said
+        assert recording.read(made[0]["path"]).get("power") == "charging"
+
+
+@check("collect: the cable out or battery saver on during a set is said at that "
+       "repeat, and compare reads the set as not recorded alike")
+def _(report):
+    """The read before each repeat already knew whether the phone charged
+    (screen.py); a set that lost its power halfway recorded its second half
+    on a draining battery with nothing said (#524). The change is said once,
+    before the repeat that found it, and the set's merged account splits, so
+    `compare` says its repeats were not recorded alike."""
+    from . import recording
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said, _ = _collect_powered(
+            [_powered(True, 80), _powered(True, 80), _powered(False, 79),
+             _powered(False, 79, saver="1")], 3, Path(tmp))
+        lines = [s for s in said if s.startswith("  [!] power")]
+        assert [line.split(":")[0] for line in lines] == [
+            "  [!] power before repeat 2 of 3", "  [!] power before repeat 3 of 3"], said
+        assert "battery saver on" in lines[1], lines
+        block = recording.merge([recording.read(r["path"]) for r in made])
+        assert set(block["mixed"]) == {"power", "battery_saver"}, block
+        alike = recording.merge([{"runner": "launch", "power": "charging",
+                                  "battery_saver": "off"}])
+        said = recording.moved({"recording": block}, {"recording": alike}, needs={})
+        assert [m["id"] for m in said] == ["recording", "recording-mixed"], said
+        assert "power" in said[0]["text"] and "power" in said[1]["text"], said
+
+
+@check("collect: a gradle round that uninstalled the app it measured says so, "
+       "passed or failed")
+def _(report):
+    """The connected test task uninstalls the app it tested when it ends,
+    passed or failed, and the person's own install went with it; the next
+    launch-mode round stopped on an app that was not installed, and nothing
+    had said why (#524). An app that was not there before the round is not
+    said: the round left the phone as it found it."""
+    from . import runner
+    package, serial = "com.example.app", "emulator-5554"
+
+    def round_(paths: list[str], fails: bool = False) -> tuple[list[str], str | None]:
+        paths = list(paths)
+
+        def adb(args, stdin=None, timeout=120):
+            text = " ".join(args[4:]) if list(args[3:4]) == ["shell"] else " ".join(args)
+            if text == "adb devices":
+                return f"List of devices attached\n{serial}\tdevice\n\n"
+            if text.startswith("pm path"):
+                return paths.pop(0)
+            if text.startswith("dumpsys power"):
+                return _powered(True, 90)
+            return ""
+
+        def task(*a, **kw):
+            if fails:
+                raise runner.RunnerError("the scenario command returned 1")
+            return 1.0
+
+        said: list[str] = []
+        saved = runner._run, runner.run_command, runner.harvest
+        runner._run, runner.run_command = adb, task
+        runner.harvest = lambda *a, **kw: [{"path": Path(tmp) / "t.perfetto-trace", "size": 1}]
+        error = None
+        try:
+            runner.collect(package, Path(tmp) / "traces", 1, name="run", log=said.append,
+                           section={"mode": "gradle", "gradle_task": "x",
+                                    "project_root": tmp})
+        except runner.RunnerError as e:
+            error = str(e)
+        finally:
+            runner._run, runner.run_command, runner.harvest = saved
+        return [s for s in said if "no longer installed" in s], error
+
+    there = f"package:/data/app/{package}/base.apk\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        gone, error = round_([there, ""])
+        assert error is None and len(gone) == 1, gone
+        assert serial in gone[0] and runner.KEEP_INSTALLED in gone[0], gone
+        assert round_([there, there]) == ([], None), "still installed: nothing said"
+        assert round_(["", ""]) == ([], None), "not there before: nothing said"
+        gone, error = round_([there, ""], fails=True)
+        assert len(gone) == 1 and error, (gone, error)
+
+
 @check("collect: a failed scenario command says the line that failed and what to do")
 def _(report):
     """Gradle's useful half is on stdout, and the message showed stderr.

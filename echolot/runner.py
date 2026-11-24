@@ -580,6 +580,63 @@ def installed(device: str, package: str, run: Callable[..., str] | None = None) 
     return any(line.startswith("package:") for line in out.splitlines())
 
 
+def _gradle_phone(device: str | None) -> str | None:
+    """The phone a gradle round runs on, when adb can tell; else None (#524).
+
+    The one named (`--device`, `runner.device`, `ANDROID_SERIAL`), else the
+    one device adb lists ready. With several and none named, the connected
+    task runs on each, and none is asked. Gradle mode does not need adb on
+    PATH, so an adb that is not there, or that fails, is a phone not asked.
+    """
+    named = device or os.environ.get("ANDROID_SERIAL")
+    if named:
+        return named
+    try:
+        ready = [serial for serial, state in devices() if state == "device"]
+    except RunnerError:
+        return None
+    return ready[0] if len(ready) == 1 else None
+
+
+def _gradle_look(phone: str | None, package: str):
+    """Before a gradle round: whether the app is on the phone, and the
+    phone's power (screen.read); None for what could not be asked."""
+    if not phone:
+        return None, None
+    from . import screen
+    try:
+        return installed(phone, package), screen.read(phone, _run)
+    except RunnerError:
+        return None, None
+
+
+def _uninstalled(phone: str | None, package: str, had: bool | None,
+                 log: Callable[[str], None]) -> None:
+    """After a gradle round: an app that was on the phone before it and is
+    not now, said (#524). Nothing is said when it was not there before: the
+    round left the phone as it found it."""
+    if not phone or not had:
+        return
+    try:
+        if installed(phone, package):
+            return
+    except RunnerError:
+        return
+    log(f"  [!] {package} is no longer installed on {phone}: the connected test "
+        f"task uninstalls the app it tested when it ends, passed or failed, and "
+        f"the install that was there went with it, its data too. Install the app "
+        f"again before a launch or command round; "
+        f"-P{KEEP_INSTALLED}=true in runner.gradle_args keeps it installed "
+        f"(Android Gradle plugin 8.2 and later).")
+
+
+# The Android Gradle plugin's switch, from 8.2, for leaving the app and its
+# test APK on the device after a connected test task. Not passed by default:
+# what is on the phone after a round stays what the plugin documents, and the
+# line above says what it did.
+KEEP_INSTALLED = "android.injected.androidTest.leaveApksInstalledAfterRun"
+
+
 # --- the build on the phone against the markers in the code (#393) -------------
 
 @dataclass(frozen=True)
@@ -1210,7 +1267,7 @@ def collect(package: str, out_dir: Path, iterations: int,
     import contextlib
     import time
 
-    from . import composenames, screen, stabilize
+    from . import composenames, power, screen, stabilize
 
     section = section or {}
     mode = str(section.get("mode", "launch"))
@@ -1218,6 +1275,7 @@ def collect(package: str, out_dir: Path, iterations: int,
     # anything is touched: a typo in `cooldown` stops here, not after a build.
     settle = stabilize.wanted(section)
     names = composenames.wanted(section)
+    under = power.floor(section)
     tell = progress or (lambda **kw: None)
     tell(scenario=name, mode=mode, started=time.time(), pid=os.getpid(),
          iterations=None if mode == "gradle" else iterations, done=0)
@@ -1280,37 +1338,53 @@ def collect(package: str, out_dir: Path, iterations: int,
                 log("      Composable names are the benchmark's to switch on: "
                     "-Pandroid.testInstrumentationRunnerArguments.androidx."
                     "benchmark.perfettoSdkTracing.enable=true in runner.gradle_args.")
+        # The phone the round runs on, when adb can tell which (#524): how it
+        # is powered before the task, and whether the app is still on it
+        # after. The connected test task uninstalls the app it tested when it
+        # ends, passed or failed, and the next launch-mode round stopped on
+        # an app that was not installed, with nothing said of why.
+        phone = _gradle_phone(device)
+        had, began = _gradle_look(phone, package)
+        if phone and began is not None:
+            power.check(phone, began, under, log)
         since = time.time()
-        if settle:
-            with stabilize.Settled(section, str(device), run=_run, log=log,
-                                   notify=tell) as settled:
-                if settled.cooldown is not None:
-                    log("  cooldown: before the task only; the macrobenchmark "
-                        "runs its repeats back to back")
-                settled.cool()
+        try:
+            if settle:
+                with stabilize.Settled(section, str(device), run=_run, log=log,
+                                       notify=tell) as settled:
+                    if settled.cooldown is not None:
+                        log("  cooldown: before the task only; the macrobenchmark "
+                            "runs its repeats back to back")
+                    settled.cool()
+                    spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
+                                        cwd=root, env=env)
+            else:
                 spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
                                     cwd=root, env=env)
-        else:
-            spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
-                                cwd=root, env=env)
-        # A build that failed raised above, and one that wrote nothing
-        # copies nothing: either way the previous set stays where it was.
-        results = harvest(root, since, out_dir, name, before_copy=make_room)
-        if not results:
-            raise RunnerError(
-                f"gradle finished but no new traces appeared under "
-                f"{root.resolve()}. Check that the task really is a "
-                f"macrobenchmark, that it actually ran, and that "
-                f"runner.project_root points at the project that wrote them.")
+            # A build that failed raised above, and one that wrote nothing
+            # copies nothing: either way the previous set stays where it was.
+            results = harvest(root, since, out_dir, name, before_copy=make_room)
+            if not results:
+                raise RunnerError(
+                    f"gradle finished but no new traces appeared under "
+                    f"{root.resolve()}. Check that the task really is a "
+                    f"macrobenchmark, that it actually ran, and that "
+                    f"runner.project_root points at the project that wrote them.")
+        except RunnerError:
+            _uninstalled(phone, package, had, log)
+            raise
         for r in results:
             # The macrobenchmark drove these, and how it reset the app
             # between them is its own: none of it is ours to say. Nor are
             # the device's animation scales, which a run with AGP's
             # `animationsDisabled` turns to 0 for its own length and back.
-            recording.write(r["path"], {"runner": "gradle"})
+            # How the phone was powered when the task began is.
+            recording.write(r["path"], {"runner": "gradle",
+                                        **(power.facts(began) if began else {})})
         log(f"  traces collected: {len(results)} in {spent:.0f}s")
         for r in results:
             log(f"    {r['path'].name}  {r['size'] / 1e6:.1f} MB")
+        _uninstalled(phone, package, had, log)
         return results
 
     if mode not in ("launch", "command"):
@@ -1340,7 +1414,8 @@ def collect(package: str, out_dir: Path, iterations: int,
                 f"{package} is not installed on {dev}. Install the build you "
                 f"mean to measure, and collect again: `am start` of an app that "
                 f"is not there prints an error and exits 0, and every trace "
-                f"would hold the device and no app.")
+                f"would hold the device and no app. A gradle-mode round "
+                f"uninstalls the app it tested when it ends.")
         activity = section.get("activity") or resolve_activity(dev, package)
         log(f"device {dev}, activity {activity}")
     else:
@@ -1383,7 +1458,9 @@ def collect(package: str, out_dir: Path, iterations: int,
     # A launch behind a dark, locked screen starts nothing that can be
     # measured (screen.py). Read before anything is touched, and again
     # before each repeat: a set that waits to cool can outlast the screen.
-    screen.ready(dev, _run, log)
+    # The same read says how the phone is powered (power.py, #524).
+    last = screen.ready(dev, _run, log)
+    power.check(dev, last, under, log)
     # What the device is set to do with the app's animations and activities,
     # once a round and before the device is held still: kept beside every
     # trace of the round, for the report and for `compare` (#612, #616).
@@ -1430,7 +1507,10 @@ def collect(package: str, out_dir: Path, iterations: int,
             # nothing of the app runs while the device cools.
             left, was = _stop(dev, package) if reset == "force-stop" else ("", None)
             waited = settled.cool()
-            screen.ready(dev, _run, log, during=f"before repeat {i + 1} of {iterations}")
+            during = f"before repeat {i + 1} of {iterations}"
+            now = screen.ready(dev, _run, log, during=during)
+            power.between(dev, last, now, during, log)
+            last = now
             # A last look right before the recording: whatever started the
             # app during the wait, it is stopped again, and the repeat says
             # so. A process back after that stop is stopped once more
@@ -1544,6 +1624,7 @@ def collect(package: str, out_dir: Path, iterations: int,
                     "before_c": (round(settled.last_c, 1)
                                  if settled.last_c is not None else None)},
                 **({"markers_in_build": built} if built is not None else {}),
+                **power.facts(now),
                 "launch": {
                     "repeat": i + 1, "attempt": attempt,
                     "state": state or None,

@@ -395,7 +395,8 @@ def test_no_stop_no_app_at_the_stop(tmp_path, adb):
                    name="startup", log=lambda m: None)
     kept = recording_mod.read(tmp_path / "traces" / "startup_iter000.perfetto-trace")
     check("the policy, the device's settings, and nothing about a stop that was not made",
-          kept == {"runner": "launch", "reset_policy": "none", **SHIPPED}, kept)
+          kept == {"runner": "launch", "reset_policy": "none", "power": "charging",
+                   **SHIPPED}, kept)
 
 
 def test_the_account_moves_with_its_trace_when_a_set_is_set_aside(tmp_path):
