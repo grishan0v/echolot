@@ -896,7 +896,7 @@ much it needs you. Here it has a movement: which way it went.
 | gone | it found something before and finds nothing now, and what it found was more than a small or occasional thing |
 | new | the same the other way round |
 | no change | it found something on a side, and no move can be called: the sentence says why |
-| not compared | it looked both times, but not by one measure: its thresholds changed between the two (named, from what to what), the echolot that read it did (`version`, `detector-changed`), or both sides are the same recordings (`same-traces`). Whatever moved is the config's or the tool's, so it is called neither better nor worse. With the same recordings the verdict at the top says that too, as `not_compared` |
+| not compared | it looked both times, but not by one measure: its thresholds changed between the two (named, from what to what), the echolot that read it did (`version`, `detector-changed`), or both sides are the same recordings (`same-traces`). Whatever moved is the config's or the tool's, so it is called neither better nor worse. With the same recordings the verdict at the top says that too, as `not_compared`. So does a pair whose app was compiled differently (`compile`: another filter, or a profile from another reason): every check is not compared, and the verdict is "Can't tell: the app was compiled differently", since the same code runs a cold launch 30% or more faster or slower compiled another way |
 | fine both times | it looked both times and found nothing |
 | not checked | it could not look on one side or on both, or one of the reports is too old to say (it says why); `compare` leaves such a check out of its table too |
 

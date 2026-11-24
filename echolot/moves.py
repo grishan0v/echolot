@@ -29,7 +29,9 @@ Here it says which way a check moved (`movement`):
   not_checked  it could not look on one side or on both
   not_compared it looked both times, but not by one measure: its thresholds
                changed, the tool that read it did, or both sides are the
-               same recordings, so whatever moved is not the app's (#713)
+               same recordings, so whatever moved is not the app's (#713);
+               or the app was compiled differently, so whatever moved may
+               be the compile's (#808)
 
 The two words are kept apart in the keys: a check's item carries `movement`,
 and what each report said of it stays under `before` and `after` as
@@ -548,6 +550,10 @@ def _held(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any]) ->
     if _same(before, after, cmp):
         return ("Both sides are the same recordings, so whatever moved here is the tool's or the "
                 "config's, not the app's.")
+    apart = compare.compiled_apart(before, after)
+    if apart:
+        return (f"The app was compiled {apart[0]} before and {apart[1]} after, so a move here may be "
+                "the compile's and not the code's.")
     unjudged = compare.unjudged(before, after)
     if unjudged is compare.ALL:
         return ("One of the two reports does not say which version of echolot wrote it, so a move here "
@@ -570,7 +576,9 @@ def _verdict(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
     """Better, worse or no clear change, by the scenario's window; by the
     frames the app made late when the window runs to the end of the
     recording and so cannot move (`FRAMES_FLOOR`). Not compared at all when
-    both sides are one set of recordings: nothing in the app moved (#713)."""
+    both sides are one set of recordings: nothing in the app moved (#713);
+    nor when the app was compiled differently on the two: whatever moved,
+    the compile alone can have moved it (#808)."""
     b, a = _window_side(before), _window_side(after)
     out: dict[str, Any] = {"movement": NOT_COMPARED, "before_ms": b["ms"], "after_ms": a["ms"]}
     if not cmp.get("comparable", True):
@@ -594,6 +602,20 @@ def _verdict(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
                         "between them, so no check below is called better or worse: what moved is the "
                         "tool's or the config's."}
     measured = f"Measured on {ctx.a_side}."
+    apart = compare.compiled_apart(before, after)
+    if apart:
+        # The same code compiled another way runs at another speed: on an
+        # SM-A515F one build's launch went 0.94 s to 0.64 s from `verify` to
+        # its profile, with no change to the code. Neither way can be called,
+        # nor no change (#808).
+        pct = _percent(b["ms"], a["ms"])
+        took = (f"The {ctx.noun} took {plain.hum(b['ms'])} before and {plain.hum(a['ms'])} after"
+                + (f", {pct}" if pct and plain.hum(b["ms"]) != plain.hum(a["ms"]) else ""))
+        return {**out, "by": "window", "headline": "Can't tell: the app was compiled differently",
+                "text": _said(f"{took}, but the app was compiled {apart[0]} before and {apart[1]} after.",
+                              "The same code runs at another speed compiled another way, a cold launch by "
+                              "30% or more on one phone, so no move here is called a change: record both on "
+                              "builds compiled the same way.", measured)}
     w = _by_window(b, a, ctx, cmp.get("window"))
     out["by"] = "window"
     by_window = {**out, "movement": w["movement"], "headline": w["headline"],

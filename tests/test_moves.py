@@ -516,6 +516,34 @@ def test_the_two_were_not_recorded_alike():
     check("and not at all for two that were", "unlike" not in alike, alike)
 
 
+def test_two_builds_compiled_differently_get_no_direction():
+    """#808: the same code recorded after a Gradle install (`speed-profile`
+    from its `.dm`) and after `cmd package compile -m verify -f` launched in
+    0.94 s and 0.64 s, and the page said "Better: Faster by 0.3 s" beside
+    the warning, with no check better."""
+    def side(launches, filter_, reason):
+        rep = report([entry("main_thread_block", [steady("inflate", 300, n=5)])], launches=launches)
+        rep["environment"] = {"compile": {"filter": filter_, "reason": reason}}
+        return rep
+    slow = side((930.0, 935.0, 940.0, 945.0, 950.0), "verify", "cmdline")
+    fast = side((630.0, 635.0, 640.0, 645.0, 650.0), "speed-profile", "install-dm")
+    got = reading(slow, fast)
+    v = got["verdict"]
+    check("no direction, and why", (v["movement"], v["headline"])
+          == (moves.NOT_COMPARED, "Can't tell: the app was compiled differently"), v)
+    check("with both times and both states", v["text"].startswith(
+        "The launch took 0.9 s before and 0.6 s after, 32% less, but the app was compiled `verify` (cmdline) "
+        "before and `speed-profile` (install-dm) after.") and v["text"].endswith(
+        "Measured on 5 launches before and 5 after."), v["text"])
+    check("and no check is called better or worse either", [c["movement"] for c in got["checks"]]
+          == [moves.NOT_COMPARED] and "may be the compile's" in got["checks"][0]["text"], got["checks"])
+    check("the note still names it", "compile" in next(n for n in got["notes"] if n["id"] == "unlike")["warnings"])
+    same = reading(slow, side((630.0, 635.0, 640.0, 645.0, 650.0), "verify", "install"))
+    check("the same filter by another reason is judged as ever (#809)",
+          same["verdict"]["movement"] == moves.BETTER and same["verdict"]["headline"] == "Faster by 0.3 s",
+          same["verdict"])
+
+
 # --- the reading as a whole -------------------------------------------------------------
 
 

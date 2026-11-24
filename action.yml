@@ -101,8 +101,8 @@ outputs:
     description: >-
       The comparison's verdict, by the scenario's window: `better`, `worse`,
       `no_change` or `not_compared` (two apps, two windows, an anchor that
-      never matched, the same recordings on both sides, or no window to
-      compare). A window that runs to the end of the recording is judged by
+      never matched, the same recordings on both sides, an app compiled
+      differently on the two, or no window to compare). A window that runs to the end of the recording is judged by
       the frames the app made late. Empty without a comparison.
     value: ${{ steps.compare.outputs.verdict }}
   headline:
