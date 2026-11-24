@@ -60,12 +60,18 @@ def _why(why: str | Sequence[str] | None) -> str:
 # on the report
 
 
+def _aside(aside: Sequence[str]) -> str:
+    """Why each other client on this computer cannot start, a line each."""
+    return "".join(f'<p class="small sub dig-aside">{kit.prose(w)}</p>' for w in aside)
+
+
 def report_parts(checks: Sequence[dict[str, Any]], action: str, can: bool, why: str | Sequence[str] | None,
-                 who: Sequence[str] = ("Claude Code",)) -> dict[str, Any]:
+                 who: Sequence[str] = ("Claude Code",), aside: Sequence[str] = ()) -> dict[str, Any]:
     """What a served report adds: in the request dialog, the button that leads
     to the screen before the agent starts, or the reason there is none; and
     the same as a form for a browser with script off. `who` names the
-    clients that can start, in the order the page offers them."""
+    clients that can start, in the order the page offers them, and `aside`
+    says why each other one on this computer cannot (`dig.aside`)."""
     hot = [c for c in checks if c["hot"]]
     if can:
         doer = (f"{e(who[0])}, the one on this computer, does it under your own account. The next screen says what it "
@@ -75,7 +81,7 @@ def report_parts(checks: Sequence[dict[str, Any]], action: str, can: bool, why: 
         ask = (f'<form method="post" action="{e(action)}" id="ask-start-form" class="stack gap-2">'
                '<div class="rowf"><button type="submit" class="btn primary" id="ask-start">Start it from here</button></div>'
                f'<p class="small sub">{doer}, and nothing starts before you press Start there. Or copy the request '
-               'into an agent of your own.</p></form>')
+               f'into an agent of your own.</p>{_aside(aside)}</form>')
     else:
         ask = ('<p class="small sub">Paste the request into Claude Code, Codex or Cursor opened on the project. '
                f'The page cannot start one itself: {_why(why)}</p>')
@@ -123,7 +129,8 @@ def consent(c: dict[str, Any], link: Link, steps: Sequence[tuple[str, str, bool]
     `action` (where Start is sent), `back` (the report), `keys` (what was
     ticked), `many` (more were ticked than one question takes), `others`
     (each other client that can start, by name, with the address of its own
-    screen), and what the client's adapter says of itself (`terms`): for
+    screen), `aside` (why each other client on this computer cannot), and
+    what the client's adapter says of itself (`terms`): for
     Claude Code `own_allow` and `budget`, for Codex `trust`, `config`,
     `rules_file`, `other_rules` and `idle`.
     """
@@ -149,6 +156,10 @@ def consent(c: dict[str, Any], link: Link, steps: Sequence[tuple[str, str, bool]
                      f'<p class="small sub">{e(other)} is on this computer too, and can do it instead. What it may '
                      f'do differs: its own screen says how.</p><button type="submit" class="btn '
                      f'{"line" if starts else "primary"}">Use {e(other)} instead</button></form>')
+    if c.get("aside"):
+        # Another client is on this computer and cannot do it: what it lacks,
+        # with no button that leads to a screen that would refuse it (#819).
+        parts.append(f'<div class="stack gap-2">{_aside(c["aside"])}</div>')
     paths = c.get("paths")
     where = ("any file of the project" if paths == [""] else
              "files under " + _code_list([p or "." for p in paths]) if paths else "")

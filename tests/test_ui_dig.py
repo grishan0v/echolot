@@ -46,6 +46,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import dig, job, recorder, ui  # noqa: E402
+from echolot.config import Config  # noqa: E402
 from echolot import hunt as hunt_mod  # noqa: E402
 from echolot import main as main_mod  # noqa: E402
 from echolot.pages import dig_page  # noqa: E402
@@ -834,7 +835,12 @@ def test_the_served_report_has_the_time_limit_and_dig_deeper(tmp_path, monkeypat
     from tests.test_ui_limit import written
     monkeypatch.chdir(tmp_path)
     made = Project(tmp_path)
+    # The app's own code, which `scan` names in `instrumentation.allowed` of
+    # the file the page writes: with no folder there, no agent starts (#813).
+    (tmp_path / MARKED).parent.mkdir(parents=True)
+    (tmp_path / MARKED).write_text("package com.example.app\n\nclass Store\n", encoding="utf-8")
     written(made)
+    check("the page's own file names the folder", Config.load(tmp_path / "echolot.yml").allowed == ["app/src/main"])
     made.traces().report()
     for rel in dig.LAYER:
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)

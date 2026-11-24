@@ -32,7 +32,9 @@ What is decided here and nowhere else, for Claude Code:
   nothing has moved; and once it ended, how, with what it left in the code.
 
 And for every client: which ones the page offers, in which order (`offer`),
-and everything after a press that is the same for all of them.
+what it says of the ones it cannot start (`reasons`, `aside`), what all of
+them need alike, a folder in `instrumentation.allowed` (`unplaced`), and
+everything after a press that is the same for all of them.
 
 Nothing is written to Claude Code's own settings, and nothing to `echolot.yml`.
 """
@@ -223,9 +225,10 @@ def allowed(cfg: Config) -> list[str]:
     raw = cfg.allowed
     if not raw:
         raise Refusal("Where may the agent put its markers?",
-                      "`instrumentation.allowed` in `echolot.yml` names no folder. The page lets an agent edit "
-                      "only the folders that list names: add the folders of your app's own code there, for "
-                      "example `app/src/main`, then come back.")
+                      "`instrumentation.allowed` in `echolot.yml` names no folder. An agent started here puts "
+                      "its markers only into the folders that list names, so the page starts none until it names "
+                      "one. Add the folders of your app's own code to `echolot.yml` under `instrumentation:`, "
+                      "for example `allowed: [\"app/src/main\", \"feature/*/src/main\"]`, then come back.")
     out = []
     for entry in raw:
         # Read the way `mark` reads it (`mark.allowed_entry`): `./app/src/main`
@@ -404,6 +407,20 @@ def own_allow(project: Path) -> list[str]:
     return [str(rule) for rule in allow if isinstance(rule, str) and rule not in ours]
 
 
+def unplaced(st: dict[str, Any]) -> str | None:
+    """Why an agent started from the page would have no folder it may put
+    markers in (`allowed`), with where to name one; None when it has one,
+    and None when the config does not load, which the start page says."""
+    known = st.get("config") or {}
+    try:
+        allowed(Config.load(known["path"], scenario=known.get("scenario")))
+    except Refusal as e:
+        return e.text
+    except (ConfigError, KeyError, OSError, TypeError):
+        return None
+    return None
+
+
 def why_not(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], client: Client) -> str | None:
     """Why a press would start nothing now, in a sentence; None when it would
     start. The same reading before the press, for the page, and at the
@@ -425,6 +442,13 @@ def why_not(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], clie
     unready = adapter(client.key).ready(project)
     if unready:
         return unready
+    # What it needs for every client: a folder to put the markers in. Read
+    # here and not only at the press, so that no screen offers a client the
+    # press then refuses, or one client in place of another refused alike
+    # (#813, #863).
+    nowhere = unplaced(st)
+    if nowhere:
+        return nowhere
     hunt = st.get("hunt") or {}
     if hunt and (hunt.get("status") or "open") == "open":
         asked_ = f" (\"{hunt['question']}\")" if hunt.get("question") else ""
@@ -973,6 +997,28 @@ def offer(project: Path, found: Sequence[Client], st: dict[str, Any],
     last = ((job.read(project, JOB) or {}).get("what") or {}).get("client")
     order = sorted(found, key=lambda c: c.key != last)
     return [(c, why_not(project, st, lines, c)) for c in order]
+
+
+def reasons(offered: Sequence[tuple[Client, str | None]], key: str | None = None) -> list[str]:
+    """Why none of the clients offered can start, each reason once, in their
+    order: those of the clients on this computer and of the one `key` names,
+    and every one where none of them is. That a client is not installed is
+    no reason the page cannot start one that is: beside a folder still to
+    name, it would read as a second thing to do (#863)."""
+    said = [why for c, why in offered if why and (c.program or c.key == key)] \
+        or [why for _, why in offered if why]
+    return list(dict.fromkeys(said))
+
+
+def aside(offered: Sequence[tuple[Client, str | None]], key: str | None = None) -> list[str]:
+    """Where a client can start: why each other client on this computer
+    cannot, besides the one `key` names, whose screen says it. The reasons a
+    client was not offered were read and never said, so a person who set
+    up one client did not learn what the other needs (#819). A client that
+    is not installed is left out: nothing says it is wanted."""
+    if not any(why is None for _, why in offered):
+        return []
+    return list(dict.fromkeys(why for c, why in offered if why and c.program and c.key != key))
 
 
 def pick(offered: Sequence[tuple[Client, str | None]], key: str | None = None) -> tuple[Client, str | None] | None:
