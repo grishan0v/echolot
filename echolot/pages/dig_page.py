@@ -448,16 +448,35 @@ def _spent(seen: dict[str, Any]) -> str:
     return f'<p class="small sub">{e(" ".join(bits) + ".")}</p>' if bits else ""
 
 
+# How much of one refused command the fold shows: its first line, cut here.
+REFUSED_CHARS = 120
+
+
+def one_line(said: str) -> str:
+    """A refused command as one line: a heredoc that writes a whole file is
+    its first line, and a long one is cut (#821)."""
+    lines = [line for line in str(said).splitlines() if line.strip()]
+    first = lines[0].strip() if lines else ""
+    cut = len(lines) > 1 or len(first) > REFUSED_CHARS
+    return (first[:REFUSED_CHARS].rstrip() + " …") if cut else first
+
+
 def _refused(seen: dict[str, Any]) -> str:
-    """What it tried and was refused, as it tried it, folded."""
+    """What it tried and was refused, each as one line, folded, with whether
+    it mattered: a refusal costs a turn and the run goes on."""
     refused = seen.get("denied") or []
     if not refused:
         return ""
-    items = "".join(f"<li><code>{e(r)}</code></li>" for r in refused[:20])
+    items = "".join(f"<li><code>{e(one_line(r))}</code></li>" for r in refused[:20])
     said = ("What its sandbox refused it, or Codex declined, without asking anyone:" if seen.get("client") == "codex"
             else "What it tried without a rule that allows it, refused without asking anyone:")
+    matters = ("None of it kept it from an answer: each refusal cost it a turn, and it went on."
+               if seen.get("answered") else
+               "Each refusal cost it a turn, and it went on. A step it needed may be among them, and so be why "
+               "it has no answer.")
     return kit.fold(f"What it was refused ({len(refused)})",
-                    f'<p class="small sub">{said}</p><ul class="dig-files">{items}</ul>')
+                    f'<p class="small sub">{said}</p><ul class="dig-files">{items}</ul>'
+                    f'<p class="small sub">{matters}</p>')
 
 
 # How each file it changed outside the allowed folders is said.

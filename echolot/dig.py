@@ -361,6 +361,10 @@ def unattended(n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> s
         f"- You may run `echolot`, `./gradlew` and `adb` without asking, and edit files under {where}, and "
         f"`{VERDICT}`. Everything else is refused: git, any other program, any other file. Do not commit "
         "anything.",
+        # The rule for the verdict is an edit's: a real run's first try was
+        # `cat > … <<'EOF'`, refused, and a turn lost (#821).
+        f"- Write `{VERDICT}` with your Write or Edit tool. A shell command that writes it, `cat >` or a heredoc, "
+        "is refused like any other program.",
         # Both refusals of a real run were habitual compound commands, each
         # a turn lost.
         "- Run one command per call: a loop, or a chain with another program, is refused, and each refusal costs "
@@ -784,7 +788,7 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
         "shown": step.get("shown") or "", "log": step.get("log") or "",
         "phase": None, "quiet": None, "stuck": False, "stopping": False, "title": "", "text": "", "said": None,
         "cost": None, "cached": None, "denied": [], "left": None, "can_close": False, "can_unmark": False,
-        "capped": False,
+        "capped": False, "answered": False,
         "budget": what.get("budget_usd") if isinstance(what.get("budget_usd"), (int, float)) else BUDGET_USD,
         "who": who, "client": agent.key, "idle": idle, "ends_idle": agent.idle_s, "outside": None,
     }
@@ -804,6 +808,7 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
     # Closed by the agent, or once it had ended: from this page, or by hand.
     later = _closed_after(hunt, run)
     answered = out["hunt_status"] == "concluded" and later is None
+    out["answered"] = bool(out["verdict"]) or answered
     by = " from this page" if later == "page" else ""
     words = agent.last_words(found)
     if status == job.DONE and out["verdict"]:
