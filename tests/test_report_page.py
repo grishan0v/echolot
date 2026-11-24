@@ -348,6 +348,16 @@ def test_the_verdict_is_the_reports_first_sentence_and_the_rest():
     check("the scenario beside it", "coldStart" in pill.parent.text)
 
 
+def test_two_times_of_the_verdict_and_its_range_never_read_alike():
+    """#709: 478.51 ms against 460 ms read "takes 0.5 s, you allowed 0.5 s, 4% over", and the
+    range under it "from 0.5 to 0.5 s"."""
+    main_ = page_of(plain.annotate(make([entry("gc_pressure", [])], duration=478.51, budget=460.0))).one("main")
+    check("the window", main_.one("h1").text == "The launch takes 479 ms", main_.one("h1").text)
+    check("the limit and the range", main_.one("p", "lead").text
+          == "You allowed 460 ms, so it runs 4% over. Measured on 3 launches, from 459 to 539 ms.",
+          main_.one("p", "lead").text)
+
+
 def test_a_report_with_no_budget_is_grey_and_says_why():
     rep = plain.annotate(make([entry("gc_pressure", [])], duration=1136.0, budget=None, runs=5))
     main_ = page_of(rep).one("main")

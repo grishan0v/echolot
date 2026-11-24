@@ -141,6 +141,24 @@ def hum(ms: float) -> str:
     return f"{ms:.1f} ms"
 
 
+def hum_apart(a: float, b: float) -> tuple[str, str]:
+    """Two times said as `hum` says them, unless that makes two different
+    times read alike: "takes 0.5 s, you allowed 0.5 s, 4% over" asks a reader
+    which number to believe. Then both get the digits that tell them apart:
+    whole milliseconds under a second ("479 ms" and "460 ms"), hundredths or
+    thousandths of a second above ("1.22 s" and "1.24 s")."""
+    said = hum(a), hum(b)
+    if said[0] != said[1] or a == b:
+        return said
+    forms = (["{:.0f} ms", "{:.1f} ms"] if max(a, b) < 1000 else
+             ["{s:.2f} s", "{s:.3f} s"]) + ["{:.2f} ms"]
+    for form in forms:
+        said = form.format(a, s=a / 1000), form.format(b, s=b / 1000)
+        if said[0] != said[1]:
+            break
+    return said
+
+
 class _Ctx:
     """What a sentence needs to know about the report it is read from."""
 
@@ -790,16 +808,19 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
     if ctx.window_ms <= 0:
         return {"level": NOT_CHECKED, "budget_ms": budget, "ratio": None, "warning": None,
                 "text": f"This recording has no measured {ctx.noun} to judge."}
-    lead = f"The {ctx.noun} takes {hum(ctx.window_ms)}."
     if budget is None:
+        lead = f"The {ctx.noun} takes {hum(ctx.window_ms)}."
         return {"level": NO_LIMIT, "budget_ms": None, "ratio": None, "warning": None,
                 "text": f"{lead} No time limit is set, so there is nothing to compare it with."}
     # The key, and what is said from it: the sentence's ratio is `verdict.ratio`
     # rounded to one decimal, never the rounded window over the rounded budget
     # ("1.9 s" over "0.5 s" is 3.8 where 1919 ms over 520 ms is 3.7).
     ratio = round(ctx.window_ms / budget, 3)
-    allowed = f"You allowed {hum(budget)}, so"
-    if ratio <= 1:
+    took, limit = hum_apart(ctx.window_ms, budget)
+    lead, allowed = f"The {ctx.noun} takes {took}.", f"You allowed {limit}, so"
+    # Judged by the exact times: a window a tenth of a millisecond over the
+    # limit has a ratio that rounds to 1.0 and is still not within it.
+    if ctx.window_ms <= budget:
         level, rest = FINE, "it is within the limit."
     else:
         level = WORTH_A_LOOK if ratio <= OVER_BUDGET else NEEDS_ATTENTION
