@@ -33,6 +33,17 @@ compared as written: a row is identified by that string, and a guess at which
 row a near miss meant would be the opposite of a check. Without a detector the
 row may be any detector's or one of the markers' (`AGENTTMP_…`), which is
 where the temporary markers' own numbers live.
+
+What the causes were measured against is said in `against`, the one field
+that decides how a verdict reads. With it, the verdict sets the build it
+measured against a reference — a set of an earlier build, analysed under the
+same investigation and filed as a report of its own — and its causes are what
+changed. Without it, nothing was recorded to compare with, and the causes are
+where the build measured spends its time: the costliest places, which a hunt
+with no reference finds whether or not anything changed (#538). A sentence in
+`summary` cannot be held to that; the field can. So `against` names a report
+this investigation filed, every cause cites a row outside it, and the
+reference measured the same scenario as the rows it is set against.
 """
 
 from __future__ import annotations
@@ -47,8 +58,9 @@ CONFIDENCE = ("high", "medium", "low")
 # them itself either way (`hunt.leftovers`) and records both.
 CLEANUP = ("removed", "none_added", "left")
 
-TOP_FIELDS = ("summary", "inside", "causes", "suggestions", "ruled_out",
+TOP_FIELDS = ("summary", "against", "inside", "causes", "suggestions", "ruled_out",
               "also_measured", "cleanup")
+AGAINST_FIELDS = ("report", "what")
 CAUSE_FIELDS = ("title", "where", "mechanism", "evidence", "cost_ms", "cost_of",
                 "fix", "expected_ms", "confidence", "confidence_why")
 CITATION_FIELDS = ("report", "detector", "location")
@@ -194,10 +206,8 @@ def _numbers(reports: Reports) -> str:
     return ", ".join(str(n) for n in sorted(reports)) or "none"
 
 
-def unresolved(index: _Index, report: int, location: str,
-               detector: str | None) -> str | None:
-    """Why no row answers this citation, or None when one does."""
-    reports = index.reports
+def _no_report(reports: Reports, report: int) -> str | None:
+    """Why `report` is not a report of this investigation to read, or None."""
     if report not in reports:
         if not reports:
             return (f"report {report} does not exist: this investigation has no "
@@ -207,6 +217,15 @@ def unresolved(index: _Index, report: int, location: str,
                 f"(it has {_numbers(reports)})")
     if reports[report] is None:
         return f"report {report} is filed but does not read as a report"
+    return None
+
+
+def unresolved(index: _Index, report: int, location: str,
+               detector: str | None) -> str | None:
+    """Why no row answers this citation, or None when one does."""
+    missing = _no_report(index.reports, report)
+    if missing:
+        return missing
     by, markers = index.rows(report)
     cut = " — it ends in …: the text view of `echolot report` cuts locations; " \
           "`--wide` or `--json` give them whole" if location.endswith("…") else ""
@@ -300,6 +319,99 @@ def rows_at(reports: Reports, entry: Any) -> tuple[list[tuple[str | None, dict[s
     return [(did, r) for did, rows in by for r in rows], None
 
 
+# --- what the build is set against --------------------------------------------
+
+def against(verdict: Any) -> int | None:
+    """The report a verdict sets the build it measured against, or None."""
+    entry = verdict.get("against") if isinstance(verdict, dict) else None
+    report = entry.get("report") if isinstance(entry, dict) else None
+    return report if _int(report) else None
+
+
+def reads_as(verdict: Any, check: Any) -> str | None:
+    """How a recorded verdict reads: `regression` when it names its reference,
+    `hotspots` when it was checked with none, and None for one recorded before
+    echolot asked, whose silence says nothing either way."""
+    if isinstance(verdict, dict) and isinstance(verdict.get("against"), dict):
+        return "regression"
+    if isinstance(check, dict) and "against" in check:
+        return "hotspots"
+    return None
+
+
+def _cited_reports(entries: Any) -> set[int]:
+    return {e["report"] for e in _list(entries) if isinstance(e, dict) and _int(e.get("report"))}
+
+
+def _against(verdict: dict[str, Any], index: _Index, out: list[str]) -> int | None:
+    """`against`, held to its shape and to the reports; the reference's number
+    when it is one to read.
+
+    A reference is a report this investigation filed, of a set recorded on
+    another build. What is held here is what the reports can say: that it is
+    there and reads, and that it measured the scenario the rows set against
+    it measured. Which build it was is the agent's `what`, in words, because
+    no report records a build.
+    """
+    if "against" not in verdict:
+        return None
+    entry = verdict["against"]
+    if not isinstance(entry, dict):
+        out.append('against: has to be an object like {"report": 1, "what": "the release '
+                   'before the change"} — the report of the reference, filed in this '
+                   'investigation; leave it out when nothing was recorded to set this '
+                   'build against')
+        return None
+    _unknown(entry, AGAINST_FIELDS, "against", out)
+    if not _text(entry.get("what")):
+        out.append("against.what: required, a non-empty string — which build the "
+                   "reference is, and from when (\"the release before the change, 4.1\")")
+    report = entry.get("report")
+    if not _int(report) or report < 1:
+        out.append("against.report: the number of the report this investigation filed "
+                   "for the reference, 1 or more")
+        return None
+    missing = _no_report(index.reports, report)
+    if missing:
+        out.append(f"against: {missing}")
+        return None
+    return report
+
+
+def _set_against(verdict: dict[str, Any], reference: int, index: _Index,
+                 out: list[str]) -> None:
+    """What a verdict with a reference has to show: a change in the build it
+    measured.
+
+    Every cause cites at least one row outside the reference — a row only of
+    the reference is the earlier build's, and says nothing of what changed —
+    and `inside`, the piece found, is the build measured's. A reference of
+    another scenario is another journey, which `compare` refuses as well.
+    """
+    inside = verdict.get("inside")
+    if isinstance(inside, dict) and inside.get("report") == reference:
+        out.append(f"inside: report {reference} is the reference — the piece found is the "
+                   f"build measured's, in a report other than the reference")
+    causes = [c for c in _list(verdict.get("causes")) if isinstance(c, dict)]
+    for i, cause in enumerate(_list(verdict.get("causes"))):
+        if not isinstance(cause, dict):
+            continue
+        cited = _cited_reports(cause.get("evidence"))
+        if cited and cited <= {reference}:
+            out.append(f"causes[{i}].evidence: every row it cites is in report {reference}, "
+                       f"the reference — a change shows in a row of the build measured, in "
+                       f"a report other than the reference")
+    others = _cited_reports([inside])
+    for cause in causes:
+        others |= _cited_reports(cause.get("evidence"))
+    theirs = (index.reports[reference] or {}).get("scenario")
+    for n in sorted(others - {reference}):
+        ours = (index.reports.get(n) or {}).get("scenario")
+        if isinstance(theirs, str) and isinstance(ours, str) and theirs != ours:
+            out.append(f"against: report {reference} measured `{theirs}` and report {n} "
+                       f"measured `{ours}` — a reference is the same scenario on another build")
+
+
 # --- the check ---------------------------------------------------------------
 
 def validate(verdict: Any, reports: Reports) -> list[str]:
@@ -317,6 +429,7 @@ def validate(verdict: Any, reports: Reports) -> list[str]:
 
     if not _text(verdict.get("summary")):
         out.append("summary: required, a non-empty string — the answer in a sentence")
+    reference = _against(verdict, index, out)
     if "inside" in verdict:
         _citation(verdict["inside"], "inside", index, out)
     if "cleanup" in verdict and verdict["cleanup"] not in CLEANUP:
@@ -361,6 +474,8 @@ def validate(verdict: Any, reports: Reports) -> list[str]:
         if "confidence" in cause and cause["confidence"] not in CONFIDENCE:
             out.append(f"{where}.confidence: one of {', '.join(CONFIDENCE)}")
 
+    if reference is not None:
+        _set_against(verdict, reference, index, out)
     _suggestions(verdict, out)
     _strings(verdict, "ruled_out", "what was checked and is not a cause", out)
     _strings(verdict, "also_measured", "what else was measured, one line each", out)
@@ -407,13 +522,15 @@ def record(verdict: dict[str, Any], reports: Reports, left: dict[str, Any],
 
     The verdict itself is stored as it came. This is the other half of the
     record: which reports the investigation held, how many rows the verdict
-    cites in them, and the markers echolot counted in the sources next to
-    what the agent claimed.
+    cites in them, the report it was set against (None: no reference, so
+    its causes read as where the build spends its time), and the markers
+    echolot counted in the sources next to what the agent claimed.
     """
     claimed = verdict.get("cleanup")
     return {"checked_at": when,
             "reports": sorted(reports),
             "cited": cited(verdict),
+            "against": against(verdict),
             "cleanup": {"claimed": claimed, "found": left,
                         "agrees": cleanup_agrees(claimed, left)}}
 
@@ -497,6 +614,23 @@ def _cleanup_line(claimed: Any, check: Any) -> str | None:
     return f"cleanup: {said} — {seen}"
 
 
+# What a verdict with no reference is, said where its causes are read. Its
+# confidence is the agent's about what a place costs; whether that place is
+# what changed was not measured, and echolot says so rather than the agent.
+NO_REFERENCE = ("nothing — no reference was recorded, so the causes are where the "
+                "build measured spends its time; none is shown to be what changed")
+NOT_MEASURED = "not measured — nothing was recorded to set it against"
+
+
+def _against_text(verdict: dict[str, Any], kind: str | None) -> str | None:
+    entry = verdict.get("against")
+    if kind == "regression" and isinstance(entry, dict):
+        what = entry.get("what")
+        return (f"against: report {entry.get('report')}"
+                + (f" — {_indented(what, '    ')}" if isinstance(what, str) and what.strip() else ""))
+    return f"against: {NO_REFERENCE}" if kind == "hotspots" else None
+
+
 def lines(verdict: Any, check: Any = None) -> list[str]:
     """A verdict as text, for `hunt --show`. Reads whatever is stored.
 
@@ -504,9 +638,13 @@ def lines(verdict: Any, check: Any = None) -> list[str]:
     here rather than failing the whole listing.
     """
     v = verdict if isinstance(verdict, dict) else {}
+    kind = reads_as(v, check)
     out = []
     if v.get("summary"):
         out.append(f"  verdict: {_indented(v['summary'], '    ')}")
+    said = _against_text(v, kind)
+    if said:
+        out.append(f"  {said}")
     if isinstance(v.get("inside"), dict):
         out.append(f"  inside: {_cite_text(v['inside'])}")
     causes = [c for c in _list(v.get("causes")) if isinstance(c, dict)]
@@ -525,9 +663,11 @@ def lines(verdict: Any, check: Any = None) -> list[str]:
             ("cost", [t] if (t := _cost_text(c, pad + " " * 12)) else []),
             ("fix", [_indented(c["fix"], pad + " " * 12)] if c.get("fix") else []),
             ("expected", [t] if (t := _expected_text(c.get("expected_ms"))) else []),
-            ("confidence", [f"{c['confidence']}" + (f" — {c['confidence_why']}"
-                                                    if c.get("confidence_why") else "")]
+            ("confidence", [f"{c['confidence']}"
+                            + (" that it costs this" if kind == "hotspots" else "")
+                            + (f" — {c['confidence_why']}" if c.get("confidence_why") else "")]
              if c.get("confidence") else []),
+            ("changed", [NOT_MEASURED] if kind == "hotspots" else []),
         ]
         for name, values in rows:
             for k, value in enumerate(values):

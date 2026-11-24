@@ -363,7 +363,11 @@ percentiles against.
 
 The tool **localises one specific regression**: you know "it was 3 s, now it is
 7 s" and need to find where. It does not search for the unknown across a pile
-of traces.
+of traces. A complaint about how it is now — "the list stutters", with no
+earlier build to set it against — is hunted all the same and answered as what
+it is: what counts as slow for the scenario, how this build stands against
+it, and where it spends its time, not a located change. Traces of an earlier
+build make it one, and the `echolot-hunt` skill asks for them.
 
 Networking in benchmarks is mocked on purpose — we hunt problems in code, not
 network speed.

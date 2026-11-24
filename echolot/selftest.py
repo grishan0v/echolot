@@ -6923,6 +6923,133 @@ def _(report):
         "instead of changing it")
 
 
+@check("hunt verdict: a regression names the reference it was set against, and "
+       "without one its causes read as where the build spends its time")
+def _(report):
+    """Five blind hunts with no build from before the change all named the
+    same long-standing hotspot, a control with no change among them, and the
+    answer form called it the place of the regression (#538). A sentence in
+    the summary cannot be held to the difference; `against` can.
+
+    With it, the reference is a report the investigation filed, of the same
+    scenario, and every cause cites a row outside it. Without it, the verdict
+    is recorded as set against nothing, and reads back as the costliest
+    places, the agent's confidence as what they cost and "what changed" as
+    not measured. A record from before the field says neither.
+    """
+    from . import verdict as v
+
+    def rep(scenario, *locations):
+        return {"scenario": scenario, "markers": {"rows": []},
+                "detectors": [{"id": "main_thread_block",
+                               "rows": [{"location": loc} for loc in locations]}]}
+
+    reports = {1: rep("coldStart", "Store.fill"), 2: rep("coldStart", "Store.fill", "inflate")}
+    cause = {"title": "t", "where": ["Store.kt:70"], "confidence": "high",
+             "evidence": [{"report": 2, "location": "Store.fill"}]}
+    regression = {"summary": "s", "causes": [cause],
+                  "against": {"report": 1, "what": "the release before the change"}}
+    assert v.validate(regression, reports) == [], v.validate(regression, reports)
+    before_only = {**regression, "causes": [{**cause, "evidence": [
+        {"report": 1, "location": "Store.fill"}]}]}
+    why = v.validate(before_only, reports)
+    assert len(why) == 1 and "the reference — a change shows in a row of the build measured" \
+        in why[0], why
+    other = {1: rep("feed_scroll", "Store.fill"), 2: reports[2]}
+    assert any("a reference is the same scenario on another build" in w
+               for w in v.validate(regression, other)), v.validate(regression, other)
+    assert any(w.startswith("against.what: required")
+               for w in v.validate({**regression, "against": {"report": 1}}, reports))
+
+    hotspots = {"summary": "s", "causes": [cause]}
+    assert v.validate(hotspots, reports) == []
+    record = v.record(hotspots, reports, {}, "2026-11-24T00:00:00+00:00")
+    assert record["against"] is None and v.reads_as(hotspots, record) == "hotspots", record
+    text = "\n".join(v.lines(hotspots, record))
+    assert v.NO_REFERENCE in text and "high that it costs this" in text \
+        and v.NOT_MEASURED in text, text
+    said = "\n".join(v.lines(regression, v.record(regression, reports, {}, "now")))
+    assert "against: report 1 — the release before the change" in said \
+        and "that it costs this" not in said and v.NOT_MEASURED not in said, said
+    old = {"checked_at": "then", "reports": [1, 2], "cited": 1}
+    assert v.reads_as(hotspots, old) is None and "against:" not in "\n".join(v.lines(hotspots, old))
+
+
+@check(".claude/ layer: a hunt with no reference says what counts as slow, skips "
+       "compare between rounds, and names hotspots, not a regression")
+def _(report):
+    """A complaint about how it is now — "the list stutters" — has no earlier
+    build to compare with, and the loop was built around `compare` between
+    rounds, which with nothing changed in the app compares only the markers
+    the agent added (#538). The door asks for a reference first, the brief
+    carries what it got, and the loop's branch for one build holds it to the
+    scenario's measure and keeps it from calling a hotspot a regression.
+    """
+    from .layer import CLAUDE_DIR, GUIDE_DIR
+
+    hunter = (CLAUDE_DIR / "agents" / "perf-hunter.md").read_text(encoding="utf-8")
+    branch = " ".join(hunter.split("## What the build is set against", 1)[-1]
+                      .split("## The protocol", 1)[0].split())
+    for said in ("`Reference: none`", "What counts as slow, first", "`budget_ms`",
+                 "`window.frames.late` of `count`", "`Buffer Stuffing` is latency",
+                 "No `compare` between rounds", "The answer names hotspots, not a regression",
+                 "The verdict has no `against`"):
+        assert said in branch, f"perf-hunter's branch for one build lacks {said!r}"
+    step4 = " ".join(hunter.split("4. from round 2 on", 1)[-1].split("echolot compare", 1)[0].split())
+    assert "not with `Reference: none`" in step4, step4
+    shape = hunter.split("## What to return upward", 1)[-1].split("```")[1]
+    assert shape.lstrip().startswith("Against:"), shape[:80]
+
+    texts = {"echolot-hunt.md": (CLAUDE_DIR / "commands" / "echolot-hunt.md").read_text(encoding="utf-8"),
+             "guide/hunt.md": (GUIDE_DIR / "hunt.md").read_text(encoding="utf-8")}
+    plugin = CLAUDE_DIR.parent.parent / "plugins" / "echolot" / "skills" / "echolot-hunt" / "SKILL.md"
+    if plugin.is_file():            # a source checkout; the wheel ships no plugin
+        texts["the plugin's hunt"] = plugin.read_text(encoding="utf-8")
+    for name, text in texts.items():
+        flat = " ".join(text.split())
+        assert "A reference" in flat and "not what changed" in flat, \
+            f"{name} does not ask for a reference before a hunt with no change named"
+    for name in ("guide/hunt.md", "the plugin's hunt"):
+        if name in texts:
+            assert "\nReference: <" in texts[name].replace("   Reference: <", "Reference: <"), \
+                f"{name}'s brief does not carry the reference"
+
+
+@check(".claude/ layer: a question no scenario measures gets a scenario of its own, "
+       "and --scenario's refusal says the two shapes one takes")
+def _(report):
+    """A question about a list stuttering went into the one scenario there
+    was, a cold start, and its scroll traces were recorded by hand outside
+    `collect` (#539). With one scenario the hunt never asked. Now the words
+    are held to the scenario even when there is one, a journey none measures
+    is added through setup first, and a name the config lacks is refused
+    with the two shapes that work.
+    """
+    from .config import NEW_SCENARIO, Config, ConfigError
+    from .layer import CLAUDE_DIR, GUIDE_DIR
+
+    command = " ".join((CLAUDE_DIR / "commands" / "echolot-hunt.md").read_text(encoding="utf-8").split())
+    guide = " ".join((GUIDE_DIR / "hunt.md").read_text(encoding="utf-8").split())
+    setup = (CLAUDE_DIR / "commands" / "echolot-setup.md").read_text(encoding="utf-8")
+    assert "With one, the words still have to fit it" in command \
+        and "propose adding one before anything is recorded" in command, \
+        "the hunt command takes the one scenario whatever the question"
+    assert "With one, the words still have to fit it" in guide and "Adding a scenario" in guide, \
+        "the guide takes the one scenario whatever the question"
+    adding = " ".join(setup.split("## Adding a scenario", 1)[-1].split())
+    for said in ("400 ms or more a swipe", "`reset_policy: none`", "`FrameTimingMetric`"):
+        assert said in adding and said in NEW_SCENARIO, f"{said!r} is not in both places"
+
+    one = Config({"project": {"package": "com.example.app", "process": "com.example.app"},
+                  "scenario": {"name": "coldStart", "window": "launch"}}, None)
+    try:
+        one.select("feed_scroll")
+    except ConfigError as e:
+        assert "this config has one scenario, `coldStart`" in str(e) and NEW_SCENARIO in str(e), str(e)
+    else:
+        raise AssertionError("a scenario the config lacks was taken")
+
+
 @check(".claude/ layer: the skill and the agent have frontmatter")
 def _(report):
     from .layer import CLAUDE_DIR

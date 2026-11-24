@@ -48,14 +48,61 @@ agent hunts everything that looks expensive and comes back with a guess.
 Carrying on an investigation that is already open, its record holds the first
 and the third: `echolot hunt` prints them.
 
+**A reference.** A change is two builds: the one on the phone, and one from
+before it to set it against. When the change is "unknown", or the words
+describe how it is now rather than a change — "the list stutters", "it is
+slow" — there is no such build yet, and without one the hunt returns where
+this build spends its time. In five blind hunts with no earlier build, all
+five named the same long-standing cost, and so did a control with no change
+at all. So before anything is recorded, ask with `AskUserQuestion` for a
+reference, the cheapest first:
+
+1. traces of an earlier build already on disk: an earlier investigation's
+   rounds (`echolot hunt --list`, then `--show <n>` for its trace sets), or a
+   set the human recorded on a release before;
+2. an earlier build to install and record: the store build, a release's APK,
+   or a build of a commit before the change. Outside `gradle` mode it is
+   recorded once the investigation is open: the earlier build installed (by
+   the human, or `adb install -r -d <its file>`), `collect --hunt <n>`; then
+   the build to hunt installed again before its own set. In `gradle` mode
+   the macrobenchmark builds the checkout, so that build is the checkout at
+   the earlier commit, which is the human's to set up;
+3. none.
+
+With a reference it is a regression hunt after all: `--since` names what lies
+between the two builds ("since 4.1"), and the brief names the reference's
+traces and which build they are. With none, say to the human what the answer
+will be: what counts as slow for the scenario — the time limit
+(`budget_ms`) for a launch, the frames the app made late for a scroll — how
+this build stands against it, and where it spends its time; not what
+changed. Recording the same build twice is not a reference: it says how far
+the numbers wander by themselves, which each report's repeats already say.
+
 **The scenario.** `echolot.yml` may name several journeys under
-`scenarios:`, and `echolot status` lists them, a line each. With one there is
-nothing to choose. With several, the question is about one of them: match the
-human's words to a scenario by its name and its anchors — "the feed stutters
-when scrolling" is a scroll, "the app opens slowly" is the cold start. When
-the words fit none of them, or more than one, ask with `AskUserQuestion`, the
-scenarios as the options. Carrying on the open investigation, its scenario is
-chosen already, and `echolot hunt` names it.
+`scenarios:`, and `echolot status` lists them, a line each. With several,
+the question is about one of them: match the human's words to a scenario by
+its name and its anchors — "the feed stutters when scrolling" is a scroll,
+"the app opens slowly" is the cold start — and when the words fit more than
+one, ask with `AskUserQuestion`, the scenarios as the options.
+
+With one, the words still have to fit it, by its name, its window and its
+runner: `window: launch`, or a launch runner with a start anchor, is a start;
+a `command` runner is whatever its script drives. A question about another
+journey — a scroll when the one scenario is a cold start — is not hunted on
+it: its traces would answer another question. When the words fit none of the
+scenarios, propose adding one before anything is recorded, through
+`/echolot-setup`'s "Adding a scenario", and come back. A journey a script
+paces takes one of two shapes: a `command` runner that drives the screen with
+`adb shell input swipe` (400 ms or more a swipe: a shorter one lands as a tap
+on a loaded phone), `reset_policy: none`, no `start` or `end`, so the whole
+recording is the scenario, and `duration_ms` longer than the script; or the
+project's own frame-timing macrobenchmark (`FrameTimingMetric`) in `gradle`
+mode, when `echolot scan` lists one. `echolot hunt --scenario <a name the
+config lacks>` refuses with the same two shapes.
+
+Carrying on the open investigation, its scenario is chosen already, and
+`echolot hunt` names it. Hold the words to it all the same: a question about
+another journey is a new investigation, on a scenario of its own.
 
 **The investigation.** First, are you carrying on the one already open? Yes
 when the human chose "carry on" at the door (`echolot hunt --resume` has run),
@@ -160,6 +207,9 @@ Pass the agent:
   recorded before the investigation opened
 - what regressed and against what: "it was 3 s, now it is 7 s"
 - after which change — or the word "unknown", said explicitly
+- the reference: the earlier build's traces, each file by name, and which
+  build they are — or "none", said explicitly, which sends the agent down its
+  branch for one build
 - that the investigation is open, and its number (`opened #<n>` when it
   opened, `echolot hunt --list` otherwise): every `collect` and `analyze` it
   runs carries `--hunt <n>` and is filed there, and `echolot compare` reads
@@ -205,6 +255,12 @@ removed. If it is unclear, check yourself from the checkout's root:
 over. An interim conclusion with an honest assessment is more useful than a
 confident look on weak data.
 
+**What it was set against.** The answer's `Against` line. With none, say
+that what it names is where this build spends its time, measured against the
+scenario's limit or its late frames, and not shown to be what changed — the
+verdict reads that way in `echolot hunt --show` and on the page whatever its
+words — and that a set of an earlier build would locate a change.
+
 If the finding is about the device rather than the code — for instance
 `runnable_starvation` on an emulator or a loaded machine — warn that the run is
 worth repeating on real hardware before fixing anything. A main-thread row
@@ -233,10 +289,12 @@ the way to try a correction first. It counts the temporary markers left in the
 sources as well, and says on stderr when there are any.
 
 With no file, close with one line — the `Place`, a few words of the mechanism,
-and the confidence:
+and the confidence; with no reference, say so in it, since this line is all
+the record keeps:
 
 ```bash
 echolot hunt --done "<place> — <what happens there>; confidence <high|medium|low>"
+echolot hunt --done "no reference: <place> — <what happens there>; confidence <high|medium|low> that it costs this"
 ```
 
 Every time, whatever the answer: an interim conclusion, "clean", or "the
