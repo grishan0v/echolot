@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import report as report_mod  # noqa: E402
-from echolot.main import _startup_info  # noqa: E402
+from echolot.analyze import _startup_info  # noqa: E402
 from tests.support import check  # noqa: E402
 
 MS = 1_000_000

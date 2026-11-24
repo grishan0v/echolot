@@ -28,7 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.support import check  # noqa: E402
 
 from echolot import explain as explain_mod  # noqa: E402
-from echolot.main import DETECTOR_DIR, main  # noqa: E402
+from echolot.analyze import DETECTOR_DIR  # noqa: E402
+from echolot.main import main  # noqa: E402
 from echolot.tp import load_detectors, parse_header  # noqa: E402
 
 SHIPPED = load_detectors(DETECTOR_DIR)

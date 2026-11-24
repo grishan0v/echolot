@@ -23,7 +23,7 @@ from echolot import compare as compare_mod  # noqa: E402
 from echolot import fixture, plain, selftest  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import analyze_trace  # noqa: E402
+from echolot.analyze import analyze_trace  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_compare import compare, det, report  # noqa: E402
 from tests.test_report_page import page_of, panel_of, rows_of  # noqa: E402

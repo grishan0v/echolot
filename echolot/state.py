@@ -798,7 +798,7 @@ def refused_by_analyze(cfg: Config) -> None:
     no trace, so they run here too, for every scenario, the ones not being
     measured included.
     """
-    from .main import DETECTOR_DIR, plan_detectors  # main imports this module
+    from .analyze import DETECTOR_DIR, plan_detectors
     from .tp import load_detectors
 
     if not cfg.raw:
