@@ -1097,7 +1097,10 @@ And the sources are scanned for leftover `AGENTTMP_` markers, split by who can
 remove them: lines `mark --apply` wrote carry its tag and `mark --remove` takes
 them out, while ones an agent added by hand carry only the prefix and have to
 go by hand. One number for both would send a human away believing the tree was
-clean.
+clean. A tagged line in any other shape is counted too, by its file and line:
+`mark --remove` leaves it, since it holds more than a marker (an agent's
+one-line `try { work() } finally { android.os.Trace.endSection() }`), and
+`hunt`, its cleanup check and the page in `echolot ui` say it goes by hand.
 
 ### From a shell
 

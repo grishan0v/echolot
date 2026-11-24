@@ -87,6 +87,7 @@ class Echolot:
 
     def __init__(self):
         self.ran: list[list[str]] = []
+        self.printed: list[str] = []
 
     def __call__(self, argv, **kw):
         check("the echolot that serves the page, by its module", argv[:3] == [sys.executable, "-m", "echolot"], argv)
@@ -99,6 +100,7 @@ class Echolot:
                 code = main_mod.main(list(argv[3:]))
         finally:
             os.chdir(here)
+        self.printed.append(out.getvalue())
         return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
 
 
@@ -498,6 +500,43 @@ def test_stopped_with_markers_left_says_what_hunt_counts_and_takes_them_out(proj
           == "Stopped from echolot ui, after 2 rounds, with no answer. Closed from echolot ui.", record)
     check("then Check the app can run", "disabled" not in page(get(site, "")).one("button", id="check-go").attrs)
     check("and there is nothing more to close", press(site, "dig/close").status == 409)
+
+
+def test_a_tagged_line_the_press_leaves_is_named_and_the_code_is_never_called_clean(project):
+    """An agent's own marker: the begin on a line of its own, the end folded
+    onto the call it wraps. The press takes the begin out and leaves the
+    wrap; the page said no markers were left (#703)."""
+    def by_hand(process):
+        path = project.root / MARKED
+        text = path.read_text()
+        check("the fake's block ends the function", text.endswith("\n}\n"), text)
+        path.write_text(text[:-len("}\n")] + '    android.os.Trace.beginSection("AGENTTMP_parse") // echolot:mark\n'
+                        "    try { parse() } finally { android.os.Trace.endSection() } // echolot:mark\n}\n")
+        dig.stop(project.root)
+    site, _, echolot = serving(project, {"do": "hang", "rounds": 1, "markers": MARKED}, on_wait=by_hand)
+    press(site, "dig/start", ticked("main_thread_waits"))
+    seen = panel(site)
+    text = seen.text
+    check("both begins are markers the press takes out", "2 temporary markers are still in the code, in 1 file. "
+          "echolot mark --remove takes out 2 of them." in text, text)
+    check("and the wrap is said apart, as one that goes by hand", "1 line tagged // echolot:mark is still in the "
+          "code, with more on it than the marker, so echolot mark --remove leaves it. Take the marker out of it by "
+          "hand and keep the app's own code." in text, text)
+    check("by its file and line", f"{MARKED}:9" in [li.text for li in seen.all("li")], text)
+    check("and the press is there for the rest", [b.text for b in seen.all("button")]
+          == ["Take the markers out", "Close the investigation"])
+
+    press(site, "dig/unmark")
+    check("the press left the wrap, and said so", f"! {MARKED}:5: try {{ parse() }}" in echolot.printed[-1],
+          echolot.printed[-1])
+    seen = panel(site)
+    text = seen.text
+    check("the page never says the code is clean while it is there", "No temporary markers are left" not in text, text)
+    check("it says what is left and how it goes", "1 line tagged // echolot:mark is still in the code, with more "
+          "on it than the marker, so echolot mark --remove leaves it." in text, text)
+    check("at the place the press named", [li.text for li in seen.all("li")] == [f"{MARKED}:5"], text)
+    check("the phone still has a build with markers in it", "build with markers in it" in text, text)
+    check("and no press takes it out", [b.text for b in seen.all("button")] == ["Close the investigation"])
 
 
 def test_stopped_with_no_markers_left(project):

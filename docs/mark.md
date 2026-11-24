@@ -116,7 +116,9 @@ the self-check applies, removes and compares, and `tests/test_mark_edits.py`
 does the same over generated Kotlin and Java sources, CRLF files among them.
 A line that carries the tag in any other shape has more on it than a marker,
 so it stays where it is and `--remove` lists it with its file and line, to be
-cleaned by hand. Applying twice adds nothing: a block whose begin and end are
+cleaned by hand; `echolot hunt`, its cleanup check and the page in
+`echolot ui` name it the same way until it is gone. Applying twice adds
+nothing: a block whose begin and end are
 already there is named as marked, and a block around one that is marked still
 gets its own pair. `--remove` walks every source file under `--root`, the ones
 outside a `src/` too, since `--from-anr` marks wherever a frame was placed. A

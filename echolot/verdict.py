@@ -380,13 +380,25 @@ def cleanup_agrees(claimed: Any, left: dict[str, Any]) -> bool | None:
     """Does what the agent said about its markers match what echolot counted?
 
     None when it said nothing. Counted the way `leftovers` counts: a marker
-    by its prefix, and a line in the shape `mark --remove` takes out whether
-    or not it has one.
+    by its prefix, a line in the shape `mark --remove` takes out whether or
+    not it has one, and a tagged line `--remove` leaves.
     """
     if claimed is None:
         return None
-    remaining = bool(left.get("markers") or left.get("lines"))
+    remaining = bool(left.get("markers") or left.get("lines") or left.get("kept"))
     return remaining if claimed == "left" else not remaining
+
+
+# The places of the lines `mark --remove` leaves that one sentence names; the
+# rest are counted. `mark --remove` prints every one.
+PLACES = 5
+
+
+def places(kept: Any, shown: int = PLACES) -> str:
+    """The first places in `leftovers`' `kept`, and how many more there are."""
+    where = [str(p) for p in _list(kept)]
+    more = len(where) - shown
+    return ", ".join(where[:shown]) + (f" and {more} more" if more > 0 else "")
 
 
 def record(verdict: dict[str, Any], reports: Reports, left: dict[str, Any],
@@ -469,14 +481,19 @@ def _cleanup_line(claimed: Any, check: Any) -> str | None:
     if not found:
         return f"cleanup: {said}" if isinstance(claimed, str) else None
     markers, lines = _count(found.get("markers")), _count(found.get("lines"))
+    kept = _list(found.get("kept"))
     files = len(_list(found.get("files")))
+    bits = []
     if markers:
-        seen = (f"echolot found {markers} {found.get('prefix') or ''} marker(s) "
-                f"in {files} file(s) still in the sources")
+        bits.append(f"{markers} {found.get('prefix') or ''} marker(s) in {files} file(s) "
+                    "still in the sources")
     elif lines:
-        seen = f"echolot found {lines} line(s) tagged `// echolot:mark` still in the sources"
-    else:
-        seen = "echolot found none left in the sources"
+        bits.append(f"{lines} line(s) tagged `// echolot:mark` still in the sources")
+    if kept:
+        bits.append(f"{len(kept)} line(s) tagged `// echolot:mark` that `echolot mark --remove` "
+                    f"leaves, to take out by hand: {places(kept)}")
+    seen = ("echolot found " + ", and ".join(bits)) if bits else \
+        "echolot found none left in the sources"
     return f"cleanup: {said} — {seen}"
 
 

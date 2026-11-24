@@ -248,11 +248,17 @@ def _said(said: dict[str, Any] | None) -> str:
 
 def _left(seen: dict[str, Any], link: Link) -> str:
     """What the agent left in the code, as `hunt` counts it, and the press
-    that takes it out."""
+    that takes it out.
+
+    A tagged line the press leaves, each by its place, and never "no markers
+    are left" while one is there: an agent's one-line `try { … } finally {
+    …endSection() }` stayed after the press, and the page said the code was
+    clean (#703)."""
     left = seen.get("left")
     if left is None:
         return ""
     out = []
+    kept = left.get("kept") or []
     if left["markers"]:
         hand = left["markers"] - left["removable"]
         files = len(left["files"])
@@ -268,9 +274,18 @@ def _left(seen: dict[str, Any], link: Link) -> str:
         out.append(f'<p class="measure">{left["lines"]} line{"s" if left["lines"] != 1 else ""} tagged '
                    "<code>// echolot:mark</code> are still in the code, with no marker beside them. "
                    "<code>echolot mark --remove</code> takes them out.</p>")
-    else:
+    elif not kept:
         out.append('<p class="measure">No temporary markers are left in the code.</p>')
-    if left["markers"] or left["lines"]:
+    if kept:
+        n = len(kept)
+        them = "it" if n == 1 else "them"
+        out.append(f'<p class="measure">{n} line{"s" if n != 1 else ""} tagged <code>// echolot:mark</code> '
+                   f"{'are' if n != 1 else 'is'} still in the code, with more on {them} than the marker, so "
+                   f"<code>echolot mark --remove</code> leaves {them}. Take the marker out of "
+                   f"{'it' if n == 1 else 'each'} by hand and keep the app's own code.</p>")
+        out.append('<ul class="dig-files">' + "".join(f"<li><code>{e(p)}</code></li>" for p in kept[:12])
+                   + (f'<li class="sub">and {n - 12} more</li>' if n > 12 else "") + "</ul>")
+    if left["markers"] or left["lines"] or kept:
         out.append('<p class="small sub measure">The app on your phone may still be a build with markers in it: '
                    "build and install it again before you check it.</p>")
     action = link("dig-unmark")

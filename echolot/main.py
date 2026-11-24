@@ -3249,11 +3249,11 @@ def _say_cleanup(verdict: dict[str, Any], left: dict[str, Any], closing: bool) -
     refuse: a disagreement is said where the human reads, and both halves are
     kept in the record.
     """
-    note = hunt_mod.leftover_line(left)
-    if note is None:
+    notes = hunt_mod.leftover_lines(left)
+    if not notes:
         print("  cleanup: no temporary markers in the sources")
     else:
-        print(f"\n[!] {note}", file=sys.stderr)
+        print("\n" + "\n".join(f"[!] {note}" for note in notes), file=sys.stderr)
     said = verdict.get("cleanup")
     if verdict_mod.cleanup_agrees(said, left) is False:
         print(f"    the verdict says {said}; "
@@ -3585,8 +3585,21 @@ def cmd_hunt(args) -> int:
                   f'{len(left["files"])} file(s) by the previous investigation, '
                   f'with no {left["prefix"]} marker beside them.', file=sys.stderr)
             print('    `echolot mark --remove` takes them out.', file=sys.stderr)
+        if left["kept"]:
+            # Lines `--remove` leaves: the tag on a line that carries more,
+            # such as a one-line `try { … } finally { …endSection() }` an
+            # agent wrote by hand. With the markers gone they are all that is
+            # left, each by its place, as `--remove` names them (#703).
+            print(f'\n[!] {len(left["kept"])} line(s) tagged `// echolot:mark` left by the '
+                  f'previous investigation carry something besides the marker, so '
+                  f'`echolot mark --remove` leaves them. Take the marker out of each by '
+                  f'hand, keeping the code it wraps:', file=sys.stderr)
+            for place in left["kept"][:hunt_mod.KEPT_SHOWN]:
+                print(f'    {place}', file=sys.stderr)
+            if len(left["kept"]) > hunt_mod.KEPT_SHOWN:
+                print(f'    … and {len(left["kept"]) - hunt_mod.KEPT_SHOWN} more', file=sys.stderr)
         recorder.note(hunt="opened", scenario=scenario,
-                      leftover_markers=left["markers"])
+                      leftover_markers=left["markers"], leftover_kept=len(left["kept"]))
         # The half a shell cannot do. Said every time rather than only when
         # something looks wrong: this is the command a person reaches for
         # first, and it is where the two surfaces have to line up out loud.
