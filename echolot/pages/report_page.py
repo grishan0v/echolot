@@ -450,6 +450,42 @@ REQUEST_LEAD = "/echolot-hunt "
 WARN_HEAD, ROWS_HEAD, FOCUS, MANY_NOTE = kit.WARN_HEAD, kit.ROWS_HEAD, kit.FOCUS, kit.MANY_NOTE
 
 
+def not_found(report: dict[str, Any], who: str = "it") -> tuple[str, bool] | None:
+    """What of the scenario's window echolot did not find, as both questions
+    say it, from the facts `plain.window_warning` reads: "where it starts in
+    1 of 5 recordings", "where it ends". True beside it when every part was
+    missed in some recordings only, so that the others measured the
+    scenario. None for a window that is the scenario's.
+
+    The screen before Dig deeper said "has no measured window" where the
+    start was missed in 1 of 5, and the investigation it opened asked about
+    "the 545 ms startup takes", a time the report does not judge (#861)."""
+    if not plain.window_warning(report):
+        return None
+    window = report.get("window") or {}
+    said, some = [], True
+    for key, part in (("start_anchor", "starts"), ("end_anchor", "ends")):
+        anchor = window.get(key)
+        if not isinstance(anchor, dict):
+            continue
+        seen = plain._of(anchor.get("missed"))
+        if not anchor.get("matches") and anchor.get("before_start"):
+            said.append(f"where {who} ends")
+            some = False
+        elif seen and seen[0] < seen[1]:
+            said.append(f"where {who} {part} in {seen[0]} of {seen[1]} recordings")
+        elif seen or not anchor.get("matches"):
+            said.append(f"where {who} {part}")
+            some = False
+        elif anchor.get("unfinished"):
+            said.append(f"where {who} ends")
+            some = False
+    said = list(dict.fromkeys(said))
+    if not said:
+        return f"where {who} starts or ends", False
+    return " or ".join(said), some
+
+
 def question(report: dict[str, Any]) -> str:
     """The one question an investigation answers, in words: how long the
     scenario takes, against its limit when one is set, and what to find."""
@@ -457,10 +493,16 @@ def question(report: dict[str, Any]) -> str:
     w = report.get("window") or {}
     name = f"`{report['scenario']}`" if report.get("scenario") else "The window"
     window = w.get("duration_ms")
-    if plain.window_warning(report):
-        return (f"{name} has no measured window: echolot did not find where it starts or ends, so the rows "
-                "below are about everything the app did in the recording. Find what is behind them, and "
-                "where that is in the code.")
+    missed = not_found(report, name)
+    if missed is not None:
+        # No time of the scenario's: the report judges none (#861).
+        words, some = missed
+        if some:
+            return (f"echolot did not find {words}. In those the rows below are about everything the app did in "
+                    "the recording, and they are part of the numbers. Find what is behind the rows, and where "
+                    "that is in the code.")
+        return (f"{name} has no measured window: echolot did not find {not_found(report)[0]}, so the rows below are about "
+                "everything the app did in the recording. Find what is behind them, and where that is in the code.")
     if not (_is_number(window) and window > 0):
         return f"{name} has no measured window. Find what is behind the rows below, and where that is in the code."
     ctx = plain._Ctx(report)

@@ -293,6 +293,11 @@ def hunt_question(report: dict[str, Any]) -> str:
     window = (data.get("window") or {}).get("duration_ms")
     name = data.get("scenario") or "the window"
     budget = (data.get("verdict") or {}).get("budget_ms")
+    missed = report_page.not_found(data, name)
+    if missed is not None:
+        # What the screen's question says, and no time: the report judges
+        # none where the window is not the scenario's in every recording (#861).
+        return f"What is behind what the report found in {name}? echolot did not find {missed[0]}."
     if not isinstance(window, (int, float)) or isinstance(window, bool) or window <= 0:
         return f"What is behind what the report found in {name}?"
     took = f"{window:,.0f} ms"
