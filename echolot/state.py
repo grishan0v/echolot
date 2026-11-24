@@ -793,7 +793,8 @@ def by_hand(st: dict) -> tuple[str, str]:
     What `next` says after "or by hand", and what `echolot ui` offers to copy.
     With an investigation open, the step is its next one, and the line runs
     inside it (`--hunt N`): `next` says `resume-or-new` rather than this
-    when it is not clear that the human is still on it.
+    when it is not clear that the human is still on it. Its step is
+    `collect` while the traces there were recorded outside it.
     """
     traces = st["traces"]
     # With several scenarios, the one this step is about, by name: the open
@@ -802,7 +803,12 @@ def by_hand(st: dict) -> tuple[str, str]:
     hunt = st.get("hunt") or {}
     n = hunt.get("n") if hunt.get("status") == "open" else None
     shown = st.get("shown") or {}
-    if not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
+    # Traces the last collect recorded outside the open investigation are
+    # not its evidence: `hunt` says so, and analysed with `--hunt N` they
+    # were filed as its round all the same (#720). The step is to record
+    # inside it.
+    outside = n is not None and hunt_mod.recorded_outside(hunt, st.get("collect"))
+    if outside or not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
         return "collect", collect_line_for(scenario, (st.get("config") or {}).get("runner"), n,
                                            shown=shown)
     return "analyze", analyze_line(traces.get("files"), scenario, n, shown=shown)

@@ -128,3 +128,38 @@ def test_the_page_s_line_is_from_the_project_s_folder(tmp_path: Path) -> None:
     line = state.analyze_line([".echolot/traces/a_iter000.perfetto-trace"], shown=shown)
     check("each path through the base", line == "echolot analyze "
           "../../.echolot/traces/a_iter000.perfetto-trace -c ../../echolot.yml", line)
+
+
+@pytest.mark.parametrize("inside", [False, True], ids=["recorded-outside", "recorded-inside"])
+def test_traces_recorded_outside_the_investigation_are_not_its_step(
+        tmp_path: Path, trace_bytes: bytes, monkeypatch, inside: bool) -> None:
+    """#720: `status` agrees with `hunt` on whose the traces are."""
+    import json
+    import time
+
+    from echolot import runner
+    root = project(tmp_path / "p", trace_bytes)
+    monkeypatch.chdir(root)
+    code, _, err = run("hunt", "list scroll janky")
+    assert code == 0, err
+    traces = root / ".echolot" / "traces"
+    for i in range(5):
+        (traces / f"first_frame_iter{i:03d}.perfetto-trace").write_bytes(trace_bytes)
+    now = time.time()
+    (root / runner.PROGRESS_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (root / runner.PROGRESS_FILE).write_text(json.dumps({
+        "scenario": "first_frame", "pid": 1, "iterations": 5, "done": 5, "exit": 0,
+        "started": now - 61, "finished": now - 1, "hunt": 1 if inside else None}),
+        encoding="utf-8")
+    kind, line = state.by_hand(state.project_state(root))
+    if inside:
+        check("its own traces are analysed inside it", kind == "analyze"
+              and line.endswith("-c echolot.yml --hunt 1"), line)
+    else:
+        check("the step is to record inside it", kind == "collect"
+              and line == "echolot collect -c echolot.yml -n 5 --hunt 1", line)
+    _, out, _ = run("status")
+    check("and status says that line", by_hand(said(out, "next")) == line, out)
+    _, out, _ = run("hunt")
+    check("as hunt says whose they are",
+          ("not this investigation's" in out) != inside, out)
