@@ -5891,6 +5891,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="the newest session that used echolot (default)")
     pick.add_argument("--session", metavar="ID",
                       help="a session id, or its first characters")
+    pick.add_argument("--hunt", metavar="N", type=_hunt_number,
+                      help="the session that worked inside investigation N, as the run log names it")
     pick.add_argument("--since", metavar="2h",
                       help="every session that used echolot in the last 2h / 30m / 3d")
     pick.add_argument("--all", action="store_true",

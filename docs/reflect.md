@@ -15,9 +15,24 @@ cd ~/StudioProjects/my-app        # the project the agent worked in
 echolot reflect --list            # candidate sessions
 echolot reflect --last            # the newest one that used echolot
 echolot reflect --session 3f2a    # one session, by the first characters of its id
+echolot reflect --hunt 3          # the session that worked inside investigation 3
 echolot reflect --since 2h        # every session in the last 2h / 30m / 3d
 echolot reflect --all             # every one, plus a summary
 ```
+
+`--hunt N` reads the session an investigation was worked in, the one the
+page started an agent for above all. After such an investigation the newest
+session that used echolot is most often the person's own — the one that
+started `echolot ui`, or tried a command since — and `--last` read that one.
+The run log ties the right one instead: every `collect` and `analyze` run
+with `--hunt N` notes `inside: N` on its line, and the line carries the id
+of the session whose command it was ([Two sources](#two-sources)). A
+session whose transcript is here is read from it, and one whose transcript
+is not, from its lines in the log. Lines that carry no id leave the sittings
+of the log that hold them, and `reflect` says so. An investigation nothing
+ran inside is nothing to reflect on (exit 1), and a number no investigation
+has is an error (exit 2). The report's header names the investigation, and
+the investigation's answer page names the command.
 
 Output: `.echolot/reflect/<session>.md` for a human, `.json` for the agent —
 `/echolot-reflect` reads the json and turns signals into a list of proposed
@@ -48,7 +63,7 @@ found from a subfolder too: what was asked (`argv`), where, when, exit code,
 duration, a hash of the config, a traceback if there was one, and a few facts
 the command chose to note — how many detectors fired, whether the anchor
 matched, what closed a window that is a launch, how many frames the app drew
-in it, where the report went. And which agent session asked, when the host
+in it, where the report went, which investigation it ran inside. And which agent session asked, when the host
 exports one to its commands: Claude Code's `CLAUDE_CODE_SESSION_ID` (the name
 of the session's transcript), Codex's `CODEX_THREAD_ID`, or `ECHOLOT_SESSION`
 for any other host, a hook or CI to set. The id is written as given when it
@@ -135,9 +150,26 @@ alone: `FROM_CALLS_ALONE`, the checks a session without a transcript gets.
 And whether it still means something in a session that was building the
 tool: `MEANS_SOMETHING_WHILE_BUILDING`. Both are allowlists, so a new signal
 is held back from both until somebody adds it — listed under **Not checked**
-rather than reporting clean over evidence it never had. A `hint` on a signal
-is one line about what it usually means for the tool — a pointer for whoever
-reads the report, never a verdict.
+rather than reporting clean over evidence it never had. And a third thing:
+what it says about the two sessions planted in `tests/test_reflect.py`. The
+first carries one of everything; the second is made of the shapes behind
+one day's false warnings — a subagent run in the background that hands its
+answer back, an `Agent` call the host refused, the commands of a batch
+tool, `gh … -R owner/echolot`, a passing doctor in the run log, a listing
+of the traces — beside the one real warning among them, a script written
+through a heredoc and run on a trace (#547). `VERDICTS` and
+`SHAPES_VERDICTS` hold each signal's verdict on each, silence included, and
+a signal without one fails the test.
+
+A `hint` on a signal is what it points at for the tool — a pointer for
+whoever reads the report, never a verdict — and it names the case where the
+facts carry one: which `--help` the agent read, whether before the
+command's first use, and the flags it then ran it with; which parts of
+`report.json` its one-liners took, the most taken first; where the last
+doctor was, what it failed on, and whether the session ran `echolot`, the
+door that asks for one; which tables the queries that opened a trace read;
+whether the loop that read the app ran `echolot mark`, and how much it read
+after it. It used to be one sentence per signal, the same in every session.
 
 The ones that ship, by what they watch:
 
@@ -247,9 +279,12 @@ that way, or the count is low.
 The exit code in a transcript is the Bash tool's, not echolot's: a `cd` into
 a path with spaces fails before the tool runs. Where the recorder has a line
 for the call, it wins; where it has none, the failure is marked as the
-shell's. Several `echolot` invocations in one Bash line share the line's exit
-code, duration and output; the report says so (`2 calls in one line`, `≤27 s`)
-rather than crediting each with the whole. When zsh reports a glob that
+shell's. Several `echolot` invocations in one Bash line, or the commands of
+one batch tool, share the call's exit code, duration and output; the report
+says so (`2 calls in one tool call`, `≤27 s`) rather than crediting each with
+the whole. The later ones start when the ones before them end, so each is
+matched to its run-log line anywhere in the time the call took: an `analyze`
+behind a five-minute `collect` went without its line. When zsh reports a glob that
 matched nothing, the invocation carrying that glob is marked as skipped by the
 shell — it never ran, whatever the tool's exit code says.
 

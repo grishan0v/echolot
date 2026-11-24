@@ -115,6 +115,33 @@ RE_CODE_READS_REPORT = re.compile(
     r"report\.json[\s\S]*(?:json\.loads?|JSON\.parse|read_text|readFile|open\()|"
     r"(?:json\.loads?|JSON\.parse|read_text|readFile|open\()[\s\S]*report\.json")
 RE_HELP_FLAG = re.compile(r"(?:^|\s)(?:--help|-h)(?:\s|$)")
+# What a one-liner took out of report.json: a key in brackets or `.get`, and
+# the numbers or slices between keys that keep them one path; a jq path.
+_KEY = re.compile(r"""\[\s*(['"])([A-Za-z_][\w-]*)\1\s*\]|\.get\(\s*(['"])([A-Za-z_][\w-]*)\3""")
+_BETWEEN_KEYS = re.compile(r"(?:\s*\[\s*-?\d*\s*(?::\s*-?\d*\s*)?\])*\s*")
+_JQ_PATH = re.compile(r"""\bjq\b[^'"\n]*['"]\s*((?:\.[A-Za-z_][\w-]*(?:\[[^\]]*\])?)+)""")
+
+
+def report_paths(code: str) -> list[str]:
+    """The parts of report.json a one-liner selected, as paths: `window`,
+    `summary.fired_ids`, `detectors.rows`. The advice names them; it used
+    to say "look at what the one-liners select" whatever they had (#547)."""
+    out: list[str] = []
+    chain: list[str] = []
+    end = None
+    for m in _KEY.finditer(code or ""):
+        key = m.group(2) or m.group(4)
+        if chain and end is not None and _BETWEEN_KEYS.fullmatch(code[end:m.start()]):
+            chain.append(key)
+        else:
+            if chain:
+                out.append(".".join(chain))
+            chain = [key]
+        end = m.end()
+    if chain:
+        out.append(".".join(chain))
+    out += [re.sub(r"\[[^\]]*\]", "", m.group(1)).strip(".") for m in _JQ_PATH.finditer(code or "")]
+    return list(dict.fromkeys(p for p in out if p))
 
 _EXIT = re.compile(r"Exit code (\d+)")
 _SHELL_ERROR = re.compile(r"\(eval\):|\bcd:\d*:|no matches found|command not found: (?!echolot)")
@@ -461,6 +488,9 @@ def subcommands(command: str) -> list[str]:
 def echolot_calls(session: Session) -> list[EcholotCall]:
     out: list[EcholotCall] = []
     known = verbs()
+    # The invocations of one tool call: of one shell line, or of the commands
+    # of one batch, which the reader hands over as a call each (`X`, `X#1`).
+    together: dict[str, list[EcholotCall]] = {}
     for c in session.bash():
         cmd = c.shell
         head = c.output_head or ""
@@ -510,6 +540,13 @@ def echolot_calls(session: Session) -> list[EcholotCall]:
                 shared=len(matches),
                 ran=ran,
             ))
+            together.setdefault(c.id.split("#", 1)[0], []).append(out[-1])
+    # A batch's commands share its time, exit and output as a line's do, and
+    # its later ones start when the earlier end — as `match_runs` reads
+    # `shared` (#547).
+    for group in together.values():
+        for e in group:
+            e.shared = max(e.shared, len(group))
     out.sort(key=lambda e: ts_to_epoch(e.ts))
     return out
 
@@ -554,10 +591,17 @@ def match_runs(calls: list[EcholotCall], runs: list[dict[str, Any]],
     used: set[int] = set()
     for c in calls:
         best, best_key = None, None
+        start = ts_to_epoch(c.ts)
+        # The second command of a line or a batch starts when the first one
+        # ends: a `collect` of five minutes put the `analyze` after it five
+        # minutes past the call, and it went without its line (#547). Such a
+        # call's own run is anywhere in the time the call took.
+        late = (c.duration_s or 0.0) if c.shared > 1 else 0.0
         for i, r in enumerate(inside):
             if i in used or r.get("cmd") != c.sub:
                 continue
-            d = abs(ts_to_epoch(r.get("ts")) - ts_to_epoch(c.ts))
+            t = ts_to_epoch(r.get("ts"))
+            d = start - t if t <= start else max(0.0, t - start - late)
             # The session's own line before one that names nobody, and the
             # nearer of two after that.
             key = (r.get("session") is None, d)
@@ -789,6 +833,8 @@ def prior_doctor(calls: list[EcholotCall], runs: list[dict[str, Any]]
         "age_s": round(first - ts_to_epoch(last.get("ts"))),
         "exit": last.get("exit"),
         "passed": last.get("exit") == 0 and not failed,
+        # What it failed on, for the advice to name (#547).
+        "failed": [str(x) for x in failed] if isinstance(failed, list) else [],
         "version": last.get("version"),
         # Unknown is no mismatch: a transcript call the log did not match.
         "same_version": (analyze_version is None or last.get("version") is None
@@ -865,6 +911,33 @@ def _heredocs(command: str) -> list[tuple[str, str]]:
     return out
 
 
+# A string literal, of python or of a shell line: triple-quoted, or on one line.
+_SQL_STRING = re.compile(
+    r'"""(.*?)"""'
+    r"|'''(.*?)'''"
+    r'|"((?:[^"\\\n]|\\.)*)"'
+    r"|'((?:[^'\\\n]|\\.)*)'", re.S)
+_SQL_SOURCE = re.compile(r"\b(?:from|join)\s+([A-Za-z_][A-Za-z0-9_]*)\b(?!\s*[.(])", re.I)
+_SQL_SELECT = re.compile(r"\bselect\b", re.I)
+
+
+def sql_tables(code: str) -> list[str]:
+    """The tables a script's queries read: what follows `from` and `join` in
+    a string that holds a `select`. What the agent went looking for in the
+    trace, which is the view echolot did not give it (#547). Strings only: a
+    python `from x import y`, and a comment saying where a number came from,
+    are no query."""
+    out: list[str] = []
+    for m in _SQL_STRING.finditer(code or ""):
+        text = next((g for g in m.groups() if g is not None), "")
+        if not _SQL_SELECT.search(text):
+            continue
+        for name in _SQL_SOURCE.findall(text):
+            if name.lower() not in ("select", "where") and name not in out:
+                out.append(name)
+    return out
+
+
 def trace_reads(session: Session) -> list[dict[str, Any]]:
     """Every time a shell line read a trace without echolot, and how.
 
@@ -875,14 +948,25 @@ def trace_reads(session: Session) -> list[dict[str, Any]]:
     enough: `ls ~/.local/pipx/…/perfetto/trace_processor` fired, and the
     four `python -I verify*.py` that did open the traces went unseen, their
     code having gone in through a heredoc the line's reader strips (#529).
+
+    `queried` names the tables the code's queries read, where it shows them.
     """
-    written: dict[str, str] = {}      # a script's file name → why it counts
+    written: dict[str, str] = {}      # a script's file name → its code
     rows = []
+
+    def row(c: Call, how: str, code: str) -> dict[str, Any]:
+        out = {"ts": c.ts, "agent": c.agent, "how": how, "command": c.shell[:120]}
+        tables = sql_tables(code)
+        if tables:
+            out["queried"] = ", ".join(tables)
+        return out
+
     for c in sorted(session.calls, key=lambda x: ts_to_epoch(x.ts)):
         if c.tool in ("Write", "Edit", "MultiEdit") and c.path:
             inp = c.input or {}
-            if opens_trace(str(inp.get("content") or inp.get("new_string") or "")):
-                written[Path(c.path).name] = c.path
+            text = str(inp.get("content") or inp.get("new_string") or "")
+            if opens_trace(text):
+                written[Path(c.path).name] = text
             continue
         if c.command is None:
             continue
@@ -893,31 +977,30 @@ def trace_reads(session: Session) -> list[dict[str, Any]]:
             runs_it = any(_INTERPRETERS.match(shell.name(cmd.words[h].value))
                           for cmd, h, _ in shell.runs(first))
             if target and not runs_it:
-                written[Path(target.group(1)).name] = target.group(1)
+                written[Path(target.group(1)).name] = body
             elif runs_it:
-                rows.append({"ts": c.ts, "agent": c.agent, "how": "code through a heredoc",
-                             "command": c.shell[:120]})
+                rows.append(row(c, "code through a heredoc", body))
         for cmd, h, _ in shell.runs(c.shell):
             words = [w.value for w in cmd.words]
             prog, args = shell.name(words[h]), words[h + 1:]
             how = None
+            code = ""
             if prog == "echolot":
                 continue
             if prog.startswith("trace_processor"):
-                how = prog
+                how, code = prog, c.shell
             elif prog.startswith("python") and "-c" in args \
                     and args.index("-c") + 1 < len(args) and opens_trace(args[args.index("-c") + 1]):
-                how = "python -c"
+                how, code = "python -c", args[args.index("-c") + 1]
             elif prog in written or (_INTERPRETERS.match(prog)
                                      and any(Path(a).name in written for a in args)):
                 script = prog if prog in written else next(
                     Path(a).name for a in args if Path(a).name in written)
-                how = f"ran {script}, written to open the trace"
+                how, code = f"ran {script}, written to open the trace", written[script]
             elif prog in _BYTE_READERS and any(RE_TRACE_LITERAL.search(a) for a in args):
                 how = f"{prog} on the trace file"
             if how:
-                rows.append({"ts": c.ts, "agent": c.agent, "how": how,
-                             "command": c.shell[:120]})
+                rows.append(row(c, how, code))
                 break
     return rows
 

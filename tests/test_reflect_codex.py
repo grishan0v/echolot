@@ -298,3 +298,23 @@ def test_a_main_thread_that_leaves_it_to_the_subagent_passes(tmp_path, monkeypat
     _session(home, p, loop_guide_in_main=False)
     sig = _signals(p)["guides_in_main"]
     check("the check passes", sig["severity"] == "ok", sig)
+
+
+def test_reflect_hunt_finds_the_thread_whose_subagent_ran_inside_it(project):
+    """A Codex subagent's commands carry its own thread's id, and that thread
+    is read with its parent's, never listed on its own (#826)."""
+    (project / ".echolot" / "log").mkdir(parents=True, exist_ok=True)
+    (project / ".echolot" / "hunt.json").write_text(json.dumps(
+        {"schema": 1, "n": 4, "question": "cold start got slower", "status": "concluded"}),
+        encoding="utf-8")
+    (project / ".echolot" / "log" / "runs.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        {"ts": "2026-09-30T13:01:00+00:00", "cmd": "collect", "argv": ["collect"], "exit": 0,
+         "ms": 50000, "session": SUB_ID, "agent": "codex", "facts": {"inside": 4}}]),
+        encoding="utf-8")
+    code, said = _run(project, "reflect", "--hunt", "4", "--project", str(project))
+    check("reflect exits 0", code == 0, said[-600:])
+    report = json.loads((project / ".echolot" / "reflect" / f"{MAIN_ID[:8]}.json")
+                        .read_text(encoding="utf-8"))
+    check("the main thread is read, its loop with it",
+          report["source"]["session"] == MAIN_ID and len(report["hunts"]) == 1
+          and report["context"]["investigation"]["runs"] == 1, report["source"])

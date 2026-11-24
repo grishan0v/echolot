@@ -15,7 +15,9 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
+from .. import hunt as hunt_mod
 from .. import recorder, table
 from ..config import Config, ConfigError
 from . import claude_code, codex
@@ -85,6 +87,19 @@ def cmd_reflect(args) -> int:
         found = [(from_log, r) for r in from_log.list_sessions(project)]
     only_log = all(reader is from_log for reader, _ in found)
 
+    # `--hunt N`: the sessions whose commands ran inside investigation N,
+    # read off the run log rather than guessed from `--list` (#826).
+    investigation = None
+    inside: list[dict] = []
+    read: dict[Path, Any] = {}
+    if getattr(args, "hunt", None) is not None:
+        tied = _of_investigation(args.hunt, project, found, read)
+        if isinstance(tied, int):
+            return tied
+        found, investigation, inside = tied
+        only_log = all(reader is from_log for reader, _ in found)
+        where = f"investigation #{args.hunt}"
+
     try:
         since = _parse_since(args.since) if args.since else None
     except ConfigError as e:
@@ -128,14 +143,17 @@ def cmd_reflect(args) -> int:
         picked = []
         for reader, ref in found:
             session = (from_log.read_session(ref) if reader is from_log
-                       else reader.read_session(ref.path))
-            # An explicit id is taken as is; otherwise only sessions that used
-            # the tool for real work count — a session that merely ran
-            # `reflect` is not worth reflecting on.
-            if not args.session and not reader.involves_echolot(session):
+                       else read.pop(ref.path, None) or reader.read_session(ref.path))
+            # An explicit id is taken as is, and so is a session that ran a
+            # command inside the investigation asked for; otherwise only
+            # sessions that used the tool for real work count — a session
+            # that merely ran `reflect` is not worth reflecting on.
+            if not args.session and investigation is None \
+                    and not reader.involves_echolot(session):
                 continue
             picked.append((reader, ref, session))
-            if not (args.all or args.list or args.session or since is not None):
+            if not (args.all or args.list or args.session or since is not None
+                    or investigation is not None):
                 break   # --last: the newest one is enough
         return picked
 
@@ -144,7 +162,7 @@ def cmd_reflect(args) -> int:
     # edited the README while the hunt ran from Cursor. The log is the rest
     # of what happened here, and the docs promise the fall-back; it used to
     # come only when there were no transcripts at all.
-    if not picked and not args.session and not only_log \
+    if not picked and not args.session and not only_log and investigation is None \
             and from_log.log_path(project).exists():
         logged = [(from_log, r) for r in from_log.list_sessions(project)
                   if since is None or r.mtime >= since]
@@ -235,6 +253,9 @@ def cmd_reflect(args) -> int:
                                 changed=bool(logged and now and now not in logged))
         sigs = signals_mod.run(session, facts, cfg)
         rep = reflect_render.build(session, facts, sigs)
+        if investigation is not None:
+            rep["context"]["investigation"] = {
+                **investigation, "runs": _runs_inside(inside, session, ref)}
         stem = short[ref.id]
         (out_dir / f"{stem}.json").write_text(
             reflect_render.to_json(rep), encoding="utf-8")
@@ -272,6 +293,99 @@ def cmd_reflect(args) -> int:
 
     print("\n" + "\n".join(f"→ {p}" for p in written), file=sys.stderr)
     return 0
+
+
+def _inside(run: dict) -> int | None:
+    """The investigation a run-log line ran inside: `--hunt N` noted it."""
+    n = (run.get("facts") or {}).get("inside")
+    return n if type(n) is int else None
+
+
+def _runs_inside(lines: list[dict], session, ref) -> int:
+    """How many of the lines filed under the investigation are this
+    session's: by its ids, or for a sitting, by being among its runs."""
+    ids = facts_mod.session_ids(session)
+    own = sum(1 for r in lines if r.get("session") in ids)
+    if own:
+        return own
+    keys = {(e.get("ts"), e.get("cmd"), e.get("ms")) for e in getattr(ref, "entries", None) or []}
+    return sum(1 for r in lines if not r.get("session")
+               and (r.get("ts"), r.get("cmd"), r.get("ms")) in keys)
+
+
+def _of_investigation(n: int, project: Path, found: list, read: dict[Path, Any]
+                      ) -> int | tuple[list, dict[str, Any], list[dict]]:
+    """The sessions that worked inside investigation `n`, newest first, what
+    the report says about the investigation, and the run-log lines filed
+    under it; an exit code when there is none to read.
+
+    The run log ties them. Every `collect` and `analyze` run with `--hunt N`
+    notes `inside: N` on its line, and the line carries the id of the agent
+    session whose command it was. `--last` took the newest session that used
+    echolot, which after an investigation the page started is most often the
+    person's own — the one that started `echolot ui`, or tried a command
+    since — and finding the agent's meant reading `--list` and guessing
+    (#826).
+
+    A session whose transcript is here is read from it, and one whose
+    transcript is not, from its lines in the log. Lines that carry no id — an
+    older echolot, a host that exports none — leave the sittings of the log
+    that hold them, and that is said. `read` keeps a Codex session read here
+    to find its subagents' threads, for `pick` not to read it twice.
+    """
+    record = hunt_mod.find(project, str(n))
+    if record is None:
+        print(f"error: there is no investigation #{n} here\n"
+              f"  `echolot hunt --list` lists the ones this project has.",
+              file=sys.stderr)
+        return 2
+    lines = [r for r in recorder.read(from_log.log_path(project)) if _inside(r) == n]
+    if not lines:
+        print(f"nothing to reflect on: no command in {recorder.LOG_FILE} ran "
+              f"inside investigation #{n}\n"
+              f"  A `collect` or `analyze` run with `--hunt {n}` is what ties a "
+              f"session to it, and none is logged: the agent stopped before "
+              f"its first one, or ran them without `--hunt`. `echolot reflect "
+              f"--list` names the sessions there are.", file=sys.stderr)
+        return 1
+    ids = list(dict.fromkeys(r["session"] for r in lines if r.get("session")))
+    logged = [(from_log, r) for r in from_log.list_sessions(project)]
+    out: list = []
+    if ids:
+        left = set(ids)
+        for reader, ref in found:
+            if reader is from_log or not left:
+                continue
+            if ref.id in left:
+                out.append((reader, ref))
+                left.discard(ref.id)
+            elif reader is codex:
+                # A Codex subagent's commands carry its own thread's id, and
+                # its thread is read with its parent's, never on its own.
+                session = reader.read_session(ref.path)
+                mine = facts_mod.session_ids(session) & left
+                if mine:
+                    read[ref.path] = session
+                    out.append((reader, ref))
+                    left -= mine
+        away = [(reader, ref) for reader, ref in logged if ref.named and ref.id in left]
+        if away:
+            print(f"[i] no transcript here for {', '.join(ref.id[:8] for _, ref in away)}"
+                  f" — reading its runs in {recorder.LOG_FILE} instead. Fewer "
+                  f"checks; the report lists which.", file=sys.stderr)
+        out += away
+    else:
+        mark = {(r.get("ts"), r.get("cmd"), r.get("ms")) for r in lines}
+        out = [(reader, ref) for reader, ref in logged if not ref.named
+               and any((e.get("ts"), e.get("cmd"), e.get("ms")) in mark for e in ref.entries)]
+        print(f"[i] the runs filed under #{n} carry no session id — an older "
+              f"echolot logged them, or a host that exports none: reading the "
+              f"sitting{'s' if len(out) > 1 else ''} of {recorder.LOG_FILE} "
+              f"they are in.", file=sys.stderr)
+    out.sort(key=lambda f: f[1].mtime, reverse=True)
+    return out, {"n": n, "question": record.get("question"),
+                 "status": record.get("status") or "open",
+                 "by": "session" if ids else "sitting"}, lines
 
 
 def _session_config(session, runs: list[dict], project: Path

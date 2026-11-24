@@ -7018,6 +7018,160 @@ def _(report):
         assert added and added.severity == "warn", added
 
 
+def _reflect_session(pdir: Path, sid: str, cwd: Path, at: float, commands: list[str]) -> None:
+    """A Claude Code transcript that ran `commands`, a minute apart from `at`."""
+    import json
+    from datetime import datetime, timezone
+
+    def ts(t: float) -> str:
+        return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    rows: list[dict] = [{"type": "user", "timestamp": ts(at), "sessionId": sid, "cwd": str(cwd),
+                         "message": {"role": "user", "content": "/echolot"}}]
+    for i, command in enumerate(commands):
+        t = at + 60 * (i + 1)
+        rows.append({"type": "assistant", "timestamp": ts(t), "sessionId": sid, "cwd": str(cwd),
+                     "message": {"id": f"{sid}-{i}", "role": "assistant", "content": [
+                         {"type": "tool_use", "id": f"u{i}", "name": "Bash",
+                          "input": {"command": command}}]}})
+        rows.append({"type": "user", "timestamp": ts(t + 1), "sessionId": sid, "cwd": str(cwd),
+                     "message": {"role": "user", "content": [
+                         {"type": "tool_result", "tool_use_id": f"u{i}", "content": "ok"}]}})
+    path = pdir / f"{sid}.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    os.utime(path, (at + 3600, at + 3600))
+
+
+@check("reflect: --hunt N reads the session that worked inside investigation N, not the newest "
+       "one, and the investigation's answer page names the command")
+def _(report):
+    """After an investigation the page started, the newest session that used
+    echolot is most often the person's own: the one that started `echolot
+    ui`, or tried a command since. `--last` read that one, and finding the
+    agent's meant reading `--list` and guessing (#826). The run log ties
+    them: a `collect` or `analyze` run with `--hunt N` notes `inside: N`, and
+    the line carries the id of the session whose command it was.
+    """
+    import io
+    import json
+
+    from .main import main
+
+    agent, person = "a6e47000-0000-4000-8000-000000000001", "9e550000-0000-4000-8000-000000000002"
+    at = 1_790_000_000.0
+    with tempfile.TemporaryDirectory() as tmp:
+        project, pdir = Path(tmp) / "app", Path(tmp) / "transcripts"
+        (project / ".echolot" / "log").mkdir(parents=True)
+        pdir.mkdir()
+        (project / "echolot.yml").write_text("project:\n  process: com.example.app\n", encoding="utf-8")
+        (project / ".echolot" / "hunt.json").write_text(json.dumps(
+            {"schema": 1, "n": 3, "question": "why is cold start slow", "status": "concluded"}),
+            encoding="utf-8")
+        _reflect_session(pdir, agent, project, at, [
+            "echolot collect -n 3 --hunt 3", "echolot analyze .echolot/traces/a.perfetto-trace --hunt 3"])
+        _reflect_session(pdir, person, project, at + 7200, [
+            "echolot status", "echolot analyze .echolot/traces/a.perfetto-trace"])
+
+        def line(sid: str, t: float, cmd: str, **facts) -> str:
+            from datetime import datetime, timezone
+            return json.dumps({"ts": datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds"),
+                               "cmd": cmd, "argv": [cmd], "exit": 0, "ms": 900, "version": "0.19.0",
+                               "session": sid, "agent": "claude-code", **({"facts": facts} if facts else {})})
+        (project / recorder.LOG_FILE).write_text("\n".join([
+            line(agent, at + 60, "collect", inside=3), line(agent, at + 120, "analyze", inside=3),
+            line(person, at + 7260, "status"), line(person, at + 7320, "analyze")]) + "\n", encoding="utf-8")
+
+        def reflect(*how: str) -> tuple[int, dict | None, str]:
+            out = project / ".echolot" / "reflect"
+            for old in out.glob("*.json") if out.is_dir() else ():
+                old.unlink()
+            err = io.StringIO()
+            with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(err):
+                code = main(["reflect", *how, "--transcripts", str(pdir), "--project", str(project)])
+            got = sorted(out.glob("*.json")) if out.is_dir() else []
+            return code, (json.loads(got[0].read_text(encoding="utf-8")) if got else None), err.getvalue()
+
+        code, rep, _ = reflect("--last")
+        assert code == 0 and rep and rep["source"]["session"] == person, \
+            f"--last is the newest session that used echolot: {code}, {rep and rep['source']['session']}"
+        code, rep, err = reflect("--hunt", "3")
+        assert code == 0 and rep and rep["source"]["session"] == agent, \
+            f"--hunt 3 read {rep and rep['source']['session']}, not the session that ran inside #3: {err}"
+        inv = rep["context"].get("investigation") or {}
+        assert inv.get("n") == 3 and inv.get("by") == "session" and inv.get("runs") == 2, inv
+        code, rep, err = reflect("--hunt", "9")
+        assert code == 2 and rep is None and "no investigation #9" in err, (code, err)
+
+    from .pages import answer_page
+    page = answer_page.render({"n": 3, "question": "why is cold start slow", "status": "concluded",
+                               "conclusion": "A sync read on the main thread."}, {})
+    assert "<code>echolot reflect --hunt 3</code>" in page, "the answer page does not name reflect --hunt 3"
+
+
+@check("reflect: the advice names what the session did, not the signal's stock sentence")
+def _(report):
+    """`help_lookups`, `report_sliced_by_hand`, `doctor_first`: the same
+    sentence in every session, "if this repeats, put doctor into analyze
+    itself", while the facts that make it concrete — which help the agent
+    read and what it then ran, which part of report.json it took, where the
+    last doctor was — stayed in the rows (#547).
+    """
+    from .reflect import facts as facts_mod
+    from .reflect import signals as sig_mod
+    from .reflect.model import Call, Session
+
+    def ts(minute: int) -> str:
+        return f"2026-01-01T10:{minute:02d}:00.000Z"
+
+    s = Session(id="s", agent="claude-code", started=ts(0), ended=ts(40))
+    for i, command in enumerate([
+            "echolot anr --help",
+            "echolot anr .echolot/traces/a.perfetto-trace --hunt 3 --top 5",
+            "python3 -c \"import json; r=json.load(open('.echolot/out/report.json')); "
+            "print(r['window']['duration_ms'])\"",
+            "echolot analyze .echolot/traces/a.perfetto-trace"]):
+        s.calls.append(Call(id=f"c{i}", ts=ts(i + 1), tool="Bash", input={"command": command},
+                            command=command))
+    runs = [{"ts": "2026-01-01T08:00:00+00:00", "cmd": "doctor", "exit": 1, "version": "0.19.0",
+             "facts": {"failed": ["adb"]}}]
+    f = facts_mod.gather(s, None, runs)
+    helped = sig_mod.help_lookups(s, f, None)
+    assert helped and "`anr --help` (then ran with `--hunt` and `--top`) before the first use" \
+        in (helped.hint or ""), helped and helped.hint
+    sliced = sig_mod.report_sliced_by_hand(s, f, None)
+    assert sliced and "`window.duration_ms` (1×)" in (sliced.hint or ""), sliced and sliced.hint
+    doctor = sig_mod.doctor_first(s, f, None)
+    assert doctor and doctor.severity == "warn" and "failed (adb)" in (doctor.hint or "") \
+        and "never ran `echolot`" in (doctor.hint or ""), doctor and doctor.hint
+
+
+@check("reflect: each command of a batch is matched to its own line of the run log")
+def _(report):
+    """A batch tool runs its commands one after another, and reflect hands
+    each over as a call with the batch's start. The `analyze` after a
+    five-minute `collect` started five minutes past it, outside the
+    seconds a call is matched within, and went without its line: its exit
+    code and what its report said were lost (#547).
+    """
+    from .reflect import facts as facts_mod
+    from .reflect.model import Call, Session
+
+    s = Session(id="s", agent="claude-code")
+    for i, command in enumerate(["echolot collect -n 3 --hunt 3",
+                                 "echolot analyze .echolot/traces/*.perfetto-trace --hunt 3"]):
+        s.calls.append(Call(id="b" + (f"#{i}" if i else ""), ts="2026-01-01T10:00:00.000Z",
+                            tool="mcp__x__ctx_batch_execute", input={}, command=command,
+                            duration_s=330.0))
+    runs = [{"ts": "2026-01-01T10:00:01+00:00", "cmd": "collect", "exit": 0, "ms": 300000},
+            {"ts": "2026-01-01T10:05:02+00:00", "cmd": "analyze", "exit": 3, "ms": 25000}]
+    f = facts_mod.gather(s, None, runs)
+    got = {c.sub: c for c in f.echolot_calls}
+    assert got["analyze"].recorded is not None and got["analyze"].exit == 3, \
+        f"the analyze after the collect lost its line: {got['analyze']}"
+    assert got["collect"].recorded is not None and got["collect"].shared == 2, got["collect"]
+
+
 @check("CLI: what the user typed wrong is a sentence and an exit code, never a traceback")
 def _(report):
     """Three ways the tool used to end in a Python traceback.

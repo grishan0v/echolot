@@ -738,7 +738,8 @@ def _about(hunt: dict[str, Any], rounds: list[tuple[int, dict[str, Any] | None]]
     n = hunt.get("n")
     files = "The reports of the rounds are in the folder <code>reports</code> beside this page."
     if isinstance(n, int) and not isinstance(n, bool):
-        files += f" <code>echolot hunt --show {n}</code> prints this investigation as text."
+        files += (f" <code>echolot hunt --show {n}</code> prints this investigation as text, and "
+                  f"<code>echolot reflect --hunt {n}</code> reports how the agent that worked in it went.")
     rows.append(("Files", files))
     return kit.fold("About this investigation", kit.pairs(rows), "big")
 
