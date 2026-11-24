@@ -24,9 +24,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import os
 from dataclasses import dataclass
 from functools import cached_property
-from pathlib import Path
+from pathlib import Path, PurePath
 
 CONFIG = "echolot.yml"
 
@@ -82,11 +83,12 @@ class Project:
 
     def shown(self, path: Path | None = None) -> str:
         """`path` (the config by default) as a person types it from here:
-        relative when it is under the working directory, absolute otherwise."""
+        `echolot.yml`, `../echolot.yml`; absolute on another drive."""
         path = self.config if path is None else path
-        with contextlib.suppress(ValueError):
-            return str(path.relative_to(self.here)) or "."
-        return str(path)
+        try:
+            return PurePath(os.path.relpath(path, self.here)).as_posix()
+        except (OSError, ValueError):
+            return path.as_posix()
 
 
 def _given(value, here: Path) -> Path | None:
