@@ -780,11 +780,14 @@ def summary_line(hunt: dict[str, Any] | None, st: dict[str, Any]) -> str:
     With none open it says what opens one. `hunt "<q>"` refuses while
     echolot.yml is there and does not load, so then the promise waits on
     the config, and the config's own line above this one says why it does
-    not load. With no config at all a hunt opens one.
+    not load. With no config here or above, `hunt "<q>"` refuses too: an
+    investigation belongs to a project (#721).
     """
     if not hunt:
         if st.get("hunt_unreadable"):
             return st["hunt_unreadable"]
+        if not st.get("config"):
+            return "none open — a hunt opens one once the project has an echolot.yml"
         if (st.get("config") or {}).get("error"):
             return "none open — a hunt opens one once echolot.yml loads"
         return "none open — the next hunt opens one"

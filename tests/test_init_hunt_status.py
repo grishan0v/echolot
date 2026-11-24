@@ -66,6 +66,38 @@ def test_hunt_c_from_a_subdirectory_is_the_project_s(tmp_path: Path, monkeypatch
           not list((project / ".echolot" / "traces").glob("*.perfetto-trace")))
 
 
+def test_hunt_from_a_subdirectory_without_c_finds_the_project_above(tmp_path: Path,
+                                                                    monkeypatch) -> None:
+    project = _project(tmp_path / "p")
+    monkeypatch.chdir(project)
+    _run("hunt", "cold start got slower")
+    (project / ".echolot" / "traces" / "coldStart_iter000.perfetto-trace").write_bytes(b"x")
+    (project / "app" / "src").mkdir(parents=True)
+    monkeypatch.chdir(project / "app" / "src")
+    code, _, err = _run("hunt", "startup regressed after merge")
+    h = hunt_mod.load(project)
+    check("the project's investigation is the new one", code == 0
+          and h["question"] == "startup regressed after merge" and h["n"] == 2, err)
+    check("nothing written under the subdirectory", not (project / "app" / ".echolot").exists()
+          and not (project / "app" / "src" / ".echolot").exists())
+    check("the project's traces were set aside",
+          not list((project / ".echolot" / "traces").glob("*.perfetto-trace")))
+    _, out, _ = _run("status")
+    check("and status reads the same project", "startup regressed after merge" in out
+          and str(project) in out, out)
+
+
+def test_hunt_with_no_config_here_or_above_opens_nothing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    code, _, err = _run("hunt", "cold start got slower")
+    check("refused, saying what to run", code == 2 and "no echolot.yml" in err
+          and "echolot init" in err and "-c" in err, err)
+    check("nothing written", not (tmp_path / ".echolot").exists())
+    code, _, err = _run("hunt", "-c", "perf.yml", "cold start got slower")
+    check("a config named and not there is said as such", code == 2
+          and "config not found" in err and not (tmp_path / ".echolot").exists(), err)
+
+
 def test_status_c_reads_the_project_it_names(tmp_path: Path, monkeypatch) -> None:
     project = _project(tmp_path / "p")
     monkeypatch.chdir(project)
@@ -126,6 +158,7 @@ def test_hunt_names_the_plugin_s_door(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_a_second_conclusion_is_refused(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     _run("hunt", "cold start slow")
     _run("hunt", "--done", "first answer")

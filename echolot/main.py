@@ -3297,12 +3297,36 @@ def _project_and_config(args) -> tuple[Path, str]:
     Read from the working directory, `hunt -c ../echolot.yml` opened a second
     investigation in a subdirectory and `status -c` showed the project's
     config beside a build directory's empty state.
+
+    With no `-c` and no `echolot.yml` here, the nearest folder above that
+    holds one is the project, the way git finds `.git`: `hunt "<q>"` from
+    `app/` opened a second investigation in `app/.echolot/`, beside the
+    project's own one that stayed open (#721). Found nowhere, the working
+    directory is a project not set up yet.
     """
     config = getattr(args, "config", "echolot.yml")
     if Path(config).is_file():
         path = Path(config).resolve()
         return path.parent, str(path)
+    if config == "echolot.yml":
+        above = _config_above(Path.cwd())
+        if above is not None:
+            return above.parent, str(above)
     return Path.cwd(), config
+
+
+def _config_above(here: Path) -> Path | None:
+    """The `echolot.yml` of the nearest folder above `here` that holds one."""
+    try:
+        start = here.resolve()
+    except OSError:
+        return None
+    for folder in start.parents:
+        found = folder / "echolot.yml"
+        with contextlib.suppress(OSError):
+            if found.is_file():
+                return found
+    return None
 
 
 def _named_config_missing(args) -> bool:
@@ -3645,6 +3669,23 @@ def cmd_hunt(args) -> int:
         # succeeded: exit 2 stops it where the fix is, the way `fix-config`
         # stops `/echolot` at the door. Refused before anything is touched,
         # so asking again once the config loads loses nothing.
+        # With no config here or in any folder above, nothing is opened
+        # either: an investigation needs a project to belong to, and opened
+        # in whatever folder the shell was left in, it was a second one
+        # beside the project's (#721). `-c` naming a file that is not there
+        # is said as `analyze` says it.
+        if _named_config_missing(args):
+            print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
+            return 2
+        if not (project / config).is_file():
+            said = (f"no echolot.yml in {Path.cwd()} or in a folder above it — run "
+                    f"`echolot hunt` from the project's folder, or name its config "
+                    f"with -c; a project not set up yet: `echolot init`, then "
+                    f"`echolot` says the next step")
+            print(f"error: {said}", file=sys.stderr)
+            print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
+            recorder.failed(said)
+            return 2
         try:
             cfg = _hunt_config(project, config)
         except (ConfigError, OSError) as e:
@@ -3658,9 +3699,6 @@ def cmd_hunt(args) -> int:
         # is refused before anything is touched, as a config that does not
         # load is.
         try:
-            if cfg is None and args.scenario:
-                raise ConfigError(f"--scenario {args.scenario}: there is no "
-                                  f"{config} to name it in")
             if cfg is not None:
                 cfg.select(args.scenario)
                 _note_scenario(cfg, args.scenario)
