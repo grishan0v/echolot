@@ -1030,6 +1030,11 @@ com.example.app.Store -> a.g:
     1:6:void save(java.lang.String):22:27 -> a
 """
 
+# A benchmark build is often installed under a suffix of its own while its
+# code stays in the release's package, the one `project.package` names. The
+# same minified samples, from files the device installed as `BENCHMARK`.
+BENCHMARK = "com.example.app.benchmark"
+
 SAMPLES = [
     *[(1, APP_PID, TID_WORKER, at, None) for at in (205, 215)],
     *[(1, APP_PID, TID_WORKER, at, stack) for at, stack in zip(
@@ -1126,16 +1131,21 @@ def _frames(builder, app_frames=APP_FRAMES) -> None:
               gpu_composition=False, prediction_type=FT.PREDICTION_VALID)
 
 
-def _samples(builder, arrived: bool = True, minified: bool = False) -> None:
+def _samples(builder, arrived: bool = True, minified: bool = False,
+             installed: str | None = None) -> None:
     """Callstack sampling: what the sampler wrote. The config that asked for it
     is `config`'s.
 
     `arrived=False` writes nothing — a recording that asked for samples on a
     device whose sampler never ran. `minified` writes the frames under the
-    names R8 gave them, `MINIFIED`.
+    names R8 gave them, `MINIFIED`. `installed` is the package the app's code
+    was installed under, when it is not `APP_NAME`.
     """
     if not arrived:
         return
+    app = APP_CODE.replace(f"/{APP_NAME}-", f"/{installed}-") if installed else APP_CODE
+    stacks = {key: [(name, app if path == APP_CODE else path) for name, path in stack]
+              for key, stack in SAMPLE_STACKS.items()}
 
     # The sequence opens the way traced_perf opens it: state cleared, the
     # defaults it samples with, and the files, names, frames and stacks every
@@ -1147,7 +1157,7 @@ def _samples(builder, arrived: bool = True, minified: bool = False) -> None:
     interned = packet.interned_data
 
     files = {path: iid for iid, path in enumerate(dict.fromkeys(
-        path for stack in SAMPLE_STACKS.values() for _, path in stack), start=1)}
+        path for stack in stacks.values() for _, path in stack), start=1)}
     for path, iid in files.items():
         string = interned.mapping_paths.add()
         string.iid, string.str = iid, path.encode()
@@ -1160,7 +1170,7 @@ def _samples(builder, arrived: bool = True, minified: bool = False) -> None:
     # writes a function it could not symbolize.
     frames: dict[tuple[str | None, str], int] = {}
     names: dict[str, int] = {}
-    for stack in SAMPLE_STACKS.values():
+    for stack in stacks.values():
         for name, path in stack:
             if (name, path) in frames:
                 continue
@@ -1176,7 +1186,7 @@ def _samples(builder, arrived: bool = True, minified: bool = False) -> None:
                 frame.function_name_id = names[name]
 
     callstacks: dict[str, int] = {}
-    for iid, (key, stack) in enumerate(SAMPLE_STACKS.items(), start=1):
+    for iid, (key, stack) in enumerate(stacks.items(), start=1):
         callstack = interned.callstacks.add()
         callstack.iid = callstacks[key] = iid
         callstack.frame_ids.extend(frames[frame] for frame in stack)
@@ -1892,8 +1902,9 @@ def build(frames: bool = True, environment: bool = True,
 
     `sampling` is what became of callstack sampling: `"arrived"`, `"asked"`
     for a config that asked and a sampler that never ran, `"minified"` for
-    samples that arrived from a build R8 minified, or `None` for a recording
-    that never asked. `None` by default, because that is the default
+    samples that arrived from a build R8 minified, `"benchmark"` for the same
+    build installed as `BENCHMARK`, or `None` for a recording that never
+    asked. `None` by default, because that is the default
     recording. (The README's sample report comes from echolot/demo.py.)
 
     `names=True` writes the config `runner.compose_names` records with, a
@@ -1966,8 +1977,9 @@ def build(frames: bool = True, environment: bool = True,
     if frames:
         _frames(builder, STUFFED_FRAMES if stuffed else SMOOTH_FRAMES if smooth else APP_FRAMES)
     if sampling:
-        _samples(builder, arrived=sampling in ("arrived", "minified"),
-                 minified=sampling == "minified")
+        _samples(builder, arrived=sampling in ("arrived", "minified", "benchmark"),
+                 minified=sampling in ("minified", "benchmark"),
+                 installed=BENCHMARK if sampling == "benchmark" else None)
 
     # Collect ftrace events per CPU.
     by_cpu: dict[int, list] = {}

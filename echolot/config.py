@@ -745,9 +745,11 @@ class Config:
         """The build's R8 or ProGuard `mapping.txt`, or None when there is none to read.
 
         A relative path is taken from the config's directory, where the build
-        outputs live as well. The mapping names a package's frames back, so it
-        needs `project.package`: the package as installed on the device, which
-        for a benchmark build is often the release's with a suffix.
+        outputs live as well. It names back the frames of whatever package
+        they were installed under, so it needs no `project.package`: a
+        benchmark build is often installed as the release's package with a
+        suffix, and the mapping that once had to name that package found none
+        of its frames when the config held the release's (#576).
 
         A file that is not there yet is no mistake of the config's: AGP
         writes it when the variant is built, and `scan` names it before
@@ -767,7 +769,7 @@ class Config:
         """The path `project.mapping` names, whether or not the file is there.
 
         What the value cannot mean is the config's mistake and is refused: a
-        value that is no path, and a mapping without the package it is for.
+        value that is no path.
         """
         value = self.value(MAPPING)
         if value is None or value == "":
@@ -776,10 +778,6 @@ class Config:
             raise ConfigError(
                 f"project.mapping must be a path to the build's mapping.txt — "
                 f"got {value!r}")
-        if not self.value(PACKAGE):
-            raise ConfigError(
-                "project.mapping needs project.package: the mapping names back "
-                "the frames of that package, as it is installed on the device")
         path = Path(value).expanduser()
         if not path.is_absolute():
             path = (Path(self.path).parent if self.path else Path.cwd()) / path

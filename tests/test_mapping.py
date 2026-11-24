@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
+import zlib
 from pathlib import Path
 
 import pytest
@@ -75,10 +76,10 @@ def test_the_packet_names_the_package_and_lists_methods_where_trace_processor_lo
         tmp_path: Path) -> None:
     path = tmp_path / "mapping.txt"
     path.write_text(R8, encoding="utf-8")
-    trace = pb.Trace.FromString(mapping.packet("com.example.app.beta", mapping.read(path)))
+    trace = pb.Trace.FromString(mapping.packet(mapping.read(path)))
     found = trace.packet[0].deobfuscation_mapping
-    check("one packet, for the package as installed",
-          len(trace.packet) == 1 and found.package_name == "com.example.app.beta", found)
+    check("one packet, for every package: the installed one has a suffix as often as not",
+          len(trace.packet) == 1 and not found.HasField("package_name"), found)
     store = next(c for c in found.obfuscated_classes if c.obfuscated_name == "a.b")
     check("methods in obfuscated_methods, which is where it reads them",
           [(m.obfuscated_name, m.deobfuscated_name) for m in store.obfuscated_methods]
@@ -92,11 +93,115 @@ def test_the_packet_names_the_package_and_lists_methods_where_trace_processor_lo
 def test_a_mapping_is_read_again_once_it_changes(tmp_path: Path) -> None:
     path = tmp_path / "mapping.txt"
     path.write_text(fixture.MAPPING, encoding="utf-8")
-    first = mapping.packet_for(path, "com.example.app")
-    check("read once while the file stays", mapping.packet_for(path, "com.example.app") is first)
+    first = mapping.packet_for(path)
+    check("read once while the file stays", mapping.packet_for(path) is first)
     path.write_text(fixture.OTHER_MAPPING, encoding="utf-8")
     os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1_000_000))
-    check("and again once it does", mapping.packet_for(path, "com.example.app") != first)
+    check("and again once it does", mapping.packet_for(path) != first)
+
+
+# --- the packet kept between runs (#558) --------------------------------------
+
+def _next_run(path: Path, project: Path | None) -> bytes:
+    """`packet_for` as a new process calls it: nothing of the mapping in memory."""
+    mapping._packet_for.cache_clear()
+    return mapping.packet_for(path, project)
+
+
+def _kept(project: Path) -> list[Path]:
+    return sorted((project / ".echolot" / mapping.CACHE).glob("*.z"))
+
+
+def test_the_packet_is_kept_in_the_projects_echolot_and_read_back(tmp_path: Path,
+                                                                    monkeypatch) -> None:
+    (tmp_path / ".echolot").mkdir()
+    path = tmp_path / "mapping.txt"
+    path.write_text(fixture.MAPPING, encoding="utf-8")
+    fresh = mapping.packet(mapping.read(path))
+    check("the first run makes it", _next_run(path, tmp_path) == fresh)
+    check("and keeps it, compressed", len(_kept(tmp_path)) == 1
+          and zlib.decompress(_kept(tmp_path)[0].read_bytes()) == fresh, _kept(tmp_path))
+
+    def unread(_: Path) -> mapping.Classes:
+        raise AssertionError("read the mapping again")
+    monkeypatch.setattr(mapping, "read", unread)
+    check("the next takes it without reading the mapping", _next_run(path, tmp_path) == fresh)
+
+
+def test_a_project_without_echolot_has_none_made_for_it(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.txt"
+    path.write_text(fixture.MAPPING, encoding="utf-8")
+    check("the packet as ever", _next_run(path, tmp_path) == mapping.packet(mapping.read(path)))
+    check("and no .echolot/", not (tmp_path / ".echolot").exists())
+    check("nor anything for a config that lives in memory",
+          _next_run(path, None) == mapping.packet(mapping.read(path)))
+
+
+def test_a_mapping_that_changes_is_a_packet_of_its_own(tmp_path: Path) -> None:
+    (tmp_path / ".echolot").mkdir()
+    path = tmp_path / "mapping.txt"
+    path.write_text(fixture.MAPPING, encoding="utf-8")
+    first = _next_run(path, tmp_path)
+    stat = path.stat()
+    # Another build's mapping of the same size, written within the same tick
+    # of the clock: what a key of time and size would take for the first.
+    other = fixture.OTHER_MAPPING.ljust(len(fixture.MAPPING), "#")
+    path.write_text(other, encoding="utf-8")
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    check("same size, same time", path.stat().st_size == stat.st_size
+          and path.stat().st_mtime_ns == stat.st_mtime_ns)
+    second = _next_run(path, tmp_path)
+    check("its own packet", second == mapping.packet(mapping.read(path)) != first)
+    check("both kept", len(_kept(tmp_path)) == 2, _kept(tmp_path))
+
+
+def test_a_change_to_the_code_that_packs_it_is_a_packet_of_its_own(tmp_path: Path,
+                                                                   monkeypatch) -> None:
+    (tmp_path / ".echolot").mkdir()
+    path = tmp_path / "mapping.txt"
+    path.write_text(fixture.MAPPING, encoding="utf-8")
+    _next_run(path, tmp_path)
+    monkeypatch.setattr(mapping, "_code", lambda: b"mapping.py, changed")
+    _next_run(path, tmp_path)
+    check("kept beside the old one", len(_kept(tmp_path)) == 2, _kept(tmp_path))
+
+
+@pytest.mark.parametrize("damage", ["cut short", "not a packet", "empty"])
+def test_a_kept_packet_that_does_not_read_is_built_again(tmp_path: Path, damage: str) -> None:
+    (tmp_path / ".echolot").mkdir()
+    path = tmp_path / "mapping.txt"
+    path.write_text(fixture.MAPPING, encoding="utf-8")
+    fresh = _next_run(path, tmp_path)
+    kept = _kept(tmp_path)[0]
+    kept.write_bytes({"cut short": kept.read_bytes()[:20], "not a packet": b"garbage",
+                      "empty": b""}[damage])
+    check("built again", _next_run(path, tmp_path) == fresh)
+    check("and kept whole", zlib.decompress(kept.read_bytes()) == fresh)
+
+
+def test_a_cache_that_cannot_be_written_is_read_past(tmp_path: Path) -> None:
+    # `.echolot/cache` is a file: nothing can go under it, as on a read-only disk.
+    (tmp_path / ".echolot").mkdir()
+    (tmp_path / ".echolot" / "cache").write_text("", encoding="utf-8")
+    path = tmp_path / "mapping.txt"
+    path.write_text(fixture.MAPPING, encoding="utf-8")
+    check("the packet as ever", _next_run(path, tmp_path) == mapping.packet(mapping.read(path)))
+
+
+def test_only_the_newest_packets_are_kept(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".echolot").mkdir()
+    path = tmp_path / "mapping.txt"
+    names = []
+    for i in range(mapping.KEEP + 2):
+        path.write_text(fixture.MAPPING + f"# build {i}\n", encoding="utf-8")
+        _next_run(path, tmp_path)
+        newest = max(_kept(tmp_path), key=lambda f: f.stat().st_mtime_ns)
+        names.append(newest.name)
+        os.utime(newest, ns=(0, (i + 1) * 1_000_000_000))
+    check(f"the newest {mapping.KEEP}", [f.name for f in _kept(tmp_path)]
+          == sorted(names[-mapping.KEEP:]), (names, _kept(tmp_path)))
+    check("and no file half written left", not list((tmp_path / ".echolot" / mapping.CACHE)
+                                                     .glob(".*")))
 
 
 @pytest.mark.parametrize("method, minified", [
@@ -150,12 +255,14 @@ def test_a_mapping_the_build_has_not_written_yet_is_named_and_not_read(tmp_path:
     check("read once it is there", config.mapping == expected and config.missing_mapping is None)
 
 
-def test_a_mapping_needs_the_package_it_is_for(tmp_path: Path) -> None:
+def test_a_mapping_needs_no_package(tmp_path: Path) -> None:
+    # The packet names none (#576), so a config that names only the process,
+    # `com.example.app*` for every suffix the app is installed under, has its
+    # mapping read.
     (tmp_path / "mapping.txt").write_text(fixture.MAPPING, encoding="utf-8")
     config = Config({"project": {"process": "com.example.app*", "mapping": "mapping.txt"}},
                     tmp_path / "echolot.yml")
-    with pytest.raises(ConfigError, match="needs project.package"):
-        _ = config.mapping
+    check("read", config.mapping == tmp_path / "mapping.txt", config.mapping)
 
 
 def test_the_packet_follows_the_trace_byte_for_byte(tmp_path: Path) -> None:
@@ -509,3 +616,75 @@ def test_a_mapping_that_named_back_nothing_is_called_out() -> None:
           lines)
     check("a mapping that named most of them back is a plain line", not report_mod._names_lines(
         {"methods": 3309, "minified": 38, "renamed": 3200})[0].startswith(">"))
+
+
+# --- a build installed under a suffix (#576) ----------------------------------
+
+def _analysed(tmp_path: Path, sampling: str, mapping_text: str | None = fixture.MAPPING,
+              **project) -> dict:
+    from echolot import selftest
+    from echolot.analyze import analyze_trace
+
+    trace = tmp_path / "t.perfetto-trace"
+    trace.write_bytes(fixture.build(sampling=sampling))
+    raw = {**selftest.FIXTURE_CONFIG,
+           "project": {**selftest.FIXTURE_CONFIG["project"], **project}}
+    if mapping_text is not None:
+        (tmp_path / "mapping.txt").write_text(mapping_text, encoding="utf-8")
+        raw["project"]["mapping"] = "mapping.txt"
+    return analyze_trace(trace, Config(raw, tmp_path / "echolot.yml"))
+
+
+def _stacks(report: dict) -> dict:
+    from echolot import selftest
+    return {r["location"]: r["stacks"] for r in selftest.rows(report, "uninstrumented_cpu")
+            if r.get("stacks")}
+
+
+def test_a_build_installed_under_a_suffix_has_its_frames_named_back(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    suffixed = _analysed(tmp_path / "a", "benchmark")
+    plain = _analysed(tmp_path / "b", "minified")
+    check("the rows read as for the build installed under the package itself",
+          _stacks(suffixed) == _stacks(plain) and _stacks(plain), _stacks(suffixed))
+    names = suffixed["environment"]["sampling"]["names"]
+    check("and its eight methods are the app's, all named back",
+          names == {"methods": 8, "minified": 0, "renamed": 8}, names)
+
+
+def test_a_build_installed_under_a_suffix_is_told_it_is_minified(tmp_path: Path) -> None:
+    # No mapping: the suffixed build's methods were not counted as the app's,
+    # and the header said nothing about R8's names.
+    names = _analysed(tmp_path, "benchmark", None)["environment"]["sampling"]["names"]
+    check("all eight, minified", names == {"methods": 8, "minified": 8}, names)
+
+
+def test_a_package_that_only_starts_like_the_apps_is_not_the_apps(tmp_path: Path) -> None:
+    # `com.example.app.benchmark` is not `com.example.app.bench` with a
+    # suffix: a package that only starts the same is another package.
+    names = _analysed(tmp_path, "benchmark", None, package="com.example.app.bench")
+    check("none of the benchmark's methods counted",
+          "names" not in names["environment"]["sampling"], names["environment"]["sampling"])
+
+
+def test_another_apps_frames_of_the_same_minified_names_stay_out_of_the_report(
+        tmp_path: Path, monkeypatch) -> None:
+    # The packet names no package, so trace_processor renames another app's
+    # frames too where their minified names are this mapping's. The report
+    # reads the measured process's stacks only.
+    other = "/data/app/~~T3Ro==/com.other.app-Wk9w==/oat/arm64/base.odex"
+    monkeypatch.setitem(fixture.SAMPLE_STACKS, "other_app",
+                        [("__start_thread", fixture.LIBC), ("a.b.c", other), ("a.f.c", other)])
+    monkeypatch.setattr(fixture, "SAMPLES", [
+        *fixture.SAMPLES,
+        *[(9, fixture.OTHER_PID, fixture.OTHER_PID, at, "other_app") for at in range(305, 545, 10)]])
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    crowded = _analysed(tmp_path / "a", "benchmark")
+    monkeypatch.undo()
+    alone = _analysed(tmp_path / "b", "benchmark")
+    check("the same rows", _stacks(crowded) == _stacks(alone), _stacks(crowded))
+    check("and the same count of the app's methods",
+          crowded["environment"]["sampling"]["names"]
+          == alone["environment"]["sampling"]["names"], crowded["environment"]["sampling"])

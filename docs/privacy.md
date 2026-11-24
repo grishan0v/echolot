@@ -39,7 +39,9 @@ appears in two places, both downloads, and each is checked before it is used.
 In the project:
 
 - `echolot.yml`, which `setup` writes;
-- `.echolot/`: traces, reports, what reflect found, and the run log. The log
+- `.echolot/`: traces, reports, what reflect found, the packet `analyze` makes
+  of the R8 mapping, kept for the next run (`cache/mapping/`), and the run
+  log. The log
   holds one line per command: which command, when, for how long, its exit
   code, a few facts it noted, and the id of the agent session that ran it
   when the host exports one — an opaque token, never a path.

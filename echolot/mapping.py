@@ -15,9 +15,17 @@ documentation:
 
 - methods go in `obfuscated_methods`. `obfuscated_members` is for fields, and
   a method put there is never looked at;
-- the packet names the package, and a frame is matched to it by its file's
-  path on the device, `/data/app/~~…/com.example.app-…/base.apk`, or, for
-  code the JIT compiled, by its process;
+- the packet names no package, and so applies to the frames of every one
+  (#576). A packet that names one is matched to a frame by the package in
+  its file's path on the device, `/data/app/~~…/com.example.app-…/base.apk`,
+  and a benchmark build installed under a suffix of its own,
+  `com.example.app.benchmark`, while `project.package` stays the release's,
+  got none of its frames named back. The trace says which package was
+  installed, and the packet has to go in before the trace is read. Code the
+  JIT compiled was matched whatever its package even then, by its file,
+  `memfd:jit-cache`. A frame of another app is renamed too where its class
+  and method have a minified name this mapping lists; the report reads only
+  the measured process's stacks (stacks.py, `analyze._names_info`);
 - a frame of a renamed class whose method the packet does not list keeps its
   minified name, so every method of a renamed class goes in;
 - one minified name for several methods — R8 gives overloads one name —
@@ -28,7 +36,9 @@ documentation:
 A large app's mapping takes seconds to read. A synthetic one of 125 MB, with
 60,000 classes, took 4.6 s to read and 0.9 s to pack, and a trace loaded
 1.5 s slower with it. So it is read once per process, whatever the number of
-traces.
+traces, and the packet is kept in the project's `.echolot/cache/mapping/`
+for the next process: every `analyze` of an investigation reads the same
+build's mapping (#558). See `packet_for`.
 
 The runtime also writes frames as text, and trace_processor touches none of
 them: both sides of a lock in ART's contention slice, and every thread of an
@@ -54,10 +64,15 @@ Every one of those frames comes back here as R8's own `retrace` names it.
 
 from __future__ import annotations
 
+import contextlib
 import functools
+import hashlib
 import json
+import os
 import re
+import tempfile
 import threading
+import zlib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -120,8 +135,11 @@ def read(path: Path) -> Classes:
     return kept
 
 
-def packet(package: str, classes: Classes) -> bytes:
-    """One trace packet that names the classes back, for `package`'s frames.
+def packet(classes: Classes) -> bytes:
+    """One trace packet that names the classes back, in the frames of any package.
+
+    No `package_name`: trace_processor applies such a packet to every
+    package, the installed one whatever its suffix (see the module's notes).
 
     perfetto's protobuf classes are imported here rather than at the top: they
     bring protobuf with them, and every command imports this module through
@@ -131,7 +149,6 @@ def packet(package: str, classes: Classes) -> bytes:
 
     trace = pb.Trace()
     mapping = trace.packet.add().deobfuscation_mapping
-    mapping.package_name = package
     for minified in sorted(classes):
         real, methods = classes[minified]
         entry = mapping.obfuscated_classes.add()
@@ -143,23 +160,106 @@ def packet(package: str, classes: Classes) -> bytes:
     return trace.SerializeToString()
 
 
-def packet_for(path: Path, package: str) -> bytes:
+def packet_for(path: Path, project: Path | None = None) -> bytes:
     """The packet for a mapping file, read once while the file stays the same.
 
     Once with traces read side by side too (#488): every worker asks for it as
     it opens its trace, and without the lock each read the whole file.
+
+    And once across processes, where `project` has an `.echolot/`: the packet
+    is kept in its `cache/mapping/` and read back by the next `analyze` (#558).
+    Wikipedia's Android app, built for a benchmark, wrote a mapping of 158 MB
+    with 9,588 renamed classes. Reading and packing it took 1.3 to 6.5 s on
+    an M3 Pro, by how busy the machine was; the packet was 11.8 MB, 2.2 MB
+    compressed, and came back in 70 ms, 60 of them the hash of the mapping.
+    `analyze` of one cold start with it went from 3.8 s to 1.9 s. Kept by
+    the mapping's contents and this module's own code rather than by the
+    file's time and size: a build that rewrote the mapping within the clock's
+    tick, or a mapping copied over another, would otherwise get the packet of
+    the one before, and the hash costs a twentieth of what it saves. A
+    project without `.echolot/` gets none made for it, and a cache that
+    cannot be read or written is read past: the packet is built as it was
+    before there was one.
     """
     stat = path.stat()
     with _packet_lock:
-        return _packet_for(path.resolve(), stat.st_mtime_ns, stat.st_size, package)
+        return _packet_for(path.resolve(), stat.st_mtime_ns, stat.st_size,
+                           project.resolve() / ".echolot" if project else None)
 
 
 _packet_lock = threading.Lock()
 
 
 @functools.lru_cache(maxsize=2)
-def _packet_for(path: Path, mtime_ns: int, size: int, package: str) -> bytes:
-    return packet(package, read(path))
+def _packet_for(path: Path, mtime_ns: int, size: int, echolot: Path | None) -> bytes:
+    if echolot is None or not echolot.is_dir():
+        return packet(read(path))
+    folder = echolot / CACHE
+    try:
+        key = _key(path)
+    except OSError:
+        return packet(read(path))
+    kept = _kept(folder, key)
+    if kept is not None:
+        return kept
+    built = packet(read(path))
+    _keep(folder, key, built)
+    return built
+
+
+# Where a project keeps the packets, under its `.echolot/`, and how many: an
+# investigation goes back and forth between two builds, and a mapping of
+# 158 MB kept 2.2 MB.
+CACHE = Path("cache") / "mapping"
+KEEP = 4
+
+
+def _key(path: Path) -> str:
+    """What names a kept packet: the mapping's contents and the code that
+    reads and packs it, so that a change to either is a packet of its own."""
+    digest = hashlib.sha256(_code())
+    with path.open("rb") as text:
+        while chunk := text.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()[:32]
+
+
+@functools.cache
+def _code() -> bytes:
+    return Path(__file__).read_bytes()
+
+
+def _kept(folder: Path, key: str) -> bytes | None:
+    """The packet kept under `key`, or None: none kept, or one cut short.
+
+    A file cut short does not decompress, and is built again.
+    """
+    file = folder / f"{key}.z"
+    try:
+        data = zlib.decompress(file.read_bytes())
+        os.utime(file)   # kept longest by the last use, not the first
+    except (OSError, zlib.error):
+        return None
+    return data
+
+
+def _keep(folder: Path, key: str, data: bytes) -> None:
+    """Keeps a packet, written whole or not at all, and the newest `KEEP`."""
+    tmp = None
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".", suffix=".part")
+        with os.fdopen(fd, "wb") as out:
+            out.write(zlib.compress(data, 1))
+        os.replace(tmp, folder / f"{key}.z")
+        tmp = None
+        kept = sorted(folder.glob("*.z"), key=lambda f: f.stat().st_mtime_ns, reverse=True)
+        for old in kept[KEEP:]:
+            old.unlink(missing_ok=True)
+    except OSError:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
 
 
 def minified(method: str) -> bool:
