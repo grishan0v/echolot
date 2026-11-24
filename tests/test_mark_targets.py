@@ -353,3 +353,60 @@ def test_a_mapping_flag_without_a_report_or_a_file_stops_mark(tmp_path):
                        "--mapping", str(tmp_path / "nope.txt"))
     check("a mapping that is not there is said", code == 2 and "no such file" in err,
           (code, err))
+
+
+BASE_APP = """\
+abstract class BaseApplication : Application() {
+    final override fun onCreate() {
+        super.onCreate()
+        if (isMainProcess()) onMainProcessCreate()
+    }
+
+    abstract fun onMainProcessCreate()
+}
+"""
+
+
+def test_an_on_create_inherited_from_the_app_s_own_base_is_proposed(tmp_path: Path) -> None:
+    """#924: the Application extends a base of this project's own that
+    overrides onCreate; that override is what runs at bindApplication."""
+    _project(tmp_path, "class App : MiddleApplication() {\n"
+                       "    override fun onMainProcessCreate() {\n"
+                       "        warm()\n"
+                       "    }\n"
+                       "}\n")
+    write(tmp_path, f"{PKG}/MiddleApplication.kt",
+          "abstract class MiddleApplication : BaseApplication()\n")
+    write(tmp_path, "core/base/src/main/kotlin/com/example/app/BaseApplication.kt", BASE_APP)
+    pl = mark.plan(tmp_path)
+    app = next((p for p in pl.proposals if p.kind == "app_oncreate"), None)
+    check("the base's onCreate, two classes up",
+          app is not None
+          and app.file == "core/base/src/main/kotlin/com/example/app/BaseApplication.kt"
+          and app.line == _line(BASE_APP, "final override fun onCreate()")
+          and app.applicable and "which App inherits" in app.what,
+          (app, pl.notes))
+    check("and no note that it is not overridden",
+          not any("does not override onCreate" in n for n in pl.notes), pl.notes)
+    mark.apply(tmp_path, pl)
+    base = (tmp_path / app.file).read_text(encoding="utf-8")
+    check("and --apply brackets it", "AGENTTMP_app_oncreate" in base, base)
+
+
+def test_a_base_of_the_app_s_own_without_on_create_is_named(tmp_path: Path) -> None:
+    _project(tmp_path, "class App : BaseApplication()\n")
+    write(tmp_path, f"{PKG}/BaseApplication.kt",
+          "abstract class BaseApplication : MultiDexApplication()\n")
+    pl = mark.plan(tmp_path)
+    check("nothing proposed", not any(p.kind == "app_oncreate" for p in pl.proposals),
+          pl.proposals)
+    check("the base looked in is named",
+          any("does not override onCreate (nor does BaseApplication, which it inherits from)"
+              in n for n in pl.notes), pl.notes)
+
+
+def test_a_cycle_of_bases_ends(tmp_path: Path) -> None:
+    _project(tmp_path, "class App : A()\n")
+    write(tmp_path, f"{PKG}/A.kt", "open class A : B()\nopen class B : A()\n")
+    notes = mark.plan(tmp_path).notes
+    check("said, not looped", any("does not override onCreate" in n for n in notes), notes)

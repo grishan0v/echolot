@@ -69,10 +69,13 @@ in a test is not where the app opens its database.
 - the launcher Activity does not override `onCreate` — said, with the base
   class it inherits from (`: Base()` in Kotlin, `extends Base` in Java),
   because the override may live there
-- the Application class is not in the manifest, or does not override
-  `onCreate` — said, with what runs at `bindApplication` all the same: the
-  Application's constructor, the ContentProviders and the libraries'
-  initializers, which `app_init` lists
+- the Application class is not in the manifest, or neither it nor a base
+  class of this project's own overrides `onCreate` — said, with what runs at
+  `bindApplication` all the same: the Application's constructor, the
+  ContentProviders and the libraries' initializers, which `app_init` lists.
+  When a base class in the project overrides it (`class App : BaseApp()`,
+  and `BaseApp` declares `final override fun onCreate()`), that override is
+  the row
 - an Application class with `@HiltAndroidApp` — a note, no row: the graph is
   generated, its cost sits inside `Application.onCreate`, and there is nothing
   separate to mark

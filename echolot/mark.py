@@ -602,6 +602,39 @@ def base_class(text: str, name: str) -> str | None:
     return m.group(1) if m else None
 
 
+def inherited_on_create(root: Path, module_dir: Path | None, name: str, text: str,
+                        sources: dict[Path, str]
+                        ) -> tuple[Path, str, str, tuple] | list[str]:
+    """The onCreate `name` inherits from a base class of this project's own.
+
+    (file, text, base class, what `find_on_create` gives) for the nearest base
+    declared in the sources that overrides it; when none does, the bases of
+    the project's own that were looked in. An app whose `Application` extends
+    an in-repo base that declares `final override fun onCreate()` was told it
+    does not override onCreate, and nothing was proposed for bindApplication
+    (#924). The walk stops at a base no source declares — `Application`, a
+    library's — and at a cycle.
+    """
+    walked: list[str] = []
+    seen = {name}
+    while True:
+        base = base_class(text, name)
+        if base is None:
+            return walked
+        name = simple_name(base)
+        if name in seen:
+            return walked
+        seen.add(name)
+        f = find_class_file(root, module_dir, name, sources)
+        if f is None:
+            return walked
+        walked.append(name)
+        text = sources[f]
+        oc = find_on_create(text, name)
+        if oc is not None:
+            return f, text, name, oc
+
+
 _RETURN = re.compile(r"\breturn\b(?:@(\w+))?")
 _JAVA_NESTED = re.compile(r"->\s*\{|\bnew\s+[\w.<>]+\s*\([^()]*\)\s*\{")
 
@@ -1055,18 +1088,27 @@ class _Planner:
                              f"source declares it under src/ (generated, or in a dependency)")
             return
         t = self.sources[f]
-        oc = find_on_create(t, simple_name(app_cls))
+        app = owner = simple_name(app_cls)
+        oc = find_on_create(t, app)
         if oc is None:
-            out.notes.append(f"{_rel(f, root)}: {simple_name(app_cls)} does not override "
-                             f"onCreate — what runs at bindApplication is its constructor, the "
-                             f"ContentProviders and library initializers; see app_init")
-            return
+            found = inherited_on_create(root, mdir, app, t, self.sources)
+            if isinstance(found, list):
+                out.notes.append(f"{_rel(f, root)}: {app} does not override onCreate"
+                                 + (f" (nor does {', '.join(found)}, which it inherits from)"
+                                    if found else "")
+                                 + " — what runs at bindApplication is its constructor, the "
+                                 "ContentProviders and library initializers; see app_init")
+                return
+            f, t, owner, oc = found
         line, o, c, _ = oc
         # A function body: its end goes in a `finally`, so a return in it
         # skips nothing.
         why = _why_not(o, False, one_line_body(t, o, c), c, t)
         self.add(Proposal("app_oncreate", _rel(f, root), line,
-                          f"{simple_name(app_cls)}.onCreate — what runs inside bindApplication",
+                          (f"{owner}.onCreate — what runs inside bindApplication"
+                           if owner == app else
+                           f"{owner}.onCreate, which {app} inherits — what runs inside "
+                           f"bindApplication"),
                           self.prefix + "app_oncreate", "manifest+lifecycle",
                           gradle_module(f, root),
                           applicable=not why, reason=why,
