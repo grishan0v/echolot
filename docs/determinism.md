@@ -380,5 +380,11 @@ Steps `collect` and `analyze` contain no model at all. The model enters only
 when reading the report and deciding where to dig, and only with already
 compressed data.
 
+One step of `analyze` draws at random, and draws the same every time: whether
+a set's runs drift from the first to the last is the set's own order placed
+among a thousand orders of its runs, and those come from a fixed seed (see
+[Runs that drift](analysing.md#runs-that-drift-from-the-first-to-the-last)).
+The same report gives the same `p` on every machine.
+
 That is also what makes the tool useful without any AI: the same CLI hangs in
 CI and catches regressions for zero tokens.

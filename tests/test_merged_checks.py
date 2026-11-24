@@ -385,3 +385,49 @@ def test_a_bar_that_is_not_calibrated_still_opens_for_the_merge(tmp_path) -> Non
           det.bars == ("min_slice_ms",) and not det.calibrations, (det.bars, det.calibrations))
     check("and it is zero in the opened query", ">= 0 * 1000000" in " ".join(det.render_open().split())
           or ">= 0*1000000" in det.render_open().replace(" ", ""), det.render_open()[-400:])
+
+
+def test_one_recording_names_rows_as_a_set_does() -> None:
+    """#714: a report of one recording folds the numbers the runtime chose,
+    as the merge of several does, so the two name the same rows."""
+    def cpu(name: str, ms: float) -> dict:
+        return row(name, count=0, total_ms=ms, covered_ms=0.0,
+                   detail="100% of CPU outside slices")
+    alone = report_mod.aggregate([one([cpu("Thread-31", 250.0)], det_id="uninstrumented_cpu")])
+    check("a numbered thread is `Thread-#`",
+          [r["location"] for r in alone["detectors"][0]["rows"]] == ["Thread-#"], alone)
+    lock = report_mod.aggregate([one([_lock(15427, 110.0)], det_id="main_thread_block")])
+    got = lock["detectors"][0]["rows"][0]
+    check("the owner's tid is `#`",
+          got["location"] == "Lock contention on a monitor lock (owner tid: #)", got)
+    check("as the trace had it, beside it",
+          got["variants"] == {"location": [
+              "Lock contention on a monitor lock (owner tid: 15427)"]}, got)
+    check("and no column a merge adds", "runs" not in got and "spread" not in got, got)
+    two = report_mod.aggregate([one([_lock(15427, 110.0)], det_id="main_thread_block"),
+                                one([_lock(10359, 120.0)], det_id="main_thread_block")])
+    check("the name the merge of two gives",
+          two["detectors"][0]["rows"][0]["location"] == got["location"], two)
+
+
+def test_one_recordings_pool_adds_up_and_pairs_with_a_sets() -> None:
+    """#714: `pool-0` … `pool-3` in one recording are one pool, the row a
+    set of recordings names `pool-#`; compared, one row and nothing gone."""
+    def cpu(name: str, ms: float) -> dict:
+        return row(name, count=0, total_ms=ms, covered_ms=0.0, max_ms=ms,
+                   detail="100% of CPU outside slices")
+    threads = [cpu(f"pool-{n}", ms) for n, ms in enumerate((500.0, 200.0, 180.0, 160.0))]
+    before = report_mod.aggregate([one(threads + [cpu("Main_loader", 300.0)],
+                                       det_id="uninstrumented_cpu")])
+    rows = before["detectors"][0]["rows"]
+    check("one row for the pool, added up, first by its time",
+          [(r["location"], r["total_ms"]) for r in rows]
+          == [("pool-#", 1040.0), ("Main_loader", 300.0)], rows)
+    check("the longest is the pool's longest thread", rows[0]["max_ms"] == 500.0, rows[0])
+    after = report_mod.aggregate([one([cpu(f"pool-{n}", 260.0) for n in range(4)],
+                                      det_id="uninstrumented_cpu") for _ in range(3)])
+    cmp = compare_mod.build(before, after, before_path="b.json", after_path="a.json")
+    pool = [r for r in cmp["rows"] if r["location"].startswith("pool-")]
+    check("one paired row", [r["location"] for r in pool] == ["pool-#"], pool)
+    check("neither gone nor new",
+          pool[0]["change"] not in (compare_mod.VANISHED, compare_mod.APPEARED), pool[0])

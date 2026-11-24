@@ -1065,6 +1065,8 @@ would rewrite all three for tidiness. What changed is that each artefact is
 ├── hunt.json                    the open investigation; a closed one stays
 │                                here, readable, until the next one opens
 │                                (a verdict, when it closed with one)
+├── hunt.lock                    held while a command changes the records, so
+│                                two at once wait for each other
 ├── traces/                      the working set — unchanged
 │   └── coldStart-<stamp>/       a round, pushed aside by collect
 ├── out/report.json|md           the latest report — unchanged

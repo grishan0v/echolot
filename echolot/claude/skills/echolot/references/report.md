@@ -76,6 +76,7 @@ produce. The keys only a merged report has are named under the block.
                  "ftrace_events": ["power/cpu_frequency", "sched/sched_switch", "…"],
                  "mixed": { "app_at_stop": [ { "value": "stopped", "runs": "1/5" },
                                              { "value": "running", "runs": "4/5" } ] } },
+  "drift": { "runs": 5, "rows": 41, "drifts": null },
   "summary": { "detectors_run": 16, "detectors_fired": 4,
                "fired_ids": ["main_thread_block", "…"], "absent_ids": [] },
   "config": { "path": "/abs/project/echolot.yml", "sha": "fadc1a11b903",
@@ -492,6 +493,17 @@ names via `echolot probe` and correct `scenario.start` or `scenario.end`.
 the scenario had not reached its end when the recording stopped, and the
 window runs to the end of the trace. What the scenario got stuck on is inside
 the window; that it never finished is a finding of its own.
+
+**`drift.drifts: true`** — the set's runs drift from the first to the last:
+the rows found in every run follow the order of the runs more closely than a
+random order would, `p` at 5% or less (one test for the whole set, against a
+thousand orders drawn from a fixed seed). A median over them is no one state
+of the device. `drift.most` names the three rows that follow the order
+closest, with the median of their first and last third of runs: where only
+the first runs stand apart, the device was settling and the set without them
+is one state; where values climb or fall all the way, `runner.cooldown`. A
+row on that list that holds in a comparison is the first to doubt. `drifts`
+is `null` under 8 runs.
 
 **`window.opened_inside` with `material: true`** — the scenario window opened
 while the main thread was already blocked, and more of that block happened
@@ -1109,6 +1121,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `version` | the reports come from different echolot versions, or one does not say which. A side that does not say leaves every row without a verdict: analyze its traces again |
 | `detector-changed` | the named detectors read the trace with different code on the two sides; their rows carry no verdict, a move there may be the tool's |
 | `same-traces` | both sides are one set of recordings read twice (same trace names, pid and window): every move is the tool's or the config's, and no row carries a verdict |
+| `drift` | the runs of one side, or both, drift from the first to the last (that side's `drift.drifts`): its medians are no one state of the device, and a row that drifts with it can hold with nothing changed. Named with each side's `p` and the rows that follow the order closest. The verdicts stand; before acting on a row that holds, record the two sides back to back and compare again. A report from before the block is read from its rows |
 | `environment-load` | other processes took 40% or more of the CPUs' time in one round's window, 15 points or more above the other. That side ran on a busy device; the warning names the largest load. Record it again with nothing else running |
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `compile` | the two rounds ran the app compiled differently — another `filter`, or the same filter from another profile (`reason`) — or one side's repeats did. Code compiled ahead of time runs faster than code the JIT compiles as the app runs, so a row can move for that reason alone. A side whose traces held no state (the process was already running) is judged by its JIT count instead: three times the other side's methods or more, and 50 or more apart, warns. A report from before the field gets no warning |

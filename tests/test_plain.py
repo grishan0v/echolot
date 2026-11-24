@@ -962,3 +962,50 @@ def test_a_check_whose_only_row_is_a_near_miss_is_a_marker_to_move():
           level("repeated_work", [near, real], duration=5700.0) == "worth_a_look")
     out = plain.render(make([entry("repeated_work", [near])], duration=5700.0))
     check("the list leaves it out of what needs a look", "AGENTTMP" not in out, out)
+
+
+def _spread(totals: list[float], maxes: list[float]) -> dict:
+    return {"total_ms": {"values": totals}, "max_ms": {"values": maxes}}
+
+
+def test_the_longest_from_another_launch_says_so():
+    """#712: merged, Total is the median and Max the longest any launch saw.
+    Totals [10, 30] and longest [8, 25]: the 25 ms is one launch's, beside a
+    median total of 20, and the sentence says so."""
+    merged = row("Sync Worker", 20.0, runs="2/2", count=2, max_ms=25.0, detail="background",
+                 spread=_spread([10.0, 30.0], [8.0, 25.0]))
+    said = says("binder_txn", [merged])
+    check("the longest is from one launch", "The longest took 25 ms in one launch." in said,
+          said)
+    same = row("Sync Worker", 20.0, runs="2/2", count=2, max_ms=8.0, detail="background",
+               spread=_spread([10.0, 30.0], [8.0, 8.0]))
+    check("where every launch's longest is the same, nothing to say",
+          "in one launch" not in says("binder_txn", [same]), says("binder_txn", [same]))
+    single = row("Sync Worker", 20.0, runs=None, count=2, max_ms=8.0, detail="background")
+    check("one recording, nothing to say", "in one launch" not in says("binder_txn", [single]))
+
+
+def test_one_occurrence_a_launch_reads_its_median_then_the_longest():
+    """One `activityStart` a launch: 65.86 ms the median, 99.59 ms in one."""
+    merged = row("activityStart", 65.86, runs="5/5", count=1, max_ms=99.59,
+                 detail="median 1.0 ms of 40 · worst 99.6×",
+                 spread=_spread([30.0, 50.0, 65.86, 70.0, 99.59],
+                                [30.0, 50.0, 65.86, 70.0, 99.59]))
+    said = says("main_thread_outlier", [merged])
+    check("the one occurrence at its median, the longest apart",
+          "took 66 ms, in all 5 launches. In one launch it took 100 ms." in said, said)
+    late = says("frame_jank", [row("App Deadline Missed", 300.0, runs="2/2", count=2,
+                                   max_ms=400.0, detail="Self Jank · 2 of 12 frames",
+                                   spread=_spread([200.0, 400.0], [150.0, 400.0]))])
+    check("frames: the worst in one launch", "0.4 s at worst in one launch" in late, late)
+
+
+def test_a_merged_table_heads_max_as_any_runs():
+    """#712: in a report of several launches, a row with one call a launch
+    read "Total 65.86, Max 99.59"; the header says the two are different
+    launches'."""
+    merged = report_mod._table([row("activityStart", 65.86, runs="5/5", max_ms=99.59)])
+    check("merged: Max of any run", "Max of any run, ms" in merged, merged)
+    one = report_mod._table([{"location": "activityStart", "count": 1, "total_ms": 65.86,
+                              "max_ms": 65.86}])
+    check("one recording: Max", "| Max, ms |" in one and "any run" not in one, one)

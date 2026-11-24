@@ -524,6 +524,60 @@ the trace, not from the trace, names it on stderr and under the Traces line,
 and lists it in `report.json` as `not_cold`. A set of such traces alone is
 read as given. See [launch mode](collecting.md#launch--we-drive-it).
 
+### Runs that drift from the first to the last
+
+A set's medians are one state of the device measured again and again — when
+the runs are alike. A device that warms up, heats, fills its caches or catches
+up with background work between the first run and the last makes them a slope,
+and the median of a slope is no one state of it. A comparison reads the slope
+as moves: three sets of 15 cold starts of one build on an SM-A515F, each split
+in two, held 7 to 12 rows past the floor first half against second half, where
+random halves of the same sets held 1 to 3.
+
+So `analyze` asks of every merged set whether its runs follow their order. It
+reads the rows found in every run whose median is 5 ms or more, the floor below
+which `compare` calls nothing moved, and for each one how closely its values
+follow the order of the runs: Spearman's ρ, made of ranks, so one slow run
+weighs no more than any other. The squares of those, averaged, are the set's
+score; with nothing tied to the order it averages 1 / (runs − 1). The same
+score for a thousand orders of the runs drawn at random, the same order for
+every row at once, says how often chance scores as high: `p`. At 5% or less
+the set drifts, and the report says so above its findings, the overview too:
+
+```text
+> ⚠️ The runs drift from the first to the last: the 62 rows found in every run follow the order of the runs more closely than 15 runs in a random order would (p = 0.026). Closest: `io_wait` com.example.app · main 610.3 → 687.1 ms (ρ +0.74); … A median over them is no one state of the device, and a comparison with this set can read the drift as a move. …
+```
+
+One test for the whole set, rather than one per row or one for the window,
+because neither of those saw it. Tested row by row, no row of those three sets
+survived a correction for testing sixty of them; together the rows moved enough
+to make the two halves differ. The window's own trend was weak in two of the
+three, and gone in all three with the first two runs left out, while the halves
+still differed. Rows that move together because one run was slow in all of
+them move together under every order drawn too, so they count once, not sixty
+times. Shuffled, forty-nine real sets of 10 to 60 runs drifted in 52 tries of
+980: 5.3%, the share a test at 95% should give.
+
+The order is the set's: by file name, numbers as numbers, which is the order
+`collect` recorded them in. Fewer than 8 runs are not judged — eight are the
+fewest a comparison splits four against four — and `report.json` keeps the
+block either way:
+
+```json
+"drift": { "runs": 15, "rows": 62, "score": 0.117, "chance": 0.071, "p": 0.026,
+           "drifts": true,
+           "most": [ { "detector": "io_wait", "location": "com.example.app · main", "rho": 0.74,
+                       "first_ms": 610.3, "last_ms": 687.1 }, … ] }
+```
+
+`drifts` is `null` with no `p` under 8 runs or with no row to read; `most`, the
+three rows that follow the order closest with the median of their first and
+last third of runs, only when it is `true`. Where only the first runs stand
+apart the device was still settling, and the set without them is one state;
+where the values climb or fall all the way, `runner.cooldown` holds the device
+to one temperature. `compare` warns when either side drifts — see
+[the comparison](compare.md#runs-that-drift).
+
 ### A set read side by side
 
 `analyze` reads the traces of a set at once, each in a trace_processor of its
