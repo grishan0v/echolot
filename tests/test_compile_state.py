@@ -116,6 +116,21 @@ def test_compare_warns_when_the_rounds_were_compiled_differently() -> None:
           [w["id"] for w in widened] == ["compile"], widened)
 
 
+def test_the_reason_alone_is_another_build_only_for_a_profile() -> None:
+    """#809: `verify` after `adb install -r` (install) and after
+    `cmd package compile -m verify -f` (cmdline) is the same code."""
+    installed, compiled = rep(state("verify", "install")), rep(state("verify", "cmdline"))
+    check("verify by install against verify by command is quiet",
+          compare._compile_moved(installed, compiled) == []
+          and compare.compiled_apart(installed, compiled) is None)
+    check("a profile's reason still counts",
+          compare.compiled_apart(rep(COMPILED), rep(state("speed-profile", "bg-dexopt")))
+          == ("`speed-profile` (install-dm)", "`speed-profile` (bg-dexopt)"))
+    check("another filter is apart whatever the reason",
+          compare.compiled_apart(rep(state("speed-profile", "install")), compiled)
+          == ("`speed-profile` (install)", "`verify` (cmdline)"))
+
+
 def test_compare_is_quiet_when_it_cannot_know_or_nothing_moved() -> None:
     check("alike is quiet", compare._compile_moved(rep(COMPILED), rep(COMPILED)) == [])
     check("a report from before the field is unknown, and quiet",
