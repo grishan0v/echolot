@@ -1126,6 +1126,55 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
     return plain.annotate(_merge_runs(reports))
 
 
+def _names_of(reports: list[dict[str, Any]]) -> Callable[[str], str]:
+    """`runtime_name` for these reports: the project's own names are kept as
+    written, the markers' prefix and the markers the reports found."""
+    sections = [r.get("markers") or {} for r in reports]
+    prefix = next((s["prefix"] for s in sections if s.get("prefix")), None)
+    own = frozenset(row["location"] for s in sections for row in s.get("rows") or [])
+
+    def names(value: str) -> str:
+        return runtime_name(value, keep=prefix, names=own)
+    return names
+
+
+def _folded(rows: list[dict[str, Any]], identity: tuple[str, ...],
+            fold: Callable[[str], str]) -> list[dict[str, Any]]:
+    """One recording's rows under the names a merge gives them (#714).
+
+    The merge of repeats folds the numbers the runtime chose (#504); a report
+    of one recording skipped the merge and kept them, so `arch_disk_io_0` …
+    `_3` and `owner tid: 31048` were rows of their own there, and `compare`
+    against a set of recordings, where they are `arch_disk_io_#`, called the
+    four gone and the one new. Rows a folded name makes one are added up, as
+    the merge adds them within a repeat, and keep the names they had in
+    `variants`. Nothing else about the row changes: no `runs`, no `spread`.
+    """
+    groups: dict[tuple, list[dict[str, Any]]] = {}
+    for row in rows:
+        key = tuple(fold(v) if isinstance(v, str) else v
+                    for v in (row.get(c) for c in identity))
+        groups.setdefault(key, []).append(row)
+    if all(len(g) == 1 and tuple(g[0].get(c) for c in identity) == k
+           for k, g in groups.items()):
+        return rows
+    out = []
+    for key, group in groups.items():
+        row = dict(_one_run(group))
+        was = {}
+        for at, col in enumerate(identity):
+            names = {r.get(col) for r in group if r.get(col) != key[at]}
+            if names:
+                was[col] = sorted(names)
+        row.update(zip(identity, key, strict=True))
+        if was:
+            row["variants"] = was
+        out.append(row)
+    if any(len(g) > 1 for g in groups.values()):
+        out.sort(key=_rank, reverse=True)
+    return out
+
+
 def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     """Merges N repeats into a single report using the median.
 
@@ -1137,9 +1186,12 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     when the milliseconds match.
     """
     names = _merge_names(reports)
+    fold_names = _names_of(reports)
     if len(reports) == 1:
         for det in reports[0].get("detectors") or []:
             det.pop(OPEN_ROWS, None)
+            if det["id"] not in _EVENTS and det.get("rows"):
+                det["rows"] = _folded(det["rows"], identity_of(det), fold_names)
         if names is not None:
             reports[0][SLICE_NAMES] = names
         return reports[0]
@@ -1171,14 +1223,6 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     merged["environment"] = _merge_environment(reports)
     merged["recording"] = recording_mod.merge([r.get("recording") for r in reports])
 
-    # The project's own names are kept as written, see `runtime_name`.
-    sections = [r.get("markers") or {} for r in reports]
-    prefix = next((s["prefix"] for s in sections if s.get("prefix")), None)
-    own = frozenset(row["location"] for s in sections for row in s.get("rows") or [])
-
-    def names(value: str) -> str:
-        return runtime_name(value, keep=prefix, names=own)
-
     by_id: dict[str, list[dict]] = {}
     for report in reports:
         for det in report["detectors"]:
@@ -1202,7 +1246,7 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         ran = [run for run in runs if not run["error"]]
         # An ANR's row is one event, named by the id the platform gave it:
         # there is no number in it to fold.
-        fold = None if head["id"] in _EVENTS else names
+        fold = None if head["id"] in _EVENTS else fold_names
         head["rows"] = merge_rows([run["rows"] for run in ran],
                                   identity_of(head), len(ran), fold=fold,
                                   opened=[run.get(OPEN_ROWS) for run in ran]) if ran else []
