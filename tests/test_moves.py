@@ -446,7 +446,7 @@ def notes(before_launches, after_launches, budget=None):
 def test_still_over_the_limit_in_the_reports_own_sentence():
     n = notes((1968.0, 2118.0, 2166.0), (1418.0, 1421.0, 1477.0), budget=520.0)["budget"]
     check("still over", n["title"] == "Still over the limit." and n["text"]
-          == "The launch takes 1.4 s. You allowed 0.5 s, so it takes 2.7 times as long.", n)
+          == "The launch takes 1.42 s. You allowed 0.52 s, so it takes 2.7 times as long.", n)
     check("at the level the report gives the launch", n["attention"] == plain.NEEDS_ATTENTION, n)
 
 
@@ -455,7 +455,7 @@ def test_over_the_limit_now_within_it_now_and_no_limit_at_all():
     check("it was within and is over", n["title"] == "Over the limit.", n)
     n = notes((700.0, 710.0, 720.0), (400.0, 410.0, 420.0), budget=520.0)["budget"]
     check("it is within", n["title"] == "Within the limit." and n["attention"] == plain.FINE and n["text"]
-          == "The launch takes 0.4 s. You allowed 0.5 s, so it is within the limit.", n)
+          == "The launch takes 0.41 s. You allowed 0.52 s, so it is within the limit.", n)
     check("with no limit there is no such note", "budget" not in notes((700.0, 710.0, 720.0), (400.0, 410.0, 420.0)))
 
 
@@ -541,7 +541,7 @@ KNOWN_VIEW = """\
 BETTER        Faster by 0.7 s. The launch went from 2.1 s to 1.4 s, 33% less. Measured on 3
               launches before and 3 after.
 
- !  Still over the limit. The launch takes 1.4 s. You allowed 0.5 s, so it takes 2.7 times as
+ !  Still over the limit. The launch takes 1.42 s. You allowed 0.52 s, so it takes 2.7 times as
     long.
  ~  Not certain check by check yet. 3 launches before and 3 after are too few to say which
     single changes hold. It takes four a side, or three against five.

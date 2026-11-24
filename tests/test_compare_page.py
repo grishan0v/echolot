@@ -286,7 +286,7 @@ def test_the_whole_window_before_and_after():
     check("a dot per launch", [len(r.all("i", "dot")) for r in lanes] == [3, 3])
     check("the time limit is a line through both", [len(r.all("i", "thr")) for r in lanes] == [1, 1])
     key = [s.text for s in fig.one("p", "key").all("span")]
-    check("and the key names it", key == ["median", "each launch", "your limit, 0.5 s"], key)
+    check("and the key names it", key == ["median", "each launch", "your limit, 0.52 s"], key)
     check("the exact figures are in the tooltip", lanes[0].attrs["data-tip"]
           == "Before\nmedian: 2,118.00 ms\neach launch: 1,968.00 · 2,118.00 · 2,166.00", lanes[0].attrs["data-tip"])
 
