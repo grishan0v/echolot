@@ -581,10 +581,6 @@ def _one_run(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
-# Where `analyze` hands the merge each repeat's rows below the bar, see
-# `merge_rows`. Never written to a report: the merge takes it out.
-OPEN_ROWS = "open_rows"
-
 # Where `analyze` hands the merge the rows a detector with `@fires` measured
 # and its predicate did not pass (#832). Never written to a report either:
 # the merge reads them with the rows shown, as one measurement, and writes
@@ -600,13 +596,6 @@ _OVER = "over_bar"
 # JSON), 66 at 5 ms; a report showed about 18.
 FLOOR_MS = 1.0
 
-# What a detector's `below` keeps (#715): what it found with its thresholds
-# open that it reported in no repeat, for `compare` to look a gone or new row
-# up in. Only what took this long in some repeat, which is `compare`'s own
-# floor: under it a row's move is not a row's move. And at most this many,
-# the longest first; the floor then rises to what the last one kept took.
-BELOW_FLOOR_MS = 5.0
-BELOW_MOST = 200
 
 
 def _merge_detector(runs: list[dict[str, Any]], identity: tuple[str, ...],
@@ -615,10 +604,10 @@ def _merge_detector(runs: list[dict[str, Any]], identity: tuple[str, ...],
 
     A detector with `@fires` handed every row it measured, shown or not
     (`UNDER_ROWS`): they are merged as one measurement, and a row is shown
-    where it fired in some repeat. What fired in none is its `below`, every
-    row of it at least `FLOOR_MS`. A detector still on the old path handed
-    its shown rows and what its open query found (`OPEN_ROWS`), and the
-    merge rebuilds the rest from there (#505, #715).
+    where it fired in some repeat (#832). What fired in none is its `below`,
+    every row of it at least `FLOOR_MS`, for `compare` to look a row up in
+    that the other side shows (#715). A detector without `@fires`, one a
+    project wrote itself, shows every row its query returns and has none.
     """
     if any(UNDER_ROWS in run for run in runs):
         per_run = [[{**r, _OVER: True} for r in run.get("rows") or []]
@@ -629,9 +618,7 @@ def _merge_detector(runs: list[dict[str, Any]], identity: tuple[str, ...],
         for row in merge_rows(per_run, identity, total):
             (shown if row.pop(_OVER, False) else under).append(row)
         return shown, {"floor_ms": FLOOR_MS, "rows": under}
-    opened = [run.get(OPEN_ROWS) for run in runs]
-    rows = merge_rows([run.get("rows") or [] for run in runs], identity, total, opened=opened)
-    return rows, below_bar(rows, opened, identity, total)
+    return merge_rows([run.get("rows") or [] for run in runs], identity, total), None
 
 
 # What `merge_rows` sets itself, or leaves out on purpose, rather than take
@@ -641,9 +628,7 @@ _MERGED_ELSEWHERE = frozenset({*NUMERIC, THREADS, "runs", "fired", "spread", "va
 
 
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
-               total: int, *, counts: bool = False,
-               opened: list[list[dict[str, Any]] | None] | None = None,
-               ) -> list[dict[str, Any]]:
+               total: int, *, counts: bool = False) -> list[dict[str, Any]]:
     """The rows of one detector across its repeats, folded to one row per identity.
 
     `per_run` is one list of rows per repeat, in report order. The repeat's
@@ -659,14 +644,11 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
     they are. The names the trace had under a folded one are the row's
     `variants`, kept from every repeat.
 
-    `opened` is, per repeat, what the same query returned with its thresholds
-    at zero and no `LIMIT` (`Detector.render_open`), or None where that was
-    not run. A row missing from a repeat's report may have been there below
-    the bar: then that repeat's value is taken from there, `runs` counts it
-    (the thing happened), and `fired` says in how many repeats it cleared the
-    bar. Only a row the open query did not find either is absent from a
-    repeat, and only there does `compare` put a zero (#505). The evidence is
-    still the reported rows': the open ones carry no stacks or places.
+    A row a detector with `@fires` marked (`_OVER`) is found in a repeat
+    whether or not it passed there: `runs` counts the repeats that found it,
+    and `fired` those where it passed, when that is fewer (#505, #832). Its
+    median covers every repeat it was found in. The evidence comes from a
+    repeat it passed in: the rows under the bar carry no stacks.
     """
     def key_of(row: dict[str, Any]) -> tuple:
         return tuple(row.get(c) for c in identity)
@@ -683,14 +665,6 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
             key = key_of(row)
             groups.setdefault(key, {}).setdefault(i, []).append(row)
             named(key, row)
-    below: list[dict[tuple, list[dict]]] = []
-    for rows in opened or []:
-        found_open: dict[tuple, list[dict]] = {}
-        for row in rows or []:
-            key = key_of(row)
-            if key in groups:
-                found_open.setdefault(key, []).append(row)
-        below.append(found_open)
 
     out = []
     for key, by_run in groups.items():
@@ -703,16 +677,6 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
         over = ({i: rows for i, rows in by_run.items() if any(r.get(_OVER) for r in rows)}
                 if marked else by_run)
         fired = [_one_run(rows) for rows in (over or by_run).values()]
-        for i, found_open in enumerate(below):
-            # A folded row is one thing under numbered names, and in a repeat
-            # it is all of them: the ones under the bar too, once the open
-            # query found more of its names than the report kept. Otherwise
-            # it adds up only the names that cleared the bar, and `compare`
-            # sets that against the other side's `below`, which has them all
-            # (#715).
-            if key in found_open and (i not in present
-                                      or len(found_open[key]) > len(present[i])):
-                present[i] = found_open[key]
         # In report order: the values of `spread` are read as the run index.
         values_by_run = {i: _one_run(rows) for i, rows in present.items()}
         found = [values_by_run[i] for i in sorted(values_by_run)]
@@ -819,50 +783,6 @@ def standing(row: dict[str, Any]) -> tuple[float, float]:
         value = 0.0
     part = short_runs(row.get("runs"))
     return (value * part[0] / part[1] if part and part[1] else value, value)
-
-
-def below_bar(reported: list[dict[str, Any]], opened: list[list[dict[str, Any]] | None],
-              identity: tuple[str, ...], total: int) -> dict[str, Any] | None:
-    """What a detector found under its bar and reported in no repeat: the
-    `below` of its entry, or None where a repeat did not run the open query.
-
-    A row is dropped from a report when it misses the threshold, and
-    `binder_txn` keeps a thread only when one call or their sum crosses its
-    bar: 86 calls of 83 ms together, none of them 14.4 ms, were no row, and
-    `compare` called the 111 ms row of the round before gone, all of it
-    saved (#715). `compare` looks a row one side does not report up here:
-    found, it is compared with what it measured; not found, it was not there,
-    or took under `floor_ms` in every repeat. The rows are merged as the
-    reported ones are and keep no evidence: the open query has no stacks.
-    """
-    if not opened or any(rows is None for rows in opened):
-        return None
-    taken = {tuple(row.get(c) for c in identity) for row in reported}
-    rows = []
-    for row in merge_rows([list(r or []) for r in opened], identity, total):
-        if tuple(row.get(c) for c in identity) in taken:
-            continue
-        metric = metric_of(row)
-        values = ((row.get("spread") or {}).get(metric) or {}).get("values") or [row.get(metric) or 0.0]
-        if max(values) < BELOW_FLOOR_MS:
-            continue
-        # What `compare` reads off a row: its time and each repeat's, and
-        # the count. Not the longest occurrence, which it does not judge.
-        kept = {c: row[c] for c in identity if c in row}
-        kept.update({k: row[k] for k in ("runs", "count", "self_ms", "total_ms")
-                     if row.get(k) is not None})
-        spread = {k: {"min": v["min"], "max": v["max"], "values": v["values"]}
-                  for k, v in (row.get("spread") or {}).items() if k in ("self_ms", "total_ms")}
-        if spread:
-            kept["spread"] = spread
-        rows.append(kept)
-    rows.sort(key=lambda r: -(r.get(metric_of(r)) or 0.0))
-    floor = BELOW_FLOOR_MS
-    if len(rows) > BELOW_MOST:
-        rows = rows[:BELOW_MOST]
-        floor = max(floor, max(max(((r.get("spread") or {}).get(metric_of(r)) or {}).get("values")
-                                   or [r.get(metric_of(r)) or 0.0]) for r in rows[-1:]))
-    return {"floor_ms": floor, "rows": rows}
 
 
 # What an open marker's number is raised to, to see whether a merged number
@@ -1245,7 +1165,6 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
             # rows under the bar came out otherwise (#714, #845). It has no
             # repeats to count or spread, so its rows keep neither.
             rows, below = _merge_detector([det], identity_of(det), 1)
-            det.pop(OPEN_ROWS, None)
             det.pop(UNDER_ROWS, None)
             det["rows"] = [{k: v for k, v in row.items() if k not in ("runs", "spread")}
                            for row in rows]
@@ -1311,7 +1230,6 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         ran = [run for run in runs if not run["error"]]
         head["rows"], below = (_merge_detector(ran, identity_of(head), len(ran))
                                if ran else ([], None))
-        head.pop(OPEN_ROWS, None)
         head.pop(UNDER_ROWS, None)
         if below is not None:
             head["below"] = below

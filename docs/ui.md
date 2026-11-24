@@ -385,9 +385,20 @@ computer, under your own account. The button is there when Claude Code is
 installed, is 2.1.259 or newer, and says it is signed in (`claude auth
 status`), or when Codex is installed, is 0.159 or newer, says it is signed in
 (`codex login status`) and the project has what it needs
-([below](#with-codex)); otherwise the dialog says what is missing, for each,
-and the request is to copy. Cursor is not started from the page yet: its
-request is copied.
+([below](#with-codex)); otherwise the dialog says what is missing, for each
+one installed here, and the request is to copy. Where one can start and the
+other is installed and cannot, the dialog and the screen before the start
+say why that one cannot, such as the rules Codex needs and the
+`echolot init --for …,codex` that writes them. Cursor is not started from the
+page yet: its request is copied.
+
+Every client needs a folder to put its markers in: with none in
+`instrumentation.allowed`, the page starts no agent. The dialog has no
+**Start it from here** then, and says so once, with where to name the
+folders (`echolot.yml`, under `instrumentation:`) and how
+(`allowed: ["app/src/main", "feature/*/src/main"]`); no screen offers one
+client in place of the other. The `echolot.yml` that **Set it up** writes
+names the folders `scan` found the app's code in.
 
 **Before anything starts**, one screen says what a press of **Start** agrees
 to, in plain words:

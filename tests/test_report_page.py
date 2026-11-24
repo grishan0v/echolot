@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import echolot  # noqa: E402
 from echolot import demo, plain, recorder, selftest  # noqa: E402
+from echolot import files  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.main import main  # noqa: E402
 from echolot.pages import kit, md, report_page  # noqa: E402
@@ -76,7 +77,7 @@ def make(detectors, duration=2000.0, budget=None, runs=3, startup=True, **extra)
     if runs and runs > 1:
         window |= {"duration_ms_min": duration - 20, "duration_ms_max": duration + 60}
     fired = [d["id"] for d in detectors if d["rows"]]
-    rep = {"schema": 1, "trace": "t.perfetto-trace", "scenario": "coldStart", "budget_ms": budget,
+    rep = {"schema": files.REPORT_SCHEMA, "trace": "t.perfetto-trace", "scenario": "coldStart", "budget_ms": budget,
            "window": window, "detectors": detectors,
            "summary": {"detectors_run": len(detectors), "detectors_fired": len(fired),
                        "fired_ids": fired, "absent_ids": []}}

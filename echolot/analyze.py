@@ -131,8 +131,7 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
 def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                   cli_overrides: dict[str, dict] | None = None,
                   use_defaults: bool = False,
-                  tp_source: str | None = None,
-                  below_bar: bool = False) -> dict:
+                  tp_source: str | None = None) -> dict:
     """The core of a run: trace + config → Marker Report.
 
     Separate from cmd_analyze because it has two callers: the command, which
@@ -148,12 +147,10 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     got (`params_source`), so a reader can tell calibrated numbers from the
     shipped ones, and a scenario's from the config's, without opening it.
 
-    `below_bar` also runs each detector with its thresholds open, and keeps
-    what that returned beside its rows for the merge of a set (#505): a row
-    one repeat reports may have been there below the bar in another, and
-    only this tells it from a row that was not there at all. The merge takes
-    it out again, see `report.merge_rows`, and keeps what lies under the bar
-    in no repeat's report as the detector's `below` (#715).
+    A detector with `@fires` returns every row it measured (#832): the rows
+    its predicate passed are its rows, and the rest, from `report.FLOOR_MS`,
+    go to the merge beside them, which keeps what no repeat showed as the
+    detector's `below`.
     """
     plan = plan_detectors(cfg, cli_overrides=cli_overrides, use_defaults=use_defaults)
     # Refused here, like a threshold of the wrong kind: before a trace is opened.
@@ -251,11 +248,6 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                         _stacks_behind(tp, d, params, rows, package, root)
                     except Exception as e:  # the rows stand without it
                         print(f"[!] {d.id} @samples: {e}", file=sys.stderr)
-            # Last of the four: run with its thresholds open, the first query
-            # writes its own tables again (`_det_<id>`, see tp._own_tables),
-            # and the two queries above read the pieces of these rows.
-            opened = (_below_bar(tp, d, overrides, sql, rows)
-                      if below_bar and not err and not d.fires else None)
             entry = {
                 "id": d.id,
                 "title": d.title,
@@ -274,8 +266,6 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 # Did it look: `checked`, and `reason` when it did not.
                 **needs_mod.verdict(d.needs, held, err),
             }
-            if opened is not None:
-                entry[report_mod.OPEN_ROWS] = opened
             if under is not None:
                 entry[report_mod.UNDER_ROWS] = under
             if source != "default":
@@ -325,21 +315,6 @@ def _over_bar(rows: list[dict]) -> tuple[list[dict], list[dict]]:
         elif float(row.get(report_mod.metric_of(row)) or 0.0) >= report_mod.FLOOR_MS:
             under.append(row)
     return shown, under
-
-
-def _below_bar(tp, d, overrides: dict | None, sql: str,
-               rows: list[dict]) -> list[dict] | None:
-    """The detector's rows with its calibrated thresholds at zero and no LIMIT.
-
-    The rows themselves when that is the same query. None when it fails: the
-    rows stand without it, and a missing row then reads as absent, as it did.
-    """
-    try:
-        open_sql = d.render_open(overrides)
-        return rows if open_sql == sql else tp.query(open_sql)
-    except Exception as e:  # the same leniency as the detector's own query
-        print(f"[!] {d.id} with its thresholds open: {e}", file=sys.stderr)
-        return None
 
 
 def _marker_globs(cfg: Config) -> tuple[str, list[str]]:
@@ -1523,24 +1498,42 @@ def _drawn_info(tp, window: dict) -> dict | None:
     markers that were missing (#536). Read from atrace rather than from the
     frame timeline, which `collect` does not record. None when no process in
     the trace drew anything, which says the categories were not recorded.
+
+    None too for a window that closed before the app's first frame, in a
+    trace the process was born in (its `bindApplication` is there): nothing
+    was drawn yet, so none drawn says nothing of where the scenario got.
+    `bindApplication` to `activityStart`, the app's start up to its first
+    Activity, is such a window, and every repeat of it was said to have
+    drawn nothing, with `collect` stopping its round at the first (#849). A
+    process that was there before the trace began may have drawn before it,
+    and its window is counted as before.
     """
     lo, hi = window.get("ts_start"), window.get("ts_end")
     if lo is None or hi is None:
         return None
-    try:
-        rows = tp.query(f"""
-            SELECT (SELECT COUNT(*) FROM slice s WHERE {_DRAWN}) AS seen,
-                   (SELECT COUNT(*) FROM slice s
+    own = f"""FROM slice s
                     JOIN thread_track tt ON tt.id = s.track_id
                     JOIN thread t USING (utid)
                     JOIN _proc p ON p.upid = t.upid
-                    WHERE {_DRAWN} AND s.ts < {int(hi)} AND s.ts + s.dur > {int(lo)}) AS n
+                    WHERE {_DRAWN}"""
+    try:
+        rows = tp.query(f"""
+            SELECT (SELECT COUNT(*) FROM slice s WHERE {_DRAWN}) AS seen,
+                   (SELECT COUNT(*) {own}
+                      AND s.ts < {int(hi)} AND s.ts + s.dur > {int(lo)}) AS n,
+                   (SELECT MIN(s.ts) {own}) AS first,
+                   (SELECT MIN(ts) FROM _slice
+                    WHERE is_main_thread = 1 AND name = 'bindApplication') AS born
         """)
     except Exception:  # a trace without thread tracks
         return None
     if not rows or not rows[0]["seen"]:
         return None
-    return {"count": rows[0]["n"]}
+    row = rows[0]
+    first, born = row.get("first"), row.get("born")
+    if not row["n"] and born is not None and first is not None and first >= hi:
+        return None
+    return {"count": row["n"]}
 
 
 # The receivers the system runs in an app when it takes the app out of the

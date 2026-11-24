@@ -61,6 +61,100 @@ SYSTEM_SERVER = "system_server"
 # anchor's does (context.sql).
 _END = "CASE WHEN dur < 0 THEN (SELECT end_ts FROM trace_bounds) ELSE ts + dur END"
 
+# The packages the system's permission dialog belongs to: the permission
+# controller from Android 10 on, under Google's name or the platform's, and
+# the package installer before it. An app that asks for a permission before
+# its first frame has the dialog started over it, and the platform's launch
+# ends on the dialog: the launch the trace records, and the activity
+# `am start -W` names, are the permission controller's (#810).
+PERMISSION_DIALOGS = ("com.google.android.permissioncontroller",
+                      "com.android.permissioncontroller",
+                      "com.android.packageinstaller")
+
+# The permission an app asks for at its start on Android 13 and later most
+# often: the one that took the launches of #810.
+NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS"
+
+
+def permission_dialog(name: str | None) -> bool:
+    """Whether a package, or a component `pkg/Class`, is the system's
+    permission dialog's."""
+    return bool(name) and name.strip().split("/", 1)[0] in PERMISSION_DIALOGS
+
+
+def grant_said(package: str, ungranted: list[str] | None = None) -> str:
+    """What to do about a permission dialog that takes the app's launch: grant
+    the permission once, before recording, and the dialog does not come again.
+
+    `ungranted` is the runtime permissions the app held without a grant when
+    `collect` saw the dialog, as `dumpsys package` listed them; the dialog
+    asks for one of them, and the dump does not say which. Without them the
+    command names the usual one and how to list the rest.
+    """
+    if ungranted:
+        first = NOTIFICATIONS if NOTIFICATIONS in ungranted else ungranted[0]
+        others = [p for p in ungranted if p != first]
+        shown = ", ".join(f"`{p}`" for p in others[:4])
+        more = f" and {len(others) - 4} more" if len(others) > 4 else ""
+        rest = (f" (it held {shown}{more} ungranted too; the dialog asks for one of "
+                f"them)" if others else "")
+        return (f"grant it once before recording, `adb shell pm grant {package} "
+                f"{first}`{rest}, or tap Allow on the phone")
+    return (f"grant it once before recording, `adb shell pm grant {package} "
+            f"<permission>`, or tap Allow on the phone. On Android 13 and later the "
+            f"one an app asks for at its start is most often `{NOTIFICATIONS}`; "
+            f"`adb shell dumpsys package {package}` lists the ones it lacks as "
+            f"`granted=false` under `runtime permissions`")
+
+
+def _no_launch(process: str, trace: str | None, launches: list[dict]) -> str:
+    """Why the trace holds no launch of `process`, from what it holds instead
+    and from what `collect` kept beside it, and what to do.
+
+    A permission dialog started over the app before its first frame takes the
+    launch: the trace's launch is the permission controller's, and the
+    sentence used to send a person recorded with `runner.mode: launch` to
+    set `runner.mode: launch` (#810). That advice is kept for a trace whose
+    recording is not known to have started the app.
+    """
+    from . import recording
+
+    package = process.split(":", 1)[0]
+    where = f" {Path(trace).name}" if trace else ""
+    head = f"no launch of {process} in trace{where}"
+    record = recording.kept(trace, "launch") if trace else None
+    record = record if isinstance(record, dict) else {}
+    others = list(dict.fromkeys(str(s["package"]) for s in launches
+                                if s.get("package") and s["package"] != package))
+    dialog = next((p for p in others if permission_dialog(p)), None)
+    if dialog is None and permission_dialog(record.get("activity")):
+        dialog = str(record["activity"]).split("/", 1)[0]
+    if dialog:
+        ungranted = record.get("ungranted")
+        return (f"{head}: its launch is {dialog}'s. A permission dialog came up over "
+                f"the app before its first frame, and the platform's launch ended on "
+                f"the dialog, so `window: launch` has nothing of the app's to take the "
+                f"window from, and every recording will hold the same until the "
+                f"permission is granted: "
+                f"{grant_said(package, ungranted if isinstance(ungranted, list) else None)}. "
+                f"Then record again.")
+    held = (f"; the launches it holds are of {', '.join(others)}" if others else "")
+    started = recording.kept(trace, "runner") == "launch" if trace else False
+    how = ("`collect` started the app inside this recording (`runner.mode: launch`), "
+           "and the platform recorded no launch of it as the app's: `echolot probe` "
+           "on the trace lists what it holds" if started else
+           "The platform records a launch when the app is started inside the "
+           "recording: `runner.mode: launch` does that, and so does a startup "
+           "macrobenchmark")
+    return (f"{head}{held}, so `window: launch` has nothing to take the window "
+            f"from. {how}. For a scenario that is not a launch, name `start` and "
+            f"`end` instead.")
+
+
+class NoLaunch(ConfigError):
+    """A trace with no launch of the process, under `window: launch`: the
+    window cannot be taken, and the message says why and what to do."""
+
 
 def find(tp, upid: int, trace: str | None = None) -> dict[str, Any]:
     """The launch window of the process `upid`: its bounds and what closed it.
@@ -97,13 +191,7 @@ def find(tp, upid: int, trace: str | None = None) -> dict[str, Any]:
     of_package = [s for s in launches if s["package"] == package]
     mine = [s for s in launches if s["own"]] or of_package
     if not mine:
-        where = f" {Path(trace).name}" if trace else ""
-        raise ConfigError(
-            f"no launch of {process} in trace{where}, so `window: launch` has "
-            f"nothing to take the window from. The platform records a launch "
-            f"when the app is started inside the recording: `runner.mode: "
-            f"launch` does that, and so does a startup macrobenchmark. For a "
-            f"scenario that is not a launch, name `start` and `end` instead.")
+        raise NoLaunch(_no_launch(process, trace, launches))
     chosen = mine[0]
     start, launch_end = chosen["ts"], chosen["ts_end"]
     # The call belongs to this launch only up to the next one of the same

@@ -358,12 +358,13 @@ def load(path: Path) -> Any:
 # ---------------------------------------------------------------------------
 # report.json, written by `echolot analyze` (`report.build`, `report.merge`)
 
-# 1 since the first release. It goes up when a field changes meaning: the
-# first such change is a detector's threshold becoming a flag on each row
-# rather than a filter (#832). Raising it is this one line, and either an
-# upgrade from 1 in `REPORT.upgrades` or none, which refuses a report of
-# schema 1 with a sentence that names `echolot analyze`.
-REPORT_SCHEMA = 1
+# 2 since a detector's threshold became a flag on each row rather than a
+# filter (#832): its `rows` are what it showed, and its `below` every other
+# row it measured, from 1 ms. A report of schema 1 has the same shape, its
+# `below` what a second query with the thresholds open found from 5 ms, at
+# most 200 rows, and reads as it is (`REPORT.upgrades`). `compare` across the
+# two gives no verdict on a detector, since every detector's `sha` moved.
+REPORT_SCHEMA = 2
 
 
 class Detector(TypedDict, total=False):
@@ -400,6 +401,7 @@ class Report(TypedDict, total=False):
 # it describes no analysis.
 REPORT: Spec[Report] = Spec(
     name="report.json", schema=REPORT_SCHEMA, unnumbered=1,
+    upgrades={1: lambda report: report},
     shape=Obj({
         "generated_at": may(TEXT),
         "traces": may(Kind((list,), "a list")),

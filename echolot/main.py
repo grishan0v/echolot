@@ -754,8 +754,7 @@ def cmd_analyze(args) -> int:
                 jobs = 1
         reports = parallel.in_order(
             traces, lambda t: analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
-                                            use_defaults=args.defaults, tp_source=tp_source,
-                                            below_bar=True),
+                                            use_defaults=args.defaults, tp_source=tp_source),
             jobs)
         # A launch that ended on another activity than most of the set's is
         # another journey: left out, and named (#909).
@@ -3420,8 +3419,11 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
     it, or when the end anchor opened and never closed: the scenario never
     reached its screen, and the repeats after it would record the same. An
     end anchor that did not occur at all is said and the round goes on, since
-    a name that is wrong in the config reads the same. A trace this cannot
-    read says nothing: `analyze` will.
+    a name that is wrong in the config reads the same. Under `window: launch`
+    the round stops when the trace holds no launch of the app, with the
+    reason `analyze` would give: a permission dialog that took the first
+    launch takes every one after it (#810). Any other trace this cannot read
+    says nothing: `analyze` will.
     """
     import io
 
@@ -3434,6 +3436,11 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
             bounds = _setup_context(tp, cfg, procs[0]["upid"], trace=str(trace))
             window = _window_info(tp, cfg, procs,
                                   bounds if "defined_by" in bounds else None)
+    except launch_mod.NoLaunch as e:
+        # `window: launch` and no launch of the app in the first repeat: a
+        # permission dialog that took it takes every launch until it is
+        # granted, and no repeat after it would hold a window (#810).
+        return str(e).rstrip("."), None
     except Exception:
         return None, None
     end = window.get("end_anchor") or {}
@@ -4113,28 +4120,20 @@ def cmd_calibrate(args) -> int:
             _include_modules(tp, detectors)
             for d in detectors:
                 try:
-                    measured = tp.query(d.render_open(overrides.get(d.id)))
+                    measured = tp.query(d.render(overrides.get(d.id))[0])
                 except Exception as e:
                     failed[d.id] += 1
                     print(f"[!] {d.id} on {trace}: {e}", file=sys.stderr)
                     current[d.id] = None
                     continue
-                if d.fires:
-                    # One query: every row it measured, each marked with
-                    # whether the thresholds in effect show it (#832).
-                    per_run[d.id].append([{k: v for k, v in r.items() if k != "over_bar"}
-                                          for r in measured])
-                    if current[d.id] is not None:
-                        current[d.id].append([{k: v for k, v in r.items() if k != "over_bar"}
-                                              for r in measured if r.get("over_bar")])
-                    continue
-                per_run[d.id].append(measured)
+                # One query: every row it measured, each marked with whether
+                # the thresholds in effect show it (#832). A detector without
+                # `@fires` shows every row it returns.
+                every = [{k: v for k, v in r.items() if k != "over_bar"} for r in measured]
+                per_run[d.id].append(every)
                 if current[d.id] is not None:
-                    try:
-                        current[d.id].append(
-                            tp.query(d.render(overrides.get(d.id))[0]))
-                    except Exception:
-                        current[d.id] = None
+                    current[d.id].append([r for r, m in zip(every, measured, strict=True)
+                                          if not d.fires or m.get("over_bar")])
 
     spread = ""
     if len(windows) > 1 and max(windows) > 2 * min(windows):

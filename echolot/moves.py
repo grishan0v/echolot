@@ -346,15 +346,29 @@ def _open(window: dict[str, Any]) -> bool:
 def _late_side(report: dict[str, Any]) -> dict[str, Any] | None:
     """The frames the app made late on one side, each run's share of its own
     frames. None without a frame timeline, or in a report written before
-    they were counted."""
+    they were counted.
+
+    `middle` is the run the median share is, or the two it lies halfway
+    between with an even number of runs: the counts a sentence says beside
+    that share are theirs (#846). The median late frames and the median
+    frames drawn, `late` and `count`, are medians of their own, each of
+    another run: in five runs of 4 of 16, 3 of 15, 4 of 15, 3 of 16 and 3 of
+    16 frames late they are 3 of 16, 19%, beside a share of 20%, the 3 of 15
+    of the run in the middle. A report whose runs are not kept apart is its
+    medians alone, and they are its middle."""
     frames = (report.get("window") or {}).get("frames") or {}
     count, late = _number(frames.get("count")), _number(frames.get("late"))
     if not count or late is None:
         return None
-    shares = [n / of for n, of in zip(frames.get("late_values") or [], frames.get("values") or [], strict=False)
-              if _number(n) is not None and _number(of)] or [late / count]
+    runs = sorted(((n, of) for n, of in zip(frames.get("late_values") or [], frames.get("values") or [],
+                                            strict=False) if _number(n) is not None and _number(of)),
+                  key=lambda run: (run[0] / run[1], run[1])) or [(late, count)]
+    shares = [n / of for n, of in runs]
+    half = len(runs) // 2
+    middle = runs[half - 1:half + 1] if len(runs) % 2 == 0 else runs[half:half + 1]
     return {"late": late, "count": count, "share": round(median(shares), 4),
-            "low": round(min(shares), 4), "high": round(max(shares), 4), "runs": len(shares)}
+            "low": round(min(shares), 4), "high": round(max(shares), 4), "runs": len(shares),
+            "middle": [{"late": n, "count": of} for n, of in middle]}
 
 
 def _no_frames(before: dict[str, Any], after: dict[str, Any]) -> str:
@@ -383,6 +397,28 @@ def _whole(n: float) -> str:
     return f"{n:.0f}" if n == int(n) else f"{n:.1f}"
 
 
+def _late_share(side: dict[str, Any]) -> str:
+    """The share of late frames a sentence says of one side: the middle
+    run's, of the very counts said beside it, or halfway between the two
+    middle runs'. Not the rounded `share`, so that 3 of 16 is 19% however
+    a share rounds on its way to four places."""
+    middle = side["middle"]
+    return _share_of(sum(m["late"] / m["count"] for m in middle) / len(middle))
+
+
+def _late_runs(side: dict[str, Any], ctx: _Ctx) -> tuple[str, str]:
+    """The late frames of the runs a side's share is of, `3 of 15`, and
+    which runs they are: `in the middle launch`, `in the two middle
+    launches` of an even number."""
+    said = " and ".join(f"{_whole(m['late'])} of {_whole(m['count'])}" for m in side["middle"])
+    if side["runs"] == 1:
+        return said, f"a {ctx.noun}"
+    if side["runs"] == 2:
+        return said, f"in the two {ctx.plural}"
+    return said, (f"in the middle {ctx.noun}" if len(side["middle"]) == 1
+                  else f"in the two middle {ctx.plural}")
+
+
 def _by_frames(b: dict[str, Any], a: dict[str, Any], ctx: _Ctx) -> tuple[str, str]:
     """Whether the share of late frames moved, by the window's rule (see
     `FRAMES_FLOOR`), and the sentence of why not when it did not."""
@@ -395,7 +431,7 @@ def _by_frames(b: dict[str, Any], a: dict[str, Any], ctx: _Ctx) -> tuple[str, st
     lower, higher = (a, b) if a["share"] < b["share"] else (b, a)
     gap = higher["share"] - lower["share"]
     if gap < max(FRAMES_FLOOR, SHARE * higher["share"]):
-        alike = _share_of(b["share"]) == _share_of(a["share"])
+        alike = _late_share(b) == _late_share(a)
         return NO_CHANGE, "" if alike else (f"A change under {SHARE:.0%}, or under one frame in a hundred, "
                                             "is not counted.")
     if not lower["share"] < higher["low"]:
@@ -560,9 +596,12 @@ def _verdict(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
             "recording's and not the app's.", _no_frames(before, after), measured)}
     out["frames"] = {"before": fb, "after": fa}
     f, why = _by_frames(fb, fa, ctx)
-    late = (f"The app made {_share_of(fb['share'])} of its frames late before and {_share_of(fa['share'])} "
-            f"after: {_whole(fb['late'])} of {_whole(fb['count'])} frames a {ctx.noun}, then "
-            f"{_whole(fa['late'])} of {_whole(fa['count'])}.")
+    # The counts are those of the runs each share is of (#846): the median
+    # late frames over the median frames drawn are two other runs, and set
+    # beside the median share they read "20% … 3 of 16", which is 19%.
+    (said_b, where_b), (said_a, where_a) = _late_runs(fb, ctx), _late_runs(fa, ctx)
+    late = (f"The app made {_late_share(fb)} of its frames late before and {_late_share(fa)} after: "
+            f"{said_b} frames {where_b}, then {said_a}" + ("" if where_a == where_b else f" {where_a}") + ".")
     if moved:
         if f in (NO_CHANGE, w["movement"]):
             return {**by_window, "frames": out["frames"], "text": _said(w["took"], late, measured)}
@@ -646,28 +685,63 @@ NAMES_SAID = 3
 
 
 def _one_side_note(names: dict[str, Any], ctx: _Ctx) -> dict[str, str] | None:
-    """The names in every launch of one side and in none of the other (#610).
+    """The names in every launch of one side, or all but one of five or
+    more, and in none of the other (#610).
 
     No check reads them, so no check below moves for them, and they are
     often the one sign of what the change did: a method compiled only once
     it became hot names the code it is in.
+
+    How many launches a side's names were in is read from each row's
+    `runs`, the `4/5` of the table, and said of all of them, the ones past
+    `NAMES_SAID` too (#851): "in every launch after" of a name one launch
+    after did not have was read as a wait every launch made.
     """
     parts = []
     for side, other in (("after", "before"), ("before", "after")):
         rows = names.get(side) or []
         if not rows:
             continue
+        lead, missed = _one_side_runs(rows, side, ctx)
         said = ", ".join(f"`{r['name']}` ({plain.hum(r['total_ms'])} a {ctx.noun}"
+                         + (f" in {missed[i][0]} of {missed[i][1]}" if i in missed else "")
                          + (f", {r['threads']}" if r.get("threads") else "") + ")"
-                         for r in rows[:NAMES_SAID])
+                         for i, r in enumerate(rows[:NAMES_SAID]))
         more = f", and {len(rows) - NAMES_SAID} more" if len(rows) > NAMES_SAID else ""
-        parts.append(f"In every {ctx.noun} {side} and in none {other}: {said}{more}.")
+        parts.append(f"{lead} and in none {other}: {said}{more}.")
     if not parts:
         return None
     return {"id": "names", "attention": plain.WORTH_A_LOOK,
             "title": "Work only one side has.",
             "text": " ".join(parts) + " No check reads these, so no check moves for them; "
                                       "`echolot compare --names` lists them all."}
+
+
+def _one_side_runs(rows: list[dict[str, Any]], side: str,
+                   ctx: _Ctx) -> tuple[str, dict[int, tuple[int, int]]]:
+    """How many launches of `side` a note's names were in, as the sentence
+    opens, and the names it says that were not in every one, by their place
+    in `rows`, with their `(k, n)`.
+
+    `compare` lists a name in all of a side's runs, or all but one from
+    `compare.NAMES_ALL_BUT_ONE`: "In every launch after", "In 4 of 5
+    launches after" when that is all of them, and when the two mix, "In
+    every launch after, or all but one," with each name that missed one
+    said `in 4 of 5`. A row with no `runs` is of a report from one run, in
+    every one of them."""
+    seen = [plain._seen(r) for r in rows]
+    short = [s for s in seen if s is not None and s[0] < s[1]]
+    if not short:
+        return f"In every {ctx.noun} {side}", {}
+    if len(short) == len(rows) and len(set(short)) == 1:
+        k, n = short[0]
+        return f"In {k} of {n} {ctx.plural} {side}", {}
+    missed = {i: s for i, s in enumerate(seen[:NAMES_SAID]) if s is not None and s[0] < s[1]}
+    most = max(n - k for k, n in short)
+    if most == 1 and len(short) < len(rows):
+        return f"In every {ctx.noun} {side}, or all but one,", missed
+    n = max(n for _, n in short)
+    return f"In {n - most} or more of {n} {ctx.plural} {side}", missed
 
 
 # ---------------------------------------------------------------------------

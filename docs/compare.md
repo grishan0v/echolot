@@ -405,27 +405,23 @@ all 5 after, at the same milliseconds, now happens on every run, and is listed
 as grew rather than steady.
 
 "Found" means the thing happened, over the detector's threshold or under it.
-`analyze` of a set looks each row up in every repeat with the thresholds open,
-so a row that cleared the bar in 3 of 8 repeats and was there below it in the
-other 5 is `8/8, over the bar in 3`, its median covers all 8, and no zero is
-put in for it. A zero stands only for a repeat where the row was not there at
-all.
+A detector measures every row, and its thresholds only mark which rows to
+show (#832). So a row that cleared the bar in 3 of 8 repeats and was there
+below it in the other 5 is `8/8, over the bar in 3`, its median covers all
+8, and no zero is put in for it. A zero stands only for a repeat where the
+row was not there at all, or took under 1 ms.
 
-A row that one report has and the other does not is looked up in what the
-other side found under its bar. `analyze` keeps, for each detector, what its
-open query found that no repeat reported (`below` in `report.json`: the rows,
-without evidence, that took at least `floor_ms` in some repeat; 5 ms, or more
-when the longest 200 are all that is kept). Found there, the row is compared
-with what it measured, and the table marks that side *(under the bar)*: 86
-calls to the system of 83 ms together after a fix that took each under the
-14.4 ms bar are a row that shrank from 111 ms, not one that went with all of
-its 111 ms. Not found, it was not there, or took under `floor_ms`, and is
-gone or new. A report written before `below`, or a detector whose open query
-failed, cannot say, and its rows are read as before. A row under a folded
-name (`arch_disk_io_#`, `owner tid: #`) adds up, on both sides, every name it
-stands for that the open query found, under the bar or over it: otherwise
-the reported side would count only the names that cleared the bar and
-`below` all of them.
+A row that one report shows and the other does not is looked up in what the
+other side measured and did not show: `below` in `report.json`, every row
+of at least `floor_ms`, 1 ms, that no repeat showed, without evidence. Found
+there, the row is compared with what it measured, and the table marks that
+side *(under the bar)*: 86 calls to the system of 83 ms together after a fix
+that took each under the 14.4 ms bar are a row that shrank from 111 ms, not
+one that went with all of its 111 ms. Not found, it took under 1 ms there.
+A row one side has and the other lacks, that is itself no larger than the
+floor of a move, is steady rather than gone or new: it could not have moved
+by more (#843). A report written by echolot 0.18 or earlier keeps what it
+found under its bar only from 5 ms, at most 200 rows, and reads as before.
 
 ## The same thing under a new name
 
@@ -880,7 +876,10 @@ which is the warnings of
 [When two reports may not be compared](#when-two-reports-may-not-be-compared)
 said for a person; and the work only one side has, up to three of
 [the names on one side only](#names-on-one-side-only) a side, which no check
-reads and so none moves for. Then one item per check, with a sentence of what
+reads and so none moves for. The note says in how many runs of their side the
+names were, as the table's Runs column does: "In every run after", "In 4 of 5
+runs after" when each missed one, and "In every run after, or all but one"
+when the two mix, with `in 4 of 5` beside each name said that missed one. Then one item per check, with a sentence of what
 changed in the words that reading uses for the check.
 
 A movement is not a level. On a report a check has a level of attention: how
@@ -975,10 +974,17 @@ against 0.6% is not news:
 
 ```
 WORSE         More frames came late. The app made 3.2% of its frames late before and 21% after: 21
-              of 650 frames a run, then 128 of 612. The run took 14.9 s before and 14.9 s after: the
-              window runs to the end of the recording, so its length is the recording's and not the
-              app's. Measured on 3 runs before and 3 after.
+              of 650 frames in the middle run, then 128 of 612. The run took 14.9 s before and 14.9
+              s after: the window runs to the end of the recording, so its length is the recording's
+              and not the app's. Measured on 3 runs before and 3 after.
 ```
+
+The share a side says is the median of its runs' shares, and the counts beside
+it are those of the run in the middle by that share — with an even number of
+runs, of the two in the middle, and the share is halfway between them: "22%
+… 3 of 15 and 4 of 16 frames in the two middle runs". Not the median late
+frames over the median frames drawn: those are two other runs, and late 4, 3,
+4, 3, 3 of 16, 15, 15, 16, 16 frames read "20% … 3 of 16", which is 19%.
 
 A window that does move — a UI test that waits for the app takes longer when
 the app does — keeps its verdict, with the late frames in its sentence, and
@@ -1161,9 +1167,10 @@ With `--plain` or `--html` the file holds one more key, `plain`, after all the
 others: `scenario` and `process`, what the two reports are of; `verdict`
 (`movement`: `better`, `worse`, `no_change` or `not_compared`; a
 `headline` and the sentence, `text`; `by`, `window` or `frames`, what it was
-read from, and `frames`, each side's late frames — `late`, `count`, `share`
-and its `low` and `high` over the runs, `runs` — where the window runs to the
-end of the recording), `window` (each side's median, least and
+read from, and `frames`, each side's late frames — `late` and `count`, the
+medians, `share` and its `low` and `high` over the runs, `runs`, and `middle`,
+the `late` and `count` of the run the share is of, or of the two it is halfway
+between — where the window runs to the end of the recording), `window` (each side's median, least and
 most launch, and the runs), `notes` (`id`: `budget`, `few_runs`, `unlike`,
 `names`;
 `attention`, a `title` and a `text`; `unlike` also lists the ids of the

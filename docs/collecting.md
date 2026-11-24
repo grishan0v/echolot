@@ -248,6 +248,33 @@ journeys. To measure the start alone, record it where nothing sends the app
 elsewhere: for Wikipedia, before a scenario that reads a page, not right
 after it.
 
+#### A permission dialog over the launch
+
+An app that asks for a permission before its first frame has the system's
+dialog started over it, and the platform's launch ends on the dialog. A debug
+build that asks for `POST_NOTIFICATIONS` at its start, on an SM-A515F with
+Android 13 and the permission never granted, does that in every repeat:
+`am start -W` names the permission controller's `GrantPermissionsActivity`,
+and the launch the trace records is `com.google.android.permissioncontroller`'s,
+so `scenario.window: launch` finds none of the app's. `collect` says so
+under the first repeat the dialog took, reads the runtime permissions the app
+holds ungranted (`dumpsys package`), and names the command that grants the
+likely one:
+
+```
+  [1/5] coldStart_iter000.perfetto-trace  14.2 MB, am start -W: 812 ms (COLD)
+      [!] a permission dialog took the launch: it ended on com.google.android.permissioncontroller's GrantPermissionsActivity, which came up over com.example.app before its first frame. Every launch ends there until the permission is granted, and `window: launch` finds no launch of the app in such a trace: grant it once before recording, `adb shell pm grant com.example.app android.permission.POST_NOTIFICATIONS`, or tap Allow on the phone
+```
+
+Under `scenario.window: launch` the round stops there, before the rest are
+recorded: no repeat after it would hold a launch of the app, and the stop says
+what `analyze` would. A window cut by anchors is measured with the dialog up,
+and its round goes on: the end of the set says it again. The permissions are
+kept beside each trace (`launch.ungranted` in its account), so that `analyze`
+names the same command. Granted once, the dialog does not come again, and the next round's
+launches are the app's: after `pm grant` the same build gave its launch
+window.
+
 The scenario that needs nothing more is `scenario.window: launch`: its window
 is the launch this mode starts, and the trace says where it ends, so nobody
 picks an end anchor before the first recording. `echolot scan` drafts the
@@ -762,7 +789,13 @@ it records the rest, with the window `analyze` would cut. When the app drew
 no frame in it, or the end anchor opened and never closed, the scenario did
 not reach its screen (no network, an error screen, a dialog in the way), and
 every repeat after it would record the same: the round stops there, with that
-reason and nothing kept. The trace waits for this reading beside the set, and
+reason and nothing kept. A window that closes before the app's first frame is
+not one of them: `bindApplication` to `activityStart` in a cold start draws
+nothing because nothing was drawn yet, and its round goes on. Under
+`scenario.window: launch` the round stops too when the trace holds no launch
+of the app, with the reason `analyze` would give, such as a
+[permission dialog over the launch](#a-permission-dialog-over-the-launch).
+The trace waits for this reading beside the set, and
 the set from before moves only once it is let in: a round that stops here
 leaves `.echolot/traces` as it found it. With `-n 1` the trace is kept and
 marked `[!]`. An

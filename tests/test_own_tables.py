@@ -21,14 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests.support import check  # noqa: E402
 
-from echolot import fixture, selftest  # noqa: E402
-from echolot import analyze as analyze_mod  # noqa: E402
-from echolot import report as report_mod  # noqa: E402
-from echolot.config import Config  # noqa: E402
 from echolot.analyze import DETECTOR_DIR  # noqa: E402
 from echolot.tp import Detector, load_detectors  # noqa: E402
 
-HEAD = "-- @id: own\n-- @title: Own\n-- @param: min_ms = 30\n-- @bar: min_ms\n\n"
+HEAD = "-- @id: own\n-- @title: Own\n-- @param: min_ms = 30\n\n"
 ROWS = "SELECT name AS location, COUNT(*) AS count FROM {t} GROUP BY name LIMIT 20;\n"
 
 
@@ -111,72 +107,3 @@ def test_every_shipped_writer_reads_its_tables_for_the_time() -> None:
     for d in writers:
         check(f"{d.id}: its @intervals reads what its first query wrote",
               any(t in d.intervals_sql for t in d.tables), d.tables)
-
-
-# --- the run's own pieces, not the open run's ------------------------------
-
-# A row per name with occurrences of 30 ms or more, and the time it stands
-# for: those occurrences. With its bar open, the first query writes every
-# occurrence into the same table.
-OWN = HEAD + """\
-CREATE OR REPLACE PERFETTO TABLE _det_own AS
-SELECT name, ts, dur
-FROM _slice_win
-WHERE is_main_thread = 1 AND dur >= {{min_ms}} * 1000000;
-
-SELECT name AS location, COUNT(*) AS count, ROUND(SUM(dur) / 1e6, 2) AS total_ms
-FROM _det_own
-GROUP BY name
-ORDER BY total_ms DESC, location
-LIMIT 20;
-
--- @intervals
-SELECT ts, dur FROM _det_own WHERE name IN (SELECT location FROM _rows);
-"""
-
-
-def _analysed(monkeypatch, tmp_path: Path, below_bar: bool) -> tuple[dict, list, list]:
-    """The fixture under `own` alone; its stretches, and what ran in which order."""
-    det_dir = tmp_path / "detectors"
-    det_dir.mkdir(exist_ok=True)
-    (det_dir / "own.sql").write_text(OWN, encoding="utf-8")
-    monkeypatch.setattr(analyze_mod, "DETECTOR_DIR", det_dir)
-    spans: list = []
-    order: list = []
-    real_spans, real_open = analyze_mod._spans_behind, analyze_mod._below_bar
-
-    def spans_behind(tp, d, params, rows):
-        order.append(("intervals", d.id))
-        out = real_spans(tp, d, params, rows)
-        spans.extend(out or [])
-        return out
-
-    def below(tp, d, *a, **k):
-        order.append(("open", d.id))
-        return real_open(tp, d, *a, **k)
-
-    monkeypatch.setattr(analyze_mod, "_spans_behind", spans_behind)
-    monkeypatch.setattr(analyze_mod, "_below_bar", below)
-    trace = tmp_path / "f.perfetto-trace"
-    trace.write_bytes(fixture.build())
-    report = analyze_mod.analyze_trace(trace, Config(selftest.FIXTURE_CONFIG), below_bar=below_bar)
-    return report, sorted(spans), order
-
-
-def test_the_time_is_read_from_the_runs_own_pieces(monkeypatch, tmp_path) -> None:
-    alone, spans_alone, _ = _analysed(monkeypatch, tmp_path, below_bar=False)
-    merged, spans_merged, order = _analysed(monkeypatch, tmp_path, below_bar=True)
-    det = next(d for d in merged["detectors"] if d["id"] == "own")
-    rows = {r["location"]: r["count"] for r in det["rows"]}
-    opened = {r["location"]: r["count"] for r in det[report_mod.OPEN_ROWS]}
-    check("the open run counts more of a row's name than the run itself",
-          any(opened.get(name, 0) > n for name, n in rows.items()), (rows, opened))
-    check("the stretches are the run's own, open run or not",
-          spans_merged == spans_alone and spans_alone, (spans_alone, spans_merged))
-    check("one stretch per occurrence the rows counted",
-          len(spans_alone) == sum(rows.values()), (spans_alone, rows))
-    check("because the open run comes after the time is read",
-          order == [("intervals", "own"), ("open", "own")], order)
-    check("and the share of the window is the same",
-          alone["window"]["main_thread"] == merged["window"]["main_thread"],
-          (alone["window"]["main_thread"], merged["window"]["main_thread"]))
