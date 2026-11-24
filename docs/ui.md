@@ -477,7 +477,12 @@ keeps the markers until it is built and installed again.
 Unless the agent closed it, the investigation stays open, and **Check the
 app** waits while it is open: **Close the investigation** closes it with what
 came of it (`echolot hunt --done "Stopped from echolot ui, after 2 rounds, with
-no answer. …"`). What it tried and was refused is listed under the end.
+no answer. …"`). Those words head the page from then on, and the line on how
+the agent ended says the page closed it after that, as in "It ended before it
+had an answer, and the investigation was closed from this page after that". It
+says the agent closed the investigation only when the agent did, while it ran;
+one closed by hand after it ended is said to be closed after that. What it
+tried and was refused is listed under the end.
 
 ### With Codex
 

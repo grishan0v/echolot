@@ -435,6 +435,11 @@ claude -p "<the request>" --output-format json --permission-mode dontAsk --permi
 Если агент сам не закрыл расследование, оно остаётся открытым, и **Check the
 app** ждёт, пока оно открыто: **Close the investigation** закрывает его с тем,
 к чему оно пришло (`echolot hunt --done "Stopped from echolot ui, after 2 rounds, with no answer. …"`).
+Эти слова становятся заголовком страницы, а строка о том, как агент закончил,
+говорит, что расследование потом закрыли со страницы: «It ended before it had
+an answer, and the investigation was closed from this page after that».
+Что расследование закрыл агент, она говорит, только если он сам закрыл его,
+пока работал; закрытое вручную после его конца — «closed after that».
 Что агент пытался сделать и получил отказ — в списке в конце.
 
 ### С Codex

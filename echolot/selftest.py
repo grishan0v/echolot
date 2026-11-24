@@ -8020,6 +8020,59 @@ def _(report):
     assert "Nothing was recorded in this investigation" not in page
 
 
+@check("ui: the agent's panel says the page closed its investigation when the page did, "
+       "and that the agent did only when it did, while it ran")
+def _(report):
+    """An agent that wrote down no answer, or failed, leaves its
+    investigation open, and Close the investigation closes it with the
+    page's words. The panel took any closed investigation for the agent's:
+    "It closed the investigation with a few words" under the headline
+    "Closed from echolot ui.", and, of a run that failed first, "It ended
+    with an error after the investigation was closed" (#864). The page's
+    words say the page closed it; a close stamped after the run finished
+    was not the agent's either.
+    """
+    import json
+    from datetime import datetime, timezone
+    from . import dig
+
+    def at(seconds: float) -> str:
+        return datetime.fromtimestamp(seconds, timezone.utc).isoformat(timespec="seconds")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        log = root / ".echolot" / "log"
+        log.mkdir(parents=True)
+        now = time.time()
+
+        def said(end: str, closed: float, words: str) -> str:
+            step = {"id": dig.STEP, "status": end, "started": now - 120, "finished": now - 60}
+            (log / f"{dig.JOB}.json").write_text(json.dumps({
+                "job": dig.JOB, "started": now - 120, "finished": now - 60, "end": end,
+                "what": {"client": "claude", "hunt": 1}, "steps": [step]}), encoding="utf-8")
+            (root / ".echolot" / "hunt.json").write_text(json.dumps({
+                "n": 1, "question": "Why is the launch slow?", "status": "concluded", "opened_at": at(now - 120),
+                "closed_at": at(closed), "conclusion": words, "collects": 1, "reports": 0}), encoding="utf-8")
+            seen = dig.view(root, {}, procs=lambda: [], count=False)
+            assert seen is not None
+            return seen["text"]
+
+        page = dig.closing_words({"who": "Claude Code", "status": "done", "rounds": 1})
+        assert page.endswith(dig.CLOSED_HERE), page
+        text = said("done", now - 90, "Store.fill is slow.")
+        assert text.startswith("It closed the investigation with a few words"), text
+        text = said("done", now - 30, page)
+        assert text.startswith("It left the investigation open, and it was closed from this page after that"), text
+        assert "It closed the investigation" not in text, text
+        text = said("failed", now - 30, dig.closing_words({"who": "Claude Code", "status": "failed", "rounds": 1}))
+        assert text.startswith("It ended before it had an answer, and the investigation was closed from this page "
+                               "after that."), text
+        text = said("failed", now - 90, "Store.fill is slow.")
+        assert text.startswith("It ended with an error after the investigation was closed."), text
+        text = said("done", now - 30, "Store.fill is slow; closed by hand.")
+        assert text.startswith("It left the investigation open, and it was closed after that"), text
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor
