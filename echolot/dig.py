@@ -302,14 +302,24 @@ def _listed(items: Sequence[str]) -> str:
 def facts(n: int, aside: tuple[str, int] | None) -> list[str]:
     """The three facts of the hunt as every client started from the page is
     told them: the investigation open for it and how to file a round in it,
-    its first evidence, and after which change."""
+    its first evidence, and after which change.
+
+    The evidence is round 1, and every later round records anew: told only
+    not to record the recordings set aside again, a live Codex recorded
+    nothing at all, and closed the investigation on round 1 alone."""
     if aside:
         folder, count = aside
-        evidence = (f"- Its first evidence is the {count} recording{'s' if count != 1 else ''} behind the report, "
-                    f"moved aside when it opened, into `{folder}/`. Do not record {'them' if count != 1 else 'it'} "
-                    "again.")
+        one = count == 1
+        evidence = (f"- Round 1's evidence is the {'recording' if one else f'{count} recordings'} behind the report, "
+                    f"moved aside when it opened, into `{folder}/`: file {'it' if one else 'them'} with "
+                    f"`echolot analyze` and `--hunt {n}`, naming {'the trace file' if one else 'each trace file'} "
+                    f"there (it takes files, not a folder), and do not record {'it' if one else 'them'} again. Every "
+                    "later round records anew, once markers are in: build and install the app, then "
+                    f"`echolot collect --hunt {n}` and `echolot analyze --hunt {n}`.")
     else:
-        evidence = "- No recordings were set aside when it opened: record them in its first round."
+        evidence = (f"- No recordings were set aside when it opened: round 1 records them, with "
+                    f"`echolot collect --hunt {n}` and then `echolot analyze --hunt {n}`, and every later round "
+                    "records anew, once markers are in: build and install the app, then the same two.")
     return [
         f"- The investigation is open: #{n}, opened for this question by the page. Carry on in it, do not open "
         f"another, and close it at the end. Run every `collect` and `analyze` in it with `--hunt {n}`: without "
