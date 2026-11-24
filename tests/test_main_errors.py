@@ -113,6 +113,26 @@ def test_mark_apply_json_is_one_document(tmp_path: Path, monkeypatch) -> None:
           code == 0 and data["applied"] and data["applied"][0]["markers"], data.get("applied"))
 
 
+def test_mark_c_from_a_subfolder_looks_in_the_config_s_folder(tmp_path: Path,
+                                                                monkeypatch) -> None:
+    """#723: `-c ../echolot.yml` is the project `hunt -c` counts markers in."""
+    _app(tmp_path, "project:\n  package: com.example.app\n")
+    activity = tmp_path / "app/src/main/kotlin/MainActivity.kt"
+    monkeypatch.chdir(tmp_path)
+    code, _, err = _run("mark", "--apply")
+    check("markers applied", code == 0 and "AGENTTMP_" in activity.read_text(), err)
+    (tmp_path / "design-system").mkdir()
+    monkeypatch.chdir(tmp_path / "design-system")
+    code, out, err = _run("mark", "-c", "../echolot.yml", "--remove")
+    check("removed from the config's folder", code == 0
+          and "removed markers from 1 file(s)" in out + err
+          and activity.read_text() == ACTIVITY, out + err)
+    _run("mark", "-c", "../echolot.yml", "--apply")
+    code, out, err = _run("mark", "--remove")
+    check("without -c it stays under the current folder", "AGENTTMP_" in activity.read_text()
+          and "removed markers" not in out + err, out + err)
+
+
 def test_an_argument_error_is_logged(logged) -> None:
     code, _, _ = _run("analyze")
     entry = logged()
