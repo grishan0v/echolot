@@ -1,8 +1,8 @@
 """How a set was recorded, carried into its report (#533).
 
 A comparison subtracts two sets of recordings, and the subtraction is only
-about the app when the recordings were made the same way. Two things decide
-that, and neither was in `report.json`:
+about the app when the recordings were made the same way. Three things decide
+that, and none of them was in `report.json`:
 
   * what the recording asked the device for — its data sources, its atrace
     categories, its ftrace events. A set recorded by a Macrobenchmark with its
@@ -26,21 +26,42 @@ that, and neither was in `report.json`:
     `collect` writes it beside each trace it records (`write`), and `analyze`
     reads it back (`read`).
 
+  * what the device was set to do with the app, which the trace does not
+    carry either, so `collect` reads it once a round (`settings`) and keeps
+    it with the rest:
+
+    - the three animation scales of Developer options (#612). A list scroll
+      on an SM-A515F with all three at 5 on one side and 1 on the other gave
+      5 to 17 rows that held — Compose's animation work, the GPU thread —
+      and nothing said that every animation on one side ran five times as
+      long. UI-test setups set them to 0 on purpose, so a scale that is not
+      1 is said rather than refused.
+
+    - "Don't keep activities" (#616), which destroys an activity as soon as
+      it leaves the screen. It was on on the phone of one test series, and
+      nobody running it knew: `HOME` and `am start` of a living process came back
+      `WARM`, 431–469 ms, where with it off they came back `HOT`, 144–179
+      ms. It is read from ActivityManager rather than from the setting it
+      keeps: `settings put` changes the setting and not ActivityManager,
+      which reads it at boot and when Developer options switch it.
+
 The block is a list of conditions (`CONDITIONS`), each with a key in
 `report.json`, how a set's repeats combine, and how `compare` words a
-difference. A new fact about the recording — the device's animation scales,
-"Don't keep activities" — is one more entry here and one more field in what
-`collect` writes; `merge` and `moved` need no change for it.
+difference. A new fact about the recording is one more entry here and one
+more field in what `collect` writes; `merge` and `moved` need no change for
+it.
 
 A condition no repeat could say is `None`: unknown, never "the same". A
 report written before the block existed has no `recording` at all, and
 `compare` says that the recordings could not be checked rather than that
-they matched.
+they matched. A set recorded before `collect` read the device's settings
+says how it was driven and not those, and `compare` says that much.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -71,16 +92,64 @@ class Condition:
     `differs` says what is different between the two sides' blocks, for a
     condition the generic "`x` before, `y` after" says less about than it
     could; it is handed both blocks, so that it can say how many repeats.
+
+    `show` words one value, where its JSON would read badly in a sentence.
+    `valid` is what `read` takes from an account for a condition `collect`
+    keeps: a string, unless the condition says otherwise. Anything else
+    reads as not kept.
     """
     key: str
     label: str
     source: str
     per_repeat: bool = False
     differs: Callable[[dict[str, Any], dict[str, Any]], str] | None = None
+    show: Callable[[Any], str] | None = None
+    valid: Callable[[Any], bool] = lambda value: isinstance(value, str)
 
 
 def _code(value: Any) -> str:
     return f"`{value}`"
+
+
+# --- the device's settings (#612, #616) ----------------------------------------
+
+# The three animation scales of Developer options: the word the report says
+# each with, and the name `settings` keeps it under.
+SCALES = (("window", "window_animation_scale"),
+          ("transition", "transition_animation_scale"),
+          ("animator", "animator_duration_scale"))
+DONT_KEEP = '"Don\'t keep activities"'
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_scales(value: Any) -> bool:
+    return (isinstance(value, dict) and set(value) == {w for w, _ in SCALES}
+            and all(_number(v) and math.isfinite(v) and v >= 0 for v in value.values()))
+
+
+def scales_text(value: dict[str, float]) -> str:
+    """`all three `5``, or each scale by name where they are not one number."""
+    nums = [value[w] for w, _ in SCALES]
+    if len(set(nums)) == 1:
+        return f"all three `{nums[0]:g}`"
+    return ", ".join(f"{w} `{value[w]:g}`" for w, _ in SCALES)
+
+
+def _scales(rb: dict[str, Any], ra: dict[str, Any]) -> str:
+    return (f"the device's animation scales {scales_text(rb['animation_scales'])} "
+            f"before and {scales_text(ra['animation_scales'])} after")
+
+
+def _on(value: Any) -> str:
+    return "on" if value else "off"
+
+
+def _dont_keep(rb: dict[str, Any], ra: dict[str, Any]) -> str:
+    return (f"{DONT_KEEP} {_on(rb['always_finish_activities'])} before and "
+            f"{_on(ra['always_finish_activities'])} after")
 
 
 def _listed(items: list[str]) -> str:
@@ -130,7 +199,14 @@ CONDITIONS: tuple[Condition, ...] = (
               differs=_sets("atrace_categories", "atrace categories")),
     Condition("ftrace_events", "ftrace events", "trace",
               differs=_sets("ftrace_events", "ftrace events")),
+    Condition("animation_scales", "the device's animation scales", "collect",
+              differs=_scales, show=scales_text, valid=_is_scales),
+    Condition("always_finish_activities", DONT_KEEP, "collect",
+              differs=_dont_keep, show=_on, valid=lambda value: isinstance(value, bool)),
 )
+_BY_KEY = {c.key: c for c in CONDITIONS}
+# What `collect` reads of the device rather than of how it drove the repeats.
+DEVICE_KEYS = ("animation_scales", "always_finish_activities")
 
 KEYS = tuple(c.key for c in CONDITIONS)
 _FROM_COLLECT = tuple(c.key for c in CONDITIONS if c.source == "collect")
@@ -195,8 +271,7 @@ def read(trace: str | Path) -> dict[str, Any]:
         return {}
     if not isinstance(body, dict):
         return {}
-    return {k: body[k] for k in _FROM_COLLECT
-            if isinstance(body.get(k), str)}
+    return {k: body[k] for k in _FROM_COLLECT if _BY_KEY[k].valid(body.get(k))}
 
 
 _ABSENT = object()
@@ -213,6 +288,71 @@ def kept(trace: str | Path, key: str, default: Any = _ABSENT) -> Any:
     if isinstance(body, dict) and key in body:
         return body[key]
     return None if default is _ABSENT else default
+
+
+# --- what collect reads of the device -----------------------------------------
+
+# One call a round: the four settings as `settings` keeps them, and
+# ActivityManager's own state. `dumpsys activity processes` prints its header
+# always, and `mAlwaysFinishActivities=true` only while "Don't keep
+# activities" is on (Android 10, 13 and 14 alike), so a dump with the header
+# and without the line is the option off.
+SETTINGS_SCRIPT = (
+    "for k in " + " ".join(name for _, name in SCALES) + " always_finish_activities; "
+    'do echo "$k=$(settings get global $k)"; done; '
+    "dumpsys activity processes | grep -e 'RUNNING PROCESSES' "
+    "-e 'mAlwaysFinishActivities='; true")
+_AM_HEADER = "RUNNING PROCESSES"
+_AM_ALWAYS_FINISH = "mAlwaysFinishActivities=true"
+
+
+def settings(device: str, run: Callable[..., str]) -> dict[str, Any]:
+    """The device's animation scales and "Don't keep activities", as
+    `collect` keeps them beside each trace of a round. A device that does
+    not answer leaves both unknown and the collect going: a repeat is not
+    worth losing for a sentence in the report."""
+    try:
+        text = run(["adb", "-s", device, "shell", SETTINGS_SCRIPT], timeout=30)
+    except Exception:  # whatever adb did, the recording does not depend on it
+        text = ""
+    return parse_settings(text)
+
+
+def parse_settings(text: str) -> dict[str, Any]:
+    """`animation_scales` and `always_finish_activities` from what
+    `SETTINGS_SCRIPT` printed; `None` for what it did not say.
+
+    A scale never set prints `null`, and the system then animates at 1, its
+    default. "Don't keep activities" is ActivityManager's when the dump
+    answered: the setting is only what it reads at boot and what Developer
+    options write beside switching it, and a `settings put` since leaves the
+    two apart. The setting stands in only where the dump said nothing.
+    """
+    lines = [line.strip() for line in str(text or "").splitlines()]
+    stored: dict[str, str] = {}
+    for line in lines:
+        key, eq, value = line.partition("=")
+        if eq:
+            stored.setdefault(key, value.strip())
+
+    def scale(name: str) -> float | None:
+        raw = stored.get(name)
+        if raw == "null":
+            return 1.0
+        try:
+            value = float(raw) if raw is not None else None
+        except ValueError:
+            return None
+        return value if value is not None and math.isfinite(value) and value >= 0 else None
+
+    scales = {word: scale(name) for word, name in SCALES}
+    if any(_AM_HEADER in line for line in lines):
+        always = _AM_ALWAYS_FINISH in lines
+    else:
+        always = {"1": True, "0": False, "null": False}.get(
+            stored.get("always_finish_activities", ""))
+    return {"animation_scales": scales if None not in scales.values() else None,
+            "always_finish_activities": always}
 
 
 # --- what the trace says it asked for -----------------------------------------
@@ -252,8 +392,20 @@ def of_trace(tp: Any, trace: str | Path) -> dict[str, Any]:
 
 # --- a set of repeats ----------------------------------------------------------
 
+class _Frozen(tuple):
+    """A dict's items, so that it can be counted; `_thawed` gives it back."""
+
+
 def _frozen(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _Frozen(sorted(value.items()))
     return tuple(value) if isinstance(value, list) else value
+
+
+def _thawed(value: Any) -> Any:
+    if isinstance(value, _Frozen):
+        return dict(value)
+    return list(value) if isinstance(value, tuple) else value
 
 
 def merge(blocks: list[dict[str, Any] | None]) -> dict[str, Any] | None:
@@ -276,10 +428,10 @@ def merge(blocks: list[dict[str, Any] | None]) -> dict[str, Any] | None:
         # Ties go to the value met first: the earliest repeat's.
         order = list(dict.fromkeys(_frozen(v) for v in values))
         top = max(order, key=lambda v: counts[v])
-        out[key] = list(top) if isinstance(top, tuple) else top
+        out[key] = _thawed(top)
         if len(counts) > 1:
-            mixed[key] = [{"value": list(v) if isinstance(v, tuple) else v,
-                           "runs": f"{counts[v]}/{n}"} for v in order]
+            mixed[key] = [{"value": _thawed(v), "runs": f"{counts[v]}/{n}"}
+                          for v in order]
     if mixed:
         out["mixed"] = mixed
     return out
@@ -310,8 +462,10 @@ def moved(before: dict[str, Any], after: dict[str, Any],
 
     `recording` when a condition both sides know differs, naming what
     differs and the detectors that read it; `recording-mixed` for a side
-    whose own repeats were not recorded alike; `recording-unknown` once, for
-    whatever one side could not say while the other could. A condition
+    whose own repeats were not recorded alike; `recording-unknown` for
+    whatever one side could not say while the other could: once for how it
+    was driven and what it asked for, and once for the device's settings a
+    `collect` from before it read them did not keep. A condition
     neither side could say gets nothing: there is nothing to set against
     anything.
     """
@@ -386,13 +540,78 @@ def moved(before: dict[str, Any], after: dict[str, Any],
                           "that was kept, or by something other than "
                           "`collect`.",
             })
+        # A `collect` that drove its repeats and did not read the device: one
+        # from before it did. Said for launch and command rounds only, the
+        # ones that read it; a runner unknown is said above, and a
+        # Macrobenchmark's round never reads it.
+        unread = [_UNREAD[k] for k in DEVICE_KEYS
+                  if mine.get(k) is None and other.get(k) is not None]
+        if unread and mine.get("runner") in ("launch", "command"):
+            out.append({
+                "id": "recording-unknown",
+                "text": f"The {side} side does not say {' nor '.join(unread)}: "
+                        f"its traces were recorded by a `collect` from before it "
+                        f"read them. Whether the two sides ran with the same "
+                        f"device settings cannot be checked; record that side "
+                        f"again to have it checked.",
+            })
     return out
+
+
+# How a side that did not read a device setting is said not to know it.
+_UNREAD = {
+    "animation_scales": "the device's animation scales",
+    "always_finish_activities": f"whether {DONT_KEEP} was on",
+}
 
 
 def _split(c: Condition, entries: list[dict[str, Any]]) -> str:
     """One condition a side's repeats did not share, with how they split."""
     if any(isinstance(e["value"], list) for e in entries):
         return f"{c.label} differ between them ({len(entries)} different sets)"
+    show = c.show or _code
     return f"{c.label} " + ", ".join(
-        f"{'unknown' if e['value'] is None else _code(e['value'])} in "
+        f"{'unknown' if e['value'] is None else show(e['value'])} in "
         f"{e['runs'].replace('/', ' of ')}" for e in entries)
+
+
+# --- the report's header ----------------------------------------------------------
+
+def _share(block: dict[str, Any], key: str) -> str:
+    """` in 3 of 5 repeats` where a set's repeats split on `key`, else nothing."""
+    return " " + _repeats(block, key) if key in (block.get("mixed") or {}) else ""
+
+
+def header_lines(block: dict[str, Any] | None) -> list[str]:
+    """What the report's header says of the device's settings: animation
+    scales that are not 1, and "Don't keep activities" while it was on.
+    Nothing for a device at its defaults, nor for one nobody read: a report
+    from before they were read is not one recorded at the defaults, and
+    `compare` is where that is said."""
+    if not isinstance(block, dict):
+        return []
+    out: list[str] = []
+    scales = block.get("animation_scales")
+    if _is_scales(scales) and any(scales[w] != 1 for w, _ in SCALES):
+        if {scales[w] for w, _ in SCALES} == {0}:
+            what = ("animations were off, so the frames a phone draws for them, "
+                    "and the work behind those frames, are not in these numbers")
+        else:
+            what = ("an animation lasts its length times its scale, and the frames "
+                    "that draw it, with the work behind them, change with it")
+        out.append(f"Animation scales: {scales_text(scales)}"
+                   f"{_share(block, 'animation_scales')}, where a phone comes with "
+                   f"1: {what}. Developer options set them back.")
+    if block.get("always_finish_activities") is True:
+        line = (f"{DONT_KEEP} was on{_share(block, 'always_finish_activities')}: "
+                f"the system destroyed each activity as soon as it left the screen, "
+                f"so a return to the app created it again, a warm start where a "
+                f"phone without it starts hot.")
+        cold = block.get("runner") == "launch" and block.get("reset_policy") == "force-stop"
+        if cold:
+            line += (" A cold start creates its activity anyway; only an activity "
+                     "the app leaves on the way is destroyed with it.")
+        line += (" Switch it off in Developer options: `settings put` changes the "
+                 "setting and not the running system.")
+        out.append(line if cold else "> ⚠️ " + line)
+    return out

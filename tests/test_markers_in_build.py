@@ -206,8 +206,8 @@ def test_command_mode_reads_the_build_again_after_the_first_repeat(
     said = _collect(tmp_path, planted("AGENTTMP_a"), section=COMMAND)
     kinds = adb.kinds()
     check("before the set, and once the first repeat has recorded, before its pull",
-          kinds[:3] == ["devices", "build", "screen"]
-          and kinds[3:9] == ["screen", "rm", "perfetto", "wait", "build", "pull"]
+          kinds[:4] == ["devices", "build", "screen", "settings"]
+          and kinds[4:10] == ["screen", "rm", "perfetto", "wait", "build", "pull"]
           and kinds.count("build") == 2 and kinds.count("pull") == 3, kinds)
     check("said both times", "  [!] the build on the phone lacks the temporary marker in the "
           "code; the scenario may install another, so it is read again after the first repeat"

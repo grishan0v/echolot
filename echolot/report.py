@@ -1830,6 +1830,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.extend(_window_warning_lines(w))
 
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
+    out.extend(recording_mod.header_lines(report.get("recording")))
     out.extend(_no_sources_lines(report.get("no_sources")))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
@@ -2208,6 +2209,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     out.extend(_outside_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
+    out.extend(recording_mod.header_lines(report.get("recording")))
     out.extend(_no_sources_lines(report.get("no_sources")))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))

@@ -70,6 +70,12 @@ AM_START_UNMEASURED = (f"Starting: Intent {{ cmp={ACTIVITY} }}\nStatus: ok\n"
 SCREEN_ON = ("  mWakefulness=Awake\n  mIsPowered=true\n  mStayOn=true\n"
              "    mShowingDream=false mDreamingLockscreen=false\n"
              "    isKeyguardShowing=false\n")
+# What the device's settings read answers (#612, #616) on a phone as it
+# comes: every animation scale at 1, and ActivityManager's dump with no line
+# for "Don't keep activities", which it prints only while the option is on.
+SETTINGS_AS_SHIPPED = ("window_animation_scale=1.0\ntransition_animation_scale=1.0\n"
+                       "animator_duration_scale=1.0\nalways_finish_activities=0\n"
+                       "ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)\n")
 
 
 def kind(args: list[str]) -> str:
@@ -78,7 +84,7 @@ def kind(args: list[str]) -> str:
     The build read (#393) is first: its script lists the APKs with `pm path`.
     """
     text = " ".join(args)
-    for name, needle in (("build", "unzip -p"),
+    for name, needle in (("build", "unzip -p"), ("settings", "settings get global"),
                          ("devices", "adb devices"), ("resolve", "resolve-activity"),
                          ("force-stop", "am force-stop"), ("rm", "rm -f"),
                          ("perfetto", "perfetto -c"), ("start", "am start -W"),
@@ -122,6 +128,8 @@ class FakeAdb:
             return answers.pop(0) if len(answers) > 1 else answers[0]
         if what == "screen":
             return SCREEN_ON
+        if what == "settings":
+            return SETTINGS_AS_SHIPPED
         if what == "installed":
             return INSTALLED
         if what == "devices":
@@ -163,11 +171,12 @@ def test_launch_mode_asks_once_then_runs_eight_steps_per_iteration(tmp_path, adb
     results = runner.collect(PACKAGE, tmp_path / "traces", 3, section={},
                              name="startup", log=said.append)
     kinds = adb.kinds()
-    check("the device, the app on it, the activity and the screen, once each and first",
-          kinds[:4] == ["devices", "installed", "resolve", "screen"], kinds)
+    check("the device, the app on it, the activity, the screen and the device's "
+          "settings, once each and first",
+          kinds[:5] == ["devices", "installed", "resolve", "screen", "settings"], kinds)
     check("then per iteration: stop, the screen, a last look, clear, record, launch, "
           "wait, pull",
-          kinds[4:] == ["force-stop", "screen", "look", "rm", "perfetto", "start", "wait",
+          kinds[5:] == ["force-stop", "screen", "look", "rm", "perfetto", "start", "wait",
                         "pull"] * 3, kinds)
     check("a screen on and unlocked says nothing",
           not any("screen" in line for line in said), said)
@@ -671,8 +680,9 @@ def test_the_set_moves_after_the_device_check_and_before_the_first_pull(tmp_path
     check("once", kinds.count("<set aside>") == 1 and len(moved) == 1, kinds)
     where = kinds.index("<set aside>")
     check("after the device check and the first recording, right before its pull",
-          kinds[:where] == ["devices", "installed", "resolve", "screen", "force-stop",
-                            "screen", "look", "rm", "perfetto", "start", "wait"]
+          kinds[:where] == ["devices", "installed", "resolve", "screen", "settings",
+                            "force-stop", "screen", "look", "rm", "perfetto", "start",
+                            "wait"]
           and kinds[where + 1] == "pull", kinds)
     check("the old set is in the directory it went to",
           sorted(p.name for p in moved[0].iterdir()) == before)
@@ -753,8 +763,10 @@ def test_the_scenario_command_gets_the_device_as_android_serial(tmp_path, adb):
           seen.read_text(encoding="utf-8").split() == ["emulator-5554"] * 2,
           seen.read_text(encoding="utf-8"))
     kinds = adb.kinds()
-    check("and nothing but the screen, record, wait and pull around it",
-          kinds[1:] == ["screen"] + ["screen", "rm", "perfetto", "wait", "pull"] * 2, kinds)
+    check("and nothing but the screen, the device's settings, record, wait and pull "
+          "around it",
+          kinds[1:] == ["screen", "settings"] + ["screen", "rm", "perfetto", "wait", "pull"] * 2,
+          kinds)
 
 
 def test_without_device_the_one_attached_is_the_serial(tmp_path, adb):
