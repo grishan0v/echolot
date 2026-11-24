@@ -13,7 +13,6 @@ number appears the same way in both.
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import re
 import shlex
@@ -22,6 +21,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .. import files
 from ..config import Config
 from ..mark import under_allowed
 from ..recorder import LOG_FILE
@@ -652,10 +652,10 @@ def _report_on_disk(path: str | None, rec: dict[str, Any]) -> dict[str, Any]:
     with contextlib.suppress(OSError):
         out["md_bytes"] = p.with_suffix(".md").stat().st_size
     if st.st_size <= _REPORT_PARSE_MAX:
-        try:
-            window = (json.loads(p.read_text(encoding="utf-8")) or {}).get("window") or {}
-        except (OSError, ValueError, AttributeError):
-            window = {}
+        # The report's one reader: a file another version wrote, or one that
+        # does not read, says nothing here about its window.
+        report = files.read_report(p)
+        window = {} if isinstance(report, files.Refusal) else report.get("window") or {}
         if isinstance(window, dict):
             drawn = window.get("drawn")
             if isinstance(drawn, dict) and isinstance(drawn.get("count"), int):

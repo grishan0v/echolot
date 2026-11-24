@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import recording, sandbox
+from . import files, recording, sandbox
 
 # Default atrace categories. sched in ftrace_events is mandatory: without it
 # there is no thread_state, so runnable_starvation, uninstrumented_cpu and
@@ -420,7 +420,8 @@ class Progress:
 
     def __init__(self, path: Path):
         self.path = path
-        self.state: dict = {}
+        # Shared with the reader (`files.read_collect`).
+        self.state: dict = {"schema": files.COLLECT_SCHEMA}
 
     def update(self, **fields) -> None:
         self.state.update(fields)

@@ -257,3 +257,158 @@ def test_a_line_that_is_no_run_is_skipped_and_the_rest_read(tmp_path):
 
 def test_no_log_is_no_runs(tmp_path):
     check("none", files.read_runs(tmp_path / "runs.jsonl") == [])
+
+
+# --- report.json ---------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def report_written():
+    """report.json as `analyze` writes it."""
+    from tests.test_report_page import known
+    return report_mod.to_json(known())
+
+
+def test_a_report_reads_back_as_it_was_written(report_written, tmp_path):
+    (tmp_path / "report.json").write_text(report_written, encoding="utf-8")
+    got = files.read_report(tmp_path / "report.json")
+    check("it carries the schema the reader reads", json.loads(report_written)["schema"] == files.REPORT_SCHEMA)
+    check("equal to what was written", got == json.loads(report_written), got)
+
+
+BAD_REPORTS = [
+    (_set("schema", 2), "a newer echolot wrote it, in schema 2; this one reads schema 1"),
+    (_set("schema", 0), "an older echolot wrote it, in schema 0"),
+    (_set("schema", True), "its schema number is true or false, not a whole number"),
+    (_set("kind", "comparison"), "it is a comparison, not a report.json"),
+    (_set("detectors", "x"), "`detectors` is text, not a list"),
+    (_set("detectors", 0, "gc_pressure"), "`detectors[0]` is text, not an object"),
+    (_set("detectors", 0, "id", 7), "`detectors[0].id` is a number, not text"),
+    (_set("detectors", 0, "id", None), "`detectors[0].id` is missing"),
+    (_set("detectors", 2, "rows", {"a": 1}), "`detectors[2].rows` is an object, not a list"),
+    (_set("detectors", 2, "rows", ["Sync Worker"]), "`detectors[2].rows[0]` is text, not an object"),
+    (_set("markers", []), "`markers` is a list, not an object"),
+    (_set("markers", {"rows": "x"}), "`markers.rows` is text, not a list"),
+    (_set("markers", {"absent": 3}), "`markers.absent` is a number, not a list"),
+    (_set("summary", []), "`summary` is a list, not an object"),
+    (_set("summary", "detectors_run", "6"), "`summary.detectors_run` is text, not a whole number"),
+    (_set("summary", "detectors_fired", True), "`summary.detectors_fired` is true or false, not a whole number"),
+    (_set("config", "x"), "`config` is text, not an object"),
+    (_set("config", {"sha": 5}), "`config.sha` is a number, not text"),
+    (_set("config", {"defaults": "no"}), "`config.defaults` is text, not true or false"),
+    (_set("traces", "ab"), "`traces` is text, not a list"),
+    (_set("generated_at", 1763719200), "`generated_at` is a number, not text"),
+]
+
+
+@pytest.mark.parametrize("change, said", BAD_REPORTS)
+def test_a_report_of_a_bad_shape_says_which_part(report_written, tmp_path, change, said):
+    data = json.loads(report_written)
+    change(data)
+    (tmp_path / "report.json").write_text(json.dumps(data), encoding="utf-8")
+    got = files.read_report(tmp_path / "report.json")
+    check("refused, saying where", refused(got, said), got)
+    check("its schema alone makes it stale", got.stale == ("echolot wrote it" in said), got)
+
+
+@pytest.mark.parametrize("data, said", [
+    (b"\xff\xfe{", "it is not UTF-8 text"),
+    (b"\n", "it is empty"),
+    (b'{"schema": 1, "detectors": [', "it is not whole JSON at line 1"),
+    (b"42", "it holds a number, not an object"),
+])
+def test_a_report_that_is_no_json_object_says_so(tmp_path, data, said):
+    (tmp_path / "report.json").write_bytes(data)
+    check(said, refused(files.read_report(tmp_path / "report.json"), said))
+
+
+def test_a_report_with_no_schema_number_is_one_of_schema_1(report_written, tmp_path):
+    data = json.loads(report_written)
+    del data["schema"]
+    (tmp_path / "report.json").write_text(json.dumps(data), encoding="utf-8")
+    check("it reads, as it is", files.read_report(tmp_path / "report.json") == data)
+
+
+def test_raising_the_report_schema_is_one_line_and_an_upgrade(report_written):
+    """What #832 does: a new number, and either an upgrade from the old one or
+    a refusal that names `echolot analyze`."""
+    import dataclasses
+    old = json.loads(report_written)
+    refusing = dataclasses.replace(files.REPORT, schema=2)
+    check("without an upgrade, a schema-1 report is refused for its schema",
+          refused(refusing.check(old), "an older echolot wrote it, in schema 1; this one reads schema 2")
+          and refusing.check(old).stale)
+    upgrading = dataclasses.replace(files.REPORT, schema=2, upgrades={1: lambda d: {**d, "upgraded": True}})
+    got = upgrading.check(old)
+    check("with one, it reads as schema 2", got["schema"] == 2 and got["upgraded"] is True, got)
+
+
+# --- collect.json and a job's state ------------------------------------------------------------
+
+
+def test_the_progress_a_collect_writes_reads_back(tmp_path):
+    from echolot import runner
+    progress = runner.Progress(tmp_path / "collect.json")
+    progress.update(started=1763719200.5, pid=4242, scenario="coldStart", iterations="five", done=0)
+    got = files.read_collect(tmp_path / "collect.json")
+    check("equal to what was written, with the schema the reader reads",
+          got == progress.state and got["schema"] == files.COLLECT_SCHEMA, got)
+
+
+COLLECT = {"started": 1763719200.5, "pid": 4242, "scenario": "coldStart", "done": 2, "iterations": 5}
+
+
+@pytest.mark.parametrize("field, value, said", [
+    ("started", None, "`started` is missing"),
+    ("started", "now", "`started` is text, not a number"),
+    ("started", True, "`started` is true or false, not a number"),
+    ("started", 10**400, "`started` is too long, not a finite number"),
+    ("finished", "later", "`finished` is text, not a number"),
+    ("pid", 0, "`pid` is 0, below 1"),
+    ("pid", -1, "`pid` is -1, below 1"),
+    ("pid", 2**31, f"`pid` is {2**31}, above {2**31 - 1}"),
+    ("done", "2", "`done` is text, not a whole number"),
+    ("exit", True, "`exit` is true or false, not a whole number"),
+    ("scenario", ["a"], "`scenario` is a list, not text"),
+    ("schema", 2, "a newer echolot wrote it, in schema 2"),
+])
+def test_a_collect_of_a_bad_shape_says_which_part(tmp_path, field, value, said):
+    data = {**COLLECT, field: value}
+    (tmp_path / "collect.json").write_text(json.dumps(data), encoding="utf-8")
+    check(said, refused(files.read_collect(tmp_path / "collect.json"), said))
+
+
+def test_infinity_in_a_collect_is_no_time(tmp_path):
+    (tmp_path / "collect.json").write_text('{"started": Infinity}', encoding="utf-8")
+    check("refused", refused(files.read_collect(tmp_path / "collect.json"), "`started` is inf, not a finite number"))
+
+
+def test_iterations_is_held_to_no_type(tmp_path):
+    (tmp_path / "collect.json").write_text(json.dumps({**COLLECT, "iterations": "five"}), encoding="utf-8")
+    check("it reads", files.read_collect(tmp_path / "collect.json") == {**COLLECT, "iterations": "five"})
+
+
+JOB = {"job": "check", "pid": 4242, "started": 1763719200.5, "finished": None, "what": {},
+       "steps": [{"id": "collect", "status": "running", "started": 1763719201.0, "exit": None}]}
+
+
+@pytest.mark.parametrize("change, said", [
+    (_drop("steps"), "`steps` is missing"),
+    (_set("steps", {"a": 1}), "`steps` is an object, not a list"),
+    (_set("steps", 0, "id", 3), "`steps[0].id` is a number, not text"),
+    (_set("steps", 0, "started", "soon"), "`steps[0].started` is text, not a number"),
+    (_set("steps", 0, "log", 1), "`steps[0].log` is a number, not text"),
+    (_set("pid", 0), "`pid` is 0, below 1"),
+    (_set("what", []), "`what` is a list, not an object"),
+    (_set("why", 1), "`why` is a number, not text"),
+])
+def test_a_job_of_a_bad_shape_says_which_part(tmp_path, change, said):
+    data = copy.deepcopy(JOB)
+    change(data)
+    (tmp_path / "job.json").write_text(json.dumps(data), encoding="utf-8")
+    check(said, refused(files.read_job(tmp_path / "job.json"), said))
+
+
+def test_a_job_reads_back(tmp_path):
+    (tmp_path / "job.json").write_text(json.dumps(JOB), encoding="utf-8")
+    check("as written", files.read_job(tmp_path / "job.json") == JOB)
