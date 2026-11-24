@@ -314,6 +314,59 @@ def test_a_press_opens_the_investigation_then_starts_the_client_in_it(project, m
     state = job.read(project.root, dig.JOB)
     check("its job says which investigation and which checks", state["what"]["hunt"] == 1
           and state["what"]["picks"] == ["main_thread_waits"] and state["steps"][0]["tree"] is True)
+    check("#704: the page's own echolot first in its PATH", claude.env["PATH"].split(os.pathsep)[0]
+          == str(dig.own_bin()) and state["steps"][0]["path"] == [str(dig.own_bin())], claude.env["PATH"])
+
+
+def test_an_agent_whose_shell_runs_another_echolot_is_not_started(project, monkeypatch):
+    """#704: the screen before the start asks the agent's shell which
+    `echolot` it runs, says so where it is another, and offers no Start; a
+    press is refused the same, before any investigation is opened."""
+    site, claude, echolot = serving(project, {"do": "verdict"})
+    asked = []
+
+    def shell(argv, cwd, env):
+        asked.append(list(argv))
+        said = "echolot 0.14.1\n" if argv[1:] == ["--version"] else f"{dig._AT}/opt/elsewhere/bin/echolot\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=said, stderr="")
+    monkeypatch.setattr(dig, "_shell", shell)
+    report = page(get(site, "report"))
+    check("the report's dialog asks no shell, as it asks no phone", report.all("button", id="ask-start")
+          and asked == [], asked)
+    consent = page(press(site, "dig/ask", ticked("main_thread_waits")))
+    why = consent.one("div", id="dig-why").text
+    check("the screen before the start names both echolots", "Not with this echolot: Claude Code runs commands in "
+          "your login shell, and there echolot is /opt/elsewhere/bin/echolot, echolot 0.14.1, while this page is "
+          f"echolot {dig.__version__}" in why, why)
+    check("and offers no Start, the request to copy", not consent.all("button", id="dig-start")
+          and consent.one("button", id="dig-copy").attrs["class"] == "btn primary needs-js")
+    reply = press(site, "dig/start", ticked("main_thread_waits"))
+    check("a press is refused the same", reply.status == 409 and "Not with this echolot" in reply.body,
+          reply.status)
+    check("and opens no investigation, and starts nothing", echolot.ran == [] and claude.argv is None
+          and job.read(project.root, dig.JOB) is None)
+
+
+def test_the_request_carries_what_the_last_comparison_found_worse(project):
+    """#933: a comparison of this very report beside it puts its new and grown
+    rows into the request to copy and into the one the agent is handed."""
+    stamp = "2026-11-24T10:00:00+00:00"
+    project.report(data={**known(), "generated_at": stamp})
+    out = project.root / ".echolot" / "out"
+    (out / "comparison.json").write_text(json.dumps({
+        "schema": 2, "kind": "comparison", "comparable": True, "warnings": [],
+        "before": {"path": str(out / "earlier.json"), "runs": 5},
+        "after": {"path": str(out / "report.json"), "runs": 5, "generated_at": stamp},
+        "rows": [{"location": "Thread.sleep in an initializer", "detector": "main_thread_waits", "metric": "self_ms",
+                  "change": "appeared", "before": None, "after": {"self_ms": 558.0, "runs": "5/5"},
+                  "delta_ms": 558.0, "holds": None, "shift": None}]}), encoding="utf-8")
+    line = "- new in 5 of 5 runs: Thread.sleep in an initializer · main_thread_waits · 558 ms"
+    site, claude, _ = serving(project, {"do": "verdict"})
+    copied = page(press(site, "dig/ask", ticked("main_thread_waits"))).one("pre", id="dig-request").text
+    check("the request to copy carries it, before the report's rows", line in copied
+          and copied.index(line) < copied.index("The rows of the report it stands on:"), copied)
+    press(site, "dig/start", ticked("main_thread_waits"))
+    check("and so does the one the agent is handed", line in claude.argv[2], claude.argv[2])
 
 
 def test_with_several_scenarios_the_investigation_is_about_the_report_s(project):

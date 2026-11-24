@@ -387,7 +387,7 @@ def test_the_table_and_the_order_the_page_offers_them_in(tmp_path, monkeypatch):
     check("Claude Code, then Codex", [a.key for a in dig.clients()] == ["claude", "codex"])
     check("a run that names no client, or one the table lacks, is Claude Code's",
           dig.adapter(None) is dig.CLAUDE and dig.adapter("cursor") is dig.CLAUDE)
-    monkeypatch.setattr(dig, "why_not", lambda project, st, lines, client: None)
+    monkeypatch.setattr(dig, "why_not", lambda project, st, lines, client, shell=False: None)
     claude, codex_ = dig.Client(program="/c", key="claude"), dig.Client(program="/x", key="codex")
     check("the table's order where no run was started here",
           [c.key for c, _ in dig.offer(tmp_path, [claude, codex_], {}, [])] == ["claude", "codex"])

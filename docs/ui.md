@@ -388,6 +388,18 @@ with one, carries the report's warnings, and lists the ticked rows as its
 evidence. With more than three ticked, the page says that one investigation
 looks at one question and suggests ticking fewer.
 
+Where `echolot compare` left a comparison of this very report beside it
+(`comparison.json`, whose newer side is this report), the request the screen
+before the start gives to copy, and the one the agent is handed, carry what
+it found worse: the rows new in every run of this report, and the rows that
+grew and hold ([Holds](compare.md#the-holds-column)), in the comparison's
+order, at most eight, each marked `new in 5 of 5 runs` or `grew for sure`. They come after the
+report's warnings and before its rows. A comparison of another report (two
+files named by hand, or one made before the last `analyze`) adds nothing, nor
+one that says the two cannot be compared; where the thresholds of the two
+sides differ, a row it calls new says nothing and is left out, and so is a
+marker the hunt planted under the config's prefix.
+
 The dialog has **Copy the request**, for an agent of your own, and, where
 the page can start one, **Start it from here**. echolot has no model of its
 own: what it starts is Claude Code or Codex, the one installed on this
@@ -401,6 +413,22 @@ other is installed and cannot, the dialog and the screen before the start
 say why that one cannot, such as the rules Codex needs and the
 `echolot init --for …,codex` that writes them. Cursor is not started from the
 page yet: its request is copied.
+
+**Which `echolot` the agent runs.** The agent runs `echolot` through its
+shell, and which one that is depends on your shell, not on the page: Codex
+runs every command in your login shell (`zsh -lc`), and Claude Code from a
+snapshot of a login shell that sourced `~/.zshrc` (or `~/.bashrc`) first. A
+profile that puts another folder first in `PATH`, such as an older echolot
+installed with pipx in `~/.local/bin`, would have the investigation run on
+another echolot than the page that reads it. So the page puts its own folder
+first in the agent's `PATH`, and the screen before the start asks the
+client's shell, the way the client runs a command and with that same
+environment, which `echolot` it finds. Where that is another echolot of
+another version, or one that does not say its version, the screen names it
+and the page's own, says to put the page's folder first in your shell's
+`PATH` or to remove the other one, and offers no **Start**; a press is
+refused the same. Another install of the same version runs as the page's.
+The report's dialog does not ask, as it does not ask the phone.
 
 Every client needs a folder to put its markers in: with none in
 `instrumentation.allowed`, the page starts no agent. The dialog has no

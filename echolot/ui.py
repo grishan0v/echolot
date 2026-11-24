@@ -537,7 +537,9 @@ def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
     except check.Refusal as e:
         return _nothing(visit, e.title, e.text, e.status)
     lines = ready.lines(site.project, site.config, site.src, visit.st)
-    offered = dig.offer(site.project, _clients(site), visit.st, lines)
+    # The shell of each, asked which `echolot` it runs: here and at the press,
+    # and not in the report's dialog, which asks no phone either (#704).
+    offered = dig.offer(site.project, _clients(site), visit.st, lines, shell=True)
     chosen = dig.pick(offered, params.get("client"))
     if chosen is None:
         return _nothing(visit, "No such agent", "The page starts Claude Code or Codex, and this address names "
@@ -549,10 +551,11 @@ def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
         # client the press would refuse the same (#863).
         why = dig.reasons(offered, client.key)
     agent = dig.adapter(client.key)
-    paths = None
+    paths = prefix = None
     known = visit.st.get("config") or {}
     try:
         cfg = Config.load(known["path"], scenario=known.get("scenario"))
+        prefix = cfg.temp_prefix
         paths = dig.allowed(cfg)
         rounds = cfg.value(MAX_ROUNDS) or MAX_ROUNDS.default
         several = len(cfg.scenarios) > 1
@@ -575,7 +578,7 @@ def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
         **agent.terms(site.project), "commands": dig.COMMANDS,
         "verdict": dig.VERDICT, "opening": opening,
         "running": agent.shown(paths, site.project) if paths is not None else "",
-        "copy": report_page.request_text(data, picks, where, last=True), "action": action, "back": back or "",
+        "copy": dig.request_text(site.project, data, picks, where, prefix), "action": action, "back": back or "",
         "keys": [c["key"] for c in picks], "many": len(picks) > report_page.FOCUS,
         "others": [(name, url) for name, url in others if url], "aside": dig.aside(offered, client.key),
     }, site.url, visit.steps(None)))
