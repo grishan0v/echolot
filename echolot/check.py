@@ -52,6 +52,10 @@ from .pages import compare_page, report_page
 
 JOB = "check"
 RECORD, READ = "record", "read"
+# A run of the same job that reads recordings from a folder elsewhere
+# (`echolot/elsewhere.py`, #479): one thing at a time, Stop and the run's
+# list are the button's.
+ELSEWHERE = "elsewhere"
 
 # How many launches one press records where the config's `runner.iterations`
 # is not a whole number to start from. The field starts at that number, the
@@ -603,7 +607,12 @@ def rows(run: dict[str, Any], collect: dict[str, Any] | None) -> list[dict[str, 
 def running_words(run: dict[str, Any], collect: dict[str, Any] | None) -> str:
     """What is running, in a sentence: for a second press that is refused,
     and for a screen reader while the list moves."""
-    scenario = (run.get("what") or {}).get("scenario")
+    what = run.get("what") or {}
+    if what.get("do") == ELSEWHERE:
+        # Recordings from a folder (`echolot/elsewhere.py`): no check of a
+        # scenario, and nothing but the reading.
+        return f"The recordings from `{what.get('folder') or 'a folder'}` are being read."
+    scenario = what.get("scenario")
     about_what = f" of `{scenario}`" if scenario else ""
     now = next((r for r in rows(run, collect) if r["state"] == "now"), None)
     if now is None:
@@ -773,8 +782,15 @@ def reading(project: Path, st: dict[str, Any], run: dict[str, Any] | None,
         # a page links to that one's, as it does for the report.
         view["compared_of"] = what.get("scenario") if len(st.get("scenarios") or []) > 1 else None
 
+    if what.get("do") == ELSEWHERE:
+        view["folder"] = what.get("folder")
     if status == job.DONE:
         view["title"] = "Done. The short version:" if view["report"] else "Done."
+        if what.get("do") == ELSEWHERE and view["report"]:
+            n = _whole(what.get("count"))
+            many = _counted(n, "recording", "recordings") if n else "The recordings"
+            view["text"] = (f"{many[0].upper() + many[1:]} from `{what.get('folder')}`, read as a report of their "
+                            "own: your scenarios' reports stay as they were.")
         return view
     if status in (job.STOPPED, job.INTERRUPTED):
         view["title"] = "Stopped." if status == job.STOPPED else "This check was cut short."

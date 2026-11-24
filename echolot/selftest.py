@@ -9193,6 +9193,83 @@ def _(report):
         assert not any(root.iterdir()), sorted(p.name for p in root.iterdir())
 
 
+@check("ui: a folder named on the start page is listed by the names of its recordings, and nothing in it "
+       "is opened")
+def _(report):
+    """Recordings made elsewhere had no way in from the page (#479). A look
+    lists the folder one level deep and takes in only files whose names end
+    in a recording's suffix: `collect`'s names say the scenario, a
+    macrobenchmark's the test, and an iteration there twice is two sittings.
+    A file nobody may read is listed all the same: its name and size are
+    all a look takes. What a form names is held to a path."""
+    from . import check as check_mod
+    from . import elsewhere
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        folder = root / "ci"
+        folder.mkdir()
+        for name in ("coldStart_iter000.perfetto-trace", "coldStart_iter001.perfetto-trace",
+                     "Startup_cold_iter000_2026-11-20-140212.trace", "Startup_cold_iter000_2026-11-08-093001.trace",
+                     "sent.pftrace", "notes.txt"):
+            (folder / name).write_bytes(b"x")
+        (folder / "coldStart_iter000.perfetto-trace").chmod(0)
+        try:
+            found = elsewhere.look(root, folder)
+        finally:
+            (folder / "coldStart_iter000.perfetto-trace").chmod(0o644)
+        assert found.state == "found" and found.count == 5, (found.state, found.count)
+        by = {g.key: g for g in found.groups}
+        assert set(by) == {"coldStart", "Startup_cold", ""}, sorted(by)
+        assert len(by["coldStart"].files) == 2 and not by["coldStart"].test
+        assert by["Startup_cold"].test and by["Startup_cold"].repeats == [0], by["Startup_cold"]
+        assert found.groups[-1].name is None, "names that say nothing come last"
+        assert elsewhere.look(root, root / "missing").state == "missing"
+        assert elsewhere.look(root, folder / "notes.txt").state == "file"
+        assert elsewhere.asked(root, {"folder": "ci"}) == folder
+        assert elsewhere.asked(root, {"folder": "  "}) is None
+        for text in ("ci\nx", "ci\x00", "/" + "a" * elsewhere.PATH_CAP):
+            try:
+                elsewhere.asked(root, {"folder": text})
+            except check_mod.Refusal as e:
+                assert e.status == 400, e.status
+            else:
+                raise AssertionError(f"{text[:20]!r} was taken for a path")
+
+
+@check("ui: recordings read from a folder become a report of their own, by `analyze` alone, and the "
+       "scenario's report is not touched")
+def _(report):
+    """Someone else's recordings read as the report of this project's
+    scenario would stand beside this phone's runs in the next comparison
+    (#479). Read them runs the one command a person would, `analyze` over
+    the recordings chosen with `-o .echolot/out/elsewhere`: no `collect`, no
+    `compare`, and the scenario's window by `--scenario` only where the
+    config names several."""
+    from . import elsewhere
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        folder = root.parent / (root.name + "-ci")
+        folder.mkdir()
+        try:
+            for i in range(3):
+                (folder / f"coldStart_iter{i:03d}.perfetto-trace").write_bytes(b"x")
+            found = elsewhere.look(root, folder)
+            group = found.groups[0]
+            one = elsewhere.command(root, "echolot.yml", found, group, "coldStart", False)
+            argv = one["argv"]
+            assert argv[3] == "analyze" and argv[-3:] == ["--html", "-o", str(root / elsewhere.OUT)], argv
+            assert argv[4:7] == [str(folder / f"coldStart_iter{i:03d}.perfetto-trace") for i in range(3)], argv
+            assert "--scenario" not in argv and "collect" not in argv and "compare" not in argv, argv
+            assert one["shown"].endswith("-c echolot.yml --html -o .echolot/out/elsewhere"), one["shown"]
+            several = elsewhere.command(root, "echolot.yml", found, group, "feedScroll", True)["argv"]
+            assert several[several.index("--scenario") + 1] == "feedScroll", several
+            assert elsewhere.report_path(root) == root / ".echolot" / "out" / "elsewhere" / "report.json"
+        finally:
+            for f in folder.iterdir():
+                f.unlink()
+            folder.rmdir()
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor

@@ -262,9 +262,56 @@ fix**.
 scenario has recordings newer than its report, or recordings and no report,
 the button is **Read the recordings**, and it runs `analyze` alone. **Record
 again** beside it leaves them and records anew. Recordings in a folder
-elsewhere (a CI artefact, a macrobenchmark's output directory) are not read
-from the page: name them to `echolot analyze` in a terminal, and the report
-appears on the page.
+elsewhere are read from the page too: see [below](#recordings-made-elsewhere).
+
+### Recordings made elsewhere
+
+A CI artefact someone downloaded, a macrobenchmark's output folder, a
+recording a colleague sent: **Analyse trace files**, a fold under the button,
+reads them without the phone. Type the folder they are in, as a path on this
+computer (`~/Downloads/benchmark-results`, a path from the project's folder,
+or a whole one), and press **Look in this folder**. A browser cannot hand a
+path to a local server through a file field, only the bytes, so the field is
+text.
+
+Nothing is read by looking. The next screen says what the folder holds, by
+the names of its files:
+
+| what is there | the screen says |
+|---|---|
+| recordings `collect` named, `coldStart_iter002.perfetto-trace` | how many of the scenario `coldStart`, how large, how recent, and whether your config names that scenario |
+| a macrobenchmark's, `StartupBenchmark_startup_iter002_2026-11-20-140212.perfetto-trace` (or `.trace`) | the same, of the test `StartupBenchmark_startup`; an iteration there more than once is said: those are several sittings, and one report of them all mixes them into one median |
+| names that say no scenario | how many, under **Names that say no scenario** |
+| several of these | a card each, to choose one: a report is of one scenario |
+| none in the folder, some in folders inside it | a button for each such folder, which looks in it |
+| no such folder, a file that is no recording, a folder that cannot be opened | that, and the field again |
+
+A recording is a file whose name ends in `.perfetto-trace`, `.pftrace` or
+`.trace`, in the folder itself; a single recording can be named by itself.
+
+**Read them** runs `analyze` over the recordings chosen, as the button does,
+so the report is the one the terminal gives:
+
+```bash
+echolot analyze ~/Downloads/ci/coldStart_iter*.perfetto-trace -c echolot.yml --html -o .echolot/out/elsewhere
+```
+
+They become **a report of their own**, in `.echolot/out/elsewhere`, never
+the report of a scenario. Someone else's recordings read as your scenario's
+report would stand beside this phone's runs in the next comparison: the
+scenarios' reports, and what **Check again** compares with, stay as they
+were. The next folder read takes its place. The config's scenario gives the
+window they are read with, chosen on the screen where the config names
+several (the one the names say, where they say one), and `--scenario` names
+it.
+
+The read is a run like the button's: one at a time, **Stop** stops it, the
+start page shows its row and how it ended, "Done. The short version: 4
+recordings from `~/Downloads/ci`, read as a report of their own", and **See
+the report** opens it. **Reports** lists it after the scenarios' reports,
+with where its recordings came from. It is refused for the reasons the
+button is (an investigation open, a recording running, the setup not done)
+and when the recordings it was to read are no longer in the folder.
 
 **Several scenarios** in the config are cards to choose from, each with what it
 measures and where it stands: not checked yet, recordings that wait, or when
@@ -659,12 +706,14 @@ the page it opened and by nothing else:
   pages: the browser says where a request comes from, and one from anywhere
   else is refused. Such requests are each a form of the start page, the
   report's page or the answer's page: the press of the button, Stop,
-  **Set it up**, **Set the limit**, and those of **Dig deeper**: the screen
+  **Set it up**, **Set the limit**, **Look in this folder** and **Read
+  them**, and those of **Dig deeper**: the screen
   before it starts, for either client, Start, its Stop, **Take the markers
   out** and **Close the investigation**.
 - Such a request may carry a form of at most 4096 bytes. One that carries
   more, or does not say how much, is refused unread, and so is one that ends
-  before the length it stated. Nothing in a form is
+  before the length it stated. One thing in a form is a path: the folder
+  **Analyse trace files** looks in (below). Nothing else in a form is
   used as a path or as a command: a scenario has to be one the config names,
   a number of launches a whole number from 1 to 20, an investigation one the
   project has, what to set up one of the names the page offered, and a time
@@ -679,6 +728,17 @@ the page it opened and by nothing else:
   alone.
 - It serves the pages it draws and no file. No address is turned into a path
   on disk.
+- The folder **Analyse trace files** names is the one path a request carries,
+  and what it can give a page is no file. The server lists that folder one
+  level deep and takes in only the names, sizes and times of files whose
+  names end in `.perfetto-trace`, `.pftrace` or `.trace`, and how many such
+  files each folder inside it holds. It opens none of them: the recordings
+  chosen go to `analyze` by their paths, and its report is written under the
+  project's `.echolot/out/elsewhere`, never into the folder named. The path
+  is text of at most 512 characters with no control character in it; `~` is
+  your home folder, and a relative path is taken from the project's folder.
+  A page of another site cannot name one: it has neither the token nor the
+  origin, as for every other press.
 - An address a form is sent to is no page. Read, by a reload of what a press
   drew or by a step back to it in the history, it starts nothing and sends
   the browser where that press is made: the screen before an agent starts
@@ -694,8 +754,8 @@ Two at once are fine: each has its own port and its own token.
 
 ## What it writes
 
-Reading a page writes nothing. A press of the button does, all of it under
-`.echolot/`:
+Reading a page writes nothing, and looking in a folder neither. A press of
+the button does, and **Read them**, all of it under `.echolot/`:
 
 | file | what it is |
 |---|---|
@@ -704,6 +764,7 @@ Reading a page writes nothing. A press of the button does, all of it under
 | `.echolot/log/check.stop` | a request to stop, while one is pending |
 | `before.json` beside the report | the report before a **Check again**, for `compare` |
 | `comparison.html` beside the report | the comparison as a page, the one **After the fix** shows; `compare --html` writes it with the comparison |
+| `.echolot/out/elsewhere/` | the report of recordings read from a folder elsewhere, `report.json`, `report.md` and `report.html`, as `analyze -o` writes them; the next folder read writes over it |
 
 **Dig deeper** writes what its two commands write: `echolot hunt` opens the
 investigation (`.echolot/hunt.json`, the recordings set aside under
