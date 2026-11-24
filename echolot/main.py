@@ -692,6 +692,10 @@ def parse_set(values: list[str], detectors) -> dict[str, dict]:
 def cmd_analyze(args) -> int:
     _resolved_config(args)
     try:
+        # A set's directory is the set: what `collect --hunt` and `hunt` set
+        # aside is a directory, and an agent told "fact 2 is now that
+        # directory" was refused it (#915).
+        args.traces = traces_in(args.traces)
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
         inside = _working_in(_where(args).folder, args.hunt)
         if getattr(args, "whole_trace", False):
@@ -925,6 +929,29 @@ def _latest_here(out_dir: Path, cfg: Config, here: Path) -> bool:
     home = Path(cfg.path).resolve().parent
     return (here == home
             and out_dir.resolve() == _out_dir(cfg.report_dir, cfg).resolve())
+
+
+def traces_in(paths: list[str]) -> list[str]:
+    """The traces named, with a directory read as the set in it: its
+    `*.perfetto-trace` files, what `<dir>/*.perfetto-trace` would give.
+
+    Not deeper: a directory of sets is several sets, and one report of them
+    all is not asked for by naming their parent. A directory with no trace
+    in it is refused with what `analyze` takes.
+    """
+    out: list[str] = []
+    for path in paths:
+        here = Path(path)
+        if not here.is_dir():
+            out.append(path)
+            continue
+        found = sorted(here.glob("*.perfetto-trace"))
+        if not found:
+            raise ConfigError(
+                f"no trace in {path}: analyze takes trace files, or a directory of "
+                f"them, `<dir>/*.perfetto-trace`, as `collect` writes them")
+        out.extend(str(t) for t in found)
+    return out
 
 
 def run_order(path: str) -> tuple:
@@ -3383,7 +3410,9 @@ def cmd_collect(args) -> int:
 def _aside_said(aside: list[dict], kept: int, asked: int) -> str:
     """`collect`'s last word on the recordings it set aside as not cold (#523):
     how many, which, and whether the set is whole without them."""
+    from . import runner
     k = len(aside)
+    device = next((r["device"] for r in aside if r.get("device")), None)
     names = ", ".join(r["path"].name for r in aside)
     whole = (f"{'It was' if k == 1 else 'Each was'} recorded again, and the set holds "
              f"{kept} cold starts." if kept >= asked else
@@ -3393,8 +3422,8 @@ def _aside_said(aside: list[dict], kept: int, asked: int) -> str:
             f"stopped before {'it' if k == 1 else 'each'}, and its process was running "
             f"again by its start. Set aside, out of the set, with what collect said of "
             f"{'it' if k == 1 else 'each'} kept beside it: {names}. {whole} "
-            f"`adb logcat -b events -d | grep am_proc_start` says what the system "
-            f"started it for.")
+            f"`{runner.proc_starts(device)}` "
+            f"says what the system started it for.")
 
 
 def _whose_set(before: dict[str, Any] | None, scenario: str, inside: int | None) -> int | None:

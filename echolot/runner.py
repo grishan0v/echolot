@@ -1845,6 +1845,7 @@ def collect(package: str, out_dir: Path, iterations: int,
                     **({"no_launch": True} if info.get("no_launch") else {}),
                 }}
             info["repeat"], info["asked"] = i + 1, asked
+            info["device"] = dev
             recording.write(pulled, facts)
             results.append(info)
 
@@ -1910,8 +1911,8 @@ def collect(package: str, out_dir: Path, iterations: int,
         raise RunnerError(
             f"none of the {len(results)} recordings started cold: the app was "
             f"stopped before each, and its process was running again by its start "
-            f"every time. They are set aside in {out_dir}: {aside}. `adb logcat -b "
-            f"events -d | grep am_proc_start` says what the system started it for; "
+            f"every time. They are set aside in {out_dir}: {aside}. "
+            f"`{proc_starts(dev)}` says what the system started it for; "
             f"to read these starts as they are, analyze those traces by name.",
             gist=f"none of the {len(results)} recordings started cold: the app's "
                  f"process was running again by each start")
@@ -2029,6 +2030,15 @@ def _dialog_line(ended: str, package: str, withheld: list[str] | None,
 # their own, one a line, `name: granted=false, flags=[ … ]`.
 _RUNTIME = "runtime permissions:"
 _WITHHELD = re.compile(r"^\s*([\w.]+): granted=false\b")
+
+
+def proc_starts(device: str | None) -> str:
+    """The command that lists what the system started processes for, on the
+    phone the round recorded on: `adb` without `-s` fails with "more than one
+    device" on a machine with two attached, and runs on the wrong one when
+    the other is the only one left (#915)."""
+    serial = f" -s {device}" if device else ""
+    return f"adb{serial} logcat -b events -d | grep am_proc_start"
 
 
 def ungranted(device: str, package: str) -> list[str]:

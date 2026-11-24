@@ -64,3 +64,37 @@ def test_the_same_recordings_in_another_order_give_the_same_report(tmp_path: Pat
     check("and so are the two report.md", md_a == md_b)
     check("the pid shown says whose it is",
           "the first of 3)" in md_a and "`cold_iter000`" in md_a, md_a[:800])
+
+
+def test_a_sets_directory_is_the_set(tmp_path: Path) -> None:
+    """`collect --hunt` and `hunt` set a round aside in a directory, and
+    `analyze <dir>` was refused as "no such trace" (#915)."""
+    env = dict(os.environ, ECHOLOT_NO_RECORD="1")
+    folder = tmp_path / "cold-20261124-1015"
+    folder.mkdir()
+    for i, build in enumerate(({}, {"composables": False})):
+        (folder / f"cold_iter{i:03d}.perfetto-trace").write_bytes(fixture.build(**build))
+    (folder / "cold_iter000.perfetto-trace.recording.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "echolot.yml").write_text(FIXTURE_CONFIG, encoding="utf-8")
+
+    def analyzed(out: str, *given: str) -> tuple[int, dict | None, str]:
+        done = subprocess.run(
+            [sys.executable, "-m", "echolot.main", "analyze", *given, "-c", "echolot.yml",
+             "-o", out], capture_output=True, text=True, cwd=tmp_path, env=env)
+        path = tmp_path / out / "report.json"
+        rep = json.loads(path.read_text()) if path.is_file() else None
+        if rep:
+            rep.pop("generated_at", None)
+        return done.returncode, rep, done.stderr
+
+    code, by_dir, err = analyzed("dir", folder.name)
+    check("read", code == 0, err[-600:])
+    _, by_glob, _ = analyzed("glob", *sorted(str(p.relative_to(tmp_path))
+                                             for p in folder.glob("*.perfetto-trace")))
+    check("the same report as its traces named", by_dir == by_glob,
+          [k for k in by_dir or {} if (by_dir or {}).get(k) != (by_glob or {}).get(k)])
+    (tmp_path / "empty").mkdir()
+    code, _, err = analyzed("none", "empty")
+    check("a directory with no trace: refused, saying what analyze takes",
+          code == 2 and "no trace in empty" in err and "*.perfetto-trace" in err, err[-400:])
+

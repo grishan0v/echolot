@@ -501,7 +501,8 @@ def test_collect_sets_the_warm_repeats_aside_records_them_again_and_lists_the_co
           "[!] 2 recordings did not start cold" in err
           and "startup_iter001-warm.perfetto-trace, startup_iter002-warm.perfetto-trace" in err
           and "Each was recorded again, and the set holds 3 cold starts." in err, err)
-    check("and says where to look", "grep am_proc_start" in err, err)
+    check("and says where to look, on the phone it recorded on (#915)",
+          f"`adb -s {SERIAL} logcat -b events -d | grep am_proc_start`" in err, err)
     check("the spread is over the cold starts alone",
           "from 622 to 655 ms (spread 5%)" in err and "device is under load" not in err, err)
     traces = tmp_path / ".echolot" / "traces"
@@ -556,7 +557,7 @@ def test_a_set_with_no_cold_start_fails_and_says_where_the_recordings_are(
     check("the error names the recordings and what to do",
           "none of the 2 recordings started cold" in err
           and "startup_iter000-warm.perfetto-trace, startup_iter000-warm-2.perfetto-trace" in err
-          and "grep am_proc_start" in err, err)
+          and f"`adb -s {SERIAL} logcat -b events -d | grep am_proc_start`" in err, err)
     progress = json.loads((tmp_path / runner.PROGRESS_FILE).read_text())
     check("collect.json says it failed, and why", progress["exit"] == 2
           and "none of the 2 recordings started cold" in progress["error"], progress)
