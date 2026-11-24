@@ -131,7 +131,8 @@ def test_a_comparison_that_failed_is_not_a_baseline_missing(tmp_path: Path) -> N
 def _row(n: int, change: str, holds: bool | None) -> dict:
     return {"detector": "io_wait", "location": f"row {n}", "change": change, "holds": holds,
             "delta_ms": 40.0 - n, "on_main": n % 2 == 0,
-            "shift": None if holds is None else {"low_ms": 3.0, "high_ms": 70.0}}
+            "shift": None if holds is None else {"low_ms": 8.0, "high_ms": 70.0,
+                                                 "floor_ms": 5.0}}
 
 
 def _cmp(rows: list[dict]) -> dict:
@@ -148,8 +149,9 @@ def test_held_counts_the_rows_that_moved_and_hold_not_every_row_past_the_floor()
           said["moved"] == "4" and said["held"] == "1", said)
     check("which is the one named, with its interval",
           json.loads(said["held-rows"]) == [{"detector": "io_wait", "location": "row 5",
-                                             "delta_ms": 35.0, "low_ms": 3.0, "high_ms": 70.0,
-                                             "on_main": False}], said["held-rows"])
+                                             "delta_ms": 35.0, "low_ms": 8.0, "high_ms": 70.0,
+                                             "floor_ms": 5.0, "on_main": False}],
+          said["held-rows"])
     none = ci.outputs_of(_cmp(rows[:4]))
     check("rows that moved and do not hold are none held", none["held"] == "0"
           and none["held-rows"] == "[]", none)

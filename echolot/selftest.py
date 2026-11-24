@@ -2684,6 +2684,40 @@ def _(report):
     assert got == [("uninstrumented_cpu", "Thread-25"), ("runnable_starvation", "main")], got
 
 
+@check("compare holds a move whose range clears the floor, not zero, and says so")
+def _(report):
+    """Two hundred rows judged at once, and at 95% one in twenty that did
+    not move lands on one side of zero by chance: three sets of fifteen cold
+    starts of one build, each split seven against eight a hundred ways, held
+    4.0 rows a split, 3.0 of them listed as moved (#506). Asked to clear the
+    floor that listed it, a row held 0.5 times a split; one made twice as
+    slow still held in 88 splits of a hundred, against 91.
+
+    A row 15 ms slower on a 100 ms row, four runs a side, every run after
+    above every run before: its range, +6 … +27, clears zero and not the
+    10 ms floor, so it does not hold, and its cell says which floor and how
+    many runs would settle it. A 400 ms sleep holds. The line under the
+    header counts both."""
+    from . import compare as compare_mod
+
+    cmp = compare_mod.build(
+        _cold_starts({("main_thread_block", "Row.load"): [98.0, 100.0, 100.0, 102.0],
+                      ("main_thread_block", "Initializer.create"): [40.0, 42.0, 38.0, 41.0]}),
+        _cold_starts({("main_thread_block", "Row.load"): [108.0, 115.0, 115.0, 125.0],
+                      ("main_thread_block", "Initializer.create"): [460.0, 458.0, 462.0, 459.0]}),
+        before_path="a.json", after_path="b.json")
+    rows = {r["location"]: r for r in cmp["rows"]}
+    near, sleep = rows["Row.load"], rows["Initializer.create"]
+    assert near["change"] == "grew" and near["shift"]["low_ms"] == 6.0, near
+    assert near["shift"]["floor_ms"] == 10.0 and near["holds"] is False, near
+    assert compare_mod._holds(near) == "no, +6.0 … +27.0 · floor 10.0 · ~13 runs a side", near
+    assert sleep["holds"] is True and sleep["shift"]["floor_ms"] == 5.0, sleep
+    assert cmp["holds_against"] == "floor", cmp.get("holds_against")
+    text = compare_mod.to_markdown(cmp)
+    assert ("Holds asks each range to clear the floor, not zero: 1 of 2 row(s) with a "
+            "verdict do, and 1 more that clear zero alone read no.") in text, text
+
+
 @check("compare says when the two sides were recorded differently, and what reads it")
 def _(report):
     """Another trace config: the side without a frame timeline names

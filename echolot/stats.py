@@ -56,7 +56,9 @@ def shift(before: list[float], after: list[float]) -> dict[str, float] | None:
     The price is the other mistake. On the same splits with nothing made
     slower, a row cleared the floor and held in 2 comparisons of a hundred
     seven against eight, and in 1.6 five against five; the ranges had called
-    0.1 and 0.8 apart.
+    0.1 and 0.8 apart. Two hundred rows are judged at once, though, and 2 in
+    a hundred of them is four rows that did not move. So `compare` asks the
+    interval to clear the floor rather than zero (#506): see `_row` there.
 
     None with too few runs to be 95% sure of anything. Four a side is
     enough; with fewer on one side the other has to make up for it — three
@@ -103,22 +105,64 @@ def resolves(before: list[float], after: list[float] | None = None,
 
 
 def runs_needed(before: int, after: int, resolution: float,
-                move: float) -> int | None:
+                move: float, floor: float = 0.0) -> int | None:
     """About how many runs a side would resolve a move this size.
 
-    The strays shrink with the square root of the runs, so a move half the
-    size the runs resolve takes four times the runs. Two sides of unequal
+    A move holds when the medians moved further than `floor` and the strays
+    together, so what the strays may take is the room the move leaves above
+    the floor. They shrink with the square root of the runs, so room half
+    the size the runs resolve takes four times the runs. Two sides of unequal
     size count as the equal number that strays as much, 2nm / (n + m): five
     against ten resolve what seven against seven do. An estimate, and it
-    assumes the next runs stray as much as these did. None for a move of
-    nothing, which no number of runs settles, and for one the runs already
-    resolve.
+    assumes the next runs stray as much as these did; from four or five runs
+    a side, where the interval moves in whole steps, it is an order of
+    magnitude rather than a count. None for a move no larger than the floor,
+    which no number of runs settles, and for one the runs already resolve.
     """
-    if not move or resolution <= abs(move):
+    room = abs(move) - floor
+    if room <= 0 or resolution <= room:
         return None
     equal = 2 * before * after / (before + after)
     return max(math.floor(equal) + 1,
-               math.ceil(equal * (resolution / abs(move)) ** 2))
+               math.ceil(equal * (resolution / room) ** 2))
+
+
+# Past this many runs a side, `more_runs` says more runs will not settle a
+# row: a round of a hundred cold starts is an afternoon, and a move that
+# needs it is below what the scenario resolves, or the spread has to come
+# down first.
+SETTLES_UP_TO = 100
+
+
+def more_runs(before: int, after: int, resolution: float, move: float,
+              floor: float = 0.0) -> dict[str, int] | None:
+    """How many more runs each side would take, the cheaper of two ways.
+
+    `runs_needed` is a number a side. With fifteen before and four after,
+    "~20 a side" means thirty after, since fifteen before and thirty after
+    stray as twenty against twenty; and fifteen before with five after is
+    already the seven a side a smaller move asks for. So more runs on the
+    smaller side alone are counted too, and kept when they are fewer in all
+    than bringing both sides up. The smaller side alone cannot get past
+    twice the larger one, however many runs it adds.
+
+    None where `runs_needed` is, and where it is past `SETTLES_UP_TO`.
+    """
+    needed = runs_needed(before, after, resolution, move, floor)
+    if needed is None or needed > SETTLES_UP_TO:
+        return None
+    both = {"before": max(0, needed - before), "after": max(0, needed - after)}
+    if before == after:
+        return both
+    small, big = sorted((before, after))
+    equal = 2 * before * after / (before + after)
+    target = equal * (resolution / (abs(move) - floor)) ** 2
+    if target < 2 * big:
+        grown = max(small + 1, math.ceil(target * big / (2 * big - target)))
+        if grown - small < both["before"] + both["after"]:
+            side = "after" if after < before else "before"
+            return {"before": 0, "after": 0, side: grown - small}
+    return both
 
 
 @functools.lru_cache(maxsize=None)

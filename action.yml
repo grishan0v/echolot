@@ -111,15 +111,15 @@ outputs:
   held:
     description: >-
       How many of the `moved` rows also hold, the ones the table's Holds
-      column says yes to: their shift stays on one side of zero. Empty
-      without a comparison.
+      column says yes to: their shift's 95% interval stays past the row's
+      noise floor on one side. Empty without a comparison.
     value: ${{ steps.compare.outputs.held }}
   held-rows:
     description: >-
       The first five of the rows `held` counts, in the comparison's order, as
       a JSON array of `detector`, `location`, `detail` where the detector has
-      one, `delta_ms`, the interval's `low_ms` and `high_ms`, and `on_main`.
-      Empty without a comparison.
+      one, `delta_ms`, the interval's `low_ms` and `high_ms`, `floor_ms`, the
+      floor they cleared, and `on_main`. Empty without a comparison.
     value: ${{ steps.compare.outputs.held-rows }}
   window-delta-ms:
     description: >-
