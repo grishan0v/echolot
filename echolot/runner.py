@@ -671,15 +671,29 @@ class Planted:
 # without unzip, a grep without -z, an APK the shell may not read: each reads
 # as "could not tell", never as a build without the markers. Measured on an
 # A51, Android 13: 30 MB of code in a large Kotlin app's APK, about 2 s.
+#
+# How grep ends what `-z -o` prints is its own (#907): toybox on Android, like
+# GNU grep, ends each name with the zero byte it was read by, and BSD grep, on
+# a Mac, with a line break. The reader takes either. The lines the script
+# writes itself are kept apart from grep's: each APK's line is written before
+# grep starts, not while it may hold half a name unwritten, and a line break
+# ends grep's output and the test's before the next line.
 _BUILD_NAMES = """\
 printf 'x\\000\\021%secholot\\000y\\000' {prefix} | grep -a -z -o -E {pattern} | sed 's/^/echolot-selftest /'
-exec 3>&1
-for a in $(pm path {package} 2>/dev/null | sed -n 's/^package://p'); do
-  echo "echolot-apk $(unzip -l "$a" 'classes*.dex' 2>/dev/null | tail -n 1)" >&3
+echo
+apks=$(pm path {package} 2>/dev/null | sed -n 's/^package://p')
+for a in $apks; do
+  echo "echolot-apk $(unzip -l "$a" 'classes*.dex' 2>/dev/null | tail -n 1)"
+done
+for a in $apks; do
   unzip -p "$a" 'classes*.dex' 2>/dev/null
 done | grep -a -z -o -E {pattern}
-echo "echolot-grep $?"
+printf '\\necholot-grep %s\\n' $?
 """
+
+# Where one record of that answer ends: a zero byte, a line break, or the CR LF
+# adb's older shell sent through a terminal. An empty record is nothing.
+_RECORD_END = re.compile(r"\r\n|[\0\r\n]")
 
 
 def build_names(device: str, package: str, prefix: str,
@@ -707,28 +721,42 @@ def build_names(device: str, package: str, prefix: str,
 
 
 def _build_names_read(out: str, prefix: str) -> tuple[set[str] | None, str]:
-    """What `_BUILD_NAMES` printed: the names, or why they cannot be trusted."""
+    """What `_BUILD_NAMES` printed: the names, or why they cannot be trusted.
+
+    grep's own test is read first. An answer this misreads made every line
+    after it wrong at once: on a phone whose grep ended the test's name with a
+    zero byte, the APK's line was read as part of it, and the reason given was
+    that `pm path` lists no APK (#907). What the test printed is in the reason.
+    """
     names: set[str] = set()
-    tested = False
+    tested: str | None = None
     apks = files = 0
     status = None
-    for line in out.splitlines():
-        if line.startswith("echolot-selftest "):
-            tested = line[len("echolot-selftest "):] == prefix + "echolot"
-        elif line.startswith("echolot-apk"):
+    for record in _RECORD_END.split(out):
+        if record.startswith("echolot-selftest "):
+            tested = record[len("echolot-selftest "):]
+        elif record.startswith("echolot-apk"):
             apks += 1
-            m = re.search(r"(\d+)\s+files?\s*$", line)
+            m = re.search(r"(\d+)\s+files?\s*$", record)
             files += int(m.group(1)) if m else 0
-        elif line.startswith("echolot-grep "):
-            status = line[len("echolot-grep "):].strip()
-        elif line.startswith(prefix):
-            names.add(line)
+        elif record.startswith("echolot-grep "):
+            status = record[len("echolot-grep "):].strip()
+        elif record.startswith(prefix):
+            names.add(record)
+    if tested != prefix + "echolot":
+        printed = "nothing" if tested is None else repr(tested[:80])
+        return None, (f"`grep` on the phone does not read the app's code the way this "
+                      f"needs (handed a string whose answer is {prefix}echolot, it "
+                      f"printed {printed})")
     if not apks:
         return None, "`pm path` lists no APK of the app"
     if not files:
         return None, "`unzip` on the phone lists no code in the app's APKs"
-    if not tested or status not in ("0", "1"):
-        return None, "`grep` on the phone does not read the app's code the way this needs"
+    if status is None:
+        return None, ("the phone's answer stops before `grep` on the app's code said "
+                      "how it ended")
+    if status not in ("0", "1"):
+        return None, f"`grep` on the phone ended with status {status} on the app's code"
     return names, ""
 
 

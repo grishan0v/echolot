@@ -4113,6 +4113,36 @@ def _(report):
     assert "Not in the window: `never_there`" in text, text[:2000]
 
 
+@check("markers: the build on the phone is read whether its grep ends a name with a zero "
+       "byte or a line break, and a grep that answers otherwise is the reason given")
+def _(report):
+    """`collect` reads every prefixed name out of the code of the build on the
+    phone before it records (#393), with the phone's own `grep -z -o`. How
+    grep ends what it prints is its own: toybox, on Android, ends each name
+    with the zero byte it read it by, BSD grep on a Mac with a line break.
+    Read by lines only, a phone with Android 15 never answered: grep's own
+    test took in the line after it, and the reason given was that `pm path`
+    lists no APK, while it listed it fine (#907). A phone that cannot tell
+    says why, and never reads as a build without the markers.
+    """
+    from . import runner
+    read = runner._build_names_read
+    test = "echolot-selftest AGENTTMP_echolot"
+    apk = "echolot-apk  14678464                     3 files\n"
+    for end in ("\0", "\n"):
+        out = f"{test}{end}\n{apk}AGENTTMP_a{end}AGENTTMP_load_42{end}\necholot-grep 0\n"
+        for said in (out, out.replace("\n", "\r\n")):
+            assert read(said, "AGENTTMP_") == ({"AGENTTMP_a", "AGENTTMP_load_42"}, ""), \
+                (repr(said), read(said, "AGENTTMP_"))
+    # What that phone answered the first version of the script: no name found.
+    first = f"{test}\0{apk}echolot-grep 1\n"
+    assert read(first, "AGENTTMP_") == (set(), ""), read(first, "AGENTTMP_")
+    # A grep that printed nothing for its test is the reason, APK or none.
+    names, why = read("\n\necholot-grep 2\n", "AGENTTMP_")
+    assert names is None and why.startswith("`grep` on the phone") \
+        and why.endswith("it printed nothing)"), why
+
+
 @check("markers: the code's temporary markers, none of them in the traces, are said with the build")
 def _(report):
     """A round recorded straight after `mark --apply` holds none of its markers.

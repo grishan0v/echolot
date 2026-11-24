@@ -584,7 +584,11 @@ read and records the set as before, and `analyze` says afterwards if the
 traces lack the markers. The search first reads a short input whose answer is
 known and counts the code files it found, so a phone whose tools behave
 differently reads as "could not be read", never as a build without the
-markers.
+markers. The line says which tool could not: what `grep` printed for that
+input, `pm path` listing no APK, `unzip` listing no code, or the status
+`grep` ended with on the code. How `grep -z` ends each name it prints is its
+own: toybox, on Android, ends it with a zero byte, as GNU grep does, and BSD
+grep with a line break. Either is read.
 
 The reading costs one `adb shell` call, and only when the code has temporary
 markers. On the SM-A515F a large Kotlin app's APK, with 30 MB of code in
