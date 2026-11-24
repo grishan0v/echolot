@@ -757,9 +757,9 @@ project runs it with, and what each column of its rows means there.
 |---|---|---|
 | `main_thread_block` | where the main thread spent its time | `location` — the slice name; `detail` is the thread's comm, always the main thread here, cut to 15 characters by the kernel |
 | `app_init` | what ran after the Application was created, before the first Activity | an Initializer or a library's section by name; `(no section)` is the ContentProviders and `Application.onCreate` nobody traced |
-| `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects |
+| `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects; `thread` names the row, `detail` says what a cycle freed and how large the heap grew before one, or which collection a wait was for. Blind to a cold start's first ~2 s |
 | `monitor_contention` | monitor contention | the main thread's row is `main`; `threads` says how many threads a row adds up; `places` names both sides of the lock in the checkout; `detail` is the row's longest wait that names both methods, or else the owner's tid with its thread and what it and the waiter were in |
-| `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |
+| `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms`; `detail` names who answered — `system_server 94%` — and the AIDL method where the recording has the `aidl` category |
 | `runnable_starvation` | thread ready but preempted | `state` names the row with the thread; the main thread's row is `main`, and on it `detail` says who held its core — the app's own threads point at the app, other processes and idle cores at the device |
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}`, `main` for the main thread; `threads` above one is a pool's CPU together; in a sampled recording, the method after `ours:` in `detail`, at the file `code` names |
 | `frame_jank` | frames that missed their deadline | `location` is why it missed, `detail` says whose fault |
@@ -993,10 +993,20 @@ only exist in the runs where something was out of line, so `runs: 1/10` means
 **`gc_pressure`** also catches the other side: `waitWhileAllocatingLocked` on an
 application thread means an allocation stalled waiting for the collector. GC
 itself is the symptom; the cause is the number of intermediate objects.
+On a cold start it is blind for the first ~2 s: ART holds off collection
+after the fork from zygote, so allocations there run no cycle, and silence or
+`steady` from this detector says nothing about them. Read the heap's size
+instead — `the heap up to … MB` in a collection row's `detail`, or the
+`Heap size (KB)` counter — and put planted allocation load after the first
+two seconds.
 
 **`binder_txn`** fires both on one long transaction and on the sum of short
 ones. On a live startup there were 76 transactions of about 1 ms — 66 ms
 together, 8.5% of the cold start, and not one of them stood out alone.
+Its `detail` says where the calls went, by share of the row's time: `main
+thread · to system_server 94%, surfaceflinger 2%`. A process alone means the
+recording had no `aidl` category; with it, the method follows the process
+(`system_server IPackageManager.getPackageInfo 89%`).
 
 ## An empty report
 

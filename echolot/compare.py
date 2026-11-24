@@ -1407,6 +1407,18 @@ def _failed(d: dict | None) -> bool:
 
 # --- pairing rows across two reports ---------------------------------------
 
+# Detectors whose identity held `detail` until their evidence went there: the
+# column that names a row in its place, and how to read it out of an older
+# report's `detail`.
+_FROM_DETAIL: dict[str, tuple[str, Any]] = {
+    "runnable_starvation": ("state", lambda v: v.removeprefix("state ")),
+    # `main thread` or `background`, and the thread's name: `detail` held
+    # them as they are (#514).
+    "binder_txn": ("thread", lambda v: v),
+    "gc_pressure": ("thread", lambda v: v),
+}
+
+
 def _upgraded(d: dict, report: dict | None = None) -> dict:
     """A detector's block from an older report, read with the identity it has now.
 
@@ -1423,17 +1435,28 @@ def _upgraded(d: dict, report: dict | None = None) -> dict:
     of its own since. Paired on what both sides carry, an older report against
     a newer one would be paired on `location` alone, and a thread's `R` row
     would meet its `R+` row: the mistake `_match` exists to prevent. So the
-    older block gets its `state` read back out of `detail`.
+    older block gets its `state` read back out of `detail`. `binder_txn` and
+    `gc_pressure` moved the same way, to `thread`, when their `detail` began
+    to say who answered a call and what a collection freed (#514): an older
+    report's thread is read back the same way, and so are the rows it kept
+    under the bar.
     """
     d = _main_named(d, report)
     identity = identity_of(d)
-    if d.get("id") != "runnable_starvation" or "state" in identity \
-            or "detail" not in identity:
+    moved = _FROM_DETAIL.get(d.get("id"))
+    if moved is None or moved[0] in identity or "detail" not in identity:
         return d
-    rows = [{**row, "state": str(row.get("detail") or "").removeprefix("state ")}
-            for row in d.get("rows") or []]
-    return {**d, "identity": ["state" if c == "detail" else c for c in identity],
-            "rows": rows}
+    column, read = moved
+
+    def up(rows: list[dict]) -> list[dict]:
+        return [{**row, column: read(str(row.get("detail") or ""))} for row in rows]
+
+    out = {**d, "identity": [column if c == "detail" else c for c in identity],
+           "rows": up(d.get("rows") or [])}
+    below = d.get("below")
+    if isinstance(below, dict) and isinstance(below.get("rows"), list):
+        out["below"] = {**below, "rows": up(below["rows"])}
+    return out
 
 
 def _main_named(d: dict, report: dict | None) -> dict:

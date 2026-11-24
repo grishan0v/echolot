@@ -80,7 +80,11 @@ to the next. `io_wait` is named by `location, thread`: `thread` says `main` or
 `background`, and the kernel functions a thread stopped in stay in `detail`.
 `runnable_starvation` is named by `location, state` the same way: the state,
 `R` or `R+`, is the row's name, and who held the main thread's core is
-evidence in `detail`.
+evidence in `detail`. `binder_txn` and `gc_pressure` are named by
+`location, thread`, and their `detail` says who answered a thread's calls
+and what a collection freed. Each of the three had its thread or state in
+`detail` once, and `compare` reads it back out of an older report's `detail`,
+so a report from before the move still pairs row for row.
 Which functions those are, and in what order, changes between repeats, and
 with them in the name one thread became a row per variant, each seen once.
 
@@ -223,9 +227,27 @@ A detector needing a Perfetto stdlib module declares it in the header:
 -- @module: android.anrs
 ```
 
-The runner includes it once per session, before any query. It belongs in the
-header rather than in the SQL because a detector runs as a single statement,
-and an `INCLUDE` in front of the `SELECT` would make it two.
+The runner includes it once per session, before any query, in `analyze` and
+in `calibrate` alike. It belongs in the header rather than in the SQL because
+a detector runs as a single statement, and an `INCLUDE` in front of the
+`SELECT` would make it two.
+
+A module is worth its include where its tables say what a slice's name does
+not. A `binder transaction` slice names neither the process that answered it
+nor the method; `android.binder` follows the flow trace_processor draws from
+it to the server's `binder reply`, and `binder_txn` reads
+`android_binder_txns` for both. A collection's slice does not say what it
+freed; `android.garbage_collection` reads the runtime's heap counter around
+it, and `gc_pressure` reads `android_garbage_collection_events`. Both join
+the module on the slice's id for the evidence only: which slices count, and
+the numbers, come from the window's slices as before. A trace where the
+module holds nothing — binder slices without the driver's events behind
+them, a recording without the heap counter — gives the same rows with less
+to say, and the fixture holds both detectors to that (`fixture.build(answered=False,
+heap=False)`). Where a module only reads the slice's name again, as
+`gc_type` and `is_mark_compact` do, it adds nothing the row's `location` does
+not already say. The include costs its time on every trace: on a large app's
+cold start, about 0.3 s for these two together, 0.08 s of it `android.binder`.
 
 ### Sums and single occurrences are different detectors
 
@@ -413,7 +435,8 @@ WHERE s.is_main_thread = 1;
 
 `analyze` runs it straight after the first, with the same thresholds and with
 the rows the first returned in a table named `_rows` — `location` and
-`detail`, the latter NULL where a row has none. It returns `ts` and `dur` in
+`detail`, the latter NULL where a row has none, and each other column of the
+detector's `@identity`, `thread` or `state`. It returns `ts` and `dur` in
 nanoseconds, one line per stretch of the **main thread's** time. Stretches may
 overlap and may run past the window: they are clipped and every moment is
 counted once. A row about another thread returns nothing, because the
@@ -640,6 +663,27 @@ Seven shipped detectors declare nothing: `anr_risk`, `main_thread_block`,
 `frame_timeline`; `composables`, `composable_names`; `anr` and `app_init`,
 `atrace:am`; `gc_pressure` and `monitor_contention`, `atrace:dalvik`;
 `binder_txn`, `atrace:binder_driver`.
+
+### A cold start's first two seconds run no collection
+
+`@needs` says whether a detector could look at all. `gc_pressure` can look
+and still see nothing for a stretch: the first two seconds or so of a cold
+start. After the fork from zygote ART holds the heap's target at its growth
+limit for `kPostForkMaxHeapDurationMS`, 2000 ms (`runtime/gc/heap.cc`), so
+allocations that would start a collection in a settled process start none.
+Measured on SM-A515F, Android 13, an app with `largeHeap`: a planted 300 MB
+of short-lived arrays in the first half second took the heap to 379 MB with
+no collection, against 92 MB without them, and the first cycle came at
+1.96 s on both sides; the run held five cycles either way. The garbage went
+with the first scheduled cycle, which would have run anyway.
+
+So `gc_pressure` silent over a cold start, or steady in `compare`, says
+nothing about allocations made before about two seconds. The heap's size
+does: a collection's row says how large the heap grew before a cycle
+(`the heap up to … MB`), and the `Heap size (KB)` counter is in every trace
+recorded with `dalvik`. A check that plants allocation load to test this
+detector on a cold start puts it after the first two seconds, or reads the
+heap's size rather than the cycles.
 
 Presence is positive evidence only. A trace that carries no config says
 nothing of its categories, so a detector that reads one is not checked on it:

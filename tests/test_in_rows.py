@@ -137,14 +137,17 @@ def test_no_findings_cover_nothing() -> None:
 def _about_main(det_id: str, row: dict) -> bool:
     """Whether a row is about the main thread, by each detector's own naming."""
     loc, detail = str(row["location"]), str(row.get("detail") or "")
+    thread = str(row.get("thread") or "")
     if det_id == "binder_txn":
-        return detail == "main thread"
+        return thread == "main thread"
     if det_id == "io_wait":
         return detail.startswith("main")
     if det_id in ("runnable_starvation", "monitor_contention", "uninstrumented_cpu"):
         # Named `main`, by its tid (#511).
         return loc == "main"
-    if det_id in ("main_thread_block", "gc_pressure"):
+    if det_id == "gc_pressure":
+        return thread == MAIN
+    if det_id == "main_thread_block":
         return detail == MAIN
     if det_id == "repeated_work":
         return detail.endswith("— on " + MAIN) or f"— on {MAIN};" in detail

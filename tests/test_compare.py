@@ -290,6 +290,59 @@ def test_the_second_column_reaches_the_table() -> None:
         check(f"and it names {state}", f"| {state} |" in text, text)
 
 
+def test_an_older_report_s_thread_is_read_out_of_its_detail() -> None:
+    """`binder_txn` and `gc_pressure` named a row by `detail` until it began
+    to carry evidence: who answered a call, what a collection freed (#514).
+    The thread is `thread` since. An older report against a newer one would
+    be paired on `location` alone, and `gc_pressure`'s allocation wait on the
+    main thread would meet the same wait on another thread."""
+    def waits(identity: list[str], main: dict, other: dict) -> dict:
+        return report([det("gc_pressure", [main, other], identity=identity)])
+
+    before = waits(["location", "detail"],
+                   row("waitWhileAllocatingLocked", 100.0, metric="total_ms",
+                       detail="m.example.app"),
+                   row("waitWhileAllocatingLocked", 30.0, metric="total_ms",
+                       detail="RenderThread"))
+    main = row("waitWhileAllocatingLocked", 105.0, metric="total_ms",
+               detail="during Background concurrent copying GC 90%")
+    other = row("waitWhileAllocatingLocked", 300.0, metric="total_ms",
+                detail="during Background concurrent copying GC 40%")
+    main["thread"], other["thread"] = "m.example.app", "RenderThread"
+    after = waits(["location", "thread"], main, other)
+    cmp = compare(before, after)
+    by_thread = {r["detail"]: r for r in cmp["rows"]}
+
+    check("each thread's row is paired with its own",
+          sorted(by_thread) == ["thread RenderThread", "thread m.example.app"],
+          str(sorted(by_thread)))
+    check("the one that grew grew by its own number",
+          by_thread["thread RenderThread"]["change"] == "grew"
+          and by_thread["thread RenderThread"]["delta_ms"] == 270.0,
+          str(by_thread["thread RenderThread"]))
+    check("the main thread's held still",
+          by_thread["thread m.example.app"]["change"] == "steady",
+          str(by_thread["thread m.example.app"]))
+
+    calls = det("binder_txn", [row("m.example.app", 40.0, metric="total_ms",
+                                   detail="main thread")],
+                identity=["location", "detail"])
+    calls["below"] = {"floor_ms": 1.0, "rows": [
+        {"location": "OkHttp", "detail": "background", "count": 3, "total_ms": 9.0}]}
+    newer = row("m.example.app", 41.0, metric="total_ms",
+                detail="main thread · to system_server 94%")
+    newer["thread"] = "main thread"
+    gone = row("OkHttp", 60.0, metric="total_ms", detail="background · to system_server 100%")
+    gone["thread"] = "background"
+    cmp = compare(report([calls]),
+                  report([det("binder_txn", [newer, gone], identity=["location", "thread"])]))
+    by_loc = {r["location"]: r for r in cmp["rows"]}
+    check("binder_txn's main thread row meets its own",
+          by_loc["m.example.app"]["change"] == "steady", str(by_loc["m.example.app"]))
+    check("and a row kept under the bar is found there by its thread",
+          by_loc["OkHttp"]["change"] == "grew", str(by_loc["OkHttp"]))
+
+
 def test_a_row_that_only_one_side_has_is_still_new() -> None:
     """The pairing must not go the other way and match too much.
 

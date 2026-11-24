@@ -98,6 +98,9 @@ def test_without_anchors_an_open_slice_runs_the_window_to_the_end(
             ("monitor contention with owner worker (4101)", 50, None, []),
         ]),
     ]})
+    # The main thread's binder calls are the driver's events, apart from
+    # SLICES, and would land inside the wait.
+    monkeypatch.setattr(fixture, "BINDER_CALLS", [])
     report = _analysed(tmp_path, NO_ANCHORS)
     w = report["window"]
     check("the window runs from the first slice to the end of the trace",
