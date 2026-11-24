@@ -10,8 +10,9 @@
 --       left out here
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location
--- @column: location — the thread of the app that woke the main thread, its
---       digits folded: `arch_disk_io_#`, `DefaultDispatch`
+-- @column: location — the thread of the app that woke the main thread,
+--       with the numbers the runtime chose folded: `arch_disk_io_#`,
+--       `DefaultDispatch`
 -- @column: count — the main thread's sleeps it ended
 -- @column: total_ms — their time, summed
 -- @column: max_ms — the longest one
@@ -40,9 +41,10 @@
 -- waited. Those traces caught the end of a start the system had begun on its
 -- own, right after a force-stop, and the launch that followed was warm.
 --
--- A row is a thread of the app, named with its digits folded, so that
--- `arch_disk_io_0` to `_3` are one row, and `pool-14-thread-` is the same
--- row in a repeat where it is `pool-15-thread-`. The kernel keeps 15
+-- A row is a thread of the app, named with the numbers the runtime chose
+-- folded (`_name_family`, #831), so that `arch_disk_io_0` to `_3` are one
+-- row, and `pool-14-thread-` is the same row in a repeat where it is
+-- `pool-15-thread-`. The kernel keeps 15
 -- characters of a thread's name, so every coroutine worker is
 -- `DefaultDispatch` already. `detail` says where the main thread was:
 -- idle, with no slice open, or blocked inside the slice that was open when
@@ -94,15 +96,15 @@ sleeps AS MATERIALIZED (
       AND w.name != 'RenderThread'
       AND w.name NOT GLOB 'binder:*'
 )
-SELECT ts, dur, inside,
-       -- Digits folded, a run of them to one `#`.
-       REPLACE(REPLACE(REPLACE(
-           REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-               waker, '0', '#'), '1', '#'), '2', '#'), '3', '#'), '4', '#'),
-               '5', '#'), '6', '#'), '7', '#'), '8', '#'), '9', '#'),
-           '####', '#'), '##', '#'), '##', '#')                AS location
-FROM sleeps
-WHERE inside IS NULL OR inside NOT GLOB '{{lock_glob}}';
+-- The thread and the slice under the names the runtime's numbers are
+-- folded out of, the same fold every detector groups by (#831).
+SELECT s.ts, s.dur,
+       COALESCE(fi.family, s.inside)                               AS inside,
+       COALESCE(f.family, s.waker)                                 AS location
+FROM sleeps s
+LEFT JOIN _name_family f  ON f.name = s.waker
+LEFT JOIN _name_family fi ON fi.name = s.inside
+WHERE s.inside IS NULL OR s.inside NOT GLOB '{{lock_glob}}';
 
 WITH grouped AS (
     SELECT location,

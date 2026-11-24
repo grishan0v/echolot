@@ -8,8 +8,8 @@
 --       sleeps that one thread of the app ended, summed, for it to be a row
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location
--- @column: location — the thread of the app that ended the sleeps, its
---       digits folded: `arch_disk_io_#`
+-- @column: location — the thread of the app that ended the sleeps, with
+--       the numbers the runtime chose folded: `arch_disk_io_#`
 -- @column: count — the main thread's sleeps in the kernel, not on the disk,
 --       that this thread ended
 -- @column: total_ms — their time, summed
@@ -46,8 +46,8 @@
 -- driver's, the file system's — leave the same signature. On a userdebug
 -- kernel the function is named, and `detail` carries it.
 --
--- A row is the thread of the app that ended the sleeps, its digits folded as
--- in `main_thread_waits`. `RenderThread` and binder threads count here: the
+-- A row is the thread of the app that ended the sleeps, its numbers folded
+-- as in `main_thread_waits`. `RenderThread` and binder threads count here: the
 -- thread that released the lock is the finding, whatever its name. A sleep
 -- another process ended, or that has no waker, stays out, and so does a
 -- trace recorded without `sched_blocked_reason`, where `io_wait` is unknown.
@@ -112,14 +112,17 @@ sleeps AS MATERIALIZED (
             ORDER BY l.depth DESC LIMIT 1)                         AS waker_inside
     FROM candidates c
 )
-SELECT ts, dur, inside, waker_inside, fn,
-       -- Digits folded, a run of them to one `#`.
-       REPLACE(REPLACE(REPLACE(
-           REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-               waker, '0', '#'), '1', '#'), '2', '#'), '3', '#'), '4', '#'),
-               '5', '#'), '6', '#'), '7', '#'), '8', '#'), '9', '#'),
-           '####', '#'), '##', '#'), '##', '#')                AS location
-FROM sleeps;
+-- The thread and the slices under the names the runtime's numbers are
+-- folded out of, the same fold every detector groups by (#831).
+SELECT s.ts, s.dur,
+       COALESCE(fi.family, s.inside)                               AS inside,
+       COALESCE(fw.family, s.waker_inside)                         AS waker_inside,
+       s.fn,
+       COALESCE(f.family, s.waker)                                 AS location
+FROM sleeps s
+LEFT JOIN _name_family f  ON f.name = s.waker
+LEFT JOIN _name_family fi ON fi.name = s.inside
+LEFT JOIN _name_family fw ON fw.name = s.waker_inside;
 
 WITH grouped AS (
     SELECT location,

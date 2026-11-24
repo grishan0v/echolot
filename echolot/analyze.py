@@ -28,6 +28,7 @@ from . import mapping as mapping_mod
 from . import needs as needs_mod
 from . import place as place_mod
 from . import recording as recording_mod
+from . import names as names_mod
 from . import report as report_mod
 from . import stacks as stacks_mod
 from .config import LAUNCH, NO_ANCHOR, PACKAGE, WHOLE, Config, ConfigError
@@ -283,6 +284,23 @@ def _below_bar(tp, d, overrides: dict | None, sql: str,
         return None
 
 
+def _marker_globs(cfg: Config) -> tuple[str, list[str]]:
+    """The project's own names: the temporary prefix, and the globs first.
+
+    The prefix's glob first, then each slice `domains` in the config lists.
+    Their digits were written by someone to tell two things apart, so no
+    fold touches them: see `names.runtime_name`.
+    """
+    from .mark import DEFAULT_PREFIX
+    prefix = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    globs = [prefix + "*"]
+    for entry in cfg.get("domains") or []:
+        name = entry.get("slice") if isinstance(entry, dict) else None
+        if name and name not in globs:
+            globs.append(str(name))
+    return prefix, globs
+
+
 def _markers_info(tp, cfg: Config) -> dict:
     """Every marker of the project's own, measured — whatever else fired.
 
@@ -305,13 +323,7 @@ def _markers_info(tp, cfg: Config) -> dict:
     on two threads is one marker, and the reader wants one row and the
     fact.
     """
-    from .mark import DEFAULT_PREFIX
-    prefix = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
-    globs = [prefix + "*"]
-    for entry in cfg.get("domains") or []:
-        name = entry.get("slice") if isinstance(entry, dict) else None
-        if name and name not in globs:
-            globs.append(str(name))
+    prefix, globs = _marker_globs(cfg)
     wanted = " OR ".join(f"name GLOB '{sql_value(g)}'" for g in globs)
     rows = tp.query(f"""
         WITH seen AS (
@@ -402,7 +414,7 @@ MAIN_THREAD = "(main)"
 def _slice_names_info(tp, markers: dict) -> dict[str, dict]:
     """Every slice name of the window, thread and async, with its numbers (#610).
 
-    By name as `report.slice_family` folds it, so that the names of two
+    By name as `names.slice_across_builds` folds it, so that the names of two
     builds' traces can be set against each other in `compare`: a name and
     the same with another tid, vsync, fence or line number, or another
     install directory, are one. The project's own markers, from `markers`,
@@ -429,11 +441,11 @@ def _slice_names_info(tp, markers: dict) -> dict[str, dict]:
     """)
     out: dict[str, dict] = {}
     for r in rows:
-        name = report_mod.slice_family(r["name"], keep=keep, names=own)
+        name = names_mod.slice_across_builds(r["name"], keep=keep, names=own)
         row = out.setdefault(name, {"total_ns": 0, "max_ns": 0, "threads": set()})
         row["total_ns"] += r["total_ns"] or 0
         row["max_ns"] = max(row["max_ns"], r["max_ns"] or 0)
-        row["threads"].add(report_mod.slice_family(str(r["thread"])))
+        row["threads"].add(names_mod.slice_across_builds(str(r["thread"])))
     return {name: {"total_ms": round(row["total_ns"] / 1e6, 2),
                    "max_ms": round(row["max_ns"] / 1e6, 2),
                    "threads": sorted(row["threads"])}
@@ -613,27 +625,43 @@ def _own_composables(tp, cfg: Config) -> None:
 
 
 def _name_families(tp, cfg: Config) -> None:
-    """`_name_family` — the main thread's slice names in the window whose
-    numbers the runtime chose, each with them folded to `#`.
+    """`_name_family`: every name in the window whose numbers the runtime
+    chose, each with them folded to `#` (#831).
 
-    `Choreographer#doFrame 55112` is the next frame's vsync id, and
-    `owner tid: 15427` the thread that held a lock this time: the same work
-    under a new name on every call. Grouped by the raw name, each frame was
-    a group of one, so `main_thread_outlier` never had five of a name to
-    take a median of and never flagged a frame (#728). The folding is the
-    merge's own, `report.runtime_name`, so a family here is the row the
-    merge makes of it; the project's markers keep their digits. Only the
-    names it changes are listed, and a name not listed is its own family.
+    `Choreographer#doFrame 55112` is the next frame's vsync id, `owner tid:
+    15427` the thread that held a lock this time, `pool-3-thread-2` one worker
+    of a pool: the same work under a new name on every call, in every run.
+    A detector that groups by a name groups by `COALESCE(f.family, name)`
+    over this table, so each of them folds the same names the same way,
+    before it adds anything up: a pool's workers are one row with all their
+    threads counted, in a report of one recording as in a set (#845), and a
+    median is taken over every frame rather than over each frame alone
+    (#728).
+
+    The names are the window's slices, thread and async, and the threads of
+    the process. The fold is `names.runtime_name`, with the project's own
+    names kept as written: what carries the temporary prefix, and what the
+    config's `domains` lists. Only the names it changes are listed, and a
+    name not listed is its own family.
     """
-    from .mark import DEFAULT_PREFIX
-    keep = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    prefix, globs = _marker_globs(cfg)
+    own = globs[1:]
     tp.exec_script("DROP TABLE IF EXISTS _name_family;")
     tp.exec_script("CREATE TABLE _name_family (name TEXT PRIMARY KEY, family TEXT);")
-    names = [r["name"] for r in tp.query(
-        "SELECT DISTINCT name FROM _slice_win "
-        "WHERE is_main_thread = 1 AND name GLOB '*[0-9]*'")]
-    pairs = [(n, f) for n in names
-             if (f := report_mod.runtime_name(n, keep=keep)) != n]
+    found = tp.query("""
+        SELECT name FROM _slice_win WHERE name GLOB '*[0-9]*'
+        UNION SELECT name FROM _aslice_win WHERE name GLOB '*[0-9]*'
+        UNION SELECT t.name FROM thread t JOIN _proc p ON t.upid = p.upid
+              WHERE t.name GLOB '*[0-9]*'
+    """)
+    pairs = []
+    for r in found:
+        name = r["name"]
+        if any(fnmatch.fnmatchcase(name, g) for g in own):
+            continue
+        family = names_mod.runtime_name(name, keep=prefix)
+        if family != name:
+            pairs.append((name, family))
     for at in range(0, len(pairs), 500):
         rows = ", ".join(f"('{sql_value(n)}', '{sql_value(f)}')"
                          for n, f in pairs[at:at + 500])
@@ -699,7 +727,7 @@ def _near_anchor(tp, glob: str) -> list[str]:
     """
     from . import anchors
     rows = tp.query("SELECT DISTINCT name FROM _anchor WHERE name IS NOT NULL")
-    folded = {report_mod.NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*",
+    folded = {names_mod.NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*",
                                     str(r["name"])) for r in rows}
     return anchors.nearest(glob, folded)
 

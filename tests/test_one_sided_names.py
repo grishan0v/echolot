@@ -8,7 +8,7 @@ compilation of the method with the loop in it — was found by agents who
 set two sets of `echolot names` against each other in a script.
 
 What is pinned here: how a name is folded so that two builds' traces share
-it (`report.slice_family`), what `analyze` keeps of the names
+it (`names.slice_across_builds`), what `analyze` keeps of the names
 (`report._merge_names`), and which of them `compare` lists, where, and when
 it says it did not look. The doctor check of the same claim runs the scene
 `fixture.blind_main` draws.
@@ -26,6 +26,7 @@ from tests.support import check  # noqa: E402
 
 from echolot import compare as compare_mod  # noqa: E402
 from echolot import fixture, moves  # noqa: E402
+from echolot import names as names_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot.analyze import analyze_trace  # noqa: E402
@@ -39,7 +40,7 @@ JIT = ("JIT compiling void com.example.app.feature.ListViewModel.prepare() "
 # --- folding -----------------------------------------------------------------
 
 def test_a_name_is_folded_so_two_builds_share_it() -> None:
-    fold = report_mod.slice_family
+    fold = names_mod.slice_across_builds
     check("the install directory, picked anew at every install, is folded",
           fold(fixture.jit_name(fixture.JIT_NEW, fixture.INSTALL[0]))
           == fold(fixture.jit_name(fixture.JIT_NEW, fixture.INSTALL[1])) == JIT,
@@ -55,7 +56,7 @@ def test_a_name_is_folded_so_two_builds_share_it() -> None:
           == fold("Lock contention on a monitor lock (owner tid: 13533) at void "
                   "a.Store.save()(Store.kt:43)"))
     check("a name runtime_name folded first folds to the same",
-          fold(report_mod.runtime_name("Lock contention on 0x7f3a2b"))
+          fold(names_mod.runtime_name("Lock contention on 0x7f3a2b"))
           == fold("Lock contention on 0x7f3a2b") == "Lock contention on 0x#")
     check("the project's own markers keep their digits",
           (fold("AGENTTMP_fill_v4", keep="AGENTTMP_"),
