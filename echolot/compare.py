@@ -142,10 +142,14 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
             })
 
         identity = _identity(db, da)
-        for rb, ra, how in _match(rows_b, rows_a, identity, temp_prefix):
+        pairs = _under_bar(_match(rows_b, rows_a, identity, temp_prefix),
+                           db, da, identity, temp_prefix)
+        for rb, ra, how, under in pairs:
             row = _judged(det_id, identity, rb, ra, how, floor_ms,
                           floor_ratio, temp_prefix, moved_into)
             row["on_main"] = plain._on_main(det_id, ra if ra is not None else rb, whose)
+            if under:
+                row["under_bar"] = under
             rows.append(row)
 
     rows.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
@@ -1540,6 +1544,44 @@ def _match(before_rows: list[dict], after_rows: list[dict],
     return out
 
 
+def _under_bar(pairs: list[tuple[dict | None, dict | None, str]],
+               db: dict | None, da: dict | None, identity: tuple[str, ...],
+               keep: str | None = None) -> list[tuple[dict | None, dict | None, str, str | None]]:
+    """The pairs, with a row one side does not report looked up in what that
+    side found under its bar (`below`, see `report.below_bar`), and the side
+    it was found under the bar on.
+
+    86 calls to the system of 83 ms together, after a fix that took each of
+    them under 14.4 ms, were no row of `binder_txn`, and the 111 ms row of the
+    round before read as gone, all of it saved (#715). Found under the bar,
+    the row is compared with what it measured there. Not found, it was not
+    there, or took under the side's `floor_ms` in every repeat, and is gone
+    or new as before. A side with no `below`, a report written before it or
+    one whose open query failed, cannot say, and its rows are what they were.
+    """
+    def under(d: dict | None) -> list[dict] | None:
+        below = (d or {}).get("below")
+        return below.get("rows") if isinstance(below, dict) and isinstance(below.get("rows"), list) else None
+
+    below_b, below_a = under(db), under(da)
+    gone = [rb for rb, ra, _ in pairs if ra is None and rb is not None]
+    new = [ra for rb, ra, _ in pairs if rb is None and ra is not None]
+    found_a = {id(rb): (ra, how) for rb, ra, how in _match(gone, below_a, identity, keep)
+               if rb is not None and ra is not None} if gone and below_a else {}
+    found_b = {id(ra): (rb, how) for rb, ra, how in _match(below_b, new, identity, keep)
+               if rb is not None and ra is not None} if new and below_b else {}
+    out: list[tuple[dict | None, dict | None, str, str | None]] = []
+    for rb, ra, how in pairs:
+        if ra is None and id(rb) in found_a:
+            out.append((rb, *found_a[id(rb)], "after"))
+        elif rb is None and id(ra) in found_b:
+            other, by = found_b[id(ra)]
+            out.append((other, ra, by, "before"))
+        else:
+            out.append((rb, ra, how, None))
+    return out
+
+
 def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
          ra: dict | None, how: str, floor_ms: float,
          floor_ratio: float, keep: str | None = None,
@@ -1865,12 +1907,18 @@ def _table(rows: list[dict[str, Any]]) -> str:
                     + (" *(by total)*" if r.get("into_markers") else ""),
         **({"detail": r["detail"]} if r.get("detail") else {}),
         "detector": r["detector"],
-        "before": _band(r["before"], r["metric"]),
-        "after": _band(r["after"], r["metric"]),
+        "before": _band(r["before"], r["metric"]) + _under(r, "before"),
+        "after": _band(r["after"], r["metric"]) + _under(r, "after"),
         "delta": _delta(r),
         "count": _counts(r),
         "holds": _holds(r),
     } for r in rows], order=MOVED_COLUMNS, headers=MOVED_HEADERS)
+
+
+def _under(r: dict[str, Any], side: str) -> str:
+    """` *(under the bar)*` on the side a row was found under its detector's
+    threshold, and not reported (#715)."""
+    return " *(under the bar)*" if r.get("under_bar") == side else ""
 
 
 MARKER_COLUMNS = ["location", "before", "after", "delta", "count", "holds", "calls"]

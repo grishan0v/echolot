@@ -262,8 +262,23 @@ as grew rather than steady.
 so a row that cleared the bar in 3 of 8 repeats and was there below it in the
 other 5 is `8/8, over the bar in 3`, its median covers all 8, and no zero is
 put in for it. A zero stands only for a repeat where the row was not there at
-all. A row that one report has and the other does not was never looked up on
-the other side, and keeps no verdict.
+all.
+
+A row that one report has and the other does not is looked up in what the
+other side found under its bar. `analyze` keeps, for each detector, what its
+open query found that no repeat reported (`below` in `report.json`: the rows,
+without evidence, that took at least `floor_ms` in some repeat; 5 ms, or more
+when the longest 200 are all that is kept). Found there, the row is compared
+with what it measured, and the table marks that side *(under the bar)*: 86
+calls to the system of 83 ms together after a fix that took each under the
+14.4 ms bar are a row that shrank from 111 ms, not one that went with all of
+its 111 ms. Not found, it was not there, or took under `floor_ms`, and is
+gone or new. A report written before `below`, or a detector whose open query
+failed, cannot say, and its rows are read as before. A row under a folded
+name (`arch_disk_io_#`, `owner tid: #`) adds up, on both sides, every name it
+stands for that the open query found, under the bar or over it: otherwise
+the reported side would count only the names that cleared the bar and
+`below` all of them.
 
 ## The same thing under a new name
 
