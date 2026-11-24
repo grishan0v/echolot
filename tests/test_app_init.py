@@ -145,3 +145,41 @@ def test_a_merged_max_is_the_largest_repeat() -> None:
     got = report_mod.aggregate(reps)["detectors"][0]["rows"][0]
     check("Max is the largest value seen, the median stays the median",
           got["max_ms"] == 550.0 and got["total_ms"] == 510.0, got)
+
+
+def test_a_repeat_with_a_short_stretch_still_ran_the_work(tmp_path: Path) -> None:
+    """#707: the gate is a bar, so a repeat under it is present, not absent.
+
+    The fixture's stretch is 91 ms: over a bar of 80 in one repeat, under one
+    of 100 in the other. The libraries ran in both, and the merge has to say
+    so: present in 2 of 2, over the bar in 1, with both repeats' values.
+    """
+    from echolot import compare as compare_mod
+    from echolot import report as report_mod
+
+    trace = tmp_path / "f.perfetto-trace"
+    trace.write_bytes(fixture.build())
+    cfg = Config(selftest.FIXTURE_CONFIG)
+
+    def merged(bars: tuple[int, ...]) -> dict:
+        return report_mod.aggregate([
+            analyze_trace(trace, cfg, below_bar=True,
+                          cli_overrides={"app_init": {"min_stretch_ms": bar}})
+            for bar in bars])
+
+    before = merged((80, 100))
+    rows = _rows(before)
+    check("the rows are there", rows, before)
+    for name, r in rows.items():
+        check(f"{name}: present in both repeats, over the bar in one",
+              r["runs"] == "2/2" and r["fired"] == "1/2", r)
+        check(f"{name}: both repeats' values",
+              len(r["spread"]["total_ms"]["values"]) == 2, r)
+
+    # The same work under bars the other way round: compare has nothing
+    # absent to pad with zeros, so no row reads as shrunk.
+    after = merged((100, 80))
+    cmp = compare_mod.build(before, after, before_path="b.json", after_path="a.json")
+    moved = [r for r in cmp["rows"] if r.get("detector") == "app_init"
+             and r.get("change") != compare_mod.STEADY]
+    check("no app_init row moved", not moved, moved)
