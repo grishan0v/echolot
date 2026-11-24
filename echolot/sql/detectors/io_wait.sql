@@ -6,9 +6,18 @@
 --       time and nothing to profile, which is why a cold start can spend
 --       hundreds of milliseconds here with every other detector silent.
 -- @needs: platform_state
--- @param: min_io_wait_ms = 20
+-- @param: min_io_wait_ms = 20 ms — the time a thread has to spend asleep on
+--       a block device in the window, summed, to be a row
 -- @calibrate: min_io_wait_ms = top10(total_ms) * 1.5
 -- @identity: location, thread
+-- @column: location — the thread's name
+-- @column: count — its sleeps on the disk in the window
+-- @column: total_ms — their time, summed
+-- @column: max_ms — the longest one
+-- @column: thread — `main` or `background`: a worker can carry the process's
+--       name, so whether it is the main thread is said apart
+-- @column: detail — `main` or `background` again, then the kernel functions
+--       it stopped in, when a userdebug kernel names them
 -- @plain_title: Waiting for the disk
 -- @plain_why: Reading or writing a file can put a thread to sleep until the
 --       phone's storage answers.

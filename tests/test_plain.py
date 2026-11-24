@@ -879,8 +879,12 @@ def test_the_three_keys_come_after_the_last_key_and_before_the_prose():
     for det in SHIPPED:
         lines = det.path.read_text(encoding="utf-8").split("\n")
         at = next(i for i, line in enumerate(lines) if line.startswith("-- @plain_title:"))
+        # The last key's words may go on below it, a `@column`'s most often (#494).
+        key = at - 1
+        while re.match(r"--\s{2,}\S", lines[key]):
+            key -= 1
         check(f"{det.id}: right after the last of the other keys",
-              re.match(r"-- @(param|calibrate|identity|module):", lines[at - 1]), lines[at - 1])
+              re.match(r"-- @(param|calibrate|identity|module|column):", lines[key]), lines[key])
         after = at + 1
         while lines[after].startswith("-- @plain_") or re.match(r"--\s{2,}\S", lines[after]):
             after += 1

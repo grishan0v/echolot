@@ -3,10 +3,20 @@
 -- @why: the pair to main_thread_block. That one asks where the main thread's
 --       time went in total; this one asks which single occurrence was out of
 --       line with its own history. A heavy tail hides from every sum.
--- @param: factor = 4
--- @param: min_abs_ms = 40
--- @param: min_occurrences = 5
+-- @param: factor = 4 × — how many times its name's median an occurrence has
+--       to take to be out of line
+-- @param: min_abs_ms = 40 ms — and how long it has to take at least, so
+--       that four times half a millisecond is not a finding
+-- @param: min_occurrences = 5 slices — how many times a name has to occur
+--       on the main thread in the window to have a median to measure against
 -- @calibrate: min_abs_ms = top10(max_ms) * 1.5
+-- @column: location — the slice name on the main thread, the numbers the
+--       runtime chose folded: every frame is `Choreographer#doFrame #`
+-- @column: count — its occurrences out of line, not all of its occurrences
+-- @column: total_ms — their time, summed
+-- @column: max_ms — the worst of them
+-- @column: detail — the median it is measured against, over how many
+--       occurrences, and how many times the median the worst one took
 -- @plain_title: Single moments that took far too long
 -- @plain_why: A step that usually takes a moment but once takes many times
 --       longer is a hitch the user can see, even when the overall numbers look

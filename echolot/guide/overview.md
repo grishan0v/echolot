@@ -251,6 +251,6 @@ echolot guide hunt      # a hunt: the facts, the investigation, handing over the
 echolot guide loop      # the loop itself: from a report down to a place in the code
 echolot guide report    # report.json, field by field; also config, naming, collect
 echolot guide anr       # the app stopped answering: reading an ANR report, and measuring one
-echolot explain         # the detectors and their parameters
+echolot explain <id>    # one detector: what it reads, its thresholds here, its columns
 echolot --help          # every command, grouped by who runs it
 ```

@@ -4,12 +4,25 @@
 --       it needed doing: the same named work entered from two different
 --       callers, costing about the same both times, is work somebody did
 --       twice.
--- @param: min_total_ms = 40
--- @param: max_callers = 3
--- @param: max_spread = 1.5
--- @param: marker_prefix = AGENTTMP_
+-- @param: min_total_ms = 40 ms — the time a name's occurrences on one thread
+--       have to add up to for it to be a row
+-- @param: max_callers = 3 callers — the most different callers it may be
+--       entered from; more is a shared helper. Two at least, always
+-- @param: max_spread = 1.5 × — the longest occurrence over the shortest at
+--       most: identical work costs about the same. Past it, a row of a
+--       marker this hunt planted is a near miss
+-- @param: marker_prefix = AGENTTMP_ — the prefix of the temporary markers:
+--       the only names a near miss is reported for
 -- @calibrate: min_total_ms = top5(total_ms) * 1.5
 -- @identity: location, detail
+-- @column: location — the slice name
+-- @column: count — its occurrences on that thread, an occurrence inside one
+--       of its own name not counted
+-- @column: total_ms — their time, summed
+-- @column: max_ms — the longest one
+-- @column: detail — how many callers it was entered from and which, and on
+--       which thread; a `near miss` says the occurrences are too unlike to be
+--       one work, as a marker around a loop is
 -- @plain_title: The same work done twice
 -- @plain_why: When the same piece of work runs from two different places and
 --       costs about the same each time, one of them may be doing it again for

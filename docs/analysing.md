@@ -219,6 +219,41 @@ which of those modules actually burns CPU. And where the first markers go —
 the entry points, from the manifest and the SDK, with a source on every row
 — is `echolot mark`, in [mark.md](mark.md).
 
+## `explain` — one detector, in words
+
+What a detector reads, what each of its thresholds means and is counted in,
+the value it runs with in this project and where that value came from, and
+what each column of its rows means there:
+
+```bash
+echolot explain                                # the detectors, a line each, and what the config changed
+echolot explain frame_jank                     # one of them
+echolot explain frame_jank --scenario scroll   # with a scenario's own thresholds
+echolot explain --json                         # all of it, as fields
+```
+
+```
+frame_jank — Frames that missed their deadline
+…
+Thresholds, as echolot.yml runs them:
+  min_frames = 7 frames · from the config, default 3 frames · calibrate: top10(count) * 1.5
+      late frames of one verdict in the window, Self Jank or Other Jank, all its types together, below which none of that verdict's rows is reported
+  min_overrun_ms = 4 ms · default
+      how far past its deadline a frame has to finish to count as late at all
+
+Columns, a row per location:
+  …
+  max_ms    bends the contract: the worst frame's overrun past its deadline, not its duration, which is `longest` in detail; 0 on a Buffer Stuffing row
+```
+
+The values are planned as `analyze` plans them — the default, then the
+config's `detectors:`, then the scenario's own section — so what `explain`
+prints is what the next run uses, and a config `analyze` would refuse is
+refused here with the same reason. A name that is no detector exits 2 with
+the nearest ones and the list. A terminal gets the words wrapped; a pipe gets
+each on one line, to grep. The words are the detector's own, from its file
+([the header](detectors.md)), so there is no second copy of them to drift.
+
 ## Detectors for code nobody traced
 
 Three of the detectors find a problem where nobody wrote a `trace{}` call,

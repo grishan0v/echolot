@@ -9,8 +9,13 @@
 -- @id: my_detector
 -- @title: What we are looking for
 -- @why: why it matters
--- @param: threshold_ms = 50
+-- @param: threshold_ms = 50 ms — how long one slice has to take to count
 -- @identity: location, detail
+-- @column: location — the slice name
+-- @column: count — its slices that took the threshold or longer
+-- @column: total_ms — their time, summed
+-- @column: max_ms — the longest one
+-- @column: detail — the thread they ran on
 -- @plain_title: Work that takes long
 -- @plain_why: One or two plain sentences on how it touches the app.
 -- @plain_clean: What a result with nothing in it says.
@@ -36,6 +41,23 @@ LIMIT 20;
 группировки (по умолчанию `location`, обязательно включает его). В
 идентичность нельзя включать поля, меняющиеся от прогона к прогону: иначе
 `analyze` и `compare` не смогут свернуть и сопоставить повторы.
+
+Что значат параметр и столбец, тоже пишется в шапке: имя этого не говорит.
+`max_total_ms` у `binder_txn` — нижняя граница, а `max_ms` у `frame_jank` —
+опоздание кадра относительно дедлайна, а не его длительность. В `@param` за
+числом идёт единица, за строкой — ничего, а пояснение — после тире и, если
+нужно, на следующих строках. `@column` — по строке на каждый столбец запроса,
+после `@identity` и до ключей `@plain_*`:
+
+```sql
+-- @param: min_overrun_ms = 4 ms — how far past its deadline a frame has to
+--       finish to count as late at all
+-- @param: name_glob = *GC — GLOB over slice names: ART's collection cycles
+-- @column: max_ms — the worst frame's overrun past its deadline
+```
+
+Это печатает `echolot explain <детектор>` вместе со значением каждого порога
+в этом проекте, так что пояснения живут только в шапке.
 
 `@needs` указывает, какие данные должны присутствовать в трейсе (ставится
 сразу после блока `@why`). `@plain_title`, `@plain_why`, `@plain_clean`
@@ -161,7 +183,10 @@ LIMIT 20;
    обновить счётчик детекторов, пример отчёта и SVG-таблицы.
 3. Секция `-- @intervals` и `LIMIT` в основном запросе (`tests/test_in_rows.py`).
 4. Поля `@plain_title`, `@plain_why`, `@plain_clean` и шаблон в
-   `echolot/plain.py` (`tests/test_plain.py`, `tests/test_report_page.py`).
+   `echolot/plain.py` (`tests/test_plain.py`, `tests/test_report_page.py`);
+   пояснение и единица у каждого `@param` и строка `@column` на каждый
+   столбец запроса (`tests/test_explain.py` и проверка `doctor`, что строки
+   несут ровно те столбцы, которые объясняет шапка).
 5. Соблюдение контракта слияния (`@identity`, метрики, `detail`), типов
    `@param`, `@needs` (`tests/test_needs.py`) и соглашений имён масок
    (`*name_glob*`, `skip_glob`).
