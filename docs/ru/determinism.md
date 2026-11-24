@@ -29,7 +29,7 @@ echolot doctor
 ## The .claude/ layer in this project
 
   10 template files: 10 current
-  installed by echolot 0.17.0, this is 0.17.0
+  installed by echolot 0.18.0, this is 0.18.0
   the layer is current.
 
 ## Self-check on a synthetic trace
@@ -49,7 +49,7 @@ echolot наружу. Это режим для субагента перед с�
 читателю в той же сессии пришлось бы платить контекстом снова.
 
 ```
-echolot 0.17.0 · trace_processor v59.1 · perfetto 0.59.1 · python 3.14.7
+echolot 0.18.0 · trace_processor v59.1 · perfetto 0.59.1 · python 3.14.7
 layer: current (10 files)
 self-check: 219 of 219 passed
 ```
