@@ -1148,6 +1148,11 @@ def _outside_moved(before: dict, after: dict) -> list[dict[str, str]]:
     pb, pa = ob.get("pct"), oa.get("pct")
     if pb is None or pa is None:
         return []
+    # A report from before #914 counted the processes that draw the app as
+    # other load, and one after leaves them out (`platform_pct`): a launch
+    # read both ways differs by 40 points that no load put there.
+    if ("platform_pct" in ob) != ("platform_pct" in oa):
+        return []
     if max(pb, pa) < report_mod.OUTSIDE_PCT or abs(pa - pb) < OUTSIDE_GAP:
         return []
     busy, quiet = ("after", "before") if pa > pb else ("before", "after")

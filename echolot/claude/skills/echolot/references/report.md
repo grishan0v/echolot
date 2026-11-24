@@ -358,7 +358,12 @@ wait for a CPU: half of it was spent behind the app's own work. Read it with
 `crowding.outside` is the other side of the crowd: `pct`, the share of the
 window's CPU time (cores × its length) that processes other than the app
 took, and `top`, the three largest, processes of one name and uid together.
-About 10–17% on a quiet cold start. At 40% or more the header warns that the
+The processes that draw the app and record it are in neither:
+SurfaceFlinger, the composer and allocator HALs, the display and GPU drivers'
+threads, system_server, SystemUI, the home screen, zygote, and Perfetto's
+daemons with adbd. They are busy whenever the app draws, so their share is
+`platform_pct`, on its own: 47% of a 287 ms Wikipedia cold start on an
+SM-F711B, which left 9–17% in `pct`. At 40% or more the header warns that the
 app ran on a busy device and names the largest load, and the crowding line
 puts the app's waits behind those processes too. Merged, the median, with
 `pct_max` and the names from the repeat where they took most. The share of
@@ -1189,7 +1194,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `detector-changed` | the named detectors read the trace with different code on the two sides; their rows carry no verdict, a move there may be the tool's |
 | `same-traces` | both sides are one set of recordings read twice (same trace names, pid and window): every move is the tool's or the config's, and no row carries a verdict |
 | `drift` | the runs of one side, or both, drift from the first to the last (that side's `drift.drifts`): its medians are no one state of the device, and a row that drifts with it can hold with nothing changed. Named with each side's `p` and the rows that follow the order closest. The verdicts stand; before acting on a row that holds, record the two sides back to back and compare again. A report from before the block is read from its rows |
-| `environment-load` | other processes took 40% or more of the CPUs' time in one round's window, 15 points or more above the other. That side ran on a busy device; the warning names the largest load. Record it again with nothing else running |
+| `environment-load` | other processes took 40% or more of the CPUs' time in one round's window, 15 points or more above the other. That side ran on a busy device; the warning names the largest load. Record it again with nothing else running. The processes that draw the app are not counted (`platform_pct`), and a report from before they were left out gets no warning against one after |
 | `sampling` | a callstack sampler ran in one round and not the other, or at another rate, or in only some repeats of one. The sampled side is slower for a reason outside the code. A round whose sampler never started counts as plain, and a report from before the field gets no warning |
 | `compile` | the two rounds ran the app compiled differently — another `filter`, or the same filter from another profile (`reason`) — or one side's repeats did. Code compiled ahead of time runs faster than code the JIT compiles as the app runs, so a row can move for that reason alone. A side whose traces held no state (the process was already running) is judged by its JIT count instead: three times the other side's methods or more, and 50 or more apart, warns. A report from before the field gets no warning |
 | `instrumentation-removed` | temporary markers that are gone were taken out between the rounds, not work that went away; the slices they sat in got their self time back and are judged on their total |

@@ -1327,6 +1327,73 @@ def _(report):
     assert crowd == {"threads": 26, "cores": 10, "peak": 13, "above_cores_ms": 64.0}, crowd
 
 
+# The names the processes that draw an app go by on phones of other makers, and
+# load that is no part of drawing it.
+DRAWING_NAMES = ("/system/bin/surfaceflinger", "system_server", "com.android.systemui",
+                 "/vendor/bin/hw/vendor.qti.hardware.display.composer-service",
+                 "/vendor/bin/hw/android.hardware.composer.hwc3-service.pixel",
+                 "/vendor/bin/hw/android.hardware.graphics.allocator@4.0-service",
+                 "crtc_commit:140", "kgsl_worker_thr", "zygote64",
+                 "com.sec.android.app.launcher", "com.google.android.apps.nexuslauncher",
+                 "com.miui.home", "/system/bin/traced_probes", "/apex/com.android.adbd/bin/adbd")
+OTHER_LOAD = ("com.other.app", "sh", "/system/bin/dex2oat64", "/system/bin/installd",
+              "com.google.android.gms", "org.telegram.messenger", "kworker/u16:1")
+
+
+@check("crowding: the processes that draw the app are counted apart from other load")
+def _(report):
+    """#914: SurfaceFlinger, system_server, SystemUI and the composer HAL took
+    45–55% of the CPUs' time in quiet cold starts of Wikipedia on an SM-F711B,
+    a 287 ms window on 8 cores, and each of 21 was told to record again with
+    nothing else running. Here they fill every stretch of the window a
+    core stands idle in: their share is `platform_pct`, `pct` and `top` stay
+    what other processes took, as in the plain fixture, and the header says
+    nothing. Another app, dex2oat or a shell loop stays other load."""
+    from . import report as report_mod
+    from .analyze import platform_process
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "drawing.perfetto-trace"
+        path.write_bytes(fixture.build(drawing=True))
+        drawn = _analyze(path, Config(FIXTURE_CONFIG))
+    outside = drawn["window"]["crowding"]["outside"]
+    plain = report["window"]["crowding"]["outside"]
+    assert (outside["pct"], outside["top"]) == (plain["pct"], plain["top"]), (outside, plain)
+    assert outside["platform_pct"] > 70 and plain["platform_pct"] == 0.0, (outside, plain)
+    assert "Other processes took" not in report_mod.to_markdown(drawn)
+    assert [n for n in DRAWING_NAMES if not platform_process(n)] == []
+    assert [n for n in OTHER_LOAD if platform_process(n)] == []
+
+
+@check("crowding: repeats keep the drawing processes' median share, and compare does not "
+       "set a report that counted them as other load against one that does not")
+def _(report):
+    """A report from before #914 has no `platform_pct`, and its `pct` holds
+    the drawing processes: 57% on a Wikipedia cold start against 10% read
+    now. Set side by side, that is 47 points of load nobody added, and
+    `environment-load` would send the reader to record the old side again."""
+    from . import compare as compare_mod
+    from . import report as report_mod
+
+    def repeat(pct: float, platform: float | None) -> dict:
+        outside = {"pct": pct, "top": [{"name": "logd", "uid": 1036, "processes": 1,
+                                        "pct": 2.0}]}
+        if platform is not None:
+            outside["platform_pct"] = platform
+        return {"window": {"crowding": {"threads": 40, "cores": 8, "peak": 9,
+                                        "above_cores_ms": 5.0, "outside": outside}}}
+
+    merged = report_mod._merge_crowding([repeat(10.0, 46.0), repeat(9.0, 44.0),
+                                         repeat(12.0, 55.0)])
+    assert (merged["outside"]["pct"], merged["outside"]["platform_pct"]) == (10.0, 46.0), merged
+
+    def load(before: dict, after: dict) -> list[str]:
+        return [w["id"] for w in compare_mod._outside_moved(before, after)]
+
+    old, new, busy = repeat(57.0, None), repeat(10.0, 46.0), repeat(70.0, 46.0)
+    assert load(old, new) == [], "an old report against a new one"
+    assert load(new, busy) == ["environment-load"], "a busy round read the way the quiet one is"
+
+
 @check("uninstrumented_cpu: found the thread without a single slice")
 def _(report):
     got = [r for r in rows(report, "uninstrumented_cpu")
