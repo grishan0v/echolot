@@ -230,8 +230,9 @@ def terms(project: Path) -> dict[str, Any]:
 
 def _inside(rel: str, paths: Sequence[str]) -> bool:
     """Whether a path is under one of the allowed folders, as `echolot mark`
-    reads them (globs, segment by segment); `""` is the whole project."""
-    return "" in paths or under_allowed(rel, [p for p in paths if p])
+    reads them (`mark.under_allowed`: globs, segment by segment); `""` is the
+    whole project there too."""
+    return under_allowed(rel, list(paths))
 
 
 def walk(project: Path, paths: Sequence[str]) -> tuple[dict[str, list[int]], bool]:

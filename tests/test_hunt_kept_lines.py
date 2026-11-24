@@ -25,6 +25,7 @@ from echolot import hunt as hunt_mod
 from echolot import mark as mark_mod
 from echolot import state
 from echolot import verdict as verdict_mod
+from echolot.mark import Markers
 from tests.support import check
 from tests.test_hunt_verdict import CONFIG, ROUND_1, ROUND_2, VERDICT, hunt_with, run, write
 
@@ -52,14 +53,14 @@ def marked(root: Path) -> Path:
 
 def test_the_count_is_what_mark_remove_leaves(tmp_path: Path) -> None:
     marked(tmp_path)
-    left = hunt_mod.leftovers(tmp_path)
+    left = Markers(tmp_path).leftovers()
     check("both begins are markers --remove takes out", (left["markers"], left["removable"]) == (2, 2), left)
     check("with the three lines of the block and the hand begin", left["lines"] == 4, left)
     check("and the wrap is named by its place", left["kept"] == [BEFORE], left)
 
     _, kept = mark_mod.remove(tmp_path)
     check("--remove leaves the wrap and names it", [(rel, n) for rel, n, _ in kept] == [(SOURCE, 5)], kept)
-    left = hunt_mod.leftovers(tmp_path)
+    left = Markers(tmp_path).leftovers()
     check("then the wrap is all that is counted, where --remove named it",
           (left["markers"], left["removable"], left["lines"], left["kept"]) == (0, 0, 0, [AFTER]), left)
     check("the files of the markers and of the lines --remove takes out hold none of it",
@@ -83,10 +84,10 @@ def test_a_line_remove_leaves_is_one_rule_in_both(tmp_path: Path) -> None:
     rel = "app/src/main/java/com/example/app/Feed.java"
     check("the first four carry more than a marker, by the same rule",
           [mark_mod.is_kept_line(r) for r in rows] == [True] * 4 + [False] * 4)
-    check("counted at their lines", hunt_mod.leftovers(tmp_path)["kept"] == [f"{rel}:{n}" for n in (2, 3, 4, 5)])
+    check("counted at their lines", Markers(tmp_path).leftovers()["kept"] == [f"{rel}:{n}" for n in (2, 3, 4, 5)])
     _, kept = mark_mod.remove(tmp_path)
     check("and the same ones are what --remove leaves", [n for _, n, _ in kept] == [2, 3, 4, 5], kept)
-    check("still counted there", hunt_mod.leftovers(tmp_path)["kept"] == [f"{rel}:{n}" for n in (2, 3, 4, 5)])
+    check("still counted there", Markers(tmp_path).leftovers()["kept"] == [f"{rel}:{n}" for n in (2, 3, 4, 5)])
 
 
 def test_status_says_they_go_by_hand_and_where(tmp_path: Path) -> None:
@@ -146,7 +147,7 @@ def test_a_new_investigation_says_both_and_lists_twelve(tmp_path: Path) -> None:
           "previous investigation" in err, err)
     places = [line.strip() for line in err.splitlines() if line.startswith("    app/")]
     check("twelve by their place, in the order they are counted, the rest a count",
-          places == hunt_mod.leftovers(tmp_path)["kept"][:12] and "    … and 2 more" in err, (places, err))
+          places == Markers(tmp_path).leftovers()["kept"][:12] and "    … and 2 more" in err, (places, err))
 
 
 def test_the_verdict_check_and_closing_name_them_and_record_them(tmp_path: Path) -> None:

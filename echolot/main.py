@@ -72,6 +72,7 @@ from .analyze import (
 )
 from .config import PACKAGE, PROCESS, WHOLE_TRACE, Config, ConfigError
 from .runner import DEVICE, ITERATIONS, MODE, PROJECT_ROOT
+from .mark import Markers
 from .pages import answer_page
 from .pages import compare_page
 from .pages import report_page
@@ -2129,8 +2130,7 @@ def _held_verdict(project: Path, config: str, last: dict[str, Any], source: str,
         cfg = _hunt_config(project, config)
     except (ConfigError, OSError):
         cfg = None
-    left = hunt_mod.leftovers(
-        project, cfg.get("instrumentation.temp_prefix") if cfg else None)
+    left = Markers.of(project, cfg).leftovers()
     return verdict, reports, left
 
 
@@ -2470,7 +2470,6 @@ def cmd_hunt(args) -> int:
         scenario = cfg.scenario_name if cfg else None
         sha = cfg.sha if cfg else None
         confirmed = cfg.confirmed() if cfg else {}
-        prefix = cfg.get("instrumentation.temp_prefix") if cfg else None
         # The whole point of the feature: a new investigation must not start
         # on the previous one's traces. Nothing is deleted — the set moves
         # aside exactly the way `collect` moves it between rounds.
@@ -2523,7 +2522,7 @@ def cmd_hunt(args) -> int:
         # otherwise become this one's starting conditions. By the config's
         # prefix, the one `mark` wrote them with: under the default, a
         # project's `PERF_` markers were never found.
-        left = hunt_mod.leftovers(project, prefix)
+        left = Markers.of(project, cfg).leftovers()
         if left["markers"]:
             print(f'\n[!] {left["markers"]} {left["prefix"]} marker(s) left in '
                   f'{len(left["files"])} file(s) by the previous investigation.',
@@ -3020,10 +3019,14 @@ def cmd_mark(args) -> int:
     elif not args.remove:
         print("[i] no echolot.yml here or under --root, so instrumentation.allowed "
               "is not applied: every place counts as allowed", file=sys.stderr)
+    # The project's markers, as every other command reads them (#829): the
+    # list in the form the rule compares, `./app/src/main` as `app/src/main`.
+    markers = Markers(root, prefix, allowed)
+    allowed = markers.roots
 
     if args.remove:
         refused: list[str] = []
-        touched, kept = mark_mod.remove(root, refused)
+        touched, kept = markers.remove(refused)
         for rel, n in touched:
             print(f"  - {rel}: {n} line(s)")
         for rel in refused:

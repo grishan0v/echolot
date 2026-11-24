@@ -65,6 +65,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .config import ConfigError
 from .domains import files_ending, files_named, gradle_module
 from .domains import source_files as domains_source_files
 
@@ -174,7 +175,7 @@ def is_applied_line(line: str) -> bool:
 def is_kept_line(line: str) -> bool:
     """A line `--remove` leaves where it is and names: it carries the tag in
     any shape but the one `--apply` writes, so something besides the marker
-    is on it. `hunt.leftovers` counts these by the same rule (#703)."""
+    is on it. `Markers.leftovers` counts these by the same rule (#703)."""
     return TAG in line and not is_applied_line(line)
 
 
@@ -746,26 +747,47 @@ def find_composable_decl(name: str,
     return None
 
 
+def allowed_entry(entry: str) -> str:
+    """One `instrumentation.allowed` entry, or a path, as the rule reads it:
+    forward slashes, no `./` in front, no `/` at the end, no empty segment.
+
+    `./app/src/main`, `app/src/main/` and `app//src/main` are the folder
+    `app/src/main`; `.`, `./` and `""` are the whole project, and come back
+    as `""`. Compared as written, `./app/src/main` matched nothing: its `.`
+    was a segment of its own, held against `app`, and `mark` refused every
+    place in the folder the page let the agent edit (#839).
+    """
+    text = str(entry).strip().replace("\\", "/")
+    return "/".join(p for p in text.split("/") if p not in ("", "."))
+
+
 def under_allowed(rel: str, allowed: list[str]) -> bool:
     """Whether a path sits under one of `instrumentation.allowed`, globs included.
 
-    An empty list allows everything. Otherwise each root is compared segment
-    by segment, every segment a glob over the path's segment at the same
-    depth, and the path may go deeper: `feature/*/src/main` covers
+    An empty list allows everything, and so does an entry that names the
+    whole project (`.`). Otherwise each root is compared segment by segment,
+    every segment a glob over the path's segment at the same depth, and the
+    path may go deeper: `feature/*/src/main` covers
     `feature/login/src/main/kotlin/A.kt` and not `feature/login/src/test/…`.
+    Both sides go through `allowed_entry` first, so `./app/src/main` is
+    `app/src/main`.
 
     That is the form `scan` writes into the config and the example shows,
     and this used to compare it as a plain prefix — so every site in every
-    `feature/*` module was refused as outside. `reflect` reads the same list
-    through this function, so the command that writes the markers and the
-    report that audits where they went cannot disagree about it.
+    `feature/*` module was refused as outside. `reflect` and the page read
+    the same list through this function (`Markers.allowed`), so the command
+    that writes the markers and the readers that audit where they went
+    cannot disagree about it.
     """
     if not allowed:
         return True
-    parts = rel.split("/")
+    parts = allowed_entry(rel).split("/")
     for root in allowed:
-        segs = [s for s in str(root).strip("/").split("/") if s]
-        if segs and len(segs) <= len(parts) and all(
+        entry = allowed_entry(root)
+        if not entry:
+            return True
+        segs = entry.split("/")
+        if len(segs) <= len(parts) and all(
                 fnmatch.fnmatchcase(p, s) for p, s in zip(parts, segs, strict=False)):
             return True
     return False
@@ -2107,6 +2129,127 @@ def remove(root: Path, unwritable: list[str] | None = None
                 continue
             touched.append((rel, len(lines) - len(rest)))
     return touched, kept
+
+
+class Markers:
+    """The temporary markers of one project: which are in its code, which
+    `--remove` takes out, and where they may go.
+
+    Every command that asks reads the answer here: `hunt` and its cleanup
+    check, `status`, the page in `echolot ui`, `mark` and `reflect`. Each
+    used to read the tree itself, by its own rule, and they disagreed about
+    the same tree: `reflect` looked for the prefix alone and only under
+    `allowed` (#749, #838), `mark` compared `./app/src/main` as written
+    (#839), and an empty `allowed` meant every place to one and no place to
+    another.
+
+    Built from the project's root, the config's prefix (`None` is the
+    default one) and `instrumentation.allowed`. An empty `allowed` means
+    every place, here and for every caller; the page refuses to hand that
+    to an agent (`dig.allowed`), which is a refusal of its own and not a
+    second meaning.
+    """
+
+    def __init__(self, root: Path, prefix: str | None = None,
+                 allowed: list[str] | tuple[str, ...] = ()) -> None:
+        self.root = Path(root)
+        self.prefix = str(prefix or DEFAULT_PREFIX)
+        self.roots = list(dict.fromkeys(allowed_entry(e) for e in allowed))
+
+    @classmethod
+    def of(cls, root: Path, cfg: Any) -> Markers:
+        """From a loaded `Config`, or None for a project without one."""
+        if cfg is None:
+            return cls(root)
+        # A list of the wrong shape is `mark`'s to refuse, before it writes
+        # a line: it reads `cfg.allowed` itself. A count of what is in the
+        # code does not wait on it.
+        try:
+            allowed = cfg.allowed
+        except ConfigError:
+            allowed = []
+        return cls(root, cfg.get("instrumentation.temp_prefix"), allowed)
+
+    def allowed(self, rel: str) -> bool:
+        """Whether markers may go into this path, relative to the root."""
+        return under_allowed(rel, self.roots)
+
+    def remove(self, unwritable: list[str] | None = None
+               ) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]]]:
+        """`mark --remove`: see `remove`."""
+        return remove(self.root, unwritable)
+
+    def leftovers(self) -> dict[str, Any]:
+        """Temporary markers still in the sources, and whether `--remove` can take them out.
+
+        An investigation that ran out of context leaves its instrumentation
+        behind, and the next one then measures a tree nobody meant to ship
+        or profile. The whole tree is read, `allowed` or not: an agent edits
+        by hand, and a marker outside the allowed folders is still in the
+        code (#838). `outside` is the files of these outside them.
+
+        Counted by the prefix, which appears once per instrumentation point
+        — on the `beginSection`, while its paired `endSection` carries only
+        the tag. Of those points, the ones `mark --apply` wrote are a line
+        of their own and `mark --remove` takes them out; ones the agent
+        added by hand are not, and have to go by hand. The same predicate
+        decides both here and there, so the number is what `--remove` will
+        actually do. One number for both would send the human away
+        believing the tree was clean.
+
+        `lines` counts every line `--remove` would delete, prefix or not. A
+        tagged `endSection()` left after its `beginSection` went by hand has
+        no prefix to be found by, and ends whatever section the app has
+        open on that thread (#274); its file is listed with the rest.
+
+        `kept` is every line `--remove` leaves where it is and names, as
+        `file:line`: the tag in another shape than the one `--apply` writes,
+        with something besides the marker on the line, which is why it goes
+        by hand. An agent's one-line wrap is one:
+
+            try { work() } finally { android.os.Trace.endSection() } // echolot:mark
+
+        Its `beginSection` was a line of its own and went at the press; the
+        wrap has no prefix and is not a line `--remove` deletes, so it was
+        counted nowhere, and every reader said the code was clean over an
+        `endSection()` that ends whatever section the app has open (#703).
+        Its places are its own list: `files` holds the markers and the lines
+        `--remove` deletes, which the sentences about those count files by;
+        `places` is every file with anything of the markers in it.
+        """
+        prefix = self.prefix
+        files: list[str] = []
+        kept: list[str] = []
+        total = tagged = lines = 0
+        # The walk `mark --remove` takes and the text it reads, so the count
+        # is of what it removes and the lines are the ones it leaves.
+        try:
+            sources = domains_source_files(self.root)
+        except OSError:
+            sources = []
+        for p in sources:
+            try:
+                text = read_source(p, strict=True)
+            except (OSError, UnicodeDecodeError):
+                continue
+            if prefix not in text and TAG not in text:
+                continue
+            rows = text.split("\n")
+            rel = _rel(p, self.root)
+            kept += [f"{rel}:{n}" for n, ln in enumerate(rows, 1) if is_kept_line(ln)]
+            hits = [ln for ln in rows if prefix in ln]
+            applied = sum(1 for ln in rows if is_applied_line(ln))
+            if not hits and not applied:
+                continue
+            files.append(rel)
+            total += len(hits)
+            tagged += sum(1 for ln in hits if is_applied_line(ln))
+            lines += applied
+        places = list(dict.fromkeys([*files, *(k.rsplit(":", 1)[0] for k in kept)]))
+        return {"files": files, "markers": total, "removable": tagged, "lines": lines,
+                "kept": kept, "places": places,
+                "outside": [f for f in places if not self.allowed(f)],
+                "prefix": prefix}
 
 
 def planted(root: Path, prefix: str = DEFAULT_PREFIX) -> dict[str, list[str]]:

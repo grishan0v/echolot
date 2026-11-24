@@ -30,6 +30,7 @@ from echolot import hunt as hunt_mod  # noqa: E402
 # `main` under another name: this file defines its own runner below.
 from echolot.main import main as cli  # noqa: E402
 from echolot.state import next_kind, project_state  # noqa: E402
+from echolot.mark import Markers
 
 CONFIG = """\
 project:
@@ -550,14 +551,14 @@ def test_leftover_markers(tmp_path: Path) -> None:
         'fun b() {\n'
         '  android.os.Trace.beginSection("AGENTTMP_byHand")\n'
         '}\n', encoding="utf-8")
-    left = hunt_mod.leftovers(p)
+    left = Markers(p).leftovers()
     check("every instrumentation point found", left["markers"] == 2,
           str(left["markers"]))
     check("only tagged ones are removable", left["removable"] == 1,
           str(left["removable"]))
     check("both files named", len(left["files"]) == 2, str(left["files"]))
 
-    clean = hunt_mod.leftovers(setup(tmp_path / "clean"))
+    clean = Markers(setup(tmp_path / "clean")).leftovers()
     check("a clean tree reports nothing", clean["markers"] == 0)
 
 

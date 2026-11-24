@@ -974,74 +974,6 @@ def drift(hunt: dict[str, Any] | None, st: dict[str, Any]) -> list[str]:
 KEPT_SHOWN = 12
 
 
-def leftovers(root: Path, prefix: str | None = None) -> dict[str, Any]:
-    """Temporary markers still in the sources, and whether `mark` can remove them.
-
-    An investigation that ran out of context leaves its instrumentation behind,
-    and the next one then measures a tree nobody meant to ship or profile.
-
-    Counted by the prefix, which appears once per instrumentation point — on
-    the `beginSection`, while its paired `endSection` carries only the tag. Of
-    those points, the ones `mark --apply` wrote are a line of their own and
-    `mark --remove` takes them out; ones the agent added by hand are not, and
-    have to go by hand. The same predicate decides both here and there, so the
-    number is what `--remove` will actually do. One number for both would send
-    the human away believing the tree was clean.
-
-    `lines` counts every line `--remove` would delete, prefix or not. A tagged
-    `endSection()` left after its `beginSection` went by hand has no prefix to
-    be found by, and ends whatever section the app has open on that thread
-    (#274); its file is listed with the rest.
-
-    `kept` is every line `--remove` leaves where it is and names, as
-    `file:line`: the tag in another shape than the one `--apply` writes, with
-    something besides the marker on the line, which is why it goes by hand.
-    An agent's one-line wrap is one:
-
-        try { work() } finally { android.os.Trace.endSection() } // echolot:mark
-
-    Its `beginSection` was a line of its own and went at the press; the wrap
-    has no prefix and is not a line `--remove` deletes, so it was counted nowhere,
-    and every reader said the code was clean over an `endSection()` that
-    ends whatever section the app has open (#703). Its places are its own
-    list: `files` holds the markers and the lines `--remove` deletes, which
-    the sentences about those count files by.
-    """
-    from . import mark as mark_mod
-
-    prefix = prefix or mark_mod.DEFAULT_PREFIX
-    files: list[str] = []
-    kept: list[str] = []
-    total = tagged = lines = 0
-    # The walk `mark --remove` takes and the text it reads, so the count is
-    # of what it removes and the lines are the ones it leaves.
-    try:
-        sources = mark_mod.domains_source_files(root)
-    except OSError:
-        return {"files": [], "markers": 0, "removable": 0, "lines": 0, "kept": [],
-                "prefix": prefix}
-    for p in sources:
-        try:
-            text = mark_mod.read_source(p, strict=True)
-        except (OSError, UnicodeDecodeError):
-            continue
-        if prefix not in text and mark_mod.TAG not in text:
-            continue
-        rows = text.split("\n")
-        rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
-        kept += [f"{rel}:{n}" for n, ln in enumerate(rows, 1) if mark_mod.is_kept_line(ln)]
-        hits = [ln for ln in rows if prefix in ln]
-        applied = sum(1 for ln in rows if mark_mod.is_applied_line(ln))
-        if not hits and not applied:
-            continue
-        files.append(rel)
-        total += len(hits)
-        tagged += sum(1 for ln in hits if mark_mod.is_applied_line(ln))
-        lines += applied
-    return {"files": files, "markers": total, "removable": tagged, "lines": lines,
-            "kept": kept, "prefix": prefix}
-
-
 # --- rendering --------------------------------------------------------------
 
 def summary_line(hunt: dict[str, Any] | None, st: dict[str, Any]) -> str:
@@ -1137,7 +1069,10 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
         out.append(f"  ! {d}")
 
     if root is not None:
-        for note in leftover_lines(leftovers(root, (st.get("config") or {}).get("temp_prefix"))):
+        from .mark import Markers
+
+        left = Markers(root, (st.get("config") or {}).get("temp_prefix")).leftovers()
+        for note in leftover_lines(left):
             out.append(f"  ! {note}")
     return out
 

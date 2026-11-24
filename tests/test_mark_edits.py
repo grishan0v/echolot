@@ -615,6 +615,46 @@ def test_one_folder_written_as_text_is_a_list_of_one(tmp_path):
             check("and says why", "outside instrumentation.allowed" in out, out)
 
 
+def test_every_spelling_of_a_folder_is_the_folder():
+    """`./app/src/main` split into `.`, `app`, …, and the `.` was held
+    against `app`: `mark` refused every place in the folder the page let
+    the agent edit (#839). `.` names the whole project, as on the page."""
+    rel = "app/src/main/kotlin/A.kt"
+    for entry in ("app/src/main", "./app/src/main", "app/src/main/", "./app/src/main/",
+                  "app//src/main", "app\\src\\main", ".", "./", ""):
+        check(f"{entry!r} covers {rel}", mark.under_allowed(rel, [entry]))
+        check(f"and the service reads {entry!r} the same way",
+              mark.Markers(Path("."), allowed=[entry]).allowed(rel))
+    check("a path written with ./ is the same path",
+          mark.under_allowed("./app/src/main/kotlin/A.kt", ["app/src/main"]))
+    check("and the folder beside it is still outside",
+          not mark.under_allowed("core/src/main/A.kt", ["./app/src/main"]))
+    check("no list allows every place", mark.Markers(Path(".")).allowed("anything/A.kt"))
+
+
+def test_mark_proposes_the_same_rows_for_dot_slash(tmp_path):
+    """The run #839 describes: the same config with `./` in front of the
+    folder marks the same places."""
+    write(tmp_path, "app/src/main/AndroidManifest.xml", manifest(LAUNCHER, application=""))
+    rel = "app/src/main/java/com/example/app/MainActivity.kt"
+    write(tmp_path, rel, (
+        "class MainActivity : ComponentActivity() {\n"
+        "    override fun onCreate(savedInstanceState: Bundle?) {\n"
+        "        super.onCreate(savedInstanceState)\n"
+        "    }\n"
+        "}\n"))
+    config = tmp_path / "echolot.yml"
+    rows = {}
+    for allowed in ('["app/src/main"]', '["./app/src/main"]'):
+        config.write_text(f"instrumentation:\n  allowed: {allowed}\n", encoding="utf-8")
+        code, out, err = run("mark", "--root", str(tmp_path), "-c", str(config))
+        check(f"allowed: {allowed} exits 0", code == 0, out + err)
+        rows[allowed] = [ln for ln in out.splitlines() if ln.lstrip().startswith("+")]
+    check("a row to apply", rows['["app/src/main"]'], rows)
+    check("the same rows for both spellings",
+          rows['["app/src/main"]'] == rows['["./app/src/main"]'], rows)
+
+
 def test_a_frame_outside_allowed_is_shown_not_dropped(tmp_path):
     """`--from-anr` skipped such a frame without a row, where `plan` shows a
     site outside and refuses it — and the docs said the same of both."""
