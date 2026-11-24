@@ -1835,7 +1835,7 @@ def _(report):
     from .tp import load_detectors
     d = next(x for x in load_detectors(DETECTOR_DIR)
              if x.id == "runnable_starvation")
-    sql = d.render_open()
+    sql, _ = d.render()
     # A statistic over a truncated top twenty would be a statistic over the tail.
     assert "LIMIT" not in sql.upper(), "LIMIT must be stripped while measuring"
     # No threshold filters the rows: the predicate is a column of each (#832),
@@ -6119,8 +6119,8 @@ def _(report):
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build())
-        before = rep.aggregate([_analyze(trace, Config(FIXTURE_CONFIG), below_bar=True)])
-        after = rep.aggregate([_analyze(trace, Config(FIXTURE_CONFIG), below_bar=True, cli_overrides={
+        before = rep.aggregate([_analyze(trace, Config(FIXTURE_CONFIG))])
+        after = rep.aggregate([_analyze(trace, Config(FIXTURE_CONFIG), cli_overrides={
             "main_thread_block": {"min_slice_ms": 1e6}})])
     det = next(d for d in after["detectors"] if d["id"] == "main_thread_block")
     assert not det["rows"] and (det.get("below") or {}).get("rows"), (

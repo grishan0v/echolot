@@ -46,7 +46,7 @@ def _strings(rep: dict) -> list[str]:
 def test_one_recording_and_five_copies_of_it_have_the_same_rows(tmp_path: Path) -> None:
     trace = tmp_path / "fixture.perfetto-trace"
     trace.write_bytes(fixture.build())
-    analysed = analyze_trace(trace, Config(selftest.FIXTURE_CONFIG), below_bar=True)
+    analysed = analyze_trace(trace, Config(selftest.FIXTURE_CONFIG))
     one = report_mod.aggregate([copy.deepcopy(analysed)])
     five = report_mod.aggregate([copy.deepcopy(analysed) for _ in range(5)])
     rows_one, rows_five = _rows(one), _rows(five)
@@ -61,7 +61,7 @@ def test_one_recording_and_five_copies_of_it_have_the_same_rows(tmp_path: Path) 
 def test_a_name_the_project_listed_keeps_its_digits_everywhere(tmp_path: Path) -> None:
     listed = "Choreographer#doFrame 55103"
     raw = {**selftest.FIXTURE_CONFIG, "domains": [{"slice": listed, "code": "Frames"}]}
-    analysed = analyze_trace(_trace(tmp_path, FRAMES), Config(raw), below_bar=True)
+    analysed = analyze_trace(_trace(tmp_path, FRAMES), Config(raw))
     merged = report_mod.aggregate([copy.deepcopy(analysed) for _ in range(2)])
     for name, rep in (("one recording", analysed), ("the merge", merged)):
         folded_into = [r for d in rep["detectors"] for r in d["rows"]
@@ -74,7 +74,7 @@ def test_a_name_the_project_listed_keeps_its_digits_everywhere(tmp_path: Path) -
 def test_a_line_number_in_a_lock_note_is_kept_by_every_detector(tmp_path: Path) -> None:
     trace = tmp_path / "fixture.perfetto-trace"
     trace.write_bytes(fixture.build())
-    analysed = analyze_trace(trace, Config(selftest.FIXTURE_CONFIG), below_bar=True)
+    analysed = analyze_trace(trace, Config(selftest.FIXTURE_CONFIG))
     merged = report_mod.aggregate([copy.deepcopy(analysed) for _ in range(2)])
     for name, rep in (("one recording", analysed), ("the merge", merged)):
         said = [s for s in _strings(rep) if "Store.java:" in s]

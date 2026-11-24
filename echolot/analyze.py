@@ -131,8 +131,7 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
 def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                   cli_overrides: dict[str, dict] | None = None,
                   use_defaults: bool = False,
-                  tp_source: str | None = None,
-                  below_bar: bool = False) -> dict:
+                  tp_source: str | None = None) -> dict:
     """The core of a run: trace + config → Marker Report.
 
     Separate from cmd_analyze because it has two callers: the command, which
@@ -148,12 +147,10 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     got (`params_source`), so a reader can tell calibrated numbers from the
     shipped ones, and a scenario's from the config's, without opening it.
 
-    `below_bar` also runs each detector with its thresholds open, and keeps
-    what that returned beside its rows for the merge of a set (#505): a row
-    one repeat reports may have been there below the bar in another, and
-    only this tells it from a row that was not there at all. The merge takes
-    it out again, see `report.merge_rows`, and keeps what lies under the bar
-    in no repeat's report as the detector's `below` (#715).
+    A detector with `@fires` returns every row it measured (#832): the rows
+    its predicate passed are its rows, and the rest, from `report.FLOOR_MS`,
+    go to the merge beside them, which keeps what no repeat showed as the
+    detector's `below`.
     """
     plan = plan_detectors(cfg, cli_overrides=cli_overrides, use_defaults=use_defaults)
     # Refused here, like a threshold of the wrong kind: before a trace is opened.
@@ -251,11 +248,6 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                         _stacks_behind(tp, d, params, rows, package, root)
                     except Exception as e:  # the rows stand without it
                         print(f"[!] {d.id} @samples: {e}", file=sys.stderr)
-            # Last of the four: run with its thresholds open, the first query
-            # writes its own tables again (`_det_<id>`, see tp._own_tables),
-            # and the two queries above read the pieces of these rows.
-            opened = (_below_bar(tp, d, overrides, sql, rows)
-                      if below_bar and not err and not d.fires else None)
             entry = {
                 "id": d.id,
                 "title": d.title,
@@ -274,8 +266,6 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 # Did it look: `checked`, and `reason` when it did not.
                 **needs_mod.verdict(d.needs, held, err),
             }
-            if opened is not None:
-                entry[report_mod.OPEN_ROWS] = opened
             if under is not None:
                 entry[report_mod.UNDER_ROWS] = under
             if source != "default":
@@ -325,21 +315,6 @@ def _over_bar(rows: list[dict]) -> tuple[list[dict], list[dict]]:
         elif float(row.get(report_mod.metric_of(row)) or 0.0) >= report_mod.FLOOR_MS:
             under.append(row)
     return shown, under
-
-
-def _below_bar(tp, d, overrides: dict | None, sql: str,
-               rows: list[dict]) -> list[dict] | None:
-    """The detector's rows with its calibrated thresholds at zero and no LIMIT.
-
-    The rows themselves when that is the same query. None when it fails: the
-    rows stand without it, and a missing row then reads as absent, as it did.
-    """
-    try:
-        open_sql = d.render_open(overrides)
-        return rows if open_sql == sql else tp.query(open_sql)
-    except Exception as e:  # the same leniency as the detector's own query
-        print(f"[!] {d.id} with its thresholds open: {e}", file=sys.stderr)
-        return None
 
 
 def _marker_globs(cfg: Config) -> tuple[str, list[str]]:

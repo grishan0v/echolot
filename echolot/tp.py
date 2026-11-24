@@ -307,11 +307,6 @@ class Detector:
     plain_title: str = ""
     plain_why: str = ""
     plain_clean: str = ""
-    # Thresholds opened for the merge of repeats though no `@calibrate` line
-    # names them (`@bar: param, …`). A bar that is a fixed quantity, one
-    # frame, is not calibrated, and a row under it in one repeat is still
-    # there (#505); without this it read as absent again.
-    bars: tuple[str, ...] = ()
     # `@fires`: the one predicate over the query's output columns that says a
     # row is worth showing (#832), `{{param}}`s and all. A detector that has
     # one measures every row and drops none: its query has no threshold in
@@ -392,7 +387,6 @@ class Detector:
             samples_sql=sections.get("samples", ""),
             tables=tables,
             needs=needs,
-            bars=tuple(b.strip() for b in meta.get("bar", "").split(",") if b.strip()),
             fires=meta.get("fires", ""),
             shape=tuple(p.strip() for p in meta.get("shape", "").split(",") if p.strip()),
             plain_title=meta.get("plain_title", ""),
@@ -402,23 +396,6 @@ class Detector:
             meanings=header.meanings,
             columns=header.columns,
         )
-
-    def render_open(self, overrides: dict[str, Any] | None = None) -> str:
-        """The query with thresholds opened up — for measuring the distribution.
-
-        Calibrated thresholds, and the `@bar`s, are zeroed so HAVING lets everything through, and
-        LIMIT is stripped: a statistic over a truncated top twenty would be a
-        statistic over the tail.
-        """
-        if self.fires:
-            # Every row is in what `render` returns already.
-            return self.render(overrides)[0]
-        resolved = dict(self.params)
-        resolved.update(overrides or {})
-        for param in [c.param for c in self.calibrations] + list(self.bars):
-            resolved[param] = 0
-        sql, _ = self.render(resolved)
-        return _LIMIT_TAIL.sub("", sql)
 
     def check(self, overrides: dict[str, Any] | None = None,
               source: str = "") -> None:

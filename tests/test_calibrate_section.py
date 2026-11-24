@@ -98,13 +98,13 @@ def test_the_section_replaces_the_config_s_whole(app: Path) -> None:
 
 
 def test_a_detector_that_failed_is_not_rare(app: Path, monkeypatch) -> None:
-    render_open = Detector.render_open
+    render = Detector.render
 
     def broken(self, overrides=None):
-        sql = render_open(self, overrides)
-        return sql + " BROKEN" if self.id == "main_thread_block" else sql
+        sql, resolved = render(self, overrides)
+        return (sql + " BROKEN" if self.id == "main_thread_block" else sql), resolved
 
-    monkeypatch.setattr(Detector, "render_open", broken)
+    monkeypatch.setattr(Detector, "render", broken)
     code, out, err = _calibrate(app, 3)
     check("the failure is on stderr", err.count("[!] main_thread_block on") == 3, err)
     check("the section says it failed, not that the sample was small",

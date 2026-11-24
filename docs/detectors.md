@@ -112,10 +112,9 @@ shown: `main_thread_outlier`'s `factor`, how far past its deadline a frame
 counts as late. Such a parameter is named in `@shape`, and a string
 parameter is a mask, a GLOB of what is counted. Every other number is in the
 predicate. A test holds that, per detector, the rows shown at any
-thresholds are every row measured, filtered by them. A detector without
-`@fires` still filters in its query, and `analyze` runs it a second time
-with its thresholds open for the merge; the shipped ones move to `@fires`
-one at a time.
+thresholds are every row measured, filtered by them. Every shipped
+detector has `@fires`. One a project writes without it shows every row its
+query returns, and has nothing under the bar.
 
 `@needs` names what the trace has to hold for the detector's silence to mean
 anything, and stands straight after the `@why` block:
@@ -518,10 +517,8 @@ What decides the query:
 
   One copy of the logic, and the time cannot drift from the rows; the steps
   are not taken twice on every trace either (#490). The table is named
-  `_det_<id>`, or `_det_<id>_` and more, and is written with `OR REPLACE`: the
-  first query runs again in the same session with its thresholds open, for
-  the merge of repeats, and `analyze` reads the second and third queries
-  before that run. A file that writes another name, writes without
+  `_det_<id>`, or `_det_<id>_` and more, and is written with `OR REPLACE`, so
+  that a second run of the query in one session does not fail. A file that writes another name, writes without
   `OR REPLACE`, or reads a `_det_` table its first query does not write is
   refused as it is read. A second query that is one filter over the window's
   tables, as `gc_pressure`'s is, gains nothing from a table and keeps that

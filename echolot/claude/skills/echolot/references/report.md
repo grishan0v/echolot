@@ -24,7 +24,7 @@ produce. The keys only a merged report has are named under the block.
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "generated_at": "2026-08-15T12:00:00+00:00",
   "trace": "path of the first repeat",
   "traces": ["…/coldStart_iter000.perfetto-trace", "…"],

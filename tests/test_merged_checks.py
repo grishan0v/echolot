@@ -264,11 +264,16 @@ def _slice(ms: float) -> dict:
     return row("draw", count=1, self_ms=ms, total_ms=ms, max_ms=ms, detail="main")
 
 
-def _below(rows: list[dict], opened: list[dict] | None) -> dict:
+def _below(rows: list[dict], measured: list[dict] | None) -> dict:
+    """One repeat of a detector with `@fires`: the rows it shows, and the
+    rows it measured, shown or not. None for a repeat that handed nothing
+    under the bar."""
     rep = one(rows, det_id="main_thread_block")
     rep["detectors"][0]["identity"] = ["location", "detail"]
-    if opened is not None:
-        rep["detectors"][0][report_mod.OPEN_ROWS] = opened
+    if measured is not None:
+        shown = [tuple(sorted(r.items())) for r in rows]
+        rep["detectors"][0][report_mod.UNDER_ROWS] = [
+            r for r in measured if tuple(sorted(r.items())) not in shown]
     return rep
 
 
@@ -279,15 +284,15 @@ def test_a_row_below_the_bar_in_two_repeats_is_present_in_all_three() -> None:
             _below([], [_slice(12.0), row("other", self_ms=1.0, detail="main")])]
     merged = report_mod.aggregate(reps)
     got = merged["detectors"][0]["rows"]
-    check("one row: the one that fired, not every name the open query saw",
+    check("one row: the one that fired, not every name it measured",
           [r["location"] for r in got] == ["draw"], got)
     check("present in all three, over the bar in one",
           got[0]["runs"] == "3/3" and got[0]["fired"] == "1/3", got[0])
     check("the median is over every repeat",
           got[0]["self_ms"] == 12.0
           and got[0]["spread"]["self_ms"]["values"] == [20.0, 12.0, 12.0], got[0])
-    check("what the open query returned is not written",
-          all(report_mod.OPEN_ROWS not in d for d in merged["detectors"]), merged)
+    check("what it measured under the bar is not written beside the rows",
+          all(report_mod.UNDER_ROWS not in d for d in merged["detectors"]), merged)
     md = report_mod.to_markdown(merged)
     check("report.md says both counts", "3/3, over the bar in 1" in md, md)
 
@@ -327,7 +332,7 @@ def test_analyze_keeps_the_rows_below_the_bar_for_the_merge(tmp_path) -> None:
     cfg = Config(selftest.FIXTURE_CONFIG)
     # `collection_mapping` takes 120 ms of the main thread: over a bar of 100,
     # under one of 200.
-    reps = [analyze_trace(trace, cfg, below_bar=True,
+    reps = [analyze_trace(trace, cfg,
                           cli_overrides={"main_thread_block": {"min_slice_ms": bar}})
             for bar in (100, 200, 200)]
     merged = report_mod.aggregate(reps)
@@ -335,9 +340,9 @@ def test_analyze_keeps_the_rows_below_the_bar_for_the_merge(tmp_path) -> None:
     got = next(r for r in det["rows"] if r["location"] == "collection_mapping")
     check("found in all three, reported in one",
           got["runs"] == "3/3" and got["fired"] == "1/3", got)
-    single = analyze_trace(trace, cfg, below_bar=True)
+    single = analyze_trace(trace, cfg)
     check("a report of one recording carries none of it once merged",
-          report_mod.OPEN_ROWS not in next(
+          report_mod.UNDER_ROWS not in next(
               d for d in report_mod.aggregate([single])["detectors"]
               if d["id"] == "main_thread_block"))
 
@@ -353,7 +358,7 @@ def test_analyze_keeps_what_it_found_under_the_bar_in_no_repeat(tmp_path) -> Non
     trace.write_bytes(fixture.build())
     cfg = Config(selftest.FIXTURE_CONFIG)
     for n in (1, 2):
-        reps = [analyze_trace(trace, cfg, below_bar=True,
+        reps = [analyze_trace(trace, cfg,
                               cli_overrides={"main_thread_block": {"min_slice_ms": 200}})
                 for _ in range(n)]
         det = next(d for d in report_mod.aggregate(reps)["detectors"] if d["id"] == "main_thread_block")
@@ -367,16 +372,8 @@ def test_analyze_keeps_what_it_found_under_the_bar_in_no_repeat(tmp_path) -> Non
               and all(max(r["spread"]["self_ms"]["values"] if "spread" in r else [r["self_ms"]])
                       >= report_mod.FLOOR_MS for r in under.values())
               and not any("stacks" in r for r in under.values()), det["below"])
-    old = report_mod.aggregate([analyze_trace(trace, cfg)])
-    # A detector with `@fires` measures every row in its one query (#832),
-    # and has its `below` whatever `analyze` was asked.
-    from echolot.analyze import DETECTOR_DIR
-    from echolot.tp import load_detectors
-    fires = {d.id for d in load_detectors(DETECTOR_DIR) if d.fires}
-    check("without the open query there is nothing to say under the bar",
-          all("below" not in d for d in old["detectors"] if d["id"] not in fires))
-    check("but what a detector with @fires measured, it says",
-          all("below" in d for d in old["detectors"] if d["id"] in fires), fires)
+
+
 def _marker_runs(totals: list[float], open_at: set[int]) -> list[dict]:
     reps = []
     for i, ms in enumerate(totals):

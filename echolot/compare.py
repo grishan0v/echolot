@@ -1722,7 +1722,7 @@ def _under_bar(pairs: list[tuple[dict | None, dict | None, str]],
                db: dict | None, da: dict | None, identity: tuple[str, ...],
                keep: str | None = None) -> list[tuple[dict | None, dict | None, str, str | None]]:
     """The pairs, with a row one side does not report looked up in what that
-    side found under its bar (`below`, see `report.below_bar`), and the side
+    side measured under its bar (`below`, see `report._merge_detector`), and the side
     it was found under the bar on.
 
     86 calls to the system of 83 ms together, after a fix that took each of
@@ -1775,10 +1775,17 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
     shares = _shares(rb, ra)
     b_vals, a_vals = _values(rb, metric, shares), _values(ra, metric, shares)
     floor = 0.0
-    if rb is None:
-        change, delta, ratio = APPEARED, va or 0.0, None
-    elif ra is None:
-        change, delta, ratio = VANISHED, -(vb or 0.0), None
+    if rb is None or ra is None:
+        delta = (va or 0.0) if rb is None else -(vb or 0.0)
+        ratio = None
+        # A row one side does not have moved by its own size at most. Under
+        # the floor that is no move, as it is no move between two rows found:
+        # a 2.6 ms initializer the other side kept under its bar, or under
+        # the 1 ms it keeps at all, read as gone or new (#843).
+        if abs(delta) <= floor_ms:
+            change, floor = STEADY, floor_ms
+        else:
+            change = APPEARED if rb is None else VANISHED
     else:
         mb, ma = vb or 0.0, va or 0.0
         if shares and b_vals and a_vals:

@@ -277,7 +277,7 @@ def test_a_report_reads_back_as_it_was_written(report_written, tmp_path):
 
 
 BAD_REPORTS = [
-    (_set("schema", 2), "a newer echolot wrote it, in schema 2; this one reads schema 1"),
+    (_set("schema", 3), "a newer echolot wrote it, in schema 3; this one reads schema 2"),
     (_set("schema", 0), "an older echolot wrote it, in schema 0"),
     (_set("schema", True), "its schema number is true or false, not a whole number"),
     (_set("kind", "comparison"), "it is a comparison, not a report.json"),
@@ -326,21 +326,24 @@ def test_a_report_with_no_schema_number_is_one_of_schema_1(report_written, tmp_p
     data = json.loads(report_written)
     del data["schema"]
     (tmp_path / "report.json").write_text(json.dumps(data), encoding="utf-8")
-    check("it reads, as it is", files.read_report(tmp_path / "report.json") == data)
+    check("it reads, as it is, as schema 2: schema 1 has its shape (#832)",
+          files.read_report(tmp_path / "report.json") == {**data, "schema": 2})
 
 
 def test_raising_the_report_schema_is_one_line_and_an_upgrade(report_written):
-    """What #832 does: a new number, and either an upgrade from the old one or
-    a refusal that names `echolot analyze`."""
+    """What #832 did: a new number, and an upgrade from the old one. Without
+    the upgrade, an old report is refused with a sentence that names
+    `echolot analyze`."""
     import dataclasses
-    old = json.loads(report_written)
-    refusing = dataclasses.replace(files.REPORT, schema=2)
+    old = {**json.loads(report_written), "schema": 1}
+    check("#832 raised it to 2", files.REPORT_SCHEMA == 2)
+    got = files.REPORT.check(old)
+    check("and a schema-1 report reads as it was, under the new number",
+          got == {**old, "schema": 2}, got)
+    refusing = dataclasses.replace(files.REPORT, upgrades={})
     check("without an upgrade, a schema-1 report is refused for its schema",
           refused(refusing.check(old), "an older echolot wrote it, in schema 1; this one reads schema 2")
           and refusing.check(old).stale)
-    upgrading = dataclasses.replace(files.REPORT, schema=2, upgrades={1: lambda d: {**d, "upgraded": True}})
-    got = upgrading.check(old)
-    check("with one, it reads as schema 2", got["schema"] == 2 and got["upgraded"] is True, got)
 
 
 # --- collect.json and a job's state ------------------------------------------------------------

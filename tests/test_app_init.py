@@ -163,7 +163,7 @@ def test_a_repeat_with_a_short_stretch_still_ran_the_work(tmp_path: Path) -> Non
 
     def merged(bars: tuple[int, ...]) -> dict:
         return report_mod.aggregate([
-            analyze_trace(trace, cfg, below_bar=True,
+            analyze_trace(trace, cfg,
                           cli_overrides={"app_init": {"min_stretch_ms": bar}})
             for bar in bars])
 
