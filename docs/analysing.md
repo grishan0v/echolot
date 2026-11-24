@@ -562,6 +562,15 @@ out is out of reach. `reflect` of one session follows the same rule: outside
 a terminal it prints the row `--all` gives that session, and `--full` the
 whole report.
 
+### A set's directory
+
+A directory named to `analyze` is the set in it: its `*.perfetto-trace` files,
+the same report as `<dir>/*.perfetto-trace`. `collect --hunt` and `hunt` set a
+round aside in a directory of its own, `.echolot/traces/<scenario>-<stamp>/`,
+and that directory used to be refused as "no such trace" (#915). Only the
+directory itself is read, not the ones under it, and one with no trace in it is
+refused with what `analyze` takes.
+
 ### One recording, one repeat
 
 `analyze` counts each recording once, however it was named. A path given
