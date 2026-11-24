@@ -16,6 +16,11 @@ Processes, threads and the longest slices. This is what fills in the config
 during setup: the anchor candidates it prints come from a real trace rather
 than from someone's memory.
 
+A mask that matches several processes is read as `analyze` reads it: the one
+with the most slices, with a line on stderr naming the others. The mask
+`scan` writes, `com.example.app*`, also matches a macrobenchmark's own runner,
+`com.example.app.benchmark`, and its threads and slices are not the app's.
+
 The thread table is sorted by **CPU time, not slice count**. A thread with zero
 slices and hundreds of milliseconds of Running is exactly the blind spot you
 are looking for; sorted by slice count it would sit at the bottom.
