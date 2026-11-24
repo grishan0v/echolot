@@ -5,14 +5,18 @@
 --       line with its own history. A heavy tail hides from every sum.
 -- @param: factor = 4 × — how many times its name's median an occurrence has
 --       to take to be out of line
--- @param: min_abs_ms = 40 ms — and how long it has to take at least, so
---       that four times half a millisecond is not a finding
+-- @param: min_abs_ms = 40 ms — and how long the longest of them has to
+--       take for the row to be shown, so that four times half a millisecond
+--       is not a finding
 -- @param: min_occurrences = 5 slices — how many times a name has to occur
 --       on the main thread in the window to have a median to measure against
+-- @fires: max_ms >= {{min_abs_ms}}
+-- @shape: factor, min_occurrences
 -- @calibrate: min_abs_ms = top10(max_ms) * 1.5
 -- @column: location — the slice name on the main thread, the numbers the
 --       runtime chose folded: every frame is `Choreographer#doFrame #`
--- @column: count — its occurrences out of line, not all of its occurrences
+-- @column: count — its occurrences out of line, however short, not all of
+--       its occurrences
 -- @column: total_ms — their time, summed
 -- @column: max_ms — the worst of them
 -- @column: detail — the median it is measured against, over how many
@@ -85,8 +89,7 @@ SELECT r.name, r.ts, r.dur, b.n, b.median_ns
 FROM ranked r
 JOIN baseline b ON b.name = r.name
 WHERE b.n >= {{min_occurrences}}
-  AND r.dur >= b.median_ns * {{factor}}
-  AND r.dur >= {{min_abs_ms}} * 1000000;
+  AND r.dur >= b.median_ns * {{factor}};
 
 SELECT
     name                                                AS location,
@@ -98,8 +101,7 @@ SELECT
                                                         AS detail
 FROM _det_main_thread_outlier
 GROUP BY name
-ORDER BY max_ms DESC
-LIMIT 20;
+ORDER BY max_ms DESC;
 
 -- @intervals
 --

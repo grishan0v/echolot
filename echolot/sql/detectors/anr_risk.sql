@@ -10,6 +10,8 @@
 -- @param: max_gap_ms = 2 ms — the longest moment of nothing on the main
 --       thread that still does not end a stretch: the space between two
 --       messages, shorter than any idle moment
+-- @fires: 1
+-- @shape: min_stall_ms, max_gap_ms
 -- @identity: location
 -- @column: location — the longest message inside the stretch, or
 --       `uninstrumented work on the main thread` when no slice is inside it
@@ -194,8 +196,7 @@ SELECT
         || slices || ' slices'                            AS detail
 FROM described
 GROUP BY what
-ORDER BY total_ms DESC
-LIMIT 20;
+ORDER BY total_ms DESC;
 
 -- @intervals
 --

@@ -8,7 +8,7 @@
 -- @param: min_stretch_ms = 80 ms — how long the stretch from the end of
 --       makeApplication to the end of bindApplication has to be for any of
 --       its rows to be reported. One bar for the whole result, not per row
--- @bar: min_stretch_ms
+-- @fires: stretch_ms >= {{min_stretch_ms}}
 -- @identity: location
 -- @column: location — a section in the stretch by its name, an androidx.startup
 --       Initializer opened out of `Startup`; `class initialization (ART)` for
@@ -21,6 +21,9 @@
 -- @column: detail — what the row is: an Initializer, one run inside another,
 --       ART's classes, a section under bindApplication; on `(no section)`,
 --       what runs there and writes nothing
+-- @column: stretch_ms — the longest stretch from `makeApplication` to the
+--       end of `bindApplication` in the window, the same on every row:
+--       what `min_stretch_ms` is held against
 -- @plain_title: What runs before the first screen is created
 -- @plain_why: Libraries and the app's own setup code run before anything can
 --       be shown, so the time they take is added to the time until the first
@@ -229,13 +232,15 @@ SELECT
     ROUND(SUM(self) / 1e6, 2)         AS self_ms,
     ROUND(SUM(dur) / 1e6, 2)          AS total_ms,
     ROUND(MAX(dur) / 1e6, 2)          AS max_ms,
-    MAX(detail)                       AS detail
+    MAX(detail)                       AS detail,
+    -- The longest stretch of the trace, the same on every row: whether the
+    -- stretch is long enough to look into is a question about all of it.
+    ROUND((SELECT MAX(te - ts) FROM _det_app_init_stretch) / 1e6, 2)
+                                      AS stretch_ms
 FROM named
 WHERE dur > 0
-  AND (SELECT MAX(te - ts) FROM _det_app_init_stretch) >= {{min_stretch_ms}} * 1000000
 GROUP BY location
-ORDER BY self_ms DESC
-LIMIT 20;
+ORDER BY self_ms DESC;
 
 -- @intervals
 --

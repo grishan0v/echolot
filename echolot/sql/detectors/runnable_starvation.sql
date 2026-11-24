@@ -5,6 +5,7 @@
 --       else held the core — and for the main thread the row says what
 -- @param: min_runnable_ms = 20 ms — the time a thread has to spend ready to
 --       run and not running, in one state, summed, to be a row
+-- @fires: total_ms >= {{min_runnable_ms}}
 -- @calibrate: min_runnable_ms = top10(total_ms) * 1.5
 -- @identity: location, state
 -- @column: location — the thread's name; `main` for the main thread, told
@@ -113,9 +114,7 @@ LEFT JOIN evidence e ON e.state = s.state
 LEFT JOIN _name_family f ON f.name = s.thread_name
 WHERE s.state IN ('R', 'R+')
 GROUP BY COALESCE(f.family, s.thread_name), s.tid = p.pid, s.state
-HAVING SUM(s.dur) >= {{min_runnable_ms}} * 1000000
-ORDER BY total_ms DESC
-LIMIT 20;
+ORDER BY total_ms DESC;
 
 -- @intervals
 --

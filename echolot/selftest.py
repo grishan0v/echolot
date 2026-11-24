@@ -1768,8 +1768,10 @@ def _(report):
     sql = d.render_open()
     # A statistic over a truncated top twenty would be a statistic over the tail.
     assert "LIMIT" not in sql.upper(), "LIMIT must be stripped while measuring"
-    # The threshold is zeroed so HAVING lets the whole distribution through.
-    assert ">= 0 * 1000000" in sql, sql[-300:]
+    # No threshold filters the rows: the predicate is a column of each (#832),
+    # so the whole distribution comes through.
+    head, _, rows = sql.rpartition("AS over_bar FROM (")
+    assert head and ">= 20" in head and "1000000" not in rows.split("GROUP BY")[-1], sql[-400:]
 
 
 @check("calibrate: topN takes the Nth largest, not a percentile")

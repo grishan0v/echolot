@@ -10,6 +10,7 @@
 --       app's own has to hold, as self_ms below, to be a row
 -- @param: name_glob = * ([A-Za-z]*.kt:[0-9]*) — GLOB over slice names: a
 --       composable call as runtime-tracing names it, `Name (File.kt:line)`
+-- @fires: self_ms >= {{min_self_ms}}
 -- @calibrate: min_self_ms = top10(self_ms) * 1.5
 -- @identity: location
 -- @column: location — the composable, as runtime-tracing names it: its
@@ -147,9 +148,7 @@ SELECT
         || CASE WHEN elsewhere > 0 THEN ' · ' || elsewhere || ' elsewhere' ELSE '' END, 4)
                                                              AS detail
 FROM grouped
-WHERE self_ns >= {{min_self_ms}} * 1000000
-ORDER BY self_ms DESC, location
-LIMIT 20;
+ORDER BY self_ms DESC, location;
 
 -- @intervals
 --

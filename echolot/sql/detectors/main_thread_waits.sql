@@ -8,6 +8,7 @@
 -- @param: lock_glob = *contention* — GLOB over slice names: a lock's
 --       contention slice. A sleep inside one is `monitor_contention`'s, and
 --       left out here
+-- @fires: total_ms >= {{min_total_ms}}
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location
 -- @column: location — the thread of the app that woke the main thread,
@@ -142,9 +143,7 @@ SELECT
     END                                                            AS detail
 FROM grouped g
 LEFT JOIN blocked_in b USING (location)
-WHERE g.total_ns >= {{min_total_ms}} * 1000000
-ORDER BY total_ms DESC, location
-LIMIT 20;
+ORDER BY total_ms DESC, location;
 
 -- @intervals
 --

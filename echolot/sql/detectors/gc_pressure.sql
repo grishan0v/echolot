@@ -12,6 +12,7 @@
 --       every one of which ends in GC
 -- @param: name_glob_alt = waitWhileAllocating* — GLOB over slice names: a
 --       thread of the app stopped in an allocation until the collector is done
+-- @fires: count >= {{max_events}} OR total_ms >= {{max_total_ms}}
 -- @calibrate: max_events = top10(count) * 1.5
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
 -- @identity: location, thread
@@ -131,8 +132,6 @@ WITH grouped AS (
            MAX(max_heap_mb)                                        AS heap_mb
     FROM _det_gc_pressure
     GROUP BY name, thread_name
-    HAVING COUNT(*) >= {{max_events}}
-        OR SUM(dur) / 1e6 >= {{max_total_ms}}
 ),
 waited AS (
     SELECT name,
@@ -179,8 +178,7 @@ SELECT
     END                                                            AS detail
 FROM grouped g
 LEFT JOIN named n ON n.name = g.name AND n.thread_name IS g.thread_name
-ORDER BY total_ms DESC
-LIMIT 20;
+ORDER BY total_ms DESC;
 
 -- @intervals
 --

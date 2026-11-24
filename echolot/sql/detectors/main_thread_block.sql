@@ -6,7 +6,7 @@
 -- @param: min_slice_ms = 16 ms — the self time a slice name has to add up
 --       to on the main thread in the window to be a row. One frame at 60 Hz,
 --       not calibrated
--- @bar: min_slice_ms
+-- @fires: self_ms >= {{min_slice_ms}}
 -- @identity: location, detail
 -- @column: location — the slice name
 -- @column: count — its slices on the main thread in the window
@@ -70,9 +70,7 @@ SELECT
     thread_name                                              AS detail
 FROM self
 GROUP BY name, thread_name
-HAVING SUM(self_ns) >= {{min_slice_ms}} * 1000000
-ORDER BY self_ms DESC
-LIMIT 20;
+ORDER BY self_ms DESC;
 
 -- @intervals
 --

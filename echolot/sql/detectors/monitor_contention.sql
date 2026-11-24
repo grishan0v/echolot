@@ -11,6 +11,7 @@
 -- @param: name_glob_alt = monitor contention with owner* — GLOB over slice
 --       names: the same wait with both methods and the owner by name; a
 --       slice of the first mask inside one of these counts once, as this one
+-- @fires: max_ms >= {{min_block_ms}} OR total_ms >= {{max_total_ms}}
 -- @calibrate: min_block_ms = top10(max_ms) * 1.5
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
 -- @column: location — the thread that waited for the lock; `main` for the
@@ -137,10 +138,7 @@ JOIN told t ON t.thread_name = w.thread_name
 -- that no group cleared the threshold. The detector's question is "who is
 -- being blocked", not "by which particular lock".
 GROUP BY w.thread_name
-HAVING MAX(w.dur) >= {{min_block_ms}} * 1000000
-    OR SUM(w.dur) >= {{max_total_ms}} * 1000000
-ORDER BY total_ms DESC
-LIMIT 20;
+ORDER BY total_ms DESC;
 
 -- @intervals
 --

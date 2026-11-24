@@ -6,6 +6,7 @@
 --       than that one was close.
 -- @needs: atrace:am
 -- @module: android.anrs
+-- @fires: 1
 -- @identity: location, detail
 -- @column: location — the platform's own reason for the ANR, its subject;
 --       the ANR's type, or `ANR`, when the record carries none
@@ -103,8 +104,7 @@ SELECT
     END || ' · ' || o.error_id                            AS detail
 FROM ours o
 GROUP BY o.subject, detail
-ORDER BY o.ts
-LIMIT 20;
+ORDER BY o.ts;
 
 -- @intervals
 --
