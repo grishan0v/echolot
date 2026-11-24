@@ -343,7 +343,8 @@ def dock(total: int, start: str = "Tick where to start") -> str:
     """The bar at the bottom that leads to the agent, there before anything
     is ticked. `total` is how many rows can be ticked, and `start` the words
     of the button that ticks the ones to start from (`picks.js` picks them:
-    those that need attention, or the two largest)."""
+    those that need attention, the `FOCUS` largest of them when there are
+    more, or the two largest)."""
     return (f'<div class="dock needs-js" id="dock" data-n="0"><div class="dock-in"><p class="dock-t" id="dock-t" role="status">Nothing ticked yet</p><div class="dock-b">'
             f'<button type="button" class="btn quiet" id="dock-all" data-n="{total}">{e(start)}</button>'
             '<button type="button" class="btn quiet" id="dock-clear" hidden>Clear</button></div>'
@@ -356,12 +357,16 @@ def dock(total: int, start: str = "Tick where to start") -> str:
 # `report_page.request_text` does it the same way for a page that is served.
 WARN_HEAD = "The report warns, and these come first:"
 ROWS_HEAD = "The rows of the report it stands on:"
-# More than this many checks ticked, and the dialog says it is too much for
-# one question; `{n}` is how many.
+# The most checks one question holds. More than this ticked, and the dialog
+# says it is too much for one question; `{n}` is how many. The report's advice
+# on where to start ticks no more than this: it said "Tick the 4 that need
+# attention" and the dialog, with those 4 ticked, "Tick fewer" (#932). Both
+# take the number from here, and so do the screen before an agent starts
+# and `picks.js`, from the dialog's `data-focus`.
 FOCUS = 3
 MANY_NOTE = ("One investigation looks at one question. With {n} checks ticked, the agent has {n} things to chase at "
-             "once: that costs the most and is the least likely to come back with exact places. Tick fewer: the "
-             "one or two that matter most.")
+             "once: that costs the most and is the least likely to come back with exact places. Tick fewer, at "
+             f"most {FOCUS}: the ones that matter most.")
 
 
 def ask(question: str, warnings: Sequence[str], tail: str, *, start_html: str = "", starts: bool = False) -> str:

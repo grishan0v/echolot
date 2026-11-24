@@ -432,10 +432,15 @@ def where_to_start(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The checks to start from, as the button under the table ticks them:
     the ones that need attention, or with none of those the one or two that
     found the largest thing. One investigation answers one question, and
-    every yellow at once is no question."""
+    every yellow at once is no question.
+
+    Of more than `kit.FOCUS` that need attention, the `kit.FOCUS` that found
+    the largest thing: the dialog says more is too much for one question,
+    and the page suggested every red, four of them, and then told the reader
+    who ticked them to tick fewer (#932)."""
     hot = [c for c in checks if c["hot"]]
     red = [c for c in hot if c["kind"] == "red"]
-    return red or sorted(hot, key=lambda c: -_weight(c))[:2]
+    return sorted(red or hot, key=lambda c: -_weight(c))[:kit.FOCUS if red else 2]
 
 
 def _start_words(checks: list[dict[str, Any]]) -> tuple[str, str]:
@@ -445,6 +450,9 @@ def _start_words(checks: list[dict[str, Any]]) -> tuple[str, str]:
     red = [c for c in hot if c["kind"] == "red"]
     if len(red) == 1:
         return "the one that needs attention", "Tick the one that needs attention"
+    if len(red) > kit.FOCUS:
+        return (f"the {kit.FOCUS} largest of the {len(red)} that need attention",
+                f"Tick the {kit.FOCUS} largest that need attention")
     if red:
         return f"the {len(red)} that need attention", "Tick the ones that need attention"
     if len(hot) == 1:

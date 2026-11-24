@@ -386,7 +386,9 @@ answers one question, so the request
 ([as the report puts it together](analysing.md#the-report-as-a-page)) leads
 with one, carries the report's warnings, and lists the ticked rows as its
 evidence. With more than three ticked, the page says that one investigation
-looks at one question and suggests ticking fewer.
+looks at one question and suggests ticking three at most; the button that
+ticks where to start never ticks more, and of more than three that need
+attention it ticks the three that found the largest thing.
 
 Where `echolot compare` left a comparison of this very report beside it
 (`comparison.json`, whose newer side is this report), the request the screen

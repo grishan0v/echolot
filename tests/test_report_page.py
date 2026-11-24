@@ -810,6 +810,105 @@ def test_where_to_start_is_what_needs_attention_or_the_two_largest():
           and "hidden" in page.one("div", id="ask-many").attrs)
 
 
+RED = ("main_thread_block", "main_thread_waits", "monitor_contention", "uninstrumented_cpu")
+
+
+def test_where_to_start_is_no_more_than_the_dialog_takes():
+    """The page said "Tick the 4 that need attention and press Dig deeper",
+    and the dialog, with those 4 ticked, said "Tick fewer" (#932). The
+    advice stops at the number the dialog speaks past, `kit.FOCUS`."""
+    four = plain.annotate(make([entry(d, [row("main", 300.0 + 50 * i)]) for i, d in enumerate(RED)]))
+    check("four that need attention", [d["attention"] for d in four["detectors"]] == [plain.NEEDS_ATTENTION] * 4,
+          [d["attention"] for d in four["detectors"]])
+    picks = [c["key"] for c in report_page.where_to_start(report_page.checks(four))]
+    check("of those, the three that found the largest thing",
+          picks == ["uninstrumented_cpu", "monitor_contention", "main_thread_waits"] and len(picks) == kit.FOCUS, picks)
+    page = page_of(four)
+    check("the button says how many", page.one("button", id="dock-all").text == "Tick the 3 largest that need attention")
+    check("and the sentence under the table, of how many",
+          any("Tick the 3 largest of the 4 that need attention and press Dig deeper" in c.text
+              for c in page.all("div", "callout")), [c.text for c in page.all("div", "callout")])
+    ask = page.one("dialog", "ask").attrs
+    check("the dialog speaks past the same number, and names it",
+          ask["data-focus"] == str(kit.FOCUS) == "3"
+          and ask["data-many-note"].endswith("Tick fewer, at most 3: the ones that matter most."), ask)
+    three = plain.annotate(make([entry(d, [row("main", 300.0 + 50 * i)]) for i, d in enumerate(RED[:3])]))
+    check("three that need attention are all three", len(report_page.where_to_start(report_page.checks(three))) == 3)
+    page = page_of(three)
+    check("and are said as before", page.one("button", id="dock-all").text == "Tick the ones that need attention"
+          and any("Tick the 3 that need attention and press Dig deeper" in c.text for c in page.all("div", "callout")))
+
+
+# `picks.js`, run in node over the few elements it reads: the boxes, a row's
+# and its panel's twin, the bar and the dialog. It prints what the button
+# that ticks where to start ticked, whether the dialog then says to tick
+# fewer, and whether it does once one more is ticked.
+PICKS_RUN = r"""
+const fs = require('fs'), vm = require('vm');
+const [script, given] = process.argv.slice(2);
+const {focus, checks} = JSON.parse(given);
+function el(props) {
+  const on = {};
+  return Object.assign({
+    dataset: {}, hidden: false, textContent: '', disabled: false, checked: false, firstElementChild: null,
+    classList: {contains: () => false},
+    addEventListener(type, f) { (on[type] = on[type] || []).push(f); },
+    fire(type, ev) { (on[type] || []).forEach(f => f(ev)); },
+    click() { this.fire('click', {target: this}); },
+    focus() {}, setAttribute() {}, appendChild() {}, showModal() {}, close() {},
+  }, props);
+}
+const ids = {};
+['dock', 'dock-t', 'dock-go', 'dock-clear', 'ask-list', 'ask-text', 'ask-copy', 'ask-said', 'ask-close']
+  .forEach(id => { ids[id] = el(); });
+ids['dock-all'] = el({dataset: {n: String(checks.length)}});
+ids['ask'] = el({dataset: {focus: String(focus)}});
+ids['ask-many'] = el({hidden: true, firstElementChild: el()});
+const boxes = [].concat(...checks.map(([id, level, weight]) => [0, 1].map(() => el({
+  dataset: {id, level, weight: String(weight), title: id, req: '- ' + id},
+  classList: {contains: c => c === 'pick'}}))));
+const document = el({createElement: () => el(), querySelector: () => null});
+const window = {echolot: {$: id => ids[id] || null, all: sel => sel === '.pick' ? boxes.slice() : [], onPick: []}};
+vm.runInNewContext(fs.readFileSync(script, 'utf8'), {window, document});
+const ticked = () => [...new Set(boxes.filter(b => b.checked).map(b => b.dataset.id))].sort();
+ids['dock-all'].click();
+const out = {started: ticked(), gone: ids['dock-all'].hidden};
+ids['dock-go'].click();
+out.warned = !ids['ask-many'].hidden;
+const rest = boxes.find(b => !b.checked);
+rest.checked = true;
+document.fire('change', {target: rest});
+ids['dock-go'].click();
+out.more = !ids['ask-many'].hidden;
+console.log(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not here to run the script")
+def test_the_button_ticks_no_more_than_the_dialog_takes(tmp_path):
+    runner = tmp_path / "run.js"
+    runner.write_text(PICKS_RUN, encoding="utf-8")
+
+    def run(checks):
+        done = subprocess.run(["node", str(runner), str(PAGES / "picks.js"),
+                               json.dumps({"focus": kit.FOCUS, "checks": checks})], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)
+
+    four = run([["a", "red", 300.0], ["b", "red", 450.0], ["c", "red", 350.0], ["d", "red", 400.0],
+                ["y", "yellow", 900.0]])
+    check("of four that need attention, the three largest", four["started"] == ["b", "c", "d"], four)
+    check("the button goes: what it ticks is ticked", four["gone"] is True, four)
+    check("and the dialog says nothing of ticking fewer", four["warned"] is False, four)
+    check("the fourth ticked too, it does", four["more"] is True, four)
+    three = run([["a", "red", 300.0], ["b", "red", 450.0], ["c", "red", 350.0], ["y", "yellow", 900.0]])
+    check("three that need attention are all three, and no warning", three["started"] == ["a", "b", "c"]
+          and three["warned"] is False and three["more"] is True, three)
+    yellow = run([["a", "yellow", 300.0], ["b", "yellow", 450.0], ["c", "yellow", 350.0]])
+    check("with none, the two largest, as before", yellow["started"] == ["b", "c"] and yellow["warned"] is False,
+          yellow)
+
+
 def test_the_request_in_the_guide_is_the_demos(demo_report):
     """docs/analysing.md shows the request for two ticked checks of the demo app."""
     page = page_of(demo_report, where=".echolot/out/report.json")

@@ -937,7 +937,10 @@ from the report.
 The button beside **Dig deeper** ticks where to start: the checks that need
 attention, or with none of those the two that found the largest thing. With
 more than three ticked, the dialog says that one investigation looks at one
-question and suggests ticking fewer. A page written to disk starts nothing
+question and suggests ticking three at most. So of more than three that need
+attention, the button ticks the three that found the largest thing, and the
+sentence under the table says so: "Tick the 3 largest of the 4 that need
+attention". A page written to disk starts nothing
 itself; the same report served by `echolot ui` can start Claude Code on the
 request ([Dig deeper from the page](ui.md#dig-deeper-from-the-page)).
 
