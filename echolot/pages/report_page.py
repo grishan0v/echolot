@@ -340,7 +340,7 @@ def _measured(report: dict[str, Any], ctx: Any) -> str:
     low, high = w.get("duration_ms_min"), w.get("duration_ms_max")
     if not _is_number(low) or not _is_number(high):
         return f"Measured on {n} {ctx.plural}."
-    a, b = plain.hum(low), plain.hum(high)
+    a, b = plain.hum_apart(low, high)
     # "from 1.9 to 2.0 s": the unit is said once when both have the same one.
     for unit in (" ms", " s"):
         if a.endswith(unit) and b.endswith(unit):
