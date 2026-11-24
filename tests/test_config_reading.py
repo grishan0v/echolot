@@ -159,6 +159,27 @@ def test_a_scenario_with_nothing_after_it_still_loads(tmp_path: Path) -> None:
     cfg = Config.load(path)
     check("the whole recording, as before", cfg.scenario_name == "run"
           and cfg.scenario_start == NO_ANCHOR, (cfg.scenario_name, cfg.scenario_start))
+def test_a_misspelled_key_under_instrumentation_is_refused(tmp_path: Path) -> None:
+    """`alowed` was dropped, and no list allows every place (#735)."""
+    raw = {**BASE, "instrumentation": {"alowed": ["feature/only"]}}
+    said = _refused(_config(tmp_path, raw))
+    check("by name, with the keys it has",
+          "no key 'alowed' under instrumentation" in said and "allowed" in said
+          and "temp_prefix" in said, said)
+
+
+@pytest.mark.parametrize("value", [5, {"app": "src"}, ["app/src/main", 7]])
+def test_allowed_that_is_no_folder_is_refused(tmp_path: Path, value: object) -> None:
+    said = _refused(_config(tmp_path, {**BASE, "instrumentation": {"allowed": value}}))
+    check("what it got", "instrumentation.allowed must be a folder or a list of folders"
+          in said and repr(value) in said, said)
+
+
+def test_allowed_written_as_text_is_a_list_of_one(tmp_path: Path) -> None:
+    for value, want in (("app/src/main", ["app/src/main"]), (["a", "b/*"], ["a", "b/*"]),
+                        (None, [])):
+        cfg = Config.load(_config(tmp_path, {**BASE, "instrumentation": {"allowed": value}}))
+        check(f"{value!r}", cfg.allowed == want, cfg.allowed)
 
 
 def test_an_unknown_section_is_refused_by_name(tmp_path: Path) -> None:

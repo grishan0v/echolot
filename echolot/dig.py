@@ -218,9 +218,8 @@ def allowed(cfg: Config) -> list[str]:
     Refused with the entry named when one is none of those: the page puts
     nothing it cannot read into a rule. An empty list allows every place to
     `echolot mark`, and the page does not hand that to an agent."""
-    raw = cfg.get("instrumentation.allowed")
-    raw = [raw] if isinstance(raw, str) else raw
-    if not isinstance(raw, list) or not raw:
+    raw = cfg.allowed
+    if not raw:
         raise Refusal("Where may the agent put its markers?",
                       "`instrumentation.allowed` in `echolot.yml` names no folder. The page lets an agent edit "
                       "only the folders that list names: add the folders of your app's own code there, for "

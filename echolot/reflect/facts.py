@@ -1247,7 +1247,7 @@ def tree_check(project: Path | None, prefix: str, allowed: list[str]) -> dict[st
 def instrumentation(session: Session, cfg: Config | None,
                     project: Path | None = None) -> dict[str, Any]:
     prefix = (cfg.get("instrumentation.temp_prefix") if cfg else None) or "AGENTTMP_"
-    allowed = list((cfg.get("instrumentation.allowed") if cfg else None) or [])
+    allowed = cfg.allowed if cfg else []
     per_file: dict[str, dict[str, int]] = {}
     unprefixed: list[dict[str, Any]] = []
     outside: list[dict[str, Any]] = []
@@ -1543,7 +1543,7 @@ def config_snapshot(cfg: Config | None) -> dict[str, Any]:
         "process": cfg.get("project.process"),
         "source_root": cfg.get("project.source_root"),
         "max_rounds": cfg.get("loop.max_rounds"),
-        "instrumentation_allowed": cfg.get("instrumentation.allowed"),
+        "instrumentation_allowed": cfg.allowed or None,
         "temp_prefix": cfg.get("instrumentation.temp_prefix"),
         "detector_overrides": cfg.shared_overrides,
         "scenario_overrides": cfg.overrides_by_scenario,

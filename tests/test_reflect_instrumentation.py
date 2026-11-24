@@ -149,3 +149,25 @@ def test_a_note_is_not_an_instrumentation_edit() -> None:
     check("a note is not instrumentation", facts_mod.activity_of(note) != "instrumentation edit")
     marker = _edit(2, "app/src/Store.kt", "work()", 'trace("AGENTTMP_load") { work() }')
     check("a marker is", facts_mod.activity_of(marker) == "instrumentation edit")
+
+
+def test_one_folder_written_as_text_is_the_folder(tmp_path: Path) -> None:
+    """`list()` of `app/src/main` was a list of letters, and every edit under
+    it was counted outside the folder it names (#735)."""
+    path = tmp_path / "echolot.yml"
+    path.write_text("instrumentation:\n  allowed: app/src/main\n", encoding="utf-8")
+    cfg = Config.load(path)
+    marker = 'trace("AGENTTMP_load") { work() }'
+    s = _session([
+        _edit(1, "/work/app/app/src/main/java/com/example/Store.kt", "work()", marker,
+              agent="sub"),
+        _edit(2, "/work/app/core/src/main/java/com/example/Cache.kt", "work()", marker,
+              agent="sub"),
+    ])
+    got = facts_mod.instrumentation(s, cfg)
+    check("only the edit outside it is outside",
+          [o["file"] for o in got["edits_outside_allowed"]] == ["core/src/main/java/com/example/Cache.kt"],
+          got["edits_outside_allowed"])
+    check("and the snapshot holds the folder, not its letters",
+          facts_mod.config_snapshot(cfg)["instrumentation_allowed"] == ["app/src/main"],
+          facts_mod.config_snapshot(cfg)["instrumentation_allowed"])
