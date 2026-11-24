@@ -50,13 +50,56 @@ def test_a_regression_by_the_frames_reads_as_worse_and_its_fix_as_better():
     check("worse, by the frames", (v["movement"], v["by"], v["headline"])
           == (moves.WORSE, "frames", "More frames came late"), v)
     check("in one sentence with both shares and both counts, then why the window says nothing", v["text"]
-          == "The app made 3.2% of its frames late before and 21% after: 21 of 650 frames a run, then 128 of 612. "
+          == "The app made 3.2% of its frames late before and 21% after: 21 of 650 frames in the middle run, then "
+             "128 of 612. "
              "The run took 14.9 s before and 14.9 s after: the window runs to the end of the recording, so its "
              "length is the recording's and not the app's. Measured on 3 runs before and 3 after.", v["text"])
     check("with each side's share kept", v["frames"]["before"]["share"] == 0.0323
           and v["frames"]["after"]["low"] == 0.2083, v["frames"])
     v = verdict(BAD, FIXED)
     check("the fix, better", (v["movement"], v["headline"]) == (moves.BETTER, "Fewer frames came late"), v)
+
+
+FIVE = tuple(14900.0 + i for i in range(5))
+
+
+def test_the_counts_beside_a_share_are_of_the_run_it_is_of():
+    """#846: late 4, 3, 4, 3, 3 of 16, 15, 15, 16, 16 frames. Each run's share
+    is 25, 20, 26.7, 18.8 and 18.8%: the median is 20%, the 3 of 15 of the
+    second run. The median late frames and the median frames drawn are 3 and
+    16, two other runs, and "20% … 3 of 16" was 19%."""
+    side = drag((16, 15, 15, 16, 16), (4, 3, 4, 3, 3), launches=FIVE)
+    other = drag((16, 15, 15, 16, 17), (3, 4, 3, 3, 3), launches=FIVE)
+    v = verdict(side, other)
+    check("the share and the counts of the middle run, on each side",
+          v["text"].startswith("The app made 20% of its frames late before and 19% after: 3 of 15 frames in the "
+                               "middle run, then 3 of 16."), v["text"])
+    check("the medians the report keeps stay, beside the run they differ from",
+          (v["frames"]["before"]["late"], v["frames"]["before"]["count"], v["frames"]["before"]["middle"])
+          == (3, 16, [{"late": 3, "count": 15}]), v["frames"]["before"])
+
+
+def test_an_even_number_of_runs_says_the_two_its_share_lies_between():
+    four = drag((16, 15, 15, 16), (3, 4, 3, 4), launches=FIVE[:4])
+    v = verdict(four, drag((16, 15, 15, 16, 16), (4, 3, 4, 3, 3), launches=FIVE))
+    check("18.8, 20, 25 and 26.7%: halfway between 20 and 25, and each side says which runs",
+          v["text"].startswith("The app made 22% of its frames late before and 20% after: 3 of 15 and 4 of 16 "
+                               "frames in the two middle runs, then 3 of 15 in the middle run."), v["text"])
+    check("the share the verdict reads is that halfway", v["frames"]["before"]["share"] == 0.225, v["frames"])
+
+
+def test_every_share_said_is_the_one_its_counts_give():
+    """Whatever the runs, the percentage a side says is its counts, rounded
+    the way the sentence rounds them."""
+    sets = [((16, 15, 15, 16, 16), (4, 3, 4, 3, 3)), ((16, 15, 15, 16, 17), (3, 4, 3, 3, 3)),
+            ((640, 650, 660, 700, 655), (20, 21, 22, 9, 40)), ((7, 9, 8), (1, 2, 1)),
+            ((12, 13, 14, 15, 16, 17), (1, 2, 3, 3, 2, 1))]
+    for frames, late in sets:
+        side = moves._late_side(drag(frames, late, launches=tuple(14900.0 + i for i in range(len(frames)))))
+        middle = side["middle"]
+        own = sum(m["late"] / m["count"] for m in middle) / len(middle)
+        check(f"{late} of {frames}: the share is of the runs said", moves._late_share(side)
+              == moves._share_of(own) and round(own, 4) == side["share"], side)
 
 
 def test_the_same_build_twice_is_no_change():
