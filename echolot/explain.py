@@ -13,6 +13,14 @@ and the values from the config through `plan_detectors`, the function
 `analyze` plans its run with. So a threshold `explain` prints is the one the
 next `analyze` uses, and a config `analyze` would refuse is refused here too.
 
+After the columns comes what the header has no room for: how to read the
+rows — `frame_jank`'s `Buffer Stuffing` is latency, not jank; `io_wait` has no
+code behind it to profile. That is the detector's part of the report
+reference's "What matters about individual ones", under a heading of its own
+in `references/report-detectors.md`, read from there: one text, which
+`echolot guide report-detectors` prints whole and this prints a detector at
+a time (#854).
+
 Without a detector it is the list: one line each, the title, and what the
 config changed. `--json` is the same in fields, for a script.
 """
@@ -20,6 +28,8 @@ config changed. `--json` is the same in fields, for a script.
 from __future__ import annotations
 
 import difflib
+import functools
+import re
 import shutil
 import sys
 import textwrap
@@ -27,6 +37,29 @@ from typing import Any
 
 from . import needs as needs_mod
 from .tp import _PLACEHOLDER, Detector
+
+# The report reference's page about the detectors, beside the skill's other
+# references; each detector's notes sit under a `### `<id>`` heading.
+NOTES = "report-detectors.md"
+_NOTE_HEADING = re.compile(r"^### `([a-z0-9_]+)`[ \t]*$", re.M)
+
+
+@functools.cache
+def _all_notes() -> dict[str, str]:
+    """Every detector's notes, by id, as the reference has them."""
+    from .layer import REFERENCES_DIR
+    text = (REFERENCES_DIR / NOTES).read_text(encoding="utf-8")
+    parts = _NOTE_HEADING.split(text)
+    # [before the first, id, its text, id, its text, …]; a detector's text
+    # runs to the next heading of any level.
+    return {parts[i]: re.split(r"^#", parts[i + 1], maxsplit=1, flags=re.M)[0].strip()
+            for i in range(1, len(parts), 2)}
+
+
+def notes(detector_id: str) -> str | None:
+    """How to read this detector's rows, from the report reference; None
+    for one it says nothing more about."""
+    return _all_notes().get(detector_id) or None
 
 
 def find(detectors: list[Detector], name: str) -> Detector | None:
@@ -95,6 +128,9 @@ def entries(detectors: list[Detector], plan: list[tuple] | None,
             "shown_when": _shown_when(d, overrides),
             "identity": list(d.identity),
             "columns": [{"name": c, "meaning": m} for c, m in d.columns.items()],
+            # How to read its rows, as markdown; None where the reference
+            # says nothing past the header.
+            "notes": notes(d.id),
         })
     return out
 
@@ -195,6 +231,16 @@ def one(e: dict[str, Any], config: str | None, scenario: str | None,
                                    subsequent_indent=" " * (pad + 2))
         else:
             lines.append(f"  {c['name']:<{pad}}{c['meaning']}")
+    if e.get("notes"):
+        lines += ["", f"Reading its rows (`echolot guide {NOTES.removesuffix('.md')}` "
+                      f"has every detector's):"]
+        for block in e["notes"].split("\n\n"):
+            rows = block.split("\n")
+            lines.append("")
+            if all(r.startswith("    ") for r in rows):
+                lines += rows   # an example line, as the report prints it
+            else:
+                lines += para(" ".join(r.strip() for r in rows))
     return "\n".join(lines)
 
 

@@ -171,16 +171,16 @@ def test_the_report_example_runs_every_shipped_detector():
     from echolot.analyze import DETECTOR_DIR
     from echolot.tp import load_detectors
     shipped = len(load_detectors(DETECTOR_DIR))
-    text = _read(REFS / "report.md")
+    text = _read(REFS / "report-schema.md")
     check("detectors_run is the shipped count",
           f'"detectors_run": {shipped},' in text, shipped)
 
 
 def test_the_comparison_examples_carry_what_compare_writes():
-    report_md, compare_md = _read(REFS / "report.md"), _read(ROOT / "docs" / "compare.md")
-    for name, text in (("report.md", report_md), ("compare.md", compare_md)):
+    report_md, compare_md = _read(REFS / "report-compare.md"), _read(ROOT / "docs" / "compare.md")
+    for name, text in (("report-compare.md", report_md), ("compare.md", compare_md)):
         check(f"{name}: the ratio as compare rounds it", '"ratio": 73.01' in text, name)
-    check("report.md: values and runs on both sides",
+    check("report-compare.md: values and runs on both sides",
           report_md.count('"values": [ … ], "count": 1, "runs": "5/5"') == 2, report_md)
 
 
@@ -190,7 +190,7 @@ def test_the_report_reference_warns_where_the_report_does():
     quiet = report._budget_lines({"window_ms": 100.0, "accounted_pct": 97.0, key: 97.0})
     loud = report._budget_lines({"window_ms": 100.0, "accounted_pct": 94.0, key: 94.0})
     check("97% passes in silence and 94% does not", len(loud) > len(quiet), (quiet, loud))
-    flat = _flat(REFS / "report.md")
+    flat = _flat(REFS / "report-window.md")
     check("the reference says 95%", "The report warns below 95%" in flat, flat)
 
 

@@ -588,8 +588,16 @@ def _help(verb: str) -> str:
 
 def test_the_help_lists_every_guide_topic_and_every_client() -> None:
     guide = _help("guide")
-    missing = [t for t in guide_topics() if t not in guide]
+    # The report's parts are named by the word after `report-`, in a list of
+    # their own: a row of hyphenated names wraps at a hyphen in argparse and
+    # not in Rich (#854).
+    parts = re.search(r"report-<part> for each part of the report: (.*?) options:", guide)
+    check("guide --help lists the report's parts", parts, guide)
+    named = {f"report-{p.strip()}" for p in parts.group(1).split(",")}
+    missing = [t for t in guide_topics() if t not in guide and t not in named]
     check("guide --help names every topic", not missing, missing)
+    check("and no part that is not a topic", named <= set(guide_topics()),
+          sorted(named - set(guide_topics())))
     # The list itself, between its colon and its dash: `claude` and `agents`
     # also turn up elsewhere in the help, and found anywhere they could leave
     # the list unnoticed (#277).

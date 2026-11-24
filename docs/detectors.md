@@ -770,8 +770,10 @@ writes a config.
   drawn from each detector's `@title`, in the order `DETECTOR_ORDER` in
   `docs/assets/render.py` gives, and the script stops until the new one has
   a place there. Both tests fail until `python docs/assets/render.py` writes
-  the sample and draws the table again. The table in `references/report.md`
-  is a list kept by hand.
+  the sample and draws the table again. The table in
+  `references/report-detectors.md` is a list kept by hand, and so are the
+  notes under it, each below a heading that is the detector's id, which
+  `echolot explain <id>` prints after the header's words.
 - **The time its rows stand for.** A shipped detector needs an
   `-- @intervals` query, and a first query that ends in `LIMIT n`:
   `test_every_shipped_detector_has_one` in `tests/test_in_rows.py` fails

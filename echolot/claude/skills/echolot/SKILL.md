@@ -272,7 +272,9 @@ sixteen, past the default `duration_ms: 12000`.
 
 ## Reading the report
 
-Details live in `references/report.md`; three things here that you will get
+How to read it is `references/report.md`, a page that names a topic for each
+part it leaves out (`references/report-schema.md` and the rest); one
+detector is `echolot explain <id>`. Three things here that you will get
 wrong without them. And one habit to drop: do not cut `report.json` up with
 jq or python one-liners. `echolot report` prints what fired,
 `echolot report --detector <id> --top 5` one detector's rows with the
@@ -381,7 +383,16 @@ session go, what should change in echolot" — that is `/echolot reflect`
 
 ## References
 
-- `references/report.md` — the `report.json` schema, all detectors, what each column means
+- `references/report.md` — how to read a report, in one page, and which topic has the rest;
+  open the one topic a question needs, never all of them:
+  - `references/report-schema.md` — `report.json` key by key
+  - `references/report-window.md` — where the window went: the main thread, crowding, frames, startup
+  - `references/report-environment.md` — the device: clock, temperature, compile state, sampling
+  - `references/report-markers.md` — the markers table
+  - `references/report-checks.md` — every check before a conclusion, with what to do
+  - `references/report-columns.md` — every column of a row, the ranking, `spread`
+  - `references/report-detectors.md` — every detector, and what matters about each
+  - `references/report-compare.md` — `echolot compare`: its fields and its warnings
 - `references/config.md` — the `echolot.yml` sections, what the code reads and what it does not
 - `references/naming.md` — how ART names GC, locks and binder; facts from live Android 14
 - `references/collect.md` — capturing a trace: perfetto and adb commands, verified in practice

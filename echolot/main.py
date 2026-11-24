@@ -5490,10 +5490,16 @@ def build_parser() -> argparse.ArgumentParser:
     gd = add("guide", "agent", "[<topic>]",
              "how to work with this tool — for any agent, not only Claude Code")
     # Read off the topics `guide` itself reads: the list written out by hand
-    # went on without `anr` once it shipped.
+    # went on without `anr` once it shipped. The report's parts go by the word
+    # after their prefix: a row of `report-…` words breaks at a hyphen in
+    # argparse and not in Rich, and the help reads the same in both (#854).
+    prefix = layer.REPORT_TOPIC_PREFIX
+    topics = sorted(t for t in layer.guide_topics() if t != "overview")
     gd.add_argument("topic", nargs="?",
-                    help="overview (default), " + ", ".join(sorted(
-                        t for t in layer.guide_topics() if t != "overview")))
+                    help="overview (default), " + ", ".join(
+                        t for t in topics if not t.startswith(prefix))
+                    + f"; and {prefix}<part> for each part of the report: " + ", ".join(
+                        t.removeprefix(prefix) for t in topics if t.startswith(prefix)))
     gd.set_defaults(func=cmd_guide)
 
     ex = add("explain", "agent", "[<detector>]",

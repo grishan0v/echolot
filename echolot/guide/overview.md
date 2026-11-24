@@ -249,8 +249,8 @@ echolot compare --help  # the forms it takes and the floor it uses
 echolot guide setup     # building echolot.yml for a project that has none
 echolot guide hunt      # a hunt: the facts, the investigation, handing over the loop
 echolot guide loop      # the loop itself: from a report down to a place in the code
-echolot guide report    # report.json, field by field; also config, naming, collect
+echolot guide report    # how to read a report, and the topic for each key; also config, naming, collect
 echolot guide anr       # the app stopped answering: reading an ANR report, and measuring one
-echolot explain <id>    # one detector: what it reads, its thresholds here, its columns
+echolot explain <id>    # one detector: what it reads, its thresholds here, its columns, its rows
 echolot --help          # every command, grouped by who runs it
 ```
