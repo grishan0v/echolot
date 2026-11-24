@@ -139,8 +139,12 @@ def opened(monkeypatch) -> list:
 
         def query(self, sql):
             # One process with a name, so that probe goes past the check
-            # for a file with no trace data in it.
-            return [{"n": 1}] if "COUNT(*) AS n FROM process" in sql else []
+            # for a file with no trace data in it, and the one it picks.
+            if "COUNT(*) AS n FROM process" in sql:
+                return [{"n": 1}]
+            if "p.upid AS upid" in sql:
+                return [{"upid": 1, "pid": 4100, "name": "com.example.app", "slices": 0}]
+            return []
 
     monkeypatch.setattr(main_mod, "TraceSession", Session)
     return seen

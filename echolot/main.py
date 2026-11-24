@@ -130,10 +130,12 @@ def _probe_config(args) -> Config | None:
 
 def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
     process = args.process
+    source = "--process"
     if not process and cfg is not None:
         named = cfg.get("project.process") or cfg.get("project.package")
         if isinstance(named, str) and named:
             process = named
+            source = "project.process"
             print(f"[i] the process from {cfg.path}: {named} (--process names another)",
                   file=sys.stderr)
     with TraceSession(args.trace, tp_binary, cut_ok=True) as tp:
@@ -174,7 +176,15 @@ def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
                       f"trace — pick one from the table above, or widen the "
                       f"mask.", file=sys.stderr)
                 return 2
-            print(f"\n## Threads of process {process}\n")
+            # One process, as `analyze` and `names` take it (#727). The mask
+            # `scan` writes, `<package>*`, also matches a macrobenchmark's own
+            # runner, `<package>.benchmark`: its threads were listed as the
+            # app's, and its `measureBlock` led the anchors — an end anchor
+            # `analyze`, which reads the app alone, never matched.
+            chosen = _resolve_process(tp, process, args.trace, source=source,
+                                      flag=True)[0]
+            upid = int(chosen["upid"])
+            print(f"\n## Threads of process {chosen['name']} (pid {chosen['pid']})\n")
             # Sorted by CPU rather than slice count: a thread with zero slices
             # and hundreds of milliseconds of Running is precisely the blind
             # spot setup is looking for. By slice count it would sit at the
@@ -192,8 +202,7 @@ def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
                     WHERE ts.utid = t.utid AND ts.state = 'Running'
                       AND ts.dur > 0) AS running_ms
                 FROM thread t
-                JOIN process p ON t.upid = p.upid
-                WHERE p.name GLOB '{sql_value(process)}'
+                WHERE t.upid = {upid}
                 ORDER BY running_ms DESC, slices DESC LIMIT 25
             """)
 
@@ -203,7 +212,7 @@ def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
             # second kind: a `beginAsyncSection` from wherever the screen
             # was first drawn. An async section has no thread, and the
             # column says so rather than leaving the cell blank.
-            _anchor_candidates(tp, process)
+            _anchor_candidates(tp, upid)
         else:
             # The table alone, and nothing said, read as all probe does
             # (#515): the threads and the candidates need the app's name.
@@ -218,7 +227,7 @@ def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
 _NOT_ANCHORS = ("Lock contention on *", "monitor contention with owner*")
 
 
-def _anchor_candidates(tp, process: str) -> None:
+def _anchor_candidates(tp, upid: int) -> None:
     """The process's longest slices, as anchors could name them.
 
     A name with a number that differs in every recording — a frame's vsync
@@ -235,14 +244,12 @@ def _anchor_candidates(tp, process: str) -> None:
             FROM slice s
             JOIN thread_track tt ON s.track_id = tt.id
             JOIN thread t ON tt.utid = t.utid
-            JOIN process p ON t.upid = p.upid
-            WHERE p.name GLOB '{sql_value(process)}'
+            WHERE t.upid = {upid}
             UNION ALL
             SELECT s.name, '{ASYNC_THREAD}', s.dur
             FROM slice s
             JOIN process_track pt ON s.track_id = pt.id
-            JOIN process p ON pt.upid = p.upid
-            WHERE p.name GLOB '{sql_value(process)}'
+            WHERE pt.upid = {upid}
               AND pt.type = '{ASYNC_TRACK}'
         )
         WHERE name IS NOT NULL {skip}
