@@ -72,7 +72,7 @@ echolot compare before.json .echolot/out/report.json
 В CI один шаг после бенчмарка анализирует его трейсы и сравнивает их с отчётом последнего успешного прогона:
 
 ```yaml
-- uses: grishan0v/echolot@v0.18.0
+- uses: grishan0v/echolot@v0.18.1
   with:
     traces: app/benchmark/build/outputs/**/StartupBenchmark_startup_iter*.perfetto-trace
 ```

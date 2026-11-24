@@ -32,7 +32,7 @@ produce. The keys only a merged report has are named under the block.
   "scenario": "coldStart", "budget_ms": 2500,
   "verdict": { "level": "needs_attention", "budget_ms": 2500, "ratio": 3.1,
                "text": "The launch takes 7.7 s. You allowed 2.5 s, so it takes 3.1 times as long." },
-  "toolchain": { "echolot": "0.18.0", "perfetto_package": "0.59.1",
+  "toolchain": { "echolot": "0.18.1", "perfetto_package": "0.59.1",
                  "trace_processor": "v59.1", "source": "pinned", "binary": null },
   "window": { "ts_start": …, "ts_end": …, "duration_ms": 772.3,
               "duration_ms_min": 751.8, "duration_ms_max": 790.4,

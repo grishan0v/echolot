@@ -377,7 +377,7 @@ permissions:
 
 steps:
   # … checkout, запуск устройства, запуск бенчмарка …
-  - uses: grishan0v/echolot@v0.18.0
+  - uses: grishan0v/echolot@v0.18.1
     with:
       traces: app/benchmark/build/outputs/**/StartupBenchmark_startup_iter*.perfetto-trace
 ```
@@ -421,7 +421,7 @@ jobs:
             test: ScrollBenchmark_feed
     steps:
       # … checkout, устройство, запуск ${{ matrix.test }} …
-      - uses: grishan0v/echolot@v0.18.0
+      - uses: grishan0v/echolot@v0.18.1
         with:
           traces: app/benchmark/build/outputs/**/${{ matrix.test }}_iter*.perfetto-trace
           scenario: ${{ matrix.scenario }}
