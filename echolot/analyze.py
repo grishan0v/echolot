@@ -185,6 +185,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         root = Path(cfg.path).resolve().parent if cfg.path else None
 
         _include_modules(tp, [d for d, _, _ in plan])
+        # The names each folded name stands for, for the rows' `variants`.
+        families = _families_of(tp)
 
         # The main thread's time behind every row, for `_in_rows`, and the
         # detectors whose rows could not be placed on it.
@@ -202,6 +204,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 # to `compare` and to anyone reading the report.
                 rows, params, err = [], {**d.params, **(overrides or {})}, str(e)
                 print(f"[!] {d.id}: {e}", file=sys.stderr)
+            _with_variants(rows, d.identity, families)
             if rows:
                 try:
                     behind = _spans_behind(tp, d, params, rows)
@@ -666,6 +669,34 @@ def _name_families(tp, cfg: Config) -> None:
         rows = ", ".join(f"('{sql_value(n)}', '{sql_value(f)}')"
                          for n, f in pairs[at:at + 500])
         tp.exec_script(f"INSERT INTO _name_family (name, family) VALUES {rows};")
+
+
+# How many of the names a folded one stands for a row keeps. A frame's
+# family stands for every frame of the window, hundreds of vsync ids.
+VARIANTS_KEPT = 20
+
+
+def _families_of(tp) -> dict[str, list[str]]:
+    """Each family in `_name_family`, with the names of the window it stands for."""
+    out: dict[str, list[str]] = {}
+    for r in tp.query("SELECT name, family FROM _name_family ORDER BY name"):
+        out.setdefault(r["family"], []).append(r["name"])
+    return out
+
+
+def _with_variants(rows: list[dict], identity: tuple[str, ...],
+                   families: dict[str, list[str]]) -> None:
+    """A row whose name is a family keeps the names it stands for, in
+    `variants`: what the trace called it, before the fold (#831). The names
+    of the window under that family, the first `VARIANTS_KEPT` of them.
+    """
+    if not families:
+        return
+    for row in rows:
+        named = {col: families[v][:VARIANTS_KEPT] for col in identity
+                 if isinstance(v := row.get(col), str) and v in families}
+        if named:
+            row["variants"] = named
 
 
 def _claim_names(tp, overrides: dict) -> None:

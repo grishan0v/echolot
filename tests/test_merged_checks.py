@@ -165,14 +165,21 @@ def test_a_failed_detector_is_not_silent() -> None:
           "No detector fired" not in md and "Failed: `frame_jank`" in md, md)
 
 
+LOCK = "Lock contention on a monitor lock (owner tid: #)"
+
+
 def _lock(tid: int, self_ms: float) -> dict:
-    return row(f"Lock contention on a monitor lock (owner tid: {tid})", count=1,
-               self_ms=self_ms, total_ms=self_ms, max_ms=self_ms, detail="main")
+    """A lock wait as a detector returns it since #831: under the folded
+    name, with the name the trace had in `variants`."""
+    return row(LOCK, count=1, self_ms=self_ms, total_ms=self_ms, max_ms=self_ms,
+               detail="main", variants={"location": [
+                   f"Lock contention on a monitor lock (owner tid: {tid})"]})
 
 
 def test_one_wait_owned_by_another_tid_each_run_is_one_row() -> None:
     """#504: the owner's tid is the runtime's choice, and a wait that happens
-    in every run is one row, 3/3, with the tids kept beside it."""
+    in every run is one row, 3/3, with the tids kept beside it. The detector
+    folds the name (#831); the merge keeps every repeat's variants."""
     reps = [one([_lock(tid, ms)], det_id="main_thread_block")
             for tid, ms in ((15427, 110.0), (10359, 120.0), (9001, 115.0))]
     for rep in reps:
@@ -190,25 +197,18 @@ def test_one_wait_owned_by_another_tid_each_run_is_one_row() -> None:
               for t in (15427, 10359, 9001)), got)
 
 
-def test_an_unnamed_thread_numbered_anew_each_run_is_one_row() -> None:
+def test_the_merge_folds_nothing_itself() -> None:
+    """#831: a name is folded once, by the detector. Rows that reach the merge
+    under two names are two rows: the merge has no rule of its own to make
+    them one, which is how one recording and a set came to disagree."""
     def cpu(name: str, ms: float) -> dict:
         return row(name, count=0, total_ms=ms, covered_ms=0.0,
                    detail="100% of CPU outside slices")
     reps = [one([cpu(f"Thread-{n}", 250.0 + n)], det_id="uninstrumented_cpu")
             for n in (31, 34, 39)]
     rows = report_mod.aggregate(reps)["detectors"][0]["rows"]
-    check("one thread, three runs",
-          [(r["location"], r["runs"]) for r in rows] == [("Thread-#", "3/3")], rows)
-
-
-def test_two_owners_in_one_run_add_up() -> None:
-    reps = [one([_lock(1, 40.0), _lock(2, 60.0)]), one([_lock(3, 100.0)])]
-    got = report_mod.aggregate(reps)["detectors"][0]["rows"]
-    check("one row, two runs", len(got) == 1 and got[0]["runs"] == "2/2", got)
-    check("the first run's two stretches are one value, and the longest is kept",
-          got[0]["spread"]["self_ms"]["values"] == [100.0, 100.0]
-          and got[0]["spread"]["max_ms"]["values"] == [60.0, 100.0]
-          and got[0]["count"] == 1.5, got)
+    check("three names, three rows",
+          sorted(r["location"] for r in rows) == ["Thread-31", "Thread-34", "Thread-39"], rows)
 
 
 def test_numbers_that_say_where_or_what_are_kept() -> None:
@@ -248,8 +248,8 @@ def test_a_frame_that_is_another_vsync_each_run_is_one_row_in_compare() -> None:
     twenty rows without a verdict in compare."""
     def side(base: float) -> dict:
         return report_mod.aggregate([
-            one([row(f"Choreographer#doFrame {55000 + i * 7}", count=1,
-                     self_ms=base + i, total_ms=base + i, max_ms=base + i,
+            one([row(names_mod.runtime_name(f"Choreographer#doFrame {55000 + i * 7}"),
+                     count=1, self_ms=base + i, total_ms=base + i, max_ms=base + i,
                      detail="main")], det_id="main_thread_block")
             for i in range(5)])
     cmp = compare_mod.build(side(4200.0), side(4200.0),
@@ -431,18 +431,12 @@ def test_a_bar_that_is_not_calibrated_still_opens_for_the_merge(tmp_path) -> Non
 
 
 def test_one_recording_names_rows_as_a_set_does() -> None:
-    """#714: a report of one recording folds the numbers the runtime chose,
-    as the merge of several does, so the two name the same rows."""
-    def cpu(name: str, ms: float) -> dict:
-        return row(name, count=0, total_ms=ms, covered_ms=0.0,
-                   detail="100% of CPU outside slices")
-    alone = report_mod.aggregate([one([cpu("Thread-31", 250.0)], det_id="uninstrumented_cpu")])
-    check("a numbered thread is `Thread-#`",
-          [r["location"] for r in alone["detectors"][0]["rows"]] == ["Thread-#"], alone)
+    """#714: a report of one recording names its rows as the merge of several
+    does. Both take the name the detector folded (#831), and keep what the
+    trace had beside it."""
     lock = report_mod.aggregate([one([_lock(15427, 110.0)], det_id="main_thread_block")])
     got = lock["detectors"][0]["rows"][0]
-    check("the owner's tid is `#`",
-          got["location"] == "Lock contention on a monitor lock (owner tid: #)", got)
+    check("the owner's tid is `#`", got["location"] == LOCK, got)
     check("as the trace had it, beside it",
           got["variants"] == {"location": [
               "Lock contention on a monitor lock (owner tid: 15427)"]}, got)
@@ -451,46 +445,3 @@ def test_one_recording_names_rows_as_a_set_does() -> None:
                                 one([_lock(10359, 120.0)], det_id="main_thread_block")])
     check("the name the merge of two gives",
           two["detectors"][0]["rows"][0]["location"] == got["location"], two)
-
-
-def test_one_recordings_pool_adds_up_and_pairs_with_a_sets() -> None:
-    """#714: `pool-0` … `pool-3` in one recording are one pool, the row a
-    set of recordings names `pool-#`; compared, one row and nothing gone."""
-    def cpu(name: str, ms: float) -> dict:
-        return row(name, count=0, total_ms=ms, covered_ms=0.0, max_ms=ms,
-                   detail="100% of CPU outside slices")
-    threads = [cpu(f"pool-{n}", ms) for n, ms in enumerate((500.0, 200.0, 180.0, 160.0))]
-    before = report_mod.aggregate([one(threads + [cpu("Main_loader", 300.0)],
-                                       det_id="uninstrumented_cpu")])
-    rows = before["detectors"][0]["rows"]
-    check("one row for the pool, added up, first by its time",
-          [(r["location"], r["total_ms"]) for r in rows]
-          == [("pool-#", 1040.0), ("Main_loader", 300.0)], rows)
-    check("the longest is the pool's longest thread", rows[0]["max_ms"] == 500.0, rows[0])
-    after = report_mod.aggregate([one([cpu(f"pool-{n}", 260.0) for n in range(4)],
-                                      det_id="uninstrumented_cpu") for _ in range(3)])
-    cmp = compare_mod.build(before, after, before_path="b.json", after_path="a.json")
-    pool = [r for r in cmp["rows"] if r["location"].startswith("pool-")]
-    check("one paired row", [r["location"] for r in pool] == ["pool-#"], pool)
-    check("neither gone nor new",
-          pool[0]["change"] not in (compare_mod.VANISHED, compare_mod.APPEARED), pool[0])
-
-
-def test_a_folded_row_adds_up_its_names_under_the_bar_too() -> None:
-    """#715: `owner tid: #` reported from the one tid over the bar, against a
-    `below` of every tid, read as grew. With the open rows the folded row is
-    every name it stands for, in one recording and in a set."""
-    over, under = _lock(4455, 30.0), _lock(4202, 12.0)
-    for n in (1, 3):
-        reps = [_below([over], [over, under]) for _ in range(n)]
-        got = report_mod.aggregate(reps)["detectors"][0]
-        lock = got["rows"][0]
-        check(f"{n} recording(s): the reported row adds up both tids", len(got["rows"]) == 1
-              and lock["location"] == "Lock contention on a monitor lock (owner tid: #)"
-              and lock["self_ms"] == 42.0, lock)
-        check(f"{n} recording(s): and names both", lock["variants"]["location"] == [
-            "Lock contention on a monitor lock (owner tid: 4202)",
-            "Lock contention on a monitor lock (owner tid: 4455)"], lock)
-        check(f"{n} recording(s): neither is kept under the bar again", got["below"]["rows"] == [], got["below"])
-    alone = report_mod.aggregate([_below([over], [over])])["detectors"][0]["rows"][0]
-    check("a name with nothing more under the bar keeps what it had", alone["self_ms"] == 30.0, alone)

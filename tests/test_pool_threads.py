@@ -16,7 +16,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import plain  # noqa: E402
-from echolot import names as names_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_compare import compare, det, report, row  # noqa: E402
@@ -41,14 +40,6 @@ def test_the_merge_keeps_the_most_threads_any_repeat_found() -> None:
     check("the pool is as large as the most threads a repeat found",
           merged[0]["threads"] == 3, merged)
     check("the time is the median, as before", merged[0]["total_ms"] == 55.0, merged)
-
-
-def test_names_one_repeat_folds_together_add_their_threads() -> None:
-    merged = report_mod.merge_rows([[pooled("pool-1-thread-1", 10.0, 1),
-                                     pooled("pool-1-thread-2", 20.0, 1)]],
-                                   ("location",), 1, fold=names_mod.runtime_name)
-    check("two names folded into one row are two threads",
-          [(r["threads"], r["total_ms"]) for r in merged] == [(2, 30.0)], merged)
 
 
 def test_a_numbered_pool_is_one_row_of_all_its_threads(monkeypatch, tmp_path: Path) -> None:

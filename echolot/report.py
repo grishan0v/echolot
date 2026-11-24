@@ -16,12 +16,11 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 from statistics import median
-from typing import Any, Callable
+from typing import Any
 
 from . import files
 from . import launch as launch_mod
 from . import needs as needs_mod
-from .names import runtime_name
 from . import recording as recording_mod
 from . import stats, table
 from . import when as when_mod
@@ -579,9 +578,6 @@ def _one_run(rows: list[dict[str, Any]]) -> dict[str, Any]:
 # `merge_rows`. Never written to a report: the merge takes it out.
 OPEN_ROWS = "open_rows"
 
-# Detectors whose rows are single events rather than recurring work.
-_EVENTS = {"anr"}
-
 # What a detector's `below` keeps (#715): what it found with its thresholds
 # open that it reported in no repeat, for `compare` to look a gone or new row
 # up in. Only what took this long in some repeat, which is `compare`'s own
@@ -593,7 +589,6 @@ BELOW_MOST = 200
 
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
                total: int, *, counts: bool = False,
-               fold: Callable[[str], str] | None = None,
                opened: list[list[dict[str, Any]] | None] | None = None,
                ) -> list[dict[str, Any]]:
     """The rows of one detector across its repeats, folded to one row per identity.
@@ -606,9 +601,10 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
     The markers table asks for it: "one call became two" is the shape of
     work done twice, and `compare` can only judge it from each run (#618).
 
-    `fold` is applied to every text column of the identity first — see
-    `runtime_name`. Rows of one repeat that it makes one are added up, and the
-    names as the trace had them are kept in the row's `variants`.
+    A row's name is folded before it gets here, once, by the detector that
+    grouped it (`_name_family`, #831): the merge pairs rows by their names as
+    they are. The names the trace had under a folded one are the row's
+    `variants`, kept from every repeat.
 
     `opened` is, per repeat, what the same query returned with its thresholds
     at zero and no `LIMIT` (`Detector.render_open`), or None where that was
@@ -620,20 +616,20 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
     still the reported rows': the open ones carry no stacks or places.
     """
     def key_of(row: dict[str, Any]) -> tuple:
-        raw = tuple(row.get(c) for c in identity)
-        return raw if fold is None else tuple(
-            fold(v) if isinstance(v, str) else v for v in raw)
+        return tuple(row.get(c) for c in identity)
 
     groups: dict[tuple, dict[int, list[dict]]] = {}
     variants: dict[tuple, dict[str, set]] = {}
+
+    def named(key: tuple, row: dict[str, Any]) -> None:
+        for col, names in (row.get("variants") or {}).items():
+            variants.setdefault(key, {}).setdefault(col, set()).update(names)
+
     for i, rows in enumerate(per_run):
         for row in rows:
-            raw = tuple(row.get(c) for c in identity)
             key = key_of(row)
             groups.setdefault(key, {}).setdefault(i, []).append(row)
-            for col, was, now in zip(identity, raw, key, strict=True):
-                if was != now:
-                    variants.setdefault(key, {}).setdefault(col, set()).add(was)
+            named(key, row)
     below: list[dict[tuple, list[dict]]] = []
     for rows in opened or []:
         found_open: dict[tuple, list[dict]] = {}
@@ -657,11 +653,6 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
             if key in found_open and (i not in present
                                       or len(found_open[key]) > len(present[i])):
                 present[i] = found_open[key]
-                for open_row in found_open[key]:
-                    for col, was, now in zip(identity, (open_row.get(c) for c in identity), key,
-                                             strict=True):
-                        if was != now:
-                            variants.setdefault(key, {}).setdefault(col, set()).add(was)
         # In report order: the values of `spread` are read as the run index.
         values_by_run = {i: _one_run(rows) for i, rows in present.items()}
         found = [values_by_run[i] for i in sorted(values_by_run)]
@@ -763,8 +754,7 @@ def standing(row: dict[str, Any]) -> tuple[float, float]:
 
 
 def below_bar(reported: list[dict[str, Any]], opened: list[list[dict[str, Any]] | None],
-              identity: tuple[str, ...], total: int, *,
-              fold: Callable[[str], str] | None = None) -> dict[str, Any] | None:
+              identity: tuple[str, ...], total: int) -> dict[str, Any] | None:
     """What a detector found under its bar and reported in no repeat: the
     `below` of its entry, or None where a repeat did not run the open query.
 
@@ -781,7 +771,7 @@ def below_bar(reported: list[dict[str, Any]], opened: list[list[dict[str, Any]] 
         return None
     taken = {tuple(row.get(c) for c in identity) for row in reported}
     rows = []
-    for row in merge_rows([list(r or []) for r in opened], identity, total, fold=fold):
+    for row in merge_rows([list(r or []) for r in opened], identity, total):
         if tuple(row.get(c) for c in identity) in taken:
             continue
         metric = metric_of(row)
@@ -1168,73 +1158,6 @@ def aggregate(reports: list[dict[str, Any]]) -> dict[str, Any]:
     return plain.annotate(_merge_runs(reports))
 
 
-def _names_of(reports: list[dict[str, Any]]) -> Callable[[str], str]:
-    """`runtime_name` for these reports: the project's own names are kept as
-    written, the markers' prefix and the markers the reports found."""
-    sections = [r.get("markers") or {} for r in reports]
-    prefix = next((s["prefix"] for s in sections if s.get("prefix")), None)
-    own = frozenset(row["location"] for s in sections for row in s.get("rows") or [])
-
-    def names(value: str) -> str:
-        return runtime_name(value, keep=prefix, names=own)
-    return names
-
-
-def _folded(rows: list[dict[str, Any]], identity: tuple[str, ...],
-            fold: Callable[[str], str],
-            opened: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """One recording's rows under the names a merge gives them (#714).
-
-    The merge of repeats folds the numbers the runtime chose (#504); a report
-    of one recording skipped the merge and kept them, so `arch_disk_io_0` …
-    `_3` and `owner tid: 31048` were rows of their own there, and `compare`
-    against a set of recordings, where they are `arch_disk_io_#`, called the
-    four gone and the one new. Rows a folded name makes one are added up, as
-    the merge adds them within a repeat, and keep the names they had in
-    `variants`. Nothing else about the row changes: no `runs`, no `spread`.
-
-    With `opened`, what the open query found, a folded row adds up every name
-    it stands for, the ones under the bar too, as `merge_rows` does: the
-    other side's `below` has them all, and `compare` sets the two against
-    each other (#715).
-    """
-    def key_of(row: dict[str, Any]) -> tuple:
-        return tuple(fold(v) if isinstance(v, str) else v
-                     for v in (row.get(c) for c in identity))
-
-    groups: dict[tuple, list[dict[str, Any]]] = {}
-    for row in rows:
-        groups.setdefault(key_of(row), []).append(row)
-    under: dict[tuple, list[dict[str, Any]]] = {}
-    for row in opened or []:
-        key = key_of(row)
-        if key in groups:
-            under.setdefault(key, []).append(row)
-    more = {k for k, g in groups.items() if len(under.get(k) or []) > len(g)}
-    if not more and all(len(g) == 1 and tuple(g[0].get(c) for c in identity) == k
-                        for k, g in groups.items()):
-        return rows
-    out = []
-    for key, group in groups.items():
-        row = dict(_one_run(group))
-        if key in more:
-            every = _one_run(under[key])
-            row.update({c: every[c] for c in NUMERIC if every.get(c) is not None})
-            group = group + under[key]
-        was = {}
-        for at, col in enumerate(identity):
-            names = {r.get(col) for r in group if r.get(col) != key[at]}
-            if names:
-                was[col] = sorted(names)
-        row.update(zip(identity, key, strict=True))
-        if was:
-            row["variants"] = was
-        out.append(row)
-    if more or any(len(g) > 1 for g in groups.values()):
-        out.sort(key=_rank, reverse=True)
-    return out
-
-
 def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     """Merges N repeats into a single report using the median.
 
@@ -1246,16 +1169,20 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     when the milliseconds match.
     """
     names = _merge_names(reports)
-    fold_names = _names_of(reports)
     if len(reports) == 1:
         for det in reports[0].get("detectors") or []:
             opened = det.pop(OPEN_ROWS, None)
-            fold = None if det["id"] in _EVENTS else fold_names
-            if fold is not None and det.get("rows"):
-                det["rows"] = _folded(det["rows"], identity_of(det), fold, opened=opened)
+            # Through the merge, as the rows of a set go: one recording and a
+            # set of copies of it say the same of every row (#831). Where the
+            # one report used a path of its own, a pool's `threads` and the
+            # rows under the bar came out otherwise (#714, #845). It has no
+            # repeats to count or spread, so it keeps neither.
+            det["rows"] = [{k: v for k, v in row.items() if k not in ("runs", "spread")}
+                           for row in merge_rows([det.get("rows") or []], identity_of(det), 1,
+                                                 opened=None if opened is None else [opened])]
             if opened is not None and not det.get("error"):
                 det["below"] = below_bar(det.get("rows") or [], [opened],
-                                         identity_of(det), 1, fold=fold)
+                                         identity_of(det), 1)
         if names is not None:
             reports[0][SLICE_NAMES] = names
         return reports[0]
@@ -1314,16 +1241,12 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         # `1/3` when it had failed in the other two, and `1/3` means caught
         # once. How many failed is said beside the rows instead.
         ran = [run for run in runs if not run["error"]]
-        # An ANR's row is one event, named by the id the platform gave it:
-        # there is no number in it to fold.
-        fold = None if head["id"] in _EVENTS else fold_names
         opened = [run.get(OPEN_ROWS) for run in ran]
         head["rows"] = merge_rows([run["rows"] for run in ran],
-                                  identity_of(head), len(ran), fold=fold,
+                                  identity_of(head), len(ran),
                                   opened=opened) if ran else []
         head.pop(OPEN_ROWS, None)
-        below = below_bar(head["rows"], opened, identity_of(head), len(ran),
-                          fold=fold) if ran else None
+        below = below_bar(head["rows"], opened, identity_of(head), len(ran)) if ran else None
         if below is not None:
             head["below"] = below
         else:
