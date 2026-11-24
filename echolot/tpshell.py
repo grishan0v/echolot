@@ -102,7 +102,19 @@ class Failed(BaseException):
 
     Raised here without the trace, which `TraceSession` adds. `main` prints
     it as `error:` and exits 2, as every refusal reads.
+
+    `again` is set for a socket error while no shell has stopped — what the
+    error was — and such a failure is tried once more before it is said
+    (#871).
     """
+
+    def __init__(self, said: str, *, again: str | None = None):
+        super().__init__(said)
+        self.again = again
+
+
+# How long to wait before a socket error is tried again.
+PAUSE = 0.25
 
 
 # What trace_processor prints as it serves — a line for each request its
@@ -242,7 +254,15 @@ def lost(shell: Shell, error: BaseException) -> Failed:
     if how is not None:
         return Failed(f"trace_processor stopped while it read this trace: it "
                       f"{how}. {shell.last_words()}")
-    return Failed(f"could not reach trace_processor: {str(error) or type(error).__name__}")
+    why = str(error) or type(error).__name__
+    return Failed(f"could not reach trace_processor: {why}", again=why)
+
+
+def gave_up(failed: Failed) -> str:
+    """A socket error that came back when it was tried again, said."""
+    return (f"could not reach trace_processor, tried twice: {failed.again}. "
+            f"The machine's sockets failed, not the trace: run again, with "
+            f"fewer traces at once (-j 2) if many are read side by side.")
 
 
 def _process_tree():
@@ -265,7 +285,16 @@ class Shell:
 
     def __init__(self, binary: str):
         self.binary = binary
-        self.port = _free_port()
+        try:
+            self.port = _free_port()
+        except OSError as e:
+            # A socket bound to draw the port, which a machine short of
+            # sockets refuses — ENOBUFS, with many shells at once (#871).
+            # A sandbox's refusal is its own, said by sandbox.py (#190).
+            if e.errno in (errno.EPERM, errno.EACCES):
+                raise
+            raise Failed(f"could not reach trace_processor: no port for it on "
+                         f"127.0.0.1: {e}", again=str(e)) from e
         self._held = True
         self.asked = 0
         self.waited: float | None = None
@@ -481,6 +510,14 @@ class Processor:
 
     def query(self, sql: str):
         return self.client.query(sql)
+
+    def reconnect(self) -> None:
+        """The client's connection to the shell dropped: the next statement
+        opens another (http.client does, on a connection closed)."""
+        conn = getattr(getattr(self.client, "http", None), "conn", None)
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.close()
 
     def close(self) -> None:
         self.shell.close()
