@@ -3700,7 +3700,13 @@ def _private_targets(target: Path, chosen: list) -> list[Path]:
     return files
 
 
-def _keep_from_git(repo, patterns: list[str]) -> None:
+def _keep_from_git(repo, patterns: list[str], left: list[str] = ()) -> None:
+    """Write the block, and say whether git sees anything of the install.
+
+    `left` names the tracked files a shared install changed here, with more
+    than echolot's edit in them: git still shows them, and the closing line
+    says so rather than that git sees none of it (#929).
+    """
     from . import exclude as exclude_mod
     # The block is written anew on every private `init`, so that a path no
     # release installs any more drops out. With a private install in another
@@ -3731,6 +3737,17 @@ def _keep_from_git(repo, patterns: list[str]) -> None:
               f"({seen[0].relative_to(repo.project).as_posix()}): {repo.show()} does not\n"
               f"    keep it from git. `git check-ignore -v` on that path says which "
               f"line decides.")
+        return
+    if left:
+        import textwrap
+        print(textwrap.fill(
+            f"! git still shows {' and '.join(left)} changed here: a shared install "
+            f"added echolot's part, and other changes stand beside it, so "
+            f"{'it was' if len(left) == 1 else 'they were'} left as "
+            f"{'it is' if len(left) == 1 else 'they are'}. Take echolot's part out by "
+            f"hand (`git diff` shows it); git sees nothing else of the install.",
+            width=80, initial_indent="  ", subsequent_indent="    ",
+            break_on_hyphens=False, break_long_words=False))
         return
     print("  A private install: git sees none of it in this clone. "
           "`echolot init --shared`\n  hands it to the team.")
@@ -3893,10 +3910,19 @@ def cmd_init(args) -> int:
     # file exists.
     hidden: list[str] = []
     tracked: set[Path] = set()
+    still: list[str] = []
     if private:
         hidden = [repo.pattern(target / ".echolot", directory=True),
                   repo.pattern(target / "local.yml"), repo.pattern(target / "echolot.yml")]
         tracked = exclude_mod.tracked(repo, _private_targets(target, chosen))
+        # What a shared install before it added to the team's files: put
+        # back as committed where that is all that changed, named where not,
+        # and a file it created with nothing else in it kept from git (#929).
+        taken, still, made = exclude_mod.shared_edits(repo)
+        for name in taken:
+            print(f"\n  ↓ {name}: what a shared install added is taken out — it is "
+                  f"as the last commit has it again")
+        hidden += [repo.pattern(f) for f in made]
     else:
         from . import ignore as ignore_mod
         ignored = ignore_mod.ensure(target)
@@ -3918,7 +3944,7 @@ def cmd_init(args) -> int:
                                              force=getattr(args, "force", False),
                                              tracked=tracked)
         if private:
-            _keep_from_git(repo, hidden + [repo.pattern(f) for f in whole])
+            _keep_from_git(repo, hidden + [repo.pattern(f) for f in whole], still)
         # `--for all` beside the plugin used to mean `.claude/` too; the rest
         # is named instead, so following the line keeps the plugin alone.
         rest = ",".join(h.key for h in hosts_mod.every([h.key for h in chosen]))
@@ -4049,7 +4075,7 @@ def cmd_init(args) -> int:
                 for src in layer.template_files()] + [manifest]
         _keep_from_git(repo, [repo.pattern(f) for f in ours
                               if f.exists() and f not in tracked]
-                       + [repo.pattern(f) for f in whole] + hidden)
+                       + [repo.pattern(f) for f in whole] + hidden, still)
     recorder.note(hosts=[h.key for h in chosen], private=private)
     if before is None:
         print("\nLayer installed.")

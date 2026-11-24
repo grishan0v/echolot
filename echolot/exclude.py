@@ -269,3 +269,112 @@ def remove(repo: Repo) -> bool:
         return False
     _save(repo.exclude, text[:span[0]] + text[span[1]:])
     return True
+
+
+def changed(repo: Repo, paths: list[Path]) -> set[Path]:
+    """Which of `paths` git tracks and has otherwise than its last commit.
+
+    Empty where git cannot be asked, or the repository has no commit yet.
+    """
+    if not paths:
+        return set()
+    out = _git(repo.top, "diff", "--name-only", "-z", "HEAD", "--",
+               *(str(p) for p in paths))
+    named = {(repo.top / name).resolve() for name in (out or "").split("\0") if name}
+    return {p for p in paths if p.resolve() in named}
+
+
+def at_head(repo: Repo, path: Path) -> bytes | None:
+    """The file as the last commit has it; None where git cannot say."""
+    rel = path.resolve().relative_to(repo.top).as_posix()
+    try:
+        done = subprocess.run(["git", "show", f"HEAD:{rel}"], cwd=repo.top,
+                              capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _settings_edit(now: bytes, head: bytes | None) -> tuple[bool, bool]:
+    """(echolot's permission is in `now` and not in `head`, it is all that differs)."""
+    import json
+
+    from . import layer  # late: layer imports this module's callers
+    try:
+        template = json.loads((layer.CLAUDE_DIR / "settings.json").read_text(encoding="utf-8"))
+        mine = json.loads(now)
+        theirs = json.loads(head) if head is not None else None
+    except (OSError, ValueError):
+        return False, False
+    if not isinstance(mine, dict) or layer._fold(template, mine) != mine:
+        return False, False
+    if theirs is None:
+        return True, mine == template
+    if not isinstance(theirs, dict) or layer._fold(template, theirs) == theirs:
+        return False, False
+    return True, mine == layer._fold(template, theirs)
+
+
+def _ignore_edit(now: bytes, head: bytes | None) -> tuple[bool, bool]:
+    """(echolot's lines are in `now` and not in `head`, they are all that differs)."""
+    from . import ignore
+    try:
+        text, before = now.decode("utf-8"), (head or b"").decode("utf-8")
+    except UnicodeDecodeError:
+        return False, False
+    if not set(ignore.missing(before)) - set(ignore.missing(text)):
+        return False, False
+    ours = {"", ignore.HEADER, *ignore.PATTERNS}
+    return True, (text.startswith(before)
+                  and all(line.strip() in ours for line in text[len(before):].splitlines()))
+
+
+def shared_edits(repo: Repo) -> tuple[list[str], list[str], list[Path]]:
+    """What a shared `init` changed here that a private one would not have:
+    (taken out, left in, to keep from git).
+
+    A shared install adds echolot's permission to `.claude/settings.json`
+    and its lines to `.gitignore`. A private one writes neither, and an
+    exclude file hides untracked files only: after a shared install the two
+    stayed modified in `git status`, while `init --private` said git saw
+    none of it (#929). Where echolot's edit is all that differs from the
+    last commit, the file is put back as committed. Where the file carries
+    other changes too, it is left as it is and named. A file the shared
+    install created, holding nothing but echolot's, is kept from git with the
+    rest of the private install.
+    """
+    project = repo.project
+    files = [p for p in (project / ".claude" / "settings.json", project / ".gitignore")
+             if p.is_file() and not p.is_symlink()]
+    known = tracked(repo, files)
+    differ = changed(repo, sorted(known))
+    taken, left, hide = [], [], []
+    for path in files:
+        if path in known and path not in differ:
+            continue
+        head = at_head(repo, path) if path in known else None
+        if path in known and head is None:
+            continue
+        try:
+            now = path.read_bytes()
+        except OSError:
+            continue
+        edit = _settings_edit if path.name == "settings.json" else _ignore_edit
+        ours, alone = edit(now, head)
+        if not ours:
+            continue
+        name = path.relative_to(project).as_posix()
+        if path not in known:
+            if alone:
+                hide.append(path)
+            continue
+        if not alone:
+            left.append(name)
+            continue
+        try:
+            path.write_bytes(head)
+        except OSError:
+            left.append(name)
+            continue
+        taken.append(name)
+    return taken, left, hide
