@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import files
-from ..config import MAX_ROUNDS, PROCESS, SOURCE_ROOT, Config
+from ..config import DEFAULT_PREFIX, MAX_ROUNDS, PROCESS, SOURCE_ROOT, TEMP_PREFIX, Config
 from ..mark import TAG, Markers
 from ..recorder import LOG_FILE
 from . import shell
@@ -1012,7 +1012,7 @@ def _mark(ts: str, label: str, agent: str, detail: str = "") -> dict[str, Any]:
 
 
 def milestones(session: Session, calls: list[EcholotCall],
-               prefix: str = "AGENTTMP_") -> list[dict[str, Any]]:
+               prefix: str = DEFAULT_PREFIX) -> list[dict[str, Any]]:
     marks: list[dict[str, Any]] = []
     for t in session.turns:
         if t.kind == "slash":
@@ -1167,8 +1167,7 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
             "tools": tools,
             "usage": asdict(s.usage),
             "window": window_mix(session, label,
-                                 (cfg.get("instrumentation.temp_prefix") if cfg else None)
-                                 or "AGENTTMP_"),
+                                 cfg.temp_prefix if cfg else DEFAULT_PREFIX),
             "thinking_blocks": s.thinking_blocks,
             "conclusion_fields": fields_present,
             "confidence": confidence(s.final_text),
@@ -1211,7 +1210,7 @@ ACTIVITIES = ("echolot", "report reading", "source reading",
               "instrumentation edit", "source edit", "build/device", "other")
 
 
-def activity_of(c: Call, prefix: str = "AGENTTMP_") -> str:
+def activity_of(c: Call, prefix: str = DEFAULT_PREFIX) -> str:
     """What one tool call was for — the buckets the window is split by.
 
     Deliberately coarse; the question it answers is "did the agent reason
@@ -1248,7 +1247,7 @@ def activity_of(c: Call, prefix: str = "AGENTTMP_") -> str:
     return "other"
 
 
-def window_mix(session: Session, agent: str, prefix: str = "AGENTTMP_") -> dict[str, Any]:
+def window_mix(session: Session, agent: str, prefix: str = DEFAULT_PREFIX) -> dict[str, Any]:
     """What fed one agent's window, by activity: calls and tool-output chars.
 
     Characters are what the transcript has exactly; tokens are roughly a
@@ -1323,14 +1322,14 @@ def top_outputs(session: Session, n: int = 5) -> list[dict[str, Any]]:
 
 # ------------------------------------------------------- instrumentation
 
-def _has_prefix_added(c: Call, prefix: str = "AGENTTMP_") -> bool:
+def _has_prefix_added(c: Call, prefix: str = DEFAULT_PREFIX) -> bool:
     inp = c.input or {}
     new = str(inp.get("new_string") or inp.get("content") or "")
     old = str(inp.get("old_string") or "")
     return prefix in new and prefix not in old
 
 
-def _has_prefix_removed(c: Call, prefix: str = "AGENTTMP_") -> bool:
+def _has_prefix_removed(c: Call, prefix: str = DEFAULT_PREFIX) -> bool:
     inp = c.input or {}
     new = str(inp.get("new_string") or "")
     old = str(inp.get("old_string") or "")
@@ -1458,7 +1457,7 @@ def tree_check(project: Path | None, prefix: str, allowed: list[str]) -> dict[st
 
 def instrumentation(session: Session, cfg: Config | None,
                     project: Path | None = None) -> dict[str, Any]:
-    prefix = (cfg.get("instrumentation.temp_prefix") if cfg else None) or "AGENTTMP_"
+    prefix = cfg.temp_prefix if cfg else DEFAULT_PREFIX
     allowed = cfg.allowed if cfg else []
     markers = Markers(project or Path("."), prefix, allowed)
     per_file: dict[str, dict[str, int]] = {}
@@ -1740,7 +1739,7 @@ def config_snapshot(cfg: Config | None) -> dict[str, Any]:
         "source_root": cfg.written(SOURCE_ROOT),
         "max_rounds": cfg.written(MAX_ROUNDS),
         "instrumentation_allowed": cfg.allowed or None,
-        "temp_prefix": cfg.get("instrumentation.temp_prefix"),
+        "temp_prefix": cfg.written(TEMP_PREFIX),
         "detector_overrides": cfg.shared_overrides,
         "scenario_overrides": cfg.overrides_by_scenario,
     }
@@ -1800,8 +1799,7 @@ def gather(session: Session, cfg: Config | None,
     return Facts(
         echolot_calls=calls,
         milestones=milestones(session, calls,
-                              (cfg.get("instrumentation.temp_prefix") if cfg else None)
-                              or "AGENTTMP_"),
+                              cfg.temp_prefix if cfg else DEFAULT_PREFIX),
         hunts=hunts(session, cfg),
         cost=cost(session),
         top_outputs=top_outputs(session),

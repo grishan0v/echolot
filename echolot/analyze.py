@@ -48,6 +48,25 @@ _OTHERS_SHOWN = 5   # processes named besides the chosen one when a mask is wide
 ASYNC_TRACK = "atrace_async_slice"
 ASYNC_THREAD = "(async)"
 
+# A detector parameter that holds the temporary markers' prefix: it decides
+# which names a detector treats as the agent's markers.
+MARKER_PREFIX_PARAMS = ("marker_prefix",)
+
+
+def marker_prefix_params(d, cfg: Config) -> dict[str, str]:
+    """The project's `Config.temp_prefix` for each of `d`'s parameters that
+    holds the markers' prefix, where it is not that parameter's default.
+
+    `repeated_work.marker_prefix` was read by no Python code, so a project
+    with its own prefix never got a near miss, and its report said
+    `AGENTTMP_` beside a `markers` section saying `PERFHUNT_` (#874). The
+    config's `detectors:` section and `--set` still win: they are laid over
+    this.
+    """
+    prefix = cfg.temp_prefix
+    return {k: prefix for k in MARKER_PREFIX_PARAMS
+            if k in d.params and d.params[k] != prefix}
+
 
 def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
                    use_defaults: bool = False, detectors: list | None = None) -> list[tuple]:
@@ -84,7 +103,9 @@ def plan_detectors(cfg: Config, *, cli_overrides: dict[str, dict] | None = None,
     for d in detectors:
         from_cfg = dict(cfg_overrides.get(d.id) or {})
         from_cli = dict(cli_overrides.get(d.id) or {})
-        overrides = {**from_cfg, **from_cli}
+        # The project's prefix, under what the config and `--set` say: not a
+        # threshold, so `--defaults` keeps it and the source does not name it.
+        overrides = {**marker_prefix_params(d, cfg), **from_cfg, **from_cli}
         # A threshold the scenario sets is the scenario's, whatever the top
         # says about it; the rest of the config's numbers are the config's.
         mine = own.get(d.id) or {}
@@ -291,8 +312,7 @@ def _marker_globs(cfg: Config) -> tuple[str, list[str]]:
     Their digits were written by someone to tell two things apart, so no
     fold touches them: see `names.runtime_name`.
     """
-    from .mark import DEFAULT_PREFIX
-    prefix = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    prefix = cfg.temp_prefix
     globs = [prefix + "*"]
     for entry in cfg.get("domains") or []:
         name = entry.get("slice") if isinstance(entry, dict) else None

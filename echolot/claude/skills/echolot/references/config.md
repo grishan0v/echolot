@@ -378,10 +378,9 @@ name masks: a parameter with `name_glob` in its name masks the slice name
 config because ART names things differently across Android versions, and
 adapting to a device must not require editing a query.
 
-`repeated_work.marker_prefix` is a parameter of that detector's own, and not
-the same key as `instrumentation.temp_prefix`: it decides which names may come
-back as a near miss, and it does not follow the other. A project that changes
-its prefix changes both.
+`repeated_work.marker_prefix` decides which names may come back as a near
+miss. It follows `instrumentation.temp_prefix`, so a project that changes its
+prefix changes it in one place; a value set here under `detectors:` still wins.
 
 Thresholds are not picked by hand: `echolot calibrate` derives them from
 healthy runs and prints a ready section with the reasoning attached, which
