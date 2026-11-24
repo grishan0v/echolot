@@ -62,9 +62,10 @@ it came from:
   the app module its `targetProjectPath` names installs as), the
   `TraceSectionMetric` names it measures (anchor
   candidates, and `domains` entries), its runner arguments, and the gradle
-  tasks by variant. Each class says which kind it is: it measures the launch
+  tasks by variant. Each class says which kind it is: it measures frames
+  and not the launch (`FrameTimingMetric`), it measures the launch
   (`StartupTimingMetric`), it measures a section (`TraceSectionMetric`), it
-  only sets `StartupMode`, or its own file names none of the three
+  only sets `StartupMode`, or its own file names none of these
 - the devices attached
 - a config to start from — the skeleton the questions below refine. What
   it read off the tree says `_source: derived` with its `_evidence` (the
@@ -79,7 +80,17 @@ it came from:
   device answers with its chooser), the scenario that needs no end anchor,
   and its `_evidence` says the trace decides the end. A benchmark class that measures the launch and names no
   section gets the same window with `runner.mode: gradle`; one that only
-  sets `StartupMode` may be a scroll that starts cold, and keeps the `"?"`.
+  sets `StartupMode` keeps the `"?"`. A class that measures frames gets
+  `window: whole`: each trace it writes is one repeat of its measure block,
+  and the sections its test writes, `traced(…)` and the like, are in the
+  benchmark's own process, which no window is read from. A module with
+  several classes is a scenario for each under `scenarios:`, named after
+  the class, its class filter in its own `runner.gradle_args`; the cold
+  start is first, the one taken without `--scenario`. Where the benchmark
+  module's own package begins with the app's, as
+  `com.example.app.benchmark` does, `process` is the app's exact name, or
+  stays the mask when a manifest declares another process of the app, and
+  its `_evidence` says which.
   The
   `runner` section carries `_evidence` alone, and `instrumentation` neither
   — its `allowed` list is every module's `src/main` the scan found, test
@@ -125,7 +136,7 @@ a cold start — each with the time `analyze` would open the window at. `names`
 shows whether the detector masks land on the names this device produces.
 
 Pick the process deliberately: `com.example.app*` also catches `:pushservice`
-and `:webview`. A candidate whose thread reads `(async)` is a
+and `:webview`, and a macrobenchmark's own `com.example.app.benchmark`. A candidate whose thread reads `(async)` is a
 `Trace.beginAsyncSection` span on no thread — usually the app's own marker,
 and almost always the right end anchor. It is an anchor and nothing else: no
 detector reads it.
@@ -314,7 +325,8 @@ config lacks refuses with the two shapes below).
      `reset_policy: none`, and `duration_ms` longer than the script;
    - the project's own frame-timing macrobenchmark (`FrameTimingMetric`),
      `mode: gradle` with its class in `gradle_args`, when `scan` lists one
-     among the benchmarks.
+     among the benchmarks. Its draft already holds it as a scenario of its
+     own, `window: whole`, beside the cold start: keep that one.
 
    When the repository does not say, ask the human: a macrobenchmark test,
    a UI test, an `adb` command.

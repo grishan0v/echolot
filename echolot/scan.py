@@ -239,8 +239,38 @@ def _application_process(manifest: str) -> str | None:
     `:sync` — and was handed to the agent as the app's process.
     """
     tag = mark._APPLICATION_TAG.search(mark._XML_COMMENT.sub("", manifest))
-    m = re.search(r'android:process\s*=\s*"([^"]+)"', tag.group(1)) if tag else None
+    m = _PROCESS_ATTR.search(tag.group(1)) if tag else None
     return m.group(1) if m else None
+
+
+_PROCESS_ATTR = re.compile(r'android:process\s*=\s*"([^"]+)"')
+_TEST_SOURCE_SETS = ("androidTest", "test", "testFixtures")
+
+
+def declared_processes(root: Path, skip: set[str]) -> list[dict[str, str]]:
+    """Every `android:process` a manifest of the project declares, and where.
+
+    The app's own processes besides its main one, `:remote` or `:push`, are
+    what a mask over the package is for. Read across every module but the
+    ones in `skip`, a benchmark module's, and the test source sets: a
+    library's manifest is merged into the app's. A library outside the
+    project declares its own too, and is not read here.
+    """
+    from .domains import files_named
+    out = []
+    for mf in files_named(root, "AndroidManifest.xml"):
+        rel = mark._rel(mf, root)
+        if any(p in _TEST_SOURCE_SETS for p in mf.relative_to(root).parts):
+            continue
+        if any(rel.startswith(d + "/") for d in skip if d and d != "."):
+            continue
+        try:
+            text = mf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in _PROCESS_ATTR.findall(mark._XML_COMMENT.sub("", text)):
+            out.append({"process": name, "manifest": rel})
+    return out
 
 
 def _profileable_note(facts: Facts) -> None:
@@ -1118,11 +1148,20 @@ _MISSING_DIMENSION = re.compile(
 # nothing.
 _STARTUP_METRIC = re.compile(r"\bStartupTimingMetric\s*\(")
 _SECTION_METRIC = re.compile(r"\bTraceSectionMetric\s*\(")
+_FRAME_METRIC = re.compile(r"\bFrameTimingMetric\s*\(")
 _STARTUP_MODE = re.compile(r"\bStartupMode\b")
+# A section the test's own code writes: androidx.tracing's `trace(…)`, a
+# project's `traced(…)` helper, `Trace.beginSection(…)`. The test runs in the
+# benchmark's process, so each of these is a slice of that process and never
+# of the app's, which is the one a window is read from (#517).
+_OWN_SECTION = re.compile(
+    r'(?<!fun )(?<![\w$])(?:traced?|beginSection|beginAsyncSection)\s*\(\s*'
+    r'(?:\w+\s*=\s*)?(?:"([^"$]+)"|([A-Za-z_][\w.]*))')
 
 # The kinds of benchmark class the draft tells apart (#458), in `kind`.
 SECTION = "section"            # names a TraceSectionMetric: where "ready" is
 LAUNCH = "launch"              # measures the launch, and names no section
+FRAMES = "frames"              # measures frames, and not the launch (#517)
 STARTUP_MODE = "startup_mode"  # only sets StartupMode: may measure no launch
 
 
@@ -1137,12 +1176,18 @@ def _kind(code: str, metrics: list[str]) -> str | None:
     project best prepared for a launch scenario from one that measures a
     scroll, and left both with a question mark.
 
-    `section` comes first: a `TraceSectionMetric` is the developer's own
-    statement of where "ready" is, and it wins over the launch window, also
-    when its name could not be read here. None for a class that names none
-    of the three in its own file, as one whose metrics are listed in a
-    shared helper.
+    `frames` comes first: a class that constructs `FrameTimingMetric` and
+    not `StartupTimingMetric` measures what its measure block does, a
+    scroll as a rule, and a `TraceSectionMetric` beside it is a section
+    inside that, not where "ready" is. It was taken for a `section`, and a
+    scroll benchmark that starts cold was drafted as the cold start (#517).
+    Then `section`: a `TraceSectionMetric` is the developer's own statement
+    of where "ready" is, and it wins over the launch window, also when its
+    name could not be read here. None for a class that names none of these
+    in its own file, as one whose metrics are listed in a shared helper.
     """
+    if _FRAME_METRIC.search(code) and not _STARTUP_METRIC.search(code):
+        return FRAMES
     if metrics or _SECTION_METRIC.search(code):
         return SECTION
     if _STARTUP_METRIC.search(code):
@@ -1226,6 +1271,15 @@ def benchmarks_of(root: Path, build: BuildCode | None = None) -> list[dict[str, 
                 # Kept by its identifier, so the draft can say which name to
                 # look up rather than only that one was not read.
                 unresolved.append(ident)
+        # The sections the test writes itself, by the name its code gives
+        # them: a constant's value where it is found, else the constant as
+        # written. A parameter (`trace(name) { … }` in a helper) is no name.
+        traced: list[str] = []
+        for lit, ident in _OWN_SECTION.findall(code):
+            name = lit or resolve(ident, consts) or (
+                ident if "." in ident or re.fullmatch(r"[A-Z][A-Z0-9_]*", ident) else None)
+            if name and name not in traced:
+                traced.append(name)
         # Each class keeps its own metrics, so the skeleton takes the class,
         # its test and its end anchor from one file.
         entry["classes"].append({
@@ -1238,6 +1292,8 @@ def benchmarks_of(root: Path, build: BuildCode | None = None) -> list[dict[str, 
             # `StartupTimingMetric` by itself, apart from `StartupMode`:
             # whether the launch is what this class measures.
             "measures_launch": bool(_STARTUP_METRIC.search(code)),
+            "measures_frames": bool(_FRAME_METRIC.search(code)),
+            "traced": traced,
             "kind": _kind(code, metrics),
         })
         for name in metrics:
@@ -1256,7 +1312,7 @@ def benchmarks_of(root: Path, build: BuildCode | None = None) -> list[dict[str, 
         entry["dir"] = mark._rel(mdir, root)
     aliases = catalog_aliases(root) if by_module else set()
     for entry in by_module.values():
-        _, stext = _build_script(root / entry["dir"]) if entry["dir"] else (None, "")
+        spath, stext = _build_script(root / entry["dir"]) if entry["dir"] else (None, "")
         whole = _strip(stext)
         s = android_block(whole)
         entry["runner_args"] = dict(_RUNNER_ARG.findall(s))
@@ -1271,6 +1327,16 @@ def benchmarks_of(root: Path, build: BuildCode | None = None) -> list[dict[str, 
         entry["baseline_profile"] = applies_baseline_profile(whole, aliases)
         entry["build_types"] = [b["name"] for b in build_types_of(s, entry["baseline_profile"])
                                 if not b.get("implicit") or b.get("added_by")]
+        # Its own package, the process its tests run in: its applicationId,
+        # else its namespace, which a test module installs as when it names
+        # none. Android Studio's template gives `<the app's>.benchmark`, and
+        # the app's `com.example.app*` matched it in every trace (#467).
+        own_config = block(s, "defaultConfig")
+        own_id = _value(own_config, "applicationId") if own_config else None
+        entry["own_package"] = own_id or _value(s, "namespace")
+        if entry["own_package"] and spath:
+            entry["own_package_from"] = (f"{'applicationId' if own_id else 'namespace'} "
+                                         f"in {mark._rel(spath, root)}")
         # The app module it runs against, and the flavours it takes from it:
         # a dimension the module names here is one its variants do not have.
         entry["target"] = _value(s, "targetProjectPath")
@@ -1619,6 +1685,11 @@ def describe(root: Path, *, devices: bool = True) -> Facts:
     # decides the variant the applicationId note reads.
     facts.benchmarks = benchmarks_of(root, code)
     _benchmark_targets(facts)
+    if facts.app and any(b.get("own_package") for b in facts.benchmarks):
+        # Whether the draft can name the app's process exactly, and leave
+        # the benchmark's own out of the mask (#467).
+        facts.app["processes"] = declared_processes(
+            root, {b["dir"] for b in facts.benchmarks if b.get("dir")})
     _profileable_note(facts)
     _id_note(facts)
     facts.allowed = allowed_paths(root)
@@ -1647,6 +1718,141 @@ _THE_TRACE_DECIDES = ("the trace decides the end: the launch's end as the platfo
                       "which (window.defined_by)")
 
 
+def _ordered(bench: dict | None) -> list[dict]:
+    """A benchmark module's classes in the order the draft takes them.
+
+    A cold start's first, for a window that opens at bindApplication; then
+    one that measures a section. Among those that name no section, one that
+    measures the launch comes before one that only sets `StartupMode`: its
+    window needs nothing picked (#458). A class that measures frames comes
+    last whatever else it sets: a scroll that starts cold and names a
+    section was taken for the cold start (#517). The first is the scenario
+    `collect` and `analyze` take when none is named.
+    """
+    if not bench:
+        return []
+    return sorted(bench["classes"], key=lambda c: (c.get("kind") == FRAMES,
+                                                   not c.get("startup"),
+                                                   not c.get("metrics"),
+                                                   c.get("kind") != LAUNCH))
+
+
+def _scenario_names(classes: list[dict]) -> list[str]:
+    """One scenario name for each class: its simple name, which a trace's
+    file name carries; a second class of the same name gets a number."""
+    seen: set[str] = set()
+    out = []
+    for c in classes:
+        base = re.sub(r"[^A-Za-z0-9_.-]", "_", c["name"].rsplit(".", 1)[-1]) or "benchmark"
+        name, n = base, 2
+        while name in seen:
+            name, n = f"{base}_{n}", n + 1
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _process_mask(facts: Facts, read_id: str) -> tuple[str, str]:
+    """`project.process` for the draft, and what it adds to `_evidence`.
+
+    `<package>*` matched the benchmark's own process too wherever that
+    module's package begins with the app's, as the template's
+    `com.example.app.benchmark` does: `analyze` took the app, the larger,
+    and said so in every report's header, the first thing a newcomer read
+    being about a process they had never heard of (#467). A GLOB cannot
+    leave one name out and keep the rest, so where no manifest of the
+    project declares another process of the app the draft names the app's
+    exactly. Where one does, the mask is what reaches it, and stays.
+    """
+    own = next((b for b in facts.benchmarks
+                if (b.get("own_package") or "").startswith(read_id)
+                and b["own_package"] != read_id), None)
+    if not own:
+        return f"{read_id}*", ""
+    them = f"`{own['own_package']}` ({own.get('own_package_from') or own['module']})"
+    declared = (facts.app or {}).get("processes") or []
+    if declared:
+        return (f"{read_id}*",
+                f"; the mask matches the benchmark's own process too, {them}, and analyze takes "
+                f"the one with more slices: it stays a mask for the app's other processes, "
+                f"`{declared[0]['process']}` in {declared[0]['manifest']}")
+    return (read_id,
+            f"; the process by its exact name, not `{read_id}*`: the benchmark's own, {them}, "
+            f"begins with it, and no manifest here declares another process of the app")
+
+
+def _frames_evidence(cls: dict, own: str | None) -> str:
+    """Why a class that measures frames gets the whole trace for a window.
+
+    The sections the test writes itself, as `traced(PHASE_SCROLL) { … }`,
+    are where a person would look for the scroll's ends, and they are in the
+    benchmark's process: a window is read from the app's alone, and an
+    anchor of theirs matched nothing (#517).
+    """
+    words = (f"FrameTimingMetric in {cls['file']}, and no StartupTimingMetric: the benchmark "
+             "measures the frames of its measure block, not the launch, and each trace it "
+             "writes holds one repeat of that block, so the window is the whole trace")
+    if cls.get("metrics"):
+        words += ("; " + ", ".join(f"`{m}`" for m in cls["metrics"])
+                  + " (TraceSectionMetric) is a section inside it, not where it ends")
+    if cls.get("traced"):
+        words += ("; " + ", ".join(f"`{m}`" for m in cls["traced"])
+                  + ", which the test writes itself, "
+                  + ("is a slice" if len(cls["traced"]) == 1 else "are slices")
+                  + " of the benchmark's own process"
+                  + (f", `{own}`," if own else "")
+                  + " not of the app's, which a window is read from")
+    return words
+
+
+def _window(pick: dict | None, bench: dict | None, facts: Facts, pad: str) -> list[str]:
+    """Where one class's scenario starts and ends, each line indented by `pad`."""
+    start = f'{pad}start: {{name: "bindApplication", _source: default}}'
+    if pick and pick.get("kind") == FRAMES:
+        # A scroll, as a rule (#517). Its sections are no window's ends:
+        # one the app writes lies inside the scroll, and one the test
+        # writes is in another process.
+        return [f'{pad}window: {{name: whole, _source: derived, _evidence: "'
+                + _frames_evidence(pick, (bench or {}).get("own_package")) + '"}']
+    if pick and pick.get("metrics"):
+        pattern = "; a pattern, `%` read as `*`" if "*" in pick["metrics"][0] else ""
+        return [start,
+                f'{pad}end: {{name: "{pick["metrics"][0]}", _source: derived, '
+                f'_evidence: "TraceSectionMetric in {pick["file"]}{pattern}; '
+                f'confirm against a probe"}}']
+    if pick and pick.get("kind") == LAUNCH:
+        # A startup macrobenchmark, the project best prepared for the same
+        # scenario (#458): the benchmark drives the launch and writes one
+        # trace for each repeat, and the launch window reads such traces as
+        # it reads the ones `launch` mode records. Only for a class that
+        # measures the launch and names no section. `StartupMode` alone may
+        # be a scroll that starts cold, and a report about the launch would
+        # answer a person who asked about the scroll.
+        return [f'{pad}window: {{name: launch, _source: derived, _evidence: "StartupTimingMetric '
+                f'in {pick["file"]}: the benchmark measures the launch, and the runner below runs '
+                f'it; ' + _THE_TRACE_DECIDES + '"}']
+    if not bench and facts.app:
+        # How the app opens, the one scenario whose window nobody has to
+        # name (#446): the runner below starts the launcher Activity, and the
+        # window is that launch as the platform records it. Where it ends is
+        # the trace's to say, so there is no anchor to pick and no question
+        # mark: a person can record this before any trace exists.
+        return [f'{pad}window: {{name: launch, _source: derived, _evidence: "the launcher '
+                f'Activity {facts.app["launcher"]} in {facts.app["manifest"]}, started by the '
+                f'runner below; ' + _THE_TRACE_DECIDES + '"}']
+    if pick and pick.get("unresolved"):
+        return [start,
+                f'{pad}end: {{name: "?", _source: default, _evidence: "TraceSectionMetric('
+                f'{pick["unresolved"][0]}) in {pick["file"]}: its value was not read here. '
+                'Put the string it holds, or pick from `echolot probe`"}']
+    return [start,
+            f'{pad}end: {{name: "?", _source: default, _evidence: "pick from `echolot probe` — '
+            'the longest slice that means ready"}']
+
+
+_CLASS_ARG = "-Pandroid.testInstrumentationRunnerArguments.class="
+
+
 def skeleton(facts: Facts) -> list[str]:
     """An echolot.yml to start from, every value with where it came from."""
     app = facts.app or {}
@@ -1655,17 +1861,13 @@ def skeleton(facts: Facts) -> list[str]:
     where = app.get("build_script") or "build.gradle"
     others = [v["name"] for v in facts.variants if chosen and v["name"] != chosen["name"]]
     bench = facts.benchmarks[0] if facts.benchmarks else None
-    # One class for everything below: its test, its filter and its end
-    # anchor. A cold start's first, for a window that opens at
-    # bindApplication; then one that measures a section. The pieces used to
-    # come from different classes of one module. Among those that name no
-    # section, one that measures the launch comes before one that only sets
-    # `StartupMode`: its window needs nothing picked (#458).
-    pick = None
-    if bench and bench["classes"]:
-        pick = sorted(bench["classes"], key=lambda c: (not c.get("startup"),
-                                                       not c.get("metrics"),
-                                                       c.get("kind") != LAUNCH))[0]
+    # One class for each scenario: its test, its filter and its window from
+    # one file. The pieces used to come from different classes of one
+    # module. One class is `scenario:`, as it always was; several are one
+    # scenario each under `scenarios:`, so that a scroll benchmark beside
+    # the startup one is drafted rather than listed and left (#517).
+    classes = _ordered(bench)
+    pick = classes[0] if classes else None
     # A minified variant's frames come back as R8 named them, and the first
     # round would go on reading `a.b.c`. So its mapping is named, built or
     # not: AGP writes the file when the variant is built, which in gradle
@@ -1692,14 +1894,16 @@ def skeleton(facts: Facts) -> list[str]:
                + f' — the package may be longer: `adb shell pm list packages {read_id}` lists the '
                  f'installed ones; put yours' + why + '"']
     elif read_id:
+        mask, narrowed = _process_mask(facts, read_id)
         out = ["project:",
                f"  package: {read_id}",
-               f'  process: "{read_id}*"',
+               f'  process: "{mask}"',
                *mapping,
                "  _source: derived",
                f'  _evidence: "applicationId in {where}'
                + (f', variant {chosen["name"]}{plugin}' if chosen else "")
-               + (f' — the others: {", ".join(others[:6])}' if others else "") + why + '"']
+               + (f' — the others: {", ".join(others[:6])}' if others else "")
+               + narrowed + why + '"']
     else:
         # Not read is not derived: a constant or a convention plugin sets it,
         # and a placeholder written as `derived` was taken on trust. The note
@@ -1712,59 +1916,30 @@ def skeleton(facts: Facts) -> list[str]:
                f'  _evidence: "applicationId not read from {where} — set through a constant '
                f'or a convention plugin; find it there, or in `adb shell pm list packages`'
                + why + '"']
-    out += ["",
-            "scenario:",
-            f"  name: {pick['tests'][0] if pick and pick['tests'] else 'coldStart'}",
-            ]
-    start = '  start: {name: "bindApplication", _source: default}'
-    if pick and pick.get("metrics"):
-        pattern = "; a pattern, `%` read as `*`" if "*" in pick["metrics"][0] else ""
-        out += [start,
-                f'  end: {{name: "{pick["metrics"][0]}", _source: derived, '
-                f'_evidence: "TraceSectionMetric in {pick["file"]}{pattern}; '
-                f'confirm against a probe"}}']
-    elif pick and pick.get("kind") == LAUNCH:
-        # A startup macrobenchmark, the project best prepared for the same
-        # scenario (#458): the benchmark drives the launch and writes one
-        # trace for each repeat, and the launch window reads such traces as
-        # it reads the ones `launch` mode records. Only for a class that
-        # measures the launch and names no section. `StartupMode` alone may
-        # be a scroll that starts cold, and a report about the launch would
-        # answer a person who asked about the scroll.
-        out.append(
-            '  window: {name: launch, _source: derived, _evidence: "StartupTimingMetric in '
-            f'{pick["file"]}: the benchmark measures the launch, and the runner below runs it; '
-            + _THE_TRACE_DECIDES + '"}')
-    elif not bench and facts.app:
-        # How the app opens, the one scenario whose window nobody has to
-        # name (#446): the runner below starts the launcher Activity, and the
-        # window is that launch as the platform records it. Where it ends is
-        # the trace's to say, so there is no anchor to pick and no question
-        # mark: a person can record this before any trace exists.
-        out.append(
-            '  window: {name: launch, _source: derived, _evidence: "the launcher Activity '
-            f'{facts.app["launcher"]} in {facts.app["manifest"]}, started by the runner below; '
-            + _THE_TRACE_DECIDES + '"}')
-    elif pick and pick.get("unresolved"):
-        out += [start,
-                '  end: {name: "?", _source: default, _evidence: "TraceSectionMetric('
-                f'{pick["unresolved"][0]}) in {pick["file"]}: its value was not read here. '
-                'Put the string it holds, or pick from `echolot probe`"}']
+    if len(classes) > 1:
+        # Each with its own window and its own class filter, laid over the
+        # one runner below. The first is the one taken when none is named.
+        out += ["", "scenarios:"]
+        for name, cls in zip(_scenario_names(classes), classes, strict=True):
+            out.append(f"  {name}:")
+            out += _window(cls, bench, facts, "    ")
+            out += ["    runner:", "      gradle_args:", f'        - "{_CLASS_ARG}{cls["name"]}"']
     else:
-        out += [start,
-                '  end: {name: "?", _source: default, _evidence: "pick from `echolot probe` — '
-                'the longest slice that means ready"}']
+        out += ["",
+                "scenario:",
+                f"  name: {pick['tests'][0] if pick and pick['tests'] else 'coldStart'}",
+                ]
+        out += _window(pick, bench, facts, "  ")
     out.append("")
     if bench:
         task = measuring_task(bench, facts.variants, chosen)
-        cls = pick["name"] if pick else None
         out += ["runner:",
                 "  mode: gradle",
                 f'  gradle_task: "{task}"' if task else '  gradle_task: "?"',
                 ]
-        if cls:
+        if pick and len(classes) == 1:
             out.append("  gradle_args:")
-            out.append(f'    - "-Pandroid.testInstrumentationRunnerArguments.class={cls}"')
+            out.append(f'    - "{_CLASS_ARG}{pick["name"]}"')
         # No `iterations`: the benchmark's measureRepeated sets the count, and
         # collect warns that the key does not reach it.
         if bench.get("baseline_profile"):
@@ -1775,8 +1950,12 @@ def skeleton(facts: Facts) -> list[str]:
             whose = ""
         if _pinned(bench):
             whose += "; missingDimensionStrategy runs it against " + ", ".join(sorted(_pinned(bench)))
-        out += [f'  _evidence: "MacrobenchmarkRule in {pick["file"] if pick else bench["module"]}'
-                + whose + '"']
+        if len(classes) > 1:
+            rule = (f"MacrobenchmarkRule in {len(classes)} classes of {bench['module']}: each "
+                    "scenario above runs its own")
+        else:
+            rule = f'MacrobenchmarkRule in {pick["file"] if pick else bench["module"]}'
+        out += [f'  _evidence: "{rule}' + whose + '"']
     elif app.get("activity"):
         # The launcher by name, not left for the device to resolve: a debug
         # build with a leak detector has its launcher too, and the device
@@ -1821,15 +2000,30 @@ def _build_code_words(facts: Facts) -> list[str]:
     return out
 
 
-def _kind_words(cls: dict) -> str:
+def _kind_words(cls: dict, own: str | None = None) -> str:
     """Which kind a benchmark class is, in words, and what that leaves for its window.
 
     Said for every class, so the draft below explains itself: why one class
-    got the launch as its window, another its section, and a third the
-    question mark. A class that names none of the three is said too. Its
-    metrics may be listed in a shared helper, which this did not read.
+    got the launch as its window, another its section, a third the whole
+    trace and a fourth the question mark. A class that names none of them
+    is said too. Its metrics may be listed in a shared helper, which this
+    did not read. `own` is the benchmark module's own package, the process
+    the sections its test writes are in.
     """
     kind = cls.get("kind")
+    if kind == FRAMES:
+        words = ("measures frames (`FrameTimingMetric`) and not the launch: its window is the "
+                 "whole trace, one repeat of its measure block")
+        if cls.get("metrics"):
+            words += ("; " + ", ".join(f"`{m}`" for m in cls["metrics"])
+                      + " (`TraceSectionMetric`) is a section inside it")
+        if cls.get("traced"):
+            words += ("; " + ", ".join(f"`{m}`" for m in cls["traced"])
+                      + ", written by the test itself, "
+                      + ("is" if len(cls["traced"]) == 1 else "are")
+                      + f" in the benchmark's own process{f' `{own}`' if own else ''}, "
+                        "not the app's, and no window's end")
+        return words
     if kind == SECTION:
         named = ", ".join(f"`{m}`" for m in cls.get("metrics") or [])
         unread = ", ".join(f"`{m}`" for m in cls.get("unresolved") or [])
@@ -1922,8 +2116,14 @@ def render(facts: Facts) -> str:
     if not facts.benchmarks:
         out.append("_no MacrobenchmarkRule in the tree — `runner.mode: launch` drives a cold start by itself_")
     for b in facts.benchmarks:
+        # What its classes measure, each kind once: a scroll beside the
+        # startup benchmark was summed up as "a cold start" (#517).
+        kinds = list(dict.fromkeys(
+            "frame timing" if c.get("kind") == FRAMES else "a cold start"
+            for c in _ordered(b) if c.get("kind") == FRAMES or c.get("startup")))
         out.append(f"`{b['module']}` — drives `{b.get('package_name') or '?'}`"
-                   + (", a cold start" if b.get("startup") else ""))
+                   + (", " + " and ".join(kinds) if kinds else "")
+                   + (f"; its own process is `{b['own_package']}`" if b.get("own_package") else ""))
         if b.get("package_by"):
             by = b["package_by"]
             out.append(f"- no string in its code names the package: `{b['package_name']}` is what "
@@ -1931,7 +2131,7 @@ def render(facts: Facts) -> str:
                        "names, installs as")
         for c in b["classes"]:
             out.append(f"- `{c['name']}` ({c['file']}): " + (", ".join(c["tests"]) or "no @Test")
-                       + " — " + _kind_words(c))
+                       + " — " + _kind_words(c, b.get("own_package")))
         if b["metrics"]:
             out.append("- measures the sections: " + ", ".join(f"`{m}`" for m in b["metrics"])
                        + " — anchor candidates, and `domains` entries")

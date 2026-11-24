@@ -77,6 +77,14 @@ takes the largest by slice count and **says so** — on stderr and in
 `report.json` as `process_alternatives`. If the wrong process is being
 analysed, narrow the mask.
 
+A macrobenchmark's own process is one of those the mask catches when the
+benchmark module's package begins with the app's, as Android Studio's
+`com.example.app.benchmark` does. `echolot scan` then drafts the app's
+process by its exact name, `com.example.app`, and keeps the mask only where
+a manifest of the project declares another process of the app (`:remote`),
+which only the mask reaches; its `_evidence` says which. A GLOB cannot
+leave one name out and keep the rest.
+
 ### `project.mapping`
 
 The R8 or ProGuard `mapping.txt` of the build that was recorded, for a
@@ -180,7 +188,9 @@ macrobenchmark, together with `runner.mode: launch`. It drafts it too, with
 `runner.mode: gradle`, for a macrobenchmark class that measures the launch:
 one that constructs `StartupTimingMetric` and names no `TraceSectionMetric`.
 A class that names a section keeps the section as its `end`, and one that
-only sets `StartupMode` keeps an `end` to pick.
+only sets `StartupMode` keeps an `end` to pick. A class that constructs
+`FrameTimingMetric` and not `StartupTimingMetric` gets `window: whole`, below:
+each trace it writes is one repeat of its measure block.
 
 `budget_ms` is held against this window as against any other. It starts at
 the intent, about 0.14 s before `bindApplication` on the launches it was
@@ -254,7 +264,12 @@ since a shorter one lands as a tap on a loaded phone. A scroll may also keep
 no `start` or `end`, and the whole recording is then the scenario, with
 `duration_ms` longer than the script; or it is the project's own
 frame-timing macrobenchmark (`FrameTimingMetric`) in `gradle` mode, which
-`echolot scan` lists among the benchmarks. A question about a journey no
+`echolot scan` lists among the benchmarks. For a benchmark module with
+several classes `scan` drafts `scenarios:` itself, a scenario for each named
+after its class, the class filter in that scenario's `runner.gradle_args`,
+the cold start first; a frame-timing class's window is `whole`, since the
+sections its test writes (`trace(…)`, `traced(…)`) are slices of the
+benchmark's own process, not the app's. A question about a journey no
 scenario measures gets one of these before it is hunted, never the one
 scenario there is.
 
