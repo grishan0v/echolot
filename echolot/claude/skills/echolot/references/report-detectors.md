@@ -13,7 +13,7 @@ each detector's notes sit under a heading that is its id, which is how
 | `app_init` | what ran after the Application was created, before the first Activity | an Initializer or a library's section by name; `(no section)` is the ContentProviders and `Application.onCreate` nobody traced |
 | `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects; `thread` names the row, `detail` says what a cycle freed and how large the heap grew before one, or which collection a wait was for. Blind to a cold start's first ~2 s |
 | `monitor_contention` | monitor contention | the main thread's row is `main`; `threads` says how many threads a row adds up; `places` names both sides of the lock in the checkout; `detail` is the row's longest wait that names both methods, or else the owner's tid with its thread and what it and the waiter were in |
-| `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms`; `detail` names who answered — `system_server 94%` — and the AIDL method where the recording has the `aidl` category |
+| `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms`; `detail` names who answered — `system_server 94%` — and the AIDL method where the recording has the `aidl` category; on the main thread `phase` says where in the launch, and `before the app's code` is the platform's own start |
 | `runnable_starvation` | thread ready but preempted | `state` names the row with the thread; the main thread's row is `main`, and on it `detail` says who held its core — the app's own threads point at the app, other processes and idle cores at the device |
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}`, `main` for the main thread; `threads` above one is a pool's CPU together; in a sampled recording, the method after `ours:` in `detail`, at the file `code` names |
 | `frame_jank` | frames that missed their deadline | `location` is why it missed, `detail` says whose fault |
@@ -291,3 +291,15 @@ Its `detail` says where the calls went, by share of the row's time: `main
 thread · to system_server 94%, surfaceflinger 2%`. A process alone means the
 recording had no `aidl` category; with it, the method follows the process
 (`system_server IPackageManager.getPackageInfo 89%`).
+
+Who answered does not say whose the call was. The main thread's row says
+where in the launch its calls were made, in `phase`, by share: `before the
+app's code 25%, Application 31%, activity 22%, frames 18%, other 4%`.
+`before the app's code` is the platform's own start — `attachApplication`
+inside `ActivityThreadMain`, and `bindApplication` before `makeApplication`
+— and nothing in the app moves it: do not spend markers looking for it in
+the app's code. `Application` is the providers and `Application.onCreate`,
+`activity` the activity's start, `frames` `Choreographer#doFrame`; those
+hold the app's code and the platform's together, and the share says where
+to look. A window that starts at `bindApplication` has no
+`ActivityThreadMain` in it, and says less.

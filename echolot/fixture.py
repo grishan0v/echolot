@@ -1550,6 +1550,55 @@ def nested_block() -> bytes:
     return builder.serialize()
 
 
+# A background thread of `launch_binder`'s, with a call of its own.
+LAUNCH_BINDER_BG = 4106
+
+
+def launch_binder(made: bool = True) -> bytes:
+    """A cold start whose main thread waits on binder in every part of it
+    (#911), 80 ms in all: 20 ms inside `ActivityThreadMain`, its
+    `attachApplication`; 4 ms in `bindApplication` before `makeApplication`
+    and 24 ms after it, in an Initializer; 16 ms in an activity's start
+    inside a `clientTransactionExecuted`; 12 ms in the first frame's
+    traversal; and 4 ms in no section. So before the app's code is 30%, the
+    Application 30%, the activity 20%, frames 15% and other 5%. A pool thread
+    calls too, for 12 ms, and where in the launch that was is not asked. Without `made`, `bindApplication` has no
+    `makeApplication`, as before the platform traced it.
+
+    The calls are atrace's slices, with no binder driver's events behind
+    them: where a call was made is read off the main thread's sections, and
+    who answered it is another question.
+    """
+    txn = "binder transaction"
+    bind = [("binder transaction", 142, 4, []),
+            *([("makeApplication", 150, 6, [])] if made else []),
+            ("Startup", 160, 30, [("WorkManagerInitializer", 162, 28, [(txn, 165, 24, [])])])]
+    main = [
+        ("ActivityThreadMain", 100, 30, [(txn, 105, 20, [])]),
+        ("bindApplication", 140, 80, bind),
+        ("clientTransactionExecuted", 230, 40, [
+            ("activityStart", 231, 30, [
+                ("performCreate:com.example.app.MainActivity", 233, 26, [(txn, 235, 16, [])])])]),
+        ("Choreographer#doFrame 1", 280, 20, [("traversal", 281, 18, [(txn, 285, 12, [])])]),
+        (txn, 310, 4, []),
+        ("Screen.firstFrame", 320, 5, []),
+    ]
+    builder = TraceProtoBuilder()
+    config(builder, frames=False)
+    process_tree(builder, [(APP_PID, APP_NAME, {TID_MAIN: APP_NAME[-15:],
+                                                LAUNCH_BINDER_BG: "OkHttp Dispatch"})])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {0: [
+        (ms(100), next(seq), "sched", "swapper/0", 0, R, APP_NAME[-15:], TID_MAIN),
+        (ms(325), next(seq), "sched", APP_NAME[-15:], TID_MAIN, S, "swapper/0", 0)]}
+    for tid, slices in ((TID_MAIN, main), (LAUNCH_BINDER_BG, [(txn, 200, 12, [])])):
+        for ts, order, kind, name in _flatten(slices, [], seq):
+            buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+            by_cpu[0].append((ts, order, "print", tid, buf))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # The threads the repeats of `blind_main` add, and how long a compilation takes.
 BLIND_RENDER, BLIND_WORKER, BLIND_JIT = 4303, 4304, 4305
 BLIND_JIT_MS = 6

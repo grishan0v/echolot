@@ -277,6 +277,30 @@ heap=False)`). Where a module only reads the slice's name again, as
 not already say. The include costs its time on every trace: on a large app's
 cold start, about 0.3 s for these two together, 0.08 s of it `android.binder`.
 
+Who answered a call still does not say whose the call was, and for that no
+module is needed: the main thread's own sections say it. On eleven cold
+starts of Wikipedia's app the main thread's binder row was 70 ms, 94% of it
+answered by system_server, and a third of it was `attachApplication`, made
+inside `ActivityThreadMain` before any of the app's code had loaded — the
+platform's own start, which every app pays (#911). `binder_txn`'s main-thread
+row has a column for it, `phase`: the share of the row's time under each of
+the platform's sections, the outermost around each call.
+
+| `phase` says | the call was made in |
+|---|---|
+| `before the app's code` | `ActivityThreadMain`, or `bindApplication` before its `makeApplication`: the platform's |
+| `Application` | `bindApplication` from `makeApplication` on: the Application's constructor, the ContentProviders, `Application.onCreate` |
+| `activity` | `activityStart`, `activityResume` and the rest of an activity's lifecycle, or the `clientTransactionExecuted` around them |
+| `frames` | `Choreographer#doFrame` |
+| `other` | another message, or no section |
+
+Only the first is the platform's alone; the others hold the app's code and
+the platform's together. Without a `makeApplication` in the trace, all of
+`bindApplication` is `Application`: the platform's share is said only where
+it is known. A section of the app's around everything, an `AppStart` from
+the first line of `Application.onCreate` to the first frame, is looked
+through. A background row leaves the column empty.
+
 ### Sums and single occurrences are different detectors
 
 Most of the shipped ones gate on an accumulated sum for a name: how much time
