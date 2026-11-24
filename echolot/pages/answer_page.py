@@ -547,7 +547,8 @@ _CLAIM = {"removed": "The agent says it removed its temporary markers",
 
 def _markers_left(check: dict[str, Any]) -> tuple[str, str, str] | None:
     """The markers echolot counted in the sources when the investigation
-    closed, beside what the agent said of them."""
+    closed, beside what the agent said of them. A tagged line `mark --remove`
+    leaves is counted with its place, and goes by hand (#703)."""
     cleanup = _dict(check.get("cleanup"))
     found = _dict(cleanup.get("found"))
     if not found:
@@ -555,6 +556,8 @@ def _markers_left(check: dict[str, Any]) -> tuple[str, str, str] | None:
     claim = _CLAIM.get(cleanup.get("claimed"))
     markers = found.get("markers") if isinstance(found.get("markers"), int) else 0
     lines = found.get("lines") if isinstance(found.get("lines"), int) else 0
+    kept = _list(found.get("kept"))
+    them = "it" if len(kept) == 1 else "them"
     files = _count(len(_list(found.get("files"))), "file")
     if markers:
         seen = (f"echolot found {_count(markers, 'marker')} named {found.get('prefix') or ''}… in {files} when the "
@@ -562,6 +565,9 @@ def _markers_left(check: dict[str, Any]) -> tuple[str, str, str] | None:
     elif lines:
         seen = (f"echolot found {_count(lines, 'line')} tagged echolot:mark in {files} when the investigation "
                 "closed")
+    elif kept:
+        seen = (f"echolot found {_count(len(kept), 'line')} tagged echolot:mark when the investigation closed, with "
+                f"more on {them} than the marker")
     else:
         if cleanup.get("claimed") == "left":
             return "yellow", "The agent and echolot disagree about the markers", \
@@ -572,6 +578,13 @@ def _markers_left(check: dict[str, Any]) -> tuple[str, str, str] | None:
     removable = found.get("removable")
     how = (f" The command echolot mark --remove takes out {removable} of them."
            if markers and isinstance(removable, int) and removable > 0 else "")
+    where = verdict_mod.places(kept)
+    if kept and (markers or lines):
+        how += (f" {_count(len(kept), 'line')} tagged echolot:mark {'has' if len(kept) == 1 else 'have'} more on "
+                f"{them} than the marker, and echolot mark --remove leaves {them}: take the marker out by hand, at "
+                f"{where}.")
+    elif kept:
+        how += f" The command echolot mark --remove leaves {them}: take the marker out by hand, at {where}."
     return "yellow", "Temporary markers are still in the code", \
         (f"{claim}, and {seen}." if claim else seen[0].upper() + seen[1:] + ".") + how
 

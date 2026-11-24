@@ -171,6 +171,13 @@ def is_applied_line(line: str) -> bool:
     return bool(_APPLIED_LINE.match(line))
 
 
+def is_kept_line(line: str) -> bool:
+    """A line `--remove` leaves where it is and names: it carries the tag in
+    any shape but the one `--apply` writes, so something besides the marker
+    is on it. `hunt.leftovers` counts these by the same rule (#703)."""
+    return TAG in line and not is_applied_line(line)
+
+
 @dataclass
 class Proposal:
     kind: str                 # app_oncreate | activity_oncreate | set_content | set_content_view | compose_root | room_open | di_koin | anr_frame | pool_name | thread_name
@@ -2032,7 +2039,7 @@ def remove(root: Path, unwritable: list[str] | None = None
         lines = text.split("\n")
         rest = [ln for ln in lines if not is_applied_line(ln)]
         rel = _rel(p, root)
-        kept += [(rel, n, ln.strip()) for n, ln in enumerate(rest, 1) if TAG in ln]
+        kept += [(rel, n, ln.strip()) for n, ln in enumerate(rest, 1) if is_kept_line(ln)]
         if len(rest) < len(lines):
             try:
                 p.write_bytes("\n".join(rest).encode("utf-8"))

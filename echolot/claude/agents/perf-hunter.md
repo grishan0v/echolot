@@ -313,6 +313,22 @@ and the round is lost. The tag makes cleanup deterministic:
 shape stays, and `--remove` lists it: take that one out by hand, keeping the
 code it wrapped.
 
+**Around composable calls, no `try`.** The Compose compiler refuses one
+("Try catch is not supported around composable function invocations"), and
+the build fails. The begin and the end go on lines of their own, each tagged,
+as `--apply` marks a composable; a `return` between them skips the end, so
+wrap only a stretch that runs to its end:
+
+```kotlin
+android.os.Trace.beginSection("AGENTTMP_home_content") // echolot:mark
+HomeContent(state)
+android.os.Trace.endSection() // echolot:mark
+```
+
+Nor fold a marker onto the line of the code it marks, anywhere: a one-line
+`try { work() } finally { android.os.Trace.endSection() } // echolot:mark` is
+a line in another shape, and it is still there after `--remove`.
+
 **A marker reaches a trace only through a build.** In launch and command
 modes `collect` records the app that is installed on the phone and builds
 nothing, so after `mark --apply` or a marker added by hand, build and install

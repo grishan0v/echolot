@@ -718,6 +718,20 @@ def test_how_sure_is_the_agents_words_and_what_echolot_looked_at_itself(states):
      "Temporary markers are still in the code",
      "The agent says it removed its temporary markers, and echolot found 2 lines tagged echolot:mark in 1 file when "
      "the investigation closed."),
+    # A begin in the shape --apply writes, and its end folded onto the call it
+    # wraps by hand: the press takes the begin and leaves the wrap (#703).
+    ("removed", {"markers": 2, "removable": 2, "lines": 4, "files": ["a.kt"], "kept": ["a.kt:9"],
+                 "prefix": "AGENTTMP_"},
+     "Temporary markers are still in the code",
+     "The agent says it removed its temporary markers, and echolot found 2 markers named AGENTTMP_… in 1 file when "
+     "the investigation closed. The command echolot mark --remove takes out 2 of them. 1 line tagged echolot:mark "
+     "has more on it than the marker, and echolot mark --remove leaves it: take the marker out by hand, at a.kt:9."),
+    ("removed", {"markers": 0, "removable": 0, "lines": 0, "files": [], "kept": ["a.kt:5", "b.kt:2"],
+                 "prefix": "AGENTTMP_"},
+     "Temporary markers are still in the code",
+     "The agent says it removed its temporary markers, and echolot found 2 lines tagged echolot:mark when the "
+     "investigation closed, with more on them than the marker. The command echolot mark --remove leaves them: take "
+     "the marker out by hand, at a.kt:5, b.kt:2."),
     ("left", fx.CLEAN, "The agent and echolot disagree about the markers",
      "The agent says it left temporary markers in the code, and echolot found none in the sources when the "
      "investigation closed."),

@@ -442,6 +442,10 @@ terminal does to a whole job: a recording unwinds and puts the phone back. What
 is still there after 30 seconds is ended, then killed. The page then counts
 what `hunt` counts in the code: the temporary markers still there, how many
 `echolot mark --remove` takes out, and the files with markers added by hand.
+A line tagged `// echolot:mark` that holds more than a marker, such as an
+agent's one-line `try { work() } finally { android.os.Trace.endSection() }`,
+is one `--remove` leaves; the page names each by its file and line, to take
+out by hand, and does not say the code is clean while one is there.
 **Take the markers out** runs `echolot mark --remove`; the app on the phone
 keeps the markers until it is built and installed again.
 
