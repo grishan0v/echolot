@@ -51,6 +51,7 @@ when the console never got the mapping.
 | a lock chain with the main thread behind it | you have the mechanism. Open the frames of the thread at the bottom — this needs no trace |
 | a queue with no holder named | the source withheld it. The holder is among the threads that were working |
 | the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working |
+| the main thread was **waiting for a garbage collection** (`--json`: `main.waiting_for: "gc"`) | the frame it allocated in is not the cause; how much the app allocates and keeps is. Read the threads it names as stopped too, then record the same scenario and read `gc_pressure` (needs `atrace:dalvik`), or take a heap dump. `gc.cause: "explicit"` is a `System.gc()` call instead: open that line |
 | frames placed in the checkout | open those lines, once `anr` marks none of them as now inside another function |
 | "probably not the build that froze" above the placed frames | most lines fall outside the function their frame names: check out the build the report names before opening any |
 | frames landing nowhere | check out the build the report names. Line numbers are the first thing to go stale |
@@ -96,6 +97,10 @@ modes; in `gradle` mode the macrobenchmark decides.
 - **`anr`** — what the system recorded, if a freeze fired while the trace ran.
   The only detector not clipped to the scenario window. Its `detail` carries
   the platform's error id, the same string the device's drop box record has.
+
+When the report says the main thread was waiting for a garbage collection,
+`gc_pressure` is the third: how often the collector ran in the scenario and
+which threads it stopped, by thread. It needs `atrace:dalvik`.
 
 ## What this does not do
 

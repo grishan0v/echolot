@@ -225,6 +225,7 @@ that name a lock chain.
 |---|---|
 | a lock chain with the main thread behind it | you have the mechanism. Open the frames of the thread at the root of the chain — the stack `anr` prints for it. The direct holder is often queued itself, a victim like the threads behind it. No trace needed |
 | the main thread was **idle** (`nativePollOnce`) | it was not the culprit. Read the threads that were working — each is listed by the frame nearest the app, with its top beside it |
+| the main thread was **waiting for a garbage collection** (`main.waiting_for: "gc"`) | the frame it allocated in is not the cause; how much the app allocates and keeps is. Read the threads named as stopped too, then record the scenario and read `gc_pressure`, or take a heap dump. `gc.cause: "explicit"` is a `System.gc()` call: open that line |
 | "every frame belongs to the platform or a library", then "the frames nearest to the app" | the platform is a dead end, a library the app drives is not: `SystemJobScheduler.cancel` points at the app's WorkManager setup. Read that setup |
 | "every frame belongs to the platform or a library", then a platform frame such as `JobServiceEngine$JobHandler.ackStopMessage` with what it was doing | still a lead: the main thread was telling the system a JobScheduler job had stopped. Read the app's WorkManager or JobService setup |
 | "Who was holding what" under what it does not say | this file carries no lock notes; an empty chain list is the file's limit, not the freeze's. Get the device's own record |
@@ -235,7 +236,8 @@ that name a lock chain.
 | a warning that frames R8 wrote have no place in the mapping, or name another mapping's id | the mapping is another build's: find the one that froze before reading the names |
 
 `--json` is the same findings in the shape you walk: `chains`, `main.stack`,
-`working[].where` / `.top` / `.stack` / `.cut`, `nearest`, `leads`, `lock_notes`, `code.placed`,
+`main.waiting_for` / `.gc`, `working[].where` / `.top` / `.stack` / `.cut` /
+`.waiting_for`, `nearest`, `leads`, `lock_notes`, `heap`, `code.placed`,
 `retrace` and `minified`.
 Read it rather than the file: the frames that decide sit three to six deep,
 and `awk` over the dump is what this replaces.

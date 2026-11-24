@@ -130,6 +130,27 @@ thread. In that format the looper wait can show only as native frames
 (`unwindstack::SignalHandler` and what it calls) decide nothing. A file with no
 main thread at all says so under what it does not say.
 
+**A main thread stopped for a garbage collection** is the other case to know.
+ART's native frames on top name the collection —
+`Heap::WaitForGcToCompleteLocked` under `AllocateInternalWithGc`, or
+`CollectGarbageInternal` when the thread ran one itself — and the device's
+record says it in the state too, `WaitingForGcToComplete`. The managed frame
+under them (`Choreographer$FrameData.allocateFrameTimelines` on a real report)
+is where the thread ran into the collection, not why one was needed: that is
+how much the whole app allocates and keeps on the heap. The report says so in
+words, and with nothing of the app on any stack it no longer says "no line of
+yours to open": it says those lines are the app's, and that a trace of the same
+scenario read by `gc_pressure`, or a heap dump, is where they are found. Other
+threads stopped for the same collection are named — each was allocating at
+that moment — and so are the runtime's own heap lines when the record has them:
+`Heap: 2% free, 251MB/256MB`, `Max memory`, the blocking collections. A
+collection asked for by name, `System.gc()` reaching `Runtime.gc`, is that
+call's and not the heap's. A main thread asleep in its own code, or denied a
+monitor, is not this. `--json`: `main.waiting_for` is `"gc"`; `main.gc` has the
+frame, whether the thread ran the collection, and its `cause` — `allocation`,
+`explicit` or null; `working[].waiting_for` says the same of each thread, and
+`heap` holds the runtime's lines.
+
 **When every frame belongs to the platform or a library**, it says that in
 those words. One of the ten sample reports had not a single frame outside them
 in any of its fifty-three threads — every busy one was inside `androidx.work`.
@@ -188,7 +209,9 @@ them apart. The markdown shows the six busiest rows; `--json` has the table.
 **Then what it cannot say.** No reason, when the source has none — and the
 sentence names the kind of file that was read and points at the one record that
 carries a reason. No durations at all — a dump is one moment, and how long
-anything took comes from a trace. Lines it could not read, counted.
+anything took comes from a trace. For a main thread stopped for a collection,
+whose allocations made it necessary, and how full the heap was when the file
+has no heap line. Lines it could not read, counted.
 
 ## From a frame to a file
 

@@ -100,6 +100,16 @@ _SCAFFOLD = re.compile(
     r"|\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \w+ \(.*\)\s*"   # the entry's own headline
     r")$"
 )
+# The few of the runtime's statistics that say how full the heap was and how
+# much the app has waited for the collector: `Heap: 2% free, 251MB/256MB;
+# 3456789 objects`, `Max memory 256MB`, `Total blocking GC count: 12`. Read
+# by name, for a main thread that was waiting for a garbage collection, and
+# so no longer among the lines passed over by position.
+_HEAP_LINE = re.compile(
+    r"^(?P<key>Heap|Max memory|Free memory until OOME"
+    r"|Total time waiting for GC to complete|Total blocking GC count"
+    r"|Total blocking GC time)(?::\s*|\s+)(?P<value>\S.*?)\s*$"
+)
 
 
 @dataclass(frozen=True)
@@ -459,6 +469,22 @@ class Report:
     # The retraced frames whose file is echolot's guess, `<Class>.java`, for
     # a class the mapping names no file of: see `mapping.Frame.guessed`.
     guessed: set[str] = field(default_factory=set, repr=False, compare=False)
+    # The runtime's own heap lines, by the `Cmd line:` of the block they were
+    # in: see `heap`.
+    heaps: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    @property
+    def heap(self) -> dict[str, str]:
+        """What the runtime said of its heap, for the process that hung.
+
+        ART prints a `Heap:` line and its collection totals into the device's
+        record, after the threads on a recent build and before them on an
+        older one, in every process block. Only the named lines in
+        `_HEAP_LINE` are kept, as the runtime wrote them. Empty for an export
+        from a console, which carries the threads alone.
+        """
+        process = next((t.process for t in self.threads if t.process), "")
+        return self.heaps.get(process, {})
 
     @property
     def package(self) -> str:
@@ -583,6 +609,7 @@ def parse(text: str, source: Source | None = None) -> Report:
     load: list[tuple[float, str]] = []
     truncated = False
     listed: dict[str, int] = {}
+    heaps: dict[str, dict[str, str]] = {}
 
     lines = text.splitlines()
     for number, raw in enumerate(lines, 1):
@@ -664,6 +691,10 @@ def parse(text: str, source: Source | None = None) -> Report:
         # libraries — and reading those as fields of the report puts the
         # runtime's bookkeeping where the application's identity belongs.
         if current is None:
+            stat = _HEAP_LINE.match(line) if threads or in_block else None
+            if stat:
+                heaps.setdefault(process, {}).setdefault(stat["key"], stat["value"])
+                continue
             if threads:
                 # Everything after the threads: the runtime summary, the block
                 # rules, the kernel wait channels. Unbounded, different on
@@ -692,7 +723,7 @@ def parse(text: str, source: Source | None = None) -> Report:
     report = Report(head=head, threads=threads, source=source.name,
                     unread=unread, entries=entries, skipped=skipped, preamble=preamble,
                     load=sorted(load, reverse=True), truncated=truncated,
-                    listed=listed)
+                    listed=listed, heaps=heaps)
     return _scoped(report)
 
 
@@ -1044,6 +1075,99 @@ def working(report: Report) -> list[Thread]:
     """The threads left after the idle ones are struck out."""
     ours = report.ownership
     return [t for t in report.threads if idle_reason(t, ours) is None]
+
+
+# --- a garbage collection ---------------------------------------------------
+#
+# A thread that allocates into a full heap stops until the collector has made
+# room, and ART shows it in its own native frames above the managed frame that
+# allocated: `Heap::WaitForGcToCompleteLocked` under `AllocateInternalWithGc`
+# when another collection is running, `Heap::CollectGarbageInternal` when the
+# thread runs one itself. The device's record says it in the state as well,
+# `WaitingForGcToComplete` and `WaitingPerformingGc`.
+#
+# The managed frame under them is where the thread ran into the collection,
+# and rarely why: a collection is made necessary by everything the app
+# allocates and keeps, on every thread. A main thread stopped there inside
+# `Choreographer.doFrame` was reported as standing on the platform, with "no
+# line of yours to open" — the one sentence that sent the reader away from
+# the app's own allocations.
+_GC_WAITS = ("art::gc::Heap::WaitForGcToComplete",)
+_GC_RUNS = ("art::gc::Heap::CollectGarbageInternal",)
+_GC_STATES = {"waiting for gc to complete": False, "waiting performing gc": True}
+_ALLOCATING = ("art::gc::Heap::AllocateInternalWithGc",
+               "art::gc::Heap::AllocObjectWithAllocator",
+               "artAlloc", "art_quick_alloc")
+# A collection the code asked for by name. The call is then the line to open,
+# not the heap: `Runtime.gc` is what `System.gc()` reaches.
+_EXPLICIT_GC = ("java.lang.Runtime.nativeGc(", "java.lang.Runtime.gc(",
+                "java.lang.System.gc(")
+_HEAP_SYMBOL = re.compile(r"art::gc::Heap::\w+")
+
+
+@dataclass(frozen=True)
+class GcWait:
+    """A thread stopped for a garbage collection.
+
+    `frame` is the runtime's frame that says so (`art::gc::Heap::…`), empty
+    when only the state does. `running` is whether the thread ran the
+    collection itself rather than waited for another's. `cause` is
+    `allocation` when an allocation asked for it, `explicit` when a
+    `Runtime.gc` call did, and None when the frames do not say.
+    """
+    frame: str
+    running: bool
+    cause: str | None
+
+
+def gc_wait(thread: Thread) -> GcWait | None:
+    """Whether this thread was stopped for a garbage collection, and how.
+
+    Read off the native frames above its top managed one — the ones it was
+    standing in — and off the state ART wrote. Nothing managed decides it: a
+    main thread asleep in its own code, or denied a monitor, is not this.
+    """
+    above = thread.native[thread.dumping:thread.above]
+    waits = next((line for line in above if any(m in line for m in _GC_WAITS)), "")
+    runs = next((line for line in above if any(m in line for m in _GC_RUNS)), "")
+    by_state = _GC_STATES.get(thread.state)
+    if not (waits or runs) and by_state is None:
+        return None
+    found = _HEAP_SYMBOL.search(waits or runs)
+    running = bool(runs and not waits) if waits or runs else bool(by_state)
+    if any(f.startswith(_EXPLICIT_GC) for f in thread.frames[:3]) or \
+            any("Runtime_gc" in line or "Runtime_nativeGc" in line for line in above):
+        cause: str | None = "explicit"
+    elif any(m in line for line in above for m in _ALLOCATING):
+        cause = "allocation"
+    else:
+        cause = None
+    return GcWait(found.group(0) if found else "", running, cause)
+
+
+def gc_waiters(report: Report) -> list[Thread]:
+    """The working threads other than the main one stopped for a collection.
+
+    Each was allocating when it stopped, which is the closest a dump comes to
+    saying who allocates at that moment. The collector's own daemon is struck
+    out as idle before this, and is not one of them.
+    """
+    return [t for t in working(report)
+            if t is not report.main and gc_wait(t) is not None]
+
+
+def main_gc(report: Report) -> GcWait | None:
+    """The main thread's collection; never one denied a monitor, whose
+    holder is the finding."""
+    main = report.main
+    return gc_wait(main) if main is not None and not main.lock else None
+
+
+def heap_bound(report: Report) -> GcWait | None:
+    """The main thread's collection, when the heap made it necessary — not
+    one a `Runtime.gc` call asked for, which is a line to open."""
+    gc = main_gc(report)
+    return gc if gc is not None and gc.cause != "explicit" else None
 
 
 # --- the lock chain ---------------------------------------------------------
@@ -1780,6 +1904,23 @@ def _nearest_libraries(report: Report) -> list[tuple[str, str]]:
     return out
 
 
+def _gc_said(gc: GcWait) -> str:
+    """What the main thread was doing, said of a collection it stopped for."""
+    where = f" (`{gc.frame}`)" if gc.frame else ""
+    if gc.cause == "explicit":
+        return (f"It was **in a garbage collection** that a call asked for "
+                f"by name{where}: `Runtime.gc`, which `System.gc()` reaches. "
+                f"That call is the line to open, not the heap.")
+    doing = (f"It was **running a garbage collection** itself{where}"
+             if gc.running else
+             f"It was **waiting for a garbage collection** to finish{where}")
+    if gc.cause == "allocation":
+        doing += ", having run into it while allocating"
+    return (doing + ". The frame below is where it met the collection, not "
+            "why one was needed: that is how much the whole app allocates and "
+            "keeps on the heap, on every thread.")
+
+
 def _short(symbol: str) -> str:
     """`pkg.Class.method` as `Class.method` — the path below carries the rest."""
     parts = symbol.split(".")
@@ -1871,6 +2012,11 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
             out += ["", "```"] + _stack(root, ours) + ["```", ""]
 
     main = report.main
+    gc = main_gc(report)
+    # Stopped for a collection the heap made necessary, rather than one a
+    # call asked for: the verdict and the gaps then point at what the app
+    # allocates, which no frame here shows.
+    heap = heap_bound(report) is not None
     if main is not None:
         out += ["## The main thread", ""]
         if main.name != "main":
@@ -1888,11 +2034,30 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
         elif main.lock:
             out += [f"**Blocked**, denied `{main.lock.cls}` by tid "
                     f"{main.lock.owner}. The section above has the holder.", ""]
+        elif gc is not None:
+            out += [_gc_said(gc), "", f"State `{main.state}`, standing on:", ""]
         else:
             out += [f"State `{main.state}`, standing on:", ""]
         out += ["```"] + _stack(main, ours) + ["```", ""]
         if main.cut is not None:
             out += [f"The source cut this stack after {main.cut} frames.", ""]
+        if heap:
+            also = gc_waiters(report)
+            if also:
+                # Each of them was allocating when it stopped: the nearest a
+                # dump comes to who allocates at that moment.
+                names = ", ".join(f"`{t.name}`" for t in also[:4])
+                if len(also) > 4:
+                    names += f" and {len(also) - 4} more"
+                out += [f"{len(also)} other thread(s) here stopped for a "
+                        f"collection too — {names}, listed below with what "
+                        f"they were doing. Each was allocating at that "
+                        f"moment, and none is the cause on its own either.", ""]
+            if report.heap:
+                out += ["The runtime's own count in this record: "
+                        + " · ".join(f"`{key}: {value}`"
+                                     for key, value in report.heap.items())
+                        + ".", ""]
 
     if report.threads and not any(t.own(ours) for t in of_interest(report)):
         # Said as narrowly as it is checked. "Not this project's code" would
@@ -1901,11 +2066,24 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
         # Without a checkout what can be stated is that nothing here is
         # outside the platform and the libraries every app carries; with one,
         # that nothing here is in a package the checkout declares.
-        out += ["## Every frame here belongs to the platform or a library", "",
-                "Not one frame outside them in any thread worth reading. The "
-                "freeze is inside something nobody here wrote, and there is no "
-                "line of yours to open — which is a finding, and not the same "
-                "as an empty report.", ""]
+        out += ["## Every frame here belongs to the platform or a library", ""]
+        if heap:
+            # True of the frames and wrong as a verdict: what made the
+            # collection necessary is the app's, and no frame shows it.
+            out += ["Not one frame outside them in any thread worth reading, "
+                    "and here that is not the end of the road. The main "
+                    "thread was stopped for a garbage collection, and a "
+                    "collection is made necessary by what the app allocates "
+                    "and keeps on the heap — the app's own code, though no "
+                    "frame here shows it. A dump is one moment and cannot "
+                    "name those lines. A trace of the same scenario says how "
+                    "often the collector ran and which threads it stopped "
+                    "(`gc_pressure`); a heap dump says what the heap held.", ""]
+        else:
+            out += ["Not one frame outside them in any thread worth reading. "
+                    "The freeze is inside something nobody here wrote, and "
+                    "there is no line of yours to open — which is a finding, "
+                    "and not the same as an empty report.", ""]
         cut = [t for t in of_interest(report) if t.cut is not None]
         if cut:
             # A stack cut short says nothing about its bottom, and the bottom
@@ -1946,6 +2124,10 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 # The top said what the thread was standing on; this says
                 # what it was doing. Both, because they read differently.
                 line += f" — on top: `{thread.top}`"
+            if gc_wait(thread) is not None:
+                # Its managed frames say where it allocated, not that it
+                # was stopped there.
+                line += " — stopped for a garbage collection"
             if thread.cut is not None:
                 # What it was doing may be below the cut, and so may the
                 # app's frame that would have said who asked for it.
@@ -2091,6 +2273,27 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
         gaps.append("- What the main thread was doing. No thread in this file "
                     "is named `main` or runs `ActivityThread.main`, so it is "
                     "not in it, and the threads below may be all the file has.")
+    if heap_bound(report) is not None:
+        # The question the report raises and cannot answer, with the two
+        # records that can. "No line of yours to open" stood here before.
+        alone = (" This file holds the main thread alone; the whole event "
+                 "has the others, and those stopped for the same collection "
+                 "were allocating at that moment." if len(report.threads) == 1
+                 else "")
+        gaps.append("- Whose allocations made the collection necessary. A "
+                    "dump names the thread that ran into it, not the code "
+                    "that filled the heap. Record the same scenario and read "
+                    "`gc_pressure`, which needs `atrace:dalvik`: how often the "
+                    "collector ran and which threads it stopped. A heap dump "
+                    "of the app in the same state says what the heap held." + alone)
+        if not report.heap:
+            where = ("`/data/anr/` keeps the whole trace when the device lets "
+                     "you read it" if report.source == DUMPSYS.name else
+                     "the device's own record of the same freeze has them: "
+                     "`adb shell dumpsys dropbox --print data_app_anr`")
+            gaps.append("- How full the heap was. The runtime writes its "
+                        "`Heap:` line and its collection totals beside the "
+                        f"threads, and this file has none of them; {where}.")
     gaps.append("- How long anything took. A dump is one moment; durations "
                 "come from a trace.")
     if report.unread:
@@ -2135,6 +2338,7 @@ def summary(report: Report,
     busy = working(report)
     main_thread = report.main
     ours = report.ownership
+    gc = main_gc(report)
     return {
         "schema": 1,
         "source": report.source,
@@ -2179,6 +2383,19 @@ def summary(report: Report,
             "denied": None if not main_thread.lock else main_thread.lock.cls,
             "stack": _stack(main_thread, ours),
             "cut": main_thread.cut,
+            # What it was stopped for when it was neither idle nor denied a
+            # monitor: "gc" for a garbage collection, else null. What to do
+            # next is in `gc.cause`: a collection an allocation asked for
+            # is the heap's, one `Runtime.gc` asked for is that call's.
+            "waiting_for": None if gc is None else "gc",
+            # The runtime's frame that says so (null when only the state
+            # does), whether the thread ran the collection itself, and
+            # "allocation", "explicit" or null for what asked for it.
+            "gc": None if gc is None else {
+                "frame": gc.frame or None,
+                "running": gc.running,
+                "cause": gc.cause,
+            },
         },
         # `where` is the frame nearest to the app — its own, else a library's
         # — and `top` what the thread stood on; `stack` is the same cut the
@@ -2190,9 +2407,15 @@ def summary(report: Report,
              "top": t.top,
              "stack": _stack(t, ours),
              # Frames read before the source cut the stack; null when whole.
-             "cut": t.cut}
+             "cut": t.cut,
+             # "gc" when it was stopped for a garbage collection, as `main`.
+             "waiting_for": "gc" if gc_wait(t) is not None else None}
             for t in doing(report, busy, chains(report))
         ],
+        # The runtime's own heap lines from the device's record, as it wrote
+        # them: `Heap`, `Max memory`, the blocking collections. Empty for a
+        # console export, which has none.
+        "heap": report.heap,
         # Whether this file can name a lock chain at all — see `lock_notes`.
         "lock_notes": report.lock_notes,
         # Where the app's setup is reached when none of its own frames are:
