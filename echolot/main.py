@@ -56,6 +56,7 @@ from . import place as place_mod
 from . import project as project_mod
 from . import plain as plain_mod
 from . import names as names_mod
+from . import noise as noise_mod
 from . import tpshell
 from . import report as report_mod
 from . import verdict as verdict_mod
@@ -761,6 +762,7 @@ def cmd_analyze(args) -> int:
         # aside is a directory, and an agent told "fact 2 is now that
         # directory" was refused it (#915).
         args.traces = traces_in(args.traces)
+        _noise_asked(args)
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
         inside = _working_in(_where(args).folder, args.hunt)
         if getattr(args, "whole_trace", False):
@@ -976,6 +978,8 @@ def cmd_analyze(args) -> int:
     elif again:
         print(f"→ {page}  (it stood there from an earlier report: written again from this one)",
               file=sys.stderr)
+    if getattr(args, "noise", False):
+        _noise(args, reports, cfg, out_dir)
     # Outside the investigation nothing below happens: its report is not
     # filed, and the investigation is not renewed as worked on (#498).
     if inside is None:
@@ -1017,6 +1021,52 @@ def _finished(reports: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
     if left and not kept:
         raise launch_mod.Unfinished(left[0]["said"])
     return kept, left
+
+
+def _noise_asked(args) -> None:
+    """`--splits` and `--seed` are `--noise`'s, and a set too small to split
+    is refused before a trace is read rather than after all of them."""
+    if not getattr(args, "noise", False):
+        given = [flag for flag, value in (("--splits", getattr(args, "splits", None)),
+                                          ("--seed", getattr(args, "seed", None)))
+                 if value is not None]
+        if given:
+            raise ConfigError(f"{' and '.join(given)} only "
+                              f"{'go' if len(given) > 1 else 'goes'} with --noise: they say "
+                              f"how the set is split against itself")
+        return
+    if len(args.traces) < noise_mod.MIN_RUNS:
+        raise ConfigError(noise_mod.too_few(len(args.traces)))
+
+
+def _noise(args, reports: list[dict[str, Any]], cfg: Config, out_dir: Path) -> None:
+    """`analyze --noise`: the set split against itself (#569), printed after
+    the report and written beside it, noise.md and noise.json.
+
+    From the repeats' own reports, which the report was merged from: no
+    trace is read again. A set the report left repeats out of may be too
+    small by then, and that is said; the report stands either way.
+    """
+    splits = args.splits or noise_mod.SPLITS
+    seed = noise_mod.SEED if args.seed is None else args.seed
+    if len(reports) < noise_mod.MIN_RUNS:
+        print(f"[!] no noise reading: {noise_mod.too_few(len(reports))} once the "
+              f"repeats named above are left out", file=sys.stderr)
+        return
+    print(f"[i] --noise: {len(reports)} runs split in two "
+          f"{min(splits, noise_mod.possible(len(reports)))} ways, each half merged "
+          f"and the two compared…", file=sys.stderr)
+    block = noise_mod.read(reports, splits=splits, seed=seed,
+                           temp_prefix=str(cfg.temp_prefix))
+    text = noise_mod.to_markdown(block)
+    print("\n" + text)
+    atomic.write_all([(out_dir / "noise.md", text),
+                      (out_dir / "noise.json", report_mod.to_json(block))])
+    rnd = block["random"]
+    recorder.note(noise={"runs": block["runs"], "splits": rnd["splits"],
+                         "holds_median": (rnd["holds"] or {}).get("median"),
+                         "with_any": rnd["with_any"], "in_order": block["in_order"]["holds"]})
+    print(f"→ {out_dir / 'noise.md'}\n→ {out_dir / 'noise.json'}", file=sys.stderr)
 
 
 def _latest_here(out_dir: Path, cfg: Config, here: Path) -> bool:
@@ -5239,6 +5289,17 @@ def _jobs(text: str) -> int:
     return value
 
 
+def _splits(text: str) -> int:
+    """`analyze --splits`: how many splits of the set, one or more."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{value} splits: give one or more")
+    return value
+
+
 def _at_least_one(text: str) -> int:
     """`--top`: a count of rows, one or more.
 
@@ -5648,6 +5709,19 @@ def build_parser() -> argparse.ArgumentParser:
                          "trace_processor (default: as many as the cores and half "
                          "the memory allow; 1 reads them one after another). The "
                          "report is the same either way")
+    an.add_argument("--noise", action="store_true",
+                    help="also split the set in two many times, compare each pair of "
+                         "halves the way compare does, and say how many rows hold with "
+                         "nothing changed: this scenario's own noise, and the floor that "
+                         "quiets it. Printed after the report and written beside it, "
+                         f"noise.md and noise.json. Needs {noise_mod.MIN_RUNS} traces "
+                         "or more")
+    an.add_argument("--splits", type=_splits, default=None, metavar="N",
+                    help=f"with --noise: how many random splits (default: {noise_mod.SPLITS}, "
+                         "or every split there is when there are fewer)")
+    an.add_argument("--seed", type=int, default=None, metavar="N",
+                    help=f"with --noise: the seed the splits are drawn from (default: "
+                         f"{noise_mod.SEED}); the same seed gives the same numbers")
     an.set_defaults(func=cmd_analyze)
 
     cp = add("compare", "pipeline", "[<before.json> [<after.json>]]",

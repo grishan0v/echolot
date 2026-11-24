@@ -670,6 +670,10 @@ where the values climb or fall all the way, `runner.cooldown` holds the device
 to one temperature. `compare` warns when either side drifts — see
 [the comparison](compare.md#runs-that-drift).
 
+The same question in a comparison's units, with the noise of random halves
+beside it, is `analyze --noise`: see
+[This scenario's own noise](compare.md#this-scenarios-own-noise).
+
 ### A set read side by side
 
 `analyze` reads the traces of a set at once, each in a trace_processor of its
