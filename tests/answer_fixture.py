@@ -62,7 +62,7 @@ VERDICT: dict[str, Any] = {
             "mechanism": "`find` is called from the main thread while `update` holds the same lock on a "
                          "background thread.",
             "evidence": [
-                {"report": 1, "detector": "monitor_contention", "location": "com.example.app"},
+                {"report": 1, "detector": "monitor_contention", "location": "main"},
                 {"report": 2, "location": "AGENTTMP_find_item"},
             ],
             "cost_ms": [62, 66],

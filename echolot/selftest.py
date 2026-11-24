@@ -692,7 +692,7 @@ def _(report):
     # and 12 ms instead of one finding of 42. On a live trace 190 blocks
     # scattered exactly that way and the detector stayed silent.
     got = [r for r in rows(report, "monitor_contention")
-           if r["location"] == "m.example.app"]
+           if r["location"] == "main"]
     assert len(got) == 1, f"the finding shattered across owners: {got}"
     assert got[0]["count"] == 2, got[0]
     assert got[0]["total_ms"] == 42.0, got[0]
@@ -711,7 +711,7 @@ def _(report):
     # wait joins the main thread's row, and `detail` still names the longest
     # block, the 30 ms one. The row's own count and total do.
     main = [r for r in rows(report, "monitor_contention")
-            if r["location"] == "m.example.app"]
+            if r["location"] == "main"]
     assert len(main) == 1 and (main[0]["count"], main[0]["total_ms"]) == (2, 42.0), (
         f"the main thread's row took in the GC lock's wait: {main}")
     details = [r["detail"] for r in rows(report, "monitor_contention")]
@@ -1057,7 +1057,7 @@ def _(report):
     waiter = one_row(report, "monitor_contention", "LockWaiter")
     assert (waiter["count"], waiter["total_ms"], waiter["max_ms"]) == (2, 53.0, 27.0), waiter
     assert waiter["detail"].startswith("monitor contention with owner Thread-3"), waiter
-    main = one_row(report, "monitor_contention", "m.example.app")
+    main = one_row(report, "monitor_contention", "main")
     assert (main["count"], main["total_ms"]) == (2, 42.0), main
 
 
@@ -1156,8 +1156,7 @@ def _(report):
         path = Path(tmp) / "crowded.perfetto-trace"
         path.write_bytes(fixture.build(crowded=True))
         crowded = _analyze(path, Config(FIXTURE_CONFIG))
-    main = [r for r in rows(crowded, "runnable_starvation")
-            if r["location"] == fixture.THREADS[fixture.TID_MAIN]]
+    main = [r for r in rows(crowded, "runnable_starvation") if r["location"] == "main"]
     assert len(main) == 1, rows(crowded, "runnable_starvation")
     row = main[0]
     assert (row["state"], row["total_ms"]) == ("R", 30.0), row
@@ -1230,7 +1229,7 @@ def _(report):
                for r in rows(got[fixture.BLIND_LOOP_MS], "uninstrumented_cpu")]
     assert planted == [
         ("DefaultDispatch", 350.0, 0.0, "100.0% of CPU outside slices"),
-        ("com.example.app", 325.0, 1195.0, "21.0% of CPU outside slices"),
+        ("main", 325.0, 1195.0, "21.0% of CPU outside slices"),
     ], planted
     main = got[fixture.BLIND_LOOP_MS]["window"]["main_thread"]
     assert (main["window_ms"], main["in_rows_ms"]) == (1520.0, 1515.0), main
@@ -1276,6 +1275,65 @@ def _(report):
     new = report_mod.slice_family(fixture.jit_name(fixture.JIT_NEW, fixture.INSTALL[1]))
     assert got == {"before": [], "after": [(new, "3/3", "0/3", "Jit thread pool")]}, got
     assert "/data/app/~~#/com.example.app-#/base.apk" in new, new
+
+
+@check("a row over a pool says how many threads it adds up, and the main "
+       "thread's row is `main`")
+def _(report):
+    """Three coroutine workers under one cut name, the main thread, and a
+    worker that carries the process's name (`fixture.pool`). The pool's rows
+    add up three threads, and say so: 450 ms on a CPU with no slice in a
+    395 ms window read as one thread's until a reader counted them (#511).
+    The main thread's rows are `main`, told apart by its tid: by name the
+    worker's 25 ms wait was added to the main thread's 30, and the worker's
+    60 ms of blind CPU became a main-thread row 15% outside slices. The main
+    thread's 25 ms ready for a core counts in the window's account beside its
+    30 ms wait: matched on a `detail` that no longer carried the state (#515),
+    it had stopped counting."""
+    got = pool_report()
+
+    def of(det_id: str) -> list[tuple]:
+        return [(r["location"], r["threads"], r["total_ms"]) for r in rows(got, det_id)]
+    assert of("monitor_contention") == [
+        ("DefaultDispatch", 3, 60.0), ("main", 1, 30.0), ("com.example.app", 1, 25.0)], (
+        rows(got, "monitor_contention"))
+    assert of("runnable_starvation") == [("DefaultDispatch", 3, 90.0), ("main", 1, 25.0)], (
+        rows(got, "runnable_starvation"))
+    assert of("uninstrumented_cpu") == [
+        ("DefaultDispatch", 3, 450.0), ("com.example.app", 1, 60.0)], (
+        rows(got, "uninstrumented_cpu"))
+    main = got["window"]["main_thread"]
+    assert (main["window_ms"], main["in_rows_ms"]) == (395.0, 55.0), main
+    from . import plain as plain_mod
+    said = plain_mod.render(got, width=400)
+    assert ("`DefaultDispatch` (3 threads together) waited 60 ms for a lock" in said), said
+
+
+@check("compare reads an older report's main-thread row as `main`")
+def _(report):
+    """A report from before #511 names the main thread's row as the kernel
+    names the thread, and its rows carry no `threads`. Read under that name,
+    the main thread's row would be gone from one side of `compare` and new on
+    the other; it is the same row, and is paired."""
+    from . import compare as compare_mod
+    new = pool_report()
+    kernel = new["window"]["process"][-15:]
+
+    def older(d: dict) -> dict:
+        if d["id"] not in ("monitor_contention", "runnable_starvation"):
+            return d
+        kept = [{k: v for k, v in r.items() if k != "threads"} for r in d["rows"]
+                if r["location"] != kernel]
+        return {**d, "rows": [{**r, "location": kernel} if r["location"] == "main" else r
+                              for r in kept]}
+    old = {**new, "detectors": [older(d) for d in new["detectors"]]}
+    cmp = compare_mod.build(old, new, before_path="a.json", after_path="b.json")
+    main = [(r["detector"], r["location"], r["change"], r["delta_ms"]) for r in cmp["rows"]
+            if r["detector"] in ("monitor_contention", "runnable_starvation")
+            and r["location"] in ("main", kernel)]
+    assert sorted(main) == [("monitor_contention", "com.example.app", "appeared", 25.0),
+                            ("monitor_contention", "main", "steady", 0.0),
+                            ("runnable_starvation", "main", "steady", 0.0)], main
 
 
 @check("uninstrumented_cpu: the samples in a blind spot name what ran there")
@@ -1408,7 +1466,7 @@ def _(report):
         every = _analyze(trace, Config(FIXTURE_CONFIG), cli_overrides={
             "uninstrumented_cpu": {"max_covered_pct": 101, "min_running_ms": 0}})
     by_thread = {r["location"]: r for r in rows(every, "uninstrumented_cpu")}
-    main = by_thread.get("m.example.app")
+    main = by_thread.get("main")
     assert main and (main["covered_ms"], main["total_ms"]) == (835.0, 0.0), (
         "the main thread's slices nest; counted once they cover its 835 ms "
         f"on a CPU exactly, and leave none of it outside: {main}")
@@ -2614,16 +2672,16 @@ def _(report):
                         ("runnable_starvation", "DefaultDispatch"): [700.0, 400.0, 900.0, 600.0]})
     assert got == [("main_thread_block", "Initializer.create"), ("monitor_contention", "DefaultDispatch"),
                    ("runnable_starvation", "DefaultDispatch")], got
-    wait = {("monitor_contention", "com.example.app"): [20.0, 22.0, 19.0, 21.0], **pool}
-    got = order(wait, {("monitor_contention", "com.example.app"): [350.0, 348.0, 352.0, 349.0],
+    wait = {("monitor_contention", "main"): [20.0, 22.0, 19.0, 21.0], **pool}
+    got = order(wait, {("monitor_contention", "main"): [350.0, 348.0, 352.0, 349.0],
                        ("monitor_contention", "DefaultDispatch"): [4300.0, 4350.0, 4280.0, 4320.0],
                        ("runnable_starvation", "DefaultDispatch"): [700.0, 400.0, 900.0, 600.0]})
-    assert got[:2] == [("monitor_contention", "com.example.app"), ("monitor_contention", "DefaultDispatch")], got
+    assert got[:2] == [("monitor_contention", "main"), ("monitor_contention", "DefaultDispatch")], got
     burn = {("uninstrumented_cpu", "Thread-25"): [10.0, 12.0, 9.0, 11.0],
-            ("runnable_starvation", "com.example.app"): [60.0, 62.0, 58.0, 61.0]}
+            ("runnable_starvation", "main"): [60.0, 62.0, 58.0, 61.0]}
     got = order(burn, {("uninstrumented_cpu", "Thread-25"): [850.0, 860.0, 840.0, 855.0],
-                       ("runnable_starvation", "com.example.app"): [100.0, 102.0, 98.0, 101.0]})
-    assert got == [("uninstrumented_cpu", "Thread-25"), ("runnable_starvation", "com.example.app")], got
+                       ("runnable_starvation", "main"): [100.0, 102.0, 98.0, 101.0]})
+    assert got == [("uninstrumented_cpu", "Thread-25"), ("runnable_starvation", "main")], got
 
 
 @check("compare says when the two sides were recorded differently, and what reads it")
@@ -2995,7 +3053,7 @@ def _(report):
     # The other half of the same claim. Reading an open slice to the window's
     # edge must not stretch the ones that ended on their own.
     row = next(r for r in rows(report, "monitor_contention")
-               if r["location"] == "m.example.app")
+               if r["location"] == "main")
     assert row["max_ms"] == 30.0, row
     assert row["total_ms"] == 42.0, row
 
@@ -6584,6 +6642,21 @@ def sampled_report() -> dict:
 @functools.lru_cache(maxsize=2)
 def _sampled(binary: str | None) -> dict:
     return build_report(binary, sampling="arrived")
+
+
+def pool_report() -> dict:
+    """`fixture.pool` analysed once a process for each binary, for the checks
+    that read it. None of them writes to it."""
+    return _pooled(_binary)
+
+
+@functools.lru_cache(maxsize=2)
+def _pooled(binary: str | None) -> dict:
+    from .main import analyze_trace  # late import: main imports us
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "pool.perfetto-trace"
+        trace.write_bytes(fixture.pool())
+        return analyze_trace(trace, Config(FIXTURE_CONFIG), binary)
 
 
 def minified_report(mapping: str) -> dict:

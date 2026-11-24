@@ -23,7 +23,8 @@ from echolot import moves  # noqa: E402
 from echolot.selftest import _cold_starts  # noqa: E402
 from tests.support import check  # noqa: E402
 
-MAIN = "com.example.app"
+# The main thread's row, as `analyze` names it since #511.
+MAIN = "main"
 POOL = "DefaultDispatch"
 
 

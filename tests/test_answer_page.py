@@ -445,7 +445,7 @@ def test_details_shows_the_rows_a_cause_cites_from_the_round_they_were_measured_
     check("the figures are the reports', not copied into the record",
           "236.9" not in json.dumps(hunt) and reports[2]["markers"]["rows"][0]["total_ms"] == 236.9)
     check("the key under the chart", panel.one("p", "key").text == "medianeach launch")
-    own = chart_rows(panel_of(page, "cause-2"))["com.example.app"]
+    own = chart_rows(panel_of(page, "cause-2"))["main"]
     check("a name the project gave a marker is told from a temporary one",
           own["subs"][0] == 'round 1 · the check "Threads waiting for each other"', own["subs"])
     hunt, reports = changed(states["many"], causes=[{"title": "T", "where": ["a.kt:1"], "evidence": [
@@ -664,7 +664,7 @@ def test_how_it_got_there_is_read_from_each_rounds_report(states):
           and cards[0].one("div", "meter").one("i").attrs["style"] == "width:42.0%")
     check("and which of its rows the answer cites",
           [c.all("p")[1].text for c in cards]
-          == ["The answer cites 4 rows of this round: collection_load, inflate, com.example.app, TextLayout:initLayout.",
+          == ["The answer cites 4 rows of this round: collection_load, inflate, main, TextLayout:initLayout.",
               "The answer cites 2 rows of this round: AGENTTMP_bind_item_cards, AGENTTMP_find_item."],
           [c.all("p")[1].text for c in cards])
     hunt, reports = copy.deepcopy(states["open"])

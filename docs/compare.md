@@ -78,7 +78,11 @@ name as the kernel keeps it — `com.example.app` here. Everywhere else the cell
 is `—`: evidence that differs between the rounds would be a coin toss to show.
 Thread names are cut the same way wherever they appear: `uninstrumented_cpu`
 names threads, and `SyncAdapterThread-1` reaches the trace as
-`SyncAdapterThre`, fifteen characters.
+`SyncAdapterThre`, fifteen characters. The main thread's row of
+`uninstrumented_cpu`, `runnable_starvation` and `monitor_contention` is
+`main`; a report written before it was has the kernel's name for it there,
+and that row is read as `main`, so it is paired rather than gone on one side
+and new on the other.
 
 ### The order
 

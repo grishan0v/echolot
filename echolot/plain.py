@@ -159,15 +159,20 @@ def hum_apart(a: float, b: float) -> tuple[str, str]:
     return said
 
 
+def kernel_name(report: dict[str, Any]) -> str:
+    """The name the kernel gives the report's main thread: it keeps 15
+    characters of a thread's name, and the main thread of an app carries the
+    last 15 of its process's. Empty when the report names no process."""
+    return str((report.get("window") or {}).get("process") or "")[-15:]
+
+
 class _Ctx:
     """What a sentence needs to know about the report it is read from."""
 
     def __init__(self, report: dict[str, Any]):
         window = report.get("window") or {}
         self.window_ms = float(window.get("duration_ms") or 0)
-        # The kernel keeps 15 characters of a thread's name, and the main
-        # thread of an app carries the last 15 of its process's.
-        self.main = str(window.get("process") or "")[-15:]
+        self.main = kernel_name(report)
         # A startup is a launch; any other stretch is a run.
         self.kind = "launch" if window.get("startup") else "run"
         # Whether the window ends where the scenario does, which is what an
@@ -337,6 +342,14 @@ def _count(n: int, one: str, many: str) -> str:
 # whose time a row is
 
 
+# The location of the main thread's row on the detectors that group by thread
+# name and tell it apart by its tid (#511): the kernel's name for it is the
+# last fifteen characters of the process's, which nobody reads as the main
+# thread, and a worker that never named itself carries it too.
+MAIN = "main"
+NAMED_MAIN = frozenset({"uninstrumented_cpu", "runnable_starvation", "monitor_contention"})
+
+
 # Detectors whose rows are, by what they measure, time of the main thread or
 # time the user can see: its own work, its waits, a late frame, a freeze.
 _MAIN_TIME = frozenset({
@@ -369,10 +382,13 @@ def _on_main(det_id: str, row: dict[str, Any], ctx: _Ctx) -> bool:
         return detail.startswith("main")
     if det_id == "io_wait":
         return str(row.get("thread") or detail).startswith("main")
+    if det_id in NAMED_MAIN:
+        # `main` since #511. A report written before then names the main
+        # thread as the kernel does, and it is the row without `threads`.
+        return row.get("location") == MAIN or (
+            "threads" not in row and bool(ctx.main) and row.get("location") == ctx.main)
     if not ctx.main:
         return False
-    if det_id in ("uninstrumented_cpu", "runnable_starvation", "monitor_contention"):
-        return row.get("location") == ctx.main
     if det_id == "gc_pressure":
         return detail == ctx.main
     if det_id == "repeated_work":
@@ -479,7 +495,20 @@ _NO_SECTION = "(no section)"
 
 
 def _who(det_id: str, row: dict[str, Any], ctx: _Ctx) -> str:
-    return "The main thread" if _on_main(det_id, row, ctx) else _name(row.get("location"))
+    return "The main thread" if _on_main(det_id, row, ctx) else _pool(row)
+
+
+def _pool(row: dict[str, Any]) -> str:
+    """A row's thread by name, and how many threads it adds up when that is
+    more than one: `DefaultDispatch` alone read as one thread that waited
+    3.8 s in a 5.7 s launch (#511)."""
+    n = _threads(row)
+    return _name(row.get("location")) + (f" ({n} threads together)" if n > 1 else "")
+
+
+def _threads(row: dict[str, Any]) -> int:
+    n = row.get("threads")
+    return n if isinstance(n, int) else 1
 
 
 def _also(rows: list[dict[str, Any]], one: str, many: str, tail: str) -> str:
@@ -523,12 +552,14 @@ def _f_cpu(rows, ctx):
     top = rows[0]
     unnamed = "on work that nothing in the recording names"
     if len(rows) == 1:
-        return _sentence(f"{_name(top['location'])} spent {hum(_value(top))} "
+        return _sentence(f"{_who('uninstrumented_cpu', top, ctx)} spent {hum(_value(top))} "
                          f"of processor time {unnamed}", _runs(top, ctx))
     total = sum(_value(r) for r in rows)
+    where = ("the main thread" if _on_main("uninstrumented_cpu", top, ctx)
+             else _pool(top))
     return (f"{len(rows)} threads or pools of threads spent {hum(total)} of "
             f"processor time between them {unnamed}. "
-            + _sentence(f"The largest part is on {_name(top['location'])}: "
+            + _sentence(f"The largest part is on {where}: "
                         f"{hum(_value(top))}", _runs(top, ctx)))
 
 
@@ -573,7 +604,9 @@ def _f_binder(rows, ctx):
         out = _sentence(f"The main thread waited {hum(v)} for {calls}", _runs(top, ctx))
         out += longest + _share(v, ctx)
     else:
-        out = _sentence(f"{_name(top['location'])}, a background thread, spent {hum(v)} "
+        n = _threads(top)
+        who = f"{n} background threads together" if n > 1 else "a background thread"
+        out = _sentence(f"{_name(top['location'])}, {who}, spent {hum(v)} "
                         f"on {calls}", _runs(top, ctx)) + longest
     return out + _also(rows, "more thread made", "more threads made", "long calls, too.")
 

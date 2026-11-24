@@ -14,6 +14,9 @@
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
 -- @identity: location, detail
 -- @column: location — the thread that sent the transactions
+-- @column: threads — how many threads of that name the row adds up: the
+--       kernel cuts a name to fifteen characters, and a pool's workers
+--       share one. Their time together is not the window's
 -- @column: count — its synchronous transactions in the window
 -- @column: total_ms — the time it waited on them, summed
 -- @column: max_ms — the longest one
@@ -34,8 +37,11 @@
 -- time. The proper answer is `echolot calibrate`, which derives thresholds
 -- from known-healthy runs.
 
+-- `threads`: how many threads of that name the row adds up (#511). The
+-- main thread is one; a background row can be a whole pool.
 SELECT
     thread_name                       AS location,
+    COUNT(DISTINCT tid)               AS threads,
     COUNT(*)                          AS count,
     ROUND(SUM(dur) / 1e6, 2)          AS total_ms,
     ROUND(MAX(dur) / 1e6, 2)          AS max_ms,

@@ -644,7 +644,8 @@ The contract is shared, but not every detector fills every column.
 
 | column | meaning |
 |---|---|
-| `location` | the slice or thread name — what you hook onto |
+| `location` | the slice or thread name — what you hook onto; `main` for the main thread's row where the detector says so below |
+| `threads` | on a row named by a thread, how many threads it adds up — a pool's workers share one cut name |
 | `runs` | in a merged report, how many repeats the row was found in, of how many — `3/5` |
 | `count` | how many times it occurred inside the window |
 | `self_ms` | self time, with children subtracted |
@@ -737,6 +738,15 @@ nest. `self_ms` adds up within one detector's rows — self times do not
 overlap — and not across detectors: a disk wait inside a slice is in both.
 How much of the window the findings cover is `window.main_thread.in_rows_pct`.
 
+**A row named by a thread can be a whole pool.** The kernel cuts a name to
+fifteen characters, so every coroutine worker is `DefaultDispatch`, and
+`monitor_contention`, `runnable_starvation`, `uninstrumented_cpu`,
+`binder_txn` and `io_wait` add a name's threads up. `threads` says how many,
+and the report says it under the table. Eight workers' 3.8 s of waiting in a
+5.7 s cold start is their time together, not time of the start: there
+contention was 2% of the start, which `--window` says. Read a row with
+`threads` above one as the pool's, never as the window's.
+
 ## The detectors
 
 `echolot explain <id>` is one of them on a screen, read off its own file: what
@@ -748,10 +758,10 @@ project runs it with, and what each column of its rows means there.
 | `main_thread_block` | where the main thread spent its time | `location` — the slice name; `detail` is the thread's comm, always the main thread here, cut to 15 characters by the kernel |
 | `app_init` | what ran after the Application was created, before the first Activity | an Initializer or a library's section by name; `(no section)` is the ContentProviders and `Application.onCreate` nobody traced |
 | `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects |
-| `monitor_contention` | monitor contention | `places` names both sides of the lock in the checkout; `detail` is the row's longest wait that names both methods, or else the owner's tid with its thread and what it and the waiter were in |
+| `monitor_contention` | monitor contention | the main thread's row is `main`; `threads` says how many threads a row adds up; `places` names both sides of the lock in the checkout; `detail` is the row's longest wait that names both methods, or else the owner's tid with its thread and what it and the waiter were in |
 | `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |
-| `runnable_starvation` | thread ready but preempted | `state` names the row; on the main thread's row `detail` says who held its core — the app's own threads point at the app, other processes and idle cores at the device |
-| `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}`; in a sampled recording, the method after `ours:` in `detail`, at the file `code` names |
+| `runnable_starvation` | thread ready but preempted | `state` names the row with the thread; the main thread's row is `main`, and on it `detail` says who held its core — the app's own threads point at the app, other processes and idle cores at the device |
+| `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}`, `main` for the main thread; `threads` above one is a pool's CPU together; in a sampled recording, the method after `ours:` in `detail`, at the file `code` names |
 | `frame_jank` | frames that missed their deadline | `location` is why it missed, `detail` says whose fault |
 | `main_thread_outlier` | one occurrence far longer than usual | `detail` carries the median it is measured against |
 | `anr_risk` | a stretch where the main thread never got back to the message queue | `detail` splits it into on-CPU, waiting for a CPU, and neither |

@@ -11,6 +11,9 @@
 -- @calibrate: min_io_wait_ms = top10(total_ms) * 1.5
 -- @identity: location, thread
 -- @column: location — the thread's name
+-- @column: threads — how many threads of that name the row adds up: the
+--       kernel cuts a name to fifteen characters, and a pool's workers
+--       share one. Their time together is not the window's
 -- @column: count — its sleeps on the disk in the window
 -- @column: total_ms — their time, summed
 -- @column: max_ms — the longest one
@@ -64,9 +67,11 @@
 -- stopped in, and in what order they come, changes from one repeat to the
 -- next, and a name built from them made one thread a different row in each
 -- repeat: merged, a row per variant, each seen once; compared, one row gone
--- and another new.
+-- and another new. `threads` says how many threads of that name the row
+-- adds up (#511).
 SELECT
     t.thread_name                                   AS location,
+    COUNT(DISTINCT t.tid)                           AS threads,
     COUNT(*)                                        AS count,
     ROUND(SUM(t.dur) / 1e6, 2)                      AS total_ms,
     ROUND(MAX(t.dur) / 1e6, 2)                      AS max_ms,

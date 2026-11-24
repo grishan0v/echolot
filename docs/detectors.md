@@ -38,7 +38,11 @@ detector needs is in [the checklist below](#adding-a-detector).
 
 The column contract is shared: `location`, `count`, `self_ms`, `total_ms`,
 `max_ms`, `covered_ms`, `detail`. Not every detector fills every column, but
-the report renders uniformly and the agent reads a stable schema.
+the report renders uniformly and the agent reads a stable schema. A detector
+that groups by thread name fills `threads` too: how many threads the row adds
+up, since the kernel cuts a name to fifteen characters and a pool's workers
+arrive under one. Where it tells the main thread apart by its tid, the main
+thread's row is `main`.
 
 What a parameter and a column mean is said in the header too, because a
 name does not say it: `max_total_ms` of `binder_txn` is a floor, and
@@ -712,7 +716,8 @@ writes a config.
 - **Only part of a row survives a merge.** Repeats are folded row by row, and
   a merged row keeps its `@identity` columns, `runs`, the numeric contract
   columns — `count`, `self_ms`, `total_ms`, `max_ms` and `covered_ms`, as
-  medians — and `detail`, taken from the worst repeat unless the identity
+  medians — `threads`, the most any repeat found, and `detail`, taken from
+  the worst repeat unless the identity
   already holds it. `stacks`, from a `-- @samples` query, comes from that same
   repeat, so the evidence and the list it quotes agree. A column the detector
   invents is rendered in a report of one trace and is gone from a report of
