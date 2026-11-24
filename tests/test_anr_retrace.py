@@ -223,3 +223,40 @@ def test_a_build_that_kept_its_names_keeps_its_lines(tmp_path):
     check("untouched", report.main.frames[0]
           == "com.example.locks.MainActivity.onCreate(MainActivity.java:3)", report.main.frames)
     check("and nothing counted", report.retraced == {"frames": 0, "outside": 0}, report.retraced)
+
+
+# --- a file name the mapping did not give (#725) -------------------------------
+
+def _kotlin_holder(root: Path) -> Path:
+    """The checkout with `Holder` written in Kotlin: `Holder.kt`, no `Holder.java`."""
+    src = root / "app/src/main/java/com/example/locks"
+    java = (src / "Holder.java").read_text(encoding="utf-8")
+    (src / "Holder.java").unlink()
+    (src / "Holder.kt").write_text(java, encoding="utf-8")
+    return root
+
+
+def test_a_file_name_echolot_guessed_is_not_a_mismatch(tmp_path):
+    # Without `Holder`'s sourceFile line, echolot names its file the way R8's
+    # `retrace` guesses it, `Holder.java`, and the checkout has `Holder.kt`.
+    mapping = lockapp.MAPPING.replace(
+        '# {"id":"sourceFile","fileName":"Holder.java"}\n', "", 1)
+    report = retraced(tmp_path, mapping_text=mapping)
+    root = _kotlin_holder(lockapp.checkout(tmp_path / "app"))
+    placed, _ = anr.locate(report, root)
+    holder = next(f for f in placed if f.symbol.endswith("Holder.run"))
+    check("placed in Holder.kt", holder.file.endswith("/Holder.kt"), holder)
+    check("with no word about the file the frame names",
+          holder.named == "", holder)
+    text = anr.render(report, (placed, []))
+    check("the report does not say the frame names `Holder.java`",
+          "the frame names `Holder.java`" not in text, text)
+
+
+def test_a_file_name_the_mapping_gave_still_is(tmp_path):
+    report = retraced(tmp_path)
+    root = _kotlin_holder(lockapp.checkout(tmp_path / "app"))
+    placed, _ = anr.locate(report, root)
+    holder = next(f for f in placed if f.symbol.endswith("Holder.run"))
+    check("the build said `Holder.java`, and that is said",
+          holder.named == "Holder.java", holder)

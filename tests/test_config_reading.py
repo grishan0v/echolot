@@ -138,6 +138,29 @@ def test_an_unknown_key_in_one_scenario_is_refused(tmp_path: Path) -> None:
           "scenario: no key 'budgetms'" in said and "budget_ms" in said, said)
 
 
+@pytest.mark.parametrize("value, says", [
+    ("coldStart", "`name: coldStart`"),
+    ("launch", "`window: launch` under it"),
+    (["coldStart", "scroll"], "`scenarios:`"),
+])
+def test_a_scenario_that_is_not_a_block_is_refused(tmp_path: Path, value: object,
+                                                   says: str) -> None:
+    """`scenario: coldStart` measured the whole recording as `run` (#736)."""
+    said = _refused(_config(tmp_path, {"project": BASE["project"], "scenario": value}))
+    check("what it got, and how a block is written",
+          said.startswith("scenario must be a block") and repr(value) in said
+          and "`name`, `start` and `end` under it" in said and says in said, said)
+
+
+def test_a_scenario_with_nothing_after_it_still_loads(tmp_path: Path) -> None:
+    path = tmp_path / "echolot.yml"
+    path.write_text(yaml.safe_dump({"project": BASE["project"]}) + "scenario:\n",
+                    encoding="utf-8")
+    cfg = Config.load(path)
+    check("the whole recording, as before", cfg.scenario_name == "run"
+          and cfg.scenario_start == NO_ANCHOR, (cfg.scenario_name, cfg.scenario_start))
+
+
 def test_an_unknown_section_is_refused_by_name(tmp_path: Path) -> None:
     raw = {**BASE, "detectros": {"main_thread_block": {"min_slice_ms": 50}}}
     said = _refused(_config(tmp_path, raw))

@@ -555,7 +555,11 @@ def verdict_of(duration, budget):
 @pytest.mark.parametrize("duration, budget, want_level, text", [
     (400.0, 500.0, "fine", "The launch takes 0.4 s. You allowed 0.5 s, so it is within the limit."),
     (500.0, 500.0, "fine", "The launch takes 0.5 s. You allowed 0.5 s, so it is within the limit."),
-    (501.0, 500.0, "worth_a_look", "The launch takes 0.5 s. You allowed 0.5 s, so it is just over the limit."),
+    (501.0, 500.0, "worth_a_look", "The launch takes 501 ms. You allowed 500 ms, so it is just over the limit."),
+    (478.51, 460.0, "worth_a_look", "The launch takes 479 ms. You allowed 460 ms, so it runs 4% over."),
+    (460.1, 460.0, "worth_a_look",
+     "The launch takes 460.1 ms. You allowed 460.0 ms, so it is just over the limit."),
+    (1219.0, 1240.0, "fine", "The launch takes 1.22 s. You allowed 1.24 s, so it is within the limit."),
     (560.0, 500.0, "worth_a_look", "The launch takes 0.6 s. You allowed 0.5 s, so it runs 12% over."),
     (625.0, 500.0, "worth_a_look", "The launch takes 0.6 s. You allowed 0.5 s, so it runs 25% over."),
     (626.0, 500.0, "needs_attention", "The launch takes 0.6 s. You allowed 0.5 s, so it runs 25% over."),
@@ -572,6 +576,27 @@ def test_the_verdict_is_the_launch_against_the_budget(duration, budget, want_lev
     check("words", got["text"] == text, got["text"])
     check("budget and ratio are in it", got["budget_ms"] == budget
           and got["ratio"] == round(duration / budget, 3), got)
+
+
+@pytest.mark.parametrize("a, b, want", [
+    (478.51, 460.0, ("479 ms", "460 ms")), (400.0, 500.0, ("0.4 s", "0.5 s")),
+    (500.0, 500.0, ("0.5 s", "0.5 s")), (1219.0, 1240.0, ("1.22 s", "1.24 s")),
+    (995.0, 1004.0, ("0.99 s", "1.00 s")), (47.6, 48.4, ("47.6 ms", "48.4 ms")),
+    (1200.1, 1200.4, ("1200.10 ms", "1200.40 ms"))])
+def test_two_different_times_never_read_alike(a, b, want):
+    check(f"{a} and {b}", plain.hum_apart(a, b) == want, plain.hum_apart(a, b))
+
+
+def test_two_times_in_the_verdict_differ_when_the_launch_is_not_on_the_limit():
+    """#709: 478.51 ms against 460 ms was "takes 0.5 s, you allowed 0.5 s, 4% over"."""
+    for window in [w / 10 for w in range(4000, 6000, 7)]:
+        for budget in (460.0, 500.0, 520.0):
+            got = verdict_of(window, budget)
+            took, said = re.match(r"The launch takes (.+?)\. You allowed (.+?), so", got["text"]).groups()
+            check(f"{window} against {budget}: the two times", (took == said) == (window == budget),
+                  got["text"])
+            check(f"{window} against {budget}: within only when it is",
+                  ("within the limit" in got["text"]) == (window <= budget), got["text"])
 
 
 def test_the_ratio_in_the_sentence_is_the_key_rounded_to_one_decimal():
