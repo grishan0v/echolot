@@ -156,6 +156,32 @@ class NoLaunch(ConfigError):
     window cannot be taken, and the message says why and what to do."""
 
 
+class Unfinished(NoLaunch):
+    """A trace whose launch of the process had not drawn its first frame when
+    the recording stopped (#921). The launch is there, and has no end: the
+    standard library's `android_startups` leaves it out, and the trace read as
+    holding no launch at all. `analyze` leaves such a repeat out of its set."""
+
+
+def _unfinished(tp, process: str, trace: str | None, began: int) -> str:
+    """What is said of a launch the recording stopped in the middle of."""
+    from . import recording
+
+    where = f" {Path(trace).name}" if trace else ""
+    bounds = tp.query("SELECT start_ts, end_ts FROM trace_bounds")[0]
+    into = (began - bounds["start_ts"]) / 1e9
+    length = (bounds["end_ts"] - bounds["start_ts"]) / 1e9
+    record = recording.kept(trace, "launch") if trace else None
+    took = record.get("total_time_ms") if isinstance(record, dict) else None
+    said = (f" (`am start -W` said it took {took:,} ms)"
+            if isinstance(took, int) and took > 0 else "")
+    return (f"the launch of {process} in trace{where} had not ended when the recording "
+            f"stopped: it began {into:.1f} s into a recording of {length:.1f} s and drew "
+            f"no first frame in it{said}, so `window: launch` has no end to close the "
+            f"window at. Record again with a longer `runner.duration_ms`, so that the "
+            f"recording outlasts the launch.")
+
+
 def find(tp, upid: int, trace: str | None = None) -> dict[str, Any]:
     """The launch window of the process `upid`: its bounds and what closed it.
 
@@ -191,6 +217,19 @@ def find(tp, upid: int, trace: str | None = None) -> dict[str, Any]:
     of_package = [s for s in launches if s["package"] == package]
     mine = [s for s in launches if s["own"]] or of_package
     if not mine:
+        # A launch still open at the end of the recording, the app's main
+        # thread at work inside it: the platform's launch with no first frame
+        # yet, which the module does not list (#921).
+        still = tp.query("""
+            SELECT l.ts AS ts FROM slice l
+            WHERE l.name GLOB 'launchingActivity#*' AND l.name NOT GLOB '*:*'
+              AND l.dur < 0
+              AND EXISTS (SELECT 1 FROM _slice m
+                          WHERE m.is_main_thread = 1 AND m.ts >= l.ts)
+            ORDER BY l.ts LIMIT 1
+        """)
+        if still:
+            raise Unfinished(_unfinished(tp, process, trace, still[0]["ts"]))
         raise NoLaunch(_no_launch(process, trace, launches))
     chosen = mine[0]
     start, launch_end = chosen["ts"], chosen["ts_end"]

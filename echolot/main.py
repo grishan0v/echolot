@@ -827,10 +827,19 @@ def cmd_analyze(args) -> int:
                 resolve_binary_path(tp_binary)
             except ConfigError:
                 jobs = 1
-        reports = parallel.in_order(
-            traces, lambda t: analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
-                                            use_defaults=args.defaults, tp_source=tp_source),
-            jobs)
+        def read(trace: str) -> dict[str, Any]:
+            try:
+                return analyze_trace(trace, cfg, tp_binary, cli_overrides=cli_overrides,
+                                     use_defaults=args.defaults, tp_source=tp_source)
+            except launch_mod.Unfinished as e:
+                return {"trace": trace, _UNFINISHED: str(e)}
+        reports = parallel.in_order(traces, read, jobs)
+        # A launch the recording stopped in the middle of is no repeat of
+        # the set: left out, and named, unless no repeat finished (#921).
+        reports, unfinished = _finished(reports)
+        if unfinished:
+            print(f"[!] {report_mod.unfinished_said(unfinished, len(reports))}",
+                  file=sys.stderr)
         # In the order they were recorded, when every trace says when (#848).
         reports = _in_recording_order(reports)
         # A launch that ended on another activity than most of the set's is
@@ -847,6 +856,8 @@ def cmd_analyze(args) -> int:
             rep["not_cold"] = warm
         if elsewhere:
             rep["ended_elsewhere"] = elsewhere
+        if unfinished:
+            rep["unfinished"] = unfinished
         if mixed:
             rep.setdefault("window", {})["activities"] = mixed
     except (ConfigError, hunt_mod.NotOpen) as e:
@@ -986,6 +997,26 @@ def cmd_analyze(args) -> int:
             print(f"→ {again}  (this investigation's page stood there: written again "
                   f"with this round)", file=sys.stderr)
     return 0
+
+
+# What `analyze` keeps of a trace whose launch had not ended (#921), in
+# place of its report.
+_UNFINISHED = "unfinished"
+
+
+def _finished(reports: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The reports of traces whose launch ended, and the traces whose launch
+    had not when the recording stopped, each with what was said of it.
+
+    One such repeat failed the whole set with "no launch" (#921). Left out,
+    the rest are a set; when no repeat's launch ended there is nothing to
+    read, and the first one's sentence is the error.
+    """
+    kept = [r for r in reports if _UNFINISHED not in r]
+    left = [{"trace": r["trace"], "said": r[_UNFINISHED]} for r in reports if _UNFINISHED in r]
+    if left and not kept:
+        raise launch_mod.Unfinished(left[0]["said"])
+    return kept, left
 
 
 def _latest_here(out_dir: Path, cfg: Config, here: Path) -> bool:

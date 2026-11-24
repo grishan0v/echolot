@@ -267,3 +267,75 @@ def test_the_fixtures_launch_window_accounts_for_itself(tmp_path: Path) -> None:
     check("the main thread's first state is at 50, 10 ms into the window",
           (budget["before_process_ms"], budget["accounted_ms"], budget["window_ms"])
           == (10.0, 1055.0, 1065.0), budget)
+
+
+# --- a launch the recording stopped in the middle of (#921) ------------------------
+
+def test_a_launch_that_outlasts_the_recording_is_said_as_one(tmp_path: Path) -> None:
+    """A debug build's cold start of 11 s in a 12 s recording: the launch is
+    in the trace with no end, and it read as "no launch" of the app."""
+    from echolot import recording
+    trace = tmp_path / "coldStart_iter000.perfetto-trace"
+    trace.write_bytes(fixture.build(unfinished=True))
+    recording.write(trace, {"runner": "launch", "launch": {"total_time_ms": 11195}})
+    with pytest.raises(launch_mod.Unfinished) as caught:
+        analyze_trace(trace, Config(LAUNCH))
+    said = str(caught.value)
+    check("the launch had not ended, with where it began and how long the recording was",
+          said.startswith("the launch of com.example.app in trace coldStart_iter000"
+                          ".perfetto-trace had not ended when the recording stopped: it "
+                          "began 0.0 s into a recording of 1.4 s")
+          and "`am start -W` said it took 11,195 ms" in said
+          and "runner.duration_ms" in said and "no launch of" not in said, said)
+
+
+def test_analyze_leaves_out_the_repeat_whose_launch_had_not_ended(tmp_path: Path) -> None:
+    import contextlib
+    import io
+    import json
+
+    import yaml
+
+    from echolot import recorder
+    from echolot.main import main
+    traces = []
+    # Three recordings, each its own bytes: the same bytes twice are one (#565).
+    for i, build in enumerate(({}, {"unfinished": True}, {"composables": False})):
+        trace = tmp_path / f"coldStart_iter{i:03d}.perfetto-trace"
+        trace.write_bytes(fixture.build(**build))
+        traces.append(str(trace))
+    config = tmp_path / "echolot.yml"
+    config.write_text(yaml.safe_dump(LAUNCH), encoding="utf-8")
+
+    def run(*given: str) -> tuple[int, str]:
+        err = io.StringIO()
+        with recorder.isolated(), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(err):
+            code = main(["analyze", *given, "-c", str(config), "-o", str(tmp_path / "out")])
+        return code, err.getvalue()
+
+    code, err = run(*traces)
+    check("the set is read", code == 0, err[-600:])
+    rep = json.loads((tmp_path / "out/report.json").read_text(encoding="utf-8"))
+    check("over the other two", rep["runs"] == 2 and all("iter001" not in t for t in rep["traces"]),
+          rep.get("traces"))
+    check("the one left out named, in the report and on stderr",
+          [Path(e["trace"]).name for e in rep["unfinished"]] == ["coldStart_iter001.perfetto-trace"]
+          and "[!] Left out: `coldStart_iter001.perfetto-trace`" in err, err[-600:])
+    md = (tmp_path / "out/report.md").read_text(encoding="utf-8")
+    check("the header says so", "had not drawn its first frame" in md, md[:2000])
+    code, err = run(traces[1])
+    check("alone: refused, as a launch that had not ended", code == 2
+          and "had not ended when the recording stopped" in err, err[-400:])
+
+
+def test_collect_says_a_launch_took_longer_than_the_recording_had_left() -> None:
+    from echolot import runner
+    line = runner._outlasted_line({"total_time_ms": 11195, "recorded_after_ms": 11100}, 12000)
+    check("the repeat's line says so, with what to raise",
+          line == "[!] am start -W took 11,195 ms, and the recording held only 11.1 s after "
+                  "the intent: the trace ends before the launch's first frame, and `analyze` "
+                  "leaves it out. Raise `runner.duration_ms` (now 12,000)", line)
+    check("a launch inside the recording: nothing",
+          runner._outlasted_line({"total_time_ms": 900, "recorded_after_ms": 11100}, 12000) is None)
+    check("command mode, no am start: nothing", runner._outlasted_line({}, 12000) is None)

@@ -1279,6 +1279,18 @@ def same_recording_said(groups: list[list[str]]) -> str:
             f"{extra} fewer than the paths given.")
 
 
+def unfinished_said(left: list[dict[str, Any]], read: int) -> str:
+    """The sentence for the traces `analyze` left out because their launch
+    had not ended when the recording stopped (#921)."""
+    k = len(left)
+    named = ", ".join(f"`{Path(e['trace']).name}`" for e in left)
+    return (f"Left out: {named}. {'Its' if k == 1 else 'Each one'}'s launch had not "
+            f"drawn its first frame when the recording stopped, so it has no end to "
+            f"close the window at. The numbers are over the other {read}. Record "
+            f"again with a longer `runner.duration_ms`, so that the recording "
+            f"outlasts the launch.")
+
+
 def not_cold_said(left: list[dict[str, Any]], read: int) -> str:
     """The sentence for the traces `analyze` left out as not cold (#523)."""
     k = len(left)
@@ -2047,6 +2059,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(f"> ⚠️ {not_cold_said(report['not_cold'], len(traces or [None]))}")
     if report.get("ended_elsewhere"):
         out.append(f"> ⚠️ {elsewhere_said(report['ended_elsewhere'], len(traces or [None]))}")
+    if report.get("unfinished"):
+        out.append(f"> ⚠️ {unfinished_said(report['unfinished'], len(traces or [None]))}")
     if report.get("scenario"):
         out.append(f"Scenario: `{report['scenario']}`")
     if w.get("process"):
@@ -2472,6 +2486,8 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
         out.append(f"> ⚠️ {not_cold_said(report['not_cold'], len(traces or [None]))}")
     if report.get("ended_elsewhere"):
         out.append(f"> ⚠️ {elsewhere_said(report['ended_elsewhere'], len(traces or [None]))}")
+    if report.get("unfinished"):
+        out.append(f"> ⚠️ {unfinished_said(report['unfinished'], len(traces or [None]))}")
     out.extend(_diverged_lines(w))
     anchors = []
     for key, label in (("start_anchor", "start"), ("end_anchor", "end")):

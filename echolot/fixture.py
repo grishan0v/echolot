@@ -1825,7 +1825,8 @@ def build(frames: bool = True, environment: bool = True,
           fully_drawn: str | None = None, stuffed: bool = False,
           smooth: bool = False, answered: bool = True, heap: bool = True,
           activities: tuple[str, ...] = (), boot: bool = False,
-          drawing: bool = False, realtime_ns: int | None = None) -> bytes:
+          drawing: bool = False, realtime_ns: int | None = None,
+          unfinished: bool = False) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1889,6 +1890,10 @@ def build(frames: bool = True, environment: bool = True,
     the clock snapshot a phone's tracing service writes at the head of every
     trace: what says when a recording was made (#848). None by default: no
     snapshot, as in a trace written by a tool that keeps none.
+
+    `unfinished=True` stops the recording before the launch's first frame:
+    its `launchingActivity` section opens and never closes, as on a debug
+    build whose cold start outlasted `runner.duration_ms` (#921).
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -2027,10 +2032,12 @@ def build(frames: bool = True, environment: bool = True,
     # The launch, from system_server too. The completion is an instant: a
     # begin and an end at one timestamp, which is a slice of no length.
     launch = f"launchingActivity#{LAUNCH_ID}"
-    for at, buf in ((LAUNCH_AT_MS, f"S|{SS_PID}|{launch}|{LAUNCH_ID}"),
-                    (LAUNCH_DRAWN_MS, f"F|{SS_PID}|{launch}|{LAUNCH_ID}"),
-                    (LAUNCH_DRAWN_MS, f"B|{SS_PID}|{launch}:completed:{APP_NAME}"),
-                    (LAUNCH_DRAWN_MS, f"E|{SS_PID}")):
+    marks = [(LAUNCH_AT_MS, f"S|{SS_PID}|{launch}|{LAUNCH_ID}")]
+    if not unfinished:
+        marks += [(LAUNCH_DRAWN_MS, f"F|{SS_PID}|{launch}|{LAUNCH_ID}"),
+                  (LAUNCH_DRAWN_MS, f"B|{SS_PID}|{launch}:completed:{APP_NAME}"),
+                  (LAUNCH_DRAWN_MS, f"E|{SS_PID}")]
+    for at, buf in marks:
         by_cpu.setdefault(0, []).append((ms(at), next(seq), "print", SS_PID, buf + "\n"))
 
     # The platform state. Frequency belongs to its own CPU's bundle — that is
