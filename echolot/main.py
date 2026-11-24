@@ -3810,9 +3810,11 @@ def cmd_hunt(args) -> int:
         # files to analyze are not five echolot would name.
         files = state.repeats(scenario, 5) if scenario and runner != "gradle" else None
         # Inside the investigation just opened: a line without `--hunt` runs
-        # outside it, and files nothing for `compare` to read (#498).
-        print(f"By hand: {state.collect_line_for(named, runner, h['n'])}, then "
-              + state.analyze_line(files, named, h["n"]), file=sys.stderr)
+        # outside it, and files nothing for `compare` to read (#498). With
+        # the config given and from where this ran (#719).
+        shown = state.shown_from(project, config, Path.cwd())
+        print(f"By hand: {state.collect_line_for(named, runner, h['n'], shown=shown)}, then "
+              + state.analyze_line(files, named, h["n"], shown=shown), file=sys.stderr)
         return 0
 
     if conclusion is not None:
@@ -3856,7 +3858,8 @@ def cmd_status(args) -> int:
     if _named_config_missing(args):
         return 2
     project, config = _project_and_config(args)
-    st = state.project_state(project, config)
+    # The lines to run by hand are run from here, where this was run (#719).
+    st = state.project_state(project, config, here=Path.cwd())
     if getattr(args, "next", False):
         # One word for the skill to switch on; the prose is for people.
         print(state.next_kind(st))
@@ -3883,7 +3886,7 @@ def cmd_status(args) -> int:
     if cfg is None:
         lines.append(("config", "none — no echolot.yml here"))
     elif cfg.get("error"):
-        lines.append(("config", f"echolot.yml does not load: {cfg['error']}"))
+        lines.append(("config", f"{Path(cfg['path']).name} does not load: {cfg['error']}"))
     else:
         many = st.get("scenarios")
         bits = [f"{len(many)} scenarios" if many else f"scenario {cfg['scenario']}",
@@ -3892,7 +3895,8 @@ def cmd_status(args) -> int:
             bits.append(f"runner {cfg['runner']}")
         if cfg.get("local"):
             bits.append("local.yml applied")
-        lines.append(("config", "echolot.yml · " + " · ".join(bits)))
+        # The file given: `-c perf.yml` read as a project's echolot.yml (#719).
+        lines.append(("config", f"{Path(cfg['path']).name} · " + " · ".join(bits)))
     recap = state.next_kind(st) == "resume-or-new"
     lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"), st)))
     collecting = state.collect_line(st)
