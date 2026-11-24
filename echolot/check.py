@@ -608,8 +608,12 @@ def comparison(report_dir: Path) -> dict[str, Any] | None:
     """The comparison `compare` wrote there, when a page can be drawn from it
     and it is of the report beside it. None for no file, for one that does
     not read, for one written without its plain reading (`compare` with no
-    `--html` and no `--plain`), and for one older than the report: `analyze`
-    has written a new report since, and the comparison is of the one before."""
+    `--html` and no `--plain`), for one older than the report (`analyze`
+    has written a new report since, and the comparison is of the one
+    before), and for one whose newer side is another report: `compare` run on
+    two other files, or on an investigation's rounds, writes here all the same.
+    Which report that side was is told by when it was written, a stamp each
+    report carries and the comparison keeps."""
     path = report_dir / "comparison.json"
     try:
         made = path.stat().st_mtime
@@ -619,6 +623,14 @@ def comparison(report_dir: Path) -> dict[str, Any] | None:
     if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found):
         return None
     if made + 1 < _newest([report_dir / "report.json"]):
+        return None
+    try:
+        beside = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    after = found.get("after")
+    if not isinstance(beside, dict) or not isinstance(after, dict) \
+            or after.get("generated_at") != beside.get("generated_at"):
         return None
     return found
 
