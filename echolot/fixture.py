@@ -569,14 +569,16 @@ SLICES = {
 
             # --- main_thread_waits --------------------------------------
             # The main thread asleep in `loadConfig` from 692 to 698, until
-            # Room's `arch_disk_io_1` woke it (WAKINGS below). It also sleeps
-            # idle from 1086 to 1098, with no slice open, until
-            # `arch_disk_io_0` does, and at 860 that thread ends a sleep that
-            # began inside the GC lock's contention, which is a lock's wait
-            # and not counted. One row, `arch_disk_io_#`: 2 waits, 18 ms,
-            # 12 idle and 6 blocked in `loadConfig`. `loadConfig` holds 9 ms
-            # of self time, under `main_thread_block`'s bar.
+            # Room's `arch_disk_io_1` woke it (WAKINGS below), and in
+            # `readSession` from 1086 to 1098, until `arch_disk_io_0` did. At
+            # 860 that thread ends a sleep that began inside the GC lock's
+            # contention, which is a lock's wait and not counted. One row,
+            # `arch_disk_io_#`: 2 waits, 18 ms, the longer one in
+            # `readSession`. The two slices hold 9 and 14 ms of self time,
+            # under `main_thread_block`'s bar. The looper's idle, no slice
+            # open, is no wait (#926): `looper_waits` below has it.
             ("loadConfig", 690.5, 9, []),
+            ("readSession", 1085, 14, []),
 
             # Negative control: 20x the median, and 20 ms. A ratio without an
             # absolute floor under it turns every short repeated slice into a
@@ -730,8 +732,8 @@ SCHED = [
     # anchor `AppStart` spans right across it at depth 0, which is why that
     # depth is not evidence of anything.
     (0, TID_MAIN, 860, 1086, S),
-    # Idle 1086..1098, nothing open below the anchor, until Room's thread
-    # wakes it again.
+    # Asleep 1086..1098 inside `readSession`, until Room's thread wakes it
+    # again.
     (0, TID_MAIN, 1098, 1300, S),
 
     # StuckForever: 10 ms on a CPU and then blocked for good. Enough to give
@@ -1534,6 +1536,69 @@ JIT_NEW = "void com.example.app.feature.ListViewModel.prepare()"
 def jit_name(method: str, install: str) -> str:
     """What ART calls the slice of a method's JIT compilation."""
     return f"JIT compiling {method} (kind=Baseline) from {install}base.apk"
+
+
+# --- the looper's idle is no wait -----------------------------------------------
+#
+# `looper_waits()` only, a scene of its own (#926): a start of an app that shows
+# a WebView, in the shape such an app's recordings have. Between its messages
+# the main thread's looper sleeps with no slice open, and Chromium's IO thread
+# is what posts the next message, 210 ms of it here; the compositor's thread
+# posts some too. Now and then the main thread waits for the IO thread inside a
+# frame's `animation`, where WebView draws, 26 ms in three frames, and once for
+# SharedPreferences inside `activityStart`, 20 ms. Only those are waits. Read
+# as one, the IO thread's row was 236 ms, 89% of it idle, and ranked first.
+LOOPER_IO, LOOPER_VIZ, LOOPER_PREFS = 4311, 4312, 4313
+LOOPER_THREADS = {TID_MAIN: APP_NAME[-15:], LOOPER_IO: "Chrome_IOThread",
+                  LOOPER_VIZ: "VizWebView", LOOPER_PREFS: "SharedPreferenc"}
+LOOPER_MAIN = [
+    ("bindApplication", 100, 30, []),
+    ("activityStart", 140, 60, []),
+    *[("Choreographer#doFrame", at, 30, [("animation", at + 2, 18, [])])
+      for at in (300, 400, 500)],
+    ("Screen.firstFrame", 600, 5, []),
+]
+# The main thread's sleeps: (from, to, the thread that woke it).
+LOOPER_SLEEPS = [
+    (150, 170, LOOPER_PREFS),   # inside activityStart: a wait
+    (205, 295, LOOPER_IO),      # no slice open: the idle looper
+    (305, 315, LOOPER_IO),      # inside animation: a wait
+    (335, 395, LOOPER_VIZ),     # idle
+    (405, 413, LOOPER_IO),      # a wait
+    (435, 495, LOOPER_IO),      # idle
+    (505, 513, LOOPER_IO),      # a wait
+    (535, 595, LOOPER_IO),      # idle
+]
+
+
+def looper_waits() -> bytes:
+    """The scene above: `com.example.app` from `bindApplication` to the end of
+    `Screen.firstFrame`, 505 ms, the main thread on CPU 0 between its sleeps
+    and each thread that wakes it on a CPU of its own for the millisecond
+    before."""
+    builder = TraceProtoBuilder()
+    process_tree(builder, [(APP_PID, APP_NAME, LOOPER_THREADS)])
+    seq = iter(range(10**6))
+    main = LOOPER_THREADS[TID_MAIN]
+    by_cpu: dict[int, list] = {0: []}
+    on = 100
+    for start, end, waker in LOOPER_SLEEPS:
+        by_cpu[0] += [(ms(on), next(seq), "sched", "swapper/0", 0, R, main, TID_MAIN),
+                      (ms(start), next(seq), "sched", main, TID_MAIN, S, "swapper/0", 0)]
+        cpu, name = 1 + [*LOOPER_THREADS].index(waker), LOOPER_THREADS[waker]
+        by_cpu.setdefault(cpu, []).extend([
+            (ms(end - 1), next(seq), "sched", f"swapper/{cpu}", 0, R, name, waker),
+            (ms(end) - 1, next(seq), "waking", waker, TID_MAIN, main, 0),
+            (ms(end), next(seq), "sched", name, waker, S, f"swapper/{cpu}", 0),
+        ])
+        on = end
+    by_cpu[0] += [(ms(on), next(seq), "sched", "swapper/0", 0, R, main, TID_MAIN),
+                  (ms(610), next(seq), "sched", main, TID_MAIN, S, "swapper/0", 0)]
+    for ts, order, kind, name in _flatten(LOOPER_MAIN, [], seq):
+        buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+        by_cpu[0].append((ts, order, "print", TID_MAIN, buf))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
 
 
 # --- a pool under one name -------------------------------------------------------

@@ -390,19 +390,23 @@ without it.
 
 `main_thread_waits` needs none either. A main thread asleep has no slice that
 says what it waits for, and the kernel names the thread that woke it. A row
-is a thread of the app that ended the main thread's sleeps, with its digits
-folded, so that Room's `arch_disk_io_0` to `_3` are one row and every
-coroutine worker is `DefaultDispatch`, as the kernel's fifteen characters
-leave it. `detail` says whether the main thread was idle, with no slice open,
-or blocked, and in which slice; when it was both, it gives each a share. On a Compose
-app's first launch on an A51 the main thread was idle for 0.7 s of 2.1 s
-until Room's threads woke it about 260 times while the database filled. On a
-large Kotlin app it blocked inside two SDKs' initializers until the thread
+is a thread of the app that let the main thread go from sleeps it began inside
+its own work, with its digits folded, so that Room's `arch_disk_io_0` to `_3`
+are one row and every coroutine worker is `DefaultDispatch`, as the kernel's
+fifteen characters leave it. `detail` names the slice it waited longest in. On
+a large Kotlin app it blocked inside two SDKs' initializers until the thread
 loading SharedPreferences let it go, 58 ms on the median. Those traces caught
 the end of a start the system had begun on its own, right after a force-stop,
-and the launch that followed was warm. A lock's wait stays with
-`monitor_contention`, a binder reply with `binder_txn`, and a sleep that
-`RenderThread` or another process ended is left out.
+and the launch that followed was warm. A sleep with no slice open is not a
+wait (#926): it is the looper with nothing to do, and the thread that ended it
+posted the next message. An app that shows a WebView has one of Chromium's
+threads doing that hundreds of times a run, and counted as waits it ranked
+first by seconds. So a launch that sits idle until its background work posts,
+as a Compose app's first launch on an A51 did for 0.7 s of 2.1 s while Room
+filled its database, has no row here; the start's breakdown shows the main
+thread sleeping, and `uninstrumented_cpu` the threads that worked. A lock's
+wait stays with `monitor_contention`, a binder reply with `binder_txn`, and a
+sleep that `RenderThread` or another process ended is left out.
 
 `main_thread_kernel_waits` is the same reading of a different sleep: the main
 thread in the kernel for something other than the disk (`D`, `io_wait = 0`),
@@ -809,17 +813,15 @@ CPU time of five background threads can add up to two thirds of the launch while
 the main thread waits for them for a third of it, and that wait is the row that
 says so. A row on another thread is at most "worth a look".
 
-A main thread that slept with no slice open was idle: `main_thread_waits` says
-`idle` in its evidence, and the thread it names is the one that gave it its next
-piece of work. An idle main thread can still draw and answer taps, so whether
-that time counts depends on where the window ends. In a launch that ends where
-the scenario does (the platform's launch, or an end anchor that matched in every
-recording), idle time before the end can be the launch waiting for its own
-background work, and it counts in full. In a window that ends where the
-recording does, such as a scroll whose length the script fixes or a window whose
-anchor matched nothing, only the part spent blocked inside a slice counts: a
-once-a-second timer that wakes an idle main thread is "worth a look" there, not
-"needs attention". The sentence says which it was.
+A main thread that slept with no slice open was idle, and idle time is not time
+it lost, in any window: it could draw and answer taps the moment either came,
+and the thread that woke it only posted its next message. `main_thread_waits`
+counts the sleeps it began inside a slice and no others (#926). A report
+written before then added the idle ones to a row and said so in its evidence
+(`idle`, or `67% idle · 33% blocked in X`); read again, such a row counts and
+says only the part blocked inside a slice, and that the rest is not counted. A
+journey that an end anchor closed used to count the idle part in full, and a
+WebView's thread waking the idle looper read as seconds of waiting.
 
 The verdict sets the launch against `scenario.budget_ms`: within it is fine, up
 to a quarter over is worth a look, more is needs attention. Nothing fails

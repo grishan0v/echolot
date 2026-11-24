@@ -18,8 +18,7 @@ The attention levels, one sentence each:
 
   needs attention   one thing the main thread spent or lost holds at least 15%
                     of the launch and at least 0.15 s, in every launch (time
-                    it sat idle counts only in a window that ends where the
-                    scenario does: see `_held`);
+                    it sat idle is not time it lost: see `_held`);
   worth a look      the check found something else: smaller, on another
                     thread, or not in every launch;
   a marker to move  the check found only a marker put one level off;
@@ -176,9 +175,6 @@ class _Ctx:
         self.main = kernel_name(report)
         # A startup is a launch; any other stretch is a run.
         self.kind = "launch" if window.get("startup") else "run"
-        # Whether the window ends where the scenario does, which is what an
-        # idle main thread costs turns on (`_held`).
-        self.closed = _closed(window)
         # What a share is a share of. A window whose anchor missed is the
         # recording, whatever the scenario is (#557): "56% of the launch" of
         # such a window is a share of something that is not the launch. The
@@ -412,7 +408,9 @@ def _idle_part(row: dict[str, Any]) -> float:
     """The part of a `main_thread_waits` row the main thread spent idle, with
     no slice open, read off its evidence: `idle` is all of it, `67% idle ·
     33% blocked in X` two thirds, `blocked in X` none. The blocked share is
-    the one read, so evidence that names a slice is never all idle."""
+    the one read, so evidence that names a slice is never all idle. Since
+    #926 a row holds no idle sleeps and says `blocked in X`; the shares are
+    those of a report written before."""
     detail = str(row.get("detail") or "")
     blocked = _BLOCKED_IN.search(detail)
     if blocked:
@@ -420,27 +418,32 @@ def _idle_part(row: dict[str, Any]) -> float:
     return 1.0 if detail.startswith("idle") else 0.0
 
 
+def _blocked(row: dict[str, Any]) -> float:
+    """The waits of a `main_thread_waits` row: all of it since #926, the part
+    blocked inside a slice of a row written before, which added the idle
+    looper's sleeps to them."""
+    return _value(row) * (1 - _idle_part(row))
+
+
 def _held(det_id: str, row: dict[str, Any], ctx: _Ctx) -> float:
     """How much of a row counts as time the main thread lost.
 
-    An idle main thread could draw a frame or answer a tap the moment one
-    came. Whether the scenario waited for the thread that woke it the row
-    cannot say on its own: in a launch that ends where the scenario does,
-    idle time before the end can be the launch waiting for its own
-    background work (the case `main_thread_waits` was written for, #418), so
-    it keeps its weight there. In a window that ends where the recording
-    does — a scroll whose length the script fixes, or one whose anchor
-    missed — idle time costs nothing, and only the part spent blocked counts.
+    Only the waits of a `main_thread_waits` row count, in any window. An
+    idle main thread had nothing to do, and the thread that woke it posted
+    its next message; it could draw a frame or answer a tap the moment one
+    came (#926). Before #926 the row held its idle sleeps too, and time idle
+    counted in a window that ends where the scenario does: a WebView's
+    thread waking the idle looper read as seconds of waiting in a journey
+    the script ended.
 
     Frames that only waited in a queue (`_stuffed`) count for nothing: they
     were shown without a stutter, and lost no time anyone could see.
     """
     if _stuffed(det_id, row):
         return 0.0
-    ms = _value(row)
-    if det_id == "main_thread_waits" and not ctx.closed:
-        ms *= 1 - _idle_part(row)
-    return ms
+    if det_id == "main_thread_waits":
+        return _blocked(row)
+    return _value(row)
 
 
 # The platform's name for frames that waited in a queue behind the frame
@@ -522,29 +525,31 @@ def _also(rows: list[dict[str, Any]], one: str, many: str, tail: str) -> str:
 
 
 def _f_waits(rows, ctx):
-    top = rows[0]
-    v = _value(top)
-    idle = _idle_part(top)
-    n = len(rows) - 1
-    if idle >= 1:
-        # No slice was open: the main thread had nothing to do, and the row's
-        # thread is the one that gave it its next piece of work.
-        out = (_clause(f"The main thread had nothing to do for {hum(v)}", _runs(top, ctx))
-               + f", each time until {_name(top['location'])} gave it its next piece of work."
-               + _share(v, ctx))
-        out += (f" The {ctx.noun} may have been waiting for that work." if ctx.closed else
-                " While idle, it could still draw and answer taps.")
+    # A row is the main thread's waits since #926. A report written before
+    # adds the idle looper's sleeps to them and says in `detail` how much, so
+    # its rows are read by their waits, and what is left of one is idle.
+    top = max(rows, key=_blocked)
+    v = _blocked(top)
+    idle = _value(top) - v
+    if v <= 0:
+        # Every row idle: no slice was open, the main thread had nothing to
+        # do, and the row's thread posted its next message.
+        n = len(rows) - 1
+        out = (_clause(f"The main thread had nothing to do for {hum(idle)}", _runs(top, ctx))
+               + f", each time until {_name(top['location'])} posted its next message.")
+        out += " That is not waiting: while idle, it could still draw and answer taps."
         if n > 0:
             out += f" {_count(n, 'other thread', 'other threads')} woke it, too."
         return out
+    n = sum(1 for r in rows if r is not top and _blocked(r) > 0)
     out = _sentence(f"The main thread waited {hum(v)} for {_name(top['location'])}",
                     _runs(top, ctx)) + _share(v, ctx)
     inside = _BLOCKED_IN.search(str(top.get("detail") or ""))
-    # "67% idle · 33% blocked in X": inside X for a third of it is not "at the time".
-    if inside and int(inside.group(1) or 100) >= 50:
+    if inside:
         out += f" It was inside {_name(inside.group(2))} at the time."
     if idle > 0:
-        out += f" For {round(idle * 100)}% of that time it had nothing to do."
+        out += (f" The {hum(idle)} it sat idle until that thread posted its next message"
+                f" is not counted.")
     if n > 0:
         out += f" It also waited for {_count(n, 'other thread', 'other threads')}."
     return out
