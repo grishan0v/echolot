@@ -148,6 +148,23 @@ LIMIT 20;
   драйвера, запись без счётчика `Heap size (KB)`), строки те же, без
   доказательств. Поток у этих двух детекторов — отдельная колонка `thread` в
   `@identity`; `compare` достаёт его из `detail` старого отчёта.
+- Кто ответил на вызов, ещё не говорит, чей это вызов; это говорят срезы
+  самой главной нити, модуль не нужен. На одиннадцати холодных стартах
+  приложения Wikipedia binder главной нити был 70 мс, 94% из них ответил
+  system_server, и треть — `attachApplication` внутри `ActivityThreadMain`,
+  до загрузки любого кода приложения: собственный старт платформы, который
+  платит каждое приложение (#911). У строки главной нити в `binder_txn` есть
+  колонка `phase` — доля времени строки под каждым из срезов платформы,
+  самым внешним вокруг вызова: `before the app's code` (`ActivityThreadMain`
+  и `bindApplication` до `makeApplication` — это платформа), `Application`
+  (`bindApplication` от `makeApplication`: конструктор Application,
+  ContentProvider'ы, `Application.onCreate`), `activity` (`activityStart`,
+  `activityResume` и `clientTransactionExecuted` вокруг них), `frames`
+  (`Choreographer#doFrame`), `other`. Только первая — целиком платформа;
+  в остальных код приложения и платформы вместе. Без `makeApplication` в
+  трейсе весь `bindApplication` идёт в `Application`. Срез приложения
+  вокруг всего сценария (`AppStart`) не в счёт. У фоновых строк колонка
+  пустая.
 - Для единичных выбросов вместо сумм используйте оконные функции SQLite 3.50
   (`ROW_NUMBER() OVER ...`), как в `main_thread_outlier`.
 - Не переписывайте пересечение интервалов вручную через `JOIN ... ON`:

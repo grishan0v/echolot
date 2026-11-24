@@ -784,6 +784,57 @@ def _(report):
                              "IPackageManager.getPackageInfo 89%, keystore2 11%"), row
 
 
+# A cold start from its process's first section to its first frame, with
+# the main thread waiting on binder in every part of it (#911).
+LAUNCH_BINDER = {"project": {"package": "com.example.app", "process": "com.example.app"},
+                 "scenario": {"name": "launch", "start": {"name": "ActivityThreadMain"},
+                              "end": {"name": "Screen.firstFrame"}}}
+
+
+def _launch_binder(made: bool = True) -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "launch.perfetto-trace"
+        path.write_bytes(fixture.launch_binder(made=made))
+        return _analyze(path, Config(LAUNCH_BINDER))
+
+
+@check("binder_txn: the main thread's row says where in the launch its calls were made, "
+       "the platform's own start apart")
+def _(report):
+    """Who answered did not say whose the call was. On eleven cold starts of
+    Wikipedia's app the main thread's 70 ms of binder were 94% system_server's
+    to answer, and an agent sent to place them could not find them in the
+    app's code: a third were `attachApplication`, inside `ActivityThreadMain`,
+    before any of it had loaded (#911). The row now says where each call was
+    made, by the outermost of the platform's sections around it, and
+    `bindApplication` is the platform's up to its `makeApplication`. A call
+    the fixture makes inside `AppStart` alone is in none of them: an app's
+    own section is looked through. A background thread's calls are not asked
+    where, and the numbers are the slices' as before."""
+    launch = _launch_binder()
+    main = [r for r in rows(launch, "binder_txn") if r["thread"] == "main thread"]
+    assert [(r["count"], r["total_ms"], r["phase"]) for r in main] == [
+        (6, 80.0, "before the app's code 30%, Application 30%, activity 20%, "
+                  "frames 15%, other 5%")], main
+    pool = [r for r in rows(launch, "binder_txn") if r["thread"] == "background"]
+    assert [r["phase"] for r in pool] == [None], pool
+    assert only_row(report, "binder_txn")["phase"] == "other 100%", only_row(report, "binder_txn")
+
+
+@check("binder_txn: without makeApplication in the trace, none of bindApplication is said to be the platform's")
+def _(report):
+    """`makeApplication` is where the app's own code starts inside
+    `bindApplication`: the Application's constructor, then its providers and
+    `Application.onCreate`. Without it in the trace nothing says where that
+    is, and the platform's share is `ActivityThreadMain`'s alone: what the
+    row calls the platform's has to be, or the app's cost is put down to
+    the platform (#911)."""
+    main = [r for r in rows(_launch_binder(made=False), "binder_txn")
+            if r["thread"] == "main thread"]
+    assert [r["phase"] for r in main] == [
+        "before the app's code 25%, Application 35%, activity 20%, frames 15%, other 5%"], main
+
+
 @check("binder_txn, gc_pressure: a trace with nothing behind the slices gives the same rows, without the evidence")
 def _(report):
     # An older device, or a recording made by something else: the binder
