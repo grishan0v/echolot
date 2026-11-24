@@ -81,9 +81,19 @@ report is plausible. `LaunchState: UNKNOWN` with no `TotalTime` after a
 `force-stop` is a launch the system measured no start for, most often behind a
 dark or locked screen. `WARM` or `HOT` after one is a process that was running
 again by the launch: the trace holds neither its start nor `bindApplication`.
-`collect` says `not a cold start` under such a repeat and counts them at the
-end; `adb logcat -b events -d | grep am_proc_start` says what the system
-started the process for.
+`collect` says `not a cold start` under such a repeat, sets its trace aside
+as `<scenario>_iterNNN-warm.perfetto-trace` (out of the set, the paths it
+prints and the `next` line) and records the repeat again. A set gets as many
+re-recordings as it has repeats; past them it ends short, and the last line
+says how many cold starts it holds of how many asked for. `adb logcat -b
+events -d | grep am_proc_start` says what the system started the process for.
+Given a set-aside trace among cold ones, `analyze` leaves it out and names it.
+
+How each repeat started is kept beside its trace, under `launch` in
+`<trace>.recording.json`: the state, the time, `cold`, and the lines said
+under it. `echolot` prints it as the `starts` line, read off disk. Never
+record again to read the repeats' lines back after cutting `collect`'s
+output.
 
 `collect` stops the app before `runner.cooldown`'s wait, not after it. Left
 in front while the device cooled, the app had a job it scheduled come due by

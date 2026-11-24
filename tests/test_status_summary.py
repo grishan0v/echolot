@@ -181,3 +181,50 @@ def test_a_report_from_before_scenarios_is_named_where_it_belongs(project: Path)
     _report(project / ".echolot/out/coldStart")
     _, text = status(project)
     check("once it has a report of its own, nothing to say", "belongs" not in text, text)
+
+
+def _repeat(traces: Path, name: str, launch: dict | None) -> None:
+    from echolot import recording
+    traces.mkdir(parents=True, exist_ok=True)
+    (traces / name).write_bytes(b"x")
+    if launch is not None:
+        recording.write(traces / name, {"runner": "launch", "reset_policy": "force-stop",
+                                        "launch": launch})
+
+
+def test_status_says_how_each_repeat_started_without_a_device(project: Path, monkeypatch) -> None:
+    """The lines under each repeat were in `collect`'s output alone, and an
+    agent that had cut it with `tail` recorded the round again to read them
+    (#619). `status` reads them off what `collect` kept beside each trace."""
+    def no_adb(*args, **kw):
+        raise AssertionError(f"status asked the device: {args}")
+    monkeypatch.setattr(runner, "_run", no_adb)
+    traces = project / ".echolot/traces"
+    cold = {"state": "COLD", "cold": True, "notes": []}
+    for i in range(3):
+        _repeat(traces, f"coldStart_iter{i:03d}.perfetto-trace", {**cold, "repeat": i + 1})
+    _repeat(traces, "coldStart_iter001-warm.perfetto-trace",
+            {"repeat": 2, "state": "WARM", "cold": False, "notes": ["[!] not a cold start"]})
+    # Another scenario's, with a name that begins with this one's.
+    _repeat(traces, "coldStart_warm_iter000-hot.perfetto-trace",
+            {"repeat": 1, "state": "HOT", "cold": False, "notes": []})
+    lines, _ = status(project)
+    check("the set's states counted, the recording set aside named",
+          lines.get("starts") == "coldStart: 3 COLD · set aside, not cold: "
+          "coldStart_iter001-warm.perfetto-trace (WARM)", lines)
+    step, line = state.by_hand(state.project_state(project))
+    check("and the line to analyze them names the set alone", step == "analyze"
+          and "coldStart_iter002.perfetto-trace" in line and "-warm" not in line, line)
+
+
+def test_a_set_collect_kept_no_starts_for_has_no_starts_line(project: Path) -> None:
+    traces = project / ".echolot/traces"
+    for i in range(2):
+        _repeat(traces, f"coldStart_iter{i:03d}.perfetto-trace", None)
+    lines, _ = status(project)
+    check("nothing to say", "starts" not in lines, lines)
+    _repeat(traces, "coldStart_iter002.perfetto-trace",
+            {"repeat": 3, "state": "COLD", "cold": True, "notes": []})
+    lines, _ = status(project)
+    check("one that has it, and the two that do not, counted",
+          lines.get("starts") == "coldStart: 1 COLD, 2 recorded before collect kept it", lines)

@@ -129,6 +129,7 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
                     "newest": max(stamps.values(), default=None),
                     "sets": len(sets),
                     "last_set": max(sets, key=lambda k: sets[k]) if sets else None}
+    st["starts"] = starts(list(stamps), scenario, mine) if mine is not None else None
     st["collect"] = collect_state(project)
 
     st["report"] = _report(project / report_dir / "report.json")
@@ -345,6 +346,54 @@ def _holds(value: object, kind: type) -> bool:
     if isinstance(value, bool):
         return kind is bool
     return isinstance(value, kind)
+
+
+def starts(traces: list[Path], scenario: str, files: list[str]) -> dict | None:
+    """How the repeats of the scenario's set started, and which recordings of
+    it were set aside as not cold, from what `collect` kept beside each
+    (#619); None when it kept nothing of the kind, as for a set it recorded
+    before it kept this, or a trace it did not record.
+
+    Read off the files, with no device: the round's output is gone by the
+    time anyone asks, cut by `tail` or scrolled away, and recording the
+    round again was the one way left to read it back.
+    """
+    by_name = {p.name: p for p in traces}
+    states: list[str | None] = []
+    for f in files:
+        rec = runner.launch_record(by_name.get(Path(f).name, Path(f)))
+        if rec is not None:
+            states.append(rec.get("state") or None)
+    aside = []
+    for p in sorted(traces, key=lambda p: p.name):
+        m = runner._ASIDE.match(p.name)
+        rec = runner.launch_record(p) if m and m.group("scenario") == scenario else None
+        if rec is not None and rec.get("cold") is False:
+            aside.append({"name": p.name, "state": rec.get("state")})
+    if not aside and not any(states):
+        return None
+    return {"scenario": scenario, "repeats": len(files), "states": states, "aside": aside}
+
+
+def starts_line(st: dict) -> str | None:
+    """The `starts` line of `status`: the launch state of each repeat in the
+    scenario's set, counted, and the recordings set aside, named (#619)."""
+    s = st.get("starts")
+    if not s:
+        return None
+    from collections import Counter
+    counts = Counter(s["states"])
+    bits = [f"{n} {state or 'with no launch state'}" for state, n in counts.most_common()]
+    if s["repeats"] > len(s["states"]):
+        bits.append(f"{s['repeats'] - len(s['states'])} recorded before collect kept it")
+    line = f"{s['scenario']}: " + ", ".join(bits)
+    aside = s["aside"]
+    if aside:
+        shown = [f"{a['name']}" + (f" ({a['state']})" if a.get("state") else "")
+                 for a in aside[:3]]
+        more = f" and {len(aside) - 3} more" if len(aside) > 3 else ""
+        line += f" · set aside, not cold: {', '.join(shown)}{more}"
+    return line
 
 
 def collect_state(project: Path) -> dict | None:

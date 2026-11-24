@@ -945,6 +945,11 @@ def cmd_analyze(args) -> int:
         traces, same = _distinct_recordings(sorted(args.traces, key=run_order))
         if same:
             print(f"[!] {report_mod.same_recording_said(same)}", file=sys.stderr)
+        # A start `collect` stopped the app for and found warm, among cold
+        # ones: left out, and named (#523).
+        traces, warm = _cold_only(traces)
+        if warm:
+            print(f"[!] {report_mod.not_cold_said(warm, len(traces))}", file=sys.stderr)
         # Side by side, each in its own trace_processor, and merged in that
         # order (#488). See parallel.py.
         jobs = parallel.jobs_for(traces, getattr(args, "jobs", None))
@@ -966,6 +971,8 @@ def cmd_analyze(args) -> int:
         rep = report_mod.aggregate(reports)
         if same:
             rep["same_recording"] = same
+        if warm:
+            rep["not_cold"] = warm
     except (ConfigError, hunt_mod.NotOpen) as e:
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
@@ -1000,6 +1007,8 @@ def cmd_analyze(args) -> int:
     }
 
     w = rep.get("window") or {}
+    if warm:
+        recorder.note(not_cold=len(warm))
     recorder.note(
         traces=len(traces),
         fired=rep["summary"]["fired_ids"],
@@ -1178,6 +1187,35 @@ def _distinct_recordings(paths: list[str]) -> tuple[list[str], list[list[str]]]:
         else:
             groups[same].append(path)
     return kept, [g for g in groups.values() if len(g) > 1]
+
+
+def _cold_only(paths: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    """The traces to read, and those left out as not cold (#523).
+
+    `collect` keeps beside each trace how its start went (#619). A trace it
+    stopped the app for and found started warm all the same holds neither
+    the process start nor `bindApplication`, and in a set of cold starts it
+    is another measurement: one such repeat in five made `Repeat windows
+    diverged 3.7x`, an anchor missing in 1 of 5, and the header's pid the
+    warm run's. So it is left out, by what `collect` kept rather than by a
+    guess from the trace, and named.
+
+    Only from among others. A set that is all such traces, the ones
+    `collect` set aside, given on purpose, is read as given: there is no
+    cold start to read instead. A trace `collect` did not record, or one
+    recorded before it kept this, is read as it always was.
+    """
+    from . import runner
+
+    kept: list[str] = []
+    warm: list[dict[str, Any]] = []
+    for path in paths:
+        rec = runner.launch_record(Path(path))
+        if rec is not None and rec.get("cold") is False:
+            warm.append({"trace": path, "state": rec.get("state")})
+        else:
+            kept.append(path)
+    return (kept, warm) if kept else (paths, [])
 
 
 def _markers_against_code(rep: dict[str, Any], cfg: Config) -> None:
@@ -3755,6 +3793,11 @@ def cmd_status(args) -> int:
         said += (f" · {tr['sets']} earlier set(s) in subdirectories, "
                  f"last {tr['last_set']}")
     lines.append(("traces", said))
+    # How each repeat of the set started, from what collect kept beside it:
+    # its output is gone by now, and was the only place it was said (#619).
+    started = state.starts_line(st)
+    if started:
+        lines.append(("starts", started))
     if st.get("scenarios"):
         # One line a scenario, its traces and its latest report, so that the
         # one the next step names is seen beside the others.
@@ -4325,6 +4368,11 @@ def cmd_collect(args) -> int:
                         + ("" if said == e.gist else f"\n{said}"))
         progress.update(finished=time.time(), exit=2, error=e.gist)
         return 2
+    # The recordings that were stopped for a cold start and did not start
+    # cold (#523): set aside under names of their own, and out of the set,
+    # of every count below and of the paths printed.
+    aside = [r for r in results if r.get("aside")]
+    results = [r for r in results if not r.get("aside")]
     progress.update(finished=time.time(), exit=0, traces=len(results))
 
     # `TotalTime: 0` is the system saying it timed no start — the activity
@@ -4350,31 +4398,42 @@ def cmd_collect(args) -> int:
               f"launches report TotalTime: 0 — the system timed no start "
               f"there, usually because the activity was already in front.",
               file=sys.stderr)
-    # Repeats that were stopped and found the process running again by their
-    # start (#404). A spread over them and the cold ones is two kinds of start,
-    # and the device is not what to blame for it.
-    restarted = [r for r in results if r.get("not_cold")]
+    # Over the set alone. A spread over warm starts and cold ones was two
+    # kinds of start, and was put down to the device (#404); those are set
+    # aside now, and what spread is left is the device's.
     if len(times) > 1:
         spread = (max(times) - min(times)) / min(times) * 100
         print(f"\nam start -W: from {min(times)} to {max(times)} ms "
               f"(spread {spread:.0f}%)", file=sys.stderr)
-        if spread > 30 and not restarted:
+        if spread > 30:
             print("That spread is wide — the device is under load or has not "
                   "settled. Thresholds from such runs will be noisy.",
                   file=sys.stderr)
-    if restarted:
-        print(f"\n[!] {len(restarted)} of {len(results)} repeats did not start cold: the "
-              f"app was stopped before each, and its process was running again by "
-              f"its start. Those traces hold neither the process start nor "
-              f"bindApplication, and a report over the whole set mixes two kinds of "
-              f"start. `adb logcat -b events -d | grep am_proc_start` says what the "
-              f"system started it for.", file=sys.stderr)
+    if aside:
+        print(f"\n[!] {_aside_said(aside, len(results), iterations)}", file=sys.stderr)
 
     for r in results:
         print(r["path"])
     if n is not None:
         hunt_mod.touch(project, collect=True, n=n)
     return 0
+
+
+def _aside_said(aside: list[dict], kept: int, asked: int) -> str:
+    """`collect`'s last word on the recordings it set aside as not cold (#523):
+    how many, which, and whether the set is whole without them."""
+    k = len(aside)
+    names = ", ".join(r["path"].name for r in aside)
+    whole = (f"{'It was' if k == 1 else 'Each was'} recorded again, and the set holds "
+             f"{kept} cold starts." if kept >= asked else
+             f"The set holds {kept} cold start{'s' if kept != 1 else ''} of the {asked} "
+             f"asked for: the {asked} re-recordings it is given were spent.")
+    return (f"{k} recording{'s' if k != 1 else ''} did not start cold: the app was "
+            f"stopped before {'it' if k == 1 else 'each'}, and its process was running "
+            f"again by its start. Set aside, out of the set, with what collect said of "
+            f"{'it' if k == 1 else 'each'} kept beside it: {names}. {whole} "
+            f"`adb logcat -b events -d | grep am_proc_start` says what the system "
+            f"started it for.")
 
 
 def _whose_set(before: dict[str, Any] | None, scenario: str, inside: int | None) -> int | None:

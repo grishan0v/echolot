@@ -250,27 +250,31 @@ def test_the_stop_sends_the_app_home_and_waits_for_its_process_to_be_gone(tmp_pa
           script.endswith(f"pidof {PACKAGE} || true"), script)
 
 
-@pytest.mark.parametrize("left, state, said", [
-    ("", "COLD", None),
-    ("23628\n", "WARM", "was running again before the recording began (pid 23628)"),
-    ("", "WARM", "was gone after the force-stop and running again by the launch"),
-    ("", "HOT", "was gone after the force-stop and running again by the launch"),
-    ("23628 23630\n", "", "(pid 23628 23630)"),
-    ("23628\n", "COLD", None),
+@pytest.mark.parametrize("left, state, said, word", [
+    ("", "COLD", None, None),
+    ("23628\n", "WARM", "was running again before the recording began (pid 23628)", "warm"),
+    ("", "WARM", "was gone after the force-stop and running again by the launch", "warm"),
+    ("", "HOT", "was gone after the force-stop and running again by the launch", "hot"),
+    ("23628 23630\n", "", "(pid 23628 23630)", "not-cold"),
+    ("23628\n", "COLD", None, None),
 ], ids=["cold", "back-warm", "came-back-later", "hot", "no-launch-state", "died-before-launch"])
 def test_a_repeat_that_was_stopped_and_did_not_start_cold_says_so(
-        tmp_path, adb, left, state, said):
+        tmp_path, adb, left, state, said, word):
     """`am start -W` says how it found the process; the pid left after the
-    stop says it where `am start` says nothing of the kind."""
-    adb.script["force-stop"] = [left]
+    stop says it where `am start` says nothing of the kind. Such a recording
+    is set aside under a name of its own, and the repeat recorded again
+    (#523): here the second recording starts cold."""
+    adb.script["force-stop"] = [left, ""]
     adb.script["start"] = [am_start(state) if state
-                           else am_start().replace("LaunchState: COLD\n", "")]
+                           else am_start().replace("LaunchState: COLD\n", ""),
+                           am_start("COLD", 610)]
     lines: list[str] = []
     results = runner.collect(PACKAGE, tmp_path / "traces", 1, section={},
                              name="startup", log=lines.append)
     warned = [line for line in lines if "not a cold start" in line]
     if said is None:
-        check("a cold launch says nothing", not warned and not results[0].get("not_cold"),
+        check("a cold launch says nothing, and is recorded once",
+              not warned and len(results) == 1 and not results[0].get("not_cold"),
               (lines, results))
         return
     check("a line under the repeat's own", len(warned) == 1
@@ -279,7 +283,17 @@ def test_a_repeat_that_was_stopped_and_did_not_start_cold_says_so(
     check(f"that says {said!r}", said in warned[0] and PACKAGE in warned[0], warned)
     check("and what the trace lacks", "neither its process start nor bindApplication"
           in warned[0], warned)
-    check("the result carries it", results[0].get("not_cold") is True, results)
+    check("the recording carries it, and is set aside",
+          results[0].get("not_cold") is True and results[0].get("aside") is True, results)
+    check(f"under a name of its own, `-{word}`, that no repeat's glob takes",
+          results[0]["path"].name == f"startup_iter000-{word}.perfetto-trace"
+          and not runner._ITERATION.match(results[0]["path"].name), results)
+    check("then the repeat is recorded again, cold, under the set's name",
+          len(results) == 2 and results[1]["path"].name == "startup_iter000.perfetto-trace"
+          and not results[1].get("aside") and results[1]["total_time_ms"] == 610, results)
+    check("and the line says so, with what is left of the set's re-recordings",
+          any("set aside, out of the set: repeat 1 is recorded again (1 of the 1 "
+              "re-recordings the set is given)" in s for s in lines), lines)
 
 
 def test_without_a_stop_a_warm_launch_is_not_called_a_failed_cold_start(tmp_path, adb):
@@ -355,21 +369,25 @@ def test_an_unmeasured_launch_is_said_once_and_as_unmeasured(tmp_path, adb):
 def test_a_scenario_command_that_began_with_the_process_up_says_so(tmp_path, adb):
     """Command mode stops the app the same way, and `am start` is not ours
     to read there: the pid left after the stop is what says it."""
-    adb.script["force-stop"] = ["", "4242\n"]
+    adb.script["force-stop"] = ["", "4242\n", ""]
     lines: list[str] = []
     results = runner.collect(PACKAGE, tmp_path / "traces", 2,
                              section={"mode": "command", "command": "true"},
                              name="scroll", log=lines.append)
-    check("HOME and the stop before each repeat",
-          [kind(c) for c in adb.calls].count("force-stop") == 2
+    check("HOME and the stop before each recording",
+          [kind(c) for c in adb.calls].count("force-stop") == 3
           and all("KEYCODE_HOME" in " ".join(c) for c in adb.calls
                   if kind(c) == "force-stop"), adb.calls)
     warned = [s for s in lines if "not a cold start" in s]
     check("the second repeat's line says so", len(warned) == 1 and "(pid 4242)" in warned[0]
           and lines.index(warned[0]) - 1 == next(
               i for i, s in enumerate(lines) if "[2/2]" in s), lines)
-    check("and only its result carries it",
-          [r.get("not_cold", False) for r in results] == [False, True], results)
+    check("and only its recording carries it",
+          [r.get("not_cold", False) for r in results] == [False, True, False], results)
+    check("set aside with no launch state to name it by, and recorded again",
+          [r["path"].name for r in results] == [
+              "scroll_iter000.perfetto-trace", "scroll_iter001-not-cold.perfetto-trace",
+              "scroll_iter001.perfetto-trace"], results)
 
 
 # --- the last look before the recording (#611) -----------------------------------
@@ -404,43 +422,177 @@ def test_an_app_running_again_by_the_recording_is_stopped_again_and_said(tmp_pat
           not any("stopped before each wait" in s for s in lines), lines)
 
 
-def test_what_the_second_stop_leaves_is_what_the_repeat_is_judged_by(tmp_path, adb):
-    """A process the second stop could not keep down is the one the launch
-    found: the line under the repeat says both."""
-    adb.script["force-stop"] = ["", "4243\n"]
+def test_a_process_back_after_the_second_stop_is_stopped_once_more(tmp_path, adb):
+    """The look found the app, and the stop it made left the process there:
+    a recording begun now is known not to be cold before it starts (#523).
+    One more stop, and the repeat says it was stopped twice."""
+    adb.script["force-stop"] = ["", "4243\n", ""]
     adb.script["look"] = ["4242\n"]
-    adb.script["start"] = [am_start("WARM", 295)]
     lines: list[str] = []
     results = runner.collect(PACKAGE, tmp_path / "traces", 1, section={},
                              name="startup", log=lines.append)
+    kinds = adb.kinds()
+    check("the stop, the look, two stops more, then the recording",
+          kinds[kinds.index("force-stop"):kinds.index("rm")]
+          == ["force-stop", "screen", "look", "force-stop", "force-stop"], kinds)
     under = lines[next(i for i, s in enumerate(lines) if "[1/1]" in s) + 1:]
-    check("stopped again, then not cold with the pid left after the second stop",
-          len(under) == 2 and "(pid 4242), and was stopped again" in under[0]
+    check("one line under the repeat, that says twice",
+          under == [f"      {PACKAGE} was running again after the stop (pid 4242), and was "
+                    f"stopped again, twice, before the recording"], lines)
+    check("and the repeat is cold, recorded once",
+          len(results) == 1 and not results[0].get("not_cold"), results)
+
+
+def test_what_the_stops_leave_is_what_the_repeat_is_judged_by(tmp_path, adb):
+    """A process the stops after the look could not keep down is the one the
+    launch found: the line under the repeat says both, and the recording is
+    set aside. No more than two stops after the look."""
+    adb.script["force-stop"] = ["", "4243\n", "4243\n", ""]
+    adb.script["look"] = ["4242\n", ""]
+    adb.script["start"] = [am_start("WARM", 295), am_start("COLD", 610)]
+    lines: list[str] = []
+    results = runner.collect(PACKAGE, tmp_path / "traces", 1, section={},
+                             name="startup", log=lines.append)
+    kinds = adb.kinds()
+    first = kinds[:kinds.index("pull")]
+    check("the stop, the look, and two stops more: no third",
+          first.count("force-stop") == 3, first)
+    under = lines[next(i for i, s in enumerate(lines) if "[1/1]" in s) + 1:]
+    check("stopped twice, then not cold with the pid left after the last stop",
+          "(pid 4242), and was stopped again, twice," in under[0]
           and "running again before the recording began (pid 4243)" in under[1], lines)
-    check("the result carries it", results[0].get("not_cold") is True, results)
+    check("the recording carries it, set aside, and the repeat recorded again",
+          results[0].get("not_cold") is True and results[0].get("aside") is True
+          and not results[1].get("not_cold"), results)
 
 
-def test_collect_counts_the_repeats_that_were_not_cold_and_blames_no_device(
+def test_collect_sets_the_warm_repeats_aside_records_them_again_and_lists_the_cold(
         tmp_path, monkeypatch, capsys):
     """295 and 281 ms against 622: a 121% spread, and the line under it used to
-    say the device was under load. The spread was between two kinds of start."""
-    fake = FakeAdb(script={"force-stop": ["", "23628\n", "23779\n"],
+    say the device was under load. The spread was between two kinds of start,
+    and both warm traces went into the set, the `next` line, and the medians
+    (#523). Now each is set aside and its repeat recorded again."""
+    fake = FakeAdb(script={"force-stop": ["", "23628\n", "", "23779\n", ""],
                            "start": [am_start("COLD", 622), am_start("WARM", 295),
-                                     am_start("WARM", 281)]})
+                                     am_start("COLD", 640), am_start("WARM", 281),
+                                     am_start("COLD", 655)]})
     monkeypatch.setattr(runner, "_run", fake)
     (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     with recorder.isolated():
         code = main(["collect"])
     out, err = capsys.readouterr()
-    check("exit 0, the three traces printed", code == 0
-          and len([s for s in out.splitlines() if s.endswith(".perfetto-trace")]) == 3,
-          err[-800:])
-    check("each warm repeat says so", err.count("not a cold start") == 2, err)
-    check("the set counts them", "2 of 3 repeats did not start cold" in err, err)
+    printed = [s for s in out.splitlines() if s.endswith(".perfetto-trace")]
+    check("exit 0, the three cold traces printed, and only those", code == 0
+          and [Path(s).name for s in printed]
+          == [f"startup_iter{i:03d}.perfetto-trace" for i in range(3)], (out, err[-800:]))
+    check("five recordings in all", fake.kinds().count("pull") == 5, fake.kinds())
+    check("each warm recording says so", err.count("not a cold start") == 2, err)
+    check("the end counts them, names them, and says the set is whole",
+          "[!] 2 recordings did not start cold" in err
+          and "startup_iter001-warm.perfetto-trace, startup_iter002-warm.perfetto-trace" in err
+          and "Each was recorded again, and the set holds 3 cold starts." in err, err)
     check("and says where to look", "grep am_proc_start" in err, err)
-    check("the spread is still given", "from 281 to 622 ms (spread 121%)" in err, err)
-    check("and not put down to the device", "device is under load" not in err, err)
+    check("the spread is over the cold starts alone",
+          "from 622 to 655 ms (spread 5%)" in err and "device is under load" not in err, err)
+    traces = tmp_path / ".echolot" / "traces"
+    check("the warm ones are kept beside the set",
+          sorted(p.name for p in traces.glob("*-warm.perfetto-trace"))
+          == ["startup_iter001-warm.perfetto-trace", "startup_iter002-warm.perfetto-trace"])
+    check("collect.json counts the set's traces, not every recording",
+          json.loads((tmp_path / runner.PROGRESS_FILE).read_text())["traces"] == 3)
+
+
+def test_the_re_recordings_run_out_and_the_set_ends_short(tmp_path, monkeypatch, capsys):
+    """A device that starts the app again after every stop would be recorded
+    forever: the set gets as many recordings more as it has repeats, and
+    ends with the cold starts it has."""
+    fake = FakeAdb(script={"start": [am_start("COLD", 622), am_start("WARM", 295)]})
+    monkeypatch.setattr(runner, "_run", fake)
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with recorder.isolated():
+        code = main(["collect", "-n", "2"])
+    out, err = capsys.readouterr()
+    check("four recordings: two asked for, two more", fake.kinds().count("pull") == 4,
+          fake.kinds())
+    check("exit 0 with the one cold start printed", code == 0
+          and [Path(s).name for s in out.splitlines()] == ["startup_iter000.perfetto-trace"],
+          (out, err[-800:]))
+    check("each re-recording counted as it is spent",
+          "recorded again (1 of the 2 re-recordings the set is given)" in err
+          and "recorded again (2 of the 2 re-recordings the set is given)" in err, err)
+    check("and the recording past them says the set ends short",
+          "the 2 re-recordings the set is given are spent, so it ends one cold start "
+          "short" in err, err)
+    check("the end says how many of how many",
+          "The set holds 1 cold start of the 2 asked for: the 2 re-recordings it is "
+          "given were spent." in err, err)
+    check("the warm ones numbered apart",
+          sorted(p.name for p in (tmp_path / ".echolot" / "traces").glob("*-warm*.perfetto-trace"))
+          == ["startup_iter001-warm-2.perfetto-trace", "startup_iter001-warm-3.perfetto-trace",
+              "startup_iter001-warm.perfetto-trace"])
+
+
+def test_a_set_with_no_cold_start_fails_and_says_where_the_recordings_are(
+        tmp_path, monkeypatch, capsys):
+    fake = FakeAdb(script={"start": [am_start("WARM", 295)]})
+    monkeypatch.setattr(runner, "_run", fake)
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with recorder.isolated():
+        code = main(["collect", "-n", "1"])
+    out, err = capsys.readouterr()
+    check("exit 2, and no trace printed as the set", code == 2 and not out.strip(), (out, err))
+    check("the error names the recordings and what to do",
+          "none of the 2 recordings started cold" in err
+          and "startup_iter000-warm.perfetto-trace, startup_iter000-warm-2.perfetto-trace" in err
+          and "grep am_proc_start" in err, err)
+    progress = json.loads((tmp_path / runner.PROGRESS_FILE).read_text())
+    check("collect.json says it failed, and why", progress["exit"] == 2
+          and "none of the 2 recordings started cold" in progress["error"], progress)
+
+
+def test_each_recording_keeps_how_it_started_beside_it(tmp_path, adb):
+    """What `collect` says under a repeat lived in its output alone, and an
+    agent that had cut it with `tail` recorded the round again to read it
+    back (#619). It is kept beside each trace, the set's and those set
+    aside, with the lines said under it."""
+    adb.script["look"] = ["", "4242\n", ""]
+    adb.script["force-stop"] = ["", "", "", "4243\n", ""]
+    adb.script["start"] = [am_start("COLD", 622), am_start("WARM", 295),
+                           am_start("COLD", 640)]
+    lines: list[str] = []
+    results = runner.collect(PACKAGE, tmp_path / "traces", 2, section={},
+                             name="startup", log=lines.append)
+    kept = {r["path"].name: runner.launch_record(r["path"]) for r in results}
+    check("one record per recording", list(kept) == [
+        "startup_iter000.perfetto-trace", "startup_iter001-warm.perfetto-trace",
+        "startup_iter001.perfetto-trace"], kept)
+    first, warm, again = kept.values()
+    check("a cold start: its state, its time, cold, nothing said",
+          first == {"repeat": 1, "attempt": 1, "state": "COLD", "total_time_ms": 622,
+                    "cold": True, "notes": []}, first)
+    check("the warm one: the repeat it was for, not cold, and both lines said under it",
+          warm["repeat"] == 2 and warm["attempt"] == 1 and warm["state"] == "WARM"
+          and warm["total_time_ms"] == 295 and warm["cold"] is False
+          and [n.strip() for n in lines if "pid 424" in n]
+          == [n for n in warm["notes"] if "pid 424" in n] and len(warm["notes"]) == 2, warm)
+    check("the repeat recorded again says so",
+          again["repeat"] == 2 and again["attempt"] == 2 and again["cold"] is True, again)
+
+
+def test_without_a_stop_nothing_is_judged_cold_or_not(tmp_path, adb):
+    adb.script["start"] = [am_start("COLD"), AM_START_IN_FRONT]
+    results = runner.collect(PACKAGE, tmp_path / "traces", 2,
+                             section={"reset_policy": "none"}, name="startup",
+                             log=lambda m: None)
+    records = [runner.launch_record(r["path"]) for r in results]
+    check("the state as am start gave it, and no verdict on it",
+          [(r["state"], r["cold"]) for r in records]
+          == [("COLD", None), ("UNKNOWN (0)", None)], records)
+    check("the repeat that started nothing keeps its line",
+          "this trace holds no launch" in records[1]["notes"][0], records)
 
 
 # --- sampling: sent to the device, and said ------------------------------------

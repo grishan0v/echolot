@@ -49,6 +49,17 @@ report's `recording` block, where `compare` sets it against the other side's
 moves with its trace when a set is set aside; copy it along if you move
 traces by hand, or that set's runner reads as unknown.
 
+The account also keeps how the repeat started, under `launch`: which repeat
+of the set it was and which recording of that repeat (`attempt`, 2 and on for
+one recorded again), `am start -W`'s `state` (`COLD`, `WARM`, `HOT`; `null` in
+command mode) and `total_time_ms`, `cold` (`true` for a stopped app that
+started cold, `false` for one that did not, `null` where there is nothing to
+judge by), and `notes`, the lines `collect` printed under the repeat. Before,
+they were in its output alone, and an agent that had cut that output with
+`tail` recorded a whole round again to read them back. `echolot` reads them
+off the set with no device and prints a `starts` line:
+`startup: 5 COLD · set aside, not cold: startup_iter001-warm.perfetto-trace (WARM)`.
+
 ## Three modes
 
 ```yaml
@@ -115,10 +126,39 @@ again, with a line under the repeat's own: `was running again after the 95s
 cooling wait (pid 4242), and was stopped again before the recording`. A set
 with a cooldown says at its start that the app is stopped before each wait.
 
+A process the last look finds is stopped once more if that stop leaves it
+there (`was stopped again, twice, before the recording`): a recording begun
+with the process up is known not to be cold before it starts.
+
 A repeat that was stopped and started warm all the same gets a line under its
 own: `not a cold start`, with the pid when the process was running again
-before the recording began. The line at the end counts those repeats, and the
-spread of `TotalTime` over a set that has them is not put down to the device.
+before the recording began. Its trace holds neither the process start nor
+`bindApplication`, and in a set of cold starts it is another measurement: one
+such repeat in five made the report's windows diverge 3.7x and put the warm
+run's pid in its header. So it is set aside, out of the set, as
+`<scenario>_iterNNN-warm.perfetto-trace` (`-hot`, `-relaunch`, or `-not-cold`
+when `am start` gave no state), with its account beside it, and the repeat
+is recorded again: `set aside, out of the set: repeat 2 is recorded again (1
+of the 5 re-recordings the set is given)`. That name is no repeat's, so the
+paths `collect` prints, the `next` line and `echolot`'s count of the set leave
+it out, and it moves with its set when the set is set aside.
+
+A set is given as many recordings more as it has repeats, and no more: a
+device that starts the app again after every stop would otherwise be
+recorded forever. Past them, a repeat that is not cold leaves the set one
+cold start short. The line at the end names every recording set aside and
+says whether the set is whole: `Each was recorded again, and the set holds 5
+cold starts`, or `The set holds 3 cold starts of the 5 asked for`. A set with
+no cold start at all is an error, exit 2, that names the recordings set
+aside. On an A51, 51 of 124 starts of one day came out warm before the stop
+moved ahead of the cooldown, and a block of five kept one to three cold
+starts.
+
+`analyze` reads the same account. Given a trace `collect` set aside among
+cold ones, a glob that took the whole directory say, it leaves it out of the
+medians and says which: `Left out: startup_iter001-warm.perfetto-trace
+(WARM)`, in its output, in `report.md` under the runs, and in `report.json`
+as `not_cold`. A set made only of such traces is read as given.
 
 The scenario that needs nothing more is `scenario.window: launch`: its window
 is the launch this mode starts, and the trace says where it ends, so nobody

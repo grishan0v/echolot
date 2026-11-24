@@ -976,6 +976,9 @@ def harvest(search_root: Path, since: float, out_dir: Path,
 # What `collect` names a trace it wrote, read back by set_aside to tell
 # whose a file is.
 _ITERATION = re.compile(r"^(?P<scenario>.+)_iter\d+\.perfetto-trace$")
+# A recording `collect` set aside as not cold (#523, `_aside_path`).
+_ASIDE = re.compile(r"^(?P<scenario>.+)_iter\d+-(?:warm|hot|relaunch|not-cold)(?:-\d+)?"
+                    r"\.perfetto-trace$")
 
 
 def set_aside(out_dir: Path, name: str,
@@ -1047,6 +1050,25 @@ def set_aside(out_dir: Path, name: str,
 # told a reader to "let it cool and record again" after a set that had cooled
 # to 35 °C before every repeat and throttled all the same (#522). `collect`
 # keeps them in the account beside each trace (recording.py).
+def launch_record(trace: Path) -> dict | None:
+    """How the repeat that recorded `trace` started, as `collect` kept it
+    beside the trace (#619); None for a trace it did not record, or recorded
+    before it kept this.
+
+    `repeat` and `attempt` (2 and on: recorded again), `state` (`COLD`,
+    `WARM`, `HOT`; None in command mode), `total_time_ms` from `am start -W`,
+    `cold` (True: stopped, and the launch said COLD; False: stopped, and the
+    process was running again by the start; None: nothing to judge by), and
+    `notes`, the lines `collect` said under the repeat's own.
+
+    The output of a `collect` is cut by whoever reads it, and with the lines
+    went the only record of which repeats were cold: an agent that had piped
+    it through `tail` recorded the whole round again to read them back.
+    """
+    rec = recording.kept(trace, "launch")
+    return rec if isinstance(rec, dict) else None
+
+
 def markers_in_build(trace: Path) -> list[str] | None:
     """The temporary markers `collect` found in the build on the phone before it
     recorded `trace`; None when it did not look, or found some missing (#536)."""
@@ -1178,6 +1200,12 @@ def collect(package: str, out_dir: Path, iterations: int,
     whose app drew no frame, or whose end never closed, used to be recorded
     whole and accepted, and only `analyze` said so, as a build too old for
     its markers.
+
+    Returned: every recording made, in order. In launch and command modes
+    with a stop between repeats, one whose app was running again by its start
+    carries `aside`: it was kept under a name of its own and its repeat
+    recorded again (#523), and the caller leaves it out of the set. How each
+    repeat started is kept beside its trace (`launch_record`, #619).
     """
     import contextlib
     import time
@@ -1355,7 +1383,17 @@ def collect(package: str, out_dir: Path, iterations: int,
     # before each repeat: a set that waits to cool can outlast the screen.
     screen.ready(dev, _run, log)
 
+    # Every recording, in the order made: the set's, and those set aside as
+    # not cold (`aside`), which the caller counts and leaves out.
     results = []
+    # A repeat the app was stopped for and that started warm all the same is
+    # set aside, out of the set, and recorded again (#523). The set gets as
+    # many recordings more as it has repeats, and no more: a device that
+    # starts the app again after every stop would be recorded forever. Past
+    # them, a repeat that is not cold leaves the set one cold start short.
+    spare = iterations if reset == "force-stop" else 0
+    kept = again_used = short = 0
+    checked = False
     # Composable names go on after the device is held still and off before
     # it is put back, so that the app is the last thing touched and the
     # first thing restored.
@@ -1366,7 +1404,13 @@ def collect(package: str, out_dir: Path, iterations: int,
         if settled.cooldown is not None and reset == "force-stop":
             log("  the app is stopped before each wait, and stopped again if it "
                 "is running by the recording")
-        for i in range(iterations):
+        # Which recording of the repeat this is: 2 and on, recorded again.
+        attempt = 0
+        while kept + short < iterations:
+            # The set's names run on without a gap: a recording set aside
+            # leaves its name to the one that records the repeat again.
+            i = kept
+            attempt += 1
             out = out_dir / f"{name}_iter{i:03d}.perfetto-trace"
             # HOME, the force-stop and a wait for the process to be gone (see
             # _stop), before the device cools and not after (#611). Cooled
@@ -1380,10 +1424,15 @@ def collect(package: str, out_dir: Path, iterations: int,
             screen.ready(dev, _run, log, during=f"before repeat {i + 1} of {iterations}")
             # A last look right before the recording: whatever started the
             # app during the wait, it is stopped again, and the repeat says
-            # so. What is left after that is said under the repeat's line.
+            # so. A process back after that stop is stopped once more
+            # (RESTOPS): a recording made with it there is known not to be
+            # cold before it begins (#523). What is left after that is said
+            # under the repeat's line.
             again = _running(dev, package) if reset == "force-stop" else ""
-            if again:
+            restops = 0
+            while again and restops < RESTOPS and (restops == 0 or left):
                 left, _ = _stop(dev, package)
+                restops += 1
             _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
             # With composable names, `--background-wait` waits on every SDK
             # producer on the device and outlasts the recording (see
@@ -1453,19 +1502,50 @@ def collect(package: str, out_dir: Path, iterations: int,
             state = str(info.get("launch_state", ""))
             restarted = (reset == "force-stop" and not unmeasured
                          and (state in NOT_COLD or (bool(left) and state != "COLD")))
+            # What is said under the repeat's line, and kept beside its trace
+            # with the rest of how it started (#619).
+            notes: list[str] = []
+            if again:
+                notes.append(_stopped_again_line(package, again, waited, restops))
+            if unmeasured and reset == "none":
+                info["no_launch"] = True
+                notes.append("[!] am start -W measured no start: the app was still in "
+                             "front, and with reset_policy: none nothing stopped it, so "
+                             "this trace holds no launch")
+            elif unmeasured:
+                notes.append("[!] am start -W measured no start, with the screen on and "
+                             "unlocked: this trace may hold none")
             if restarted:
                 info["not_cold"] = True
+                notes.append("[!] " + _not_cold_line(package, left))
             # A trace is recorded and about to take the first name: the moment
             # the previous set has to make room, and not a moment earlier.
             make_room()
+            if restarted:
+                # Out of the set, under a name no glob of its repeats takes,
+                # and kept: it is what the system did to the app (#523).
+                info["aside"] = True
+                out = _aside_path(out, state)
             info.update(_pull(dev, out))
-            recording.write(out, {
+            facts = {
                 "runner": mode, "reset_policy": reset, "app_at_stop": was,
                 "cooldown": None if cooling is None else {
                     "max_c": cooling.max_c, "sensor": cooling.sensor,
                     "before_c": (round(settled.last_c, 1)
                                  if settled.last_c is not None else None)},
-                **({"markers_in_build": built} if built is not None else {})})
+                **({"markers_in_build": built} if built is not None else {}),
+                "launch": {
+                    "repeat": i + 1, "attempt": attempt,
+                    "state": state or None,
+                    "total_time_ms": info.get("total_time_ms"),
+                    # True: stopped, and `am start -W` said COLD. False:
+                    # stopped, and it was not. None: nothing to judge by.
+                    "cold": (False if restarted else True
+                             if mode == "launch" and reset == "force-stop"
+                             and state == "COLD" else None),
+                    "notes": notes,
+                }}
+            recording.write(out, facts)
             results.append(info)
 
             extra = ""
@@ -1475,22 +1555,27 @@ def collect(package: str, out_dir: Path, iterations: int,
                 extra += f" ({info['launch_state']})"
             log(f"  [{i + 1}/{iterations}] {out.name}  "
                 f"{info['size'] / 1e6:.1f} MB{extra}")
-            if again:
-                log("      " + _stopped_again_line(package, again, waited))
-            if unmeasured and reset == "none":
-                info["no_launch"] = True
-                log("      [!] am start -W measured no start: the app was still in "
-                    "front, and with reset_policy: none nothing stopped it, so this "
-                    "trace holds no launch")
-            elif unmeasured:
-                log("      [!] am start -W measured no start, with the screen on and "
-                    "unlocked: this trace may hold none")
+            for note in notes:
+                log("      " + note)
             if restarted:
-                log("      [!] " + _not_cold_line(package, left))
+                if again_used < spare:
+                    again_used += 1
+                    log(f"      set aside, out of the set: repeat {i + 1} is recorded "
+                        f"again ({again_used} of the {spare} re-recordings the set "
+                        f"is given)")
+                else:
+                    short += 1
+                    log(f"      set aside, out of the set; the {spare} re-recordings "
+                        f"the set is given are spent, so it ends one cold start short")
+                continue
+            kept += 1
+            attempt = 0
             # One look at the first trace before the rest are recorded: a
             # round in which the scenario never reached its screen stops here,
-            # with the phone still in hand (#536).
-            if i == 0 and check_first is not None:
+            # with the phone still in hand (#536). The first trace of the
+            # set, not a recording set aside before it.
+            if not checked and check_first is not None:
+                checked = True
                 stop, note = check_first(out)
                 if stop and iterations == 1:
                     # The one trace there is: kept, to look at.
@@ -1506,7 +1591,21 @@ def collect(package: str, out_dir: Path, iterations: int,
                         f"Once it shows the scenario's screen, collect again.")
                 if note:
                     log(f"      [!] {note}")
-            tell(done=i + 1)
+                    notes.append(f"[!] {note}")
+                    recording.write(out, facts)
+            tell(done=kept)
+    if not kept:
+        # Every recording set aside: nothing to hand on as a set, and the
+        # traces are where the system's doing is to be read.
+        aside = ", ".join(r["path"].name for r in results)
+        raise RunnerError(
+            f"none of the {len(results)} recordings started cold: the app was "
+            f"stopped before each, and its process was running again by its start "
+            f"every time. They are set aside in {out_dir}: {aside}. `adb logcat -b "
+            f"events -d | grep am_proc_start` says what the system started it for; "
+            f"to read these starts as they are, analyze those traces by name.",
+            gist=f"none of the {len(results)} recordings started cold: the app's "
+                 f"process was running again by each start")
     return results
 
 
@@ -1516,6 +1615,11 @@ STOP_POLLS = 50
 # And how long it has to stay gone, in seconds. On an A51 the system had it
 # running again 65–95 ms after the kill, a moment after it was first gone.
 STOP_SETTLE_S = 0.5
+# How many times the app is stopped again when the last look before a
+# recording finds it running: once, and once more if that stop leaves it
+# there. A recording begun with the process up is known not to be cold
+# before it starts (#523).
+RESTOPS = 2
 
 # What `am start -W` calls a launch that found the process running.
 NOT_COLD = ("WARM", "HOT", "RELAUNCH")
@@ -1580,11 +1684,28 @@ def _running(device: str, package: str) -> str:
     return " ".join(pids.split())
 
 
-def _stopped_again_line(package: str, pids: str, waited: float) -> str:
-    """The line under a repeat whose app was running again by its recording (#611)."""
+def _stopped_again_line(package: str, pids: str, waited: float, stops: int = 1) -> str:
+    """The line under a repeat whose app was running again by its recording
+    (#611), and how many times it was stopped for it (#523)."""
     after = f"after the {waited:.0f}s cooling wait" if waited else "after the stop"
+    times = "again" if stops == 1 else "again, twice,"
     return (f"{package} was running again {after} (pid {pids}), and was stopped "
-            f"again before the recording")
+            f"{times} before the recording")
+
+
+def _aside_path(out: Path, state: str) -> Path:
+    """Where a recording that did not start cold is kept: beside the set, as
+    `<name>_iterNNN-warm.perfetto-trace` (`-hot`, `-relaunch`, `-not-cold`
+    where `am start` gave no state), a name `_ITERATION` does not match, so
+    that `status`, `next` and `collect`'s own list leave it out. It goes with
+    its set when the set is set aside (#523)."""
+    stem = out.name.removesuffix(".perfetto-trace")
+    word = state.lower() if state in NOT_COLD else "not-cold"
+    path, n = out.with_name(f"{stem}-{word}.perfetto-trace"), 1
+    while path.exists():
+        n += 1
+        path = out.with_name(f"{stem}-{word}-{n}.perfetto-trace")
+    return path
 
 
 def _not_cold_line(package: str, left: str) -> str:
