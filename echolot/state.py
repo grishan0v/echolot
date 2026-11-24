@@ -96,6 +96,8 @@ def project_state(project: Path, config: str = "echolot.yml",
             if theirs in cfg.scenarios:
                 cfg.select(theirs)
             st["config"]["scenario"] = cfg.scenario_name
+            # The hash of what applies to that scenario (#928).
+            st["config"]["sha"] = cfg.sha
             # The runner of that scenario: read before the choice, it was
             # the first scenario's, or the top level's under a scenario that
             # has a runner of its own (#501).
@@ -172,6 +174,9 @@ def project_state(project: Path, config: str = "echolot.yml",
             st["scenarios"].append({
                 "name": name, "focus": name == focus, "files": files,
                 "own_thresholds": bool(loaded.scenario_overrides),
+                # What of the config applies to this scenario: its report
+                # is held against this, not the focused one's (#928).
+                "sha": loaded.sha,
                 "report": _report(project / loaded.report_dir / "report.json")})
         loaded.select(focus)
         # The report a single-scenario config left at `.echolot/out/`, from

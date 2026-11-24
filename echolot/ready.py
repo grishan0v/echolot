@@ -614,14 +614,16 @@ def latest(st: dict) -> list[dict[str, Any]]:
     it, `said` the line `echolot` prints, kept for "All settings"."""
     project, known = st["project"], st.get("config")
     usable = known if known and not known.get("error") else None
-    each = ([(sc["name"], sc["report"]) for sc in st["scenarios"]] if st.get("scenarios")
-            else [(None, st.get("report"))])
+    each = ([(sc["name"], sc["report"], sc.get("sha")) for sc in st["scenarios"]] if st.get("scenarios")
+            else [(None, st.get("report"), (usable or {}).get("sha"))])
     out = []
-    for name, rep in each:
+    for name, rep, sha in each:
+        # Each report against what of the config applies to its scenario (#928).
+        mine = {**usable, "sha": sha} if usable else None
         entry: dict[str, Any] = {"key": name, "scenario": name or (usable or {}).get("scenario"),
                                  "path": None, "verdict": None,
                                  "plain": "No report yet. It appears here once its recordings are read.",
-                                 "said": cli._report_text(rep, usable, project, "no report yet")}
+                                 "said": cli._report_text(rep, mine, project, "no report yet")}
         if rep:
             report = None if rep.get("error") else _report(rep["path"])
             if report is None:

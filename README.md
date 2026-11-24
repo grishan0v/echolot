@@ -136,7 +136,7 @@ That is the platform's measure rather than the window: the startup began 38 ms b
 Device: clock **1478 MHz** (from 1325 to 1574 across repeats), peak 54 °C, 1514 MB free at the low point
 Detectors fired: **5 of 16**
 > ⚠️ 1 detector(s) could not run, because the trace does not hold what they read. Their silence says nothing about the app. `composables` — The recording does not carry the names of composables, which have to be switched on when recording. A recording that holds what they read lets them look; until then those checks are open.
-Config: `/home/you/my-app/echolot.yml` (sha 3d78738defec) · thresholds: built-in defaults
+Config: `/home/you/my-app/echolot.yml` (sha ce502af692b8) · thresholds: built-in defaults
 
 ## Markers
 _the names `domains` lists and the `AGENTTMP_` ones; medians per run, self time with children subtracted_

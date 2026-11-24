@@ -2787,7 +2787,7 @@ def cmd_status(args) -> int:
                          f"from before the config named several: it belongs in "
                          f".echolot/out/{sc['name']}/")
             lines.append(("scenario", f"{sc['name']}{own} · {count} trace(s) · "
-                          + _report_text(sc["report"], cfg, st["project"], none)
+                          + _report_text(sc["report"], {**(cfg or {}), "sha": sc.get("sha")}, st["project"], none)
                           + mark))
     else:
         lines.append(("report", _report_text(st["report"], cfg, st["project"])))
