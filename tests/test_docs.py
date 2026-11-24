@@ -422,7 +422,59 @@ def test_every_address_into_this_repository_is_in_its_tree(document):
 def test_the_readme_links_into_this_repository_at_all():
     """The check above found the README's links, and did not pass on none."""
     found = _OWN.findall(_unfenced(ROOT / "README.md"))
+    assert len(found) >= 5, found
+
+
+# --- addresses on the documentation site --------------------------------------
+
+# The READMEs send a reader to a document's page on the site, which has a
+# search and a sidebar, rather than to the Markdown on GitHub (#406). The link
+# checker follows these addresses, but on the site `main` last built: a page
+# a pull request renames is still up until that pull request merges, and the
+# README's link to it breaks the run after. So they are held to the tree the
+# pull request brings too: a page docs/site.py publishes for that language,
+# and a heading there for the anchor.
+_SITE = re.compile(r"https://grishan0v\.github\.io/echolot/([^)\s\"'#>]*)(?:#([^)\s\"'>]+))?")
+
+
+def _site_source(path: str) -> Path | None:
+    """The Markdown a page of the site is built from, or None if none is."""
+    _, langs = _languages()
+    parts = [p for p in path.split("/") if p]
+    docs = ROOT / "docs"
+    for info in langs.values():
+        if info["site_prefix"] and parts[:1] == [info["site_prefix"]]:
+            docs, parts = docs / info["docs_dir"], parts[1:]
+            break
+    if len(parts) > 1 or not path.endswith("/") and parts:
+        return None
+    page = docs / (f"{parts[0]}.md" if parts else "README.md")
+    return page if page.is_file() else None
+
+
+@pytest.mark.parametrize("document", ["SECURITY.md", *LINKING])
+def test_every_address_on_the_site_is_a_page_this_tree_publishes(document):
+    """What a link to the site names is a page of it, and so is its heading."""
+    broken = []
+    for path, fragment in _SITE.findall(_unfenced(ROOT / document)):
+        page = _site_source(path)
+        if page is None:
+            broken.append(path or "/")
+        elif fragment and fragment not in _anchors(page):
+            broken.append(f"{path}#{fragment}")
+    assert not broken, (
+        f"{document} links to pages the site does not have: {', '.join(broken)}")
+
+
+@pytest.mark.parametrize("readme", ["README.md", "README.ru.md"])
+def test_the_readme_sends_its_documents_to_the_site(readme):
+    """The check above found the README's links to the site, and each of the
+    documents it lists goes there rather than to the Markdown on GitHub."""
+    text = _unfenced(ROOT / readme)
+    found = _SITE.findall(text)
     assert len(found) >= 10, found
+    on_github = re.findall(r"https://github\.com/grishan0v/echolot/blob/main/docs/[^)\s\"'>]+", text)
+    assert not on_github, f"{readme} sends these documents to GitHub, not the site: {on_github}"
 
 
 # --- the version, which is also a claim about the tool ----------------------

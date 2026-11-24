@@ -58,6 +58,9 @@ THEMES = {
                  page="#0D1117"),
 }
 
+# The line a table's words are folded under, below its picture.
+AS_TEXT = "The table as text"
+
 # What to type in the agent, by what a person arrives with: (when, what to
 # type, what it needs). The first row is the first run, which sets the
 # project up.
@@ -255,11 +258,13 @@ def tables(lang: str = "en") -> dict[str, dict]:
         return {
             "ask": dict(
                 title="What to type in the agent, by the problem you arrive with",
+                as_text=AS_TEXT,
                 labels=("WHEN", "WHAT TO TYPE"), rows=ASK, split=300, row=58,
                 lead=(SANS, 16, "ink", 400), rest=(MONO, 14.5, "accent", 500),
                 narrow=((SANS, 16, "ink", 400), (MONO, 13.5, "accent", 500))),
             "detectors": dict(
                 title="The detectors, and what each one catches",
+                as_text=AS_TEXT,
                 labels=("DETECTOR", "WHAT IT CATCHES"), rows=detector_rows(), split=260, row=46,
                 lead=(MONO, 14.5, "accent", 500), rest=(SANS, 15.5, "ink", 400),
                 narrow=((MONO, 14, "accent", 500), (SANS, 14.5, "ink", 400))),
@@ -280,6 +285,7 @@ def tables(lang: str = "en") -> dict[str, dict]:
     return {
         "ask": dict(
             title=ask_cfg["title"],
+            as_text=cfg["as_text"],
             labels=tuple(ask_cfg["labels"]),
             rows=[tuple(r) for r in ask_cfg["rows"]],
             split=300, row=58,
@@ -287,6 +293,7 @@ def tables(lang: str = "en") -> dict[str, dict]:
             narrow=((SANS, 16, "ink", 400), (MONO, 13.5, "accent", 500))),
         "detectors": dict(
             title=det_cfg["title"],
+            as_text=cfg["as_text"],
             labels=tuple(det_cfg["labels"]),
             rows=[(det_id, desc_map[det_id], None) for det_id, _, _ in base_detectors],
             split=260, row=46,
@@ -309,19 +316,45 @@ def pictures(lang: str = "en") -> dict[str, str]:
 
 
 def alt(table: dict) -> str:
-    """A table in words, for whoever does not see the picture: a screen reader,
-    a search, a page with its images off."""
-    rows = " ".join(f"{first}: {second}{f' ({note})' if note else ''}."
-                    for first, second, note in table["rows"])
-    return f"{table['title']}. {rows}"
+    """One sentence that names the table, for whoever does not see the
+    picture. Its rows follow the picture as text (`in_words`): written into
+    the alt, they were 966 characters a screen reader says in one breath,
+    with no way to skip a row, and a wall of text wherever the alt shows
+    (#411)."""
+    return f"{table['title']}."
 
 
-def with_alts(readme: str, lang: str = "en") -> str:
-    """The README with each table picture's alt text written from its rows."""
+def _cell(s: str, code: bool) -> str:
+    """One cell as Markdown: code where the picture sets it in monospace."""
+    if not code:
+        return re.sub(r"([\\`*_\[\]<>])", r"\\\1", s)
+    if "`" in s:
+        raise SystemExit(f"a cell the table sets as code holds a backtick: {s!r}")
+    return f"`{s}`"
+
+
+def in_words(table: dict) -> str:
+    """The table as a list, a row an item, folded under its picture: a screen
+    reader, a search and a page with its images off get every word, and a
+    reader who sees the picture gets one line they can open."""
+    lead, rest = table["lead"][0] == MONO, table["rest"][0] == MONO
+    items = "\n".join(
+        f"- {_cell(first, lead)}: {_cell(second, rest)}"
+        + (f" ({_cell(note, False)})" if note else "")
+        for first, second, note in table["rows"])
+    return f"<details>\n<summary>{table['as_text']}</summary>\n\n{items}\n\n</details>\n"
+
+
+def with_words(readme: str, lang: str = "en") -> str:
+    """The README with each table picture's alt text, and its words under it,
+    written from its rows."""
     default, _ = _load_languages()
     prefix = RAW if lang == default else f"{RAW}{lang}/"
     pattern = re.compile(
-        r'(<img alt=")([^"]*)(" src="' + re.escape(prefix) + r'([a-z]+)-wide\.svg")'
+        r'(<img alt=")([^"]*)(" src="' + re.escape(prefix) + r'([a-z]+)-wide\.svg"[^>]*>\n'
+        r"\s*</picture>\n\s*</p>\n)"
+        r"(\n<details>\n<summary>[^<\n]*</summary>\n.*?\n</details>\n)?",
+        re.S,
     )
     known, found = tables(lang), set()
 
@@ -333,7 +366,7 @@ def with_alts(readme: str, lang: str = "en") -> str:
         said = alt(known[name])
         for raw, escaped in (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"), ('"', "&quot;")):
             said = said.replace(raw, escaped)
-        return match.group(1) + said + match.group(3)
+        return match.group(1) + said + match.group(3) + "\n" + in_words(known[name])
 
     new = pattern.sub(words, readme)
     if found != set(known):
@@ -394,7 +427,7 @@ SAMPLE = re.compile(r"^```markdown\n# Marker Report\n.*?^```", re.S | re.M)
 
 def write_readme(lang: str | None = None) -> bool:
     """The README's parts this script writes: the sample report, rendered from
-    the demo app, and the alt text of each table. True when anything changed."""
+    the demo app, and each table's alt text and words. True when anything changed."""
     sys.path.insert(0, str(ROOT))
     from echolot import demo, recorder
     from echolot import report as report_mod
@@ -417,7 +450,7 @@ def write_readme(lang: str | None = None) -> bool:
             raise SystemExit(
                 f"{info['readme']}: the ```markdown block holding the sample report is gone"
             )
-        new = with_alts(
+        new = with_words(
             SAMPLE.sub(lambda _: f"```markdown\n{rendered}\n```", text_, count=1),
             lang=code,
         )
@@ -435,7 +468,7 @@ def main(argv: list[str]) -> int:
                              "desktop and phone")
     args = parser.parse_args(argv)
     if write_readme():
-        print("→ updated README sample report and tables' alt text")
+        print("→ updated README sample report and tables' words")
     default, langs = _load_languages()
     for code, info in langs.items():
         if code != default and "tables" not in info:

@@ -8,7 +8,7 @@
 #   1. Add an entry under `languages:` below (and in mkdocs.yml `extra.alternate`).
 #   2. Add README.<lang>.md and docs/<lang>/*.md (same filenames as docs/*.md).
 #   3. Run `python docs/assets/render.py` to generate docs/assets/<lang>/*.svg
-#      and sync the sample report + alt texts in README.<lang>.md.
+#      and sync the sample report, alt texts and tables as text in README.<lang>.md.
 #   4. Run `python docs/site.py` and `pytest`.
 
 default: en
@@ -34,6 +34,7 @@ languages:
     toggle_light: Переключить на светлую тему
     toggle_dark: Переключить на тёмную тему
     tables:
+      as_text: Таблица текстом
       ask:
         title: Что написать агенту в зависимости от задачи
         labels: ["КОГДА", "ЧТО НАПИСАТЬ"]

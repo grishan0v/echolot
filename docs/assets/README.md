@@ -7,7 +7,7 @@ its tables, which [render.py](render.py) draws and commits next to it. Change
 the script, then draw them again:
 
 ```bash
-python docs/assets/render.py                     # the sample report, the tables' alt text, the .svg files
+python docs/assets/render.py                     # the sample report, the tables' words, the .svg files
 python docs/assets/render.py --preview /tmp/pv   # plus the README as four pages: light and dark, desktop and phone
 ```
 
@@ -23,10 +23,14 @@ GitHub draws a Markdown table with a border round every cell and a stripe on
 every other row, and its stylesheet is not the README's to change. A picture
 can take the logo's colours and leave room between the rows.
 
-What a picture takes away, the README gives back. The words of each table go
-into its alt text, which the script writes, for a screen reader, a search and
-a page with its images off. Whatever a reader has to copy stays text: the
-install commands are code blocks.
+What a picture takes away, the README gives back. The script writes the words
+of each table under it, a row an item, folded into a `<details>` block, for a
+screen reader, a search and a page with its images off; the picture's alt text
+is one sentence that names the table. The words used to be the alt text
+itself, 966 characters for the detectors: a screen reader says an alt in one
+breath, with no way to skip a row, and wherever the alt is shown it is a wall
+of text. Whatever a reader has to copy stays text: the install commands are
+code blocks.
 
 ## Where the words come from
 
