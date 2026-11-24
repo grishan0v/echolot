@@ -306,7 +306,8 @@ def outputs_of(cmp: dict[str, Any]) -> dict[str, str]:
     verdict = reading.get("verdict") or {}
     unlike = next((n.get("warnings") or [] for n in reading.get("notes") or []
                    if n.get("id") == "unlike"), [])
-    delta = (cmp.get("window") or {}).get("delta_ms")
+    window = cmp.get("window") or {}
+    delta, holds = window.get("delta_ms"), window.get("holds")
     return {
         "moved": str(summary["moved"]),
         "appeared": str(summary.get("appeared", 0)),
@@ -318,6 +319,9 @@ def outputs_of(cmp: dict[str, Any]) -> dict[str, str]:
         # One line: $GITHUB_OUTPUT takes `key=value` a line.
         "headline": " ".join(str(verdict.get("headline") or "").split()),
         "window-delta-ms": "" if delta is None else str(delta),
+        # Whether that move holds, as a row's does (#532); empty where the
+        # runs could not say: too few, or a report without per-run windows.
+        "window-holds": "" if holds is None else str(bool(holds)).lower(),
         "comparable": "true" if cmp.get("comparable", True) else "false",
         "warnings": ",".join(dict.fromkeys(str(w.get("id")) for w in cmp.get("warnings") or [])),
         "unlike": ",".join(unlike),
@@ -338,8 +342,8 @@ def _held_row(r: dict[str, Any]) -> dict[str, Any]:
 
 # Every output of the compare step, empty: there was no comparison.
 NOTHING = dict.fromkeys(["baseline", "comparison", "moved", "appeared", "vanished", "held",
-                         "held-rows", "verdict", "headline", "window-delta-ms", "comparable",
-                         "warnings", "unlike"], "")
+                         "held-rows", "verdict", "headline", "window-delta-ms", "window-holds",
+                         "comparable", "warnings", "unlike"], "")
 
 
 def cmd_compare(args: argparse.Namespace) -> int:

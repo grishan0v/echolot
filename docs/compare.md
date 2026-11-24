@@ -286,6 +286,84 @@ see [`spread`](#what-analyze-keeps-for-it) below. With one trace on each side
 the column is empty for every row, and the comparison is a difference of two
 single measurements.
 
+## The window and the startup
+
+The two lines above the table are tested the way a row is: the same
+`change` against the same floor, the same range and the same Holds verdict,
+read from each run's window (and startup) that `analyze` keeps
+([below](#what-analyze-keeps-for-it)).
+
+```
+Scenario window: **1012.0 → 1313.5 ms**  (+301.5, ×1.3) · holds: yes, +225.0 … +374.0
+Startup (platform): **1072.0 → 1373.5 ms**  (+301.5, ×1.28) · holds: yes, +225.0 … +374.0
+```
+
+That pair is the fixture's own runs, four a side, with the after side made
+300 ms slower; `doctor` holds it to this. The same eight runs split four
+against four with nothing changed are 1.5 ms apart, and their range,
+`-75.0 … +74.0`, runs through zero: `holds: no`. The demo app's planted lock
+moves the launch 24 ms, and its window reads `holds: no, -54.0 … +105.7`
+while the lock's own two rows hold — the change is real and smaller than
+what five launches can see in the whole window.
+
+The window was the one number `compare` did not test. Fifteen cold starts
+against four of a later build read `5700.0 → 5310.0 ms (−390.0, ×0.93)` and
+nothing more; whether 390 ms is more than the runs' own scatter was left to
+whoever read it. The platform's startup was not compared at all, and in that
+pair it was the largest relative change, 35%.
+
+**On real runs.** One app's cold start to its first screen, about 4.9 s,
+recorded as six control sets of ten launches and as four sets with a sleep
+planted on the main thread at startup, 50, 100, 200 and 400 ms. The
+controls against each other: the window held in 1 pair of 15, and in 24 of
+the 756 ways to split each control five against five (3.2%). The planted
+sleep against each control, ten a side: 50 and 100 ms held in no pair, 200
+ms in 4 of 6, 400 ms in 6 of 6; five a side, 400 ms in 2 of 6. The
+startup, about 1.2 s and without the menu after it, saw more: 100 ms and up
+held in 6 of 6, 50 ms in 3; the controls held in 3 of 15, moves of 27 to 41
+ms between sets recorded at different times — real, and not the app's, which is
+what the rows' floor is for and why the startup's reasons are read under it.
+
+**Against zero, not the floor.** A row holds when its range clears zero,
+as the window and the startup do; the window and the startup keep that
+whatever the rows ask. They are one number tested once, where a row is one
+of two hundred tested at once, and a floor of a tenth of a 4.9 s window is
+490 ms: against it the 400 ms sleep above held in no pair instead of all
+six. The startup's reasons are a dozen judged at once, and follow the rows'
+rule.
+
+**The startup line** is there when both sides have a startup, Perfetto's own
+measure of the launch, from the intent to the first frame. Two kinds of
+startup are named on it, `(cold → warm)`. With a startup on one side only
+there is nothing to set it against, and neither the line nor
+`comparison.json`'s `startup` is there.
+
+**Its reasons** — `bind_application`, `io`, `binder`, the time before the
+process ran, and the rest of the split Perfetto makes — are judged as rows
+too, in a table of their own under the main one, which lists those that
+moved past the floor:
+
+| Reason | Before | After | Δ | Holds |
+|---|---|---|---|---|
+| `monitor_contention` | 61.6 | 86.24 | +24.6 | yes, +15.5 … +35.0 |
+
+That is the demo's lock, in the platform's words. They are not rows of the
+detectors' table: the time they split is time the detectors' rows already
+count — `io` the disk waits, `binder` the calls — and the table's counts
+and the plain reading's sums would count it twice.
+
+**A report that keeps no per-run windows**, written before they were kept,
+is compared as it always was: the two medians and their difference, and the
+line says the move is untested rather than leaving the reader to guess:
+
+```
+Scenario window: **2027.5 → 2435.0 ms**  (+407.5, ×1.2) · untested: the before report keeps no per-run values; `analyze` the traces again to test the move
+```
+
+Too few runs a side, two reports that are not of one thing, or one side that
+does not say which echolot wrote it leave the window without a verdict, as
+they leave every row: the warnings at the top say which.
+
 ## What is a move at all
 
 A row is listed when it moves by more than **5 ms or 10 %**, whichever is
@@ -700,6 +778,24 @@ leaves two of the pairs with it at each end, and the next comparison of this
 row will not see less than that unless there are more runs or the slow one
 goes away. Absent below four runs.
 
+The window is kept the same way as a row: `window.values` holds each run's
+window, in the order of `traces`, beside the median and its two ends. The
+startup's `values` holds each run's startup, and `reason_values` each
+reason's, a run without that reason as 0, the way the median counts it. That
+is what [the window's line](#the-window-and-the-startup) is tested with. The
+demo app's five runs, as its report keeps them:
+
+```json
+"window": { "duration_ms": 1136.05, "duration_ms_min": 1084.25,
+            "duration_ms_max": 1214.18,
+            "values": [1084.25, 1093.16, 1160.03, 1136.05, 1214.18],
+            "startup": { "type": "cold", "dur_ms": 1174.05,
+                         "values": [1122.25, 1131.16, 1198.03, 1174.05, 1252.18],
+                         "reasons": { "S": 492.0, … },
+                         "reason_values": { "S": [492.0, 462.48, 526.44, 482.16, 551.04],
+                                            … } } }
+```
+
 `slice_names` is what [names on one side only](#names-on-one-side-only) is
 read from: every slice name of the window, folded, from every run.
 
@@ -799,7 +895,18 @@ from 8.6 s to 4.3 s.
   launches beat the fastest launch of the slower side, so one slow launch does
   not hide a change. For a check: the most its sum can have been in any launch
   of the lower side is under the least it can have been in any launch of the
-  higher side.
+  higher side;
+- for the window, where the two reports keep each launch's window, its move
+  also holds ([the window's line](#the-window-and-the-startup)). A move
+  whose range runs through zero is no clear change however far the medians
+  are, with the range in the sentence, so the verdict does not say what the
+  Holds beside the window denies. Four to six launches a side, one launch as
+  slow as the other side's is enough to keep the range across zero; from
+  seven a side it no longer is. A move that holds is not called a change by
+  that alone: the two days above were apart by a move that holds, which is
+  what the fifth is for. Without a range — fewer than four launches a side,
+  or a report that keeps no per-run windows — the three conditions above
+  decide alone.
 
 This is a coarser rule than [the Holds column](#the-holds-column), on purpose:
 it has to give an answer at three launches a side, where no row can be 95%
@@ -925,7 +1032,19 @@ needs the slices under a row, or the sampled stacks, kept for both sides.
               "defaults": false },
   "after":  { "…": "the same shape" },
   "window": { "before_ms": 1184.0, "after_ms": 2960.4,
-              "delta_ms": 1776.4, "ratio": 2.5 },
+              "delta_ms": 1776.4, "ratio": 2.5, "change": "grew",
+              "shift": { "ms": 1771.2, "low_ms": 1690.5, "high_ms": 1860.0,
+                         "resolves_ms": 81.4, "runs_needed": null },
+              "holds": true },
+  "startup": { "type": { "before": "cold", "after": "cold" },
+               "before_ms": 1240.0, "after_ms": 3012.5,
+               "delta_ms": 1772.5, "ratio": 2.43, "change": "grew",
+               "shift": { "…": "the same shape" }, "holds": true,
+               "reasons": [ { "reason": "Running",
+                              "before_ms": 402.0, "after_ms": 1273.3,
+                              "delta_ms": 871.3, "ratio": 3.17,
+                              "change": "grew", "shift": { "…": "…" },
+                              "holds": true }, … ] },
   "noise_floor": { "abs_ms": 5.0, "ratio": 0.1 },
   "confidence": 0.95,
   "holds_against": "floor",
@@ -956,6 +1075,14 @@ needs the slices under a row, or the sampled stacks, kept for both sides.
 
 `on_main` says whether a row is time the main thread spent or lost, or a
 frame's: the rule [the order](#the-order) puts such a row first by.
+
+`window` and `startup` carry a row's `change`, `shift` and `holds`
+([the window and the startup](#the-window-and-the-startup)). `shift` and
+`holds` are null where a row's would be, and absent when either side has no
+window. `untested` names a side of more than one run whose report keeps no
+per-run values: its move is the medians' alone. `startup` is null unless
+both sides have one; its `reasons` are sorted by how far they moved, and a
+reason on one side only is `appeared` or `vanished`.
 
 `summary.not_compared` lists the detectors one side or both could not run,
 with each side's reason, `null` for a side that could. Their rows are not in
@@ -1150,6 +1277,10 @@ Its outputs are:
   scenario's window: `better`, `worse`, `no_change` or `not_compared`; and
   `headline`, the same in words, such as `Slower by 1.2 s`;
 - `window-delta-ms`: how far the window moved, after minus before, in ms;
+- `window-holds`: `true` or `false`, whether that move holds as a row's
+  does ([the window and the startup](#the-window-and-the-startup)); empty
+  where the runs give it no verdict — too few a side, or a report that keeps
+  no per-run windows;
 - `comparable`: `false` when the two reports are not of one thing — two
   processes, two windows, or an anchor no run found;
 - `warnings`: the ids of the comparison's warnings, comma-separated, such as
@@ -1164,7 +1295,7 @@ are read from `comparison.json`, never from the table's text.
 `.github/workflows/action.yml` runs the action this way on the demo app's
 traces for every pull request here, on the demo's planted change, where
 exactly the lock's two rows have to move and hold while the launch, 2%
-longer, reads as no clear change, and on one of two scenarios in one config,
+longer, reads as no clear change and its move does not hold, and on one of two scenarios in one config,
 where the report has to be that scenario's.
 
 ### A change, or noise
