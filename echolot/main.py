@@ -53,6 +53,7 @@ from . import codex, files, layer, parallel, plugin, recorder, sandbox, state, t
 from . import launch as launch_mod
 from . import moves as moves_mod
 from . import place as place_mod
+from . import project as project_mod
 from . import plain as plain_mod
 from . import report as report_mod
 from . import verdict as verdict_mod
@@ -634,40 +635,21 @@ def _project_root(cfg: Config) -> Path:
     return Path(cfg.path).resolve().parent if cfg.path else Path.cwd()
 
 
-_PROJECT_MARKS = (".echolot", ".git", "settings.gradle", "settings.gradle.kts")
-
-
 def project_of(args) -> Path:
-    """The same question `_project_root` answers, from the arguments alone.
+    """The project folder `args` work on: `project.resolve`'s answer, for the
+    commands not yet moved onto `args.where` (#830)."""
+    return _where(args).folder
 
-    `_project_root` needs a loaded config, and the run log is written by
-    `main` after the command has returned — including when it returned
-    because the config would not load. So the rule is read off the flags
-    instead: whatever names a project explicitly, then the config's own
-    directory, then the working directory.
 
-    One place rather than a call in each command. A `recorder.at(...)` per
-    verb is a list kept by hand, and the verb somebody forgets is the one
-    whose runs go missing — which is the failure this is fixing, arriving by
-    a different road.
-    """
-    for flag in ("project", "into"):        # reflect --project, init --into
-        named = getattr(args, flag, None)
-        if named:
-            return Path(named).resolve()
-    # The config's directory when it is the project: the command runs inside
-    # it (a build directory), or it holds what a project holds. A draft kept
-    # in a scratch directory (`-c ../scratch/draft.yml`) is neither, and
-    # sent the line next to the draft, where the project's log never heard
-    # of the run; `argv` and `config.path` keep the draft's path either way.
-    config = getattr(args, "config", None)
-    if config and Path(config).exists():
-        home = Path(config).resolve().parent
-        here = Path.cwd().resolve()
-        if here == home or home in here.parents or any(
-                (home / mark).exists() for mark in _PROJECT_MARKS):
-            return home
-    return Path.cwd()
+def _where(args) -> project_mod.Project:
+    """The project `main` resolved for this run, or resolved now for a
+    command called without `main` (a test, the self-check)."""
+    found = getattr(args, "where", None)
+    if found is None:
+        found = project_mod.resolve(args)
+        with contextlib.suppress(AttributeError):
+            args.where = found
+    return found
 
 
 def parse_set(values: list[str], detectors) -> dict[str, dict]:
@@ -5648,7 +5630,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "terminal it is the session's row of the summary --all "
                          "prints; a terminal gets the whole report anyway")
     rf.add_argument("--project", metavar="ROOT",
-                    help="the application project the agent worked in (default: .)")
+                    help="the application project the agent worked in (default: the "
+                         "one this folder is in, where its echolot.yml is)")
     rf.add_argument("--from-log", action="store_true",
                     help="read .echolot/log/runs.jsonl only, ignoring any "
                          "agent transcript — what every client but Claude Code "
@@ -5794,9 +5777,18 @@ def _record_bad_call(argv: list[str] | None, started: float, said: str | None) -
     known = set(sub.choices) if sub else set()
     cmd = next((w for w in words if w in known), words[0] if words else None)
     with contextlib.suppress(Exception):
-        recorder.at(None)   # no project was named: the working directory
+        # The arguments were refused, so no flag names the project: the one
+        # the working directory is in.
+        recorder.at(_folder_there(project_mod.resolve()))
         recorder.failed(said or "the arguments were refused")
         recorder.record(argparse.Namespace(cmd=cmd), words, started, exit_code=2)
+
+
+def _folder_there(project: project_mod.Project) -> Path | None:
+    """The project's folder for the run log, when it is there. Only a
+    directory that is there: `init --into <typo>` refused, and then the log
+    created the directory it had refused."""
+    return project.folder if project.folder.is_dir() else None
 
 
 def main(argv=None) -> int:
@@ -5819,10 +5811,12 @@ def main(argv=None) -> int:
     #
     # Which project's log, decided before the command runs: it has to hold
     # even when the command fails, and a failure is exactly the line worth
-    # keeping. Only a directory that is there: `init --into <typo>` refused,
-    # and then the log created the directory it had refused.
-    root = project_of(args)
-    recorder.at(root if root.is_dir() else None)
+    # keeping. The same project the command works on, resolved once here
+    # (#830): from `app/`, `hunt` kept its investigation in the project and
+    # wrote its line to `app/.echolot/log`, where `reflect` never looked
+    # (#835).
+    args.where = project_mod.resolve(args)
+    recorder.at(_folder_there(args.where))
     heard = _LastWords(sys.stderr)
     try:
         with contextlib.redirect_stderr(heard):

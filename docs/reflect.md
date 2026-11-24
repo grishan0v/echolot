@@ -34,7 +34,7 @@ Where things are looked for, when they are not where the defaults say:
 
 | flag | default | what it names |
 |---|---|---|
-| `--project ROOT` | `.` | the application project the agent worked in — its run log, its config, its source tree |
+| `--project ROOT` | the project this folder is in | the application project the agent worked in — its run log, its config, its source tree |
 | `--transcripts DIR` | `~/.claude/projects/<slug>` | where Claude Code's transcripts are; naming it leaves Codex's sessions out |
 | `-c`, `--local` | the copy the session's own commands read with `-c`, when they all read one; otherwise `echolot.yml` in the project; `local.yml` beside it | the config the protocol checks read; when it changed after the session ran, the header says so |
 | `-o DIR` | `.echolot/reflect` in the project | where the reports go; a path given here is from the current directory, like `-c` |
@@ -43,7 +43,8 @@ Where things are looked for, when they are not where the defaults say:
 ## Two sources
 
 **The tool's own record.** Every command appends one line to
-`.echolot/log/runs.jsonl`: what was asked (`argv`), where, when, exit code,
+`.echolot/log/runs.jsonl` of its project — the one its `echolot.yml` is in,
+found from a subfolder too: what was asked (`argv`), where, when, exit code,
 duration, a hash of the config, a traceback if there was one, and a few facts
 the command chose to note — how many detectors fired, whether the anchor
 matched, what closed a window that is a launch, how many frames the app drew

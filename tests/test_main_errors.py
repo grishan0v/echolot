@@ -62,8 +62,10 @@ def _app(root: Path, config: str | None = GUARDED) -> Path:
     return root
 
 
-def test_a_draft_outside_the_project_logs_where_the_command_ran(tmp_path: Path,
-                                                               monkeypatch) -> None:
+def test_the_log_goes_to_the_project_the_config_names(tmp_path: Path, monkeypatch) -> None:
+    """The run log follows the project the command works on (#830): a config
+    `-c` names is that project's, a draft in a scratch folder too, and the
+    report `analyze -c` writes goes there as well."""
     project, scratch = tmp_path / "proj", tmp_path / "scratch"
     (project / "build").mkdir(parents=True)
     scratch.mkdir()
@@ -71,15 +73,16 @@ def test_a_draft_outside_the_project_logs_where_the_command_ran(tmp_path: Path,
     (project / "echolot.yml").write_text("project: {package: a}\n", encoding="utf-8")
     monkeypatch.chdir(project)
     args = argparse.Namespace(config="../scratch/draft.yml")
-    check("the draft's directory is no project", project_of(args) == Path.cwd())
+    check("the draft's directory", project_of(args) == scratch.resolve())
     monkeypatch.chdir(project / "build")
     args = argparse.Namespace(config="../echolot.yml")
-    check("while the project's own config, from below it, is",
-          project_of(args) == project.resolve())
+    check("the project's own config, from below it", project_of(args) == project.resolve())
+    args = argparse.Namespace(config="echolot.yml")
+    check("and without -c, the one above", project_of(args) == project.resolve())
     (project / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     args = argparse.Namespace(config="proj/echolot.yml")
-    check("and so is a project's from beside it", project_of(args) == project.resolve())
+    check("and a project's from beside it", project_of(args) == project.resolve())
 
 
 def test_mark_finds_the_config_under_root_and_refuses_one_named_and_missing(
