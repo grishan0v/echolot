@@ -183,3 +183,62 @@ def test_a_repeat_with_a_short_stretch_still_ran_the_work(tmp_path: Path) -> Non
     moved = [r for r in cmp["rows"] if r.get("detector") == "app_init"
              and r.get("change") != compare_mod.STEADY]
     check("no app_init row moved", not moved, moved)
+
+
+def _platform_inside() -> dict:
+    """The fixture with sections the platform writes while androidx.startup
+    runs: a vsync request inside `ProfileInstallerInitializer`, and a lock
+    wait of ART's beside the Initializers, right under `Startup`."""
+    def put(nodes):
+        out = []
+        for n, start, dur, kids in nodes:
+            if n == "ProfileInstallerInitializer":
+                kids = [("Choreographer#scheduleVsyncLocked", 121.5, 0.5, [])]
+            if n == "Startup":
+                kids = kids + [("Lock contention on ClassLinker classes lock "
+                                "(owner tid: 4100)", 125.2, 0.4, [])]
+            out.append((n, start, dur, put(kids)))
+        return out
+    slices = copy.deepcopy(fixture.SLICES)
+    slices[fixture.TID_MAIN] = put(slices[fixture.TID_MAIN])
+    return slices
+
+
+def test_a_platform_section_under_startup_is_not_an_initializer(
+        tmp_path: Path, monkeypatch) -> None:
+    """#708: only a name shaped like an Initializer's is one."""
+    monkeypatch.setattr(fixture, "SLICES", _platform_inside())
+    got = _rows(_analysed(tmp_path))
+    check("the vsync request is not a row",
+          "Choreographer#scheduleVsyncLocked" not in got, sorted(got))
+    check("nor the lock wait",
+          not any(n.startswith("Lock contention") for n in got), sorted(got))
+    profile = got["ProfileInstallerInitializer"]
+    check("the Initializer keeps the vsync request in its own time",
+          profile["total_ms"] == 4.0 and profile["self_ms"] == 4.0, profile)
+    check("and is still called an Initializer",
+          profile["detail"] == "an androidx.startup Initializer", profile["detail"])
+
+
+def test_an_initializer_and_a_platform_section_inside_another(
+        tmp_path: Path, monkeypatch) -> None:
+    """#708 beside #512: a nested Initializer is still a row of its own, a
+    platform section beside it stays in the parent's own time."""
+    def put(nodes):
+        out = []
+        for n, start, dur, kids in nodes:
+            if n == "WorkManagerInitializer":
+                kids = [("LogsInitializer", 111.5, 3, []),
+                        ("binder transaction", 115, 1, []),
+                        ("Inflate: layout/x", 117, 2, [])]
+            out.append((n, start, dur, put(kids)))
+        return out
+    slices = copy.deepcopy(fixture.SLICES)
+    slices[fixture.TID_MAIN] = put(slices[fixture.TID_MAIN])
+    monkeypatch.setattr(fixture, "SLICES", slices)
+    got = _rows(_analysed(tmp_path))
+    check("the nested Initializer is a row", "LogsInitializer" in got, sorted(got))
+    check("the inflate is not", "Inflate: layout/x" not in got, sorted(got))
+    parent = got["WorkManagerInitializer"]
+    check("the parent's self time leaves out only the Initializer",
+          parent["total_ms"] == 9.0 and parent["self_ms"] == 6.0, parent)
