@@ -8,6 +8,7 @@ default declared in the detector's own .sql file.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 from collections.abc import Callable
@@ -53,6 +54,16 @@ class _Loader(yaml.SafeLoader):
                                 f"and {line}: keep one")
             seen[key] = line
         return super().construct_mapping(node, deep=deep)
+
+
+def _measured(node: Any) -> Any:
+    """A config's values without the notes beside them (`_source`,
+    `_evidence`, any key that starts with `_`), for `Config.sha`."""
+    if isinstance(node, dict):
+        return {str(k): _measured(v) for k, v in node.items() if not str(k).startswith("_")}
+    if isinstance(node, list):
+        return [_measured(v) for v in node]
+    return node
 
 
 def _load_yaml(p: Path) -> Any:
@@ -553,15 +564,33 @@ class Config:
 
     @property
     def sha(self) -> str | None:
-        """A short content hash of the file: enough to tell two configs apart.
+        """A short hash of what in the file applies to the selected scenario:
+        enough to tell two configs apart.
 
         Goes into report.json and the run log, so a report can be matched to
-        the exact config that produced it — and an edited config shows as a
-        different one.
+        the config that produced it, and a config edited where it applies
+        shows as a different one. What applies is every section of
+        `echolot.yml` (project, runner, detectors, instrumentation and the
+        rest) and, under `scenarios:`, the selected scenario's block alone.
+        An edit to another scenario changed the hash of the whole file, and
+        `compare` said "the config changed" between two rounds of one that
+        nothing had touched (#928). Comments, layout and the `_source` and
+        `_evidence` notes measure nothing and are left out.
         """
         if self.path is None or not Path(self.path).exists():
             return None
-        return hashlib.sha256(Path(self.path).read_bytes()).hexdigest()[:12]
+        try:
+            raw = _load_yaml(Path(self.path))
+        except ConfigError:
+            raw = None
+        if not isinstance(raw, dict):
+            return hashlib.sha256(Path(self.path).read_bytes()).hexdigest()[:12]
+        many = raw.get("scenarios")
+        if isinstance(many, dict) and many:
+            name = self.scenario_key if self.scenario_key in many else next(iter(many))
+            raw = {**raw, "scenarios": {name: many[name]}}
+        applied = json.dumps(_measured(raw), sort_keys=True, default=str, ensure_ascii=False)
+        return hashlib.sha256(applied.encode("utf-8")).hexdigest()[:12]
 
     @property
     def tp_binary(self) -> str | None:

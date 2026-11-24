@@ -173,9 +173,11 @@ different `detail` are two findings, not a duplicate. Where `detail` is part
 of the identity it is the same in every repeat; elsewhere it is evidence,
 taken from the repeat where the row cost most.
 
-**`config`** — which file made this report, and its content hash. A different
-`sha` means `echolot.yml` changed — anchors, process mask, thresholds, or a
-comment — and says nothing about `local.yml`, which is not hashed. The
+**`config`** — which file made this report, and a hash of what in it applies
+to the report's scenario: every section, and of `scenarios:` that scenario's
+block alone. A different `sha` means a value that applies changed — anchors,
+process mask, thresholds, the runner — not a comment, a `_source` note, or
+another scenario, and says nothing about `local.yml`, which is not hashed. The
 thresholds each detector ran with are its `params`, and `compare` lists the
 ones that differ in its `thresholds` warning. `defaults: true` means `--defaults` ran every detector with its built-in
 numbers, `set` lists what `--set` overrode for that run. `mapping` is the

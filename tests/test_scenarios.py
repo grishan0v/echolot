@@ -286,6 +286,51 @@ def test_report_reads_the_scenario_it_is_asked_for(tmp_path: Path, trace: Path,
           and "no such scenario" in err and "Traceback" not in err, err[-300:])
 
 
+def _sha(path: Path, scenario: str | None) -> str | None:
+    return Config.load(path, scenario=scenario).sha
+
+
+def test_the_config_sha_is_what_applies_to_the_scenario(tmp_path: Path) -> None:
+    """An edit to another scenario read as "the config changed" (#928)."""
+    path = write(tmp_path, TWO)
+    before = {name: _sha(path, name) for name in ("first_frame", "loaded")}
+    check("two scenarios, two hashes", before["first_frame"] != before["loaded"], before)
+    edited = json.loads(json.dumps(TWO))
+    edited["scenarios"]["loaded"]["runner"]["command"] = "echo scroll faster"
+    write(tmp_path, edited)
+    check("an edit to `loaded` leaves `first_frame` as it was", _sha(path, "first_frame") == before["first_frame"])
+    check("and is an edit to `loaded`", _sha(path, "loaded") != before["loaded"])
+    check("the first scenario is the one read when none is named", _sha(path, None) == before["first_frame"])
+    after = {name: _sha(path, name) for name in ("first_frame", "loaded")}
+    for section, change in (("project", {"process": "com.example.app:ui"}), ("runner", {"iterations": 5})):
+        moved = json.loads(json.dumps(edited))
+        moved[section] |= change
+        write(tmp_path, moved)
+        now = {name: _sha(path, name) for name in ("first_frame", "loaded")}
+        check(f"an edit to {section} is an edit to every scenario",
+              all(now[name] != after[name] for name in now), (now, after))
+    write(tmp_path, edited)
+    text = path.read_text(encoding="utf-8")
+    path.write_text("# a comment\n" + text.replace("project:", "project:  # the app", 1), encoding="utf-8")
+    check("a comment changes nothing that is measured", _sha(path, "first_frame") == before["first_frame"])
+
+
+def test_compare_does_not_say_the_config_changed_for_another_scenario(tmp_path: Path, trace: Path,
+                                                                       monkeypatch) -> None:
+    """Two rounds of `first_frame`, and only `loaded` edited between them (#928)."""
+    write(tmp_path, TWO)
+    analyzed(tmp_path, trace, monkeypatch, "first_frame")
+    out = tmp_path / ".echolot/out/first_frame"
+    (tmp_path / "before.json").write_bytes((out / "report.json").read_bytes())
+    edited = json.loads(json.dumps(TWO))
+    edited["scenarios"]["loaded"]["runner"]["command"] = "echo scroll faster"
+    write(tmp_path, edited)
+    analyzed(tmp_path, trace, monkeypatch, "first_frame")
+    code, said, err = run("compare", str(tmp_path / "before.json"), str(out / "report.json"))
+    check("compared, and no word of a changed config", code == 0 and "config changed" not in said + err,
+          (said[-800:], err[-400:]))
+
+
 def test_compare_refuses_two_scenarios(tmp_path: Path, trace: Path, monkeypatch) -> None:
     write(tmp_path, TWO)
     analyzed(tmp_path, trace, monkeypatch, "first_frame", "loaded")
