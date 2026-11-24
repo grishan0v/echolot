@@ -635,12 +635,6 @@ def _project_root(cfg: Config) -> Path:
     return Path(cfg.path).resolve().parent if cfg.path else Path.cwd()
 
 
-def project_of(args) -> Path:
-    """The project folder `args` work on: `project.resolve`'s answer, for the
-    commands not yet moved onto `args.where` (#830)."""
-    return _where(args).folder
-
-
 def _where(args) -> project_mod.Project:
     """The project `main` resolved for this run, or resolved now for a
     command called without `main` (a test, the self-check)."""
@@ -695,6 +689,7 @@ def parse_set(values: list[str], detectors) -> dict[str, dict]:
 
 
 def cmd_analyze(args) -> int:
+    _resolved_config(args)
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
         inside = _working_in(cfg, args.hunt)
@@ -1424,33 +1419,26 @@ def _load_report(path: Path) -> dict:
     return dict(got)
 
 
-def _nearest_config(args) -> None:
-    """`echolot.yml` up the tree, when no `-c` names one and none is here.
+def _resolved_config(args) -> None:
+    """`-c` set to the config `main` resolved (#830): the one named, else
+    the nearest `echolot.yml` from here up to the top of the checkout.
 
-    The agent runs `analyze` inside a macrobenchmark's output directory with
-    `-c` naming the project's config, and its report and the investigation's
-    copy land in the project. `compare` and `report` run from that same
-    directory read the build directory as the project: "nothing to compare"
-    with an investigation open and two reports in it. The walk stops at the
-    root of the checkout.
+    The agent runs `analyze` inside a macrobenchmark's output directory, and
+    `compare` and `report` from the same place; from there, or from `app/`,
+    `analyze` stopped on "config not found" and the other two read the build
+    directory as the project. With none found, `-c` stays as typed, for the
+    error to name it the way it was given.
     """
-    if args.config != "echolot.yml" or Path(args.config).exists():
-        return
-    here = Path.cwd().resolve()
-    for folder in (here, *here.parents):
-        found = folder / "echolot.yml"
-        if found.is_file():
-            args.config = str(found)
-            print(f"[i] config: {found}, the nearest up the tree", file=sys.stderr)
-            return
-        if (folder / ".git").exists():
-            return
+    found = _where(args)
+    if found.found == "above":
+        print(f"[i] config: {found.config}, the nearest up the tree", file=sys.stderr)
+        args.config = str(found.config)
 
 
 def cmd_compare(args) -> int:
     """The delta between two Marker Reports."""
     from .mark import DEFAULT_PREFIX
-    _nearest_config(args)
+    _resolved_config(args)
     unloaded = None
     try:
         args.cfg = None
@@ -1461,7 +1449,7 @@ def cmd_compare(args) -> int:
             # a reason to say why nothing is written, which "no config found"
             # did not, for a config that was there.
             unloaded = e
-        project = _project_root(args.cfg) if args.cfg else Path.cwd()
+        project = _where(args).folder
         # A scenario named here is the config's to have, and one it lacks
         # stops the comparison: it would compare whatever was there.
         if args.cfg is not None and args.scenario:
@@ -4797,8 +4785,8 @@ def cmd_report(args) -> int:
     for every command unless ECHOLOT_NO_RECORD is set. `--html` is the
     exception: it writes the report as a page, beside the report it read.
     """
-    _nearest_config(args)
-    project = project_of(args)
+    _resolved_config(args)
+    project = _where(args).folder
     try:
         path = Path(args.report) if args.report else project / _report_dir(args) / "report.json"
         if not args.report and not path.exists():
