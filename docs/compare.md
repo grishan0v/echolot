@@ -964,6 +964,9 @@ one drag — a build that recomposed a list on every move of a panel, against
 the build before it and the fix after it — all read "No clear change. The run
 took 14.9 s before and 14.9 s after", the window 8.6 ms apart at most, while
 the share of frames the app itself made late went 3% → 21% → 10%.
+Only the end anchor decides this: a start anchor missed in some repeats moves
+those repeats' start back, and a window that still closed on its end anchor in
+every repeat is judged by its time, with the missed start in a note.
 
 Such a window is judged by that share instead: in each run the frames the app
 made late out of the frames it drew (see

@@ -164,3 +164,27 @@ def test_the_merge_keeps_each_runs_late_frames_beside_its_frames():
           == {"count": 657, "values": [644, 657, 770], "runs": "3/3", "late": 20, "late_values": [20, 31, 12]})
     reps[1]["window"]["frames"].pop("late")
     check("a repeat that does not say leaves them out", "late" not in report_mod._merge_frames(reps))
+
+
+def test_a_start_missed_in_some_runs_leaves_the_window_closed_on_its_end():
+    """#869: the end anchor matched in every recording on both sides and the
+    start anchor was missed in 1 of 5 and 1 of 3. The window ends where the
+    scenario does, so it is judged by its time; said to run to the end of
+    the recording, it was judged by late frames."""
+    def side(missed, launches):
+        return drag((16, 16, 16), (16, 16, 16), launches=launches, window={
+            "start_anchor": {"glob": "bindApplication", "matches": 0, "missed": missed},
+            "end_anchor": {"glob": "reportFullyDrawn*", "matches": 1}})
+    before, after = side("1/5", FIVE), side("1/3", (14900.0, 14905.0, 14910.0))
+    check("not open", not moves._open(before["window"]) and not moves._open(after["window"]))
+    v = verdict(before, after)
+    check("judged by the window, in the run's own word", v["by"] == "window" and "frames" not in v
+          and "end of the recording" not in v["text"]
+          and v["text"].startswith("The run took 14.9 s before and 14.9 s after."), v)
+    r = reading(before, after)
+    check("the start missed is a note", any("anchor-before" in n.get("warnings", []) for n in r["notes"]), r["notes"])
+    ended = {"start_anchor": {"glob": "bindApplication", "matches": 1},
+             "end_anchor": {"glob": "reportFullyDrawn*", "matches": 0, "missed": "1/3"}}
+    v = verdict(drag((640, 650, 660), (20, 21, 22), window=ended), drag((600, 612, 620), (125, 128, 132), window=ended))
+    check("an end missed still runs to the end of the recording, and is judged by frames",
+          v["by"] == "frames" and "the window runs to the end of the recording" in v["text"], v)
