@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import itertools
 import os
 import platform
 import re
@@ -507,7 +508,11 @@ class Detector:
         last = _LIMIT_TAIL.sub("", last).rstrip()
         fires = _PLACEHOLDER.sub(lambda m: sql_value(resolved[m.group(1)]), self.fires)
         rows = f"SELECT *, ({fires}) AS over_bar FROM (\n{last}\n)"
-        return ";\n".join([*head, rows]) + ";"
+        # The header stays in front, as it is in front of a query on the old
+        # path: what a failing query is, by its `@id`, for whoever reads it.
+        header = "".join(ln + "\n" for ln in itertools.takewhile(
+            lambda ln: ln.strip().startswith("--"), sql.splitlines()))
+        return header + ";\n".join([*head, rows]) + ";"
 
     def render_intervals(self, resolved: dict[str, Any]) -> str | None:
         """The second query, with the values the first one ran with.

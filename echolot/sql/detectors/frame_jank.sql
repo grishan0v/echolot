@@ -10,6 +10,8 @@
 --       that verdict's rows is reported
 -- @param: min_overrun_ms = 4 ms — how far past its deadline a frame has to
 --       finish to count as late at all
+-- @fires: verdict_frames >= {{min_frames}}
+-- @shape: min_overrun_ms
 -- @calibrate: min_frames = top10(count) * 1.5
 -- @column: location — why the frames missed, the platform's jank_type: a
 --       comma-joined set, `App Deadline Missed, Buffer Stuffing` being one
@@ -23,6 +25,9 @@
 --       system's), how many of all the app's frames, and the longest frame's
 --       own duration — the number a benchmark's percentiles are quoted in. A
 --       Buffer Stuffing row leads with `latency, not jank` instead
+-- @column: verdict_frames — the late frames of its verdict in the window,
+--       `Self Jank` or `Other Jank`, all its types together: what
+--       `min_frames` is held against
 -- @plain_title: Frames that came late
 -- @plain_why: The screen is redrawn many times a second. A frame that is not
 --       ready in time makes the picture stutter.
@@ -154,12 +159,10 @@ WHERE f.jank_tag != 'No Jank'
   AND f.over_ns >= {{min_overrun_ms}} * 1000000
 GROUP BY f.jank_type, f.jank_tag
 )
-SELECT location, count, total_ms, max_ms, detail
+SELECT location, count, total_ms, max_ms, detail, verdict_frames
 FROM kinds
-WHERE verdict_frames >= {{min_frames}}
 -- Late frames first, by what they cost; frames that only queued after them.
-ORDER BY queued, total_ms DESC
-LIMIT 20;
+ORDER BY queued, total_ms DESC;
 
 -- @intervals
 --

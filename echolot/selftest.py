@@ -420,10 +420,11 @@ def _(report):
     # place in the code, the samples, a merge's bookkeeping — is not the
     # query's, and not counted.
     from .analyze import DETECTOR_DIR
-    from .report import HIDDEN
+    from .report import GATES, HIDDEN
     from .tp import load_detectors
 
-    added = HIDDEN | {"code", "runs"}
+    # A gate column is the query's own, hidden from the tables only.
+    added = (HIDDEN - GATES) | {"code", "runs"}
     lowered = _lowered_bar()
     for d in load_detectors(DETECTOR_DIR):
         got = rows(lowered if d.id in SILENT_ON_FIXTURE else report, d.id)

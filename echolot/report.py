@@ -32,9 +32,12 @@ COLUMNS = ["location", "threads", "runs", "count", "self_ms", "total_ms", "max_m
 # and wrong for bookkeeping the report writes itself. `places` is the json
 # side of the `code` column — see place.py — and `stacks` the json side of
 # what the evidence says the samples named — see stacks.py. `unfinished` is a
-# marker that never closed, which its numbers say with a `≥`.
+# marker that never closed, which its numbers say with a `≥`. A column a
+# detector's predicate is held against, beside its numbers, is the threshold's
+# business and no finding (`GATES`, #832).
+GATES = {"verdict_frames"}
 HIDDEN = {"spread", "places", "stacks", "unfinished", "parents", "variants", "fired",
-          "floors", "unfinished_runs", "open_ms"}
+          "floors", "unfinished_runs", "open_ms", *GATES}
 HEADERS = {
     "location": "Where",
     "threads": "Threads",
@@ -631,6 +634,12 @@ def _merge_detector(runs: list[dict[str, Any]], identity: tuple[str, ...],
     return rows, below_bar(rows, opened, identity, total)
 
 
+# What `merge_rows` sets itself, or leaves out on purpose, rather than take
+# from the worst repeat with the rest of its columns.
+_MERGED_ELSEWHERE = frozenset({*NUMERIC, THREADS, "runs", "fired", "spread", "variants",
+                               "stacks", _OVER})
+
+
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
                total: int, *, counts: bool = False,
                opened: list[list[dict[str, Any]] | None] | None = None,
@@ -781,6 +790,12 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
         # place and other shares of them in the other.
         if worst.get("stacks") is not None:
             row["stacks"] = worst["stacks"]
+        # A column of the detector's own beyond the shared ones, such as
+        # what its predicate is held against (`frame_jank`'s
+        # `verdict_frames`, #832), comes from the same repeat.
+        for col, value in worst.items():
+            if col not in row and col not in _MERGED_ELSEWHERE:
+                row[col] = value
         out.append(row)
     return sorted(out, key=standing, reverse=True)
 

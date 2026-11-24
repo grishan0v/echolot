@@ -81,3 +81,23 @@ def test_the_verdicts_are_counted_apart(tmp_path: Path) -> None:
         (4, 760, 16, 40, FT.JANK_BUFFER_STUFFING),
     ]))["rows"]
     check("no verdict reaches three frames", rows == [], rows)
+
+
+def test_the_late_frames_do_not_depend_on_min_frames(tmp_path: Path) -> None:
+    """#842: two late frames of the app's are two late frames, whether or not
+    `min_frames` makes them a row. The window counted them from the rows
+    shown, so a run with fewer than `min_frames` said none, and a threshold
+    moved between two rounds read as fewer frames late."""
+    two = COLD_START[:2]
+    trace = tmp_path / "f.perfetto-trace"
+    old = fixture.APP_FRAMES
+    fixture.APP_FRAMES = two
+    try:
+        trace.write_bytes(fixture.build())
+    finally:
+        fixture.APP_FRAMES = old
+    late = {}
+    for bar in (1, 3, 4):
+        cfg = Config({**selftest.FIXTURE_CONFIG, "detectors": {"frame_jank": {"min_frames": bar}}})
+        late[bar] = analyze_trace(trace, cfg)["window"]["frames"]["late"]
+    check("two late frames at every min_frames", set(late.values()) == {2}, late)
