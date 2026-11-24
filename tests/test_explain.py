@@ -240,6 +240,17 @@ def test_a_config_analyze_would_refuse_is_refused(project):
     check("the reason analyze gives", "must be a number" in err, err)
 
 
+@pytest.mark.parametrize("written", [".nan", ".inf", "-.inf"])
+def test_a_threshold_that_is_no_finite_number_is_refused(project, written):
+    """`min_slice_ms = nan ms` was shown as the value in force (#852)."""
+    config(project, f"detectors:\n  main_thread_block:\n    min_slice_ms: {written}\n")
+    code, out, err = run("explain", "main_thread_block")
+    check("exit 2", code == 2, code)
+    check("nothing on stdout", out == "", out)
+    check("the reason analyze gives",
+          "main_thread_block.min_slice_ms (from the config) must be a number" in err, err)
+
+
 def test_a_config_named_and_not_there_exits_2(project):
     code, _, err = run("explain", "-c", "nope.yml")
     check("a named config that is not there", code == 2 and "config not found" in err, err)
