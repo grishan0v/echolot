@@ -136,7 +136,7 @@ fits the words:
 
 | the words ask for | the route |
 |---|---|
-| an ANR: a freeze, "not responding", a Crashlytics or Play Console issue, a drop box record, an issue's id | the section "When what arrived is an ANR" below: `echolot anr <the report's file> --root .`. An id or a link and no file: ask the human for the report itself, exported as text — echolot reads a file. Nothing opens, and the open investigation is not asked about |
+| an ANR: a freeze, "not responding", a Crashlytics or Play Console issue, a drop box record, an issue's id | the section "When what arrived is an ANR" below: `echolot anr <the report's file> --root .`. An id or a link and no file: an event your Crashlytics tool returns reads too, saved to a file as the tool gave it — one thread, see that section — and otherwise ask the human for the report itself, exported as text: echolot reads a file. Nothing opens, and the open investigation is not asked about |
 | traces already on disk, no device: "from last month's traces", "no phone today", a path | `echolot analyze <those traces, named> -c echolot.yml`, no `collect` and no `--hunt`, then `echolot report` and its views. Two sets: analyse each with its own `-o`, then `echolot compare <a>/report.json <b>/report.json`. Nothing opens, nothing is filed |
 | a measurement with nothing to blame: "record a baseline", "just measure", "how long does the cold start take now" | `echolot collect -c echolot.yml`, then `echolot analyze <the traces it printed, named> -c echolot.yml`, both without `--hunt`, and show the report. Nothing opens, and an open investigation stays as it was |
 | a regression to find: `hunt <words>`, "why is startup slow", "the list stutters since the redesign" | with no investigation open, the `echolot-hunt` skill with those words: it asks for the change, opens the investigation with `echolot hunt "<words>" --since …` — the same word in a shell, which does that half and nothing else — hands the loop to `perf-hunter`, and closes the investigation with its answer. With one open, ask first, as `resume-or-new` says, "something new" first with their words: never `echolot hunt "<words>"` before the human has answered, since it closes the open one |
@@ -222,6 +222,15 @@ the line every command adds to `.echolot/log/runs.jsonl`, so a folder of
 exports goes through it in one loop and the ones worth chasing are the ones
 that name a lock chain.
 
+What you hold from a Crashlytics tool is an event, not the console's export,
+and `anr` reads it too: save it to a file as the tool returned it — YAML,
+JSON, or just its `Thread:` text — one event per file. Such an event carries
+**one thread**, the one Crashlytics blamed, with no state, no tid and no lock
+note, so no lock chain can come out of it; the report says so first under what
+it does not say, beside the revision, process state and Crashlytics' own
+reading the event adds. Do not build an export by hand from it: made-up states
+and tids are what the report would then read.
+
 | what it says | your next move |
 |---|---|
 | a lock chain with the main thread behind it | you have the mechanism. Open the frames of the thread at the root of the chain — the stack `anr` prints for it. The direct holder is often queued itself, a victim like the threads behind it. No trace needed |
@@ -230,6 +239,8 @@ that name a lock chain.
 | "every frame belongs to the platform or a library", then "the frames nearest to the app" | the platform is a dead end, a library the app drives is not: `SystemJobScheduler.cancel` points at the app's WorkManager setup. Read that setup |
 | "every frame belongs to the platform or a library", then a platform frame such as `JobServiceEngine$JobHandler.ackStopMessage` with what it was doing | still a lead: the main thread was telling the system a JobScheduler job had stopped. Read the app's WorkManager or JobService setup |
 | "Who was holding what" under what it does not say | this file carries no lock notes; an empty chain list is the file's limit, not the freeze's. Get the device's own record |
+| "The other threads, their states and their locks" under what it does not say | the input was a Crashlytics event: one thread. Read it for what it shows, as the rows above say; when the question is a lock — Crashlytics' subtitle says deadlock — or the main thread is not in it, ask the human for the console's export of that event, or the device's own record |
+| "This checkout is at the build's own revision" / "a line placed here may have moved since" | the event named the build's revision: open the lines in the first case; in the second, `git worktree add --detach <dir> <revision>` and run `anr` again with `--root <dir>` |
 | frames placed in the checkout | open those lines, once `anr` marks none of them as now inside another function |
 | "probably not the build that froze" above the placed frames | most lines fall outside the function their frame names: check out the build the report names before opening any |
 | frames landing nowhere | check out the build the report names — line numbers go stale first |
@@ -239,7 +250,7 @@ that name a lock chain.
 `--json` is the same findings in the shape you walk: `chains`, `main.stack`,
 `main.waiting_for` / `.gc`, `working[].where` / `.top` / `.stack` / `.cut` /
 `.waiting_for`, `nearest`, `leads`, `lock_notes`, `heap`, `code.placed`,
-`retrace` and `minified`.
+`code.is_the_build`, `event`, `retrace` and `minified`.
 Read it rather than the file: the frames that decide sit three to six deep,
 and `awk` over the dump is what this replaces.
 

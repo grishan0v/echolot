@@ -4182,13 +4182,23 @@ def cmd_anr(args) -> int:
     text = path.read_text(encoding="utf-8", errors="replace")
     source = anr_mod.detect(text)
     if source is None:
-        print(f"nothing in {path} announces a thread the way a source this "
-              f"reader knows does. It reads a Crashlytics export, a Play "
-              f"Console ANR cluster, and the ART dump that `dumpsys dropbox "
-              f"--print data_app_anr` and the files under /data/anr/ carry.",
+        # An export that opens the way Crashlytics' does and holds no thread
+        # is said as that, not as a file of unknown shape.
+        what = ("is a Crashlytics export with no thread in it"
+                if text.lstrip().startswith("# Crashlytics") else
+                "announces no thread the way a source this reader knows does")
+        print(f"{path} {what}. It reads a Crashlytics export, a Crashlytics "
+              f"event as an agent's tool returns it, a Play Console ANR "
+              f"cluster, and the ART dump that `dumpsys dropbox --print "
+              f"data_app_anr` and the files under /data/anr/ carry.",
               file=sys.stderr)
         return 2
     report = anr_mod.parse(text, source)
+    if not report.threads and source is anr_mod.EVENT:
+        print(f"{path} is a Crashlytics event with no thread in it: the tool "
+              f"returned none. The console's export of the same event, from "
+              f"the issue page, has every thread.", file=sys.stderr)
+        return 2
     if not report.threads:
         print(f"{path} reads as {source.name} and yields no threads.",
               file=sys.stderr)
@@ -6572,6 +6582,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     an_r = add("anr", "agent", "<report>", "a thread dump from the field: the lock chain, and who was working",
                description="Reads an ANR report — an export from Crashlytics, "
+                    "a Crashlytics event as an agent's tool returns it (YAML "
+                    "or JSON, one thread), "
                     "an ANR cluster from Play Console, or the device's own "
                     "record from `adb shell dumpsys dropbox --print "
                     "data_app_anr` — and prints what it found: the monitor "
