@@ -143,6 +143,102 @@ def test_codex_itself_loads_the_rule_and_allows_echolot(tmp_path):
     check("git does not", '"decision"' not in decide("git", "status"))
 
 
+# --- the two rules an investigation needs besides (#454) -----------------------
+
+# What 0.10.0 to 0.17.0 wrote: the `echolot` rule alone, the text before the
+# two rules that follow it now.
+OLDER = codex.RULE_FILE[:codex.RULE_FILE.index("\n# An investigation also")]
+
+
+def test_the_rules_let_echolot_gradle_and_adb_out_and_nothing_else():
+    check("the three, each a rule of its own", codex.lets_out(codex.RULE_FILE)
+          == ["echolot", "./gradlew", "adb"], codex.lets_out(codex.RULE_FILE))
+    rules = sandbox._calls(sandbox._uncommented(codex.RULE_FILE), "prefix_rule")
+    for word, call in zip(codex.COMMANDS, rules, strict=True):
+        examples = re.findall(r'"([^"]+)"', re.search(r"match = \[(.*?)\]", call, re.S)[1])
+        check(f"each example of the {word} rule is a command line that starts with it",
+              examples and all(shlex.split(line)[0] == word for line in examples), examples)
+    check("allowed without a prompt, every one", codex.RULE_FILE.count('decision = "allow"') == 3)
+    check("a rule set to prompt lets nothing out",
+          codex.lets_out(codex.RULE_FILE.replace('decision = "allow"', 'decision = "prompt"')) == [])
+    check("one commented out is not there", codex.lets_out(
+        codex.RULE_FILE.replace('    pattern = ["adb"]', '    # pattern = ["adb"]')) == ["echolot", "./gradlew"])
+
+
+def test_the_text_an_older_echolot_wrote_is_known_as_older():
+    check("its hash is among the earlier ones, so it reads as ours and untouched",
+          codex._sha(OLDER) in codex._EARLIER, codex._sha(OLDER))
+    check("and it lets echolot out, and not what an investigation runs besides",
+          codex.lets_out(OLDER) == ["echolot"])
+
+
+@pytest.mark.skipif(shutil.which("codex") is None, reason="the Codex CLI is not installed")
+def test_codex_itself_lets_gradle_and_adb_out_by_the_rules(tmp_path):
+    """The same check as for the `echolot` rule: Codex's own reading of the
+    file, which checks every example in it and starts no session."""
+    rules = tmp_path / "echolot.rules"
+    rules.write_text(codex.RULE_FILE, encoding="utf-8")
+
+    def decide(*argv: str) -> str:
+        out = subprocess.run(["codex", "execpolicy", "check", "--rules", str(rules),
+                              "--", *argv], capture_output=True, text=True, timeout=60)
+        check("codex accepts the file", out.returncode == 0, out.stdout + out.stderr)
+        return out.stdout
+
+    check("a Gradle task runs outside the sandbox", '"decision":"allow"' in decide("./gradlew", ":app:installDebug"))
+    check("so does adb", '"decision":"allow"' in decide("adb", "shell", "am", "force-stop", "com.example.app"))
+    check("gradle by another name does not", '"decision"' not in decide("gradle", "installDebug"))
+
+
+def test_init_for_codex_writes_the_three_rules_then_finds_them_current(project, home):
+    said = init(project, "--for", "codex")
+    rule = project / codex.RULE_PATH
+    check("fresh: the file this echolot writes", rule.read_text(encoding="utf-8") == codex.RULE_FILE
+          and "+ .codex/rules/echolot.rules" in said, said)
+    check("with the three rules in it", codex.project_lets_out(project) == ["echolot", "./gradlew", "adb"])
+    said = init(project)
+    check("up to date: left as it is, and said", "= .codex/rules/echolot.rules (Codex, current)" in said, said)
+
+
+def test_a_rules_file_an_older_echolot_wrote_is_said_to_be_older_then_brought_up_to_date(project, home, checked):
+    init(project, "--for", "claude,agents,codex")
+    rule = project / codex.RULE_PATH
+    rule.write_text(OLDER, encoding="utf-8")
+    check("read as older, not as an edit", codex.rule_state(project) == "stale")
+    trusted(home, project)
+    line = status_line(project, "codex")
+    check("echolot says it is from an older echolot, with the command", line.endswith(
+        "; it is from an older echolot → `echolot init --for claude,agents,codex`"), line)
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        codex.print_status(project, hosts.keys(project))
+    check("doctor says init brings it up to date", "`echolot init --for claude,agents,codex` brings it up to date."
+          in flat(out.getvalue()), out.getvalue())
+    trusted(home, project, "untrusted")
+    line = status_line(project, "codex")
+    check("an untrusted project is told too", "is not read" in line and line.endswith(
+        " · .codex/rules/echolot.rules here is from an older echolot → `echolot init --for claude,agents,codex`"), line)
+    said = init(project)
+    check("init brings it up to date, since nobody edited it", "↑ .codex/rules/echolot.rules" in said
+          and rule.read_text(encoding="utf-8") == codex.RULE_FILE, said)
+    line = status_line(project, "codex") or ""
+    check("and then nothing is older", "older echolot" not in line, line)
+
+
+def test_an_older_file_beside_a_rule_for_every_project_is_named(project, home, checked):
+    (home / "rules").mkdir()
+    (home / "rules" / "default.rules").write_text(sandbox.CODEX_RULE + "\n", encoding="utf-8")
+    rule = project / codex.RULE_PATH
+    rule.parent.mkdir(parents=True)
+    rule.write_text(OLDER, encoding="utf-8")
+    line = status_line(project, "codex")
+    check("the rule Codex reads, then the older file here", "in every project · .codex/rules/echolot.rules here "
+          "is from an older echolot →" in line, line)
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        codex.print_status(project, hosts.keys(project))
+    check("doctor says it too", ".codex/rules/echolot.rules here is from an older echolot:" in flat(out.getvalue()),
+          out.getvalue())
+
+
 # --- init --------------------------------------------------------------------
 
 def test_init_for_codex_writes_the_rule_and_says_codex_must_trust_the_project(

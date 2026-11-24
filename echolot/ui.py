@@ -22,8 +22,8 @@ the one line of that `echolot.yml` the page wrote for the limit, while the
 line still reads as the page wrote it, and nothing else in the file. The
 last ones dig deeper from a report (`echolot/dig.py`): they open an
 investigation with the report's question and start the person's own Claude
-Code in it, as a process of its own, with a command line and a grant the
-server builds; they stop it, take out the markers it left, and close an
+Code or Codex in it, as a process of its own, with a command line and a grant
+the server builds; they stop it, take out the markers it left, and close an
 investigation it left open.
 
 What it will and will not answer:
@@ -46,8 +46,9 @@ What it will and will not answer:
   project has, what to set up is one of the names the page offered, a time
   limit is a number of seconds in a stated range, the fingerprints of the
   config a page saw are compared with the file's, never opened, and a ticked
-  check is one the report on disk has; an agent's command line is built from
-  the config and the report alone.
+  check is one the report on disk has, a client named in an address is one
+  the page starts; an agent's command line is built from the config and the
+  report alone.
 - It serves the pages it draws and nothing else. There is one table of
   routes, no route reads a file by a path taken from the address, and no page
   fetches anything from elsewhere: a served page may send a form to this
@@ -130,11 +131,11 @@ class Site:
     # A press is answered under the same lock, so two of them cannot both
     # find nothing running.
     drawing: threading.Lock = field(default_factory=threading.Lock)
-    # The agent a press of Dig deeper starts (`echolot/dig.py`): how Claude
-    # Code is found, how a command of echolot's is run and waited for, and
-    # how the processes under a running agent are listed. A test hands in
-    # doubles for all three.
-    agent: Callable[[], dig.Client] = dig.find
+    # The agent a press of Dig deeper starts (`echolot/dig.py`): how the
+    # clients of its table are found (one client or a list of them), how a
+    # command of echolot's is run and waited for, and how the processes under
+    # a running agent are listed. A test hands in doubles for all three.
+    agent: Callable[[], Any] = dig.find_all
     run: Callable[..., Any] = subprocess.run
     procs: Callable[[], list[dict[str, Any]]] = job.processes
 
@@ -465,6 +466,17 @@ def _dig_report(visit: Visit, params: dict[str, str]) -> tuple[dict[str, Any], s
     return data, cli._shown_path(rep["path"], visit.site.project), named
 
 
+def _clients(site: Site) -> list[dig.Client]:
+    """The clients the site finds: one, or a list of them, as it was handed."""
+    found = site.agent()
+    return [found] if isinstance(found, dig.Client) else list(found)
+
+
+def _whys(offered: list[tuple[dig.Client, str | None]]) -> list[str] | None:
+    """Why none of the clients can start, each reason once, in their order."""
+    return list(dict.fromkeys(why for _, why in offered if why)) or None
+
+
 def _dig_parts(visit: Visit, data: dict[str, Any], params: dict[str, str]) -> dict[str, Any] | None:
     """What a served report adds to start an agent from it, where the server
     takes that press: the way to the screen before it starts, or why there
@@ -473,9 +485,10 @@ def _dig_parts(visit: Visit, data: dict[str, Any], params: dict[str, str]) -> di
     action = site.url("dig-ask-of", scenario=unquote(params["scenario"])) if "scenario" in params else site.url("dig-ask")
     if not action:
         return None
-    client = site.agent()
-    why = dig.why_not(site.project, visit.st, [], client)
-    return dig_page.report_parts(report_page.checks(data), action, why is None, why)
+    offered = dig.offer(site.project, _clients(site), visit.st, [])
+    can = [dig.adapter(c.key).name for c, why in offered if why is None]
+    return dig_page.report_parts(report_page.checks(data), action, bool(can), None if can else _whys(offered),
+                                 who=can)
 
 
 def _phone(lines: list[dict[str, Any]]) -> str | None:
@@ -489,18 +502,37 @@ def _phone(lines: list[dict[str, Any]]) -> str | None:
     return text.split("is connected:", 1)[1].strip().rstrip(".") or None
 
 
+def _dig_url(site: Site, name: str, client: str | None, scenario: str | None) -> str | None:
+    """The address of a press about the agent: with the client named in it
+    where one is, and the scenario where the report's address named one."""
+    params = {"client": client} if client else {}
+    if scenario:
+        params["scenario"] = scenario
+    return site.url(name + ("-with" if client else "") + ("-of" if scenario else ""), **params)
+
+
 def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
     """The screen before an agent starts: what a press of Start would do,
-    for the checks ticked on the report. Nothing is started here."""
+    for the checks ticked on the report, with the client the address names
+    or, where it names none, the first the page offers (`dig.offer`), and a
+    way to each other one that can start. Nothing is started here."""
     site = visit.site
     try:
         data, where, named = _dig_report(visit, params)
         picks = dig.picked(data, dig.asked(visit.form))
     except check.Refusal as e:
         return _nothing(visit, e.title, e.text, e.status)
-    client = site.agent()
     lines = ready.lines(site.project, site.config, site.src, visit.st)
-    why = dig.why_not(site.project, visit.st, lines, client)
+    offered = dig.offer(site.project, _clients(site), visit.st, lines)
+    chosen = dig.pick(offered, params.get("client"))
+    if chosen is None:
+        return _nothing(visit, "No such agent", "The page starts Claude Code or Codex, and this address names "
+                        "neither.")
+    client, why = chosen
+    if why and not any(w is None for _, w in offered):
+        # None can start: every reason, once each.
+        why = _whys(offered)
+    agent = dig.adapter(client.key)
     paths = None
     known = visit.st.get("config") or {}
     try:
@@ -516,14 +548,20 @@ def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
     opening = shlex.join(["echolot", "hunt", dig.hunt_question(data), "--since", "unknown",
                           *(["--scenario", str(scenario)] if several and scenario else [])])
     back = site.url("report-of", scenario=named) if named else site.url("report")
-    action = site.url("dig-of", scenario=named) if named else site.url("dig")
+    # Start names its client in the address, unless it is Claude Code: a
+    # press of Start without one starts Claude Code, as it did before Codex.
+    action = _dig_url(site, "dig", None if client.key == dig.PROGRAM else client.key, named)
+    others = [(dig.adapter(c.key).name, _dig_url(site, "dig-ask", c.key, named))
+              for c, w in offered if w is None and c.key != client.key]
     return Page(dig_page.consent({
         "question": report_page.question(data), "picks": picks, "client": client, "why": why, "paths": paths,
         "phone": _phone(lines), "rounds": rounds, "changed": dig.changed_files(site.project),
-        "own_allow": dig.own_allow(site.project), "budget": dig.BUDGET_USD, "commands": dig.COMMANDS,
-        "verdict": dig.VERDICT, "opening": opening, "running": dig.shown(dig.rules(paths)) if paths is not None else "",
+        **agent.terms(site.project), "commands": dig.COMMANDS,
+        "verdict": dig.VERDICT, "opening": opening,
+        "running": agent.shown(paths, site.project) if paths is not None else "",
         "copy": report_page.request_text(data, picks, where, last=True), "action": action, "back": back or "",
         "keys": [c["key"] for c in picks], "many": len(picks) > report_page.FOCUS,
+        "others": [(name, url) for name, url in others if url],
     }, site.url, visit.steps(None)))
 
 
@@ -540,7 +578,14 @@ def _dig_start(visit: Visit, params: dict[str, str]) -> Page:
         data, where, _ = _dig_report(visit, params)
         picks = dig.picked(data, dig.asked(visit.form))
         lines = ready.lines(site.project, site.config, site.src, visit.st)
-        started = dig.start(site.project, visit.st, lines, data, picks, where, site.agent(),
+        # The client the address names, Claude Code where it names none: the
+        # screen before the start drew its Start that way.
+        key = params.get("client") or dig.PROGRAM
+        client = next((c for c in _clients(site) if c.key == key), None)
+        if client is None:
+            raise check.Refusal("No such agent", "The page starts Claude Code or Codex, and this address names "
+                                "neither.", 404)
+        started = dig.start(site.project, visit.st, lines, data, picks, where, client,
                             run=site.run, spawn=site.spawn)
     except check.Refusal as e:
         return _nothing(visit, e.title, e.text, e.status)
@@ -639,6 +684,10 @@ ROUTES: list[Route] = [
     Route("dig-unmark", "dig/unmark", _dig_unmark, method="POST"),
     Route("dig-close", "dig/close", _dig_close, method="POST"),
     Route("dig-state", "dig/state", _dig_progress),
+    Route("dig-ask-with", "dig/with/{client}/ask", _dig_ask, method="POST"),
+    Route("dig-ask-with-of", "dig/with/{client}/ask/{scenario}", _dig_ask, method="POST"),
+    Route("dig-with", "dig/with/{client}/start", _dig_start, method="POST"),
+    Route("dig-with-of", "dig/with/{client}/start/{scenario}", _dig_start, method="POST"),
 ]
 
 # A part of an address that names something. Numbers are digits; a name is

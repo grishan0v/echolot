@@ -547,3 +547,204 @@ def test_the_processes_of_this_computer_are_read_from_ps():
     def broken(argv, **kw):
         raise OSError("no ps here")
     check("no ps: no processes, and no error", job.processes(run=broken) == [])
+
+
+# --- a step that ends itself once nothing moves under it (#454) ------------------------------------
+
+HELPER = "/opt/example/codex/bin/codex-code-mode-host"
+
+
+def idle_tree(root: Path, seconds: float = 1800.0) -> list[dict]:
+    """A tree step whose plan says how long nothing may move: a log it
+    watches, and the client's own helpers, which run the whole time."""
+    return [{**tree("agent")[0], "idle": {"seconds": seconds, "watch": ["watched.log"], "helpers": ["codex"]}}]
+
+
+def watched(root: Path, at: float) -> Path:
+    path = root / "watched.log"
+    path.write_text("an event\n", encoding="utf-8")
+    os.utime(path, (at, at))
+    return path
+
+
+class Started(Table):
+    """The processes under the step, each with the moment it started on the
+    job's clock: `ps` gives their age, which grows as the clock moves."""
+
+    def __init__(self, now: list[float], started: dict[int, tuple[int, float, str]]):
+        super().__init__({pid: parent for pid, (parent, _, _) in started.items()})
+        self.now = now
+        for pid, (_, at, args) in started.items():
+            self.rows[pid].update(args=args, at=at)
+
+    def __call__(self):
+        return [{**row, "age": self.now[0] - row["at"]} for row in self.rows.values()]
+
+
+def stop_after_an_hour(root: Path, now: list[float]):
+    """Each look moves the job's clock on by 700 s, and a person presses Stop
+    once an hour has passed."""
+    def tick(command):
+        now[0] += 700.0
+        if now[0] >= 1000.0 + 5 * 700.0:
+            job.stop(root, "check")
+    return tick
+
+
+def test_a_step_with_nothing_moving_under_it_for_its_time_is_ended_and_says_why(tmp_path):
+    now = [1000.0]
+    watched(tmp_path, 1000.0)
+
+    def tick(command):
+        now[0] += 700.0                                   # three looks: at 700, 1400 and 2100 seconds
+    commands = Commands(agent={"waits": 10, "on_wait": tick})
+    # Under it, only the client's own helper, which has run since before it started.
+    table = Table({5001: 4002})
+    table.rows[5001].update(args=HELPER, age=99999.0)
+    run(tmp_path, commands, idle_tree(tmp_path), procs=table, kill=table.kill, clock=lambda: now[0])
+    state = job.read(tmp_path, "check")
+    check("ended as a stop is, and the state says why", state["status"] == job.STOPPED
+          and state["steps"][0]["status"] == job.STOPPED and state["why"] == job.IDLE, state)
+    check("once its time had passed, not before", now[0] == 3100.0, now)
+    check("Ctrl-C to what is under it and to the command, as Stop sends it",
+          (5001, signal.SIGINT) in table.sent and commands.started[0].signals == [signal.SIGINT], table.sent)
+    check("the plan's time is kept beside the step", state["steps"][0]["idle"]["seconds"] == 1800.0)
+
+
+def test_a_build_that_runs_long_under_it_is_never_idle(tmp_path):
+    now = [1000.0]
+    watched(tmp_path, 1000.0)
+    commands = Commands(agent={"waits": 10, "on_wait": stop_after_an_hour(tmp_path, now)})
+    # The helper started with the client; the build two minutes in, and it runs on.
+    table = Started(now, {5001: (4002, 1000.0, HELPER),
+                          5002: (5001, 1120.0, "java org.gradle.wrapper.GradleWrapperMain :app:installDebug")})
+    run(tmp_path, commands, idle_tree(tmp_path), procs=table, kill=table.kill, clock=lambda: now[0])
+    state = job.read(tmp_path, "check")
+    check("it ran until it was stopped, and was not ended for being idle",
+          state["status"] == job.STOPPED and "why" not in state and now[0] == 4500.0, (state, now))
+
+
+def test_a_file_it_watches_written_is_movement(tmp_path):
+    now = [1000.0]
+    log = watched(tmp_path, 1000.0)
+
+    def tick(command):
+        now[0] += 700.0
+        os.utime(log, (now[0] - 1.0, now[0] - 1.0))         # the client said something just now
+        if now[0] >= 1000.0 + 5 * 700.0:
+            job.stop(tmp_path, "check")
+    commands = Commands(agent={"waits": 10, "on_wait": tick})
+    table = Table({5001: 4002})
+    table.rows[5001].update(args=HELPER, age=99999.0)
+    run(tmp_path, commands, idle_tree(tmp_path), procs=table, kill=table.kill, clock=lambda: now[0])
+    check("a client that writes is not idle", "why" not in job.read(tmp_path, "check"))
+
+
+def test_where_the_processes_cannot_be_listed_nothing_is_idle(tmp_path):
+    """No `ps` (Windows): a build that runs for an hour would look like a wait."""
+    now = [1000.0]
+    watched(tmp_path, 1000.0)
+
+    def tick(command):
+        now[0] += 700.0
+        if now[0] >= 1000.0 + 5 * 700.0:
+            job.stop(tmp_path, "check")
+    table = Table({})
+    run(tmp_path, Commands(agent={"waits": 10, "on_wait": tick}), idle_tree(tmp_path), procs=table, kill=table.kill,
+        clock=lambda: now[0])
+    check("it ran until it was stopped", "why" not in job.read(tmp_path, "check") and now[0] == 4500.0, now)
+
+
+def test_a_process_that_started_under_it_is_movement_and_a_step_without_a_time_is_never_idle(tmp_path):
+    now = [1000.0]
+    watched(tmp_path, 1000.0)
+    table = Table({5001: 4002})
+
+    def tick(command):
+        now[0] += 700.0
+        # A command it runs now and then, just started each time it is looked at.
+        table.rows[5001].update(args="/bin/zsh -lc 'echolot hunt --show 1'", age=5.0)
+        if now[0] >= 1000.0 + 5 * 700.0:
+            job.stop(tmp_path, "check")
+    run(tmp_path, Commands(agent={"waits": 10, "on_wait": tick}), idle_tree(tmp_path), procs=table, kill=table.kill,
+        clock=lambda: now[0])
+    check("a process just started under it is movement", "why" not in job.read(tmp_path, "check"))
+    now[0] = 1000.0
+    empty = Table({})
+
+    def later(command):
+        now[0] += 700.0
+        if now[0] >= 1000.0 + 5 * 700.0:
+            job.stop(tmp_path, "check")
+    run(tmp_path, Commands(agent={"waits": 10, "on_wait": later}), tree("agent"), procs=empty, kill=empty.kill,
+        clock=lambda: now[0])
+    state = job.read(tmp_path, "check")
+    check("a step whose plan says no time runs until it is stopped", "why" not in state
+          and "idle" not in state["steps"][0])
+    run(tmp_path, Commands(collect={}), [{**steps("collect")[0], "idle": {"seconds": 1}}], procs=empty, kill=empty.kill)
+    check("and only a tree step takes one", "idle" not in job.read(tmp_path, "check")["steps"][0])
+
+
+def test_a_program_its_own_settings_start_with_it_is_its_own(tmp_path):
+    """(a) An MCP server the person's own settings start: it starts with the
+    client, sleeps the whole run, and has a name of its own."""
+    now = [1000.0]
+    watched(tmp_path, 1000.0)
+
+    def tick(command):
+        now[0] += 700.0
+    commands = Commands(agent={"waits": 10, "on_wait": tick})
+    table = Started(now, {5001: (4002, 1000.0 + 2.0, "npx -y @example/mcp-server --stdio")})
+    run(tmp_path, commands, idle_tree(tmp_path), procs=table, kill=table.kill, clock=lambda: now[0])
+    state = job.read(tmp_path, "check")
+    check("the run is still ended at its idle time", state["why"] == job.IDLE and now[0] == 3100.0, (state, now))
+    check("and the server gets Ctrl-C with it", (5001, signal.SIGINT) in table.sent, table.sent)
+
+
+def test_a_process_started_after_the_first_seconds_is_something_that_runs(tmp_path):
+    """(b) A command it runs starts after its first reply: while it runs, the
+    run is never idle, however long it says nothing."""
+    now = [1000.0]
+    watched(tmp_path, 1000.0)
+    table = Started(now, {5001: (4002, 1000.0 + job.STARTUP_S + 1.0, "/bin/zsh -lc 'sleep 7200'")})
+    run(tmp_path, Commands(agent={"waits": 10, "on_wait": stop_after_an_hour(tmp_path, now)}), idle_tree(tmp_path),
+        procs=table, kill=table.kill, clock=lambda: now[0])
+    state = job.read(tmp_path, "check")
+    check("never ended for being idle", state["status"] == job.STOPPED and "why" not in state and now[0] == 4500.0,
+          (state, now))
+
+
+def test_a_child_of_an_early_process_started_later_is_something_that_runs(tmp_path):
+    """(c) Codex installed through npm: the step runs the node wrapper, the
+    real program is its child, started at once, and every command is a child
+    of that one, started later. Only what itself started early is its own."""
+    now = [1000.0]
+    watched(tmp_path, 1000.0)
+    table = Started(now, {5001: (4002, 1000.0 + 0.5, "/opt/example/lib/node_modules/@openai/codex/vendor/bin/codex"),
+                          5002: (5001, 1000.0 + 120.0, "/bin/zsh -lc './gradlew :app:installDebug'")})
+    run(tmp_path, Commands(agent={"waits": 10, "on_wait": stop_after_an_hour(tmp_path, now)}), idle_tree(tmp_path),
+        procs=table, kill=table.kill, clock=lambda: now[0])
+    check("the build under the early program counts as running", "why" not in job.read(tmp_path, "check"))
+    now[0] = 1000.0
+    early = Started(now, {5001: (4002, 1000.0 + 0.5, "/opt/example/lib/node_modules/@openai/codex/vendor/bin/codex"),
+                          5002: (5001, 1000.0 + 3.0, "uvx mcp-server-example")})
+
+    def tick(command):
+        now[0] += 700.0
+    run(tmp_path, Commands(agent={"waits": 10, "on_wait": tick}),
+        [{**idle_tree(tmp_path)[0], "idle": {**idle_tree(tmp_path)[0]["idle"], "startup_s": 5.0}}],
+        procs=early, kill=early.kill, clock=lambda: now[0])
+    check("while what started with it, a server of its settings among it, is its own, within the plan's own seconds",
+          job.read(tmp_path, "check")["why"] == job.IDLE and now[0] == 3100.0, now)
+
+
+@pytest.mark.parametrize("args, helper", [(HELPER, True), ("codex exec --json", True), ("/usr/local/bin/codex", True),
+                                          ("codexfoo", False), ("/bin/zsh -lc codex", False), ("", False),
+                                          ("./gradlew assembleDebug", False)])
+def test_the_client_s_own_helpers_are_known_by_the_program_s_name(args, helper):
+    check(f"{args!r}", job._helper(args, ("codex",)) is helper)
+
+
+def test_a_state_whose_why_is_no_word_is_no_job(tmp_path):
+    write(tmp_path, why=3)
+    check("refused as any other field of the wrong type", job.read(tmp_path, "check") is None)
