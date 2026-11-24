@@ -1507,6 +1507,36 @@ def _(report):
     assert "/data/app/~~#/com.example.app-#/base.apk" in new, new
 
 
+@check("compare --plain says in how many launches a name of one side was, as the table does")
+def _(report):
+    """From five runs a name may be missing from one of them and still be
+    listed, and the table says `4/5 against 0/5`. The plain reading said
+    "In every launch after and in none before" of such a name, a wait a
+    reader then took for one every launch made (#851). Here a name in all
+    five runs after and one in four: the sentence opens with both, and says
+    which name missed a run."""
+    from . import compare as compare_mod
+    from . import moves
+    from . import report as report_mod
+
+    def with_names(tag: str, runs: list[dict[str, float]]) -> dict:
+        side = _set_of(tag, len(runs))
+        side[report_mod.SLICE_NAMES] = report_mod._merge_names([{report_mod.NAMES_ALL: {
+            name: {"total_ms": ms, "max_ms": ms, "threads": ["main"]} for name, ms in run.items()}}
+            for run in runs])
+        return side
+    before = with_names("a", [{"common": 30.0}] * 5)
+    for runs, said in (([{"common": 30.0, "wait": 2.0}] * 4 + [{"common": 30.0}],
+                        "In 4 of 5 runs after and in none before: `wait` (2 ms a run, main)."),
+                       ([{"common": 30.0, "load": 6.0, "wait": 2.0}] * 4 + [{"common": 30.0, "load": 6.0}],
+                        "In every run after, or all but one, and in none before: `load` (6 ms a run, "
+                        "main), `wait` (2 ms a run in 4 of 5, main).")):
+        after = with_names("b", runs)
+        cmp = compare_mod.build(before, after, before_path="a.json", after_path="b.json")
+        note = next((n for n in moves.read(before, after, cmp)["notes"] if n["id"] == "names"), None)
+        assert note is not None and note["text"].startswith(said), note
+
+
 @check("a row over a pool says how many threads it adds up, and the main "
        "thread's row is `main`")
 def _(report):
@@ -2913,6 +2943,48 @@ def _(report):
         v = moves.read(before, after, cmp)["verdict"]
         assert (v["movement"], v["by"]) == (movement, "frames"), v
         assert shares in v["text"] and "its length is the recording's" in v["text"], v["text"]
+
+
+def _set_of(tag: str, runs: int) -> dict:
+    """A merged report of `runs` repeats with no rows, its traces named by
+    `tag`: two sides under one set of names are the same recordings to
+    `compare`, which then compares nothing (#713)."""
+    side = _side_with({})
+    side.update(runs=runs, traces=[f"{tag}{i}.perfetto-trace" for i in range(runs)])
+    return side
+
+
+@check("compare --plain says beside a share of late frames the counts of the run it is the share of")
+def _(report):
+    """Late 4, 3, 4, 3, 3 of 16, 15, 15, 16, 16 frames: each run's share is
+    25, 20, 26.7, 18.8 and 18.8%, and their median, which the verdict
+    reads, is 20%, the 3 of 15 of the second run. The sentence put beside
+    it the median late frames and the median frames drawn, 3 of 16, two
+    other runs and 19%: "20% … 3 of 16 frames a launch", and the same 3 of
+    16 read 18% in another pair (#846). The counts are the middle run's
+    now; with an even number of runs, the two the median lies halfway
+    between."""
+    from . import compare as compare_mod
+    from . import moves
+    from . import report as report_mod
+
+    def drag(tag: str, frames: tuple, late: tuple) -> dict:
+        side = _set_of(tag, len(frames))
+        side["window"].update({"start_anchor": None, "end_anchor": None, "duration_ms": 14900.0,
+                               "frames": report_mod._merge_frames(
+                                   [{"window": {"frames": {"count": n, "late": k}}}
+                                    for n, k in zip(frames, late, strict=True)])})
+        return side
+    five = drag("a", (16, 15, 15, 16, 16), (4, 3, 4, 3, 3))
+    for after, said in ((drag("b", (16, 15, 15, 16, 17), (3, 4, 3, 3, 3)),
+                         "The app made 20% of its frames late before and 19% after: 3 of 15 frames in the "
+                         "middle run, then 3 of 16."),
+                        (drag("c", (16, 15, 15, 16), (3, 4, 3, 4)),
+                         "The app made 20% of its frames late before and 22% after: 3 of 15 frames in the "
+                         "middle run, then 3 of 15 and 4 of 16 in the two middle runs.")):
+        cmp = compare_mod.build(five, after, before_path="a.json", after_path="b.json")
+        v = moves.read(five, after, cmp)["verdict"]
+        assert v["by"] == "frames" and v["text"].startswith(said), v["text"]
 
 
 @check("frame_jank: the worst frame in the trace is outside the window")

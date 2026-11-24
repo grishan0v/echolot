@@ -217,6 +217,36 @@ def test_the_plain_reading_names_the_work_only_one_side_has() -> None:
               f"Jit thread pool)." in note["text"], note)
 
 
+def _note(before: dict, after: dict) -> str:
+    cmp = compare(before, after)
+    return next(n for n in moves.read(before, after, cmp)["notes"] if n["id"] == "names")["text"]
+
+
+def test_the_plain_reading_says_how_many_launches_a_name_was_in() -> None:
+    """#851: from five runs a name may miss one, and the table says `4/5`.
+    The plain reading said "In every launch after" of it all the same."""
+    before = side([{"common": 30.0}] * 5)
+    text = _note(before, side([{"common": 30.0, "wait": 2.0}] * 4 + [{"common": 30.0}]))
+    check("all of them in 4 of 5: the sentence says so", text.startswith(
+        "In 4 of 5 runs after and in none before: `wait` (2 ms a run, Jit thread pool)."), text)
+    text = _note(before, side([{"common": 30.0, JIT: 6.0, "wait": 2.0}] * 4 + [{"common": 30.0, JIT: 6.0}]))
+    check("one in every run and one in 4 of 5: both said, and the one that missed a run by name",
+          text.startswith(f"In every run after, or all but one, and in none before: `{JIT}` (6 ms a run, "
+                          "Jit thread pool), `wait` (2 ms a run in 4 of 5, Jit thread pool)."), text)
+    text = _note(before, side([{"common": 30.0, JIT: 6.0}] * 5))
+    check("every run is every run", text.startswith("In every run after and in none before:"), text)
+
+
+def test_the_names_past_the_ones_said_count_too() -> None:
+    """The names after the third are said as "and N more": what the sentence
+    opens with is true of them as well."""
+    every = {f"every_{c}": 20.0 - i for i, c in enumerate("abc")}
+    text = _note(side([{}] * 5), side([{**every, "late_one": 2.0}] * 4 + [every]))
+    check("three in every run said, a fourth in 4 of 5 behind `1 more`",
+          text.startswith("In every run after, or all but one, and in none before:")
+          and "in 4 of 5" not in text and ", and 1 more." in text, text)
+
+
 # --- from traces -------------------------------------------------------------
 
 CONFIG = {
