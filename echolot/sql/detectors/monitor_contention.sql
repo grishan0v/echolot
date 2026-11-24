@@ -68,7 +68,8 @@
 WITH waits AS (
     SELECT
         CASE WHEN s.is_main_thread = 1 THEN 'main'
-             ELSE s.thread_name END       AS thread_name,
+             ELSE COALESCE(f.family, s.thread_name) END
+                                          AS thread_name,
         s.tid,
         s.ts,
         s.dur,
@@ -78,6 +79,9 @@ WITH waits AS (
     FROM _slice_win s
     JOIN slice x ON x.id = s.slice_id
     LEFT JOIN slice parent ON parent.id = x.parent_id
+    -- A thread's name under the fold every detector groups by: a pool's
+    -- workers are one row, and `threads` counts them all (#831, #845).
+    LEFT JOIN _name_family f ON f.name = s.thread_name
     WHERE (s.name GLOB '{{name_glob}}' OR s.name GLOB '{{name_glob_alt}}')
       AND NOT (s.name GLOB '{{name_glob}}'
                AND COALESCE(parent.name GLOB '{{name_glob_alt}}', 0))

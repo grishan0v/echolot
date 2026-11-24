@@ -74,10 +74,13 @@ SELECT
     s.ts,
     s.dur,
     s.tid,
-    s.thread_name,
+    COALESCE(f.family, s.thread_name)                              AS thread_name,
     s.is_main_thread,
     b.callee
 FROM _slice_win s
+-- A thread's name under the fold every detector groups by: a pool's
+-- workers are one row, and `threads` counts them all (#831, #845).
+LEFT JOIN _name_family f ON f.name = s.thread_name
 LEFT JOIN (
     -- One line per transaction, whatever the module holds: a duplicate
     -- here would be counted twice in the rows.

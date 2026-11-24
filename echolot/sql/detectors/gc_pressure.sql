@@ -90,17 +90,21 @@ CREATE OR REPLACE PERFETTO TABLE _det_gc_pressure AS
 SELECT
     s.ts,
     s.dur,
-    s.name,
-    s.thread_name,
+    -- The slice's and the thread's names under the fold every detector
+    -- groups by (#831): a collection's numbers and a pool's are the
+    -- runtime's.
+    COALESCE(fn.family, s.name)                                    AS name,
+    COALESCE(ft.family, s.thread_name)                             AS thread_name,
     s.is_main_thread,
     g.reclaimed_mb,
     g.max_heap_mb,
     -- An allocation wait waits for the collection that was running when it
     -- began, or that began while it waited: the first one over it.
     CASE WHEN s.name GLOB '{{name_glob_alt}}' THEN (
-        SELECT c.name
+        SELECT COALESCE(fc.family, c.name)
         FROM android_garbage_collection_events e
         JOIN slice c ON c.id = e.gc_id
+        LEFT JOIN _name_family fc ON fc.name = c.name
         WHERE e.upid = (SELECT upid FROM _proc)
           AND e.gc_ts < s.ts + s.dur
           AND e.gc_ts + e.gc_dur > s.ts
@@ -109,6 +113,8 @@ SELECT
     ) END                                                          AS during
 FROM _slice_win s
 LEFT JOIN android_garbage_collection_events g ON g.gc_id = s.slice_id
+LEFT JOIN _name_family fn ON fn.name = s.name
+LEFT JOIN _name_family ft ON ft.name = s.thread_name
 WHERE s.name GLOB '{{name_glob}}'
    OR s.name GLOB '{{name_glob_alt}}';
 

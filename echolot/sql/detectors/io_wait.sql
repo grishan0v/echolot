@@ -70,7 +70,7 @@
 -- and another new. `threads` says how many threads of that name the row
 -- adds up (#511).
 SELECT
-    t.thread_name                                   AS location,
+    COALESCE(f.family, t.thread_name)               AS location,
     COUNT(DISTINCT t.tid)                           AS threads,
     COUNT(*)                                        AS count,
     ROUND(SUM(t.dur) / 1e6, 2)                      AS total_ms,
@@ -82,9 +82,12 @@ SELECT
                                                     AS detail
 FROM _tstate_win t
 CROSS JOIN _proc p
+-- A thread's name under the fold every detector groups by: a pool's
+-- workers are one row, and `threads` counts them all (#831, #845).
+LEFT JOIN _name_family f ON f.name = t.thread_name
 WHERE t.state IN ('D', 'DK')
   AND t.io_wait = 1
-GROUP BY t.thread_name, t.tid = p.pid
+GROUP BY COALESCE(f.family, t.thread_name), t.tid = p.pid
 HAVING SUM(t.dur) >= {{min_io_wait_ms}} * 1000000
 ORDER BY total_ms DESC
 LIMIT 20;
@@ -97,8 +100,10 @@ LIMIT 20;
 SELECT t.ts, t.dur
 FROM _tstate_win t
 CROSS JOIN _proc p
+LEFT JOIN _name_family f ON f.name = t.thread_name
 WHERE t.tid = p.pid
   AND t.state IN ('D', 'DK')
   AND t.io_wait = 1
   AND EXISTS (SELECT 1 FROM _rows r
-              WHERE r.location = t.thread_name AND r.detail LIKE 'main%');
+              WHERE r.location = COALESCE(f.family, t.thread_name)
+                AND r.detail LIKE 'main%');

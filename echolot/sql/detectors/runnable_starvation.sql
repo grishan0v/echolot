@@ -55,8 +55,11 @@ main_top AS (
     FROM (SELECT state, holder_thread,
                  ROW_NUMBER() OVER (PARTITION BY state
                                     ORDER BY SUM(dur) DESC, holder_thread) AS k
-          FROM _main_runnable_held
-          WHERE holder = 'app'
+          FROM (SELECT h.state, h.dur,
+                       COALESCE(f.family, h.holder_thread) AS holder_thread
+                FROM _main_runnable_held h
+                LEFT JOIN _name_family f ON f.name = h.holder_thread
+                WHERE h.holder = 'app')
           GROUP BY state, holder_thread)
     WHERE k = 1
 ),
@@ -91,7 +94,7 @@ evidence AS (
 -- The main thread is `main`, by its tid and not by its name, and `threads`
 -- says how many threads a row adds up: see `monitor_contention` (#511).
 SELECT
-    CASE WHEN s.tid = p.pid THEN 'main' ELSE s.thread_name END
+    CASE WHEN s.tid = p.pid THEN 'main' ELSE COALESCE(f.family, s.thread_name) END
                                       AS location,
     COUNT(DISTINCT s.tid)             AS threads,
     COUNT(*)                          AS count,
@@ -105,8 +108,11 @@ SELECT
 FROM _tstate_win s
 CROSS JOIN _proc p
 LEFT JOIN evidence e ON e.state = s.state
+-- A thread's name under the fold every detector groups by: a pool's
+-- workers are one row, and `threads` counts them all (#831, #845).
+LEFT JOIN _name_family f ON f.name = s.thread_name
 WHERE s.state IN ('R', 'R+')
-GROUP BY s.thread_name, s.tid = p.pid, s.state
+GROUP BY COALESCE(f.family, s.thread_name), s.tid = p.pid, s.state
 HAVING SUM(s.dur) >= {{min_runnable_ms}} * 1000000
 ORDER BY total_ms DESC
 LIMIT 20;

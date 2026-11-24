@@ -78,13 +78,16 @@
 -- name alone the two were one row, held to the main thread's bar.
 
 WITH running AS (
-    SELECT CASE WHEN w.tid = p.pid THEN 'main' ELSE w.thread_name END
-                                                       AS thread_name,
+    SELECT CASE WHEN w.tid = p.pid THEN 'main'
+                ELSE COALESCE(f.family, w.thread_name) END   AS thread_name,
            SUM(w.dur)                                  AS running_ns,
            COUNT(DISTINCT w.tid)                       AS threads,
            MAX(w.tid = p.pid)                          AS main
     FROM _tstate_win w
     CROSS JOIN _proc p
+    -- A thread's name under the fold every detector groups by: a pool's
+    -- workers are one row, and `threads` counts them all (#831, #845).
+    LEFT JOIN _name_family f ON f.name = w.thread_name
     WHERE w.state = 'Running'
     GROUP BY 1
 ),
@@ -93,18 +96,21 @@ covered AS (
     -- with top-level slices. Doing that interval-overlap join by hand makes
     -- SQLite run a nested loop that does not finish within ten minutes on a
     -- live trace.
-    SELECT CASE WHEN t.tid = p.pid THEN 'main' ELSE t.name END AS thread_name,
+    SELECT CASE WHEN t.tid = p.pid THEN 'main'
+                ELSE COALESCE(f.family, t.name) END    AS thread_name,
            SUM(c.dur)                                  AS sliced_ns
     FROM _cpu_in_slice c
     JOIN thread t ON t.utid = c.utid
     CROSS JOIN _proc p
+    LEFT JOIN _name_family f ON f.name = t.name
     GROUP BY 1
 ),
 counted AS (
-    SELECT CASE WHEN is_main_thread = 1 THEN 'main' ELSE thread_name END
-                                                       AS thread_name,
+    SELECT CASE WHEN s.is_main_thread = 1 THEN 'main'
+                ELSE COALESCE(f.family, s.thread_name) END   AS thread_name,
            COUNT(*)                                    AS slice_count
-    FROM _slice_win
+    FROM _slice_win s
+    LEFT JOIN _name_family f ON f.name = s.thread_name
     GROUP BY 1
 ),
 blind AS (
@@ -154,10 +160,12 @@ WHERE t.upid = p.upid
 -- `_samples_win` is already this process's alone.
 
 SELECT w.location, w.callsite_id
-FROM (SELECT CASE WHEN t.tid = p.pid THEN 'main' ELSE t.name END AS location,
+FROM (SELECT CASE WHEN t.tid = p.pid THEN 'main'
+                  ELSE COALESCE(f.family, t.name) END        AS location,
              s.callsite_id
       FROM _samples_by_slice s
       JOIN thread t ON t.utid = s.utid
       CROSS JOIN _proc p
+      LEFT JOIN _name_family f ON f.name = t.name
       WHERE s.instrumented IS NULL) w
 WHERE w.location IN (SELECT location FROM _rows);
