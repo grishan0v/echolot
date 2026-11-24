@@ -565,6 +565,7 @@ class Hunt(TypedDict, total=False):
     analyzes: int
     reports: int
     traces: list[str]
+    filed: list[dict[str, Any]]
     conclusion: str | None
     verdict: dict[str, Any]
     verdict_check: dict[str, Any]
@@ -587,6 +588,13 @@ HUNT: Spec[Hunt] = Spec(
                                              "conclusion", "opened_at", "touched_at", "closed_at")},
         **{k: may(Obj({}), drop=True) for k in ("confirmed", "verdict", "verdict_check")},
         "traces": may(ListOf(TEXT, drop=True), drop=True),
+        # Whether each report filed is a round or a look (#908): a mark that
+        # does not read is left out, and `compare` tells that report from
+        # the report itself, as it does one filed before the marks.
+        "filed": may(ListOf(Obj({"report": need(Whole(1)), "kind": need(OneOf(("round", "look"))),
+                                 "why": may(TEXT, drop=True),
+                                 "recordings": may(ListOf(TEXT, drop=True), drop=True)}),
+                            drop=True), drop=True),
     }))
 
 

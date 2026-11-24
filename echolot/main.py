@@ -907,10 +907,13 @@ def cmd_analyze(args) -> int:
     hunt_mod.touch(root, analyze=True, n=inside["n"])
     # .echolot/out/report.json is always the latest and every analyze
     # overwrites it, including one belonging to a different question. The
-    # investigation keeps its own copy of each.
-    kept = hunt_mod.record_report(root, out_dir, n=inside["n"])
+    # investigation keeps its own copy of each, and says whether it is a
+    # round or a look, by what it read and how (#908).
+    kept = hunt_mod.record_report(root, out_dir, n=inside["n"],
+                                  recordings=hunt_mod.recording_ids(traces))
     if kept is not None:
         print(f"→ {kept}  (this investigation's copy)", file=sys.stderr)
+        print(f"[i] {_filed_as(root, kept)}", file=sys.stderr)
         again = _answer_again(root, str(cfg.path or args.config), hunt_mod.load(root))
         if again is not None:
             print(f"→ {again}  (this investigation's page stood there: written again "
@@ -1139,46 +1142,81 @@ def _reports_of_hunt(project: Path, ident: str) -> list[Path]:
     return reports
 
 
-def _last_two_rounds(reports: list[Path]) -> tuple[Path, Path, list[Path]]:
-    """The previous round and the latest one, among the reports a hunt filed.
+def _last_two_rounds(project: Path, hunt: dict | None,
+                     reports: list[Path]) -> tuple[Path, Path, str]:
+    """The previous round and the latest one, among the reports a hunt
+    filed, and the line that says which two they are and why.
 
     Every `analyze` inside an open investigation files a report, and a look
     at part of a round files one too: the last two reports were round 2 and
     a single-run look at one of its traces, a side with no spread and an
-    empty Holds column under a header that read as two rounds (#613). A
-    report is a look, not a round, when it read fewer traces than the round
-    before it, ran with other `--set` or `--defaults`, or read only traces
-    that round read already. The looks that would have been taken are named
-    on stderr; with fewer than two rounds the last two reports are taken, as
-    before.
+    empty Holds column under a header that read as two rounds (#613). The
+    rule that kept looks out went by the traces' paths and their number, and
+    `collect --hunt` records every round under the same loose names: round
+    3 read round 2's paths and was left out as a look, and a round of ten
+    after one of eleven was a look too, so the `--set` look after it became
+    a side (#908). What a report is, `analyze` now says as it files it
+    (`hunt.rounds`), by the recordings' bytes and the thresholds; a report
+    filed before it did is told from the report, and the line says so. With
+    fewer than two rounds the last two reports are taken, and the line says
+    what each is.
     """
-    rounds: list[tuple[Path, dict]] = []
-    looks: list[Path] = []
-    for path in reports:
-        try:
-            rep = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            rep = None
-        if not isinstance(rep, dict):
-            rounds.append((path, {}))  # `_load_report` says what it is instead
-            continue
-        cfg = rep.get("config") if isinstance(rep.get("config"), dict) else {}
-        shape = {"runs": compare_mod._runs(rep), "set": cfg.get("set") or None,
-                 "defaults": bool(cfg.get("defaults")),
-                 "traces": set(map(str, rep.get("traces") or [rep.get("trace")]))}
-        if rounds and rounds[-1][1]:
-            last = rounds[-1][1]
-            if (shape["runs"] < last["runs"] or shape["set"] != last["set"]
-                    or shape["defaults"] != last["defaults"]
-                    or shape["traces"] <= last["traces"]):
-                looks.append(path)
-                continue
-        rounds.append((path, shape))
-    if len(rounds) < 2:
-        return reports[-2], reports[-1], []
-    after = rounds[-1][0]
-    before = rounds[-2][0]
-    return before, after, [p for p in looks if p.name > before.name]
+    filed = hunt_mod.rounds(project, hunt, reports)
+    rounds = [f for f in filed if f.round]
+
+    def shown(f: hunt_mod.Filed) -> str:
+        return _shown_path(f.path, project)
+
+    if len(rounds) >= 2:
+        before, after = rounds[-2], rounds[-1]
+        looks = [f for f in filed if not f.round and f.path.name > before.path.name]
+        said = (f"[i] compare: {shown(before)} against {shown(after)}, rounds "
+                f"{before.round} and {after.round}: this investigation's last two")
+        if looks:
+            said += (". Left out as looks rather than rounds: "
+                     + "; ".join(f"{f.path.name} ({f.why})" for f in looks))
+    else:
+        before, after = filed[-2], filed[-1]
+
+        def what(f: hunt_mod.Filed) -> str:
+            return f"round {f.round}" if f.round else f"a look ({f.why})"
+        said = (f"[!] compare: {shown(before)} against {shown(after)}, this "
+                f"investigation's last two reports: it has "
+                f"{'one round' if rounds else 'no round'} so far, and these are "
+                f"{what(before)} and {what(after)}. Name two reports to compare another pair")
+    # From the older side on: what decided the pair.
+    span = [f for f in filed if f.path.name >= before.path.name]
+    unmarked = [f.path.name for f in span if not f.marked]
+    if unmarked:
+        one = len(unmarked) == 1
+        who = ("These reports carry" if len(unmarked) == len(span)
+               else f"{', '.join(unmarked)} {'carries' if one else 'carry'}")
+        said += (f". {who} no mark of round or look (filed before `analyze` wrote "
+                 f"one), so {'it was' if one else 'each was'} told from the report "
+                 f"itself: a look when it ran with --set or --defaults, or when its "
+                 f"first recording's window opened at the same moment, in the same "
+                 f"process, as an earlier round's. A look at part of a round that "
+                 f"leaves that round's first recording out passes for a round: name "
+                 f"two reports if one of these is that")
+    return before.path, after.path, said + "."
+
+
+def _filed_as(project: Path, kept: Path) -> str:
+    """What `analyze` just filed is to the investigation: its next round,
+    or a look that a bare `compare` leaves out, and why."""
+    filed = hunt_mod.rounds(project, hunt_mod.load(project))
+    this = next((f for f in filed if f.path.name == kept.name), None)
+    if this is None:
+        return "filed"
+    if this.why:
+        return (f"filed as a look, not a round: {this.why}. `echolot compare` "
+                f"with no arguments leaves it out; name it to compare it")
+    previous = next((f for f in filed if f.round == (this.round or 0) - 1), None)
+    if previous is None:
+        return (f"filed as round {this.round}: the next round is compared "
+                f"with it")
+    return (f"filed as round {this.round}: `echolot compare` with no arguments "
+            f"holds it against round {previous.round} ({previous.path.name})")
 
 
 def _same_scenario(before: dict, after: dict, before_path: Path, after_path: Path) -> None:
@@ -1274,12 +1312,8 @@ def _compare_pair(args, project: Path) -> tuple[Path, Path]:
     open_hunt = hunt_mod.load(project)
     if open_hunt and open_hunt.get("status") == "open":
         reports = _reports_of_hunt(project, str(open_hunt.get("n")))
-        before, after, looks = _last_two_rounds(reports)
-        print(f"[i] compare: {_shown_path(before, project)} against "
-              f"{_shown_path(after, project)}, this investigation's last two rounds"
-              + ("; left out as looks rather than rounds: "
-                 + ", ".join(p.name for p in looks) if looks else ""),
-              file=sys.stderr)
+        before, after, said = _last_two_rounds(project, open_hunt, reports)
+        print(said, file=sys.stderr)
         return before, after
 
     raise ConfigError(

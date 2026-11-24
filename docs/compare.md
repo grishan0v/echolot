@@ -21,12 +21,25 @@ echolot compare old.json new.json     # exactly those two
 With no arguments, inside an open investigation, the two sides are its last
 two rounds among the reports filed there: every `analyze --hunt <n>` files
 one, and an `analyze` without the flag runs outside the investigation and
-files nothing. A look is not a
-round and is left out: a report that read fewer traces than the round before
-it, read only traces that round read already, or ran with other `--set` or
-`--defaults`. A single-run look at one trace of round 2 would otherwise be the
-after side, with no spread to judge a move by. The line on stderr names the
-two reports taken and the looks left out; name two paths for any other pair.
+files nothing. A round is a set of recordings the investigation reads for the
+first time, with the config's thresholds. Anything else filed there is a look
+and is left out: the same recordings again, part of them, some of them among
+new ones, or any `analyze` with `--set` or `--defaults`. A single-run look at
+one trace of round 2 would otherwise be the after side, with no spread to judge
+a move by.
+
+`analyze` decides which it is as it files the report, by the recordings' bytes
+rather than their paths — `collect --hunt` records every round under the same
+names, `<scenario>_iter000…` — and says so on stderr, `[i] filed as round 3: …`
+or `[i] filed as a look, not a round: …`; the investigation's record keeps it.
+The line `compare` prints names the two reports it took and their rounds, and
+each look after the older one with why it is one. With fewer than two rounds
+it takes the last two reports, and says what each is. A report filed before
+`analyze` kept that mark is told from the report itself: a look when it ran
+with `--set` or `--defaults`, or when its first recording's window opened at
+the moment an earlier round's did, in the same process. The line says so when
+it went by that, since a look at part of a round that leaves the round's first
+recording out passes for a round there. Name two paths for any other pair.
 
 It writes `comparison.md` and `comparison.json` next to the report, by the same
 rule `analyze` uses: a relative `-o` is taken from the config's directory, so
