@@ -1520,6 +1520,36 @@ def blind_main(loop_ms: float = BLIND_LOOP_MS, *, run: int | None = None,
     return builder.serialize()
 
 
+def nested_block() -> bytes:
+    """A main thread whose longest piece of work is spread over small pieces
+    (#912): a `clientTransactionExecuted` that usually takes 1 ms, once
+    70 ms, holding an activity's start of 64 ms, holding a WebView's start of
+    61 ms, made of ten pieces of under 6 ms with names of their own. Each
+    piece is under main_thread_block's bar, and the WebView's own time is 2
+    ms. What a 105 ms `performStart` of Wikipedia's article screen was, with
+    Chromium's start of 59 ms in it.
+    """
+    pieces = [(f"WebViewChromium.step{i}", 203.5 + 6 * i, 5.9, []) for i in range(10)]
+    main = [
+        *[("clientTransactionExecuted", 100 + 10 * i, 1, []) for i in range(5)],
+        ("clientTransactionExecuted", 200, 70, [
+            ("performStart:com.example.app.PageActivity", 202, 64, [
+                ("WebViewChromiumAwInit.startChromiumLockedSync", 203, 61, pieces)])]),
+        ("Screen.firstFrame", 300, 5, []),
+    ]
+    builder = TraceProtoBuilder()
+    process_tree(builder, [(APP_PID, APP_NAME, {TID_MAIN: APP_NAME[-15:]})])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {0: [
+        (ms(100), next(seq), "sched", "swapper/0", 0, R, APP_NAME[-15:], TID_MAIN),
+        (ms(305), next(seq), "sched", APP_NAME[-15:], TID_MAIN, S, "swapper/0", 0)]}
+    for ts, order, kind, name in _flatten(main, [], seq):
+        buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+        by_cpu[0].append((ts, order, "print", TID_MAIN, buf))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # The threads the repeats of `blind_main` add, and how long a compilation takes.
 BLIND_RENDER, BLIND_WORKER, BLIND_JIT = 4303, 4304, 4305
 BLIND_JIT_MS = 6

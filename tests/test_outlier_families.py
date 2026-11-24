@@ -116,3 +116,35 @@ def test_every_name_of_the_window_has_its_family(tmp_path: Path) -> None:
           any("Store.java:41" in f and "Thread-# (#)" in f for f in family.values()), family)
     check("a name the project listed is not folded",
           "Choreographer#doFrame 55103" not in family, family)
+
+
+# --- where the worst occurrence went (#912) --------------------------------------
+
+def test_an_outlier_names_the_slice_that_held_most_of_it(tmp_path: Path) -> None:
+    """A 61 ms WebView start in ten pieces of under 6 ms, inside an
+    activity's start inside a `clientTransactionExecuted`: every piece under
+    main_thread_block's bar, and the outlier row named only the outermost
+    slice. It now names the way down to the slice that held most of it."""
+    from echolot import plain
+    trace = tmp_path / "nested.perfetto-trace"
+    trace.write_bytes(fixture.nested_block())
+    cfg = Config({"project": {"package": "com.example.app", "process": "com.example.app"},
+                  "scenario": {"name": "s", "start": {"name": "clientTransactionExecuted"},
+                               "end": {"name": "Screen.firstFrame"}}})
+    rep = analyze_trace(trace, cfg)
+    rows = {d["id"]: d["rows"] for d in rep["detectors"]}
+    block = [r["location"] for r in rows["main_thread_block"]]
+    check("no block row names the WebView start", not any("WebView" in str(n) for n in block),
+          block)
+    row = rows["main_thread_outlier"][0]
+    check("the outlier row names the way, the deepest last, with its time",
+          row["location"] == "clientTransactionExecuted" and row["detail"].endswith(
+              " · mostly in performStart:com.example.app.PageActivity › "
+              "WebViewChromiumAwInit.startChromiumLockedSync (61.0 ms)"), row)
+    said = plain.found(next(d for d in rep["detectors"] if d["id"] == "main_thread_outlier"),
+                       rep, plain._Ctx(rep))
+    check("and the plain sentence names it",
+          "Most of the longest was `WebViewChromiumAwInit.startChromiumLockedSync`, 61 ms." in said,
+          said)
+    check("a piece no larger than half its parent stops the way",
+          "step" not in row["detail"])

@@ -20,7 +20,9 @@
 -- @column: total_ms — their time, summed
 -- @column: max_ms — the worst of them
 -- @column: detail — the median it is measured against, over how many
---       occurrences, and how many times the median the worst one took
+--       occurrences, how many times the median the worst one took, and
+--       where most of the worst one went: the slices under it, each holding
+--       more than half of the one above, down to the deepest
 -- @plain_title: Single moments that took far too long
 -- @plain_why: A step that usually takes a moment but once takes many times
 --       longer is a hitch the user can see, even when the overall numbers look
@@ -66,11 +68,12 @@ CREATE OR REPLACE PERFETTO TABLE _det_main_thread_outlier AS
 WITH ranked AS (
     SELECT
         name,
+        slice_id,
         ts,
         dur,
         ROW_NUMBER() OVER (PARTITION BY name ORDER BY dur) AS rk,
         COUNT(*)     OVER (PARTITION BY name)              AS n
-    FROM (SELECT COALESCE(f.family, s.name) AS name, s.ts, s.dur
+    FROM (SELECT COALESCE(f.family, s.name) AS name, s.slice_id, s.ts, s.dur
           FROM _slice_win s
           LEFT JOIN _name_family f ON f.name = s.name
           WHERE s.is_main_thread = 1
@@ -85,22 +88,57 @@ baseline AS (
     FROM ranked
     WHERE rk = (n + 1) / 2
 )
-SELECT r.name, r.ts, r.dur, b.n, b.median_ns
+SELECT r.name, r.slice_id, r.ts, r.dur, b.n, b.median_ns
 FROM ranked r
 JOIN baseline b ON b.name = r.name
 WHERE b.n >= {{min_occurrences}}
   AND r.dur >= b.median_ns * {{factor}};
 
+-- Where the worst occurrence of each name went. A 176 ms
+-- `clientTransactionExecuted` was the row, and the 59 ms of WebView's start
+-- inside it named nowhere: main_thread_block counts self time, and Chromium
+-- splits its start into pieces of 10 ms at most, each under that bar (#912).
+-- So the row follows its worst occurrence down, through the child that holds
+-- more than half of its parent — there is at most one, since children do not
+-- overlap — as far as such a child goes, and names the way and the last
+-- one's time. A child still open at the end has no length to hold anything.
+WITH RECURSIVE worst AS (
+    SELECT name, slice_id, dur
+    FROM (SELECT name, slice_id, dur,
+                 ROW_NUMBER() OVER (PARTITION BY name ORDER BY dur DESC, ts) AS k
+          FROM _det_main_thread_outlier)
+    WHERE k = 1
+),
+down(name, slice_id, dur, step, path) AS (
+    SELECT name, slice_id, dur, 0, ''
+    FROM worst
+    UNION ALL
+    SELECT d.name, c.id, c.dur, d.step + 1,
+           d.path || CASE WHEN d.step = 0 THEN '' ELSE ' › ' END
+                  || COALESCE(f.family, c.name)
+    FROM down d
+    JOIN slice c ON c.parent_id = d.slice_id
+    LEFT JOIN _name_family f ON f.name = c.name
+    WHERE c.dur * 2 > d.dur
+),
+mostly AS (
+    SELECT name, ' · mostly in ' || path || ' (' || ROUND(dur / 1e6, 1) || ' ms)' AS said
+    FROM (SELECT name, path, dur,
+                 ROW_NUMBER() OVER (PARTITION BY name ORDER BY step DESC) AS k
+          FROM down WHERE step > 0)
+    WHERE k = 1
+)
 SELECT
-    name                                                AS location,
+    o.name                                              AS location,
     COUNT(*)                                            AS count,
-    ROUND(SUM(dur) / 1e6, 2)                            AS total_ms,
-    ROUND(MAX(dur) / 1e6, 2)                            AS max_ms,
-    'median ' || ROUND(median_ns / 1e6, 1) || ' ms of ' || n
-        || ' · worst ' || ROUND(MAX(dur) * 1.0 / median_ns, 1) || '×'
-                                                        AS detail
-FROM _det_main_thread_outlier
-GROUP BY name
+    ROUND(SUM(o.dur) / 1e6, 2)                          AS total_ms,
+    ROUND(MAX(o.dur) / 1e6, 2)                          AS max_ms,
+    'median ' || ROUND(o.median_ns / 1e6, 1) || ' ms of ' || o.n
+        || ' · worst ' || ROUND(MAX(o.dur) * 1.0 / o.median_ns, 1) || '×'
+        || COALESCE(m.said, '')                         AS detail
+FROM _det_main_thread_outlier o
+LEFT JOIN mostly m ON m.name = o.name
+GROUP BY o.name
 ORDER BY max_ms DESC;
 
 -- @intervals

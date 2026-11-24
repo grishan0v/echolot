@@ -1219,6 +1219,12 @@ allocation that stalled.
 Walking down to the code the same way for both wastes a round.
 `main_thread_outlier` puts the median and how many occurrences it came from in
 `detail`, which is also the number to hold a benchmark's percentiles against.
+It also follows the worst occurrence down, through each slice that holds more
+than half of the one above it, and names the way and the deepest one's time:
+`mostly in performStart:org.wikipedia.page.PageActivity ›
+StartupController.triggerChromiumStartup… (59.2 ms)`. A WebView's start of 59 ms
+made of pieces of 10 ms at most was under `main_thread_block`'s bar piece by
+piece, and no row named it (#912).
 
 ## Rows of Compose
 

@@ -259,7 +259,11 @@ is expensive every time it runs, and the fix is in that work. A
 the cause is the state it hit that once — a cold cache, a lock, a first-run
 path, an allocation that stalled. `detail` gives the median and how many
 occurrences it came from, which is the number to compare a benchmark's
-percentiles against.
+percentiles against, and where most of the worst occurrence went:
+`mostly in performStart:…PageActivity › WebViewChromiumAwInit.startChromiumLockedSync
+(57.2 ms)`, each slice holding more than half of the one before it. The last is
+the place to start reading; its pieces may each be too small for a
+`main_thread_block` row.
 
 It is also the row a merge across repeats does **not** smooth away. Its rows
 only exist in the runs where something was out of line, so `runs: 1/10` means
