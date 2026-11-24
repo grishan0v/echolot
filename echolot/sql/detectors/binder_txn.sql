@@ -11,6 +11,7 @@
 --       transactions counted
 -- @param: skip_glob = *async* — GLOB over slice names: those of the above
 --       left out. An async transaction does not block the thread that sent it
+-- @fires: max_ms >= {{min_txn_ms}} OR total_ms >= {{max_total_ms}}
 -- @calibrate: min_txn_ms = top10(max_ms) * 1.5
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
 -- @identity: location, thread
@@ -115,8 +116,6 @@ WITH grouped AS (
            MAX(dur)                                                AS max_ns
     FROM _det_binder_txn
     GROUP BY thread_name, is_main_thread
-    HAVING MAX(dur) >= {{min_txn_ms}} * 1000000
-        OR SUM(dur) >= {{max_total_ms}} * 1000000
 ),
 -- Who answered a row's calls, by the time the thread waited on each.
 callees AS (
@@ -169,8 +168,7 @@ SELECT
 FROM grouped g
 LEFT JOIN named n ON n.thread_name IS g.thread_name
                  AND n.is_main_thread = g.is_main_thread
-ORDER BY total_ms DESC
-LIMIT 20;
+ORDER BY total_ms DESC;
 
 -- @intervals
 --

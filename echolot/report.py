@@ -578,6 +578,21 @@ def _one_run(rows: list[dict[str, Any]]) -> dict[str, Any]:
 # `merge_rows`. Never written to a report: the merge takes it out.
 OPEN_ROWS = "open_rows"
 
+# Where `analyze` hands the merge the rows a detector with `@fires` measured
+# and its predicate did not pass (#832). Never written to a report either:
+# the merge reads them with the rows shown, as one measurement, and writes
+# what fired in no repeat to `below`.
+UNDER_ROWS = "under_rows"
+# What marks a row the predicate passed, inside the merge.
+_OVER = "over_bar"
+
+# Under this much of its metric a row a detector measured and did not show
+# is not kept: absent means "under it in every repeat", the same on both
+# sides of a comparison. Measured on ten real launch traces with every
+# threshold open: 1,466 rows a trace with no floor, 136 at 1 ms (20 KB of
+# JSON), 66 at 5 ms; a report showed about 18.
+FLOOR_MS = 1.0
+
 # What a detector's `below` keeps (#715): what it found with its thresholds
 # open that it reported in no repeat, for `compare` to look a gone or new row
 # up in. Only what took this long in some repeat, which is `compare`'s own
@@ -585,6 +600,31 @@ OPEN_ROWS = "open_rows"
 # the longest first; the floor then rises to what the last one kept took.
 BELOW_FLOOR_MS = 5.0
 BELOW_MOST = 200
+
+
+def _merge_detector(runs: list[dict[str, Any]], identity: tuple[str, ...],
+                    total: int) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """One detector's rows over its repeats, and its `below`.
+
+    A detector with `@fires` handed every row it measured, shown or not
+    (`UNDER_ROWS`): they are merged as one measurement, and a row is shown
+    where it fired in some repeat. What fired in none is its `below`, every
+    row of it at least `FLOOR_MS`. A detector still on the old path handed
+    its shown rows and what its open query found (`OPEN_ROWS`), and the
+    merge rebuilds the rest from there (#505, #715).
+    """
+    if any(UNDER_ROWS in run for run in runs):
+        per_run = [[{**r, _OVER: True} for r in run.get("rows") or []]
+                   + [{**r, _OVER: False} for r in run.get(UNDER_ROWS) or []]
+                   for run in runs]
+        shown: list[dict[str, Any]] = []
+        under: list[dict[str, Any]] = []
+        for row in merge_rows(per_run, identity, total):
+            (shown if row.pop(_OVER, False) else under).append(row)
+        return shown, {"floor_ms": FLOOR_MS, "rows": under}
+    opened = [run.get(OPEN_ROWS) for run in runs]
+    rows = merge_rows([run.get("rows") or [] for run in runs], identity, total, opened=opened)
+    return rows, below_bar(rows, opened, identity, total)
 
 
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
@@ -641,8 +681,15 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
 
     out = []
     for key, by_run in groups.items():
-        fired = [_one_run(rows) for rows in by_run.values()]
         present = dict(by_run)
+        # Rows a detector with `@fires` marked (#832): every repeat that
+        # found the row is in `runs`, and those where it passed the
+        # predicate are `fired`. A repeat that marked none is still a
+        # measurement, and counts as one.
+        marked = any(_OVER in r for rows in by_run.values() for r in rows)
+        over = ({i: rows for i, rows in by_run.items() if any(r.get(_OVER) for r in rows)}
+                if marked else by_run)
+        fired = [_one_run(rows) for rows in (over or by_run).values()]
         for i, found_open in enumerate(below):
             # A folded row is one thing under numbered names, and in a repeat
             # it is all of them: the ones under the bar too, once the open
@@ -658,8 +705,10 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
         found = [values_by_run[i] for i in sorted(values_by_run)]
         row: dict[str, Any] = dict(zip(identity, key, strict=True))
         row["runs"] = f"{len(present)}/{total}"
-        if len(present) > len(by_run):
-            row["fired"] = f"{len(by_run)}/{total}"
+        if len(present) > len(over):
+            row["fired"] = f"{len(over)}/{total}"
+        if marked:
+            row[_OVER] = bool(over)
         if key in variants:
             row["variants"] = {col: sorted(names)
                                for col, names in variants[key].items()}
@@ -1171,18 +1220,18 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     names = _merge_names(reports)
     if len(reports) == 1:
         for det in reports[0].get("detectors") or []:
-            opened = det.pop(OPEN_ROWS, None)
             # Through the merge, as the rows of a set go: one recording and a
             # set of copies of it say the same of every row (#831). Where the
             # one report used a path of its own, a pool's `threads` and the
             # rows under the bar came out otherwise (#714, #845). It has no
-            # repeats to count or spread, so it keeps neither.
+            # repeats to count or spread, so its rows keep neither.
+            rows, below = _merge_detector([det], identity_of(det), 1)
+            det.pop(OPEN_ROWS, None)
+            det.pop(UNDER_ROWS, None)
             det["rows"] = [{k: v for k, v in row.items() if k not in ("runs", "spread")}
-                           for row in merge_rows([det.get("rows") or []], identity_of(det), 1,
-                                                 opened=None if opened is None else [opened])]
-            if opened is not None and not det.get("error"):
-                det["below"] = below_bar(det.get("rows") or [], [opened],
-                                         identity_of(det), 1)
+                           for row in rows]
+            if below is not None and not det.get("error"):
+                det["below"] = below
         if names is not None:
             reports[0][SLICE_NAMES] = names
         return reports[0]
@@ -1241,12 +1290,10 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         # `1/3` when it had failed in the other two, and `1/3` means caught
         # once. How many failed is said beside the rows instead.
         ran = [run for run in runs if not run["error"]]
-        opened = [run.get(OPEN_ROWS) for run in ran]
-        head["rows"] = merge_rows([run["rows"] for run in ran],
-                                  identity_of(head), len(ran),
-                                  opened=opened) if ran else []
+        head["rows"], below = (_merge_detector(ran, identity_of(head), len(ran))
+                               if ran else ([], None))
         head.pop(OPEN_ROWS, None)
-        below = below_bar(head["rows"], opened, identity_of(head), len(ran)) if ran else None
+        head.pop(UNDER_ROWS, None)
         if below is not None:
             head["below"] = below
         else:

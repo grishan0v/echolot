@@ -368,8 +368,15 @@ def test_analyze_keeps_what_it_found_under_the_bar_in_no_repeat(tmp_path) -> Non
                       >= report_mod.BELOW_FLOOR_MS for r in under.values())
               and not any("stacks" in r for r in under.values()), det["below"])
     old = report_mod.aggregate([analyze_trace(trace, cfg)])
+    # A detector with `@fires` measures every row in its one query (#832),
+    # and has its `below` whatever `analyze` was asked.
+    from echolot.analyze import DETECTOR_DIR
+    from echolot.tp import load_detectors
+    fires = {d.id for d in load_detectors(DETECTOR_DIR) if d.fires}
     check("without the open query there is nothing to say under the bar",
-          all("below" not in d for d in old["detectors"]))
+          all("below" not in d for d in old["detectors"] if d["id"] not in fires))
+    check("but what a detector with @fires measured, it says",
+          all("below" in d for d in old["detectors"] if d["id"] in fires), fires)
 def _marker_runs(totals: list[float], open_at: set[int]) -> list[dict]:
     reps = []
     for i, ms in enumerate(totals):

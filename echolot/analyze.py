@@ -205,8 +205,15 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                 rows, params, err = [], {**d.params, **(overrides or {})}, str(e)
                 print(f"[!] {d.id}: {e}", file=sys.stderr)
             _with_variants(rows, d.identity, families)
+            # A detector with `@fires` returns every row it measured, each
+            # with `over_bar`: the rows to show, and the rest (#832).
+            under = None
+            if d.fires and not err:
+                rows, under = _over_bar(rows)
             if rows:
                 try:
+                    # The rows shown: the main thread's share the report's
+                    # rows name is what a reader sees named (`_in_rows`).
                     behind = _spans_behind(tp, d, params, rows)
                 except Exception as e:  # the same leniency as the query above
                     behind = None
@@ -215,6 +222,9 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                     uncounted.append(d.id)
                 else:
                     spans.extend(behind)
+                # What ran behind a row, only for the rows shown: the
+                # samples are the costly part, and a row under the bar is
+                # read for its number.
                 if sampled and d.samples_sql:
                     try:
                         _stacks_behind(tp, d, params, rows, package, root)
@@ -223,7 +233,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
             # Last of the four: run with its thresholds open, the first query
             # writes its own tables again (`_det_<id>`, see tp._own_tables),
             # and the two queries above read the pieces of these rows.
-            opened = _below_bar(tp, d, overrides, sql, rows) if below_bar and not err else None
+            opened = (_below_bar(tp, d, overrides, sql, rows)
+                      if below_bar and not err and not d.fires else None)
             entry = {
                 "id": d.id,
                 "title": d.title,
@@ -244,6 +255,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
             }
             if opened is not None:
                 entry[report_mod.OPEN_ROWS] = opened
+            if under is not None:
+                entry[report_mod.UNDER_ROWS] = under
             if source != "default":
                 # What the shipped numbers would have been — the reader can
                 # see how far calibration moved them without `explain`.
@@ -270,6 +283,27 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                            budget_ms=budget_ms, recording=recording)
     rep[report_mod.NAMES_ALL] = names
     return rep
+
+
+def _over_bar(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """A `@fires` detector's rows: those its predicate passed, and the rest
+    that measured at least `report.FLOOR_MS` (#832).
+
+    The floor keeps a report small: a detector that measures every thread
+    or every slice name returns hundreds of rows of a fraction of a
+    millisecond, and none of them could move a comparison. Under it a row
+    is absent, the same on both sides of one. A row its predicate passed is
+    shown whatever it measured.
+    """
+    shown: list[dict] = []
+    under: list[dict] = []
+    for raw in rows:
+        row = dict(raw)
+        if row.pop("over_bar", None):
+            shown.append(row)
+        elif float(row.get(report_mod.metric_of(row)) or 0.0) >= report_mod.FLOOR_MS:
+            under.append(row)
+    return shown, under
 
 
 def _below_bar(tp, d, overrides: dict | None, sql: str,
@@ -1450,7 +1484,8 @@ def _late_frames(results: list[dict]) -> int | None:
     jank = next((d for d in results if d["id"] == "frame_jank"), None)
     if jank is None or jank.get("error") or jank.get("checked") is False:
         return None
-    return sum(int(r.get("count") or 0) for r in jank.get("rows") or []
+    every = (jank.get("rows") or []) + (jank.get(report_mod.UNDER_ROWS) or [])
+    return sum(int(r.get("count") or 0) for r in every
                if str(r.get("detail") or "").startswith("Self Jank"))
 
 

@@ -88,6 +88,35 @@ so a report from before the move still pairs row for row.
 Which functions those are, and in what order, changes between repeats, and
 with them in the name one thread became a row per variant, each seen once.
 
+A detector measures every row, and its thresholds only say which rows to
+show. Its query has no threshold in it; `@fires` is one predicate over the
+columns it returns, and `analyze` wraps the query as `SELECT *, (<fires>) AS
+over_bar FROM (…)`:
+
+```sql
+-- @fires: max_ms >= {{min_txn_ms}} OR total_ms >= {{max_total_ms}}
+```
+
+The report shows the rows the predicate passed. The rest it measured, down
+to 1 ms of the row's metric, are kept as the detector's `below`: the merge
+of repeats reads them with the rows shown, as one measurement, so a row
+under the bar in one repeat is still there, with its number (`runs` counts
+where it was found, `fired` where it passed). `compare` sets a row of one
+side against what the other side measured, whatever either side's bar was,
+and `calibrate` reads the same rows. A threshold that a query held in its
+`WHERE` or `HAVING` dropped those rows before anyone else could see them,
+and every reader had to rebuild them (#505, #715, #832).
+
+A number the query does read decides what a row is, not whether it is
+shown: `main_thread_outlier`'s `factor`, how far past its deadline a frame
+counts as late. Such a parameter is named in `@shape`, and a string
+parameter is a mask, a GLOB of what is counted. Every other number is in the
+predicate. A test holds that, per detector, the rows shown at any
+thresholds are every row measured, filtered by them. A detector without
+`@fires` still filters in its query, and `analyze` runs it a second time
+with its thresholds open for the merge; the shipped ones move to `@fires`
+one at a time.
+
 `@needs` names what the trace has to hold for the detector's silence to mean
 anything, and stands straight after the `@why` block:
 
