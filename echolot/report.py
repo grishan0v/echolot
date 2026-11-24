@@ -1501,6 +1501,18 @@ STARTUP_STATES = {
 }
 
 
+def startup_by_label(reasons: dict[str, float] | None) -> list[tuple[str, float]]:
+    """The startup's reasons in the budget's words, longest first, each label
+    once: `R` and `R+` (runnable, and runnable after a preemption) are both
+    "waiting for a CPU", and were two items of that name in `report --window`
+    (#822). Ties by label."""
+    out: dict[str, float] = {}
+    for reason, ms in (reasons or {}).items():
+        label = STARTUP_STATES.get(reason, f"`{reason}`")
+        out[label] = out.get(label, 0.0) + (ms or 0.0)
+    return sorted(out.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
 def _startup_lines(startup: dict[str, Any] | None, built: bool = False) -> list[str]:
     """The app's startup by Perfetto's own account, under the window's.
 
@@ -1519,12 +1531,8 @@ def _startup_lines(startup: dict[str, Any] | None, built: bool = False) -> list[
     if not startup or not startup.get("dur_ms"):
         return []
     dur = startup["dur_ms"]
-    shares: dict[str, float] = {}
-    for reason, ms in (startup.get("reasons") or {}).items():
-        label = STARTUP_STATES.get(reason, f"`{reason}`")
-        shares[label] = shares.get(label, 0.0) + ms / dur * 100
-    parts = [f"{share:.0f}% {label}" for label, share
-             in sorted(shares.items(), key=lambda kv: (-kv[1], kv[0])) if share >= 1]
+    parts = [f"{ms / dur * 100:.0f}% {label}"
+             for label, ms in startup_by_label(startup.get("reasons")) if ms / dur * 100 >= 1]
     kind = startup.get("type") or "of a kind Perfetto could not tell"
     line = f"Startup: {kind}, **{dur:.0f} ms** from the launch to the first frame"
     if startup.get("startups") and built:
@@ -2702,8 +2710,7 @@ def window_view(report: dict[str, Any]) -> str:
     st = w.get("startup")
     if isinstance(st, dict) and st.get("dur_ms") is not None:
         reasons = st.get("reasons") if isinstance(st.get("reasons"), dict) else {}
-        parts = [f"{STARTUP_STATES.get(k, f'`{k}`')} {v} ms"
-                 for k, v in sorted(reasons.items(), key=lambda kv: -kv[1])]
+        parts = [f"{label} {round(ms, 2)} ms" for label, ms in startup_by_label(reasons)]
         out.append(f"Startup: {st.get('type') or ''} {st['dur_ms']} ms".replace("  ", " ")
                    + (": " + " · ".join(parts) if parts else ""))
     inside = w.get("opened_inside")

@@ -74,6 +74,22 @@ def test_the_window_view_is_the_windows_numbers_not_the_header_again(demo_report
     check("and leaves the device to the overview", "Device:" not in view, view)
 
 
+def test_the_startup_names_each_plain_reason_once() -> None:
+    """`R` and `R+` are both "waiting for a CPU": one item in the window view,
+    as in report.md, not two of the same name (#822)."""
+    startup = {"type": "cold", "dur_ms": 100.0,
+               "reasons": {"inflate": 1.79, "R": 1.62, "D": 1.58, "R+": 0.7,
+                           "verify_class": 0.03}}
+    view = report_mod.window_view({"window": {"startup": startup}})
+    line = next(ln for ln in view.splitlines() if ln.startswith("Startup:"))
+    check("once, the two added", line.count("waiting for a CPU") == 1
+          and "waiting for a CPU 2.32 ms" in line, line)
+    check("longest first", line.index("waiting for a CPU") < line.index("inflate")
+          < line.index("blocked in the kernel"), line)
+    text = "\n".join(report_mod._startup_lines(startup))
+    check("and report.md says it once too", text.count("waiting for a CPU") == 1, text)
+
+
 # --- 3. runnable_starvation ----------------------------------------------------
 
 def test_runnable_starvation_does_not_repeat_its_state_column() -> None:
