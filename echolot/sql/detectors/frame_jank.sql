@@ -59,6 +59,13 @@
 -- includes the wait in the queue, which nothing in the timeline separates,
 -- and its evidence says so.
 --
+-- `min_frames` is a number of late frames, and it is held against all the
+-- frames of one verdict in the window, not against each jank_type: a type is
+-- a set of reasons, and one bad frame often has a set of its own (#726).
+-- Two frames late are still an anecdote; three the app was late for, each
+-- for a different mix of reasons, are a finding, and each type keeps its
+-- row.
+--
 -- jank_tag joins that GROUP BY and still does not belong in @identity: it is
 -- a verdict *on* the jank_type, one per type, so the pair names no more rows
 -- than the type alone. And `detail` carries per-frame numbers around it, so
@@ -99,7 +106,8 @@ frames AS (
 ),
 counted AS (
     SELECT COUNT(*) AS n FROM frames
-)
+),
+kinds AS (
 SELECT
     f.jank_type                                          AS location,
     COUNT(*)                                             AS count,
@@ -117,14 +125,26 @@ SELECT
         || ' · longest ' || ROUND(MAX(f.actual_ns) / 1e6, 1) || ' ms'
         || CASE WHEN f.jank_type LIKE '%Buffer Stuffing%'
                 THEN ' · the overrun includes the wait in the queue' ELSE '' END
-    END                                                  AS detail
+    END                                                  AS detail,
+    f.jank_tag = 'Buffer Stuffing'                       AS queued,
+    -- The bar counts the late frames of one verdict together, whatever
+    -- their reasons. Counted per jank_type, a cold start of three frames,
+    -- all three the app's and hundreds of ms late, made three rows of one
+    -- frame each, since 'App Deadline Missed', 'App Deadline Missed, Buffer
+    -- Stuffing' and 'Display HAL, App Deadline Missed' are three types; and
+    -- the detector said nothing (#726). Buffer Stuffing is its own verdict
+    -- and stays apart, as #537 has it.
+    SUM(COUNT(*)) OVER (PARTITION BY f.jank_tag)         AS verdict_frames
 FROM frames f
 WHERE f.jank_tag != 'No Jank'
   AND f.over_ns >= {{min_overrun_ms}} * 1000000
 GROUP BY f.jank_type, f.jank_tag
-HAVING COUNT(*) >= {{min_frames}}
+)
+SELECT location, count, total_ms, max_ms, detail
+FROM kinds
+WHERE verdict_frames >= {{min_frames}}
 -- Late frames first, by what they cost; frames that only queued after them.
-ORDER BY f.jank_tag = 'Buffer Stuffing', total_ms DESC
+ORDER BY queued, total_ms DESC
 LIMIT 20;
 
 -- @intervals
