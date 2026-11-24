@@ -39,6 +39,13 @@ port on 127.0.0.1 was taken, or goes on to [::1]. One whose port was taken
 is stopped, and the session starts another on another port (`Taken`). That
 covers what a lease cannot: an echolot from before it, or any other program
 that drew the port in between.
+
+A shell that does not come up is `Failed`, in words that say which binary,
+how it ended — its exit code, or that it did not answer in time — and what
+it printed (#872). Not an `Exception`, for the reason `orphans.Stopped` is
+not one: every detector's query is read under an `except Exception`, and a
+trace_processor that is gone is not one query's failure. It ends the
+command with one `error:` line and exit 2, whatever was reading.
 """
 
 from __future__ import annotations
@@ -48,6 +55,7 @@ import errno
 import http.client
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -82,6 +90,22 @@ class Taken(Exception):
     """The shell could not listen on its port on 127.0.0.1 — another process
     holds it, as a rule — so whatever answers there is not this shell. The
     shell is stopped, and nothing was sent to what answered."""
+
+
+class Failed(BaseException):
+    """trace_processor did not start, or cannot be read from: the command
+    cannot go on, and says so in one sentence.
+
+    Raised here without the trace, which `TraceSession` adds. `main` prints
+    it as `error:` and exits 2, as every refusal reads.
+    """
+
+
+# What trace_processor prints as its server starts, which says nothing about
+# why it stopped: left out of what it printed.
+_STARTING = "[HTTP] Starting HTTP server on "
+# How many of the last lines it printed an error quotes.
+_LINES = 8
 
 
 def _lease_file() -> int:
@@ -181,6 +205,19 @@ def _answers(port: int) -> bool:
         conn.close()
 
 
+def printed(out: str, err: str) -> str:
+    """What a shell printed, as a sentence an error ends with: its last
+    lines, stderr's then stdout's, without the line every start prints."""
+    lines = [ln.strip() for text in (err, out) for ln in text.splitlines()]
+    lines = [ln[:300] for ln in lines if ln and not ln.startswith(_STARTING)]
+    if not lines:
+        return "It printed nothing."
+    shown = lines[-_LINES:]
+    head = ("It printed:" if len(shown) == len(lines)
+            else f"The last {len(shown)} lines it printed:")
+    return head + "".join(f"\n  {ln}" for ln in shown)
+
+
 def _process_tree():
     """perfetto's own teardown of the shell, so it ends as it always did:
     the group killed on POSIX, the job closed on Windows."""
@@ -200,10 +237,14 @@ class Shell:
     """
 
     def __init__(self, binary: str):
+        self.binary = binary
         self.port = _free_port()
         self._held = True
         self.asked = 0
         self.waited: float | None = None
+        # How it ended, once it ended on its own: kept when it is closed,
+        # for the error that names it.
+        self.exit_code: int | None = None
         self._proc: subprocess.Popen | None = None
         self._job: Any = None
         self._out = self._err = None
@@ -243,10 +284,10 @@ class Shell:
         """Until the shell answers and the answer is its own, asking every
         `EVERY` seconds.
 
-        A shell that ends first, or does not answer within `limit`, is an
-        error in perfetto's words, with what the shell printed. A shell that
-        says its port was another's is stopped, and `Taken`: what answered
-        was the other one.
+        A shell that ends first, or does not answer within `limit`, is
+        `Failed`: which binary, its exit code or that it did not answer in
+        time, and what it printed. A shell that says its port was another's
+        is stopped, and `Taken`: what answered was the other one.
 
         Its own answer comes after it has said where it listens — it prints
         that before it serves — so it is taken at once. An answer before the
@@ -255,8 +296,6 @@ class Shell:
         neither, in words other than these, is taken at its answer as it was
         before #807, a second late.
         """
-        from perfetto.trace_processor import TraceProcessorException
-
         deadline = self._started + limit
         answered: float | None = None
         try:
@@ -276,15 +315,42 @@ class Shell:
                 time.sleep(EVERY)
         finally:
             self._let_go()
+        how = self.ended()
         said = self._said()
         self.close()
         if TAKEN in said[1]:
             raise Taken(
                 f"Trace processor could not listen on {self.address}, so what "
                 f"answers there is not this one.\nstderr: {said[1]}\n")
-        raise TraceProcessorException(
-            f"Trace processor failed to start.\nstdout: {said[0]}\n"
-            f"stderr: {said[1]}\n")
+        if how is None:
+            how = (f"did not answer within {limit:g} s, and was stopped")
+        else:
+            how += " before it answered"
+        raise Failed(f"trace_processor did not start: {self.binary} {how}. "
+                     f"{printed(*said)}")
+
+    def ended(self, within: float = 0.0) -> str | None:
+        """How the shell ended, in words — "exited with code 1", "was killed
+        by signal 9 (SIGKILL)" — once it ended on its own; None while it runs,
+        and once echolot stopped it. Waits up to `within` seconds for it to
+        end: a shell killed from outside drops its sockets a moment before it
+        can be reaped."""
+        code = self.exit_code
+        proc = self._proc
+        if code is None and proc is not None:
+            try:
+                code = proc.wait(within) if within > 0 else proc.poll()
+            except subprocess.TimeoutExpired:
+                code = None
+        if code is None:
+            return None
+        if code < 0:
+            try:
+                name = f" ({signal.Signals(-code).name})"
+            except ValueError:
+                name = ""
+            return f"was killed by signal {-code}{name}"
+        return f"exited with code {code}"
 
     def listens(self) -> bool | None:
         """Whether the shell says it listens on 127.0.0.1 at its port: False
@@ -348,6 +414,9 @@ class Shell:
         proc, self._proc = self._proc, None
         job, self._job = self._job, None
         if proc is not None:
+            code = proc.poll()
+            if code is not None and self.exit_code is None:
+                self.exit_code = code
             with contextlib.suppress(Exception):
                 _, terminate = _process_tree()
                 terminate(proc, job)

@@ -56,6 +56,7 @@ from . import place as place_mod
 from . import project as project_mod
 from . import plain as plain_mod
 from . import names as names_mod
+from . import tpshell
 from . import report as report_mod
 from . import verdict as verdict_mod
 from .analyze import (
@@ -3586,7 +3587,7 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
         # permission dialog that took it takes every launch until it is
         # granted, and no repeat after it would hold a window (#810).
         return str(e).rstrip("."), None
-    except Exception:
+    except (Exception, tpshell.Failed):
         return None, None
     end = window.get("end_anchor") or {}
     if end.get("unfinished"):
@@ -4746,7 +4747,7 @@ def cmd_doctor(args) -> int:
     try:
         from . import selftest
         results = selftest.run(tp_binary)
-    except Exception as e:
+    except (Exception, tpshell.Failed) as e:
         print(f"  could not run: {e}")
         if isinstance(e, SandboxError):
             # Nothing is known to be wrong with the install: the self-check
@@ -4845,7 +4846,7 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
         results = selftest.run(info.get("binary"))
     except ToolchainError as e:
         return _no_trace_processor(e, info), False
-    except Exception as e:
+    except (Exception, tpshell.Failed) as e:
         print(f"self-check: could not run — {e}")
         _record_not_run(f"self-check: could not run — {e}", info, e)
         return 1, False
@@ -5975,6 +5976,16 @@ def main(argv=None) -> int:
         # directory given as a report, a trace without read permission, an
         # -o that is a file, a config that is not UTF-8. A sentence and exit
         # 2, the way every refusal reads; a traceback is for faults in echolot.
+        print(f"error: {e}", file=sys.stderr)
+        recorder.failed(str(e))
+        recorder.record(args, argv, started, exit_code=2)
+        return 2
+    except tpshell.Failed as e:
+        # A trace_processor that did not start, or stopped, or could not be
+        # reached: whatever was reading cannot go on, and nothing it wrote
+        # would be whole. The trace and the binary are in the sentence
+        # (#872). Not an Exception, so that no detector reads it as its own
+        # failure (tpshell.py).
         print(f"error: {e}", file=sys.stderr)
         recorder.failed(str(e))
         recorder.record(args, argv, started, exit_code=2)
