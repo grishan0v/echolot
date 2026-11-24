@@ -136,6 +136,43 @@ def test_a_project_in_a_subdirectory_is_anchored_where_it_is(tmp_path: Path, cap
     check("and git shows nothing", _status(top) == [], _status(top))
 
 
+@pytest.mark.parametrize("folder", ["android [v2]", "app*", "what?", "a\\b", "trailing "])
+def test_a_folder_named_with_what_an_ignore_line_reads_as_a_pattern(
+        tmp_path: Path, capsys, folder: str) -> None:
+    """`[v2]` in an ignore line is a class matching `v` or `2`: the block
+    matched nothing, git saw the whole install, and init and `echolot` both
+    said it was hidden (#738)."""
+    if os.name == "nt" and any(c in folder for c in "*?\\") or folder.endswith(" ") and os.name == "nt":
+        pytest.skip("no such folder name on Windows")
+    top = _repo(tmp_path / "repo", {f"{folder}/build.gradle": "\n"})
+    project = top / folder
+    out = _init(project, capsys, "--private", "--for", "claude,agents")
+    check("git shows nothing", _status(top) == [], _status(top))
+    written = [p for p in project.rglob("*") if p.is_file() and p.name != "build.gradle"]
+    seen = exclude.unseen(exclude.find(project), written)
+    check("git ignores every file init wrote", written and seen == [], seen)
+    check("init says it is private", "git sees none of it in this clone" in out, out)
+    check("and so does `echolot`", layer.PRIVATE_NOTE in layer.one_line(project)[1],
+          layer.one_line(project))
+
+
+def test_where_git_still_sees_the_install_init_and_echolot_say_so(
+        tmp_path: Path, capsys) -> None:
+    """The block written and not matching: a `!` line of the person's after
+    it, here. Said from git's answer, not from the choice saved."""
+    project = _repo(tmp_path / "app")
+    repo = exclude.find(project)
+    _init(project, capsys, "--private", "--for", "claude")
+    repo.exclude.write_text(repo.exclude.read_text(encoding="utf-8") + "!/.echolot/\n"
+                            "!/.claude/\n", encoding="utf-8")
+    out = _init(project, capsys)
+    check("init says git still sees it", "! git still sees what init wrote here" in out
+          and "git sees none of it" not in out, out)
+    line = layer.one_line(project)[1]
+    check("and `echolot` does not say git ignores it", layer.PRIVATE_NOTE not in line
+          and "git sees what init wrote" in line and "`echolot init --private`" in line, line)
+
+
 def test_a_worktree_keeps_its_block_where_git_reads_it(tmp_path: Path, capsys) -> None:
     main_tree = _repo(tmp_path / "app")
     _git(main_tree, "worktree", "add", "-q", str(tmp_path / "feature"))

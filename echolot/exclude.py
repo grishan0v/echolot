@@ -26,6 +26,7 @@ keeps the other installs' paths in it (#608).
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,23 @@ class BrokenBlock(Exception):
     """A block whose end marker is gone: where echolot's lines stop is unknown."""
 
 
+_SPECIAL = re.compile(r"([\\\[\]*?])")
+
+
+def escaped(rel: str) -> str:
+    """A path as an ignore line names it, character for character.
+
+    In an ignore file `[v2]` is a class matching `v` or `2`, `*` and `?` are
+    wildcards, and trailing spaces are dropped. A project in `android [v2]`
+    had its whole private install in plain sight of git while `init` said it
+    was hidden (#738). A backslash makes each of them literal. The line
+    starts with `/`, so a leading `#` or `!` never reaches the start of it.
+    """
+    rel = _SPECIAL.sub(r"\\\1", rel)
+    stripped = rel.rstrip(" ")
+    return stripped + "\\ " * (len(rel) - len(stripped))
+
+
 @dataclass(frozen=True)
 class Repo:
     """The repository a project sits in, as far as a private install needs it."""
@@ -51,7 +69,7 @@ class Repo:
 
     def pattern(self, path: Path, directory: bool = False) -> str:
         """`path` as a line of the exclude file: anchored, so it names this file and no other."""
-        rel = path.resolve().relative_to(self.top).as_posix()
+        rel = escaped(path.resolve().relative_to(self.top).as_posix())
         return f"/{rel}/" if directory else f"/{rel}"
 
     def show(self) -> str:
@@ -119,6 +137,30 @@ def private_elsewhere(repo: Repo) -> list[Path]:
     from . import hosts  # late: the choice each checkout saved
     rel = repo.project.relative_to(repo.top)
     return [top / rel for top in checkouts(repo) if hosts.load_private(top / rel)]
+
+
+def unseen(repo: Repo, paths: list[Path]) -> list[Path] | None:
+    """Which of `paths` git does not ignore, as it reads the ignore files now.
+
+    Asked of git, not of the block: a line written is not a line that
+    matches, and `init` and `echolot` said git ignored a private install
+    that it saw whole (#738). None when git could not be asked.
+    """
+    if not paths:
+        return []
+    try:
+        done = subprocess.run(
+            ["git", "check-ignore", "--no-index", "-z", "--stdin"], cwd=repo.project,
+            input="\0".join(str(p) for p in paths) + "\0", capture_output=True,
+            text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    # 0: some are ignored, 1: none is; anything else is git failing.
+    if done.returncode not in (0, 1):
+        return None
+    ignored = {Path(p).resolve() for p in done.stdout.split("\0") if p}
+    ignored |= {(repo.project / p).resolve() for p in done.stdout.split("\0") if p}
+    return [p for p in paths if p.resolve() not in ignored]
 
 
 def tracked(repo: Repo, paths: list[Path]) -> set[Path]:

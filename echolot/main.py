@@ -4705,9 +4705,18 @@ def _keep_from_git(repo, patterns: list[str]) -> None:
             f"{', '.join(str(c) for c in shared)}.",
             width=80, initial_indent="  ", subsequent_indent="  ",
             break_on_hyphens=False, break_long_words=False))
-    if not said.startswith("!"):
-        print("  A private install: git sees none of it in this clone. "
-              "`echolot init --shared`\n  hands it to the team.")
+    if said.startswith("!"):
+        return
+    # Asked of git: a block written is not a block that matches (#738).
+    seen = exclude_mod.unseen(repo, layer.kept_from_git(repo.project))
+    if seen:
+        print(f"  ! git still sees what init wrote here "
+              f"({seen[0].relative_to(repo.project).as_posix()}): {repo.show()} does not\n"
+              f"    keep it from git. `git check-ignore -v` on that path says which "
+              f"line decides.")
+        return
+    print("  A private install: git sees none of it in this clone. "
+          "`echolot init --shared`\n  hands it to the team.")
 
 
 PLUGIN_WAYS = """\
