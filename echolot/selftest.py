@@ -8346,6 +8346,113 @@ def _(report):
         assert Config.load(path).scenario_budget_ms == 1500
 
 
+@check("ui: an investigation that recorded nothing itself is not said to have taken a round")
+def _(report):
+    """An agent started by Dig deeper that answers from the recordings
+    behind the report it was handed files them as round 1, records nothing,
+    and closes the investigation. Its page said "1 round" beside the state,
+    as if it had recorded the app once (#823). With no `collect --hunt` in
+    the investigation it says "no new recording", and the rounds say what
+    they read. One recording in it, and the rounds are counted as before.
+    """
+    from .pages import answer_page
+    hunt = {"n": 1, "question": "Why is the launch slow?", "status": "concluded", "scenario": "coldStart",
+            "opened_at": "2026-11-01T09:00:00+00:00", "closed_at": "2026-11-01T09:04:00+00:00",
+            "collects": 0, "analyzes": 1, "reports": 1,
+            "conclusion": "The store is read on the main thread. It waits for the disk."}
+    page = answer_page.render(hunt, {1: report})
+    assert '<span class="small sub">no new recording · 4 min</span>' in page, page[:2000]
+    assert "Nothing was recorded in this investigation: its round read recordings made before it opened, " \
+           "or outside it." in page
+    assert '<span class="small sub">1 round' not in page
+    page = answer_page.render({**hunt, "collects": 1}, {1: report})
+    assert '<span class="small sub">1 round · 4 min</span>' in page, page[:2000]
+    assert "Nothing was recorded in this investigation" not in page
+
+
+@check("ui: the agent's panel says the page closed its investigation when the page did, "
+       "and that the agent did only when it did, while it ran")
+def _(report):
+    """An agent that wrote down no answer, or failed, leaves its
+    investigation open, and Close the investigation closes it with the
+    page's words. The panel took any closed investigation for the agent's:
+    "It closed the investigation with a few words" under the headline
+    "Closed from echolot ui.", and, of a run that failed first, "It ended
+    with an error after the investigation was closed" (#864). The page's
+    words say the page closed it; a close stamped after the run finished
+    was not the agent's either.
+    """
+    import json
+    from datetime import datetime, timezone
+    from . import dig
+
+    def at(seconds: float) -> str:
+        return datetime.fromtimestamp(seconds, timezone.utc).isoformat(timespec="seconds")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        log = root / ".echolot" / "log"
+        log.mkdir(parents=True)
+        now = time.time()
+
+        def said(end: str, closed: float, words: str) -> str:
+            step = {"id": dig.STEP, "status": end, "started": now - 120, "finished": now - 60}
+            (log / f"{dig.JOB}.json").write_text(json.dumps({
+                "job": dig.JOB, "started": now - 120, "finished": now - 60, "end": end,
+                "what": {"client": "claude", "hunt": 1}, "steps": [step]}), encoding="utf-8")
+            (root / ".echolot" / "hunt.json").write_text(json.dumps({
+                "n": 1, "question": "Why is the launch slow?", "status": "concluded", "opened_at": at(now - 120),
+                "closed_at": at(closed), "conclusion": words, "collects": 1, "reports": 0}), encoding="utf-8")
+            seen = dig.view(root, {}, procs=lambda: [], count=False)
+            assert seen is not None
+            return seen["text"]
+
+        page = dig.closing_words({"who": "Claude Code", "status": "done", "rounds": 1})
+        assert page.endswith(dig.CLOSED_HERE), page
+        text = said("done", now - 90, "Store.fill is slow.")
+        assert text.startswith("It closed the investigation with a few words"), text
+        text = said("done", now - 30, page)
+        assert text.startswith("It left the investigation open, and it was closed from this page after that"), text
+        assert "It closed the investigation" not in text, text
+        text = said("failed", now - 30, dig.closing_words({"who": "Claude Code", "status": "failed", "rounds": 1}))
+        assert text.startswith("It ended before it had an answer, and the investigation was closed from this page "
+                               "after that."), text
+        text = said("failed", now - 90, "Store.fill is slow.")
+        assert text.startswith("It ended with an error after the investigation was closed."), text
+        text = said("done", now - 30, "Store.fill is slow; closed by hand.")
+        assert text.startswith("It left the investigation open, and it was closed after that"), text
+
+
+@check("ui: Check again from an investigation's page names the round it compared with, "
+       "not the report before it")
+def _(report):
+    """The answer's Check again gives `compare` the investigation's first
+    round, as its page promises. The comparison's row and the start page
+    said "Comparing with the report before it" and "It was compared with
+    the report before it", which is the last report on the start page
+    (#866). The press keeps which round of which investigation it is, and
+    every sentence that names the comparison says that.
+    """
+    from . import check as check_mod
+    from .pages import start_page
+    what = {"do": "record", "scenario": "coldStart", "against": {"hunt": 5, "round": 1}}
+    run = {"status": "done", "what": what, "steps": [
+        {"id": "analyze", "status": "done"}, {"id": "compare", "status": "done"}]}
+    assert check_mod.rows(run, None)[-1]["name"] == "Comparing with round 1 of investigation #5", \
+        check_mod.rows(run, None)
+    assert check_mod.against(run) == "round 1 of investigation #5"
+    view = {"status": "done", "rows": check_mod.rows(run, None), "title": "Done.", "text": "", "counts": None,
+            "compare": "Faster by 0.4 s", "compared": "reading", "against": check_mod.against(run), "said": None,
+            "todo": ""}
+    html = start_page._run(view, lambda *a, **k: None)
+    assert "It was compared with round 1 of investigation #5. " in html, html
+    assert "the report before it" not in html, html
+    plain = {**run, "what": {"do": "record", "scenario": "coldStart"}}
+    assert check_mod.rows(plain, None)[-1]["name"] == "Comparing with the report before it"
+    for wrong in ({"hunt": "5", "round": 1}, {"hunt": 5, "round": True}, "round 1"):
+        assert check_mod.against({**run, "what": {**what, "against": wrong}}) == "the report before it", wrong
+
+
 def _dig_project(root: Path, allowed: str | None) -> dict:
     """A project both clients could start in but for what the config says:
     Claude Code's commands, a git repository and Codex's rules. The state the

@@ -57,6 +57,7 @@ from typing import Any, Callable, Sequence
 from . import check as check_mod
 from . import hunt as hunt_mod
 from . import job, state
+from . import when as when_mod
 from .check import Refusal, _stops_recording
 from .config import Config, ConfigError
 from .mark import Markers, allowed_entry
@@ -78,6 +79,10 @@ BUDGET_USD = 10
 QUIET_S = 600.0
 # The one file outside the allowed paths the agent writes: its verdict.
 VERDICT = ".echolot/verdict.json"
+# How the words the page closes an investigation with end (`closing_words`):
+# the investigation's page heads with them, and the panel reads them to know
+# that the page closed it, not the agent.
+CLOSED_HERE = "Closed from echolot ui."
 # What the agent is told it may run, as the rules hold it and as a person reads it.
 COMMANDS = (("echolot", "Bash(echolot *)", "any echolot command"),
             ("./gradlew", "Bash(./gradlew *)", "any Gradle task of the project"),
@@ -714,6 +719,29 @@ def _rounds(project: Path, hunt: dict[str, Any] | None) -> int:
     return len(hunt_mod.archived_reports(project, hunt)) if hunt else 0
 
 
+def _closed_after(hunt: dict[str, Any] | None, run: dict[str, Any]) -> str | None:
+    """How the investigation came to be closed once the agent had ended:
+    "page" when the page closed it (`close`, with words that end in the
+    page's own), "later" when it was closed after the run finished some
+    other way, as `echolot hunt --done` typed by a person does. None while it
+    is open, and when the agent closed it itself, which it can only do while
+    it runs. `closed_at` is kept to the second: a close in the second the
+    run finished reads as the agent's, unless the page's words say whose.
+
+    The panel took every closed investigation for the agent's, and said
+    "It closed the investigation with a few words" of one the page had
+    closed, under a headline that said so (#864)."""
+    if not hunt or (hunt.get("status") or "open") == "open":
+        return None
+    words = hunt.get("conclusion")
+    if isinstance(words, str) and words.rstrip().endswith(CLOSED_HERE) and not isinstance(hunt.get("verdict"), dict):
+        return "page"
+    closed, ended = when_mod.iso_epoch(hunt.get("closed_at")), run.get("finished")
+    if closed is not None and isinstance(ended, (int, float)) and not isinstance(ended, bool) and closed >= ended:
+        return "later"
+    return None
+
+
 def _left(project: Path, st: dict[str, Any] | None) -> dict[str, Any]:
     return Markers(project, ((st or {}).get("config") or {}).get("temp_prefix")).leftovers()
 
@@ -773,7 +801,10 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
     found = agent.result(project)
     out["cost"], out["denied"], out["capped"] = agent.cost(found), agent.denied(found), agent.capped(found)
     out["cached"] = agent.cached(found)
-    answered = out["hunt_status"] == "concluded"
+    # Closed by the agent, or once it had ended: from this page, or by hand.
+    later = _closed_after(hunt, run)
+    answered = out["hunt_status"] == "concluded" and later is None
+    by = " from this page" if later == "page" else ""
     words = agent.last_words(found)
     if status == job.DONE and out["verdict"]:
         out["title"] = f"{who} finished."
@@ -784,6 +815,7 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
         out["text"] = (f"{who} stopped by itself when its own estimate of what it had spent reached the cap the "
                        "page sets, before it had an answer"
                        + (". It closed the investigation before that." if answered else
+                          f". The investigation was closed{by} after that." if later else
                           ". The investigation is still open, with the rounds it has."))
     elif status == job.DONE and answered:
         out["title"] = f"{who} finished."
@@ -791,12 +823,16 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
                        "headline.")
     elif status == job.DONE:
         out["title"] = f"{who} finished, and wrote down no answer."
-        out["text"] = "The investigation is still open, with the rounds it has. Its last words are below."
+        out["text"] = (f"It left the investigation open, and it was closed{by} after that. Its last words are below."
+                       if later else
+                       "The investigation is still open, with the rounds it has. Its last words are below.")
     elif status == job.FAILED:
         out["title"] = f"{who} stopped with an error."
-        out["text"] = ("It ended before it had an answer. What it said is below: a sign-in that ran out, or a "
-                       f"limit of your plan, is put right in {who} itself.") if not answered else \
-            "It ended with an error after the investigation was closed. What it said is below."
+        out["text"] = ("It ended with an error after the investigation was closed. What it said is below."
+                       if answered else
+                       "It ended before it had an answer"
+                       + (f", and the investigation was closed{by} after that" if later else "") + ". What it said "
+                       f"is below: a sign-in that ran out, or a limit of your plan, is put right in {who} itself.")
     elif status == job.STOPPED and idle:
         out["title"] = f"Stopped: nothing had moved for {_minutes(agent.idle_s or QUIET_S)}."
         out["text"] = (f"{who} had run nothing, written nothing and recorded nothing for that long. That is how it "
@@ -838,15 +874,15 @@ def closing_words(seen: dict[str, Any]) -> str:
     after = f"after {rounds} round{'s' if rounds != 1 else ''}" if rounds else "before its first round"
     if seen.get("capped"):
         return (f"{who} stopped at its spending cap of ${seen.get('budget') or BUDGET_USD:g}, {after}, with no "
-                "answer. Closed from echolot ui.")
+                f"answer. {CLOSED_HERE}")
     if seen.get("idle") and seen.get("status") == job.STOPPED:
         return (f"Stopped from echolot ui once {who} had done nothing for "
-                f"{_minutes(seen.get('ends_idle') or QUIET_S)}, {after}, with no answer. Closed from echolot ui.")
+                f"{_minutes(seen.get('ends_idle') or QUIET_S)}, {after}, with no answer. {CLOSED_HERE}")
     how = {job.STOPPED: "Stopped from echolot ui",
            job.FAILED: f"{who} ended with an error",
            job.INTERRUPTED: f"Cut short, the process that ran {who} gone",
            job.DONE: f"{who} finished and wrote down nothing"}.get(seen.get("status"), "Left")
-    return f"{how}, {after}, with no answer. Closed from echolot ui."
+    return f"{how}, {after}, with no answer. {CLOSED_HERE}"
 
 
 def close(project: Path, config: str, st: dict[str, Any] | None, *,

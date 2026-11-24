@@ -145,8 +145,8 @@ def _run(run: dict[str, Any], link: Link) -> str:
         # for a person. Without one, the two lines `compare` printed.
         said = (kit.prose(run["compare"]) if run.get("compared") == "reading" else
                 f'<code>echolot compare</code> says: {e(run["compare"])}.')
-        parts.append(f'<p class="small sub measure" id="run-compare">It was compared with the report before it. '
-                     f'{said}{more}</p>')
+        parts.append(f'<p class="small sub measure" id="run-compare">It was compared with '
+                     f'{e(run.get("against") or "the report before it")}. {said}{more}</p>')
     parts.append(_said(run["said"]))
     if run["todo"]:
         parts.append(f'<p class="small sub measure">{kit.prose(run["todo"])}</p>')

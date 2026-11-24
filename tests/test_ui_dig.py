@@ -625,12 +625,72 @@ def test_ended_with_a_verdict_lands_on_the_answer(project):
     check("and the start page has nothing to say of it", not page(get(site, "")).all("div", id="dig-on"))
 
 
+def test_an_answer_from_the_recordings_it_was_handed_is_no_round_of_its_own(project):
+    """It filed the recordings behind the report as round 1, recorded
+    nothing, and answered: the page said "1 round" (#823)."""
+    site, _, _ = serving(project, {"do": "verdict", "rounds": 1, "handed": 1})
+    reply = press(site, "dig/start", ticked("main_thread_waits"))
+    answer = page(get(site, dict(reply.headers)["Location"][len(f"/{site.token}/"):]))
+    beside = answer.one("main").all("div", "rowf")[0].one("span", "sub").text
+    check("beside the state, no new recording, not a round", beside.startswith("no new recording")
+          and "round" not in beside, beside)
+    check("and its rounds say what they read", "Nothing was recorded in this investigation: its round read "
+          "recordings made before it opened, or outside it." in answer.text)
+    site, _, _ = serving(project, {"do": "verdict", "rounds": 2, "handed": 1})
+    reply = press(site, "dig/start", ticked("main_thread_waits"))
+    answer = page(get(site, dict(reply.headers)["Location"][len(f"/{site.token}/"):]))
+    check("one that recorded a round of its own counts them as before",
+          answer.one("main").all("div", "rowf")[0].one("span", "sub").text.startswith("2 rounds"))
+
+
 def test_an_investigation_closed_with_words_and_no_verdict(project):
     site, _, _ = serving(project, {"do": "text", "rounds": 1})
     press(site, "dig/start", ticked("main_thread_waits"))
     seen = panel(site)
     check("finished, with a few words", "Claude Code finished. It closed the investigation with a few words and no "
           "table of causes" in seen.text and not seen.all("button"), seen.text)
+
+
+def test_an_investigation_the_page_closed_is_not_said_to_be_the_agent_s(project):
+    """The panel took every closed investigation for the agent's: under the
+    headline "Closed from echolot ui." it said the agent had closed it, and
+    of a run that failed first, that it failed after the close (#864)."""
+    site, _, _ = serving(project, {"do": "rounds", "rounds": 1})
+    press(site, "dig/start", ticked("main_thread_waits"))
+    press(site, "dig/close")
+    answer = page(get(site, "hunt/1/answer"))
+    seen = answer.one("section", id="dig")
+    check("the headline is the page's close", answer.one("h1").text.startswith("Claude Code finished and wrote down "
+          "nothing") and "Closed from echolot ui." in answer.text, answer.one("h1").text)
+    check("and the panel agrees: the agent wrote nothing down, the page closed it", "Claude Code finished, and wrote "
+          "down no answer. It left the investigation open, and it was closed from this page after that. Its last words "
+          "are below." in seen.text and "It closed the investigation" not in seen.text, seen.text)
+    check("nothing is left to close", "Close the investigation" not in [b.text for b in seen.all("button")])
+
+    site, _, _ = serving(project, {"do": "fail"})
+    press(site, "dig/start", ticked("main_thread_waits"))
+    press(site, "dig/close")
+    seen = panel(site, 2)
+    check("a run that failed, then was closed: in that order", "Claude Code stopped with an error. It ended before it "
+          "had an answer, and the investigation was closed from this page after that." in seen.text
+          and "after the investigation was closed" not in seen.text, seen.text)
+
+    site, _, _ = serving(project, {"do": "budget", "rounds": 1})
+    press(site, "dig/start", ticked("main_thread_waits"))
+    press(site, "dig/close")
+    seen = panel(site, 3)
+    check("one stopped at the cap, then closed", "before it had an answer. The investigation was closed from this page "
+          "after that." in seen.text and "It closed the investigation before that" not in seen.text, seen.text)
+
+
+def test_an_investigation_closed_by_hand_after_the_agent_ended_is_not_said_to_be_its(project):
+    a_dig(project, end="done")
+    hunt_mod.conclude(project.root, "Store.fill is slow; closed by hand.")
+    site, _, _ = serving(project)
+    seen = panel(site)
+    check("closed after it ended, by whoever, and not by the agent", "It left the investigation open, and it was "
+          "closed after that." in seen.text
+          and "from this page" not in seen.text and "It closed the investigation" not in seen.text, seen.text)
 
 
 # --- one thing at a time -------------------------------------------------------------------------

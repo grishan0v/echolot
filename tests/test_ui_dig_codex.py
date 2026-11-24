@@ -488,6 +488,25 @@ def test_failed_says_so_in_codex_s_name_with_its_words(project):
     check("no tokens where its turn did not end", "tokens" not in seen.text)
 
 
+def test_a_codex_run_the_page_closed_says_the_page_closed_it(project):
+    """Codex wrote no verdict, the page closed the investigation, and the
+    panel said Codex had closed it, under a headline that said otherwise;
+    of a run that failed, that it failed after the close (#864)."""
+    site, _, _ = serving(project, {"do": "rounds", "rounds": 1})
+    press(site, "dig/with/codex/start", ticked("main_thread_waits"))
+    press(site, "dig/close")
+    seen = panel(site)
+    check("finished with nothing written down, and closed from the page", "Codex finished, and wrote down no answer. "
+          "It left the investigation open, and it was closed from this page after that" in seen.text
+          and "It closed the investigation" not in seen.text, seen.text)
+    site, _, _ = serving(project, {"do": "fail"})
+    press(site, "dig/with/codex/start", ticked("main_thread_waits"))
+    press(site, "dig/close")
+    seen = panel(site, 2)
+    check("failed, then closed from the page, in that order", "Codex stopped with an error. It ended before it had an "
+          "answer, and the investigation was closed from this page after that." in seen.text, seen.text)
+
+
 def test_ended_without_a_verdict_reports_its_tokens(project):
     site, _, _ = serving(project, {"do": "rounds", "rounds": 2})
     press(site, "dig/with/codex/start", ticked("main_thread_waits"))
