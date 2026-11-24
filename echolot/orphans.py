@@ -91,15 +91,32 @@ def open_processor(binary: str, connect: Callable[[str], Any]) -> Any:
     The watcher holds the shell's pid from its start. The thread's group
     gets the session once the shell answers, before the trace is fed to it:
     a run stopped while the trace is read closes it there.
+
+    A shell that could not listen on its port — another process took it
+    first — is stopped and another started on another port, `tpshell.TRIES`
+    in all (#807): nothing had been sent to whatever answered in its place.
     """
     from . import tpshell
 
     group = getattr(_joined, "group", None)
     check_joined()
-    tp = tpshell.Processor(tpshell.Shell(binary))
+    for left in range(tpshell.TRIES - 1, -1, -1):
+        tp = tpshell.Processor(tpshell.Shell(binary))
+        try:
+            _watcher.hold(tp.shell.pid)
+            tp.shell.wait()
+            break
+        except tpshell.Taken as e:
+            close(tp)
+            if not left:
+                from perfetto.trace_processor import TraceProcessorException
+                raise TraceProcessorException(
+                    f"Trace processor failed to start: it could not listen on "
+                    f"127.0.0.1 on any of {tpshell.TRIES} ports.\n{e}") from e
+        except BaseException:
+            close(tp)
+            raise
     try:
-        _watcher.hold(tp.shell.pid)
-        tp.shell.wait()
         if group is not None:
             group.add(tp)
         tp.client = connect(tp.shell.address)

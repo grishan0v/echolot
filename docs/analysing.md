@@ -639,6 +639,19 @@ second shorter than the table says, and `doctor`, which opens a few dozen
 sessions, takes seconds rather than forty. Most of what is left is each
 detector asked twice on a set, at its thresholds and with them open.
 
+Each trace_processor listens on a port of its own on 127.0.0.1. echolot asks
+the kernel for the port and lets it go before the shell starts, and a shell
+whose port another process took in between does not stop: it listens on
+[::1] alone, and the client reached whoever held 127.0.0.1 — another
+session, fed this one's trace and running this one's SQL. That is how tests
+run side by side on Linux, where the kernel hands a released port out again
+at random, failed with `view _proc already exists`. Now a lease holds the
+port from the draw until its shell listens — a lock on the port's byte of
+one file in the temporary directory — and another echolot draws another
+port. And before anything is sent to what answered, echolot reads its own
+shell's stderr: a shell that says it could not listen on 127.0.0.1 means the
+answer came from another process, and it is started again on another port.
+
 ## When a detector could not look
 
 A detector with no rows says it ran and nothing cleared its bar. Some are

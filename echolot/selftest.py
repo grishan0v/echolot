@@ -5111,7 +5111,8 @@ def _(report):
 
 
 # A trace_processor_shell that takes its time to listen, then answers its
-# /status: the wait measured is the start's, not this machine's.
+# /status: the wait measured is the start's, not this machine's. It says
+# where it listens as trace_processor does, before it serves (#807).
 _SLOW_SHELL = """
 import sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -5123,7 +5124,9 @@ class Status(BaseHTTPRequestHandler):
         self.end_headers()
     def log_message(self, *_):
         pass
-HTTPServer(("127.0.0.1", port), Status).serve_forever()
+server = HTTPServer(("127.0.0.1", port), Status)
+print(f"[HTTP] Starting HTTP server on [::1]:{port}", file=sys.stderr, flush=True)
+server.serve_forever()
 """
 
 
@@ -5200,6 +5203,120 @@ def _(report):
     assert len(set(ports)) == len(ports), f"two shells on one port: {sorted(ports)}"
     wrong = [traces[i].name for i, (_, n) in seen.items() if n != alone[traces[i]]]
     assert not wrong, f"read another session's trace: {wrong}"
+
+
+@check("trace_processor: a shell whose port another process holds is stopped before anything is sent to it, and the session starts on a port of its own")
+def _(report):
+    """A shell whose port on 127.0.0.1 another process took before it
+    listened does not stop: it listens on [::1] alone, and the client
+    reached the other one, fed it its trace and ran its SQL there. Between
+    test workers starting shells side by side on Linux that read `view _proc
+    already exists`, `no such table: process` and a connection reset (#807).
+
+    The shell says so on stderr, and that is what is held, on two real
+    shells and one port: the second is `Taken` and stopped, the first still
+    answers and says it is its own. A session whose first port is taken
+    opens on another and reads its own trace.
+    """
+    from . import tpshell
+    from .tp import TraceSession, resolve_binary_path
+
+    binary = resolve_binary_path(_binary)
+    draw = tpshell._free_port
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = _two_fixtures(tmp)[1]
+        with TraceSession(trace, _binary) as tp:
+            alone = tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"]
+        first = tpshell.Shell(binary)
+        try:
+            first.wait()
+            assert first.listens() is True, f"the first shell did not say: {first._heard()!r}"
+            tpshell._free_port = lambda: first.port
+            try:
+                second = tpshell.Shell(binary)
+            finally:
+                tpshell._free_port = draw
+            pid = second.pid
+            try:
+                second.wait()
+            except tpshell.Taken as e:
+                said = str(e)
+            else:
+                second.close()
+                raise AssertionError("a shell on a port another holds was taken for the one that answered")
+            assert tpshell.TAKEN in said, said
+            assert second.pid is None, "the shell whose port was taken is still held"
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, 0)
+                raise AssertionError(f"trace_processor {pid} is still running")
+            assert tpshell._answers(first.port) and first.listens() is True
+
+            ports = iter([first.port])
+            tpshell._free_port = lambda: next(ports, None) or draw()
+            try:
+                with TraceSession(trace, _binary) as tp:
+                    port = tp._tp.shell.port
+                    n = tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"]
+            finally:
+                tpshell._free_port = draw
+        finally:
+            first.close()
+    assert port != first.port, "the session opened on the port another holds"
+    assert n == alone, f"read {n} sched rows, its trace has {alone}"
+
+
+_LEASE = """
+import sys
+from echolot import tpshell
+assert tpshell._lease(int(sys.argv[1]))
+print("held", flush=True)
+sys.stdin.read()
+"""
+
+
+@check("trace_processor: a port another echolot drew for its shell is not drawn here until that one lets go")
+def _(report):
+    """Between drawing a port and its shell listening on it, the port is
+    free as far as the kernel knows, and on Linux the next process to ask
+    may be handed it (#807). The draw takes a lease on it first — a lock on
+    the port's byte of one file in the temporary directory — and a draw
+    that finds another process's lease draws again. Held on a process that
+    leases a port and keeps it: the lease is refused here, and granted once
+    that process has ended, however it ends.
+    """
+    import signal
+    import socket
+    import subprocess
+    import sys
+    from . import tpshell
+
+    with tpshell._lock:
+        if tpshell._lease_file() < 0:
+            raise Skipped("the temporary directory refuses the lease file")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    root = str(Path(__file__).resolve().parent.parent)
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _LEASE, str(port)], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, env={**os.environ, "PYTHONPATH": root})
+    try:
+        held = holder.stdout.readline().strip() == b"held"
+        with tpshell._lock:
+            refused = not tpshell._lease(port)
+            if not refused:
+                tpshell._lease(port, take=False)
+    finally:
+        holder.send_signal(getattr(signal, "SIGKILL", signal.SIGTERM))
+        holder.wait(10)
+        holder.stdin.close()
+        holder.stdout.close()
+    assert held, "the other process took no lease"
+    assert refused, f"port {port} was leased here while another process held it"
+    with tpshell._lock:
+        granted = tpshell._lease(port)
+        tpshell._lease(port, take=False)
+    assert granted, f"the lease on {port} outlived the process that took it"
 
 
 @check("reflect: a signal that broke is not checked, and does not read as checked")
