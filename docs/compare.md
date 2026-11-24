@@ -850,7 +850,7 @@ echolot compare old.json new.json --plain
 BETTER        Faster by 0.7 s. The launch went from 2.1 s to 1.4 s, 33% less. Measured on 3
               launches before and 3 after.
 
- !  Still over the limit. The launch takes 1.4 s. You allowed 0.5 s, so it takes 2.7 times as
+ !  Still over the limit. The launch takes 1.42 s. You allowed 0.52 s, so it takes 2.7 times as
     long.
  ~  Not certain check by check yet. 3 launches before and 3 after are too few to say which
     single changes hold. It takes four a side, or three against five.
