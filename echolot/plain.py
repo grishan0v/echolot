@@ -378,9 +378,9 @@ def _on_main(det_id: str, row: dict[str, Any], ctx: _Ctx) -> bool:
     if det_id in _MAIN_TIME:
         return True
     detail = str(row.get("detail") or "")
-    if det_id == "binder_txn":
-        return detail.startswith("main")
-    if det_id == "io_wait":
+    # `binder_txn` and `gc_pressure` keep the thread in `thread` since #514,
+    # and a report written before in `detail`, as `io_wait` once did.
+    if det_id in ("binder_txn", "io_wait"):
         return str(row.get("thread") or detail).startswith("main")
     if det_id in NAMED_MAIN:
         # `main` since #511. A report written before then names the main
@@ -390,7 +390,7 @@ def _on_main(det_id: str, row: dict[str, Any], ctx: _Ctx) -> bool:
     if not ctx.main:
         return False
     if det_id == "gc_pressure":
-        return detail == ctx.main
+        return str(row.get("thread") or detail) == ctx.main
     if det_id == "repeated_work":
         return detail.rstrip().endswith(f"— on {ctx.main}")
     return False
@@ -660,7 +660,7 @@ def _f_init(rows, ctx):
 def _f_gc(rows, ctx):
     top = rows[0]
     v = _value(top)
-    thread = str(top.get("detail") or "")
+    thread = str(top.get("thread") or top.get("detail") or "")
     main = _on_main("gc_pressure", top, ctx)
     where = " on the main thread" if main else (f" on {_name(thread)}" if thread else "")
     out = _clause(f"Memory clean-up ran {_count(int(top.get('count') or 1), 'time', 'times')}"

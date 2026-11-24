@@ -718,7 +718,46 @@ def _(report):
     assert row["max_ms"] == 25.0, row
     assert row["count"] == 2, f"both sync transactions belong to the group: {row}"
     assert row["total_ms"] == 28.0, row
-    assert row["detail"] == "main thread", row
+    assert row["thread"] == "main thread", row
+
+
+@check("binder_txn: the evidence says who answered the calls, and the method where it is named")
+def _(report):
+    # The two calls are the binder driver's events, and trace_processor ties
+    # each to the thread that answered it; `android.binder` reads the process
+    # off that, and the method off the AIDL slice system_server opened inside
+    # its reply. The row used to say only which thread of the app waited.
+    # Shares of the row's time, 25 and 3 of 28 ms; keystore2 names no
+    # method, and its directory is left out (#514).
+    row = only_row(report, "binder_txn")
+    assert row["detail"] == ("main thread · to system_server "
+                             "IPackageManager.getPackageInfo 89%, keystore2 11%"), row
+
+
+@check("binder_txn, gc_pressure: a trace with nothing behind the slices gives the same rows, without the evidence")
+def _(report):
+    # An older device, or a recording made by something else: the binder
+    # slices came with no driver's events behind them, so no flow says who
+    # answered, and the runtime wrote no heap counter, so the standard
+    # library holds no collection. The modules load and are empty; the rows
+    # are the slices' as they always were, and say only what the slices say.
+    from .config import Config
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bare.perfetto-trace"
+        path.write_bytes(fixture.build(answered=False, heap=False))
+        bare = _analyze(path, Config(FIXTURE_CONFIG))
+
+    def numbers(rep, det):
+        return [{k: v for k, v in r.items() if k != "detail"} for r in rows(rep, det)]
+    for det in ("binder_txn", "gc_pressure"):
+        assert numbers(bare, det) == numbers(report, det), (det, rows(bare, det))
+    assert [r["detail"] for r in rows(bare, "binder_txn")] == ["main thread"], rows(bare, "binder_txn")
+    assert [r["detail"] for r in rows(bare, "gc_pressure")] == [None, None], rows(bare, "gc_pressure")
+    # And the main thread's time behind the rows is the same: `@intervals`
+    # finds the slices by the row's `thread`, whatever `detail` says.
+    covered = ("in_rows_ms", "in_rows_pct", "in_rows_uncounted")
+    assert ({k: bare["window"]["main_thread"].get(k) for k in covered}
+            == {k: report["window"]["main_thread"].get(k) for k in covered}), bare["window"]["main_thread"]
 
 
 @check("the async transaction is still visible as a long slice on main")
@@ -788,6 +827,33 @@ def _(report):
     # waitWhileAllocatingLocked appears on application threads when an
     # allocation stalls waiting for the collector. A real name from Android 14.
     assert "waitWhileAllocatingLocked" in locations(report, "gc_pressure")
+
+
+@check("gc_pressure: a cycle's evidence is what it freed and how large the heap grew before one")
+def _(report):
+    # Read by `android.garbage_collection` off the runtime's heap counter:
+    # 46 MB freed by the first cycle, which came after a burst to 64 MB, and
+    # 12 MB by each of the nineteen after it. Freed is a cycle's average, the
+    # heap the largest it was before any — the number that is there when a
+    # cold start's first two seconds hold no cycle at all (#514, #609). The
+    # thread is a column of its own and names the row.
+    got = [r for r in rows(report, "gc_pressure")
+           if r["location"] == "Background young concurrent copying GC"]
+    assert len(got) == 1, rows(report, "gc_pressure")
+    assert got[0]["thread"] == "HeapTaskDaemon", got[0]
+    assert got[0]["detail"] == "13.7 MB freed a cycle, the heap up to 64.0 MB", got[0]
+
+
+@check("gc_pressure: an allocation wait's evidence names the collection it waited for")
+def _(report):
+    # The first of the three waits, 700..760, falls on the cycles that start
+    # at 700; the other two fall on none. So one wait of 60 ms in 180, a
+    # third of the row, was for a young collection.
+    got = [r for r in rows(report, "gc_pressure")
+           if r["location"] == "waitWhileAllocatingLocked"]
+    assert len(got) == 1, rows(report, "gc_pressure")
+    assert got[0]["thread"] == fixture.THREADS[fixture.TID_MAIN], got[0]
+    assert got[0]["detail"] == "during Background young concurrent copying GC 33%", got[0]
 
 
 @check("main_thread_outlier: one occurrence far outside its own history")
@@ -2725,6 +2791,40 @@ def _(report):
     got = order(burn, {("uninstrumented_cpu", "Thread-25"): [850.0, 860.0, 840.0, 855.0],
                        ("runnable_starvation", "main"): [100.0, 102.0, 98.0, 101.0]})
     assert got == [("uninstrumented_cpu", "Thread-25"), ("runnable_starvation", "main")], got
+
+
+@check("compare holds a move whose range clears the floor, not zero, and says so")
+def _(report):
+    """Two hundred rows judged at once, and at 95% one in twenty that did
+    not move lands on one side of zero by chance: three sets of fifteen cold
+    starts of one build, each split seven against eight a hundred ways, held
+    4.0 rows a split, 3.0 of them listed as moved (#506). Asked to clear the
+    floor that listed it, a row held 0.5 times a split; one made twice as
+    slow still held in 88 splits of a hundred, against 91.
+
+    A row 15 ms slower on a 100 ms row, four runs a side, every run after
+    above every run before: its range, +6 … +27, clears zero and not the
+    10 ms floor, so it does not hold, and its cell says which floor and how
+    many runs would settle it. A 400 ms sleep holds. The line under the
+    header counts both."""
+    from . import compare as compare_mod
+
+    cmp = compare_mod.build(
+        _cold_starts({("main_thread_block", "Row.load"): [98.0, 100.0, 100.0, 102.0],
+                      ("main_thread_block", "Initializer.create"): [40.0, 42.0, 38.0, 41.0]}),
+        _cold_starts({("main_thread_block", "Row.load"): [108.0, 115.0, 115.0, 125.0],
+                      ("main_thread_block", "Initializer.create"): [460.0, 458.0, 462.0, 459.0]}),
+        before_path="a.json", after_path="b.json")
+    rows = {r["location"]: r for r in cmp["rows"]}
+    near, sleep = rows["Row.load"], rows["Initializer.create"]
+    assert near["change"] == "grew" and near["shift"]["low_ms"] == 6.0, near
+    assert near["shift"]["floor_ms"] == 10.0 and near["holds"] is False, near
+    assert compare_mod._holds(near) == "no, +6.0 … +27.0 · floor 10.0 · ~13 runs a side", near
+    assert sleep["holds"] is True and sleep["shift"]["floor_ms"] == 5.0, sleep
+    assert cmp["holds_against"] == "floor", cmp.get("holds_against")
+    text = compare_mod.to_markdown(cmp)
+    assert ("Holds asks each range to clear the floor, not zero: 1 of 2 row(s) with a "
+            "verdict do, and 1 more that clear zero alone read no.") in text, text
 
 
 @check("compare says when the two sides were recorded differently, and what reads it")

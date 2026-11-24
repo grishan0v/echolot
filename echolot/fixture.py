@@ -101,6 +101,14 @@ SF_PID = 600
 SF_NAME = "/system/bin/surfaceflinger"
 SF_THREADS = {SF_PID: "surfaceflinger"}
 
+# A native daemon, which answers one of the main thread's binder calls
+# (BINDER_CALLS) and has no other slice. Not surfaceflinger: its having no
+# thread slice at all is what a check of `project.process` stands on.
+KS_PID = 700
+KS_NAME = "/system/bin/keystore2"
+KS_BINDER_TID = 715
+KS_THREADS = {KS_PID: "keystore2", KS_BINDER_TID: "binder:700_1"}
+
 # --- the frame timeline ----------------------------------------------------
 # Shape: (token, start_ms, expected_ms, actual_ms, jank)
 #
@@ -447,10 +455,11 @@ SLICES = {
             ("collection_mapping", 200, 120, []),
             # negative control: 5 ms < 16, must not fire
             ("quick_thing", 400, 5, []),
-            # binder_txn: 25 ms → fires (threshold 10)
-            ("binder transaction", 450, 25, []),
-            # negative control: 3 ms < 10
-            ("binder transaction", 480, 3, []),
+            # binder_txn: two synchronous transactions, 25 ms at 450 → fires
+            # (threshold 10), and 3 ms at 480, a negative control alone. Not
+            # here: they are the binder driver's events, not atrace's, so
+            # that the trace ties each to the process that answered it
+            # (BINDER_CALLS).
             # negative control: an async transaction. Long and on main, but the
             # sender does not block on it, so it has no place in binder_txn.
             ("binder transaction async", 600, 40, []),
@@ -592,6 +601,7 @@ SLICES = {
         ("After_OUTSIDE", 1200, 200, []),
     ],
     # gc_pressure: 20 collection cycles → fires on count (threshold 15).
+    # What each freed is in the heap's counter, HEAP_KB.
     # The structure is real, taken from a live Android 14 trace: the cycle sits
     # at depth 0 with its phases (CopyingPhase and friends) nested inside.
     # Adding them to the parent counts the same time twice; on the live trace
@@ -1204,7 +1214,43 @@ def _samples(builder, arrived: bool = True, minified: bool = False) -> None:
 
 SS_PID = 1200
 SS_NAME = "system_server"
-SS_THREADS = {SS_PID: "system_server"}
+# A binder thread, which answers one of the main thread's calls (BINDER_CALLS).
+SS_BINDER_TID = 1215
+SS_THREADS = {SS_PID: "system_server", SS_BINDER_TID: "binder:1200_2"}
+
+# --- who answered the app's calls, and what the collector freed ---------------
+#
+# The main thread's synchronous transactions, as the binder driver writes them
+# under `binder_driver`: the caller's `binder_transaction` and, on the thread
+# that answers, its `binder_transaction_received`; then the answer's own pair
+# the other way. trace_processor makes them the caller's `binder transaction`
+# and the server's `binder reply`, tied by a flow, which `android.binder` reads
+# the server off (#514). The first is answered by system_server, which names
+# the AIDL method inside its reply as a recording with the `aidl` category
+# has it; the second by keystore2, a native daemon named by its path, which
+# names none. The 25 ms one is the row; the 3 ms one is in its sum, and alone
+# would not be.
+#
+#   (caller tid, start ms, ms, server pid, server tid, the method's slice)
+BINDER_CALLS = [
+    (TID_MAIN, 450, 25, SS_PID, SS_BINDER_TID,
+     "AIDL::java::IPackageManager::getPackageInfo::server"),
+    (TID_MAIN, 480, 3, KS_PID, KS_BINDER_TID, None),
+]
+
+# ART's `Heap size (KB)`, an atrace counter of the app's process under
+# `dalvik`, around the twenty cycles on HeapTaskDaemon (700 + 5i, 4 ms each):
+# 30 MB before a cycle and 18 MB after it, which `android.garbage_collection`
+# reads as 12 MB freed. The first cycle comes after a burst, at 64 MB, the
+# shape a cold start's first collection has: so a row's heap is the largest
+# before any cycle and its freed memory a cycle's average, 13.7 MB.
+#
+#   (at ms, KB)
+HEAP_KB = [(650, 20_000)] + [
+    point for i in range(20) for point in (
+        (700 + i * 5 - 0.5, 64_000 if i == 0 else 30_000),
+        (700 + i * 5 + 4.5, 18_000))
+]
 
 # --- the launch, as system_server records it ----------------------------------
 #
@@ -1552,7 +1598,7 @@ def build(frames: bool = True, environment: bool = True,
           sampling: str | None = None, names: bool = False,
           crowded: bool = False, categories=None, composables: bool = True,
           fully_drawn: str | None = None, stuffed: bool = False,
-          smooth: bool = False) -> bytes:
+          smooth: bool = False, answered: bool = True, heap: bool = True) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1595,6 +1641,12 @@ def build(frames: bool = True, environment: bool = True,
     `stuffed=True` draws the app's frames from `STUFFED_FRAMES`, a list that
     runs a frame behind, in place of `APP_FRAMES`; `smooth=True` from
     `SMOOTH_FRAMES`, a build that keeps up.
+
+    `answered=False` writes the main thread's binder transactions as plain
+    atrace slices, the same names and times with no server behind them, and
+    `heap=False` leaves out the runtime's heap counter: what a trace from an
+    older device, or from a tool that recorded less, gives the standard
+    library to read (#514).
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -1605,7 +1657,8 @@ def build(frames: bool = True, environment: bool = True,
     process_tree(builder, [(APP_PID, APP_NAME, threads),
                            (OTHER_PID, OTHER_NAME, other_threads),
                            (SF_PID, SF_NAME, SF_THREADS),
-                           (SS_PID, SS_NAME, SS_THREADS)])
+                           (SS_PID, SS_NAME, SS_THREADS),
+                           (KS_PID, KS_NAME, KS_THREADS)])
 
     if frames:
         _frames(builder, STUFFED_FRAMES if stuffed else SMOOTH_FRAMES if smooth else APP_FRAMES)
@@ -1668,6 +1721,43 @@ def build(frames: bool = True, environment: bool = True,
             (ms(start), next(seq), "print", TID_MAIN, f"S|{APP_PID}|{name}|{cookie}\n"))
         by_cpu[cpu].append(
             (ms(start + dur), next(seq), "print", TID_MAIN, f"F|{APP_PID}|{name}|{cookie}\n"))
+
+    # The binder driver's events: a call, its arrival, the answer, and the
+    # answer's arrival back at the caller. The server's side on CPU 0, as any
+    # other process's here; the method it names is an atrace slice inside its
+    # reply, as an AIDL server writes it.
+    if answered:
+        for n, (tid, start, dur, server_pid, server_tid, method) in enumerate(BINDER_CALLS):
+            call, answer = 2 * n + 1, 2 * n + 2
+            cpu = tid_to_cpu[tid]
+            by_cpu.setdefault(cpu, []).append(
+                (ms(start), next(seq), "binder", tid, call, server_pid, server_tid, False))
+            by_cpu.setdefault(0, []).append(
+                (ms(start + 0.1), next(seq), "received", server_tid, call))
+            if method:
+                by_cpu[0].append((ms(start + 0.2), next(seq), "print", server_tid,
+                                  f"B|{server_pid}|{method}\n"))
+                by_cpu[0].append((ms(start + dur - 0.2), next(seq), "print", server_tid,
+                                  f"E|{server_pid}\n"))
+            by_cpu[0].append(
+                (ms(start + dur - 0.1), next(seq), "binder", server_tid, answer,
+                 tid_to_tgid[tid], tid, True))
+            by_cpu[cpu].append((ms(start + dur), next(seq), "received", tid, answer))
+    else:
+        # A recording whose binder slices came without the driver's events:
+        # the same two names and times, as atrace writes any slice, and
+        # nothing to say who answered.
+        for tid, start, dur, *_ in BINDER_CALLS:
+            for at, buf in ((start, f"B|{tid_to_tgid[tid]}|binder transaction\n"),
+                            (start + dur, f"E|{tid_to_tgid[tid]}\n")):
+                by_cpu.setdefault(tid_to_cpu[tid], []).append(
+                    (ms(at), next(seq), "print", tid, buf))
+
+    # The runtime's heap size, from the collector's thread.
+    if heap:
+        for at, kb in HEAP_KB:
+            by_cpu.setdefault(tid_to_cpu[TID_HEAP], []).append(
+                (ms(at), next(seq), "print", TID_HEAP, f"C|{APP_PID}|Heap size (KB)|{kb}\n"))
 
     # atrace counters: the ANR record, from system_server rather than from us.
     for at, name in ANR_COUNTERS:
@@ -1742,7 +1832,8 @@ def ftrace(builder, by_cpu: dict[int, list]) -> None:
     (prev_comm, prev_pid, prev_state, next_comm, next_pid), `waking` (waker
     tid, wakee tid, wakee's name, wakee's CPU), `blocked` (tid, io_wait),
     `freq` (cpu, khz), `temp` (zone, millidegrees), `cdev` (device, level),
-    and `print` (tid, atrace line).
+    `binder` (tid, debug id, the process and thread it goes to, whether it is
+    an answer), `received` (tid, debug id) and `print` (tid, atrace line).
     """
     for cpu in sorted(by_cpu):
         packet = builder.add_packet()
@@ -1793,6 +1884,18 @@ def ftrace(builder, by_cpu: dict[int, list]) -> None:
                 event.pid = 0
                 event.cdev_update.type = device
                 event.cdev_update.target = level
+            elif kind == "binder":
+                _, _, _, tid, debug_id, to_proc, to_thread, reply = item
+                event.pid = tid
+                txn = event.binder_transaction
+                txn.debug_id = debug_id
+                txn.to_proc = to_proc
+                txn.to_thread = to_thread
+                txn.reply = int(reply)
+            elif kind == "received":
+                _, _, _, tid, debug_id = item
+                event.pid = tid
+                event.binder_transaction_received.debug_id = debug_id
             else:
                 _, _, _, tid, buf = item
                 event.pid = tid

@@ -718,9 +718,10 @@ tests. `values` holds one entry per repeat the row was **found in**, which is
 what `runs` counts: a `3/5` row has three. Absent when `analyze` ran on a
 single trace — there is nothing to spread.
 
-`resolves_ms` is the smallest move of this row a later `compare` could call
-real, against as many runs spread the same way; `resolves_pct` is the same
-against the median. A move smaller than that cannot hold, so it is the number
+`resolves_ms` is how far this row's strays reach against as many runs spread
+the same way; `resolves_pct` is the same against the median. A later
+`compare` calls a move real when it is larger than the row's floor (5 ms or a
+tenth of the row) and this together, so it is the number
 to read before promising anyone a comparison: the row above resolves nothing
 under 215 ms, because one run in five went slow. It shrinks with the square
 root of the runs, four times the runs for half the move. Absent below four
@@ -757,9 +758,9 @@ project runs it with, and what each column of its rows means there.
 |---|---|---|
 | `main_thread_block` | where the main thread spent its time | `location` — the slice name; `detail` is the thread's comm, always the main thread here, cut to 15 characters by the kernel |
 | `app_init` | what ran after the Application was created, before the first Activity | an Initializer or a library's section by name; `(no section)` is the ContentProviders and `Application.onCreate` nobody traced |
-| `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects |
+| `gc_pressure` | collection cycles and allocation waits | frequent GC = many intermediate objects; `thread` names the row, `detail` says what a cycle freed and how large the heap grew before one, or which collection a wait was for. Blind to a cold start's first ~2 s |
 | `monitor_contention` | monitor contention | the main thread's row is `main`; `threads` says how many threads a row adds up; `places` names both sides of the lock in the checkout; `detail` is the row's longest wait that names both methods, or else the owner's tid with its thread and what it and the waiter were in |
-| `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms` |
+| `binder_txn` | synchronous IPC into another process | `count` and `total_ms`, not just `max_ms`; `detail` names who answered — `system_server 94%` — and the AIDL method where the recording has the `aidl` category |
 | `runnable_starvation` | thread ready but preempted | `state` names the row with the thread; the main thread's row is `main`, and on it `detail` says who held its core — the app's own threads point at the app, other processes and idle cores at the device |
 | `uninstrumented_cpu` | threads burning CPU with no instrumentation | an address for adding `trace{}`, `main` for the main thread; `threads` above one is a pool's CPU together; in a sampled recording, the method after `ours:` in `detail`, at the file `code` names |
 | `frame_jank` | frames that missed their deadline | `location` is why it missed, `detail` says whose fault |
@@ -993,10 +994,20 @@ only exist in the runs where something was out of line, so `runs: 1/10` means
 **`gc_pressure`** also catches the other side: `waitWhileAllocatingLocked` on an
 application thread means an allocation stalled waiting for the collector. GC
 itself is the symptom; the cause is the number of intermediate objects.
+On a cold start it is blind for the first ~2 s: ART holds off collection
+after the fork from zygote, so allocations there run no cycle, and silence or
+`steady` from this detector says nothing about them. Read the heap's size
+instead — `the heap up to … MB` in a collection row's `detail`, or the
+`Heap size (KB)` counter — and put planted allocation load after the first
+two seconds.
 
 **`binder_txn`** fires both on one long transaction and on the sum of short
 ones. On a live startup there were 76 transactions of about 1 ms — 66 ms
 together, 8.5% of the cold start, and not one of them stood out alone.
+Its `detail` says where the calls went, by share of the row's time: `main
+thread · to system_server 94%, surfaceflinger 2%`. A process alone means the
+recording had no `aidl` category; with it, the method follows the process
+(`system_server IPackageManager.getPackageInfo 89%`).
 
 ## An empty report
 
@@ -1052,7 +1063,8 @@ echolot compare old.json new.json    # or name them
                   "detail": "com.example.app" },
       "delta_ms": 871.3, "ratio": 73.01,
       "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3,
-                 "resolves_ms": 40.0, "runs_needed": null },
+                 "floor_ms": 5.0, "resolves_ms": 40.0, "runs_needed": null,
+                 "more_runs": null },
       "holds": true, "detail": "com.example.app" }
   ]
 }
@@ -1065,24 +1077,31 @@ dropped silently.
 
 **`holds`** answers whether the repeats support calling it a change. `shift`
 is the move with the range it lies in, 95% sure, worked out from every run
-after paired with every run before. `true` means the range is on one side of
-zero: the move survives a re-record, and the end nearer zero is the least it
-moved. `false` means the range runs through zero, so the runs disagree among
-themselves by more than the row moved: record another round before
-concluding. `null` in both means there was nothing to test: the row is on one
+after paired with every run before. `true` means the whole range is past
+`shift.floor_ms` — the floor that listed the row, 5 ms or a tenth of the
+before value — on one side: the move survives a re-record, and the end nearer
+zero is the least it moved. Not zero: a comparison judges about two hundred
+rows at once, and against zero one build set against itself held four of them
+a comparison; against the floor, half a row (`holds_against: "floor"` at the
+top says so). `false` means the range reaches into the floor or runs through
+zero, so the runs cannot tell the move from the floor or from nothing: record
+another round before concluding. `null` in both means there was nothing to test: the row is on one
 side only — every `appeared` and `vanished` row — or the row has too few runs
 to be 95% sure. The count is the row's own: a row found in `2/5` runs has two
 values, and gets `null` with no warning above it, while `before.runs` and
 `after.runs` say why. For the report as a whole four repeats a side are always
 enough, and below that the `single` or `few` warning says so.
 
-`shift.resolves_ms` is the smallest move of the medians these two sets could
-call real, in the direction this one went: `holds` is `true` exactly when the
-move is larger. When it is not, `shift.runs_needed` says about how many runs a
-side would settle a move this size, by the square root of the runs and
-assuming the next runs stray as much as these did. A handful more is another
-round; hundreds means more rounds will not settle it — say the move is below
-what this scenario can resolve, or bring the spread down first.
+`shift.resolves_ms` is how far these two sets' strays reach in the direction
+this move went: `holds` is `true` exactly when the medians moved further than
+the floor and that together. When they did not, `shift.runs_needed` says about
+how many runs a side would settle a move this size, by the square root of the
+runs and assuming the next runs stray as much as these did — an order of
+magnitude, not a count — and `shift.more_runs` the fewest more on each side,
+`{"before": 0, "after": 1}`: with fifteen runs before and four after, more
+after alone is often the cheaper round. `null` with `runs_needed` over a
+hundred means more rounds will not settle it — say the move is below what
+this scenario can resolve, or bring the spread down first.
 
 **`count` before and after** separates "called more often" from "became slower
 inside". `inflate` at 12 → 31 occurrences and `loadAll` growing 73× at one

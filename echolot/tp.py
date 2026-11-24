@@ -478,8 +478,9 @@ class Detector:
         which stretches of the main thread's time they stand for. `analyze`
         runs it straight after the first, with those rows in a table named
         `_rows` — `location` and `detail`, the latter NULL where a row has
-        none — so the query only has to find its way back from a row to the
-        time behind it. Which rows cleared a threshold is already decided,
+        none, and each other column of `@identity`, `thread` or `state` — so
+        the query only has to find its way back from a row to the time behind
+        it. Which rows cleared a threshold is already decided,
         and repeating the HAVING here would be one more place for the two to
         drift apart. Where the first query found its pieces in steps, it
         wrote them into a table of its own, and this reads that table rather

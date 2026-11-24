@@ -720,15 +720,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         sampled = bool((environment.get("sampling") or {}).get("started"))
         root = Path(cfg.path).resolve().parent if cfg.path else None
 
-        # Stdlib modules the detectors declared, loaded once for the session.
-        # A module that is not in this trace_processor is not fatal here: the
-        # detector that wanted it fails on its own line below, with its own
-        # name against the reason, and the rest of the run is unaffected.
-        for module in sorted({m for d, _, _ in plan for m in d.modules}):
-            try:
-                tp.exec_script(f"INCLUDE PERFETTO MODULE {module};")
-            except Exception as e:
-                print(f"[!] module {module}: {e}", file=sys.stderr)
+        _include_modules(tp, [d for d, _, _ in plan])
 
         # The main thread's time behind every row, for `_in_rows`, and the
         # detectors whose rows could not be placed on it.
@@ -2843,6 +2835,23 @@ def _outside_info(tp, cores: int) -> dict | None:
                     for r in rows[:3]]}
 
 
+def _include_modules(tp, detectors) -> None:
+    """The stdlib modules the detectors declared, loaded once for the session.
+
+    A module that is not in this trace_processor is not fatal here: the
+    detector that wanted it fails on its own line, with its own name against
+    the reason, and the rest of the run is unaffected. `analyze` and
+    `calibrate` both load them: calibrate ran without, and once
+    `binder_txn` and `gc_pressure` read theirs (#514), every trace failed
+    them there and kept their thresholds where they were.
+    """
+    for module in sorted({m for d in detectors for m in d.modules}):
+        try:
+            tp.exec_script(f"INCLUDE PERFETTO MODULE {module};")
+        except Exception as e:
+            print(f"[!] module {module}: {e}", file=sys.stderr)
+
+
 def _spans_behind(tp, d, params: dict,
                   rows: list[dict]) -> list[tuple[int, int]] | None:
     """The main thread's time behind one detector's rows, from its `@intervals`.
@@ -2853,7 +2862,7 @@ def _spans_behind(tp, d, params: dict,
     sql = d.render_intervals(params)
     if sql is None:
         return None
-    _rows_table(tp, rows)
+    _rows_table(tp, rows, d.identity)
     return [(int(r["ts"]), int(r["dur"])) for r in tp.query(sql)
             if r.get("ts") is not None and (r.get("dur") or 0) > 0]
 
@@ -2875,7 +2884,7 @@ def _stacks_behind(tp, d, params: dict, rows: list[dict], package: str,
     sql = d.render_samples(params)
     if sql is None:
         return
-    _rows_table(tp, rows)
+    _rows_table(tp, rows, d.identity)
     behind: dict[Any, list[int | None]] = {}
     for r in tp.query(sql):
         c = r.get("callsite_id")
@@ -2891,20 +2900,29 @@ def _stacks_behind(tp, d, params: dict, rows: list[dict], package: str,
             row["detail"] = f"{row['detail']} · {words}" if row.get("detail") else words
 
 
-def _rows_table(tp, rows: list[dict]) -> None:
+def _rows_table(tp, rows: list[dict], identity: tuple[str, ...] = ()) -> None:
     """One detector's rows as `_rows`, for the queries after its first.
 
     `location`, `detail` and `state`, the column `runnable_starvation` names
-    a row by besides its thread, NULL on a row without one.
+    a row by besides its thread, NULL on a row without one; and every other
+    column the detector names its rows by: `binder_txn`'s and `gc_pressure`'s
+    `thread` (#514). Where the thread became a column of its own, `detail`
+    became evidence, and a row found its way back to its slices by the thread
+    or not at all.
 
     One statement at a time — `exec_script` splits on `;`, and a slice name is
     free to contain one.
     """
+    # A name that is not one, from a project's own detector, is left out
+    # rather than written into the statement.
+    extra = [c for c in identity
+             if c not in ("location", "detail", "state") and c.isidentifier()]
     tp.query("DROP TABLE IF EXISTS _rows")
     tp.query("CREATE TABLE _rows AS " + " UNION ALL ".join(
         f"SELECT {_sql_text(r.get('location'))} AS location, "
         f"{_sql_text(r.get('detail'))} AS detail, "
-        f"{_sql_text(r.get('state'))} AS state" for r in rows))
+        f"{_sql_text(r.get('state'))} AS state"
+        + "".join(f", {_sql_text(r.get(c))} AS {c}" for c in extra) for r in rows))
 
 
 def _sql_text(value) -> str:
@@ -5441,6 +5459,7 @@ def cmd_calibrate(args) -> int:
                 print(f"{trace}: {e}", file=sys.stderr)
                 return 2
             windows.append((bounds["ts_end"] - bounds["ts_start"]) / 1e6)
+            _include_modules(tp, detectors)
             for d in detectors:
                 try:
                     per_run[d.id].append(tp.query(d.render_open(overrides.get(d.id))))
@@ -5589,6 +5608,7 @@ def _calibrate_check(traces: list[str], tp_binary, cfg, measured: dict,
                 _setup_context(tp, cfg, procs[0]["upid"])
             except ConfigError:
                 return
+            _include_modules(tp, [measured[i] for i in moved])
             for det_id, after in list(moved.items()):
                 try:
                     runs[det_id].append(

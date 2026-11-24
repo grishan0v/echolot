@@ -222,6 +222,10 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
         "window": _window(before, after),
         "noise_floor": {"abs_ms": floor_ms, "ratio": floor_ratio},
         "confidence": stats.CONFIDENCE_PCT / 100,
+        # What a row's range has to clear for `holds` (#506): the floor, each
+        # row's in `shift.floor_ms`. A comparison without the field held its
+        # rows against zero.
+        "holds_against": "floor",
         "summary": {
             "moved": counts[GREW] + counts[SHRANK],
             "appeared": counts[APPEARED],
@@ -1407,6 +1411,18 @@ def _failed(d: dict | None) -> bool:
 
 # --- pairing rows across two reports ---------------------------------------
 
+# Detectors whose identity held `detail` until their evidence went there: the
+# column that names a row in its place, and how to read it out of an older
+# report's `detail`.
+_FROM_DETAIL: dict[str, tuple[str, Any]] = {
+    "runnable_starvation": ("state", lambda v: v.removeprefix("state ")),
+    # `main thread` or `background`, and the thread's name: `detail` held
+    # them as they are (#514).
+    "binder_txn": ("thread", lambda v: v),
+    "gc_pressure": ("thread", lambda v: v),
+}
+
+
 def _upgraded(d: dict, report: dict | None = None) -> dict:
     """A detector's block from an older report, read with the identity it has now.
 
@@ -1423,17 +1439,28 @@ def _upgraded(d: dict, report: dict | None = None) -> dict:
     of its own since. Paired on what both sides carry, an older report against
     a newer one would be paired on `location` alone, and a thread's `R` row
     would meet its `R+` row: the mistake `_match` exists to prevent. So the
-    older block gets its `state` read back out of `detail`.
+    older block gets its `state` read back out of `detail`. `binder_txn` and
+    `gc_pressure` moved the same way, to `thread`, when their `detail` began
+    to say who answered a call and what a collection freed (#514): an older
+    report's thread is read back the same way, and so are the rows it kept
+    under the bar.
     """
     d = _main_named(d, report)
     identity = identity_of(d)
-    if d.get("id") != "runnable_starvation" or "state" in identity \
-            or "detail" not in identity:
+    moved = _FROM_DETAIL.get(d.get("id"))
+    if moved is None or moved[0] in identity or "detail" not in identity:
         return d
-    rows = [{**row, "state": str(row.get("detail") or "").removeprefix("state ")}
-            for row in d.get("rows") or []]
-    return {**d, "identity": ["state" if c == "detail" else c for c in identity],
-            "rows": rows}
+    column, read = moved
+
+    def up(rows: list[dict]) -> list[dict]:
+        return [{**row, column: read(str(row.get("detail") or ""))} for row in rows]
+
+    out = {**d, "identity": [column if c == "detail" else c for c in identity],
+           "rows": up(d.get("rows") or [])}
+    below = d.get("below")
+    if isinstance(below, dict) and isinstance(below.get("rows"), list):
+        out["below"] = {**below, "rows": up(below["rows"])}
+    return out
 
 
 def _main_named(d: dict, report: dict | None) -> dict:
@@ -1632,6 +1659,7 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
     # all read from those.
     shares = _shares(rb, ra)
     b_vals, a_vals = _values(rb, metric, shares), _values(ra, metric, shares)
+    floor = 0.0
     if rb is None:
         change, delta, ratio = APPEARED, va or 0.0, None
     elif ra is None:
@@ -1650,7 +1678,7 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
         else:
             change = GREW if delta > 0 else SHRANK
 
-    shift = _shift(b_vals, a_vals, delta if rb and ra else 0.0)
+    shift = _shift(b_vals, a_vals, delta if rb and ra else 0.0, floor)
     row = {
         "location": loc,
         "detector": det_id,
@@ -1662,10 +1690,23 @@ def _row(det_id: str, identity: tuple[str, ...], rb: dict | None,
         "delta_ms": round(delta, 2) if delta is not None else None,
         "ratio": ratio,
         "shift": shift,
-        # Read off the rounded ends, so the verdict and the numbers printed
-        # beside it cannot disagree about which side of zero they are on.
+        # Past the floor, not past zero (#506). A comparison judges two
+        # hundred rows at once, and at 95% one in twenty that did not move
+        # lands on one side of zero by chance: three sets of fifteen cold
+        # starts of one build, each split seven against eight a hundred ways,
+        # held 4.0 rows a split that way, 3.0 of them past the floor and
+        # listed as moved. Asking
+        # the range to clear the floor that listed them took that to 0.5
+        # (1.3 five against five, from 5.8), while a row made twice as slow
+        # still held in 88 splits of a hundred, against 91. Correcting the
+        # 95% for the number of rows instead (Benjamini–Hochberg at 5%) took
+        # it to 0.1 and the doubled row to 59, and to none at all five a
+        # side: there the smallest p a row can reach, 0.008, is above what
+        # sixty rows at once ask for. Read off the rounded ends and floor,
+        # so the verdict and the numbers printed beside it cannot disagree.
         "holds": None if shift is None else (
-            shift["low_ms"] > 0 or shift["high_ms"] < 0),
+            shift["low_ms"] > shift["floor_ms"]
+            or shift["high_ms"] < -shift["floor_ms"]),
     }
     if detail is not None:
         row["detail"] = detail
@@ -1754,26 +1795,33 @@ def _face(row: dict | None, metric: str) -> dict[str, Any] | None:
 
 
 def _shift(b: list[float] | None, a: list[float] | None,
-           move: float) -> dict[str, float | int | None] | None:
+           move: float, floor: float = 0.0) -> dict[str, Any] | None:
     """The move with the range it lies in, and what these runs could resolve.
 
     `stats.shift` pairs every run after with every run before; see there for
-    why that replaced the ranges. `resolves_ms` is the smallest move of the
-    medians the two sets could call real, in the direction this one went,
-    and a move that does not hold gets `runs_needed`: about how many runs a
-    side would settle it, if the next ones stray as much as these did.
+    why that replaced the ranges. `floor_ms` is the floor the range has to
+    clear for the move to hold, the one that listed it. `resolves_ms` is how
+    far the two sets' strays reach, in the direction this move went: the
+    move holds when the medians moved further than the floor and that
+    together. A move that does not hold gets `runs_needed`, about how many
+    runs a side would settle it if the next ones stray as much as these did,
+    and `more_runs`, the fewest more on each side, which with unequal sides
+    may be the smaller one alone; null where more runs will not settle it.
 
     None where there is nothing to pair: a row on one side only, a side
     without per-run values, or too few runs to be 95% sure of anything.
     """
     if not b or not a:
         return None
-    out = stats.shift(b, a)
+    out: dict[str, Any] | None = stats.shift(b, a)
     if out is None:
         return None
+    out["floor_ms"] = round(floor, 2) + 0.0
     out["resolves_ms"] = stats.resolves(b, a, upward=move >= 0)
-    out["runs_needed"] = stats.runs_needed(len(b), len(a),
-                                           out["resolves_ms"], move)
+    out["runs_needed"] = stats.runs_needed(len(b), len(a), out["resolves_ms"],
+                                           move, out["floor_ms"])
+    out["more_runs"] = stats.more_runs(len(b), len(a), out["resolves_ms"],
+                                       move, out["floor_ms"])
     return out
 
 
@@ -1824,6 +1872,9 @@ def to_markdown(cmp: dict[str, Any]) -> str:
     out.append(
         f"Detectors fired: {len(s['fired_before'])} → {len(s['fired_after'])}"
     )
+    against = _against_line(cmp)
+    if against:
+        out.append(against)
     out.append("")
 
     for warning in cmp["warnings"]:
@@ -1851,7 +1902,8 @@ def to_markdown(cmp: dict[str, Any]) -> str:
             f"{_pct(cmp['noise_floor']['ratio'])}, whichever is larger. "
             f"± is the furthest a repeat got from the median. Holds gives the "
             f"range the move lies in, {stats.CONFIDENCE_PCT}% sure: yes when it "
-            f"stays on one side of zero._"
+            f"stays past that floor on one side, and a no whose range clears "
+            f"zero alone names the floor._"
         )
         out.append("")
         out.append(_table(moved))
@@ -1907,6 +1959,34 @@ def to_markdown(cmp: dict[str, Any]) -> str:
 def _pct(ratio: float) -> str:
     """A ratio as a percentage, rounded: `int()` printed 0.29 as 28%."""
     return f"{round(ratio * 100, 4):g}%"
+
+
+def _clears_zero(shift: dict[str, Any]) -> bool:
+    return shift["low_ms"] > 0 or shift["high_ms"] < 0
+
+
+def _against_line(cmp: dict[str, Any]) -> str | None:
+    """The line under the header that says Holds asks for the floor (#506).
+
+    How many listed rows hold, and how many more clear zero and no more:
+    those held before the floor was asked for, and on one build set against
+    itself they are most of what held. None when no listed row has a
+    verdict, or for a comparison written before the floor was asked for.
+    """
+    if cmp.get("holds_against") != "floor":
+        return None
+    judged = [r for r in [*cmp["rows"], *(cmp.get("markers") or [])]
+              if r["change"] in (GREW, SHRANK) and r.get("shift")
+              and r.get("holds") is not None]
+    if not judged:
+        return None
+    held = sum(1 for r in judged if r["holds"])
+    short = sum(1 for r in judged if not r["holds"] and _clears_zero(r["shift"]))
+    line = (f"Holds asks each range to clear the floor, not zero: "
+            f"{held} of {len(judged)} row(s) with a verdict do")
+    if short:
+        line += f", and {short} more that clear zero alone read no"
+    return line + "."
 
 
 def _silent_both(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
@@ -2052,18 +2132,44 @@ def _holds(r: dict[str, Any]) -> str:
     """The verdict first, then the range it was read from.
 
     The word is what a reader scanning the column needs; the range is what
-    tells "at least 12 ms slower" from "at least 800". A `no` adds what
-    "record another round" leaves out: about how many runs a side would
-    settle it — five more, or five hundred, which is a different answer.
+    tells "at least 12 ms slower" from "at least 800". A `no` whose range is
+    clear of zero names the floor it did not clear, so the two are not read
+    as disagreeing (#506). A `no` adds what "record another round" leaves
+    out: about how many runs would settle it — one more after, twenty a
+    side, or more than a round of runs can give, which are different answers.
     """
     shift = r.get("shift")
     if shift is None:
         return "—"
     word = "yes" if r["holds"] else "no"
     text = f"{word}, {shift['low_ms']:+.1f} … {shift['high_ms']:+.1f}"
-    if not r["holds"] and shift.get("runs_needed"):
-        text += f" · ~{shift['runs_needed']} runs a side"
-    return text
+    if r["holds"]:
+        return text
+    if shift.get("floor_ms") and _clears_zero(shift):
+        text += f" · floor {shift['floor_ms']:.1f}"
+    return text + _runs_text(shift)
+
+
+def _runs_text(shift: dict[str, Any]) -> str:
+    """How many more runs would settle a row that does not hold.
+
+    The smaller side alone when that is fewer runs in all; with fifteen
+    before and four after, a row that needs seven a side needs one more
+    after. A number past `stats.SETTLES_UP_TO` is no round of `collect`, and
+    is said as that rather than printed.
+    """
+    needed = shift.get("runs_needed")
+    if not needed:
+        return ""
+    more = shift.get("more_runs")
+    if more is None:
+        if "more_runs" in shift and needed > stats.SETTLES_UP_TO:
+            return " · more runs will not settle it"
+        return f" · ~{needed} runs a side"
+    sides = [side for side in ("before", "after") if more[side]]
+    if len(sides) == 1:
+        return f" · ~{more[sides[0]]} more {sides[0]}"
+    return f" · ~{needed} runs a side"
 
 
 def _band(face: dict | None, metric: str) -> str:

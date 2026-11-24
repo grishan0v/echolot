@@ -290,6 +290,59 @@ def test_the_second_column_reaches_the_table() -> None:
         check(f"and it names {state}", f"| {state} |" in text, text)
 
 
+def test_an_older_report_s_thread_is_read_out_of_its_detail() -> None:
+    """`binder_txn` and `gc_pressure` named a row by `detail` until it began
+    to carry evidence: who answered a call, what a collection freed (#514).
+    The thread is `thread` since. An older report against a newer one would
+    be paired on `location` alone, and `gc_pressure`'s allocation wait on the
+    main thread would meet the same wait on another thread."""
+    def waits(identity: list[str], main: dict, other: dict) -> dict:
+        return report([det("gc_pressure", [main, other], identity=identity)])
+
+    before = waits(["location", "detail"],
+                   row("waitWhileAllocatingLocked", 100.0, metric="total_ms",
+                       detail="m.example.app"),
+                   row("waitWhileAllocatingLocked", 30.0, metric="total_ms",
+                       detail="RenderThread"))
+    main = row("waitWhileAllocatingLocked", 105.0, metric="total_ms",
+               detail="during Background concurrent copying GC 90%")
+    other = row("waitWhileAllocatingLocked", 300.0, metric="total_ms",
+                detail="during Background concurrent copying GC 40%")
+    main["thread"], other["thread"] = "m.example.app", "RenderThread"
+    after = waits(["location", "thread"], main, other)
+    cmp = compare(before, after)
+    by_thread = {r["detail"]: r for r in cmp["rows"]}
+
+    check("each thread's row is paired with its own",
+          sorted(by_thread) == ["thread RenderThread", "thread m.example.app"],
+          str(sorted(by_thread)))
+    check("the one that grew grew by its own number",
+          by_thread["thread RenderThread"]["change"] == "grew"
+          and by_thread["thread RenderThread"]["delta_ms"] == 270.0,
+          str(by_thread["thread RenderThread"]))
+    check("the main thread's held still",
+          by_thread["thread m.example.app"]["change"] == "steady",
+          str(by_thread["thread m.example.app"]))
+
+    calls = det("binder_txn", [row("m.example.app", 40.0, metric="total_ms",
+                                   detail="main thread")],
+                identity=["location", "detail"])
+    calls["below"] = {"floor_ms": 1.0, "rows": [
+        {"location": "OkHttp", "detail": "background", "count": 3, "total_ms": 9.0}]}
+    newer = row("m.example.app", 41.0, metric="total_ms",
+                detail="main thread · to system_server 94%")
+    newer["thread"] = "main thread"
+    gone = row("OkHttp", 60.0, metric="total_ms", detail="background · to system_server 100%")
+    gone["thread"] = "background"
+    cmp = compare(report([calls]),
+                  report([det("binder_txn", [newer, gone], identity=["location", "thread"])]))
+    by_loc = {r["location"]: r for r in cmp["rows"]}
+    check("binder_txn's main thread row meets its own",
+          by_loc["m.example.app"]["change"] == "steady", str(by_loc["m.example.app"]))
+    check("and a row kept under the bar is found there by its thread",
+          by_loc["OkHttp"]["change"] == "grew", str(by_loc["OkHttp"]))
+
+
 def test_a_row_that_only_one_side_has_is_still_new() -> None:
     """The pairing must not go the other way and match too much.
 
@@ -510,18 +563,23 @@ def test_resolves_is_where_the_verdict_turns() -> None:
 
     A run after minus a run before is the move of the medians plus what the
     two strayed from their own medians, so the interval is the strays' own,
-    moved along. A move of the medians just past `resolves` holds, and one
-    just short of it does not, whatever the runs.
+    moved along. It has to clear the floor (#506), so a move of the medians
+    just past the floor and `resolves` together holds, and one just short of
+    them does not, whatever the runs.
     """
     before = [16.3, 38.0, 47.3, 55.1, 78.3]
     shape = [33.9, 95.2, 121.9, 140.3, 209.9]
     reach = stats.resolves(before, shape)
+    floor = max(compare_mod.FLOOR_MS, compare_mod.FLOOR_RATIO * median(before))
     gap = median(shape) - median(before)
     for past, want in ((0.05, True), (-0.05, False)):
-        after = [y + reach + past - gap for y in shape]
+        after = [y + floor + reach + past - gap for y in shape]
         r = one_row(before, after)["rows"][0]
-        check(f"a move {past:+} ms from {reach} ms {'holds' if want else 'does not'}",
+        check(f"a move {past:+} ms from {floor} + {reach} ms "
+              f"{'holds' if want else 'does not'}",
               r["holds"] is want, str(r["shift"]))
+        check("and the floor it was held against is the row's",
+              r["shift"]["floor_ms"] == floor, str(r["shift"]))
 
 
 def test_one_set_resolves_the_same_both_ways() -> None:
@@ -550,6 +608,54 @@ def test_runs_needed_goes_by_the_square_root() -> None:
           stats.runs_needed(5, 5, 10.0, 12.0) is None)
     check("a move of nothing is never settled",
           stats.runs_needed(5, 5, 10.0, 0.0) is None)
+    check("what the strays may take is the room above the floor",
+          stats.runs_needed(5, 5, 10.0, 10.0, floor=5.0) == 20)
+    check("and a move no larger than the floor is never settled",
+          stats.runs_needed(5, 5, 1.0, 5.0, floor=5.0) is None)
+
+
+def test_more_runs_goes_to_the_smaller_side_when_that_is_fewer() -> None:
+    """Fifteen before and four after (#506).
+
+    "~N runs a side" read "~7 a side" where one more run after would do,
+    "~20 a side" where that meant thirty after, and a number in the
+    millions for a move far under what the runs resolve.
+    """
+    equal = 2 * 15 * 4 / 19
+    seven = 10.0 * math.sqrt(equal / 6.9)   # a move that needs 6.9 a side
+    check("~7 a side is one more after, with the fifteen before",
+          stats.runs_needed(15, 4, 10.0, seven) == 7
+          and stats.more_runs(15, 4, 10.0, seven) == {"before": 0, "after": 1},
+          str(stats.more_runs(15, 4, 10.0, seven)))
+    twenty = 10.0 * math.sqrt(equal / 19.9)
+    check("~20 a side is fewer runs in all than thirty after",
+          stats.more_runs(15, 4, 10.0, twenty) == {"before": 5, "after": 16},
+          str(stats.more_runs(15, 4, 10.0, twenty)))
+    check("and the same holds with the sides the other way",
+          stats.more_runs(4, 15, 10.0, seven) == {"before": 1, "after": 0},
+          str(stats.more_runs(4, 15, 10.0, seven)))
+    tiny = 10.0 * math.sqrt(equal / 1_595_306)
+    check("past a hundred a side there is no count",
+          stats.runs_needed(15, 4, 10.0, tiny) > stats.SETTLES_UP_TO
+          and stats.more_runs(15, 4, 10.0, tiny) is None)
+    check("and a move already resolved needs nothing",
+          stats.more_runs(15, 4, 10.0, 12.0) is None)
+
+
+def test_the_cell_says_how_many_more_runs_and_when_none_will_do() -> None:
+    """The Holds cell, from `more_runs`: one side, both, or neither."""
+    cell = compare_mod._holds
+    base = {"low_ms": -5.0, "high_ms": 40.0, "floor_ms": 5.0}
+    one = {"holds": False, "shift": {**base, "runs_needed": 7,
+                                     "more_runs": {"before": 0, "after": 1}}}
+    check("one more after", cell(one) == "no, -5.0 … +40.0 · ~1 more after", cell(one))
+    both = {"holds": False, "shift": {**base, "runs_needed": 20,
+                                      "more_runs": {"before": 5, "after": 16}}}
+    check("twenty a side", cell(both) == "no, -5.0 … +40.0 · ~20 runs a side", cell(both))
+    never = {"holds": False, "shift": {**base, "runs_needed": 1_595_306,
+                                       "more_runs": None}}
+    check("and a move more runs will not settle",
+          cell(never) == "no, -5.0 … +40.0 · more runs will not settle it", cell(never))
 
 
 def test_a_move_that_does_not_hold_says_how_many_runs() -> None:
@@ -560,11 +666,13 @@ def test_a_move_that_does_not_hold_says_how_many_runs() -> None:
     check("the move does not hold", r["holds"] is False, str(r))
     check("these runs resolve 88 ms upward", r["shift"]["resolves_ms"] == 88.0,
           str(r["shift"]))
-    check("so 74.6 needs about seven a side", r["shift"]["runs_needed"] == 7,
+    check("so 74.6, 69.6 past the 5 ms floor, needs about eight a side",
+          r["shift"]["runs_needed"] == 8, str(r["shift"]))
+    check("on both sides alike", r["shift"]["more_runs"] == {"before": 3, "after": 3},
           str(r["shift"]))
     text = compare_mod.to_markdown(cmp)
     check("and the cell says so",
-          "| no, -13.4 … +162.6 · ~7 runs a side |" in text, text)
+          "| no, -13.4 … +162.6 · ~8 runs a side |" in text, text)
 
     held = one_row([10.4, 11.3, 12.1, 13.0, 14.0],
                    [843.4, 861.0, 883.4, 897.2, 923.4])["rows"][0]

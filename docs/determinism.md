@@ -37,7 +37,7 @@ echolot doctor
   ok    the right process is picked, the foreign one is dropped
   ...
 
-All 221 checks passed — the pipeline computes correctly.
+All 226 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
@@ -51,7 +51,7 @@ again.
 ```
 echolot 0.18.0 · trace_processor v59.1 · perfetto 0.59.1 · python 3.14.7
 layer: current (10 files)
-self-check: 221 of 221 passed
+self-check: 226 of 226 passed
 ```
 
 Exit code 0/1, and 2 on a first run that could not download trace_processor
@@ -192,7 +192,7 @@ fixture only.
 
 ## What the detectors were checked against
 
-The detectors were validated against a synthetic trace — 221 checks inside
+The detectors were validated against a synthetic trace — 226 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
@@ -314,6 +314,23 @@ raise the pin → echolot doctor → the checks either pass
 The TP version is also written into `report.json`. When numbers diverge between
 two reports, the first question is whether anything underneath changed, and the
 field answers it immediately instead of after an hour of digging.
+
+### Notice before the bump
+
+The fixture makes a bump reviewable. It does not say when one is due, or what
+it will cost before somebody makes it. `.github/workflows/perfetto-canary.yml`
+does that every Tuesday. It installs echolot as CI does, replaces the pinned
+perfetto with the newest one on PyPI — and with it the `trace_processor` that
+package's manifest names — and runs three things there: `doctor`, the
+fixture's report compared value by value with the one the pin writes, and the
+whole test suite. The run's summary puts the two versions side by side, names
+the checks and tests that fail, and lists the report values that moved.
+
+A red run is the notice; GitHub mails it to whoever last edited the schedule.
+The pin itself is not touched: the canary opens no pull request and proposes
+nothing. Started by hand (Actions → perfetto-canary → Run workflow), it takes
+a version to try instead of the newest — a version known to differ is how to
+see that it still names what fails.
 
 ### Your own binary
 

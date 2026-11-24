@@ -472,6 +472,8 @@ def test_the_two_were_not_recorded_alike():
     check("said once, in a person's words", got["unlike"]["title"] == "Not recorded alike." and got["unlike"]["text"]
           == "Besides the app, 2 things differed between the two: the config changed; the app was compiled "
           "differently. A time can move for that reason alone. The technical comparison says more.", got["unlike"])
+    check("with the warnings it says, by id, for a reader that is not a person",
+          got["unlike"]["warnings"] == ["config", "compile"], got["unlike"])
     alike = {n["id"] for n in reading(report([]), report([]))["notes"]}
     check("and not at all for two that were", "unlike" not in alike, alike)
 
