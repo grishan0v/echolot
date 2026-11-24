@@ -588,9 +588,16 @@ def _round(n: int, report: dict[str, Any] | None, opened: Any, cited: _Cited | N
     ctx = _ctx(report)
     runs = _runs(report)
     facts = []
-    if ctx.window_ms:
-        facts.append(f"the {ctx.noun} takes {plain.hum(ctx.window_ms)}")
-    facts.append(f"{_count(runs, ctx.noun, ctx.plural)} recorded")
+    # A window whose anchor missed, in some recordings or in all, or that
+    # never closed, is not the scenario's: the report page gives it no time
+    # (#557), and nor does its round here. What was recorded is counted with
+    # the scenario's own word, as for a round with no miss.
+    kind, kinds = ctx.kind, ctx.kind + ("es" if ctx.kind == "launch" else "s")
+    if plain.window_warning({"window": _dict(report.get("window"))}):
+        facts.append(f"no measured {kind}")
+    elif ctx.window_ms:
+        facts.append(f"the {kind} takes {plain.hum(ctx.window_ms)}")
+    facts.append(f"{_count(runs, kind, kinds)} recorded")
     summary = _dict(report.get("summary"))
     ran, fired = summary.get("detectors_run"), summary.get("detectors_fired")
     if isinstance(ran, int) and isinstance(fired, int) and ran:
