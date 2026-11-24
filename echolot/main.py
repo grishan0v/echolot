@@ -120,12 +120,12 @@ def _probe_config(args) -> Config | None:
     pin. `analyze` stops on the same error; a look at a trace has no reason
     to.
     """
-    named = getattr(args, "config", None)
-    path = named or "echolot.yml"
-    if not Path(path).exists():
-        if named:
-            raise ConfigError(f"-c {named}: no such file")
+    found = _where(args)
+    if not found.set_up:
+        if found.named:
+            raise ConfigError(f"-c {args.config}: no such file")
         return None
+    path = str(found.config) if found.found == "above" else (args.config or "echolot.yml")
     try:
         return Config.load(path)
     except ConfigError as e:
@@ -1695,6 +1695,7 @@ def cmd_names(args) -> int:
     THIS device names GC, locks and binder — and whether the detector masks
     land on those names.
     """
+    _resolved_config(args)
     overrides, tp_bin, prefix, process, source, off = _names_setup(args)
     try:
         session = TraceSession(args.trace, tp_bin, cut_ok=True)
@@ -2807,17 +2808,20 @@ def cmd_anr(args) -> int:
     # The repository is optional on purpose. A report read anywhere still
     # answers what froze; pointed at a checkout it also says where to open.
     code = None
-    root = Path(args.root).resolve()
+    found = _where(args)
+    root = found.root
     if not root.is_dir():
         # A mistyped --root used to drop the placement without a word; the
-        # default `.` is always there, so this is a path typed by hand.
+        # default, the project's checkout, is there or is said by `analyze`
+        # the same way, so this is a path typed by hand.
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
     # Before anything reads the threads: which frames are the app's, which
     # thread is idle and where a frame is in the checkout all go by names,
     # and a minified build's are R8's.
     mapping = named or _config_mapping(
-        root / "echolot.yml", hint="; --mapping names the build's mapping.txt")
+        found.config if found.set_up and args.root is None else root / "echolot.yml",
+        hint="; --mapping names the build's mapping.txt")
     if mapping is not None:
         anr_mod.retrace(report, mapping)
     # A directory with no sources in it is no checkout, and costs the
@@ -2883,15 +2887,17 @@ def cmd_domains(args) -> int:
     """
     from . import domains as domains_mod
 
-    root = Path(args.root).resolve()
+    root = _where(args).root
     if not root.is_dir():
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
 
     cfg = None
-    if args.config:
+    found = _where(args)
+    config = args.config if found.named else (str(found.config) if found.set_up else None)
+    if config:
         try:
-            cfg = Config.load(args.config)
+            cfg = Config.load(config)
         except ConfigError as e:
             print(f"config error: {e}", file=sys.stderr)
             return 2
@@ -2940,21 +2946,29 @@ def cmd_mark(args) -> int:
     """
     from . import mark as mark_mod
 
-    root = _mark_root(args)
+    # The project `main` resolved and its checkout: `--root`, else
+    # `project.root`, else the config's folder, as for `analyze` (#830).
+    # From `app/`, mark read no config and put markers outside
+    # `instrumentation.allowed`, and `--remove` from a sibling folder missed
+    # the markers `hunt` there counted (#837).
+    found = _where(args)
+    root = found.root
     if not root.is_dir():
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
     package, allowed, prefix = None, [], mark_mod.DEFAULT_PREFIX
     # `instrumentation.allowed` is a guard, and an empty one allows every
-    # place. So a config named and not there is refused, the default one is
-    # looked for under --root as well as here (mark is pointed at the app
-    # from elsewhere), and one that does not load stops the run: a mistake
-    # in `detectors:` used to lift a guard set under `instrumentation:`.
-    config = _mark_config(args, root)
-    if config is None and args.config is not None:
+    # place. So a config named and not there is refused, outside any project
+    # the one under --root is read (mark is pointed at the app from
+    # elsewhere), and one that does not load stops the run: a mistake in
+    # `detectors:` used to lift a guard set under `instrumentation:`.
+    if found.named and not found.set_up:
         print(f"config not found: {args.config}", file=sys.stderr)
         recorder.failed(f"config not found: {args.config}")
         return 2
+    config = str(found.config) if found.set_up else None
+    if config is None and (root / "echolot.yml").is_file():
+        config = str(root / "echolot.yml")
     cfg: Config | None = None
     if config is not None:
         try:
@@ -2969,8 +2983,9 @@ def cmd_mark(args) -> int:
                 recorder.failed(f"{config} does not load: {e}")
                 return 2
     elif not args.remove:
-        print("[i] no echolot.yml here or under --root, so instrumentation.allowed "
-              "is not applied: every place counts as allowed", file=sys.stderr)
+        print("[i] no echolot.yml here, in a folder above it or under --root, so "
+              "instrumentation.allowed is not applied: every place counts as allowed",
+              file=sys.stderr)
     # The project's markers, as every other command reads them (#829): the
     # list in the form the rule compares, `./app/src/main` as `app/src/main`.
     markers = Markers(root, prefix, allowed)
@@ -3190,32 +3205,6 @@ def _after_apply(cfg: Config | None, root: Path) -> str:
             f"build has none of these markers.")
 
 
-def _mark_root(args) -> Path:
-    """Where `mark` looks: `--root`, else the folder of the config `-c` names,
-    else here.
-
-    `-c` alone picked the config and left the root here: `mark -c
-    ../echolot.yml --remove` from a subfolder found no marker, while `hunt
-    -c ../echolot.yml` counted them in the config's folder and said `mark
-    --remove` would take them out (#723).
-    """
-    if args.root is not None:
-        return Path(args.root).resolve()
-    if args.config is not None and Path(args.config).is_file():
-        return Path(args.config).resolve().parent
-    return Path.cwd().resolve()
-
-
-def _mark_config(args, root: Path) -> str | None:
-    """The config `mark` reads: the one `-c` names, else `echolot.yml` here or under --root."""
-    if args.config is not None:
-        return args.config if Path(args.config).is_file() else None
-    for place in (Path("echolot.yml"), root / "echolot.yml"):
-        if place.is_file():
-            return str(place)
-    return None
-
-
 def cmd_collect(args) -> int:
     """N repeats of one scenario.
 
@@ -3224,6 +3213,7 @@ def cmd_collect(args) -> int:
     stand on the distribution across repeats. Below three there is hardly any
     point.
     """
+    _resolved_config(args)
     from . import runner
 
     # The runner section and the process are read here, inside the same
@@ -3727,10 +3717,18 @@ def cmd_init(args) -> int:
     writes goes into the repository's own ignore file, and no file git
     tracks is written. See `exclude.py`.
     """
-    target = Path(args.into)
+    # The project `main` resolved: `--into`, else the one whose echolot.yml
+    # is here or above. From `app/` of a project already set up, init put a
+    # second layer into `app/` and said to write a second echolot.yml there
+    # (#836).
+    found = _where(args)
+    target = found.folder
     if not target.is_dir():
-        print(f"no such directory: {target}", file=sys.stderr)
+        print(f"no such directory: {args.into or target}", file=sys.stderr)
         return 2
+    if found.found == "above":
+        print(f"[i] the project is {target}, where its echolot.yml is: the layer goes "
+              f"there — --into names another folder", file=sys.stderr)
 
     from . import hosts as hosts_mod
 
@@ -4033,6 +4031,7 @@ def cmd_calibrate(args) -> int:
     section and a human looks at the numbers and decides. Thresholds define
     what counts as normal, and that decision is not handed to a script.
     """
+    _resolved_config(args)
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
     except ConfigError as e:
@@ -4509,6 +4508,7 @@ def cmd_doctor(args) -> int:
     The trace_processor it checks is the one `analyze` would run from here:
     the flag, then `toolchain.tp_binary` from the config, then the pin.
     """
+    _resolved_config(args)
     import platform as py_platform
 
     if _refused_without_asserts():
@@ -4558,11 +4558,11 @@ def cmd_doctor(args) -> int:
     # "there is no runner yet" while the binary had one went unnoticed for a
     # whole session. Not a check that can fail: a project may have edited its
     # copy on purpose.
-    verdict = layer.print_status(Path.cwd())
+    verdict = layer.print_status(_where(args).folder)
     recorder.note(layer=verdict)
     # Right before the self-check, which is what the sandbox refuses first:
     # whether a rule lets echolot out, and whether Codex reads it here.
-    said = codex.print_status(Path.cwd(), layer.hosts.keys(Path.cwd()))
+    said = codex.print_status(_where(args).folder, layer.hosts.keys(_where(args).folder))
     if said:
         recorder.note(codex=said)
     # Where Cursor has a copy of the plugin from another release (#399). Not
@@ -4664,7 +4664,7 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
     print(f"echolot {recorder.version()} · trace_processor {tp}{src} · "
           f"perfetto {info.get('perfetto_package') or 'unknown'} · "
           f"python {py_platform.python_version()}")
-    here = project or Path.cwd()
+    here = project or _where(args).folder
     verdict, line = layer.one_line(here)
     recorder.note(layer=verdict)
     print(line)
@@ -4725,7 +4725,7 @@ def cmd_scan(args) -> int:
     """
     from . import scan as scan_mod
 
-    root = Path(args.root).resolve()
+    root = _where(args).root
     if not root.is_dir():
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
@@ -4868,6 +4868,7 @@ def _report_cmd(path: str | None) -> str:
 def cmd_explain(args) -> int:
     """One detector in words, with the values this project runs it on; or the
     list of them, a line each (#494). See explain.py."""
+    _resolved_config(args)
     from . import explain as explain_mod
 
     detectors = load_detectors(DETECTOR_DIR)
@@ -5223,11 +5224,12 @@ def build_parser() -> argparse.ArgumentParser:
                     "line in .echolot/log/runs.jsonl under the working "
                     "directory.")
     an_r.add_argument("report", help="the report file")
-    an_r.add_argument("--root", default=".",
+    an_r.add_argument("--root", default=None,
                       help="repository root, to place the frames in files and "
                            "tell the app's own code from its libraries by the "
-                           "packages its sources declare (default: the current "
-                           "directory)")
+                           "packages its sources declare (default: the project's "
+                           "checkout: project.root, else the folder of its "
+                           "echolot.yml, else here)")
     an_r.add_argument("--mapping", metavar="MAPPING",
                       help="the R8 mapping.txt of the build that froze, to name "
                            "back the frames R8 renamed (default: project.mapping "
@@ -5244,7 +5246,8 @@ def build_parser() -> argparse.ArgumentParser:
                           "With -c, it also lists the config's own `domains:` entries "
                           "that no string of the code holds. Reads no trace; writes "
                           "only its own line in .echolot/log/runs.jsonl.")
-    dom.add_argument("--root", default=".", help="repository root (default: the current directory)")
+    dom.add_argument("--root", default=None, help="repository root (default: the project's "
+                     "checkout: project.root, else the folder of its echolot.yml, else here)")
     dom.add_argument("-c", "--config", default=None,
                      help="an echolot.yml whose `domains:` to hold against the code")
     dom.add_argument("--top", type=int, default=12,
@@ -5305,7 +5308,9 @@ def build_parser() -> argparse.ArgumentParser:
                     "layer. Later: brings untouched files up to date, keeps the "
                     "ones you edited, runs the environment check, and says what "
                     "to do next.")
-    ini.add_argument("--into", default=".", help="Android project root")
+    ini.add_argument("--into", default=None,
+                     help="Android project root (default: the one whose echolot.yml is "
+                          "here or in a folder above, else here)")
     # `--all`, and `--force` as the older spelling. The flag brings every
     # file of the layer up to date, the ones this project edited included —
     # they are echolot's copies, under the project's git. Named for what it
@@ -5528,7 +5533,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "the devices attached — and an echolot.yml to start from, every "
                          "value saying where it came from. Writes only its own line in "
                          ".echolot/log/runs.jsonl under the working directory.")
-    sc.add_argument("--root", default=".", help="repository root (default: the current directory)")
+    sc.add_argument("--root", default=None, help="repository root (default: the project's "
+                    "checkout: project.root, else the folder of its echolot.yml, else here)")
     sc.add_argument("--no-devices", action="store_true", help="do not ask adb")
     sc.add_argument("--json", action="store_true", help="the facts as json")
     sc.set_defaults(func=cmd_scan)

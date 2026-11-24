@@ -91,9 +91,6 @@ def _argv(name: str, parser: argparse.ArgumentParser, config: str, root: str,
     return argv
 
 
-# `--root` that defaults to the working directory, until the command moves
-# onto the project (#830's later steps).
-ROOT_IS_HERE = {"domains"}
 
 
 def test_every_command_that_takes_c_resolves_one_project(tree: Path) -> None:
@@ -111,7 +108,7 @@ def test_every_command_that_takes_c_resolves_one_project(tree: Path) -> None:
                 continue
             args = parser.parse_args(argv)
             got = project_mod.resolve(args, here=tree / here)
-            want_root = tree / (here if name in ROOT_IS_HERE and root == "-" else checkout)
+            want_root = tree / checkout
             check(f"{name} from {here} with -c {config} --root {root}",
                   (got.folder, got.config, got.found, got.root)
                   == ((tree / folder).resolve(), (tree / cfg).resolve(), found,
@@ -242,3 +239,18 @@ def test_analyze_from_a_build_folder_reads_the_project_s_config(tree: Path, monk
     err = capsys.readouterr().err
     check("the config above is read", code != 0 and "config not found" not in err
           and f"config: {(tree / 'proj/echolot.yml').resolve()}" in err, err)
+
+
+def test_init_from_a_subfolder_installs_into_the_project(tree: Path, monkeypatch,
+                                                         capsys) -> None:
+    """#836: from `app/` of a project already set up, the layer goes into the
+    project, and nothing is written under `app/`."""
+    monkeypatch.chdir(tree / "proj/app")
+    with recorder.isolated():
+        code = main(["init", "--no-doctor", "--no-input", "--for", "claude"])
+    err = capsys.readouterr().err
+    check("installed", code == 0, err)
+    check("into the project", (tree / "proj/.claude").is_dir()
+          and "the layer goes there" in err, err)
+    check("and nothing under app/", not (tree / "proj/app/.claude").exists()
+          and not (tree / "proj/app/.gitignore").exists())
