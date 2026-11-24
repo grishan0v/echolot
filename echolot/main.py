@@ -226,6 +226,9 @@ def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
             # was first drawn. An async section has no thread, and the
             # column says so rather than leaving the cell blank.
             _anchor_candidates(tp, upid)
+
+            print("\n## Start candidates (Android's own events a journey begins with)\n")
+            _show_start_candidates(tp, upid)
         else:
             # The table alone, and nothing said, read as all probe does
             # (#515): the threads and the candidates need the app's name.
@@ -292,6 +295,109 @@ def _anchor_candidates(tp, upid: int) -> None:
         print("\nA `*` stands for a number that differs in every recording: write the "
               "name as shown, a glob. One that matches a slice of every frame closes "
               "the window at the first such slice after it opens.")
+
+
+# The sections Android writes itself, on the app's main thread, when a
+# journey begins (#615). A tap reaches the window as `deliverInputEvent`, an
+# intent reaches a running activity as `activityNewIntent`, a new screen is
+# `activityStart`, a cold start is `bindApplication`. Each is a few
+# milliseconds long, `bindApplication` a few hundred, and a recording holds
+# seconds of other work: none of them reached the longest slices. Setup had
+# nothing to offer for a journey's start, the human answered "none", and the
+# window opened at the process's first slice, up to 614 ms before the tap.
+#
+# The first column is what `scenario.start` takes. An input event's name
+# carries the event's own numbers (`deliverInputEvent src=0x1002
+# eventTimeNano=… id=0x…`), and is offered as its prefix and a `*`; the
+# others are named alike in every recording. A fragment or a navigation
+# library writes nothing of the kind: its start is the tap or the intent
+# that led to it.
+START_EVENTS = (
+    ("deliverInputEvent*", "input reached a window: a tap, a key"),
+    ("activityNewIntent", "an intent reached an activity already running"),
+    ("activityPause", "the activity in front paused, for another one or the background"),
+    ("activityStart", "an activity was created"),
+    ("activityRestart", "an activity was recreated: a rotation, a new configuration"),
+    ("activityResume", "an activity came to the front"),
+    ("bindApplication", "the process started: a cold start"),
+)
+
+
+def _start_candidates(tp, upid: int) -> tuple[list[dict], float | None]:
+    """The START_EVENTS this process wrote, earliest first, and where the
+    window opens without a start: the process's first thread slice.
+
+    Each row is what `analyze` would do with that `start`: the first slice
+    of this one process, a thread's or an async section, whose name the glob
+    matches, as `_win_start` in context.sql reads it — so `first_at_ms`, from
+    the start of the trace, is where the window would open. One process, as
+    probe takes it: a macrobenchmark's runner binds an application and starts
+    an activity of its own, and `analyze` never sees either (#727).
+
+    Ordered by that time rather than by length. The window opens at the
+    first match, and the earliest of these is where the journey began: the
+    tap before the activity it opens, the intent before the resume.
+    """
+    globs = ", ".join(f"('{sql_value(g)}')" for g, _ in START_EVENTS)
+    rows = tp.query(" ".join(f"""
+        WITH g(start) AS (VALUES {globs}),
+        a AS (
+            SELECT s.ts AS ts, s.name AS name,
+                   CASE WHEN t.tid = p.pid THEN 'main' ELSE t.name END AS thread
+            FROM slice s
+            JOIN thread_track tt ON s.track_id = tt.id
+            JOIN thread t ON tt.utid = t.utid
+            JOIN process p ON t.upid = p.upid
+            WHERE t.upid = {upid}
+            UNION ALL
+            SELECT s.ts, s.name, '{ASYNC_THREAD}'
+            FROM slice s
+            JOIN process_track pt ON s.track_id = pt.id
+            WHERE pt.upid = {upid}
+              AND pt.type = '{ASYNC_TRACK}'
+        )
+        SELECT start, thread, n,
+               ts - (SELECT start_ts FROM trace_bounds) AS at
+        FROM (
+            SELECT g.start AS start, a.ts AS ts, a.thread AS thread,
+                   ROW_NUMBER() OVER (PARTITION BY g.start ORDER BY a.ts) AS k,
+                   COUNT(*) OVER (PARTITION BY g.start) AS n
+            FROM g JOIN a ON a.name GLOB g.start
+        )
+        WHERE k = 1
+        ORDER BY ts, start
+    """.split()))
+    first = tp.query(" ".join(f"""
+        SELECT MIN(s.ts) - (SELECT start_ts FROM trace_bounds) AS at
+        FROM slice s
+        JOIN thread_track tt ON s.track_id = tt.id
+        JOIN thread t ON tt.utid = t.utid
+        WHERE t.upid = {upid}
+    """.split()))
+    what = dict(START_EVENTS)
+    found = [{"start": r["start"], "event": what[r["start"]], "thread": r["thread"],
+              "first_at_ms": round(r["at"] / 1e6, 1), "n": r["n"]} for r in rows]
+    at = first[0]["at"] if first else None
+    return found, (None if at is None else round(at / 1e6, 1))
+
+
+def _show_start_candidates(tp, upid: int) -> None:
+    """The section `probe` prints from `_start_candidates`."""
+    found, first = _start_candidates(tp, upid)
+    if not found:
+        print("None of the events a journey begins with is in this process. They "
+              "need the `am` and `view` atrace categories, which `collect` records; "
+              "`echolot names <trace> --grep <word>` finds a section of the app's "
+              "own to start at.")
+    else:
+        table.show(found)
+        print("\nAndroid writes these in every app. Write the first column as "
+              "`start:` — `analyze` opens the window at its first occurrence, "
+              "`first_at_ms` from the start of the trace; `n` counts them all. "
+              "The earliest is usually where the journey began.")
+    if first is not None:
+        print(f"Without a `start:`, the window opens at the process's first slice, "
+              f"at {first} ms.")
 
 
 def _tp_binary(args, cfg: Config | None = None) -> str | None:

@@ -53,6 +53,9 @@ PLATFORM = (
     "perform[A-Z]*:*",           # performCreate:<class> and the rest, Android 12 on
     "reportFullyDrawn*",
     "launching: *", "launchingActivity#*",   # the launch as system_server records it
+    # ViewRootImpl: an input event reaching the window, the start `probe`
+    # offers for a tap (#615).
+    "deliverInputEvent*",
     # The frame.
     "Choreographer#*", "traversal", "measure", "layout", "draw",
     "Record View#draw()", "DrawFrame*", "animation", "input", "inflate",

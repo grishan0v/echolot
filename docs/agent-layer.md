@@ -858,7 +858,9 @@ its scroll traces were recorded by hand outside `collect` (#539). When the
 words fit none, the hunt proposes a scenario of its own before anything is
 recorded. `/echolot-setup` adds one to a config that has one without starting
 over: the scenario there moves under `scenarios:` as it was, and the new one
-is probed and anchored with the human the way the first was. A journey a
+is probed and anchored with the human the way the first was — its start
+from the probe's start candidates, the tap or the intent a command's
+journey begins with. A journey a
 script paces is a `command` runner that drives the screen with
 `adb shell input swipe` (400 ms or more a swipe: a shorter one lands as a tap
 on a loaded phone), `reset_policy: none`, no anchors so the whole recording is

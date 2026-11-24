@@ -246,6 +246,54 @@ def _(report):
         ("renamed", "end", "near", (("list_shown", "app/src/main/java/Marks.kt:1"),))], notes
 
 
+@check("probe offers what a journey begins with, where analyze opens the window with it")
+def _(report):
+    """A journey a command drives begins with a tap or an intent, a few
+    milliseconds of the platform's own work that no list of the longest
+    slices reaches. Setup had nothing to offer for its start, and the window
+    opened at the process's first slice, up to 614 ms before the tap (#615).
+
+    `fixture.journey` is such a recording: the tap at 650 ms, the activities
+    after it, and a benchmark runner that the mask matches too and that binds
+    an application of its own. The candidates are the app's alone, the
+    earliest first, and each opens `analyze`'s window at the time probe
+    prints for it — the input event's async span, which begins before the
+    main thread's section of the same name, included.
+    """
+    from .config import Config
+    from .analyze import _resolve_process, _setup_context
+    from .main import _start_candidates
+    from .tp import TraceSession
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "journey.perfetto-trace"
+        trace.write_bytes(fixture.journey())
+        with TraceSession(trace, _binary) as tp:
+            upid = _resolve_process(tp, "com.example.app*", str(trace))[0]["upid"]
+            found, first = _start_candidates(tp, upid)
+            began = tp.query("SELECT start_ts FROM trace_bounds")[0]["start_ts"]
+            opened = {}
+            for row in found:
+                scenario = {"name": "journey", "start": {"name": row["start"]},
+                            "end": {"name": fixture.JOURNEY_END}}
+                bounds = _setup_context(tp, Config({**FIXTURE_CONFIG, "scenario": scenario}), upid)
+                opened[row["start"]] = round((bounds["ts_start"] - began) / 1e6, 1)
+    starts = [r["start"] for r in found]
+    assert starts == ["deliverInputEvent*", "activityPause", "activityStart",
+                      "activityResume"], f"the app's, earliest first, no runner's: {found}"
+    tap = found[0]
+    assert (tap["first_at_ms"], tap["thread"], tap["n"]) == (fixture.JOURNEY_TAP_MS, "(async)", 4), (
+        f"the tap's async span, queued at 650 ms; two events, each twice: {tap}")
+    assert opened == {r["start"]: r["first_at_ms"] for r in found}, (
+        f"where analyze opens the window with each: {opened}, probe said {found}")
+    assert first == fixture.JOURNEY_FIRST_MS, f"with no start, the app's first slice: {first}"
+    # What probe offers, the check before recording must not call an anchor
+    # no code writes: the project's sources hold none of these names.
+    from . import anchors
+    from .main import START_EVENTS
+    unknown = [g for g, _ in START_EVENTS if not anchors.platform(g)]
+    assert not unknown, f"offered, and not among the platform's sections: {unknown}"
+
+
 @check("async sections stay out of every detector")
 def _(report):
     # They have no thread to be counted under. A detector that shows one has
