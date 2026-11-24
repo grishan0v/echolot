@@ -221,8 +221,9 @@ _FROM_COLLECT = tuple(c.key for c in CONDITIONS if c.source == "collect")
 # found in the build on the phone before it recorded (#536); `launch`, how
 # the repeat started and what `collect` said under it (#619, see
 # `runner.launch_record`); `battery_level`, the charge in percent before the
-# repeat (#524).
-_ALSO = ("cooldown", "markers_in_build", "launch", "battery_level")
+# repeat (#524); `scenario`, the scenario of the config the repeat was
+# recorded as, which `analyze` measures it as when not told otherwise (#815).
+_ALSO = ("cooldown", "markers_in_build", "launch", "battery_level", "scenario")
 
 # What a detector's `@needs` source is fed by in the recording's config, so
 # that a difference there names the detectors that read it. Composable names

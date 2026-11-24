@@ -173,6 +173,49 @@ def test_analyze_measures_the_scenario_it_is_given(tmp_path: Path, trace: Path) 
           windows["loaded"])
 
 
+def test_analyze_measures_the_scenario_the_traces_were_recorded_as(
+        tmp_path: Path, trace: Path) -> None:
+    """A set `collect --scenario loaded` recorded was measured with the first
+    scenario's anchors when `--scenario` was left out (#815). Its account
+    says what it was recorded as, and so does its name for a set from before
+    the account kept it."""
+    from echolot import recording
+    path = write(tmp_path, TWO)
+
+    def end_of(*traces: Path) -> tuple[str, str]:
+        out = tmp_path / f"out-{len(list(tmp_path.iterdir()))}"
+        code, _, err = run("analyze", *map(str, traces), "-c", str(path), "-o", str(out))
+        check("exit 0", code == 0, err[-600:])
+        report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        return report["window"]["end_anchor"]["glob"], err
+
+    named = tmp_path / "set" / "loaded_iter000.perfetto-trace"
+    named.parent.mkdir()
+    named.write_bytes(trace.read_bytes())
+    end, err = end_of(named)
+    check("by its name: loaded's window, and said", end == "Screen.loaded"
+          and "[i] scenario loaded, the one these traces were recorded as" in err, err[-400:])
+
+    kept = tmp_path / "kept" / "fixture.perfetto-trace"
+    kept.parent.mkdir()
+    kept.write_bytes(trace.read_bytes())
+    recording.write(kept, {"runner": "launch", "scenario": "loaded"})
+    end, _ = end_of(kept)
+    check("by its account, whatever its name", end == "Screen.loaded", end)
+
+    end, err = end_of(trace)
+    check("a trace that says nothing: the first, as before",
+          end == "Screen.firstFrame" and "the first of 2" in err, err[-400:])
+
+    other = tmp_path / "set" / "first_frame_iter001.perfetto-trace"
+    other.write_bytes(b"x" + trace.read_bytes()[1:])
+    code, _, err = run("analyze", str(named), str(other), "-c", str(path),
+                       "-o", str(tmp_path / "mixed"))
+    check("a set recorded as two scenarios: refused, naming both", code == 2
+          and "loaded (1)" in err and "first_frame (1)" in err and "--scenario" in err,
+          err[-400:])
+
+
 def test_a_config_with_one_scenario_says_nothing_new(tmp_path: Path, trace: Path) -> None:
     path = write(tmp_path, {"project": PROJECT,
                             "scenario": {"name": "fixture", "start": {"name": "AppStart"},

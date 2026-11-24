@@ -38,7 +38,7 @@ import re
 import shlex
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
@@ -536,9 +536,19 @@ def _rel_to(path: Path, root: Path) -> str:
 
 
 def _pick_scenario(cfg: Config, asked: str | None, inside: bool | None = None, *,
-                   project: Path) -> None:
-    """The scenario this run measures: `--scenario`, else the open
-    investigation's, else the first.
+                   project: Path, traces: list[str] | None = None) -> None:
+    """The scenario this run measures: `--scenario`, else the one `traces`
+    were recorded as, else the open investigation's, else the first.
+
+    `traces` is `analyze`'s. A set `collect --scenario launchAndScroll`
+    recorded was measured with the config's first scenario's anchors: a
+    window between other slices, numbers that looked plausible, and one line
+    on stderr saying it was the first (#815). What the traces were recorded
+    as is a fact about them, read from their accounts or their names
+    (`runner.recorded_as`), and it comes before the investigation's: that is
+    the question's scenario, and these traces answer another one. A set
+    recorded as two of the config's scenarios is refused: one window cannot
+    be right for both.
 
     Inside an investigation, its scenario is the question's: a `collect` or
     an `analyze` without the flag measured the first one, and the
@@ -555,6 +565,21 @@ def _pick_scenario(cfg: Config, asked: str | None, inside: bool | None = None, *
     `project` is the folder `main` resolved, whose investigation it is (#830).
     """
     names = cfg.scenarios
+    if asked is None and len(names) > 1 and traces:
+        recorded = _recorded_as(traces, names)
+        if len(recorded) > 1:
+            split = ", ".join(f"{name} ({n})" for name, n in recorded.most_common())
+            raise ConfigError(
+                f"these traces were recorded as {len(recorded)} of the config's "
+                f"scenarios, {split}: one window cannot be both. Analyze each "
+                f"set with its own --scenario")
+        if recorded:
+            theirs = next(iter(recorded))
+            cfg.select(theirs)
+            print(f"[i] scenario {theirs}, the one these traces were recorded as: "
+                  f"--scenario picks another", file=sys.stderr)
+            recorder.note(scenario=theirs)
+            return
     if asked is None and len(names) > 1:
         damaged = hunt_mod.unreadable_line(project, then=False)
         if damaged and inside is None:
@@ -570,6 +595,16 @@ def _pick_scenario(cfg: Config, asked: str | None, inside: bool | None = None, *
             recorder.note(scenario=theirs)
             return
     _note_scenario(cfg, asked)
+
+
+def _recorded_as(traces: list[str], names: list[str]) -> Counter:
+    """How many of `traces` were recorded as each of the config's scenarios.
+
+    A trace that says nothing, or names a scenario this config does not
+    have, is not counted: a renamed scenario, a trace from another project.
+    """
+    from . import runner
+    return Counter(name for name in map(runner.recorded_as, traces) if name in names)
 
 
 def _whole_trace(cfg: Config, asked: str | None) -> None:
@@ -698,7 +733,7 @@ def cmd_analyze(args) -> int:
             _whole_trace(cfg, args.scenario)
         else:
             _pick_scenario(cfg, args.scenario, inside=inside is not None,
-                           project=_where(args).folder)
+                           project=_where(args).folder, traces=args.traces)
         if args.root:
             if not Path(args.root).is_dir():
                 raise ConfigError(f"--root {args.root}: no such directory")

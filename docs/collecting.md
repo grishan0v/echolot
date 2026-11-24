@@ -45,8 +45,8 @@ name merely begins with this one's: re-recording `startup` leaves
 `startup_warm_*` alone.
 
 Beside each trace it records, `collect` keeps a short account of how it
-recorded it, `<trace>.recording.json`: the runner, the reset policy,
-whether the force-stop before the repeat found the app still running, and
+recorded it, `<trace>.recording.json`: the scenario, the runner, the reset
+policy, whether the force-stop before the repeat found the app still running, and
 how the phone was powered (see [Power](#power)). The
 trace cannot say any of that itself, and `analyze` carries it into the
 report's `recording` block, where `compare` sets it against the other side's
@@ -499,6 +499,11 @@ The name goes into the traces' names, so the two sets live side by side in
 `.echolot/traces/`, and a new round of one sets aside that scenario's
 previous traces and no other's. `collect`, `analyze` and `calibrate` take
 `--scenario`; without it they take the first scenario and say so on stderr.
+`analyze` first looks at what its traces were recorded as: `collect` keeps the
+scenario in each trace's `.recording.json`, and a trace from before that is
+read by its name, `feed_scroll_iter000`. A set recorded as one of the config's
+scenarios is measured as that one, and one recorded as two of them is refused
+(#815).
 
 Each scenario keeps its own latest report too: `analyze` writes it to
 `.echolot/out/<scenario>/` unless `-o` says otherwise, and the report names

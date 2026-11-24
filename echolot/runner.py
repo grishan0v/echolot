@@ -1180,6 +1180,22 @@ _ASIDE = re.compile(r"^(?P<scenario>.+)_iter\d+-(?:warm|hot|relaunch|not-cold)(?
                     r"\.perfetto-trace$")
 
 
+def recorded_as(trace: str | Path) -> str | None:
+    """The scenario `collect` recorded `trace` as: what its account says,
+    else what its name says (`coldStart_iter000.perfetto-trace`), else None
+    for a trace named by someone else.
+
+    The name is the fallback for a set recorded before the account kept the
+    scenario. A name is only read as `collect` writes it, so a file a person
+    named `my_iter3_test.perfetto-trace` says nothing.
+    """
+    said = recording.kept(trace, "scenario")
+    if isinstance(said, str) and said:
+        return said
+    m = _ITERATION.match(Path(trace).name) or _ASIDE.match(Path(trace).name)
+    return m.group("scenario") if m else None
+
+
 def set_aside(out_dir: Path, name: str,
               log: Callable[[str], None] = print) -> Path | None:
     """Moves an existing set of `<name>_*` traces out of the way.
@@ -1530,7 +1546,7 @@ def collect(package: str, out_dir: Path, iterations: int,
             # the device's animation scales, which a run with AGP's
             # `animationsDisabled` turns to 0 for its own length and back.
             # How the phone was powered when the task began is.
-            recording.write(r["path"], {"runner": "gradle",
+            recording.write(r["path"], {"runner": "gradle", "scenario": name,
                                         **(power.facts(began) if began else {})})
         log(f"  traces collected: {len(results)} in {spent:.0f}s")
         for r in results:
@@ -1814,6 +1830,7 @@ def collect(package: str, out_dir: Path, iterations: int,
             info.update(_pull(dev, pulled))
             facts = {
                 "runner": mode, "reset_policy": reset, "app_at_stop": was,
+                "scenario": name,
                 **device_settings,
                 "cooldown": None if cooling is None else {
                     "max_c": cooling.max_c, "sensor": cooling.sensor,
