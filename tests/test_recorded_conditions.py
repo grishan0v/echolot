@@ -568,6 +568,28 @@ def test_the_header_words_the_option_by_what_the_set_measured():
                                     "animator `0.5`,"), one)
 
 
+def test_the_header_says_a_setting_only_some_repeats_had():
+    """Two of five repeats with every scale at 5 and "Don't keep activities"
+    on, three at the defaults: the header said nothing, since the set's value
+    is the majority's (#850)."""
+    split = recording_mod.merge(blocks(
+        animation_scales=[scales(5.0)] * 2 + [scales(1.0)] * 3,
+        always_finish_activities=[True] * 2 + [False] * 3,
+        reset_policy=["none"] * 5))
+    lines = recording_mod.header_lines(split)
+    check("two lines", len(lines) == 2, lines)
+    check("the scales, with how many repeats",
+          lines[0].startswith("Animation scales: all three `5` in 2 of 5 repeats, where a phone "
+                              "comes with 1"), lines)
+    check("and the option, warned, with how many",
+          lines[1].startswith('> ⚠️ "Don\'t keep activities" was on in 2 of 5 repeats:'), lines)
+    two = recording_mod.header_lines(recording_mod.merge(blocks(
+        animation_scales=[scales(0.0), scales(5.0), scales(1.0), scales(1.0)])))
+    check("two values other than 1, each with its share",
+          two and "all three `0` in 1 of 4 repeats and all three `5` in 1 of 4 repeats" in two[0],
+          two)
+
+
 def test_compare_says_when_the_device_animated_or_kept_activities_differently():
     """The list scroll of #612: all three scales at 5 on one side and at 1 on
     the other, rows that held, and no warning."""

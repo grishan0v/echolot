@@ -583,33 +583,49 @@ def _split(c: Condition, entries: list[dict[str, Any]]) -> str:
 
 # --- the report's header ----------------------------------------------------------
 
-def _share(block: dict[str, Any], key: str) -> str:
-    """` in 3 of 5 repeats` where a set's repeats split on `key`, else nothing."""
-    return " " + _repeats(block, key) if key in (block.get("mixed") or {}) else ""
+def _each(block: dict[str, Any], key: str) -> list[tuple[Any, str]]:
+    """Every value a set's repeats had for `key`, each with ` in 2 of 5
+    repeats` where they split, else the one value with nothing.
+
+    `merge` keeps the value most repeats had under the key, and the rest in
+    `mixed`. A header that read the key alone lost the minority: two of five
+    repeats with every animation at `5` said nothing at all (#850).
+    """
+    entries = (block.get("mixed") or {}).get(key)
+    if not entries:
+        return [(block.get(key), "")]
+    out = []
+    for entry in entries:
+        k, _, n = str(entry["runs"]).partition("/")
+        out.append((entry["value"], f" in {k} of {n} repeats"))
+    return out
 
 
 def header_lines(block: dict[str, Any] | None) -> list[str]:
     """What the report's header says of the device's settings: animation
-    scales that are not 1, and "Don't keep activities" while it was on.
+    scales that are not 1, and "Don't keep activities" while it was on, in
+    every repeat that had them, with how many repeats where the set split.
     Nothing for a device at its defaults, nor for one nobody read: a report
     from before they were read is not one recorded at the defaults, and
     `compare` is where that is said."""
     if not isinstance(block, dict):
         return []
     out: list[str] = []
-    scales = block.get("animation_scales")
-    if _is_scales(scales) and any(scales[w] != 1 for w, _ in SCALES):
-        if {scales[w] for w, _ in SCALES} == {0}:
+    odd = [(scales, share) for scales, share in _each(block, "animation_scales")
+           if _is_scales(scales) and any(scales[w] != 1 for w, _ in SCALES)]
+    if odd:
+        if all({scales[w] for w, _ in SCALES} == {0} for scales, _ in odd):
             what = ("animations were off, so the frames a phone draws for them, "
                     "and the work behind those frames, are not in these numbers")
         else:
             what = ("an animation lasts its length times its scale, and the frames "
                     "that draw it, with the work behind them, change with it")
-        out.append(f"Animation scales: {scales_text(scales)}"
-                   f"{_share(block, 'animation_scales')}, where a phone comes with "
+        said = " and ".join(f"{scales_text(scales)}{share}" for scales, share in odd)
+        out.append(f"Animation scales: {said}, where a phone comes with "
                    f"1: {what}. Developer options set them back.")
-    if block.get("always_finish_activities") is True:
-        line = (f"{DONT_KEEP} was on{_share(block, 'always_finish_activities')}: "
+    on = [share for value, share in _each(block, "always_finish_activities") if value is True]
+    if on:
+        line = (f"{DONT_KEEP} was on{on[0]}: "
                 f"the system destroyed each activity as soon as it left the screen, "
                 f"so a return to the app created it again, a warm start where a "
                 f"phone without it starts hot.")
