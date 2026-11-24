@@ -83,7 +83,14 @@
 -- one where nothing ran: a set said "2/5", its medians were the two longest
 -- repeats', and `compare` padded the rest with zeros (#707).
 
-WITH RECURSIVE bind AS (
+-- The steps that find the stretch and what has a name in it are written
+-- down once, as three tables of this detector's own, and both the rows below
+-- and the time they stand for (`@intervals`) are read from them (#490).
+--
+-- The stretch of each `bindApplication`: from the end of its
+-- `makeApplication`, or from its start where there is none, to its end.
+CREATE OR REPLACE PERFETTO TABLE _det_app_init_stretch AS
+WITH bind AS (
     SELECT s.slice_id, s.ts, s.ts + s.dur AS te
     FROM _slice_win s
     WHERE s.is_main_thread = 1
@@ -91,28 +98,31 @@ WITH RECURSIVE bind AS (
       AND s.dur > 0
 ),
 kid AS (
-    SELECT b.slice_id AS bind_id, s.slice_id, s.name, s.ts, s.dur
+    SELECT b.slice_id AS bind_id, s.name, s.ts, s.dur
     FROM _slice_win s
     JOIN slice raw ON raw.id = s.slice_id
     JOIN bind b    ON raw.parent_id = b.slice_id
-),
-stretch AS (
-    SELECT b.slice_id AS bind_id,
-           COALESCE((SELECT MAX(k.ts + k.dur) FROM kid k
-                     WHERE k.bind_id = b.slice_id
-                       AND k.name = 'makeApplication'), b.ts) AS ts,
-           b.te,
-           EXISTS (SELECT 1 FROM kid k
-                   WHERE k.bind_id = b.slice_id
-                     AND k.name = 'makeApplication') AS made
-    FROM bind b
-),
-inside AS (
-    SELECT k.*
-    FROM kid k
-    JOIN stretch t ON t.bind_id = k.bind_id
-    WHERE k.ts >= t.ts
-),
+)
+SELECT b.slice_id AS bind_id,
+       COALESCE((SELECT MAX(k.ts + k.dur) FROM kid k
+                 WHERE k.bind_id = b.slice_id
+                   AND k.name = 'makeApplication'), b.ts) AS ts,
+       b.te,
+       EXISTS (SELECT 1 FROM kid k
+               WHERE k.bind_id = b.slice_id
+                 AND k.name = 'makeApplication') AS made
+FROM bind b;
+
+-- `bindApplication`'s own sections inside the stretch.
+CREATE OR REPLACE PERFETTO TABLE _det_app_init_inside AS
+SELECT t.bind_id, s.slice_id, s.name, s.ts, s.dur
+FROM _slice_win s
+JOIN slice raw                 ON raw.id = s.slice_id
+JOIN _det_app_init_stretch t   ON raw.parent_id = t.bind_id
+WHERE s.ts >= t.ts;
+
+-- What has a name there, one line per section, under the row it belongs to.
+--
 -- What `Startup` holds, at every depth. An Initializer that another depends
 -- on runs inside the other's section: androidx.startup opens the dependent's
 -- section, initializes what it depends on, then creates it. Taken from
@@ -130,11 +140,12 @@ inside AS (
 -- Initializer" or "run inside ProfileInstallerInitializer" (#708). They stay
 -- in the time of the Initializer they ran in, as ART's sections do; under
 -- `Startup` itself, in the stretch's.
-startup (slice_id, up, name, dur, parent) AS (
-    SELECT s.slice_id, NULL, s.name, s.dur, NULL
+CREATE OR REPLACE PERFETTO TABLE _det_app_init AS
+WITH RECURSIVE startup (slice_id, up, name, ts, dur, parent) AS (
+    SELECT s.slice_id, NULL, s.name, s.ts, s.dur, NULL
     FROM _slice_win s
-    JOIN slice raw ON raw.id = s.slice_id
-    JOIN inside i  ON raw.parent_id = i.slice_id
+    JOIN slice raw                ON raw.id = s.slice_id
+    JOIN _det_app_init_inside i   ON raw.parent_id = i.slice_id
     WHERE i.name = 'Startup'
       AND (s.name NOT GLOB '*[ #(:]*'
            OR (s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
@@ -142,7 +153,7 @@ startup (slice_id, up, name, dur, parent) AS (
 
     UNION ALL
 
-    SELECT s.slice_id, t.slice_id, s.name, s.dur, t.name
+    SELECT s.slice_id, t.slice_id, s.name, s.ts, s.dur, t.name
     FROM startup t
     JOIN slice raw    ON raw.parent_id = t.slice_id
     JOIN _slice_win s ON s.slice_id = raw.id
@@ -157,44 +168,48 @@ startup (slice_id, up, name, dur, parent) AS (
 -- Self time is a section less the sections below it that are rows here: an
 -- Initializer's own work, apart from the ones it waited for.
 candidate AS (
-    SELECT i.name, i.dur, i.dur AS self, 0 AS initializer, NULL AS parent
-    FROM inside i
+    SELECT i.name, i.ts, i.dur, i.dur AS self, 0 AS initializer, NULL AS parent
+    FROM _det_app_init_inside i
     WHERE i.name != 'Startup'
 
     UNION ALL
 
-    SELECT t.name, t.dur,
+    SELECT t.name, t.ts, t.dur,
            t.dur - COALESCE((SELECT SUM(c.dur) FROM startup c
                              WHERE c.up = t.slice_id), 0),
            1, t.parent
     FROM startup t
-),
-named AS (
-    SELECT CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')
-                  OR c.name GLOB 'VerifyClass *'
-                THEN 'class initialization (ART)'
-                ELSE c.name
-           END AS location,
-           c.dur,
-           c.self,
-           CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')
-                  OR c.name GLOB 'VerifyClass *'
-                THEN 'ART writes a section for every class it initializes'
-                WHEN c.initializer AND c.parent IS NOT NULL
-                THEN 'under androidx.startup, run inside ' || c.parent
-                WHEN c.initializer
-                THEN 'an androidx.startup Initializer'
-                ELSE 'a section under bindApplication, after makeApplication'
-           END AS detail
-    FROM candidate c
-    WHERE c.name NOT IN (SELECT name FROM _claimed_name)
+)
+SELECT CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')
+              OR c.name GLOB 'VerifyClass *'
+            THEN 'class initialization (ART)'
+            ELSE c.name
+       END AS location,
+       c.ts,
+       c.dur,
+       c.self,
+       CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')
+              OR c.name GLOB 'VerifyClass *'
+            THEN 'ART writes a section for every class it initializes'
+            WHEN c.initializer AND c.parent IS NOT NULL
+            THEN 'under androidx.startup, run inside ' || c.parent
+            WHEN c.initializer
+            THEN 'an androidx.startup Initializer'
+            ELSE 'a section under bindApplication, after makeApplication'
+       END AS detail
+FROM candidate c
+WHERE c.name NOT IN (SELECT name FROM _claimed_name);
+
+WITH named AS (
+    SELECT location, dur, self, detail
+    FROM _det_app_init
 
     UNION ALL
 
     SELECT '(no section)',
-           (t.te - t.ts) - COALESCE((SELECT SUM(i.dur) FROM inside i
+           (t.te - t.ts) - COALESCE((SELECT SUM(i.dur) FROM _det_app_init_inside i
                                      WHERE i.bind_id = t.bind_id), 0),
-           (t.te - t.ts) - COALESCE((SELECT SUM(i.dur) FROM inside i
+           (t.te - t.ts) - COALESCE((SELECT SUM(i.dur) FROM _det_app_init_inside i
                                      WHERE i.bind_id = t.bind_id), 0),
            CASE WHEN t.made
                 THEN 'no section holds it: ContentProviders and '
@@ -204,7 +219,7 @@ named AS (
                      || 'makeApplication: the stretch is all of '
                      || 'bindApplication, the platform''s part included'
            END
-    FROM stretch t
+    FROM _det_app_init_stretch t
 )
 SELECT
     location,
@@ -215,7 +230,7 @@ SELECT
     MAX(detail)                       AS detail
 FROM named
 WHERE dur > 0
-  AND (SELECT MAX(te - ts) FROM stretch) >= {{min_stretch_ms}} * 1000000
+  AND (SELECT MAX(te - ts) FROM _det_app_init_stretch) >= {{min_stretch_ms}} * 1000000
 GROUP BY location
 ORDER BY self_ms DESC
 LIMIT 20;
@@ -223,96 +238,34 @@ LIMIT 20;
 -- @intervals
 --
 -- The rows' own time: the Initializers, the sections and ART's classes
--- whole, and for the row nobody named, the gaps between the sections in the
--- stretch. The steps that find the stretch are the ones above, repeated.
+-- whole, as the first query wrote them down, and for the row nobody named,
+-- the gaps between the sections in the stretch.
 
-WITH RECURSIVE bind AS (
-    SELECT s.slice_id, s.ts, s.ts + s.dur AS te
-    FROM _slice_win s
-    WHERE s.is_main_thread = 1
-      AND s.name = 'bindApplication'
-      AND s.dur > 0
+WITH inside AS (
+    SELECT i.bind_id, i.ts, i.dur,
+           LAG(i.ts + i.dur) OVER (PARTITION BY i.bind_id ORDER BY i.ts) AS prev_end
+    FROM _det_app_init_inside i
 ),
-kid AS (
-    SELECT b.slice_id AS bind_id, s.slice_id, s.name, s.ts, s.dur
-    FROM _slice_win s
-    JOIN slice raw ON raw.id = s.slice_id
-    JOIN bind b    ON raw.parent_id = b.slice_id
-),
-stretch AS (
-    SELECT b.slice_id AS bind_id,
-           COALESCE((SELECT MAX(k.ts + k.dur) FROM kid k
-                     WHERE k.bind_id = b.slice_id
-                       AND k.name = 'makeApplication'), b.ts) AS ts,
-           b.te
-    FROM bind b
-),
-inside AS (
-    SELECT k.*,
-           LAG(k.ts + k.dur) OVER (PARTITION BY k.bind_id ORDER BY k.ts) AS prev_end
-    FROM kid k
-    JOIN stretch t ON t.bind_id = k.bind_id
-    WHERE k.ts >= t.ts
-),
-startup (slice_id, name, ts, dur) AS (
-    SELECT s.slice_id, s.name, s.ts, s.dur
-    FROM _slice_win s
-    JOIN slice raw ON raw.id = s.slice_id
-    JOIN inside i  ON raw.parent_id = i.slice_id
-    WHERE i.name = 'Startup'
-      AND (s.name NOT GLOB '*[ #(:]*'
-           OR (s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
-           OR s.name GLOB 'VerifyClass *')
-
-    UNION ALL
-
-    SELECT s.slice_id, s.name, s.ts, s.dur
-    FROM startup t
-    JOIN slice raw    ON raw.parent_id = t.slice_id
-    JOIN _slice_win s ON s.slice_id = raw.id
-    WHERE NOT ((t.name GLOB 'L*;' AND t.name NOT GLOB '* *')
-               OR t.name GLOB 'VerifyClass *')
-      AND t.name NOT IN (SELECT name FROM _claimed_name)
-      AND NOT ((s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
-               OR s.name GLOB 'VerifyClass *')
-      AND s.name NOT IN (SELECT name FROM _claimed_name)
-      AND s.name NOT GLOB '*[ #(:]*'
-),
-candidate AS (
-    SELECT i.name, i.ts, i.dur
+gaps AS (
+    SELECT COALESCE(i.prev_end, t.ts) AS ts,
+           i.ts - COALESCE(i.prev_end, t.ts) AS dur
     FROM inside i
-    WHERE i.name != 'Startup'
+    JOIN _det_app_init_stretch t ON t.bind_id = i.bind_id
 
     UNION ALL
 
-    SELECT t.name, t.ts, t.dur
-    FROM startup t
-),
-pieces AS (
-    SELECT CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')
-                  OR c.name GLOB 'VerifyClass *'
-                THEN 'class initialization (ART)'
-                ELSE c.name
-           END AS location,
-           c.ts, c.dur
-    FROM candidate c
-    WHERE c.name NOT IN (SELECT name FROM _claimed_name)
-
-    UNION ALL
-
-    SELECT '(no section)', COALESCE(i.prev_end, t.ts),
-           i.ts - COALESCE(i.prev_end, t.ts)
-    FROM inside i
-    JOIN stretch t ON t.bind_id = i.bind_id
-
-    UNION ALL
-
-    SELECT '(no section)', COALESCE(MAX(i.ts + i.dur), t.ts),
+    SELECT COALESCE(MAX(i.ts + i.dur), t.ts),
            t.te - COALESCE(MAX(i.ts + i.dur), t.ts)
-    FROM stretch t
+    FROM _det_app_init_stretch t
     LEFT JOIN inside i ON i.bind_id = t.bind_id
     GROUP BY t.bind_id
 )
-SELECT p.ts, p.dur
-FROM pieces p
-WHERE p.location IN (SELECT location FROM _rows);
+SELECT ts, dur
+FROM _det_app_init
+WHERE location IN (SELECT location FROM _rows)
+
+UNION ALL
+
+SELECT ts, dur
+FROM gaps
+WHERE '(no section)' IN (SELECT location FROM _rows);

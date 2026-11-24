@@ -60,6 +60,10 @@
 -- - a sleep `RenderThread` ended is the frame pipeline;
 -- - a sleep another process ended is not the app's to change.
 
+-- The sleeps this detector counts, each under the row it belongs to, are
+-- written down once as its own table: both the rows below and the time
+-- they stand for (`@intervals`) are read from it (#490).
+CREATE OR REPLACE PERFETTO TABLE _det_main_thread_waits AS
 WITH states AS MATERIALIZED (
     -- The main thread's states in order, each with the waker of the next.
     SELECT s.ts, s.dur, s.state, s.utid,
@@ -89,25 +93,24 @@ sleeps AS MATERIALIZED (
       AND w.name IS NOT NULL
       AND w.name != 'RenderThread'
       AND w.name NOT GLOB 'binder:*'
-),
-waits AS MATERIALIZED (
-    SELECT ts, dur, inside,
-           -- Digits folded, a run of them to one `#`.
-           REPLACE(REPLACE(REPLACE(
-               REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                   waker, '0', '#'), '1', '#'), '2', '#'), '3', '#'), '4', '#'),
-                   '5', '#'), '6', '#'), '7', '#'), '8', '#'), '9', '#'),
-               '####', '#'), '##', '#'), '##', '#')                AS location
-    FROM sleeps
-    WHERE inside IS NULL OR inside NOT GLOB '{{lock_glob}}'
-),
-grouped AS (
+)
+SELECT ts, dur, inside,
+       -- Digits folded, a run of them to one `#`.
+       REPLACE(REPLACE(REPLACE(
+           REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+               waker, '0', '#'), '1', '#'), '2', '#'), '3', '#'), '4', '#'),
+               '5', '#'), '6', '#'), '7', '#'), '8', '#'), '9', '#'),
+           '####', '#'), '##', '#'), '##', '#')                AS location
+FROM sleeps
+WHERE inside IS NULL OR inside NOT GLOB '{{lock_glob}}';
+
+WITH grouped AS (
     SELECT location,
            COUNT(*)                                                AS count,
            SUM(dur)                                                AS total_ns,
            MAX(dur)                                                AS max_ns,
            SUM(CASE WHEN inside IS NULL THEN dur ELSE 0 END)       AS idle_ns
-    FROM waits
+    FROM _det_main_thread_waits
     GROUP BY location
 ),
 -- The slice the main thread spent most of its blocked time in, per row.
@@ -116,7 +119,7 @@ blocked_in AS (
     FROM (SELECT location, inside,
                  ROW_NUMBER() OVER (PARTITION BY location
                                     ORDER BY SUM(dur) DESC, inside) AS k
-          FROM waits
+          FROM _det_main_thread_waits
           WHERE inside IS NOT NULL
           GROUP BY location, inside)
     WHERE k = 1
@@ -143,42 +146,10 @@ LIMIT 20;
 
 -- @intervals
 --
--- A row stands for the sleeps its thread ended: the main thread's own time,
--- clipped to the window. Sleeps do not overlap one another.
+-- A row stands for the sleeps its thread ended, as the first query wrote
+-- them down: the main thread's own time, clipped to the window. Sleeps do
+-- not overlap one another.
 
-WITH states AS MATERIALIZED (
-    SELECT s.ts, s.dur, s.state, s.utid,
-           LEAD(s.waker_utid) OVER (ORDER BY s.ts)                 AS waker_utid
-    FROM thread_state s
-    WHERE s.utid = (SELECT t.utid FROM thread t CROSS JOIN _proc p
-                    WHERE t.upid = p.upid AND t.tid = p.pid
-                    ORDER BY t.utid DESC LIMIT 1)
-),
-sleeps AS MATERIALIZED (
-    SELECT MAX(s.ts, wn.ts_start)                                  AS ts,
-           MIN(s.ts + s.dur, wn.ts_end) - MAX(s.ts, wn.ts_start)    AS dur,
-           w.name                                                  AS waker,
-           (SELECT x.name FROM _slice_win x
-            WHERE x.utid = s.utid AND x.ts <= s.ts AND x.ts + x.dur > s.ts
-              AND NOT (x.ts <= wn.ts_start AND x.ts + x.dur >= wn.ts_end)
-            ORDER BY x.depth DESC LIMIT 1)                         AS inside
-    FROM states s
-    JOIN thread w ON w.utid = s.waker_utid
-    CROSS JOIN _proc p
-    CROSS JOIN _window wn
-    WHERE s.state = 'S' AND s.dur > 0
-      AND s.ts < wn.ts_end AND s.ts + s.dur > wn.ts_start
-      AND w.upid = p.upid AND w.tid != p.pid
-      AND w.name IS NOT NULL
-      AND w.name != 'RenderThread'
-      AND w.name NOT GLOB 'binder:*'
-)
-SELECT s.ts, s.dur
-FROM sleeps s
-JOIN _rows r ON r.location =
-    REPLACE(REPLACE(REPLACE(
-        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-            s.waker, '0', '#'), '1', '#'), '2', '#'), '3', '#'), '4', '#'),
-            '5', '#'), '6', '#'), '7', '#'), '8', '#'), '9', '#'),
-        '####', '#'), '##', '#'), '##', '#')
-WHERE s.inside IS NULL OR s.inside NOT GLOB '{{lock_glob}}';
+SELECT ts, dur
+FROM _det_main_thread_waits
+WHERE location IN (SELECT location FROM _rows);

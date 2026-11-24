@@ -54,13 +54,19 @@
 -- one scope. An outlier on a background thread is a different question, and
 -- uninstrumented_cpu and runnable_starvation already answer it structurally.
 
+-- The occurrences this detector counts, past `factor` times the median for
+-- their name and past the floor, are written down once as its own table:
+-- both the rows below and the time they stand for (`@intervals`) are read
+-- from it (#490).
+CREATE OR REPLACE PERFETTO TABLE _det_main_thread_outlier AS
 WITH ranked AS (
     SELECT
         name,
+        ts,
         dur,
         ROW_NUMBER() OVER (PARTITION BY name ORDER BY dur) AS rk,
         COUNT(*)     OVER (PARTITION BY name)              AS n
-    FROM (SELECT COALESCE(f.family, s.name) AS name, s.dur
+    FROM (SELECT COALESCE(f.family, s.name) AS name, s.ts, s.dur
           FROM _slice_win s
           LEFT JOIN _name_family f ON f.name = s.name
           WHERE s.is_main_thread = 1
@@ -75,50 +81,32 @@ baseline AS (
     FROM ranked
     WHERE rk = (n + 1) / 2
 )
-SELECT
-    r.name                                              AS location,
-    COUNT(*)                                            AS count,
-    ROUND(SUM(r.dur) / 1e6, 2)                          AS total_ms,
-    ROUND(MAX(r.dur) / 1e6, 2)                          AS max_ms,
-    'median ' || ROUND(b.median_ns / 1e6, 1) || ' ms of ' || b.n
-        || ' · worst ' || ROUND(MAX(r.dur) * 1.0 / b.median_ns, 1) || '×'
-                                                        AS detail
+SELECT r.name, r.ts, r.dur, b.n, b.median_ns
 FROM ranked r
 JOIN baseline b ON b.name = r.name
 WHERE b.n >= {{min_occurrences}}
   AND r.dur >= b.median_ns * {{factor}}
-  AND r.dur >= {{min_abs_ms}} * 1000000
-GROUP BY r.name
+  AND r.dur >= {{min_abs_ms}} * 1000000;
+
+SELECT
+    name                                                AS location,
+    COUNT(*)                                            AS count,
+    ROUND(SUM(dur) / 1e6, 2)                            AS total_ms,
+    ROUND(MAX(dur) / 1e6, 2)                            AS max_ms,
+    'median ' || ROUND(median_ns / 1e6, 1) || ' ms of ' || n
+        || ' · worst ' || ROUND(MAX(dur) * 1.0 / median_ns, 1) || '×'
+                                                        AS detail
+FROM _det_main_thread_outlier
+GROUP BY name
 ORDER BY max_ms DESC
 LIMIT 20;
 
 -- @intervals
 --
--- The occurrences a row counted, whole: the ones past `factor` times the
--- median for their name, and past the floor. The median is taken over every
--- occurrence of the name, as above, so the same ones come out.
+-- The occurrences a row counted, whole, as the first query wrote them down:
+-- the ones past `factor` times the median for their name, and past the
+-- floor.
 
-WITH ranked AS (
-    SELECT
-        name,
-        ts,
-        dur,
-        ROW_NUMBER() OVER (PARTITION BY name ORDER BY dur) AS rk,
-        COUNT(*)     OVER (PARTITION BY name)              AS n
-    FROM (SELECT COALESCE(f.family, s.name) AS name, s.ts, s.dur
-          FROM _slice_win s
-          LEFT JOIN _name_family f ON f.name = s.name
-          WHERE s.is_main_thread = 1
-            AND s.dur > 0)
-    WHERE name IN (SELECT location FROM _rows)
-),
-baseline AS (
-    SELECT name, dur AS median_ns
-    FROM ranked
-    WHERE rk = (n + 1) / 2
-)
-SELECT r.ts, r.dur
-FROM ranked r
-JOIN baseline b ON b.name = r.name
-WHERE r.dur >= b.median_ns * {{factor}}
-  AND r.dur >= {{min_abs_ms}} * 1000000;
+SELECT ts, dur
+FROM _det_main_thread_outlier
+WHERE name IN (SELECT location FROM _rows);

@@ -435,6 +435,41 @@ What decides the query:
   returns nothing, and a comment saying why: `frame_jank`'s lateness is on the
   display's timeline, and `anr` is a record of the system giving up. A
   detector with no second query at all is named in the report as not counted.
+- **Pieces found in steps are written down once.** Where the second query
+  would have to take the first one's steps again — `app_init`'s stretch after
+  `makeApplication` and the sections in it, `anr_risk`'s stretches and the
+  name each is reported under, the waits of `main_thread_waits` with the slice
+  each sleep fell in — the first query writes its pieces into a table of the
+  detector's own before the statement that returns the rows, and both read it:
+
+  ```sql
+  CREATE OR REPLACE PERFETTO TABLE _det_my_detector AS
+  WITH found AS (…), named AS (…)
+  SELECT location, ts, dur FROM named;
+
+  SELECT location, COUNT(*) AS count, ROUND(SUM(dur) / 1e6, 2) AS total_ms
+  FROM _det_my_detector
+  GROUP BY location
+  HAVING SUM(dur) >= {{min_total_ms}} * 1000000
+  ORDER BY total_ms DESC, location
+  LIMIT 20;
+
+  -- @intervals
+  SELECT ts, dur
+  FROM _det_my_detector
+  WHERE location IN (SELECT location FROM _rows);
+  ```
+
+  One copy of the logic, and the time cannot drift from the rows; the steps
+  are not taken twice on every trace either (#490). The table is named
+  `_det_<id>`, or `_det_<id>_` and more, and is written with `OR REPLACE`: the
+  first query runs again in the same session with its thresholds open, for
+  the merge of repeats, and `analyze` reads the second and third queries
+  before that run. A file that writes another name, writes without
+  `OR REPLACE`, or reads a `_det_` table its first query does not write is
+  refused as it is read. A second query that is one filter over the window's
+  tables, as `gc_pressure`'s is, gains nothing from a table and keeps that
+  filter.
 
 Every shipped detector has one, and the tests hold each to its own rows: on
 the fixture, the stretches behind the rows about the main thread add up to

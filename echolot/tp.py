@@ -40,6 +40,11 @@ says what stretches of the main thread's time the rows of the first stand
 for; see Detector.render_intervals. A line reading `-- @samples` starts a
 third, which picks out the callstack samples behind each row; see
 Detector.render_samples.
+
+A first query that finds its pieces in several steps writes them down once,
+`CREATE OR REPLACE PERFETTO TABLE _det_<id> AS …;`, before the statement
+that returns the rows, and the queries after it read that table instead of
+repeating the steps; see _own_tables.
 """
 
 from __future__ import annotations
@@ -80,6 +85,13 @@ _SECTION = re.compile(r"^--\s*@(intervals|samples)\s*$", re.MULTILINE)
 _MEANING = re.compile(r"\s+—(?:\s+|$)")
 # A number and its unit: `4 ms`, `1.5 ×`, `50 %`.
 _WITH_UNIT = re.compile(r"^([-+]?\d+(?:\.\d+)?)\s+(\S+)$")
+# A table a detector's first query writes for the queries after it, and any
+# name of that shape a query reads. Looked for with the comments left out,
+# so that a sentence about a table is not taken for one.
+_WRITES = re.compile(r"\bCREATE\s+(OR\s+REPLACE\s+)?PERFETTO\s+TABLE\s+(\w+)",
+                     re.IGNORECASE)
+_OWN_NAME = re.compile(r"\b_det_\w+")
+_COMMENT = re.compile(r"--[^\n]*")
 
 
 @dataclass(frozen=True)
@@ -281,6 +293,9 @@ class Detector:
     intervals_sql: str = ""
     # The query after `-- @samples`, the same.
     samples_sql: str = ""
+    # The tables its first query writes for the queries after it,
+    # `_det_<id>…`, in the order it writes them; see _own_tables.
+    tables: tuple[str, ...] = ()
     # What the trace has to hold for a silent run to mean anything: names
     # from needs.SOURCES, `()` for a detector that reads only what every
     # recording `collect` makes holds.
@@ -344,8 +359,10 @@ class Detector:
                 # query nobody runs that still reads as the one in force.
                 raise ValueError(f"{path.name}: two `-- @{name}` sections")
             sections[name] = body
+        det_id = meta.get("id", path.stem)
+        tables = _own_tables(det_id, first, sections, path.name)
         return cls(
-            id=meta.get("id", path.stem),
+            id=det_id,
             title=meta.get("title", path.stem),
             why=meta.get("why", ""),
             params=params,
@@ -357,6 +374,7 @@ class Detector:
             path=path,
             intervals_sql=sections.get("intervals", ""),
             samples_sql=sections.get("samples", ""),
+            tables=tables,
             needs=needs,
             bars=tuple(b.strip() for b in meta.get("bar", "").split(",") if b.strip()),
             plain_title=meta.get("plain_title", ""),
@@ -463,7 +481,9 @@ class Detector:
         none — so the query only has to find its way back from a row to the
         time behind it. Which rows cleared a threshold is already decided,
         and repeating the HAVING here would be one more place for the two to
-        drift apart.
+        drift apart. Where the first query found its pieces in steps, it
+        wrote them into a table of its own, and this reads that table rather
+        than taking the steps again; see _own_tables.
 
         It returns `ts` and `dur`, in nanoseconds, one line per stretch.
         Stretches may overlap each other and run past the window: the caller
@@ -500,6 +520,63 @@ class Detector:
         if missing:
             raise ValueError(f"{self.id} {name}: no values for {sorted(missing)}")
         return _PLACEHOLDER.sub(lambda m: sql_value(resolved[m.group(1)]), sql)
+
+
+def _own_tables(det_id: str, first: str, sections: dict[str, str],
+                where: str) -> tuple[str, ...]:
+    """The tables a detector's first query writes for the queries after it.
+
+    `@intervals` says what time a detector's rows stand for, and the pieces
+    that time is made of are the pieces the rows were counted from. A first
+    query that finds them in several steps — `app_init`'s stretch after
+    `makeApplication` and the sections in it, `anr_risk`'s stretches with no
+    way back to the queue — used to have its second query repeat the steps,
+    two copies of one logic with nothing but the tests to say when they
+    drifted apart, and the work done twice on every trace (#490). Now it
+    writes them down once, before the statement that returns its rows:
+
+        CREATE OR REPLACE PERFETTO TABLE _det_<id> AS …;
+
+    and both read the table. Three rules keep that safe, and each is refused
+    as the file is read rather than found out on a trace:
+
+    - The name is `_det_<id>`, or `_det_<id>_` and more. The window's tables
+      (`_slice_win`, `_window`, …) are names a detector must not write over,
+      and two detectors must not write one table: `load_detectors` refuses
+      a name two of them write, `anr`'s `_det_anr_risk` beside `anr_risk`.
+    - `OR REPLACE`. The first query runs again in the same session: with its
+      thresholds open for the merge of repeats, and once more per trace under
+      `calibrate`. A plain CREATE fails the second time.
+    - Every `_det_` name its queries read is one its own first query writes.
+      A table holds what the last run of its detector left, which another
+      detector's query cannot know.
+
+    The second run, the one with the thresholds open, leaves its own pieces
+    in the table, so `analyze` reads `@intervals` and `@samples` before it;
+    see `analyze_trace`.
+    """
+    written: list[str] = []
+    for m in _WRITES.finditer(_COMMENT.sub("", first)):
+        name = m.group(2)
+        if name != f"_det_{det_id}" and not name.startswith(f"_det_{det_id}_"):
+            raise ValueError(
+                f"{where}: its first query writes `{name}`. A table of a "
+                f"detector's own is named after it: `_det_{det_id}`, or "
+                f"`_det_{det_id}_` and more")
+        if not m.group(1):
+            raise ValueError(
+                f"{where}: `{name}` is written with CREATE PERFETTO TABLE. "
+                f"The first query runs again in the same session, with its "
+                f"thresholds open, and a plain CREATE fails there: write "
+                f"CREATE OR REPLACE PERFETTO TABLE")
+        written.append(name)
+    for text in (first, *sections.values()):
+        for name in _OWN_NAME.findall(_COMMENT.sub("", text)):
+            if name not in written:
+                raise ValueError(
+                    f"{where}: it reads `{name}`, which its first query does "
+                    f"not write. A detector reads only the tables of its own")
+    return tuple(written)
 
 
 def _identity(declared: str | None) -> tuple[str, ...]:
@@ -916,9 +993,18 @@ def _coerce(raw: str) -> Any:
 
 
 def load_detectors(directory: Path) -> list[Detector]:
-    return [
-        Detector.from_file(p) for p in sorted(directory.glob("*.sql"))
-    ]
+    found = [Detector.from_file(p) for p in sorted(directory.glob("*.sql"))]
+    # A name made of another detector's: `anr` may write `_det_anr_risk` by
+    # its own rule, and would write over `anr_risk`'s pieces.
+    owner: dict[str, str] = {}
+    for d in found:
+        for table in d.tables:
+            if table in owner:
+                raise ValueError(
+                    f"{d.path.name if d.path else d.id}: `{table}` is written by "
+                    f"`{owner[table]}` too. Two detectors cannot share a table")
+            owner[table] = d.id
+    return found
 
 
 def render_sql(text: str, params: dict[str, Any]) -> str:
