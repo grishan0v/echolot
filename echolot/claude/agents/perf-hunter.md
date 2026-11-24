@@ -74,7 +74,10 @@ It is open while you work, and that is what the loop stands on. Every
 `collect` and `analyze` you run carries `--hunt <n>`, the number you were
 handed: then each `analyze` files a copy of its report under it — the line
 ending `(this investigation's copy)` says where — and `echolot compare` with
-no arguments reads the last two rounds among them. A run without the flag is
+no arguments reads the last two rounds among them. The line after it says
+which that report is: `[i] filed as round 3: …`, or `[i] filed as a look, not
+a round: …` for the same recordings again, part of them, or `--set` /
+`--defaults`, which that comparison leaves out. A run without the flag is
 outside the investigation: nothing of it is filed, compare does not see it,
 and stderr says `[i] outside investigation #<n>`. A `--hunt` that names a
 number no longer open exits 2 before it records or reads anything: stop and

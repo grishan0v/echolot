@@ -30,13 +30,15 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import json
 import os
 import re
 import shutil
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar
@@ -429,7 +431,8 @@ def record_traces(project: Path, directory: Path, n: int | None = None) -> None:
 
 
 @_one_writer()
-def record_report(project: Path, out_dir: Path, n: int | None = None) -> Path | None:
+def record_report(project: Path, out_dir: Path, n: int | None = None,
+                  recordings: list[str] | None = None) -> Path | None:
     """Copy the report just written into the open investigation's own history,
     the one numbered `n` when it is given.
 
@@ -437,6 +440,11 @@ def record_report(project: Path, out_dir: Path, n: int | None = None) -> Path | 
     overwrites it — including an analyze belonging to a different question.
     A copy per run costs tens of kilobytes and is the only way to see what an
     investigation concluded at each step rather than only at the end.
+
+    `recordings` is what the report read, by `recording_ids`: with it, the
+    record says whether the report is a round or a look, the way `rounds`
+    reads it back (#908). Without it, nothing is said, and `rounds` tells it
+    from the report as it did for reports filed before the record said so.
     """
     hunt = load(project)
     if not _still(hunt, n):
@@ -453,8 +461,8 @@ def record_report(project: Path, out_dir: Path, n: int | None = None) -> Path | 
         # up with a name that was taken, and the next `analyze` wrote over
         # the round before it. Silently, and these copies exist because the
         # working report is overwritten every run.
-        seq = max((int(p.stem) for p in dest.glob("*.json")
-                   if p.stem.isdigit()), default=0) + 1
+        before = sorted(dest.glob("*.json"))
+        seq = max((int(p.stem) for p in before if p.stem.isdigit()), default=0) + 1
         for ext in ("json", "md"):
             src_file = out_dir / f"report.{ext}"
             if src_file.exists():
@@ -462,9 +470,179 @@ def record_report(project: Path, out_dir: Path, n: int | None = None) -> Path | 
     except OSError:
         return None
     hunt["reports"] = int(hunt.get("reports") or 0) + 1
+    if recordings is not None:
+        earlier = rounds(project, hunt, before)
+        look = _look(_report(dest / f"{seq:03d}.json") or {}, frozenset(recordings),
+                     [f for f in earlier if f.round])
+        entry: dict[str, Any] = {"report": seq, "kind": "look" if look else "round"}
+        if look:
+            entry["why"] = look
+        entry["recordings"] = list(recordings)
+        # A number is taken again only after the report that had it was
+        # deleted: its mark goes with it.
+        hunt["filed"] = [*(e for e in _filed_entries(hunt) if e.get("report") != seq), entry]
     with contextlib.suppress(OSError):
         save(project, hunt)
     return dest / f"{seq:03d}.json"
+
+
+def recording_ids(paths: Iterable[str | Path]) -> list[str] | None:
+    """What each recording is, by its bytes, in the order given.
+
+    `collect --hunt` records every round under the same loose names,
+    `.echolot/traces/<scenario>_iter000…`, having moved the set before
+    aside: two rounds read the same paths and are different recordings, and
+    a set copied elsewhere is the same recordings under other paths. A
+    round told from a look by its paths took a new round for a look and
+    left it out of `compare` (#908). The bytes are what a recording is, the
+    way `analyze` tells one recording named twice (#565). Sixteen hex
+    digits of SHA-256 apiece. None when one of them cannot be read: no mark
+    is better than a wrong one, and `rounds` says how it told the report
+    without one.
+    """
+    ids: list[str] = []
+    for path in paths:
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                for block in iter(lambda f=f: f.read(1 << 20), b""):
+                    h.update(block)
+        except OSError:
+            return None
+        ids.append(h.hexdigest()[:16])
+    return ids
+
+
+@dataclass(frozen=True)
+class Filed:
+    """One report an investigation filed, and whether it is a round.
+
+    A round is a set of recordings read with the config's thresholds for
+    the first time in the investigation: what `compare` with no arguments
+    holds against the round before it. A look is any other `analyze` filed
+    there — the same recordings again, part of them, or other thresholds —
+    and `why` says which. `marked` is True when `analyze` said so as it
+    filed the report; False when it was told afterwards from the report
+    itself, for one filed before the record said so.
+    """
+    path: Path
+    round: int | None
+    why: str | None
+    marked: bool
+    recordings: frozenset[str]
+    window: tuple[int, int] | None
+
+
+def rounds(project: Path, hunt: dict[str, Any] | None,
+           reports: list[Path] | None = None) -> list[Filed]:
+    """Every report the investigation filed, in order, as a round or a look.
+
+    `reports` are its report files when the caller has them, else every one
+    in its directory. What `analyze` marked when it filed a report is taken
+    as it is. A report it did not mark — filed before it did, or with a
+    recording it could not read — is told from the report: a look when it
+    ran with `--set` or `--defaults`, or when its window opened at the
+    moment an earlier round's did, in the same process — the first
+    recording that round read, read again. A look at part of a round that
+    leaves the round's first recording out is not told apart that way:
+    `compare` says so when it went by the report.
+    """
+    if reports is None:
+        own = home(project, hunt)
+        reports = sorted((own / "reports").glob("*.json")) if own else []
+    marks = {e["report"]: e for e in _filed_entries(hunt or {})}
+    of = [marks.get(int(p.stem)) if p.stem.isdigit() else None for p in reports]
+    # A marked report is read only for the window an unmarked one after it is
+    # held to: an investigation marked throughout reads none of them.
+    last_unmarked = max((i for i, m in enumerate(of) if m is None), default=-1)
+    out: list[Filed] = []
+    for i, (path, mark) in enumerate(zip(reports, of, strict=True)):
+        rep = _report(path) if mark is None or i < last_unmarked else None
+        window = _first_window(rep)
+        before = [f for f in out if f.round]
+        if mark is not None:
+            why = (mark.get("why") or "a look") if mark.get("kind") == "look" else None
+            ids = frozenset(mark.get("recordings") or [])
+        else:
+            # One that does not read is a round: `compare` loads it and says
+            # what it is instead.
+            why = _look(rep, None, before) if rep is not None else None
+            ids = frozenset()
+        out.append(Filed(path, None if why else len(before) + 1, why, mark is not None,
+                         ids, window))
+    return out
+
+
+def _filed_entries(hunt: dict[str, Any]) -> list[dict[str, Any]]:
+    """The marks `record_report` left, each naming its report by number."""
+    got = hunt.get("filed")
+    if not isinstance(got, list):
+        return []
+    return [e for e in got if isinstance(e, dict) and isinstance(e.get("report"), int)
+            and not isinstance(e.get("report"), bool) and e.get("kind") in ("round", "look")]
+
+
+def _report(path: Path) -> dict[str, Any] | None:
+    try:
+        got = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return got if isinstance(got, dict) else None
+
+
+def _first_window(rep: dict[str, Any] | None) -> tuple[int, int] | None:
+    """Where the window of a report's first recording opened, and in which
+    process: the trace's own clock in nanoseconds and the app's pid. The
+    same recording read again opens it at the same moment, whatever the
+    thresholds; another recording, never."""
+    w = (rep or {}).get("window")
+    if not isinstance(w, dict):
+        return None
+    pid, ts = w.get("pid"), w.get("ts_start")
+    if isinstance(pid, int) and isinstance(ts, int) and not isinstance(pid, bool) \
+            and not isinstance(ts, bool):
+        return pid, ts
+    return None
+
+
+def _thresholds(rep: dict[str, Any]) -> str | None:
+    """`--set` or `--defaults` a report ran with, as the command line said them."""
+    cfg = rep.get("config") if isinstance(rep.get("config"), dict) else {}
+    if cfg.get("defaults"):
+        return "it ran with --defaults"
+    given = cfg.get("set")
+    if isinstance(given, dict) and given:
+        pairs = [f"--set {d}.{p}={v}" for d, ps in sorted(given.items())
+                 if isinstance(ps, dict) for p, v in sorted(ps.items())]
+        return "it ran with " + " ".join(pairs or ["--set"])
+    return None
+
+
+def _look(rep: dict[str, Any], ids: frozenset[str] | None,
+          rounds_before: list[Filed]) -> str | None:
+    """Why a report is a look and not the next round, or None for a round.
+
+    Other thresholds than the config's make a look, whatever it read. So do
+    recordings a round before it read: all of them, or some among new ones.
+    `ids` is what it read by their bytes; None for a report filed without
+    them, which is held to each round by its first recording's window.
+    """
+    said = _thresholds(rep)
+    if said:
+        return said
+    window = _first_window(rep)
+    for r in reversed(rounds_before):
+        name = f"round {r.round} ({r.path.name})"
+        if ids is not None and r.marked:
+            both = ids & r.recordings
+            if both and both == ids:
+                return f"it reads again what {name} read"
+            if both:
+                return f"{len(both)} of its {len(ids)} recordings were read by {name} already"
+        elif window is not None and window == r.window:
+            return (f"its first recording is the one {name} read first: its window "
+                    f"opened at the same moment, in the same process")
+    return None
 
 
 def archive(project: Path, hunt: dict[str, Any]) -> Path | None:
