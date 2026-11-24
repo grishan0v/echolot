@@ -198,17 +198,61 @@ def app(cfg: Config | None, facts: scan_mod.Facts | None, said: dict[str, list[s
         return _line(RED, lead, "cannot be measured yet: a release-like build of it shows nothing of the "
                      "app in a recording. Add `<profileable android:shell=\"true\" />` inside "
                      f"`<application>` in `{found['manifest']}`, then build and install it again.", behind)
-    chosen = scan_mod.preferred(facts.variants)
-    if chosen is None:
+    best = scan_mod.preferred(facts.variants)
+    if best is None:
         return _line(GREEN, lead, "can be measured. Which build to take could not be read from "
                      "its build script.", behind)
-    if chosen.get("debuggable") is True:
+    if best.get("debuggable") is True:
         # `preferred` puts a debuggable variant last: when it comes first,
         # every variant is one.
         return _line(RED, lead, "has only debuggable builds, and a debuggable build runs slower and "
                      "differently: what is measured on it is not what a user gets. Add a build type "
                      "that is not debuggable, the way a `benchmark` one is.", behind)
-    return _line(GREEN, lead, f"can be measured on the `{chosen['name']}` build.", behind)
+    chosen = measured(cfg, facts)
+    if chosen is None:
+        # The config measures a package no variant installs as (#812): what
+        # a phone answers to that name is an install of something else, an
+        # old build of another variant, and never this code. Said only when
+        # every variant's package was read whole: a part set where `scan`
+        # does not read it may be the one that makes the name.
+        ids = list(dict.fromkeys(v["application_id"] for v in facts.variants if v.get("application_id")))
+        if ids and not any(v.get("unread") for v in facts.variants):
+            return _line(RED, lead, "is not a package this project's build script makes: it makes "
+                         + ", ".join(f"`{i}`" for i in ids[:6]) + ". A phone that answers to the name has "
+                         "another build on it, and what is measured there is not this code. Set "
+                         f"`project.package` in `echolot.yml` to `{best['application_id']}`, the "
+                         f"`{best['name']}` build's, and install that build.", behind)
+        return _line(GREEN, lead, "can be measured. Which of this project's builds installs as it could not "
+                     "be read from its build script.", behind)
+    if chosen.get("debuggable") is True:
+        return _line(RED, lead, f"is the `{chosen['name']}` build, and a debug build runs slower and "
+                     "differently: what is measured on it is not what a user gets. Set `project.package` in "
+                     f"`echolot.yml` to `{best['application_id']}`, the `{best['name']}` build's, and "
+                     "install that build.", behind)
+    text = f"can be measured on the `{chosen['name']}` build."
+    if chosen.get("unread"):
+        # Part of the package is set where `scan` does not read it (#816):
+        # the name may lack a suffix, and an old install of another variant
+        # answers to the short one.
+        base = chosen.get("application_id") or lead
+        text += (" Part of its package is set where echolot does not read it, so the build may install "
+                 "under a longer name, and a phone that answers to this one may have another build on "
+                 f"it: `adb shell pm list packages {base}` lists the ones installed.")
+    return _line(GREEN, lead, text, behind)
+
+
+def measured(cfg: Config | None, facts: scan_mod.Facts) -> dict | None:
+    """The variant a recording measures: the one the config's package
+    installs as, else the one `scan` would start from. `None` when the
+    config names a package no variant installs as, or when a variant's
+    package could not be read and so cannot be matched."""
+    pkg = None
+    if cfg is not None:
+        with contextlib.suppress(ConfigError):
+            pkg = cfg.value(PACKAGE)
+    if not pkg:
+        return scan_mod.preferred(facts.variants)
+    return scan_mod.preferred([v for v in facts.variants if v.get("application_id") == str(pkg)])
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +390,9 @@ def settings(st: dict, head: str, says: dict[str, list[str]], cfg: Config | None
     found = facts.app if facts is not None else None
     start = [("echolot scan", s) for s in said.get("start", [])]
     if found:
-        chosen = scan_mod.preferred(facts.variants)
+        # The build the config's package installs as, the one the app line
+        # speaks of (#812); scan's pick when the config names none of them.
+        chosen = measured(cfg, facts) or scan_mod.preferred(facts.variants)
         if chosen:
             # `measure` is scan's answer to "measure on it?", in its words:
             # "yes — release-like and profileable", "no — debuggable: …".
