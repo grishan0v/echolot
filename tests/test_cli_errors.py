@@ -216,7 +216,7 @@ def _damaged(how: str) -> dict:
     elif how == "markers":
         data["markers"] = {"rows": "x"}
     elif how == "a newer schema":
-        data["schema"] = 2
+        data["schema"] = 3
     elif how == "no schema number":
         data["schema"] = "1"
     return data
@@ -228,7 +228,7 @@ def _damaged(how: str) -> dict:
     ("rows", "`detectors[2].rows` is an object, not a list"),
     ("a row", "`detectors[2].rows[0]` is text, not an object"),
     ("markers", "`markers.rows` is text, not a list"),
-    ("a newer schema", "a newer echolot wrote it, in schema 2; this one reads schema 1"),
+    ("a newer schema", "a newer echolot wrote it, in schema 3; this one reads schema 2"),
     ("no schema number", "its schema number is text, not a whole number"),
 ])
 @pytest.mark.parametrize("argv", [["report"], ["report", "--html"], ["report", "--json"], ["compare"]])

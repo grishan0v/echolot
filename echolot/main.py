@@ -754,8 +754,7 @@ def cmd_analyze(args) -> int:
                 jobs = 1
         reports = parallel.in_order(
             traces, lambda t: analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
-                                            use_defaults=args.defaults, tp_source=tp_source,
-                                            below_bar=True),
+                                            use_defaults=args.defaults, tp_source=tp_source),
             jobs)
         # A launch that ended on another activity than most of the set's is
         # another journey: left out, and named (#909).
@@ -4113,28 +4112,20 @@ def cmd_calibrate(args) -> int:
             _include_modules(tp, detectors)
             for d in detectors:
                 try:
-                    measured = tp.query(d.render_open(overrides.get(d.id)))
+                    measured = tp.query(d.render(overrides.get(d.id))[0])
                 except Exception as e:
                     failed[d.id] += 1
                     print(f"[!] {d.id} on {trace}: {e}", file=sys.stderr)
                     current[d.id] = None
                     continue
-                if d.fires:
-                    # One query: every row it measured, each marked with
-                    # whether the thresholds in effect show it (#832).
-                    per_run[d.id].append([{k: v for k, v in r.items() if k != "over_bar"}
-                                          for r in measured])
-                    if current[d.id] is not None:
-                        current[d.id].append([{k: v for k, v in r.items() if k != "over_bar"}
-                                              for r in measured if r.get("over_bar")])
-                    continue
-                per_run[d.id].append(measured)
+                # One query: every row it measured, each marked with whether
+                # the thresholds in effect show it (#832). A detector without
+                # `@fires` shows every row it returns.
+                every = [{k: v for k, v in r.items() if k != "over_bar"} for r in measured]
+                per_run[d.id].append(every)
                 if current[d.id] is not None:
-                    try:
-                        current[d.id].append(
-                            tp.query(d.render(overrides.get(d.id))[0]))
-                    except Exception:
-                        current[d.id] = None
+                    current[d.id].append([r for r, m in zip(every, measured, strict=True)
+                                          if not d.fires or m.get("over_bar")])
 
     spread = ""
     if len(windows) > 1 and max(windows) > 2 * min(windows):

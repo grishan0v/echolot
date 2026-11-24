@@ -65,10 +65,8 @@ def test_the_second_query_comes_off_the_file(tmp_path: Path) -> None:
 
     check("the first query ends where the marker begins",
           "@intervals" not in d.sql and "_rows" not in d.sql, d.sql)
-    check("and still ends in its LIMIT, which calibrate strips",
+    check("and still ends in its LIMIT: without `@fires` it shows what it returns",
           _LIMIT_TAIL.search(d.sql) is not None, d.sql[-80:])
-    check("so the measuring pass has none",
-          "LIMIT" not in d.render_open().upper(), d.render_open()[-80:])
     sql, params = d.render()
     check("the first renders as before", ">= 16 * 1000000" in sql, sql)
     second = d.render_intervals(params)

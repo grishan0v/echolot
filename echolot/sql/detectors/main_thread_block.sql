@@ -38,9 +38,9 @@
 -- the tail of healthy runs moves with how busy the scenario is: on 15 healthy
 -- cold starts it came out at 119.7 ms, and a 100 ms block stopped being a row
 -- (#509). A slice that is long for this app is `main_thread_outlier`'s to
--- find, against its own median. `@bar` still opens it when repeats are
--- merged, so a block just under 16 ms in one repeat is not read as absent
--- there (#505).
+-- find, against its own median. The bar is the predicate (`@fires`) and no
+-- query's filter, so a block just under 16 ms in one repeat is still
+-- measured there, and not read as absent (#505, #832).
 --
 -- Self times add up without overlap: their sum across a thread cannot exceed
 -- the thread's own time. Total duration stays alongside — the "self / total"

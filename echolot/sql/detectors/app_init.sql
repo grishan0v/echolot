@@ -80,11 +80,11 @@
 -- above that: a silent detector means the providers and `Application.onCreate`
 -- together were short.
 --
--- It gates the whole result, so `@bar` opens it when repeats are merged, as
--- the bar of `main_thread_block` is. Without that, a repeat whose stretch
--- came out at 75 ms returned no row from the open query either and read as
--- one where nothing ran: a set said "2/5", its medians were the two longest
--- repeats', and `compare` padded the rest with zeros (#707).
+-- It gates the whole result, so it is a column of every row, `stretch_ms`,
+-- and the predicate holds it (#832): every section is measured whatever the
+-- stretch. A repeat whose stretch came out at 75 ms once returned no row and
+-- read as one where nothing ran: a set said "2/5", its medians were the two
+-- longest repeats', and `compare` padded the rest with zeros (#707).
 
 -- The steps that find the stretch and what has a name in it are written
 -- down once, as three tables of this detector's own, and both the rows below
