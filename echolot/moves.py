@@ -580,7 +580,39 @@ def _notes(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
                     "title": "Not recorded alike.",
                     "text": f"Besides the app, {things} differed between the two: {'; '.join(unlike)}. "
                             "A time can move for that reason alone. The technical comparison says more."})
+    named = _one_side_note(cmp.get("names") or {}, ctx)
+    if named is not None:
+        out.append(named)
     return out
+
+
+# How many names of each side the note below says by name.
+NAMES_SAID = 3
+
+
+def _one_side_note(names: dict[str, Any], ctx: _Ctx) -> dict[str, str] | None:
+    """The names in every launch of one side and in none of the other (#610).
+
+    No check reads them, so no check below moves for them, and they are
+    often the one sign of what the change did: a method compiled only once
+    it became hot names the code it is in.
+    """
+    parts = []
+    for side, other in (("after", "before"), ("before", "after")):
+        rows = names.get(side) or []
+        if not rows:
+            continue
+        said = ", ".join(f"`{r['name']}` ({plain.hum(r['total_ms'])} a {ctx.noun}"
+                         + (f", {r['threads']}" if r.get("threads") else "") + ")"
+                         for r in rows[:NAMES_SAID])
+        more = f", and {len(rows) - NAMES_SAID} more" if len(rows) > NAMES_SAID else ""
+        parts.append(f"In every {ctx.noun} {side} and in none {other}: {said}{more}.")
+    if not parts:
+        return None
+    return {"id": "names", "attention": plain.WORTH_A_LOOK,
+            "title": "Work only one side has.",
+            "text": " ".join(parts) + " No check reads these, so no check moves for them; "
+                                      "`echolot compare --names` lists them all."}
 
 
 # ---------------------------------------------------------------------------

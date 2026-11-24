@@ -697,6 +697,13 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         if cooled is not None:
             environment["cooldown"] = cooled
         markers = _markers_info(tp, cfg)
+        # Every slice name of the window, for `compare` to set against the
+        # other set's (#610). The merge keeps what it needs of it.
+        try:
+            names = _slice_names_info(tp, markers)
+        except Exception as e:  # the report stands without it, as without a detector
+            names = None
+            print(f"[!] slice names: {e}", file=sys.stderr)
         # How the trace was recorded: what it asked the device for, and what
         # `collect` kept beside it (#533).
         recording = recording_mod.of_trace(tp, trace)
@@ -793,11 +800,13 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     if window.get("frames"):
         window["frames"]["late"] = _late_frames(results)
 
-    return report_mod.build(str(trace), window, results,
-                            toolchain=toolchain_info(tp_binary, tp_source),
-                            absent=absent, environment=environment,
-                            markers=markers, scenario=cfg.scenario_name,
-                            budget_ms=budget_ms, recording=recording)
+    rep = report_mod.build(str(trace), window, results,
+                           toolchain=toolchain_info(tp_binary, tp_source),
+                           absent=absent, environment=environment,
+                           markers=markers, scenario=cfg.scenario_name,
+                           budget_ms=budget_ms, recording=recording)
+    rep[report_mod.NAMES_ALL] = names
+    return rep
 
 
 def _below_bar(tp, d, overrides: dict | None, sql: str,
@@ -924,6 +933,52 @@ def _markers_info(tp, cfg: Config) -> dict:
         f"SELECT DISTINCT name FROM slice WHERE name GLOB '{sql_value(globs[0])}'")})
     return {"prefix": prefix, "globs": globs, "rows": out, "absent": absent,
             "in_trace": in_trace}
+
+
+# What the inventory below calls the main thread: its name is the package's
+# last fifteen characters, which says nothing about whose thread it is.
+MAIN_THREAD = "(main)"
+
+
+def _slice_names_info(tp, markers: dict) -> dict[str, dict]:
+    """Every slice name of the window, thread and async, with its numbers (#610).
+
+    By name as `report.slice_family` folds it, so that the names of two
+    builds' traces can be set against each other in `compare`: a name and
+    the same with another tid, vsync, fence or line number, or another
+    install directory, are one. The project's own markers, from `markers`,
+    are kept as written. The threads are folded the same way, the main
+    thread named as such and an async section under `(async)`.
+
+    All of them, whatever they took: what `compare` needs of one side is
+    whether a name of the other was there at all. `report._merge_names`
+    keeps what it needs of it.
+    """
+    keep = markers.get("prefix")
+    own = frozenset(r["location"] for r in markers.get("rows") or [])
+    rows = tp.query(f"""
+        SELECT s.name AS name,
+               CASE WHEN s.is_main_thread = 1 THEN '{MAIN_THREAD}'
+                    ELSE COALESCE(s.thread_name, 'tid ' || s.tid) END AS thread,
+               SUM(MAX(s.dur, 0)) AS total_ns, MAX(MAX(s.dur, 0)) AS max_ns
+        FROM _slice_win s WHERE s.name IS NOT NULL
+        GROUP BY 1, 2
+        UNION ALL
+        SELECT a.name, '{ASYNC_THREAD}', SUM(MAX(a.dur, 0)), MAX(MAX(a.dur, 0))
+        FROM _aslice_win a WHERE a.name IS NOT NULL
+        GROUP BY a.name
+    """)
+    out: dict[str, dict] = {}
+    for r in rows:
+        name = report_mod.slice_family(r["name"], keep=keep, names=own)
+        row = out.setdefault(name, {"total_ns": 0, "max_ns": 0, "threads": set()})
+        row["total_ns"] += r["total_ns"] or 0
+        row["max_ns"] = max(row["max_ns"], r["max_ns"] or 0)
+        row["threads"].add(report_mod.slice_family(str(r["thread"])))
+    return {name: {"total_ms": round(row["total_ns"] / 1e6, 2),
+                   "max_ms": round(row["max_ns"] / 1e6, 2),
+                   "threads": sorted(row["threads"])}
+            for name, row in out.items()}
 
 
 def cmd_analyze(args) -> int:
@@ -1593,6 +1648,7 @@ def cmd_compare(args) -> int:
     s = cmp["summary"]
     recorder.note(comparable=cmp["comparable"], moved=s["moved"],
                   appeared=s["appeared"], vanished=s["vanished"],
+                  only_after=s["only_after"], only_before=s["only_before"],
                   warnings=[w["id"] for w in cmp["warnings"]])
 
     text = compare_mod.to_markdown(cmp)
@@ -1624,7 +1680,11 @@ def cmd_compare(args) -> int:
             cmp.pop("plain", None)
             print(f"[!] the plain reading could not be worked out, so the table is all there is: "
                   f"{type(e).__name__}: {e}", file=sys.stderr)
-    print(moves_mod.render(reading) if args.plain and reading is not None else text)
+    # `--names`: the names on one side only, every one, in place of the rest.
+    if getattr(args, "names", False):
+        print(compare_mod.names_view(cmp))
+    else:
+        print(moves_mod.render(reading) if args.plain and reading is not None else text)
 
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -6571,6 +6631,10 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--html", action="store_true",
                     help="write the comparison as a page for a person, beside "
                          "comparison.json (comparison.html): one file that opens from disk")
+    cp.add_argument("--names", action="store_true",
+                    help="print every slice name that is in every run of one side and in "
+                         "no run of the other, in place of the comparison, which lists "
+                         f"{compare_mod.NAMES_SHOWN} a side")
     cp.set_defaults(func=cmd_compare)
 
     gd = add("guide", "agent", "[<topic>]",
