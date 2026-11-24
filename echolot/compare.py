@@ -56,7 +56,7 @@ from . import when as when_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
 from . import report as report_mod
-from . import plain, stats, table
+from . import files, plain, stats, table
 from .report import family, identity_of, metric_of, short_runs
 
 # What counts as movement worth a row. Absolute floor first, so a 4 ms wobble
@@ -218,9 +218,8 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
     names = _one_sided(before, after, [*rows, *markers], temp_prefix)
 
     return {
-        # 2 since `overlap` gave way to `shift` and `holds`: a reader written
-        # for the first shape finds the verdict it read gone, not moved.
-        "schema": 2,
+        # Shared with the reader, which says why it goes up (`files`).
+        "schema": files.COMPARISON_SCHEMA,
         "kind": "comparison",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "comparable": comparable,
