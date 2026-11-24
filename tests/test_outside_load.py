@@ -96,6 +96,34 @@ def test_repeats_carry_the_median_and_the_worst_names(reports) -> None:
           and merged["top"][0]["name"] == fixture.OTHER_NAME, merged)
 
 
+def test_repeats_name_the_process_that_took_most_across_them() -> None:
+    """#710: `system_server` first in two repeats, another app first in the
+    third, the busiest. The warning names the process of the median, with
+    its median share, and not the busiest repeat's."""
+    def repeat(pct: float, top: list[tuple[str, int, float]]) -> dict:
+        return {"window": {"crowding": {
+            "threads": 40, "cores": 8, "peak": 9, "above_cores_ms": 5.0,
+            "outside": {"pct": pct, "top": [
+                {"name": n, "uid": uid, "processes": 1, "pct": share}
+                for n, uid, share in top]}}}}
+
+    merged = report._merge_crowding([
+        repeat(50.0, [("system_server", 1000, 20.0), ("com.other.app", 10283, 4.0)]),
+        repeat(55.0, [("system_server", 1000, 18.0), ("surfaceflinger", 1000, 6.0)]),
+        repeat(61.0, [("com.other.app", 10283, 16.0), ("system_server", 1000, 9.0)]),
+    ])
+    top = merged["outside"]["top"]
+    check("the process of the median leads", top[0]["name"] == "system_server", top)
+    check("with its median share over the three", top[0]["pct"] == 18.0, top)
+    check("a process missing from a repeat counts zero there",
+          next(p for p in top if p["name"] == "com.other.app")["pct"] == 4.0, top)
+    check("the worst repeat's share is still kept", merged["outside"]["pct_max"] == 61.0,
+          merged["outside"])
+    line = report._outside_lines(merged)[0]
+    check("the sentence names it, with that share",
+          "most of it `system_server` (uid 1000, 18%)" in line, line)
+
+
 def compare(before: dict, after: dict) -> dict:
     return compare_mod.build(before, after, before_path="a.json", after_path="b.json")
 

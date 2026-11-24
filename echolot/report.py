@@ -293,18 +293,40 @@ def _merge_crowding(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
         "above_cores_ms": round(median([c["above_cores_ms"] for c in found]), 2),
         "runs": f"{len(found)}/{len(reports)}",
     }
-    # Other processes' share: the median, like the rest, and the names from
-    # the repeat where they took most, which is where the load was clearest.
+    # Other processes' share: the median, like the rest, and the processes
+    # by theirs. Copied whole from the repeat where others took most, the
+    # names were that one repeat's: an app that led in one repeat of eight,
+    # with system_server first in the other seven, was the one the warning
+    # sent the reader to close, beside a share that was not part of the
+    # median printed with it (#710).
     outside = [c["outside"] for c in found if c.get("outside")]
     if outside:
         worst = max(outside, key=lambda o: o.get("pct") or 0)
         out["outside"] = {
             "pct": round(median([o["pct"] for o in outside]), 1),
             "pct_max": worst.get("pct"),
-            "top": worst.get("top") or [],
+            "top": _merge_outside_top([o.get("top") or [] for o in outside]),
             "runs": f"{len(outside)}/{len(reports)}",
         }
     return out
+
+
+def _merge_outside_top(tops: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """The processes that took the CPUs across repeats, each by the median
+    of its share over every repeat: zero where it was not among a repeat's
+    largest. Most first, as many as one repeat lists."""
+    seen: dict[tuple[Any, Any], dict[str, Any]] = {}
+    shares: dict[tuple[Any, Any], list[float]] = {}
+    for at, top in enumerate(tops):
+        for p in top:
+            key = (p.get("name"), p.get("uid"))
+            seen.setdefault(key, dict(p))
+            seen[key]["processes"] = max(seen[key].get("processes") or 1,
+                                         p.get("processes") or 1)
+            shares.setdefault(key, [0.0] * len(tops))[at] = p.get("pct") or 0.0
+    merged = [{**seen[k], "pct": round(median(v), 1)} for k, v in shares.items()]
+    merged.sort(key=lambda p: (-p["pct"], str(p.get("name"))))
+    return merged[:max((len(t) for t in tops), default=0)]
 
 
 def _merge_frames(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
