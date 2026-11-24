@@ -132,6 +132,96 @@ def test_a_port_handed_to_a_shell_is_not_handed_again_until_it_listens(monkeypat
     assert (first, second) == (40001, 40002)
     tpshell._release(first)
     assert tpshell._free_port() == 40001, "a port its shell listens on is the kernel's to keep"
+    for port in (first, second):
+        tpshell._release(port)
+    assert not tpshell._handed
+
+
+# A process that opens sessions one after another, each drawing its port out
+# of the few from argv[1] on: Linux's random draw, squeezed until processes
+# side by side draw one port all the time. A port a closed shell left in
+# TIME_WAIT stays drawable, as it is to trace_processor, which binds with
+# SO_REUSEADDR; one someone listens on is not. Prints, per session, what it
+# read or the error it ended in.
+_SIDE_BY_SIDE = r"""
+import errno, json, random, socket, sys, types
+from pathlib import Path
+from echolot import tpshell
+from echolot.tp import TraceSession
+
+base, k, sessions = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+traces = sys.argv[4:]
+
+
+class Narrow(socket.socket):
+    def bind(self, address):
+        if address[1]:
+            return super().bind(address)
+        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        for port in random.sample(range(base, base + k), k):
+            try:
+                return super().bind((address[0], port))
+            except OSError as e:
+                if e.errno != errno.EADDRINUSE:
+                    raise
+        raise OSError(errno.EADDRINUSE, "all taken")
+
+
+tpshell.socket = types.SimpleNamespace(
+    socket=Narrow, AF_INET=socket.AF_INET, SOCK_STREAM=socket.SOCK_STREAM)
+out = []
+for i in range(sessions):
+    trace = traces[i % len(traces)]
+    try:
+        with TraceSession(Path(trace)) as tp:
+            tp.query("CREATE VIEW _proc AS SELECT 1 AS one")
+            out.append([trace, tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"]])
+    except Exception as e:
+        out.append([trace, f"{type(e).__name__}: {str(e).strip()[-160:]}"])
+print(json.dumps(out))
+"""
+
+
+@pytest.mark.skipif(not sys.platform.startswith(("linux", "darwin")),
+                    reason="the squeezed draw leans on how Linux and macOS reuse ports")
+def test_processes_side_by_side_drawing_one_port_each_read_their_own_trace(tmp_path: Path) -> None:
+    """Test workers starting trace_processors side by side on Linux drew one
+    port now and then, and one session's SQL ran in another's shell: `view
+    _proc already exists`, `no such table: process`, a connection reset — in
+    three CI runs of a hundred and twenty-four (#807). Here four processes
+    draw out of eight ports, where they collide on most sessions: every
+    session reads its own trace. Before the lease and the shell's own word on
+    its port, one in six or seven did not."""
+    import json
+    import random
+    import subprocess
+
+    crowded, plain = tmp_path / "crowded.perfetto-trace", tmp_path / "plain.perfetto-trace"
+    crowded.write_bytes(fixture.build(crowded=True))
+    plain.write_bytes(fixture.build())
+    alone = {}
+    for t in (crowded, plain):
+        with TraceSession(t) as tp:
+            alone[str(t)] = tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"]
+    assert alone[str(crowded)] != alone[str(plain)], alone
+
+    # Below the ephemeral ranges (Linux 32768+, macOS 49152+), where no
+    # other program is handed a port by the kernel.
+    base = random.randrange(20000, 30000, 8)
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    workers = [subprocess.Popen(
+        [sys.executable, "-c", _SIDE_BY_SIDE, str(base), "8", "6",
+         *((str(crowded), str(plain)) if i % 2 else (str(plain), str(crowded)))],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True)
+        for i in range(4)]
+    read = []
+    for w in workers:
+        out, err = w.communicate(timeout=120)
+        assert w.returncode == 0, err[-2000:]
+        read += json.loads(out)
+    wrong = [(Path(t).name, n) for t, n in read if n != alone[t]]
+    assert len(read) == 24, read
+    assert not wrong, f"{len(wrong)} of {len(read)} sessions did not read their own trace: {wrong}"
 
 
 def test_the_watcher_holds_the_shell_from_its_start(trace: Path, monkeypatch) -> None:
