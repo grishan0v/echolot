@@ -6,6 +6,7 @@
 --       nobody named.
 -- @needs: atrace:am
 -- @param: min_stretch_ms = 80
+-- @bar: min_stretch_ms
 -- @identity: location
 -- @plain_title: What runs before the first screen is created
 -- @plain_why: Libraries and the app's own setup code run before anything can
@@ -62,6 +63,12 @@
 -- On a healthy cold start the stretch took 49 to 53 ms, so the default sits
 -- above that: a silent detector means the providers and `Application.onCreate`
 -- together were short.
+--
+-- It gates the whole result, so `@bar` opens it when repeats are merged, as
+-- the bar of `main_thread_block` is. Without that, a repeat whose stretch
+-- came out at 75 ms returned no row from the open query either and read as
+-- one where nothing ran: a set said "2/5", its medians were the two longest
+-- repeats', and `compare` padded the rest with zeros (#707).
 
 WITH RECURSIVE bind AS (
     SELECT s.slice_id, s.ts, s.ts + s.dur AS te
