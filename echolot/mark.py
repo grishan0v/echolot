@@ -1219,6 +1219,38 @@ def enclosing_block(text: str, suffix: str, line: int):
     return best
 
 
+def inlined_into(text: str, suffix: str, line: int, name: str) -> list[int] | None:
+    """The declarations of `name`, for a frame whose line is past the end of its file.
+
+    None when the line is in the file. Past its end is where Kotlin numbers
+    the body of an `inline fun` it copied into a caller: the lines after the
+    caller file's last one, which R8 keeps and a retraced frame carries. On
+    the build that froze, every `*JsonFiller.fill` of one app carried such
+    a line, and each was read as a line from another build. The frame still
+    names the function it ran in, so that is where it is placed: the
+    1-based lines that declare `name`, one per overload, none when the file
+    declares no such function.
+    """
+    lines = re.findall(r"[^\n]*\n|[^\n]+$", text)
+    if line <= len(lines):
+        return None
+    pattern = _KOTLIN_FUN if suffix == ".kt" else _JAVA_DECL
+    found = []
+    for number, raw in enumerate(lines, 1):
+        decl = pattern.match(raw)
+        if decl and decl.group("name").strip("`") == name:
+            found.append(number)
+    return found
+
+
+def inlined_note(line: int, name: str, declared: int) -> str:
+    """What a frame placed by `inlined_into` says about its line."""
+    if declared == 1:
+        return f"line {line} is past the end of the file: inlined code, placed at `{name}`"
+    return (f"line {line} is past the end of the file: inlined code, and `{name}` "
+            f"is declared {declared} times here")
+
+
 # What can start a declaration that ends the expression of the one above it.
 _NEXT_DECL = re.compile(
     r"^(?P<indent>[ \t]*)(?:@[\w.]+(?:\([^)]*\))?[ \t]*)*(?:[a-z]+[ \t]+)*"
@@ -1514,9 +1546,28 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
         if text is None:
             continue
         block = enclosing_block(text, path.suffix, line)
+        named = frame_function(symbol, declared_functions(text, path.suffix))
         expression = None if block is not None else expression_body(
-            text, path.suffix, line,
-            frame_function(symbol, declared_functions(text, path.suffix)))
+            text, path.suffix, line, named)
+        # Past the end of the file: an `inline fun`'s body, numbered by
+        # Kotlin after the caller's last line. Placed at the function the
+        # frame names, which is the one that ran, on the build that froze.
+        inlined = ""
+        decls = (inlined_into(text, path.suffix, line, named)
+                 if block is None and expression is None else None)
+        if decls:
+            inlined = inlined_note(line, named, len(decls))
+            if len(decls) > 1:
+                out.proposals.append(Proposal(
+                    "anr_frame", rel, decls[0], f"{named} — on the stack when it "
+                    f"froze, at line {line}", marker, "anr",
+                    gradle_module(path, root), applicable=False,
+                    reason=f"{inlined} — mark by hand"))
+                continue
+            block = enclosing_block(text, path.suffix, decls[0])
+            if block is None or block[1] != decls[0]:
+                block = None
+                expression = expression_body(text, path.suffix, decls[0], named)
         if expression is not None:
             # A function, with nothing to bracket. Not "no function": that
             # reads as a line from another build, and counts as one below.
@@ -1524,7 +1575,8 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
                 "anr_frame", rel, expression, f"{symbol.rsplit('.', 1)[-1]} — on "
                 f"the stack when it froze, at line {line}", marker, "anr",
                 gradle_module(path, root), applicable=False,
-                reason="an expression body: rewrite it as a block, or mark the caller"))
+                reason=(f"{inlined}; " if inlined else "")
+                + "an expression body: rewrite it as a block, or mark the caller"))
             continue
         if block is None:
             out.proposals.append(Proposal(
@@ -1578,7 +1630,8 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
                or _why_not(open_at, has_return and composable, flat, close_at, text))
         proposal = Proposal(
             "anr_frame", rel, decl_line,
-            f"{name} — on the stack when it froze, at line {line}",
+            f"{name} — on the stack when it froze, at line {line}"
+            + (" (past the end of the file: inlined code)" if inlined else ""),
             marker, "anr", gradle_module(path, root),
             applicable=not why, reason=why,
             open_at=open_at, close_at=close_at, composable=composable)
@@ -1592,9 +1645,11 @@ def plan_from_anr(root: Path, frames: list[tuple[str, str, int | None]],
     for p in out.proposals:
         _refuse_outside(p, list(allowed or []))
 
-    # A frame that lands on an import, on a blank line between two functions,
-    # or past the end of the file is not a hard case — it is a line number
-    # from another build. Refusing each one on its own merits and saying
+    # A frame that lands on an import, or on a blank line between two
+    # functions, is not a hard case — it is a line number from another
+    # build. Past the end of the file is not one either when the file
+    # declares the function the frame names: that is inlined code (see
+    # `inlined_into`), placed above, and not counted here. Refusing each one on its own merits and saying
     # nothing about the pattern reads as a tool that cannot do its job, when
     # what happened is that the checkout is not the version that froze.
     # Only what another build explains: a line in no function, a frame

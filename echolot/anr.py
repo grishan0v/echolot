@@ -456,6 +456,9 @@ class Report:
     # map id the frames carry when it is not the mapping's. None when no
     # mapping was given.
     retraced: dict[str, Any] | None = None
+    # The retraced frames whose file is echolot's guess, `<Class>.java`, for
+    # a class the mapping names no file of: see `mapping.Frame.guessed`.
+    guessed: set[str] = field(default_factory=set, repr=False, compare=False)
 
     @property
     def package(self) -> str:
@@ -800,6 +803,12 @@ def retrace(report: Report, mapping: Path) -> None:
                            "map_id": {"frames": batch.foreign[0], "mapping": batch.foreign[1]}}
         return
     named = {text: _as_lines(got, parsed[text][2]) for text, got in batch.traced.items()}
+    for text, got in batch.traced.items():
+        if len(got.chains) == 1:
+            report.guessed |= {line for frame, line in zip(got.frames, named[text], strict=True)
+                               if frame.guessed}
+        elif got.chains[0][0].guessed:
+            report.guessed |= set(named[text])
     for thread in report.threads:
         thread.frames = [new for text in thread.frames for new in named.get(text, [text])]
         if thread.lock:
@@ -1287,6 +1296,12 @@ class Located:
     # names: "line 138 is now inside `clearAll`, the frame names `await`".
     # Empty when they agree, and when there is no line to check.
     astray: str = ""
+    # A line past the end of the file, in a file that declares the function
+    # the frame names: Kotlin's numbering of an `inline fun` copied into it.
+    # `at` is the declaration it is placed at, and `inlined` says so. Not a
+    # sign of another build, and not counted with `astray`.
+    at: int | None = None
+    inlined: str = ""
 
 
 def source_index(root: Path) -> dict[str, list[Path]]:
@@ -1503,6 +1518,10 @@ def locate(report: Report, root: Path,
             seen.add(frame)
             found = place(frame, index, root)
             if found:
+                if frame in report.guessed:
+                    # The frame's `X.java` is echolot's guess, not the
+                    # build's: a checkout with `X.kt` does not disagree.
+                    found.named = ""
                 placed.append(found)
                 continue
             # Matched once and kept. The same regex ran twice here — once to
@@ -1549,7 +1568,15 @@ def _check_functions(placed: list[Located], root: Path) -> None:
         wanted = mark_mod.frame_function(found.symbol, declared)
         block = mark_mod.enclosing_block(text, suffix, found.line)
         if block is None:
-            if mark_mod.expression_body(text, suffix, found.line, wanted) is None:
+            if mark_mod.expression_body(text, suffix, found.line, wanted) is not None:
+                continue
+            decls = mark_mod.inlined_into(text, suffix, found.line, wanted)
+            if decls:
+                # Past the end of the file, in a file that declares the
+                # function: inlined code, on the build that froze.
+                found.at = decls[0] if len(decls) == 1 else None
+                found.inlined = mark_mod.inlined_note(found.line, wanted, len(decls))
+            else:
                 found.astray = f"line {found.line} is in no function now"
         elif block[0] == wanted:
             continue
@@ -1923,13 +1950,16 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                 f"  ← one of {len(found.others) + 1} of that name, also "
                 + ", ".join(found.others[:3])
                 + (" …" if len(found.others) > 3 else ""))
-            where = found.file + (f":{found.line}" if found.line else "")
+            line = found.at or found.line
+            where = found.file + (f":{line}" if line else "")
             if found.named:
                 # Placed by its class: said, so the line is not read as a
                 # file of that name somebody could look for.
                 mark += f"  ← the frame names `{found.named}`"
             if found.astray:
                 mark += f"  ← {found.astray}"
+            if found.inlined:
+                mark += f"  ← {found.inlined}"
             out.append(f"- `{_short(found.symbol)}` — {where}{mark}")
         out.append("")
 
@@ -2166,7 +2196,10 @@ def summary(report: Report,
                  # The file the frame named when it was placed by its class.
                  "named": f.named or None,
                  # What the line is in now, when not the function named.
-                 "astray": f.astray or None}
+                 "astray": f.astray or None,
+                 # A line past the end of the file: where the frame is
+                 # placed, the declaration it names, and the note.
+                 "at": f.at, "inlined": f.inlined or None}
                 for f in code[0]
             ],
             "unplaced": code[1],
