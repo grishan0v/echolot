@@ -195,11 +195,19 @@ def _named_by_text(raw: dict[str, Any], p: Path) -> None:
                    if isinstance(value, list) and key == "package" else ""))
 
 # `scenario.window: launch`: the window is how the app opens, as the platform
-# records it, and the trace says where it ends (see launch.py). The one window
-# a scenario can name without an anchor; any other scenario says where it
-# starts and ends with `start` and `end`.
+# records it, and the trace says where it ends (see launch.py).
+# `scenario.window: whole`: the window is the whole trace, from its first
+# moment to its last, for a recording made outside any scenario (#519);
+# `analyze --whole-trace` takes it without a word in the config. The two
+# windows a scenario can name without an anchor; any other scenario says
+# where it starts and ends with `start` and `end`.
 LAUNCH = "launch"
-_WINDOWS = (LAUNCH,)
+WHOLE = "whole"
+_WINDOWS = (LAUNCH, WHOLE)
+# What `analyze --whole-trace` calls the scenario it measures, and the
+# directory its report goes to: the name of no scenario in the config, so
+# that it never takes the place of one's latest report.
+WHOLE_TRACE = "whole-trace"
 
 
 def _detectors_section(node: Any, where: str) -> dict[str, Any]:
@@ -255,15 +263,28 @@ def _window_named(where: str, block: dict[str, Any]) -> str | None:
     if node not in _WINDOWS:
         raise ConfigError(
             f"{where}.window: {node!r} is no window. It takes `{LAUNCH}`: how "
-            f"the app opens, from the launch the platform records. Any other "
-            f"scenario says where it starts and ends with `start` and `end`")
+            f"the app opens, from the launch the platform records; or "
+            f"`{WHOLE}`: the whole trace, for a recording made outside any "
+            f"scenario. Any other scenario says where it starts and ends with "
+            f"`start` and `end`")
     beside = [key for key in ("start", "end") if _anchor_named(block.get(key))]
     if beside:
         raise ConfigError(
             f"{where}: `window: {node}` and "
             + " and ".join(f"`{key}`" for key in beside)
-            + " are two ways to say where the window is: keep one. The launch "
-              "window takes its start and its end from the trace")
+            + " are two ways to say where the window is: keep one. "
+            + ("The launch window takes its start and its end from the trace"
+               if node == LAUNCH else
+               "The whole trace starts and ends where the recording does"))
+    # The whole trace is as long as somebody let the recording run: a limit
+    # held against that length is a limit on the recording, and its verdict
+    # would read as one about the app.
+    if node == WHOLE and block.get("budget_ms") is not None:
+        raise ConfigError(
+            f"{where}: `window: {WHOLE}` and `budget_ms` cannot go together. The "
+            f"whole trace is as long as the recording ran, so a time limit on it "
+            f"says nothing about the app: name `start` and `end` to give the "
+            f"scenario a window a limit can be held against")
     return str(node)
 
 
@@ -329,6 +350,9 @@ class Config:
         # `analyze --root`: the checkout named on the command line, over
         # `project.root` (see `sources`).
         self.root_override: Path | None = None
+        # `analyze --whole-trace`: the window is the whole trace, whatever
+        # scenario the config names (see `_scenario`).
+        self.whole_trace = False
 
     @classmethod
     def load(cls, path: str | Path, local: str | Path | None = None,
@@ -581,8 +605,8 @@ class Config:
 
     @property
     def scenario_window(self) -> str | None:
-        """The window the scenario names instead of two anchors: `launch`, or
-        None for a scenario that says where it starts and ends.
+        """The window the scenario names instead of two anchors: `launch` or
+        `whole`, or None for a scenario that says where it starts and ends.
 
         Written as the anchors are: the word itself, or a block with `name`
         beside its `_source` and `_evidence`.
@@ -676,8 +700,18 @@ class Config:
         return out
 
     def _scenario(self) -> tuple[str, dict[str, Any]]:
-        """The scenario the accessors read: where it is written, and its block."""
+        """The scenario the accessors read: where it is written, and its block.
+
+        Under `analyze --whole-trace` it is a scenario of its own, which the
+        config does not write: called `whole-trace`, its window the whole
+        trace, with no anchor, no limit, and no runner keys or thresholds of
+        its own. The config's top-level thresholds are what it runs on. The
+        config's scenarios are still read, so that one it cannot mean is
+        refused as on any other run.
+        """
         many = self._many()
+        if self.whole_trace:
+            return "scenario", {"name": WHOLE_TRACE, "window": WHOLE}
         if many is None:
             node = self.get("scenario")
             if node is None:
@@ -862,9 +896,11 @@ class Config:
         `.echolot/out`, as it has always been. A config that names its
         scenarios under `scenarios:` keeps a directory per scenario under it,
         `.echolot/out/feed_scroll`, so that measuring one does not overwrite
-        the other's latest report.
+        the other's latest report. `--whole-trace` measures no scenario of the
+        config, and has `.echolot/out/whole-trace` in any config, for the
+        same reason.
         """
-        if self.get("scenarios") is None:
+        if self.get("scenarios") is None and not self.whole_trace:
             return ".echolot/out"
         return f".echolot/out/{self.scenario_name}"
 

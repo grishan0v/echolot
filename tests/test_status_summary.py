@@ -71,9 +71,9 @@ def project(tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize("window, said", [
     ({"end_anchor": {"glob": "list_shown", "matches": 0, "missed": "5/5"}},
-     "! end anchor not found in 5/5 runs: their window is the whole trace"),
+     "! end anchor not found in 5/5 runs: their window is everything the process did"),
     ({"start_anchor": {"glob": "bindApplication", "matches": 0}},
-     "! start anchor not found: the window is the whole trace"),
+     "! start anchor not found: the window is everything the process did"),
     ({"end_anchor": {"glob": "x", "matches": 1, "unfinished": True}},
      "! end anchor never closed"),
     ({"duration_ms_min": 300, "duration_ms_max": 1200}, "! repeat windows diverged 4.0x"),

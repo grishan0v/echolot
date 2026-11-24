@@ -56,6 +56,7 @@ import textwrap
 from pathlib import Path
 from typing import Any, Callable
 
+from . import launch as launch_mod
 from .report import metric_of
 from .tp import load_detectors
 
@@ -180,8 +181,10 @@ class _Ctx:
         self.closed = _closed(window)
         # What a share is a share of. A window whose anchor missed is the
         # recording, whatever the scenario is (#557): "56% of the launch" of
-        # such a window is a share of something that is not the launch.
-        self.noun = "recording" if _missed(window) else self.kind
+        # such a window is a share of something that is not the launch. The
+        # whole trace is the recording by name (#519).
+        self.noun = ("recording" if _missed(window) or launch_mod.is_whole(window)
+                     else self.kind)
         # The frames drawn in the window, the median over the repeats; None
         # without a frame timeline, or in a report written before it was kept.
         drawn = (window.get("frames") or {}).get("count")
@@ -209,12 +212,13 @@ def _closed(window: dict[str, Any]) -> bool:
     closed, or on an end anchor that matched in every repeat?
 
     Anything else ends where the recording does: a window without anchors,
-    whose length the script fixes (a scroll), or one whose anchor missed.
+    whose length the script fixes (a scroll), one whose anchor missed, and
+    the whole trace.
     """
     if _missed(window):
         return False
     end = window.get("end_anchor")
-    return bool(window.get("defined_by")) or isinstance(end, dict)
+    return launch_mod.is_launch(window) or isinstance(end, dict)
 
 
 def _of(missed: Any) -> tuple[int, int] | None:
@@ -244,13 +248,14 @@ def window_warning(report: dict[str, Any]) -> str | None:
                         f"the recording, not to the end of the scenario. Are the two swapped?")
         elif seen and seen[0] < seen[1]:
             said.append(f"echolot did not find where this scenario {where} ({glob}) in {seen[0]} of "
-                        f"{seen[1]} recordings. In those the numbers are about the whole recording, and "
-                        f"they are part of the numbers below.")
+                        f"{seen[1]} recordings. In those the numbers are about everything the app did "
+                        f"in the recording, and they are part of the numbers below.")
         elif seen or not anchor.get("matches"):
             scope = (f" in {seen[0]} of {seen[1]} recordings" if seen and seen[1] > 1 else
                      " in the recording")
             said.append(f"echolot did not find where this scenario {where} ({glob}){scope}, so the "
-                        f"numbers below are about the whole recording, not about the scenario.")
+                        f"numbers below are about everything the app did in the recording, not "
+                        f"about the scenario.")
         elif anchor.get("unfinished"):
             said.append(f"This scenario had not reached its end ({glob}) when the recording stopped, "
                         f"so the numbers below run to the end of the recording.")

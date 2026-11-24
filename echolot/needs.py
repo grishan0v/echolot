@@ -27,6 +27,16 @@ For a set of repeats a detector counts as checked only when every repeat held
 what it reads (`merged`). A report written before the keys existed has
 neither, which means unknown, and never checked.
 
+One source is asked of the window and not of the recording: the start of
+the app's process, which `app_init` reads (#519). A recording holds every
+category it asked for wherever the window lies, but a scroll, a tap, a warm
+start and a recording made outside any scenario hold no `bindApplication`
+in their window, and "nothing took long before the first screen" was the
+report's answer about a first screen that never was. Such a detector is not
+checked either, and the report says it in a line of its own: nothing is
+wrong with the recording, and no other recording of the same window would
+let it look.
+
 Presence is positive evidence only. Where the trace itself cannot say — a
 recording with no composable names might be one nobody asked for, or an app
 that has none — the recording's own account of itself is used: the config the
@@ -102,6 +112,8 @@ class Source:
     # What it is and what puts it in a recording, for `echolot explain`
     # (#494): an agent asking about one detector, before any trace is open.
     about: str = ""
+    # Asked of the scenario's window rather than of the whole recording.
+    window: bool = False
 
 
 def _platform_state(p: Probe) -> bool:
@@ -150,6 +162,21 @@ def _no_composable_names(p: Probe) -> str:
             "to be switched on when recording.")
 
 
+def _process_start(p: Probe) -> bool:
+    # What `app_init` reads, by its own rule: the main thread's
+    # `bindApplication` in the window, with a length. The platform writes it
+    # as the app's process starts, under the `am` category; a warm or hot
+    # start has a process already, and writes none.
+    return p.any("SELECT 1 FROM _slice_win WHERE is_main_thread = 1 "
+                 "AND name = 'bindApplication' AND dur > 0 LIMIT 1")
+
+
+NO_PROCESS_START = ("The window holds no start of the app's process "
+                    "(`bindApplication`): what this check measures runs only as "
+                    "the process starts, on a cold start, so there was nothing "
+                    "for it to read.")
+
+
 # The categories a detector reads, in the words a person has for them.
 CATEGORIES = {
     "am": "the system's activity records, where it notes freezes and app starts",
@@ -187,6 +214,11 @@ SOURCES: dict[str, Source] = {s.id: s for s in (
     Source("composable_names", _composable_names, _no_composable_names,
            "the names `runtime-tracing` writes for every composable call: "
            "`runner.compose_names: true`, for an app that carries it"),
+    Source("process_start", _process_start, lambda p: NO_PROCESS_START,
+           "the app's process starting inside the window, its "
+           "`bindApplication`: a cold start the window covers, as a launch "
+           "scenario's does, and no warm start, scroll or tap",
+           window=True),
     *(_category(name) for name in CATEGORIES),
 )}
 
@@ -210,7 +242,8 @@ def survey(tp: Any, environment: dict[str, Any] | None,
            wanted: set[str]) -> dict[str, str | None]:
     """Each wanted source: None when the trace holds it, else why it does not.
 
-    Only what a detector in this run needs is asked of the trace.
+    Only what a detector in this run needs is asked of the trace. A source of
+    the window (`Source.window`) is asked of the window the trace has open.
     """
     probe = Probe(tp, environment)
     return {name: None if SOURCES[name].holds(probe) else SOURCES[name].missing(probe)
@@ -224,6 +257,10 @@ def verdict(needs: tuple[str, ...], held: dict[str, str | None],
     A detector that failed did not look either, so it is not checked, and the
     reason says to read its error. What the trace lacks comes first when both
     are true: that is the cause a person can do something about.
+
+    Every source that is missing is said, in the order the header names
+    them: a recording without `am` has no `bindApplication` in any window,
+    and that comes second, after what explains it.
     """
     lacking = [held[n] for n in needs if held.get(n)]
     if lacking:
@@ -285,13 +322,40 @@ def said(detectors: list[dict[str, Any]]) -> tuple[int, str] | None:
                      for reason, ids in groups.items()))
 
 
+def of_window(reason: str | None) -> bool:
+    """Whether a detector's reason is the window's alone: what it reads is in
+    no recording of this window, and nothing is wrong with the recording.
+
+    Told by the sentence itself, which leads the reason when the recording
+    held everything else (`verdict` keeps the header's order) and keeps its
+    words through a merge, which only adds how many recordings.
+    """
+    said = [s.missing(Probe(None)) for s in SOURCES.values() if s.window]
+    return bool(reason) and any(reason.startswith(w.rstrip(".")) for w in said)
+
+
 def line(detectors: list[dict[str, Any]]) -> str | None:
-    """The line report.md says it with, next to the one about detectors turned off."""
-    found = said(detectors)
-    if found is None:
-        return None
-    count, why = found
-    return (f"> ⚠️ {count} detector(s) could not run, because the trace does not "
+    """The lines report.md says it with, next to the one about detectors turned off.
+
+    Two kinds, one line each. A recording that does not hold what a detector
+    reads is worth a warning: another recording lets it look. A window that
+    does not is the scenario's nature, and is said without one: a scroll
+    lets no check of a launch look, however it is recorded.
+    """
+    blind = [d for d in detectors if could_not_run(d)]
+    recording = said([d for d in blind if not of_window(d.get("reason"))])
+    window = said([d for d in blind if of_window(d.get("reason"))])
+    out = []
+    if recording is not None:
+        count, why = recording
+        out.append(
+            f"> ⚠️ {count} detector(s) could not run, because the trace does not "
             f"hold what they read. Their silence says nothing about the app. "
             f"{why} A recording that holds what they read lets them look; until "
             f"then those checks are open.")
+    if window is not None:
+        count, why = window
+        out.append(
+            f"> {count} detector(s) did not look, because what they read is not "
+            f"in this window. Their silence says nothing about the app. {why}")
+    return "\n".join(out) or None

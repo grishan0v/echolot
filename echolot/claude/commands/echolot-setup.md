@@ -212,7 +212,7 @@ Look not at the findings but at `window`:
   closed the window, and the window is about as long as the startup line
   says the launch was. `analyze` stopping at `no launch of <process>` means
   the app was not started inside the recording: use `runner.mode: launch`
-- the window is nearly the whole trace — the anchors did not work
+- the window is nearly as long as the recording — the anchors did not work
 - **every detector screaming at once** — almost certainly the process or the
   boundaries are off
 

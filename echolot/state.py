@@ -262,7 +262,7 @@ def window_warning(w: object) -> str | None:
     when its window is the scenario's.
 
     The summary is what an agent decides on, and a report whose end anchor
-    matched in none of five traces, its window the whole trace, read there
+    matched in none of five traces, its window everything the process did, read there
     as healthy as any other (#501). The same checks report.md opens with:
     an anchor that matched nowhere or in some repeats only, an end that
     never closed, and repeats whose windows differ several-fold.
@@ -275,9 +275,10 @@ def window_warning(w: object) -> str | None:
             continue
         missed = a.get("missed")
         if isinstance(missed, str) and missed:
-            return f"{label} anchor not found in {missed} runs: their window is the whole trace"
+            return (f"{label} anchor not found in {missed} runs: their window is "
+                    f"everything the process did")
         if a.get("matches") == 0:
-            return f"{label} anchor not found: the window is the whole trace"
+            return f"{label} anchor not found: the window is everything the process did"
         if a.get("unfinished") is True:
             return f"{label} anchor never closed: the window runs to the end of the trace"
     low, high = w.get("duration_ms_min"), w.get("duration_ms_max")

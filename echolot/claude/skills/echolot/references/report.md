@@ -527,7 +527,10 @@ for ActivityManager's record of it when the app's slice is missing, `null`
 when the trace holds no call after the launch began. `launch` beside `app`
 means the call came before the first frame and closed nothing. Such a window
 has no anchors: `start_anchor` and `end_anchor` are `null`. A window cut by
-anchors carries neither key.
+anchors carries neither key. `whole` is the whole trace (`analyze
+--whole-trace`, `window: whole`), with no `report_fully_drawn`: the one
+window a report calls the whole trace, about everything the app did while the
+recording ran, and refused by `compare` against any other.
 
 The two definitions are two windows. A launch that ran on to
 `reportFullyDrawn()` is longer and holds rows the other does not, so `compare`
@@ -1165,7 +1168,7 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `few` | too few repeats to be 95% sure of any move — four a side is always enough — so every `holds` is `null`. Record another round rather than read the moves as settled |
 | `detectors` | the two runs did not use the same set of detectors |
 | `detector-failed` | a detector failed on that side. Its rows on the other side are left out rather than called gone or new; the failure is no answer about the app |
-| `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording does not hold what they read (`checked: false` in its report). Their rows are left out on both sides rather than called gone or new, and `summary.not_compared` gives each side's reason, `null` for a side that could look. Record that side again with what they read |
+| `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording or its window does not hold what they read (`checked: false` in its report). Their rows are left out on both sides rather than called gone or new, and `summary.not_compared` gives each side's reason, `null` for a side that could look. Record that side again with what they read; a window's reason, no start of the app's process, is the scenario's, and no recording changes it |
 | `not-checked-both` | the same detectors could not run on either side, for the same reasons: one warning in place of the two above. They are left out of the comparison |
 
 A row is listed as moved when it changes by more than 5 ms or 10 %, whichever

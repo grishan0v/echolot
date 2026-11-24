@@ -25,6 +25,7 @@ import functools
 import re
 from typing import Any, Sequence
 
+from .. import launch as launch_mod
 from .. import plain
 from .. import report as report_mod
 from ..tp import load_detectors
@@ -458,11 +459,19 @@ def question(report: dict[str, Any]) -> str:
     window = w.get("duration_ms")
     if plain.window_warning(report):
         return (f"{name} has no measured window: echolot did not find where it starts or ends, so the rows "
-                "below are about the whole recording. Find what is behind them, and where that is in the code.")
+                "below are about everything the app did in the recording. Find what is behind them, and "
+                "where that is in the code.")
     if not (_is_number(window) and window > 0):
         return f"{name} has no measured window. Find what is behind the rows below, and where that is in the code."
     ctx = plain._Ctx(report)
     n = _runs(report)
+    if launch_mod.is_whole(w):
+        # No scenario's length, and no limit to hold it against: the
+        # recording is as long as somebody let it run (#519).
+        took = f"The whole trace runs {window:,.0f} ms" + (
+            f" (the median of {n} recordings)" if n > 1 else "")
+        return (f"{took}, and no scenario cuts it. Find what is behind the rows below, "
+                "and where that is in the code.")
     took = f"{name} takes {window:,.0f} ms" + (f", the median of {n} {ctx.plural}," if n > 1 else "")
     budget = (report.get("verdict") or {}).get("budget_ms")
     if _is_number(budget) and budget > 0 and window > budget:

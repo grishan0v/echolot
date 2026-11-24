@@ -655,14 +655,26 @@ the config the tracing service writes into the trace, or what the report's
 | `atrace:am` | the activity manager's category: the ANR records, `bindApplication` | the recording's own config lists it | `am` in `runner.atrace_categories`, which is in the default list |
 | `atrace:dalvik` | ART's category: collections and lock waits | the config lists it | `dalvik`, likewise |
 | `atrace:binder_driver` | calls between processes | the config lists it | `binder_driver`, likewise |
+| `process_start` | the app's process starting: its `bindApplication`, which a cold start writes and a warm start, a scroll or a tap does not | a main-thread `bindApplication` with a length **in the window** | a window that covers a cold start: a launch scenario's, or a recording that starts the app |
 
 Seven shipped detectors declare nothing: `anr_risk`, `main_thread_block`,
 `main_thread_outlier`, `main_thread_waits`, `repeated_work`,
 `runnable_starvation` and `uninstrumented_cpu`. `io_wait` and
 `main_thread_kernel_waits` need `platform_state`; `frame_jank`,
-`frame_timeline`; `composables`, `composable_names`; `anr` and `app_init`,
-`atrace:am`; `gc_pressure` and `monitor_contention`, `atrace:dalvik`;
-`binder_txn`, `atrace:binder_driver`.
+`frame_timeline`; `composables`, `composable_names`; `anr`, `atrace:am`;
+`app_init`, `atrace:am` and `process_start`; `gc_pressure` and
+`monitor_contention`, `atrace:dalvik`; `binder_txn`, `atrace:binder_driver`.
+
+`process_start` is the one source asked of the window rather than of the
+whole recording (#519). A recording holds a category it asked for wherever
+the window lies, but a scroll, a tap, a warm start and a trace measured with
+`--whole-trace` that holds no launch have no `bindApplication` in their
+window, and `app_init` used to call that silent: "nothing took long before
+the first screen" about a first screen that never was. Its reason says the
+window holds no start of the app's process, and `report.md` says it in a line
+of its own, without the warning sign: nothing is wrong with the recording,
+and no other recording of the same window would let it look. A recording
+without `am` has no `bindApplication` either, and says that first.
 
 ### A cold start's first two seconds run no collection
 
