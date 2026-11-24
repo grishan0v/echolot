@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import os
+import re
 import shlex
 import tempfile
 import time
@@ -1782,10 +1783,12 @@ def _(report):
     assert not any("not a cold start" in s for s in said), said
 
 
-def _collect_starting(states: list[str], n: int, where: Path) -> tuple[list[dict], list[str]]:
+def _collect_starting(states: list[str], n: int, where: Path, section: dict | None = None,
+                      **kw) -> tuple[list[dict], list[str]]:
     """`runner.collect` of `n` repeats on a fake device whose launches find
     the app as `states` says, one by one, the last for every launch after:
-    the recordings made, and what was said."""
+    the recordings made, and what was said. `section` goes on top of the
+    runner section, and `kw` to `collect` as it is."""
     from . import runner
     package, serial = "com.example.app", "emulator-5554"
     states = list(states)
@@ -1813,7 +1816,8 @@ def _collect_starting(states: list[str], n: int, where: Path) -> tuple[list[dict
     runner._run = adb
     try:
         made = runner.collect(package, where, n, name="run",
-                              section={"activity": f"{package}/.Main"}, log=said.append)
+                              section={"activity": f"{package}/.Main", **(section or {})},
+                              log=said.append, **kw)
     finally:
         runner._run = real
     return made, said
@@ -1857,6 +1861,120 @@ def _(report):
             assert "none of the 2 recordings started cold" in str(e), e
         else:
             raise AssertionError("a set with no cold start at all ends in an error")
+
+
+@check("collect: once the re-recordings are spent, the next recording is the next "
+       "repeat's")
+def _(report):
+    """A repeat left one cold start short counted for nothing: the repeat's
+    number was the count of repeats kept, so the next recording was repeat 1
+    once more, a fifth time after the line that said no re-recording was
+    left, and `[3/3]` never came (#858). The set's names still run on
+    without a gap."""
+    from . import runner
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_starting(["WARM"] * 4 + ["COLD"], 3, Path(tmp))
+        records = [runner.launch_record(r["path"]) for r in made]
+        assert [(k["repeat"], k["attempt"]) for k in records] == [
+            (1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (3, 1)], records
+        assert [r["path"].name for r in made if not r.get("aside")] == [
+            "run_iter000.perfetto-trace", "run_iter001.perfetto-trace"], made
+        shown = [m.group(1) for s in said if (m := re.match(r"\s*\[(\d+/\d+)\]", s))]
+        assert shown == ["1/3"] * 4 + ["2/3", "3/3"], said
+
+
+@check("collect: a round its first repeat stops leaves the set before where it was")
+def _(report):
+    """The first trace is read before the rest are recorded, and a round whose
+    scenario never reached its screen stops there (#536). The set before had
+    moved out of .echolot/traces by then, for a trace that was deleted with
+    the stop, and inside an investigation it was filed as a round nothing
+    followed (#857). The trace now waits for its check beside the set, and
+    the set moves once the check lets it in."""
+    from . import runner
+    stop = "the app drew no frame in the scenario's window"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        before = [f"run_iter{i:03d}.perfetto-trace" for i in range(3)]
+        for name in before:
+            (out / name).write_bytes(b"the baseline")
+        moved: list[Path] = []
+        try:
+            _collect_starting(["COLD"], 3, out, check_first=lambda t: (stop, None),
+                              on_set_aside=moved.append)
+        except runner.RunnerError as e:
+            assert stop in str(e), e
+        else:
+            raise AssertionError("a first repeat that never reached its screen stops the round")
+        assert sorted(p.name for p in out.iterdir()) == before, list(out.iterdir())
+        assert not moved, f"nothing set aside, nothing filed: {moved}"
+        seen: list[list[str]] = []
+
+        def look(trace: Path) -> tuple[None, None]:
+            seen.append(sorted(p.name for p in out.glob("*.perfetto-trace")))
+            return None, None
+        made, _ = _collect_starting(["COLD"], 2, out, check_first=look,
+                                    on_set_aside=moved.append)
+        assert seen == [before], f"the set before is there while the first trace is read: {seen}"
+        assert len(moved) == 1 and sorted(p.name for p in moved[0].iterdir()) == before, moved
+        assert [r["path"].name for r in made] == [
+            "run_iter000.perfetto-trace", "run_iter001.perfetto-trace"], made
+        assert all(r["path"].parent == out and r["path"].exists()
+                   and runner.launch_record(r["path"]) for r in made), made
+        assert not [p for p in out.iterdir() if p.name.startswith(".")], list(out.iterdir())
+
+
+@check("status: the repeats that started nothing are left out of the next step")
+def _(report):
+    """With `reset_policy: none` nothing stops the app between repeats, and
+    from the second one on `am start -W` starts nothing. `collect` said to
+    leave those traces out of `analyze`, and the `next` line named every one
+    of them (#856). The account beside each says it started nothing, and the
+    step names the others."""
+    from . import state as state_mod
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "echolot.yml").write_text(
+            "project:\n  package: com.example.app\nscenario:\n  name: run\n", encoding="utf-8")
+        _collect_starting(["COLD", "UNKNOWN (0)"], 3, root / ".echolot" / "traces",
+                          section={"reset_policy": "none"})
+        st = state_mod.project_state(root)
+        step, line = state_mod.by_hand(st)
+        assert step == "analyze" and "run_iter000.perfetto-trace" in line \
+            and "run_iter001" not in line and "run_iter002" not in line, line
+        said = state_mod.starts_line(st) or ""
+        assert said.startswith("run: 2 UNKNOWN (0), 1 COLD · started nothing, left out of "
+                               "`next`: run_iter001.perfetto-trace (UNKNOWN (0)), "
+                               "run_iter002.perfetto-trace (UNKNOWN (0))"), said
+
+
+@check("status and an interrupted collect name the recordings set aside when no repeat "
+       "was kept")
+def _(report):
+    """Every recording set aside as not cold, and the `starts` line read
+    `startup:  · set aside, …` with nothing after the colon; interrupted while
+    the first repeat was recorded again, `collect` said no trace was kept with
+    the warm one in .echolot/traces (#860)."""
+    from . import runner
+    from . import state as state_mod
+    from .main import _interrupted_line
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "echolot.yml").write_text(
+            "project:\n  package: com.example.app\nscenario:\n  name: run\n", encoding="utf-8")
+        traces = root / ".echolot" / "traces"
+        told: dict = {}
+        try:
+            _collect_starting(["WARM"], 1, traces, progress=lambda **kw: told.update(kw))
+        except runner.RunnerError:
+            pass
+        aside = ["run_iter000-warm.perfetto-trace", "run_iter000-warm-2.perfetto-trace"]
+        said = state_mod.starts_line(state_mod.project_state(root)) or ""
+        assert said.startswith("run: no repeat kept · set aside, not cold: "), said
+        assert told.get("not_cold") == aside, told
+        line = _interrupted_line({"iterations": 3, "done": 0, "not_cold": aside[:1]},
+                                 traces, root, [])
+        assert "no trace was kept" not in line and aside[0] in line, line
 
 
 @check("collect keeps how each repeat started beside its trace, and analyze leaves a "

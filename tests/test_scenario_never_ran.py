@@ -51,8 +51,9 @@ def test_a_first_repeat_that_drew_nothing_stops_the_round(tmp_path: Path, adb) -
     with pytest.raises(runner.RunnerError) as e:
         runner.collect(PACKAGE, out, 5, section={"activity": ACTIVITY}, name="startup",
                        log=lambda m: None, check_first=look)
-    check("the first trace was looked at, once", looked == [out / "startup_iter000.perfetto-trace"],
-          looked)
+    # Beside the set, under the repeat's name, until it is let in (#857).
+    check("the first trace was looked at, once",
+          looked == [out / ".startup-first" / "startup_iter000.perfetto-trace"], looked)
     check("the round stops, saying why and to look at the phone",
           str(e.value).startswith("repeat 1 of 5: com.example.app drew no frame in the "
                                   "scenario's window. The scenario did not get where it was "

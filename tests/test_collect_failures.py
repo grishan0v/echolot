@@ -207,14 +207,31 @@ def test_an_interrupted_collect_says_how_far_it_got(tmp_path, monkeypatch, capsy
 
 def test_half_a_pulled_trace_is_not_kept(tmp_path, monkeypatch, capsys) -> None:
     old = old_set(tmp_path / ".echolot" / "traces")
-    code, err = _interrupted(tmp_path, monkeypatch, capsys, "pull", 1)
+    code, err = _interrupted(tmp_path, monkeypatch, capsys, "pull", 2)
     check("exit 130", code == 130, err[-600:])
     traces = tmp_path / ".echolot" / "traces"
-    check("no trace under the repeat's name",
-          not list(traces.glob("*.perfetto-trace")), list(traces.iterdir()))
+    check("no trace under the repeat's name, the one before it kept",
+          sorted(p.name for p in traces.glob("*.perfetto-trace"))
+          == ["startup_iter000.perfetto-trace"], list(traces.iterdir()))
     aside = [d for d in traces.iterdir() if d.is_dir()]
     check("the set before it was moved aside, whole",
           len(aside) == 1 and sorted(p.name for p in aside[0].iterdir()) == old, aside)
-    check("and the line says where it went",
-          "before the first of 3 repeats was recorded: no trace was kept; the set "
-          f"that was there before is in .echolot/traces/{aside[0].name}" in err, err)
+    check("and the line says how far it got",
+          "collect interrupted after 1 of 3 repeats: its trace is kept in "
+          ".echolot/traces" in err, err)
+
+
+def test_an_interrupt_before_the_first_trace_is_in_leaves_the_set_where_it_was(
+        tmp_path, monkeypatch, capsys) -> None:
+    """The first trace waits for its check beside the set, and the set before
+    moves once the check lets it in (#857): cut short in its copy, it leaves
+    .echolot/traces as the round found it."""
+    old = old_set(tmp_path / ".echolot" / "traces")
+    code, err = _interrupted(tmp_path, monkeypatch, capsys, "pull", 1)
+    check("exit 130", code == 130, err[-600:])
+    traces = tmp_path / ".echolot" / "traces"
+    check("the set is where it was, and nothing beside it",
+          sorted(p.name for p in traces.iterdir()) == old, list(traces.iterdir()))
+    check("and the line says nothing was kept, and moved nothing",
+          "before the first of 3 repeats was recorded: no trace was kept" in err
+          and "the set that was there before" not in err, err)
