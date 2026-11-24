@@ -9,6 +9,7 @@ produce. The keys only a merged report has are named under the block.
   "generated_at": "2026-08-15T12:00:00+00:00",
   "trace": "path of the first repeat",
   "traces": ["…/coldStart_iter000.perfetto-trace", "…"],
+  "recorded_at": ["2026-08-15T11:52:03.118Z", "…"],
   "runs": 5,
   "scenario": "coldStart", "budget_ms": 2500,
   "verdict": { "level": "needs_attention", "budget_ms": 2500, "ratio": 3.1,

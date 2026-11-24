@@ -826,6 +826,8 @@ def cmd_analyze(args) -> int:
             traces, lambda t: analyze_trace(t, cfg, tp_binary, cli_overrides=cli_overrides,
                                             use_defaults=args.defaults, tp_source=tp_source),
             jobs)
+        # In the order they were recorded, when every trace says when (#848).
+        reports = _in_recording_order(reports)
         # A launch that ended on another activity than most of the set's is
         # another journey: left out, and named (#909).
         reports, elsewhere, mixed = _one_journey(reports)
@@ -998,7 +1000,8 @@ def _latest_here(out_dir: Path, cfg: Config, here: Path) -> bool:
 
 
 def run_order(path: str) -> tuple:
-    """Where a recording goes in a set: by its file name, numbers as numbers.
+    """Where a recording goes in a set before it is read: by its directory,
+    then by its file name, numbers as numbers.
 
     The same recordings named in another order made another report: the
     header's trace, pid and window came from whichever was named first, and
@@ -1006,13 +1009,34 @@ def run_order(path: str) -> tuple:
     sorts by the locale, a script lists a directory in the file system's
     order, an artifact unpacks in its own. The order has to be one, and it
     has to keep its meaning: the values of `spread` are read as the run
-    index, and `collect` names its repeats `_iter000`, `_iter001`, … in the
-    order it recorded them. By name, then by the whole path for two sets
-    with the same names; `run10` after `run9`.
+    index. Read, a set is put in the order it was recorded in
+    (`_in_recording_order`); this is the order for a set whose traces do not
+    all say when, and the one ties keep.
+
+    By directory first: every `collect` round names its repeats `_iter000`,
+    `_iter001`, …, and a set merged from three rounds sorted by name first
+    was read round1's first repeat, round2's, round3's, round1's second, …
+    (#848). A round stays together, and the rounds go in their directories'
+    order, which for the directories `collect` sets a round aside in
+    (`<scenario>-<stamp>`) is the order they were recorded in; `run10`
+    after `run9`.
     """
     def natural(text: str) -> list:
         return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", text)]
-    return natural(Path(path).name), natural(str(path))
+    return natural(str(Path(path).parent)), natural(Path(path).name)
+
+
+def _in_recording_order(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The set's reports in the order their recordings began, when every one
+    of them says when (`recorded_at`, from the trace's own clock snapshot);
+    as they are otherwise, in `run_order`, which also orders a tie.
+
+    The drift test reads the runs in this order as time (#848), and a set
+    of which some say when and some do not has no time to give the others.
+    """
+    if not reports or not all(isinstance(r.get("recorded_at"), str) for r in reports):
+        return reports
+    return sorted(reports, key=lambda r: r["recorded_at"])
 
 
 def _distinct_recordings(paths: list[str]) -> tuple[list[str], list[list[str]]]:

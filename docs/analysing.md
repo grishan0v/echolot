@@ -627,10 +627,16 @@ them move together under every order drawn too, so they count once, not sixty
 times. Shuffled, forty-nine real sets of 10 to 60 runs drifted in 52 tries of
 980: 5.3%, the share a test at 95% should give.
 
-The order is the set's: by file name, numbers as numbers, which is the order
-`collect` recorded them in. Fewer than 8 runs are not judged — eight are the
-fewest a comparison splits four against four — and `report.json` keeps the
-block either way:
+The order is the set's, the order the recordings were made in: each trace's
+own clock snapshot says when it began, and `report.json` keeps it as
+`recorded_at`, a list beside `traces` for a set. A set merged from several `collect` rounds names its files
+`_iter000` to `_iter004` in every round, and read by name it was interleaved,
+round by round, so that the test took the repeat's number for time: 15 cold
+starts of three rounds drifted at p = 0.001 by name and not at all (p = 0.11)
+in the order they were recorded (#848). A set of which some trace does not say
+when is read by directory, then by file name, numbers as numbers. Fewer than
+8 runs are not judged — eight are the fewest a comparison splits four against
+four — and `report.json` keeps the block either way:
 
 ```json
 "drift": { "runs": 15, "rows": 62, "score": 0.117, "chance": 0.071, "p": 0.026,
@@ -660,8 +666,9 @@ trace, up to 260 MB for a cold start of 16–24 MB). `-j N` says how many instea
 did.
 
 The report is the same either way. The reports are merged in the set's order
-— by file name, numbers read as numbers, whatever order the traces were named
-in — however the reading finishes, and what each trace's reading printed comes
+— the order the recordings were made in, or by directory and file name,
+numbers read as numbers, for a set of which some trace does not say when;
+whatever order the traces were named in — however the reading finishes, and what each trace's reading printed comes
 out whole and in that order: a warning about the second trace after the first
 trace's lines, never in the middle of them. A trace that cannot be read ends
 the run with its own error, the first one in that order, as before; the traces

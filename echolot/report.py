@@ -1177,6 +1177,11 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(reports)
     merged = dict(reports[0])
     merged["traces"] = [r["trace"] for r in reports]
+    # When each began, beside `traces` and in their order; the first's alone
+    # would read as the set's (#848).
+    merged.pop("recorded_at", None)
+    if any(r.get("recorded_at") for r in reports):
+        merged["recorded_at"] = [r.get("recorded_at") for r in reports]
     merged["runs"] = total
     # A repeat's own section, when the repeats are reports read back, is of
     # one run and not of the set.

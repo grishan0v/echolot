@@ -34,8 +34,10 @@ held about one time in eight. Shuffled, forty-nine real sets of 10 to 60 runs
 came out at or under 5% in 52 tries of 980: 5.3%, as a test at 95%
 should.
 
-The order is the set's: by the traces' names, numbers as numbers, which is
-the order `collect` recorded them in (`main.run_order`). The orders are
+The order is the set's, the order the recordings were made in, by each
+trace's own clock (`main._in_recording_order`, #848); by directory, then by
+name, numbers as numbers, for a set whose traces do not all say when
+(`main.run_order`). The orders are
 drawn from a fixed seed, so the same report gives the same answer every
 time. Rows below `FLOOR_MS` are left out: `compare` calls no move there,
 whatever their order.

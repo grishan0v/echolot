@@ -190,6 +190,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         # How the trace was recorded: what it asked the device for, and what
         # `collect` kept beside it (#533).
         recording = recording_mod.of_trace(tp, trace)
+        recorded_at = _recorded_at(tp)
         # What each detector's silence can be taken to mean: whether the trace
         # holds what it reads (#441). Asked once, of the sources the planned
         # detectors name.
@@ -293,7 +294,32 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                            markers=markers, scenario=cfg.scenario_name,
                            budget_ms=budget_ms, recording=recording)
     rep[report_mod.NAMES_ALL] = names
+    if recorded_at is not None:
+        rep["recorded_at"] = recorded_at
     return rep
+
+
+def _recorded_at(tp) -> str | None:
+    """When the recording began, on the phone's wall clock, in UTC to the
+    millisecond: `2026-08-17T05:43:29.601Z`. None for a trace without the
+    clock snapshot the tracing service writes at its head.
+
+    It is the order of a set (#848). A set merged from several `collect`
+    rounds names its files `_iter000` to `_iter004` in every round, and read
+    by name the rounds were interleaved: the drift test then took the
+    repeat's number for time and said 15 runs drifted (p = 0.001) that, in
+    the order they were recorded, did not (p = 0.11).
+    """
+    try:
+        rows = tp.query("SELECT TO_REALTIME(trace_start()) AS ns")
+    except Exception:  # a trace_processor without the function
+        return None
+    ns = rows[0].get("ns") if rows else None
+    if not isinstance(ns, int) or ns <= 0:
+        return None
+    from datetime import datetime, timezone
+    at = datetime.fromtimestamp(ns // 1_000_000 / 1000, tz=timezone.utc)
+    return at.strftime("%Y-%m-%dT%H:%M:%S.") + f"{at.microsecond // 1000:03d}Z"
 
 
 def _over_bar(rows: list[dict]) -> tuple[list[dict], list[dict]]:

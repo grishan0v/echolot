@@ -1795,7 +1795,7 @@ def build(frames: bool = True, environment: bool = True,
           fully_drawn: str | None = None, stuffed: bool = False,
           smooth: bool = False, answered: bool = True, heap: bool = True,
           activities: tuple[str, ...] = (), boot: bool = False,
-          drawing: bool = False) -> bytes:
+          drawing: bool = False, realtime_ns: int | None = None) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1854,6 +1854,11 @@ def build(frames: bool = True, environment: bool = True,
 
     `drawing=True` gives every idle stretch of the window to SurfaceFlinger
     and system_server, the processes that draw a launch (see `_drawing`).
+
+    `realtime_ns` is the wall clock at the trace's clock's zero, written as
+    the clock snapshot a phone's tracing service writes at the head of every
+    trace: what says when a recording was made (#848). None by default: no
+    snapshot, as in a trace written by a tool that keeps none.
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -1864,6 +1869,10 @@ def build(frames: bool = True, environment: bool = True,
     builder = TraceProtoBuilder()
     config(builder, categories=RECORDED_CATEGORIES if categories is None else categories,
            environment=environment, frames=frames, names=names, sampling=bool(sampling))
+    if realtime_ns is not None:
+        snapshot = builder.add_packet().clock_snapshot
+        snapshot.clocks.add(clock_id=6, timestamp=0)  # BOOTTIME, the trace's clock
+        snapshot.clocks.add(clock_id=1, timestamp=realtime_ns)  # REALTIME
     process_tree(builder, [(APP_PID, APP_NAME, threads),
                            (OTHER_PID, OTHER_NAME, other_threads),
                            (SF_PID, SF_NAME, sf_threads),
