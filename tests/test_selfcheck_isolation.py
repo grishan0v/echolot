@@ -20,6 +20,8 @@ from echolot.config import ConfigError  # noqa: E402
 from tests.support import check  # noqa: E402
 
 RUN_LOG_CHECK = "collect: the run log keeps the sentence a failure printed"
+SANDBOX_CHECK = "doctor: a check the sandbox does not let run is a skip, and only that one"
+SANDBOX_MARKS = ("CURSOR_SANDBOX", "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED")
 
 
 def test_a_check_leaves_the_run_log_on(monkeypatch) -> None:
@@ -34,6 +36,23 @@ def test_a_check_leaves_the_run_log_on(monkeypatch) -> None:
     monkeypatch.setenv("ECHOLOT_NO_RECORD", "yes")
     selftest.run_checks({}, [c for c in selftest.CHECKS if c[0] == RUN_LOG_CHECK])
     check("or as it was", os.environ.get("ECHOLOT_NO_RECORD") == "yes")
+
+
+def test_the_sandbox_check_holds_whichever_agent_runs_doctor(monkeypatch) -> None:
+    """The check stands in for Cursor's sandbox. Run by Codex, doctor carries
+    Codex's marks, which `sandbox.host()` reads first: the check failed, and
+    doctor said no report made there could be trusted (#700)."""
+    for env in ({}, {"CODEX_SANDBOX_NETWORK_DISABLED": "1"}, {"CODEX_SANDBOX": "seatbelt"},
+                {"CURSOR_SANDBOX": "seatbelt"}):
+        for name in SANDBOX_MARKS:
+            monkeypatch.delenv(name, raising=False)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        results = selftest.run_checks({}, [c for c in selftest.CHECKS if c[0] == SANDBOX_CHECK])
+        check(f"passes with {env or 'no marks'}", results == [(SANDBOX_CHECK, None)], results)
+        marks = {name: os.environ.get(name) for name in SANDBOX_MARKS}
+        check("and leaves the marks as they were", marks == {name: env.get(name) for name in SANDBOX_MARKS},
+              marks)
 
 
 def test_every_trace_the_self_check_opens_is_on_the_binary_it_checks(
