@@ -19,7 +19,7 @@ from tests.support import check  # noqa: E402
 from echolot import fixture, selftest  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import analyze_trace  # noqa: E402
+from echolot.analyze import analyze_trace  # noqa: E402
 from echolot.tp import Detector  # noqa: E402
 
 # The fixture's own tables, before any test here patches them.

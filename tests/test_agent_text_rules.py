@@ -119,6 +119,31 @@ def test_the_anr_guide_reads_the_lead_anr_prints():
     check("the missing lock notes", "Who was holding what" in flat, flat)
 
 
+def test_the_anr_texts_know_an_event_from_a_tool_holds_one_thread():
+    """An agent holds a Crashlytics event from its tool, not the export; the
+    texts say `anr` reads it, that it is one thread, and what to ask for when
+    the question is a lock — in the words the report itself prints (#527)."""
+    from echolot import anr
+    from tests.test_anr_event import MAIN_IN_THE_APP, _event
+
+    report = anr.parse(_event(MAIN_IN_THE_APP))
+    printed = anr.render(report)
+    door = _flat(ROOT / "echolot" / "claude" / "skills" / "echolot" / "SKILL.md")
+    section = door[door.index("## When what arrived is an ANR"):door.index("## Reading the report")]
+    for name, flat in (("the door's ANR section", section),
+                       ("the anr guide", _flat(ROOT / "echolot" / "guide" / "anr.md")),
+                       ("the loop", _flat(LOOP))):
+        check(f"{name}: an event from a tool reads", "Crashlytics event" in flat, flat)
+        check(f"{name}: one thread", "one thread" in flat, flat)
+        check(f"{name}: the export is what to ask for on a lock",
+              "console's export of that event" in flat, flat)
+    for name, flat in (("the door", section), ("the guide",
+                                               _flat(ROOT / "echolot" / "guide" / "anr.md"))):
+        row = "The other threads, their states and their locks"
+        check(f"{name} quotes the gap the report prints", row in flat and row in printed,
+              printed)
+
+
 # --- stale counts and keys (#275) -----------------------------------------------
 
 REFS = ROOT / "echolot" / "claude" / "skills" / "echolot" / "references"
@@ -143,7 +168,7 @@ def test_the_hunt_texts_let_collect_set_the_last_round_aside():
 
 
 def test_the_report_example_runs_every_shipped_detector():
-    from echolot.main import DETECTOR_DIR
+    from echolot.analyze import DETECTOR_DIR
     from echolot.tp import load_detectors
     shipped = len(load_detectors(DETECTOR_DIR))
     text = _read(REFS / "report.md")

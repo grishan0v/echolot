@@ -333,7 +333,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # main.py (`SQL_DIR`) and layer.py (`GUIDE_DIR`, `CLAUDE_DIR`, which
+          # analyze.py (`SQL_DIR`) and layer.py (`GUIDE_DIR`, `CLAUDE_DIR`, which
           # `guide` and `init` read) find their files by a path next to their
           # own `__file__` — none of them raises ImportError if package-data
           # was left out of the build; the directory is just empty on whoever

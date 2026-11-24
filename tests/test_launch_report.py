@@ -26,7 +26,8 @@ from tests.test_report_page import read  # noqa: E402
 from echolot import fixture, recorder, selftest  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
-from echolot.main import _startup_info, analyze_trace, main  # noqa: E402
+from echolot.analyze import _startup_info, analyze_trace  # noqa: E402
+from echolot.main import main  # noqa: E402
 from echolot.pages import report_page  # noqa: E402
 
 

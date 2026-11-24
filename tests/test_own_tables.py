@@ -22,10 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.support import check  # noqa: E402
 
 from echolot import fixture, selftest  # noqa: E402
-from echolot import main as main_mod  # noqa: E402
+from echolot import analyze as analyze_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import DETECTOR_DIR  # noqa: E402
+from echolot.analyze import DETECTOR_DIR  # noqa: E402
 from echolot.tp import Detector, load_detectors  # noqa: E402
 
 HEAD = "-- @id: own\n-- @title: Own\n-- @param: min_ms = 30\n-- @bar: min_ms\n\n"
@@ -140,10 +140,10 @@ def _analysed(monkeypatch, tmp_path: Path, below_bar: bool) -> tuple[dict, list,
     det_dir = tmp_path / "detectors"
     det_dir.mkdir(exist_ok=True)
     (det_dir / "own.sql").write_text(OWN, encoding="utf-8")
-    monkeypatch.setattr(main_mod, "DETECTOR_DIR", det_dir)
+    monkeypatch.setattr(analyze_mod, "DETECTOR_DIR", det_dir)
     spans: list = []
     order: list = []
-    real_spans, real_open = main_mod._spans_behind, main_mod._below_bar
+    real_spans, real_open = analyze_mod._spans_behind, analyze_mod._below_bar
 
     def spans_behind(tp, d, params, rows):
         order.append(("intervals", d.id))
@@ -155,11 +155,11 @@ def _analysed(monkeypatch, tmp_path: Path, below_bar: bool) -> tuple[dict, list,
         order.append(("open", d.id))
         return real_open(tp, d, *a, **k)
 
-    monkeypatch.setattr(main_mod, "_spans_behind", spans_behind)
-    monkeypatch.setattr(main_mod, "_below_bar", below)
+    monkeypatch.setattr(analyze_mod, "_spans_behind", spans_behind)
+    monkeypatch.setattr(analyze_mod, "_below_bar", below)
     trace = tmp_path / "f.perfetto-trace"
     trace.write_bytes(fixture.build())
-    report = main_mod.analyze_trace(trace, Config(selftest.FIXTURE_CONFIG), below_bar=below_bar)
+    report = analyze_mod.analyze_trace(trace, Config(selftest.FIXTURE_CONFIG), below_bar=below_bar)
     return report, sorted(spans), order
 
 

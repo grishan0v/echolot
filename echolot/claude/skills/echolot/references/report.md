@@ -36,6 +36,7 @@ produce. The keys only a merged report has are named under the block.
                  "trace_processor": "v59.1", "source": "pinned", "binary": null },
   "window": { "ts_start": …, "ts_end": …, "duration_ms": 772.3,
               "duration_ms_min": 751.8, "duration_ms_max": 790.4,
+              "values": [751.8, 768.0, 772.3, 781.5, 790.4],
               "process": "com.example.app", "pid": 4100,
               "start_anchor": { "glob": "bindApplication", "matches": 1 },
               "end_anchor":   { "glob": "…", "matches": 1 },
@@ -117,7 +118,9 @@ a byte copy under another name or a symlink beside the file is read once, and
 out because `collect` set them aside as not cold — stopped, and the process
 running again by the start — each with its launch state; the medians are over
 the others. Every number in it is then a median across them, and a few keys say
-how far the repeats spread: `window.duration_ms_min` and `_max`,
+how far the repeats spread: `window.duration_ms_min` and `_max`, with
+`window.values` each repeat's window in the order of `traces` (what `compare`
+tests the window's move with),
 `window.main_thread.runs` (how many repeats had a main thread to account for),
 `environment.cpu.mean_mhz_min` and `_max` with `environment.cpu.runs` (how many
 had a clock to read), `environment.thermal.throttled_runs` — how many were
@@ -378,7 +381,9 @@ one cause — `bind_application`, `activity_start`, `choreographer_do_frame`,
 `binder`, `io`, `monitor_contention`, `launch_delay` (before the app's main
 thread ran at all), the thread states for the rest. The header prints it under
 the budget: `Startup: cold, 1359 ms from the launch to the first frame: 42%
-bind_application · 13% monitor_contention · …`.
+bind_application · 13% monitor_contention · …`. In a merged report
+`values` holds each repeat's `dur_ms` and `reason_values` each reason's, a
+repeat without the reason as 0: `compare` tests the startup with them.
 
 It is the platform's measure, not the window, and `from_window_start_ms` and
 `from_window_end_ms` say where it sits against the window, negative for
@@ -1046,7 +1051,16 @@ echolot compare old.json new.json    # or name them
   "comparable": true,
   "warnings": [ { "id": "thresholds", "text": "…" } ],
   "window": { "before_ms": 1184.0, "after_ms": 2960.4,
-              "delta_ms": 1776.4, "ratio": 2.5 },
+              "delta_ms": 1776.4, "ratio": 2.5, "change": "grew",
+              "shift": { "ms": 1771.2, "low_ms": 1690.5, "high_ms": 1860.0,
+                         "resolves_ms": 81.4, "runs_needed": null },
+              "holds": true },
+  "startup": { "type": { "before": "cold", "after": "cold" },
+               "before_ms": 1240.0, "after_ms": 3012.5, "delta_ms": 1772.5,
+               "change": "grew", "shift": { "…": "…" }, "holds": true,
+               "reasons": [ { "reason": "Running", "before_ms": 402.0,
+                              "after_ms": 1273.3, "change": "grew",
+                              "shift": { "…": "…" }, "holds": true }, … ] },
   "summary": { "moved": 4, "appeared": 2, "vanished": 1, "steady": 17,
                "state_changed": [ { "id": "binder_txn",
                                     "before": "silent", "after": "1 row(s)" } ],
@@ -1102,6 +1116,18 @@ magnitude, not a count — and `shift.more_runs` the fewest more on each side,
 after alone is often the cheaper round. `null` with `runs_needed` over a
 hundred means more rounds will not settle it — say the move is below what
 this scenario can resolve, or bring the spread down first.
+
+**`window`** and **`startup`** are tested as a row is: `change`, `shift`,
+`holds`, from each run's window and startup the reports keep; `holds` asks
+the range to clear zero, one number tested once. Read
+`window.holds` before the table: `false` with a window that grew means the
+runs do not settle that the launch got longer, whatever the rows say. Both are
+`null` where a row's would be; `window.untested` names a side whose report is
+too old to keep per-run windows (analyse it again). `startup` is null unless
+both sides have one; its `reasons` are the platform's split of the launch,
+judged as rows but not added to `rows` — the detectors already count that
+time. `compare --plain` calls no window better or worse whose move does not
+hold.
 
 **`count` before and after** separates "called more often" from "became slower
 inside". `inflate` at 12 → 31 occurrences and `loadAll` growing 73× at one

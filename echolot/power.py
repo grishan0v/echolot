@@ -36,6 +36,10 @@ from .screen import Screen
 # Macrobenchmark's floor, in percent.
 FLOOR = 25
 
+# The key of `runner:` read here. `config.runner_keys()` joins it to the
+# others, so a config that sets it loads (#834).
+KEYS = ("min_battery",)
+
 
 def floor(section: dict) -> int:
     """`runner.min_battery`, the charge under which a phone that is not
