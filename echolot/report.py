@@ -1217,6 +1217,9 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         detectors.append(head)
 
     merged["detectors"] = detectors
+    # Whether the runs were alike, read off the rows just merged (#508).
+    from . import drift
+    merged["drift"] = drift.of(merged)
     merged["markers"] = _merge_markers(reports, total)
     fired = [d for d in detectors if d["rows"]]
     merged["summary"] = {
@@ -2032,6 +2035,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.extend(_outside_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
     out.extend(_window_warning_lines(w))
+    out.extend(_drift_lines(report))
 
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(recording_mod.header_lines(report.get("recording")))
@@ -2151,6 +2155,14 @@ def _diverged_lines(w: dict[str, Any]) -> list[str]:
                if w.get("defined_by") else
                "either the anchors did not match or the runs did different things")
             + ". A median over such numbers is meaningless."]
+
+
+def _drift_lines(report: dict[str, Any]) -> list[str]:
+    """The set's runs drift from the first to the last (#508). Said where the
+    window's warnings are, in the whole report and the overview alike: it
+    decides how far the medians below describe one state of the device."""
+    from . import drift
+    return drift.lines(report.get("drift"))
 
 
 def _window_warning_lines(w: dict[str, Any]) -> list[str]:
@@ -2403,6 +2415,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     if anchors:
         out.append("Anchors: " + " · ".join(anchors))
     out.extend(_window_warning_lines(w))
+    out.extend(_drift_lines(report))
     out.extend(launch_mod.lines(w))
     alts = w.get("process_alternatives")
     if alts:
