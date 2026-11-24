@@ -35,7 +35,7 @@ COLUMNS = ["location", "threads", "runs", "count", "self_ms", "total_ms", "max_m
 # marker that never closed, which its numbers say with a `≥`. A column a
 # detector's predicate is held against, beside its numbers, is the threshold's
 # business and no finding (`GATES`, #832).
-GATES = {"verdict_frames"}
+GATES = {"verdict_frames", "stretch_ms"}
 HIDDEN = {"spread", "places", "stacks", "unfinished", "parents", "variants", "fired",
           "floors", "unfinished_runs", "open_ms", *GATES}
 HEADERS = {

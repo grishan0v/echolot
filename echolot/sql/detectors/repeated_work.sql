@@ -13,6 +13,8 @@
 --       marker this hunt planted is a near miss
 -- @param: marker_prefix = AGENTTMP_ — the prefix of the temporary markers:
 --       the only names a near miss is reported for
+-- @fires: total_ms >= {{min_total_ms}}
+-- @shape: max_callers, max_spread
 -- @calibrate: min_total_ms = top5(total_ms) * 1.5
 -- @identity: location, detail
 -- @column: location — the slice name
@@ -284,7 +286,6 @@ WHERE s.raw_name NOT IN (SELECT name FROM _claimed_name)
 GROUP BY s.name, s.thread_name
 HAVING COUNT(DISTINCT COALESCE(s.parent, '(top level)')) >= 2
    AND COUNT(DISTINCT COALESCE(s.parent, '(top level)')) <= {{max_callers}}
-   AND SUM(MAX(s.dur, 0)) >= {{min_total_ms}} * 1000000
    -- An instant slice (dur = 0) has no cost to compare; dividing by it would
    -- be a ratio about nothing. An open slice already runs to the window's end
    -- in `_slice_win`.
@@ -295,8 +296,7 @@ HAVING COUNT(DISTINCT COALESCE(s.parent, '(top level)')) >= 2
    AND ((MAX(MAX(s.dur, 0)) * 1.0) / MIN(MAX(s.dur, 0)) <= {{max_spread}}
         OR (SUBSTR(s.name, 1, LENGTH('{{marker_prefix}}')) = '{{marker_prefix}}'
             AND COUNT(DISTINCT COALESCE(s.parent, '(top level)')) = 2))
-ORDER BY total_ms DESC
-LIMIT 20;
+ORDER BY total_ms DESC;
 
 -- @intervals
 --

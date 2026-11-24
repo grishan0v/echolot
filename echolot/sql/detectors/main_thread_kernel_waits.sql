@@ -6,6 +6,7 @@
 -- @needs: platform_state
 -- @param: min_total_ms = 16 ms — the time the main thread spent in such
 --       sleeps that one thread of the app ended, summed, for it to be a row
+-- @fires: total_ms >= {{min_total_ms}}
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location
 -- @column: location — the thread of the app that ended the sleeps, with
@@ -175,9 +176,7 @@ FROM grouped g
 JOIN waker_top w USING (location)
 JOIN main_top m USING (location)
 LEFT JOIN fn_top f USING (location)
-WHERE g.total_ns >= {{min_total_ms}} * 1000000
-ORDER BY total_ms DESC, location
-LIMIT 20;
+ORDER BY total_ms DESC, location;
 
 -- @intervals
 --

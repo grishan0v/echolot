@@ -8,6 +8,7 @@
 -- @needs: platform_state
 -- @param: min_io_wait_ms = 20 ms — the time a thread has to spend asleep on
 --       a block device in the window, summed, to be a row
+-- @fires: total_ms >= {{min_io_wait_ms}}
 -- @calibrate: min_io_wait_ms = top10(total_ms) * 1.5
 -- @identity: location, thread
 -- @column: location — the thread's name
@@ -88,9 +89,7 @@ LEFT JOIN _name_family f ON f.name = t.thread_name
 WHERE t.state IN ('D', 'DK')
   AND t.io_wait = 1
 GROUP BY COALESCE(f.family, t.thread_name), t.tid = p.pid
-HAVING SUM(t.dur) >= {{min_io_wait_ms}} * 1000000
-ORDER BY total_ms DESC
-LIMIT 20;
+ORDER BY total_ms DESC;
 
 -- @intervals
 --

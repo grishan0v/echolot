@@ -363,9 +363,9 @@ def test_analyze_keeps_what_it_found_under_the_bar_in_no_repeat(tmp_path) -> Non
               "collection_mapping" in under and under["collection_mapping"]["runs"] == f"{n}/{n}"
               and "collection_mapping" not in reported, det["below"])
         check(f"{n} recording(s): nothing reported is kept twice, nothing under the floor, no evidence",
-              not reported & set(under) and det["below"]["floor_ms"] == report_mod.BELOW_FLOOR_MS
+              not reported & set(under) and det["below"]["floor_ms"] == report_mod.FLOOR_MS
               and all(max(r["spread"]["self_ms"]["values"] if "spread" in r else [r["self_ms"]])
-                      >= report_mod.BELOW_FLOOR_MS for r in under.values())
+                      >= report_mod.FLOOR_MS for r in under.values())
               and not any("stacks" in r for r in under.values()), det["below"])
     old = report_mod.aggregate([analyze_trace(trace, cfg)])
     # A detector with `@fires` measures every row in its one query (#832),
@@ -427,14 +427,15 @@ def test_a_marker_cut_short_in_one_repeat_holds_the_median_down() -> None:
 
 def test_a_bar_that_is_not_calibrated_still_opens_for_the_merge(tmp_path) -> None:
     """#666 took `@calibrate` off `main_thread_block`, and its bar stopped
-    opening: a row under 16 ms in one repeat read as absent again (#505)."""
+    opening: a row under 16 ms in one repeat read as absent again (#505).
+    The bar is the predicate now, and no query filters by it (#832)."""
     from echolot.analyze import DETECTOR_DIR
     from echolot.tp import Detector
     det = Detector.from_file(DETECTOR_DIR / "main_thread_block.sql")
-    check("min_slice_ms is a bar and not a calibration",
-          det.bars == ("min_slice_ms",) and not det.calibrations, (det.bars, det.calibrations))
-    check("and it is zero in the opened query", ">= 0 * 1000000" in " ".join(det.render_open().split())
-          or ">= 0*1000000" in det.render_open().replace(" ", ""), det.render_open()[-400:])
+    check("min_slice_ms is in the predicate and not a calibration",
+          "{{min_slice_ms}}" in det.fires and not det.calibrations, (det.fires, det.calibrations))
+    code = "\n".join(ln for ln in det.sql.splitlines() if not ln.strip().startswith("--"))
+    check("and in no query", "{{min_slice_ms}}" not in code, code[-400:])
 
 
 def test_one_recording_names_rows_as_a_set_does() -> None:
