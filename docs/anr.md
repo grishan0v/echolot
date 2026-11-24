@@ -279,8 +279,10 @@ has no heap line. Lines it could not read, counted.
 echolot anr report.txt --root .
 ```
 
-`--root` is the working directory unless another is named, so run from the
-checkout the command places frames without being asked; a directory with no
+`--root` is the project's checkout unless another is named, as for `analyze`:
+`project.root`, else the folder of the nearest `echolot.yml` from here up, else
+the working directory. So run from anywhere in the checkout the command places
+frames without being asked; a directory with no
 sources in it costs the report nothing.
 
 A java frame carries its own source location: the compiler wrote the file name
@@ -355,7 +357,8 @@ console that was never given the build's mapping. Such a frame is in no file
 of the checkout and in no package it declares, so the report finds nothing
 of the project in it and says every frame belongs to the platform or a
 library. `--mapping` names the build's `mapping.txt`. Without the flag,
-`project.mapping` of the `echolot.yml` under `--root` is used, the key
+`project.mapping` of the project's `echolot.yml` is used (the one under
+`--root` when `--root` is named), the key
 `analyze` reads; `mark --from-anr` takes the same `--mapping`, or reads the
 key from the config it reads.
 

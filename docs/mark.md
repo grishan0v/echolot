@@ -114,8 +114,11 @@ above it ends, and nothing else in the file changes — a CRLF file stays CRLF.
 tag in the shape `--apply` writes, and gives every file back byte for byte:
 the self-check applies, removes and compares, and `tests/test_mark_edits.py`
 does the same over generated Kotlin and Java sources, CRLF files among them.
-Without `--root`, the root is the folder of the config `-c` names, the
-project `hunt -c` counts markers in, and the current directory without `-c`.
+Without `--root`, the root is the project's checkout, as for `analyze`:
+`project.root`, else the folder of the project's config — the one `-c` names,
+else the nearest `echolot.yml` from here up to the top of the git checkout, so
+`mark --remove` from `app/` or a sibling module takes out what `hunt` there
+counts — else the current directory.
 A line that carries the tag in any other shape has more on it than a marker,
 so it stays where it is and `--remove` lists it with its file and line, to be
 cleaned by hand; `echolot hunt`, its cleanup check and the page in
@@ -194,8 +197,9 @@ note to mark the nearest allowed caller instead. A frame from `--from-anr` is
 shown the same way rather than left out, and a place to name from `--pools`
 says it is outside.
 
-The config is the one `-c` names, else `echolot.yml` in the working directory
-or under `--root`. A `-c` that names no file stops `mark` with exit 2, and so
+The config is the project's: the one `-c` names, else the nearest
+`echolot.yml` from the working directory up to the top of the git checkout,
+else the one under `--root`. A `-c` that names no file stops `mark` with exit 2, and so
 does a config that does not load, except for `--remove`: an empty
 `instrumentation.allowed` allows every place, so a mistake elsewhere in the
 file must not lift the guard. With no config at all, `mark` says on stderr that

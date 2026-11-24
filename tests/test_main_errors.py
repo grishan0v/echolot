@@ -137,8 +137,35 @@ def test_mark_c_from_a_subfolder_looks_in_the_config_s_folder(tmp_path: Path,
           and activity.read_text() == ACTIVITY, out + err)
     _run("mark", "-c", "../echolot.yml", "--apply")
     code, out, err = _run("mark", "--remove")
-    check("without -c it stays under the current folder", "AGENTTMP_" in activity.read_text()
-          and "removed markers" not in out + err, out + err)
+    check("and without -c, from the project's echolot.yml above (#837)",
+          code == 0 and activity.read_text() == ACTIVITY
+          and "removed markers from 1 file(s)" in out + err, out + err)
+
+
+def test_mark_from_a_subfolder_keeps_to_the_project_s_allowed(tmp_path: Path,
+                                                               monkeypatch) -> None:
+    """#837: from `app/`, the guard is the project's echolot.yml above."""
+    _app(tmp_path)
+    activity = tmp_path / "app/src/main/kotlin/MainActivity.kt"
+    monkeypatch.chdir(tmp_path / "app")
+    code, out, err = _run("mark", "--apply")
+    check("no place outside instrumentation.allowed is marked",
+          "AGENTTMP_" not in activity.read_text() and "not applied" not in err, out + err)
+
+
+def test_mark_works_in_the_checkout_project_root_names(tmp_path: Path, monkeypatch) -> None:
+    """With `project.root`, mark puts markers where `analyze` places rows,
+    and `--remove` takes them out from there (#830)."""
+    checkout = _app(tmp_path / "checkout", config=None)
+    (tmp_path / "perf").mkdir()
+    (tmp_path / "perf/echolot.yml").write_text(
+        "project:\n  package: com.example.app\n  root: ../checkout\n", encoding="utf-8")
+    activity = checkout / "app/src/main/kotlin/MainActivity.kt"
+    monkeypatch.chdir(tmp_path / "perf")
+    code, out, err = _run("mark", "--apply")
+    check("applied in the checkout", code == 0 and "AGENTTMP_" in activity.read_text(), out + err)
+    code, out, err = _run("mark", "--remove")
+    check("and removed from it", code == 0 and activity.read_text() == ACTIVITY, out + err)
 
 
 def test_an_argument_error_is_logged(logged) -> None:
