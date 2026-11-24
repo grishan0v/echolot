@@ -433,7 +433,7 @@ def settings(st: dict, head: str, says: dict[str, list[str]], cfg: Config | None
         row("Time limit", _sentence(str(e)))
     else:
         # The line to edit comes after what the row reads: where the page
-        # may rewrite the line it wrote, its field stands there instead
+        # may rewrite the limit's line, its field stands there instead
         # (`echolot/time_limit.py`).
         under = "scenario" if cfg.get("scenarios") is None else f"scenarios.{cfg.scenario_name}"
         if budget is None:

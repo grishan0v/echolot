@@ -350,7 +350,7 @@ def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = (),
            if any(label == "Launches in one check" for label, _ in launches) else "")
     if limit and not limit.get("keep"):
         one += (", and" if one else " but") + (" the time limit, in the one line of <code>echolot.yml</code> "
-                                               "the page wrote for it")
+                                               "that holds it")
     intro = ('<p class="small sub measure">What this page reads, and what <code>echolot</code> and '
              f'<code>echolot scan</code> say behind each line. Nothing here is changed from the page{one}: '
              'the values live in <code>echolot.yml</code>.</p>')

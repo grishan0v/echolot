@@ -18,8 +18,8 @@ started again all show the same. A third sets a project up
 proposes, never over a file that is there, and where echolot was never set up
 it runs `echolot init` the same way, as a process of its own. A fourth sets
 or changes the time limit afterwards (`echolot/time_limit.py`): it rewrites
-the one line of that `echolot.yml` the page wrote for the limit, while the
-line still reads as the page wrote it, and nothing else in the file. The
+the one line of `echolot.yml` that holds the limit, or adds that one line,
+whoever wrote the file, and nothing else in it. The
 last ones dig deeper from a report (`echolot/dig.py`): they open an
 investigation with the report's question and start the person's own Claude
 Code or Codex in it, as a process of its own, with a command line and a grant
@@ -224,8 +224,11 @@ def _start(visit: Visit, params: dict[str, str]) -> Page:
                                                 view["ready"]), site.url) if site.url("setup") else None
     if setup and setup.get("instead"):
         found = None
-    # The time limit under All settings, where the server takes that press.
-    limit = limit_page.setting(time_limit.view(site.project, site.config, visit.st), site.url)
+    # The time limit under All settings, where the server takes that press,
+    # and not while the setup stands in place of the button: no press but its
+    # own meanwhile.
+    limit = (None if setup and setup.get("instead") else
+             limit_page.setting(time_limit.view(site.project, site.config, visit.st), site.url))
     digging = (dig_page.on_start(dig.view(site.project, visit.st, procs=site.procs, count=False), site.url)
                if site.url("dig") else "")
     return Page(start_page.render(view, site.url, visit.steps("start"), check=found, setup=setup, limit=limit,
@@ -432,16 +435,20 @@ def _setup_progress(visit: Visit, params: dict[str, str]) -> Page:
 
 def _set_limit(visit: Visit, params: dict[str, str]) -> Page:
     """Set or change the time limit (`echolot/time_limit.py`): rewrite the one
-    line of `echolot.yml` the page wrote for it, as the file is now. Refused,
-    it answers with a page that says why and that nothing was written; taken,
-    or the same press again, it sends the browser back to the limit."""
+    line of `echolot.yml` that holds it, or add it, as the file is now.
+    Refused, it answers with a page that says why and that nothing was
+    written; taken, or the same press again, it sends the browser back to the
+    limit, on the report of the scenario the press was about."""
     site = visit.site
     try:
         press = time_limit.asked(visit.form)
         time_limit.write(site.project, site.config, press)
     except check.Refusal as e:
         return _nothing(visit, e.title, e.text, e.status)
-    return Page("", 303, f"{site.url(press['back'])}#{limit_page.ID}")
+    named, focus = press.get("scenario"), (visit.st.get("config") or {}).get("scenario")
+    back = (site.url("report-of", scenario=named) if press["back"] == "report" and named and named != focus
+            else site.url(press["back"]))
+    return Page("", 303, f"{back}#{limit_page.ID}")
 
 
 # ---------------------------------------------------------------------------

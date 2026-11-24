@@ -1000,10 +1000,13 @@ def test_all_settings_of_a_launch_window(project):
     page = start(project.ready())
     check("it is a fold, closed", page.one("details", id="settings").attrs.get("open") is None)
     fold = page.one("details", id="settings")
-    check("nothing in it can be changed but the number of launches, which belongs to the button",
-          [(i.attrs.get("name"), i.attrs.get("form"), i.attrs.get("value")) for i in fold.all("input")]
-          == [("launches", "check-form", "3")] and not fold.all("select") and not fold.all("textarea")
-          and not fold.all("button"), [i.attrs for i in fold.all("input")])
+    # The config is one written by hand, and its limit is on a line of its
+    # own: the page sets it as it sets the limit of a file it wrote (#818).
+    check("nothing in it can be changed but the number of launches, which belongs to the button, and the time limit",
+          [(i.attrs.get("name"), i.attrs.get("form"), i.attrs.get("value")) for i in fold.all("input")
+           if i.attrs.get("type") != "hidden"] == [("launches", "check-form", "3"), ("limit", None, "0.5")]
+          and not fold.all("select") and not fold.all("textarea")
+          and [b.text for b in fold.all("button")] == ["Set the limit"], [i.attrs for i in fold.all("input")])
     check("the build, and whether to measure on it, in scan's words",
           "benchmark. Measure on it: yes — release-like and profileable. It installs as com.example.app."
           in setting(page, "Build to measure").text, setting(page, "Build to measure").text)

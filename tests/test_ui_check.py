@@ -1248,7 +1248,7 @@ def test_reading_writes_nothing_with_a_run_on_show(project):
 
 def test_without_the_addresses_of_a_press_the_page_reads_only(project, monkeypatch):
     project.ready()
-    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith("check")])
+    monkeypatch.setattr(ui, "ROUTES", [r for r in ui.ROUTES if not r.name.startswith(("check", "limit"))])
     page = page_of(site_of(project))
     check("no button, no form, no field", not page.all("form") and not page.all("button", id="check-go") and not page.all("input"))
     check("the step is a command to copy again", page.one("code", id="next-cmd").text == "echolot collect -c echolot.yml -n 5")

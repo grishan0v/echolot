@@ -7469,6 +7469,52 @@ def _(report):
     assert check_mod._stops_recording([computer, {**phone, "tone": ready.GREEN}, app]) is None
 
 
+@check("ui: the time limit is set in an echolot.yml the page did not write: a press changes "
+       "the number on its line, or adds the line, and every other byte stays")
+def _(report):
+    """The field under the time limit was offered only for a config that
+    began with the two lines the page writes at its top: a config written by
+    hand, by `scan` or by an agent lost it with no word, and so did one with
+    several scenarios (#818). Which file the page may change is now a matter
+    of what it holds. A `budget_ms` line keeps its comment and its spacing
+    and gets a new number; an empty field turns it into a comment, which the
+    next press turns back; a scenario with no limit gets the page's own line
+    as the first of its keys. Every other byte of the file stays.
+    """
+    from . import project_setup, time_limit
+    hand = ("# the team's config\nproject:\n  package: com.example.app\n  process: com.example.app\n\n"
+            "scenario:\n  name: coldStart   # the launch\n  window: launch\n  budget_ms: 500    # agreed\n\n"
+            "runner:\n  mode: launch\n")
+
+    def press(root: Path, ms: int | None) -> dict:
+        found = time_limit.reading(root, "echolot.yml")
+        assert found is not None and found["can"], found
+        time_limit.write(root, "echolot.yml", {"limit_ms": ms, "scenario": None, "seen": found["seen"],
+                                               "rest": found["rest"], "back": "start"})
+        return found
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = root / "echolot.yml"
+        path.write_text(hand, encoding="utf-8")
+        assert press(root, 2000)["line"] == 9
+        assert path.read_text(encoding="utf-8") == hand.replace("budget_ms: 500", "budget_ms: 2000"), \
+            path.read_text(encoding="utf-8")
+        assert Config.load(path).scenario_budget_ms == 2000
+        press(root, None)
+        assert path.read_text(encoding="utf-8") == hand.replace("  budget_ms: 500", "  # budget_ms: 2000"), \
+            path.read_text(encoding="utf-8")
+        assert Config.load(path).scenario_budget_ms is None
+        press(root, 800)
+        assert path.read_text(encoding="utf-8") == hand.replace("budget_ms: 500", "budget_ms: 800")
+        none = hand.replace("  budget_ms: 500    # agreed\n", "")
+        path.write_text(none, encoding="utf-8")
+        press(root, 1500)
+        assert path.read_text(encoding="utf-8") == none.replace(
+            "scenario:\n", "scenario:\n" + project_setup.limit_line(1500) + "\n", 1), path.read_text(encoding="utf-8")
+        assert Config.load(path).scenario_budget_ms == 1500
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor

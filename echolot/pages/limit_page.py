@@ -1,6 +1,7 @@
 """The time limit as `echolot ui` sets it (`echolot.time_limit`): the sentence
-with a field in it, beside the report's verdict and under "All settings";
-why the page leaves the file to the person, where it does; and, while the
+with a field in it, beside the report's verdict and under "All settings",
+with the line of `echolot.yml` a press changes; why the page leaves the file
+to the person and which line to edit, where it does; and, while the
 report is one made with another limit, that it is, with the button that
 reads the recordings again.
 
@@ -25,22 +26,33 @@ ID = "time-limit"
 Link = Callable[..., "str | None"]
 
 
+def _does(found: dict[str, Any]) -> str:
+    """What a press writes, in a sentence: the one line it changes or adds."""
+    line, under = found.get("line"), found.get("under") or "scenario"
+    if found.get("kind") == "insert":
+        return (f"A press adds one line to `echolot.yml`, `budget_ms` under `{under}:` as line {line}, and changes "
+                "nothing else in it.")
+    return f"A press changes line {line} of `echolot.yml`, `budget_ms` under `{under}:`, and nothing else in it."
+
+
 def _field(found: dict[str, Any], action: str, back: str) -> str:
     """The sentence with the field, as on the page that sets a project up, the
     limit in force in it, and the button: one form."""
     low, high = found["range"]
     value = f' value="{e(found["seconds"])}"' if found.get("seconds") else ""
+    scenario = (f'<input type="hidden" name="scenario" value="{e(found["scenario"])}">'
+                if found.get("scenario") else "")
+    empty = ", or empty for no limit" if found.get("off", True) else ""
     return (f'<form method="post" action="{e(action)}" class="lim-form" id="{ID}-form">'
             f'<input type="hidden" name="seen" value="{e(found["seen"])}">'
             f'<input type="hidden" name="rest" value="{e(found["rest"])}">'
-            f'<input type="hidden" name="back" value="{e(back)}">'
+            f'<input type="hidden" name="back" value="{e(back)}">{scenario}'
             f'<div class="lim-row"><label class="lim-field" for="{ID}-in">It should take no longer than '
             f'<input type="text" inputmode="decimal" maxlength="6" id="{ID}-in" name="limit"{value} autocomplete="off" '
             f'aria-describedby="{ID}-h"> seconds</label>'
             '<button type="submit" class="btn line">Set the limit</button></div>'
-            f'<p class="small sub measure" id="{ID}-h">From {low:g} to {high:g}, or empty for no limit. A press '
-            'changes one line of <code>echolot.yml</code>, the <code>budget_ms</code> the page wrote, and nothing '
-            'else in it.</p></form>')
+            f'<p class="small sub measure" id="{ID}-h">From {low:g} to {high:g}{empty}. {kit.prose(_does(found))}</p>'
+            '</form>')
 
 
 def _behind(found: dict[str, Any], link: Link, look: str) -> str:
@@ -79,8 +91,9 @@ def beside(found: dict[str, Any] | None, link: Link) -> dict[str, Any] | None:
     if found["can"]:
         body = _field(found, action, "report")
     else:
+        at = f", line {found['line']}" if found.get("line") else ""
         where = ("in `local.yml`" if found.get("reason") == "local" else
-                 f"`budget_ms` under `{found['under']}:` in `echolot.yml`")
+                 f"`budget_ms` under `{found['under']}:` in `echolot.yml`{at}")
         body = (f'<p class="small sub measure" id="{ID}-no">{kit.prose(found["why"])} The limit is {kit.prose(where)}, '
                 'in milliseconds.</p>')
     return {"html": f'<section class="lim" id="{ID}" aria-label="Time limit">{body}{_behind(found, link, "primary")}'
@@ -98,6 +111,7 @@ def setting(found: dict[str, Any] | None, link: Link) -> dict[str, Any] | None:
     if found["can"]:
         body, keep = _field(found, action, "start"), False
     else:
-        body, keep = f'<p id="{ID}-no">{kit.prose(found["why"])}</p>', True
+        at = f" It is line {found['line']} of `echolot.yml`." if found.get("line") else ""
+        body, keep = f'<p id="{ID}-no">{kit.prose(found["why"] + at)}</p>', True
     return {"html": f'<div class="lim" id="{ID}">{body}{_behind(found, link, "line")}</div>', "keep": keep, "css": CSS,
             "js": JS}
