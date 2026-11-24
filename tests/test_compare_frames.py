@@ -100,7 +100,8 @@ def test_the_merge_keeps_each_runs_frames() -> None:
 
 
 def test_analyze_counts_the_frames_in_the_window(marker_report) -> None:
-    check("the fixture's frames", marker_report["window"]["frames"] == {"count": 24},
+    check("the fixture's frames, and the 5 the app made late by frame_jank's own floors",
+          marker_report["window"]["frames"] == {"count": 24, "late": 5},
           marker_report["window"].get("frames"))
 
 

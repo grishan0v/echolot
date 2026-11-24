@@ -308,14 +308,29 @@ def _merge_crowding(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _merge_frames(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The frames drawn in the window across repeats: the median, and each run's."""
-    counts = [f["count"] for r in reports
-              if (f := (r.get("window") or {}).get("frames")) and f.get("count") is not None]
-    if not counts:
+    """The frames drawn in the window across repeats: the median, and each run's.
+
+    The frames the app made late (`late`) the same way, with each run's in
+    `late_values` in the order of `values`, so that a run's late frames are
+    read against its own: the share of each run is what `compare --plain`
+    judges a frame-paced scenario by (#586). Left out when a repeat does not
+    say, rather than counted as none.
+    """
+    drawn = [f for r in reports
+             if (f := (r.get("window") or {}).get("frames")) and f.get("count") is not None]
+    if not drawn:
         return None
-    mid = median(counts)
-    return {"count": int(mid) if mid == int(mid) else round(mid, 1),
-            "values": counts, "runs": f"{len(counts)}/{len(reports)}"}
+    counts = [f["count"] for f in drawn]
+
+    def whole(values: list) -> float:
+        mid = median(values)
+        return int(mid) if mid == int(mid) else round(mid, 1)
+
+    out = {"count": whole(counts), "values": counts, "runs": f"{len(counts)}/{len(reports)}"}
+    late = [f.get("late") for f in drawn]
+    if all(isinstance(n, int) for n in late):
+        out["late"], out["late_values"] = whole(late), late
+    return out
 
 
 def _merge_startup(reports: list[dict[str, Any]]) -> dict[str, Any] | None:

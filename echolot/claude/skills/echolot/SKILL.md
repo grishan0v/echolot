@@ -180,7 +180,8 @@ echolot compare --hunt 3             # its first report against its last
 echolot compare old.json new.json    # or name them
 ```
 
-One table sorted by how far each row moved, plus `comparison.json` beside the
+One table sorted by how far each row moved — the main thread's moves that
+hold first, the moves that do not hold last — plus `comparison.json` beside the
 report. Three things decide how to read it:
 
 - **`change`** — `appeared`, `grew`, `shrank`, `vanished`, `steady`. An
