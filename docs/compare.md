@@ -629,9 +629,11 @@ interpreter and the JIT carry it. A large app's launch on the SM-A515F took
 nothing had compiled: a comparison of the two calls every row a regression,
 and the clock check above passes it, since the clock did not move. The state
 is ART's own slice for the app's dex, read from each trace, so a build that
-changed under the same config is caught. The reason is part of it: the same
-filter from a profile background dexopt widened (`bg-dexopt`) is not the build
-the install brought (`install-dm`). A side whose traces held no state — the
+changed under the same config is caught. For a profile's filter the reason is
+part of it: the same `speed-profile` from a profile background dexopt widened
+(`bg-dexopt`) is not the build the install brought (`install-dm`). For any
+other filter it is not: `verify` after an install and `verify` after
+`cmd package compile` are the same code, and get no warning. A side whose traces held no state — the
 process was already running when the recording began, as in every scroll or
 drag recorded with the app up — says nothing about its filter, so the JIT's
 work in the window speaks instead: when the two sides' JIT-compiled methods

@@ -1227,9 +1227,10 @@ def _compile_moved(before: dict, after: dict) -> list[dict[str, str]]:
     code the JIT compiles while the app runs. On an SM-A515F a large app's
     launch took ~1.4 s on its benchmark build and ~8.8 s on a debuggable
     build that nothing had compiled, and every row of a comparison between
-    them grows for that reason alone. The reason counts too: a profile
-    widened by background dexopt (`bg-dexopt`) compiles more than the one
-    the install brought (`install-dm`).
+    them grows for that reason alone. The reason counts for a profile's
+    filter: a profile widened by background dexopt (`bg-dexopt`) compiles
+    more than the one the install brought (`install-dm`). Which states are
+    apart is `compiled_apart`'s.
 
     A report from before the field carries no `compile` and is unknown, and
     so is a side whose traces did not hold the state. That side's filter
@@ -1243,7 +1244,7 @@ def _compile_moved(before: dict, after: dict) -> list[dict[str, str]]:
     cb, ca = eb["compile"] or {}, ea["compile"] or {}
     out: list[dict[str, str]] = []
     was, now = _compiled(cb), _compiled(ca)
-    if was and now and was != now:
+    if compiled_apart(before, after):
         out.append({
             "id": "compile",
             "text": f"The app was compiled differently: {was} before, {now} "
@@ -1302,6 +1303,34 @@ def _jit_moved(cb: dict, ca: dict) -> list[dict[str, str]]:
                 f"(`dumpsys package dexopt`), or record both rounds with the "
                 f"app's process started after its last compile.",
     }]
+
+
+def compiled_apart(before: dict, after: dict) -> tuple[str, str] | None:
+    """The two sides' compile states in words, when the app ran compiled
+    differently on them; None when they agree or a side does not say.
+
+    The filter is what decides how fast the code runs. The reason counts
+    only for a filter compiled from a profile (`speed-profile`): which
+    profile it was depends on how the system came to compile it, and a
+    profile widened by background dexopt is not the one the install brought.
+    For any other filter the reason is only how it came about: `verify`
+    after an install and `verify` after `cmd package compile` are the same
+    code, and were warned about as two builds (#809). The reason stays in
+    the words, beside the filter.
+    """
+    cb = (before.get("environment") or {}).get("compile") or {}
+    ca = (after.get("environment") or {}).get("compile") or {}
+    was, now = _compiled(cb), _compiled(ca)
+    if not (was and now) or _build(cb) == _build(ca):
+        return None
+    return was, now
+
+
+def _build(c: dict) -> tuple[str, str | None]:
+    """What of a compile state moves the code's speed: the filter, and the
+    reason beside a profile's."""
+    f = str(c.get("filter"))
+    return f, (c.get("reason") if "-profile" in f else None)
 
 
 def _compiled(c: dict | None) -> str | None:
