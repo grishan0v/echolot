@@ -24,6 +24,16 @@ record from `adb shell dumpsys dropbox --print data_app_anr`. Only the last of
 those carries the reason the system fired — checked across ten Crashlytics
 exports, none of them has one.
 
+A Crashlytics event from your own tool reads too — the YAML or JSON it
+returned, saved to a file as it came, or just its `Thread:` text; one event
+per file. It carries **one thread**, the one Crashlytics blamed, with no state,
+no tid and no lock note, cut after eighteen or so frames: no lock chain can
+come out of it, and the report says so first under what it does not say,
+beside the revision, the process state and Crashlytics' own reading that the
+event adds. When the question is a lock, ask the human for the console's
+export of that event. Do not build an export from the event by hand: the
+states and tids you would invent are what the report would then read.
+
 Play Console strips who holds a monitor, so a chain from there names what
 everyone is queued on and says the holder is not in the file — look for it
 among the threads that were working. An export of the same freeze from
@@ -60,6 +70,8 @@ when the console never got the mapping.
 | "every frame belongs to the platform or a library", then "the frames nearest to the app" | the platform is a dead end, a library the app drives is not: `SystemJobScheduler.cancel` points at the app's WorkManager setup. Read that setup |
 | "every frame belongs to the platform or a library", then a platform frame such as `JobServiceEngine$JobHandler.ackStopMessage` with what it was doing | still a lead: the main thread was telling the system a JobScheduler job had stopped. Read the app's WorkManager or JobService setup |
 | "Who was holding what" under what it does not say | this file carries no lock notes; an empty chain list is the file's limit, not the freeze's. Get the device's own record |
+| "The other threads, their states and their locks" under what it does not say | the input was a Crashlytics event: one thread. Read it as the rows above say; for a lock — Crashlytics' subtitle says deadlock — or a main thread that is not in it, ask for the console's export of that event, or the device's own record |
+| "This checkout is at the build's own revision", or "a line placed here may have moved since" | the event named its build's revision. In the second case `git worktree add --detach <dir> <revision>`, then `anr` again with `--root <dir>` |
 | "What the main thread was doing" under what it does not say | the file has no main thread, often an export of the one thread a console blamed. Whether the main thread waited for it is not in the file: get the whole event, or the device's own record |
 | a CPU table with the device busy | a machine under load is a different story from an app that blocked itself |
 

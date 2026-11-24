@@ -240,6 +240,31 @@ PLAY = Source(
 
 SOURCES = (CRASHLYTICS, DUMPSYS, PLAY)
 
+# What an agent's Crashlytics tool returns for one event, rather than what the
+# console exports. Not a dump but a record: the issue Crashlytics filed it
+# under, the build and its revision, whether the app was in the foreground,
+# the keys the app set — and `threads`, which in the shape the tools give is
+# the one thread Crashlytics blamed, written as text:
+#
+#   Thread: main
+#   at __epoll_pwait
+#   at android.os.MessageQueue.nativePollOnce (Native method)
+#   at android.os.MessageQueue.next (MessageQueue.java:355)
+#   ... frames omitted ...
+#
+# No state, no tid, no lock note and no other thread: 29 of 30 events taken
+# from a large app's top issues had exactly one. Its frames are read as any
+# other source's, and the report says what such an input cannot show (see
+# `_gaps`). The signature below is what `detect` counts when the thread text
+# is given alone; the record itself is told by its fields (`_event_data`).
+EVENT = Source(
+    name="crashlytics-event",
+    signature=re.compile(r"^\s*Thread:\s*(?P<name>\S.*?)\s*$"),
+    frame=re.compile(r"^\s*at\s+(?P<frame>\S.*?)\s*$"),
+    native=re.compile(r"(?!)"),
+    lock=re.compile(r"(?!)"),
+)
+
 # Packages that belong to the platform, the runtime and the libraries every app
 # carries — a stack of twenty `java.util.concurrent` frames says nothing about
 # the app that owns it.
@@ -430,6 +455,25 @@ class Thread:
         return next((f for f in self.frames if not f.startswith(CORE)), self.top)
 
 
+@dataclass(frozen=True)
+class Event:
+    """What a Crashlytics event says around its threads, which no dump does.
+
+    `title` and `subtitle` are the issue's, as Crashlytics wrote them: the
+    blamed frame, and its own reading of the mechanism — "a deadlock involving
+    the main thread", "root cause unknown". `revision` is the build's commit
+    from `buildStamp`, empty when the build stamped none. `custom_keys` are the
+    names of the keys the app set, and only the names: some of the values are
+    the app's identifiers of a user or a session, which a report has no
+    business copying (#146).
+    """
+    title: str = ""
+    subtitle: str = ""
+    process_state: str = ""
+    revision: str = ""
+    custom_keys: tuple[str, ...] = ()
+
+
 @dataclass
 class Report:
     head: dict[str, str]
@@ -472,6 +516,13 @@ class Report:
     # The runtime's own heap lines, by the `Cmd line:` of the block they were
     # in: see `heap`.
     heaps: dict[str, dict[str, str]] = field(default_factory=dict)
+    # What a Crashlytics event says beside its threads, when that is what was
+    # read; None for a dump.
+    event: Event | None = None
+    # The commit the checkout is at, read by `locate` when the event names
+    # the build's revision to compare it with; None otherwise, and outside
+    # a git checkout.
+    checkout: str | None = field(default=None, compare=False)
 
     @property
     def heap(self) -> dict[str, str]:
@@ -572,10 +623,16 @@ def detect(text: str) -> Source | None:
     Counted rather than decided on the first hit: a header line or a frame can
     look like somebody's signature, and one accidental match should not choose
     the reader for the whole file.
+
+    A Crashlytics event as an agent's tool returns it is a record with
+    fields, told by them before anything is counted; its thread text alone
+    is counted like the rest, and loses a tie to every dump.
     """
+    if _event_data(text) is not None:
+        return EVENT
     head = text.splitlines()[:600]
     scored = [(sum(1 for line in head if source.signature.match(line)), source)
-              for source in SOURCES]
+              for source in (*SOURCES, EVENT)]
     best, source = max(scored, key=lambda pair: pair[0])
     return source if best else None
 
@@ -597,6 +654,8 @@ def _state(word: str) -> str:
 def parse(text: str, source: Source | None = None) -> Report:
     """A dump into threads. Everything unreadable is kept, not dropped."""
     source = source or detect(text) or CRASHLYTICS
+    if source is EVENT:
+        return parse_event(text)
     head: dict[str, str] = {}
     threads: list[Thread] = []
     unread: list[tuple[int, str]] = []
@@ -793,6 +852,230 @@ def _scoped(report: Report) -> Report:
     if not report.head.get("Process"):
         report.head["Process"] = target
     return report
+
+
+# --- an event from an agent's tool ------------------------------------------
+#
+# An agent reaches Crashlytics through a tool, not the console, and the tool
+# gives an event rather than the export: YAML in the shape the Firebase tools
+# print it, where most fields are themselves small YAML documents in a string
+# (`issue: |` over `id:`, `title:`, `subtitle:`), or JSON in the shape the API
+# returns it, where `threads` is a list of frames. Either is read here into the
+# same threads a dump gives, and nothing is made up on the way: no state, no
+# tid, no lock note, since the event has none.
+
+# The fields only an event has. One of them, at the start of a line or as a
+# key of a JSON document, is what makes a file worth parsing as one at all.
+_EVENT_FIELDS = ("threads", "eventId", "bundleOrPackage", "buildStamp",
+                 "processState", "blameFrame")
+_EVENT_KEY = re.compile(
+    r'^\s*(?:-\s+)?"?(?:' + "|".join(_EVENT_FIELDS) + r')"?\s*:', re.MULTILINE)
+# `revision: "…"` inside `buildStamp`, which the tools give as the build
+# system's own text and the API as a string or an object.
+_REVISION = re.compile(r'\brevision"?\s*[:=]\s*"?(?P<rev>[0-9a-fA-F]{7,40})\b')
+# One frame of an event's thread text: `at <symbol>`, and its place in
+# parentheses after a space when it has one — `(MessageQueue.java:355)`,
+# `(Native method)`. A native symbol's own parentheses follow it without a
+# space, `__futex_wait_ex(void volatile*, …)`, and stay part of it.
+_EVENT_FRAME = re.compile(r"^\s*at(?:\s+(?P<symbol>.*?))?(?:\s+\((?P<where>[^()]*)\))?\s*$")
+# A managed frame's symbol: a dotted name and nothing else. What is not is a
+# native frame — `__epoll_pwait`, `art::Thread::DumpState const`.
+_JAVA_SYMBOL = re.compile(r"^[\w$]+(?:\.[\w$<>-]+)+$")
+
+
+def _event_data(text: str) -> list[dict[str, Any]] | None:
+    """The events in this file, or None when it is not one.
+
+    Parsed only when it looks like one: a dump of three hundred threads is
+    not handed to a YAML parser on the chance. A file that parses and holds
+    no event — a list of strings, an export's text — is not one either.
+    """
+    stripped = text.lstrip()
+    if not (stripped[:1] in ("{", "[") or _EVENT_KEY.search(text)):
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        import yaml   # echolot's own dependency; only an event needs it here
+        try:
+            data = yaml.safe_load(text)
+        except (yaml.YAMLError, RecursionError):
+            return None
+    if isinstance(data, dict) and isinstance(data.get("events"), list):
+        data = data["events"]
+    items = data if isinstance(data, list) else [data]
+    found = [e for e in items if isinstance(e, dict)
+             and any(k in e for k in _EVENT_FIELDS)]
+    return found or None
+
+
+def _field(event: dict[str, Any], key: str) -> Any:
+    """A field of the event, unwrapped when the tool wrote it as YAML text.
+
+    The Firebase tools print most fields as a small YAML document of their
+    own inside a string: `issue` arrives as the text `id: …\\ntitle: …`, and
+    `eventTime` as `'2026-…'` with its quotes. What parses into an object is
+    that object; a scalar stays the text it was, without the quotes.
+    """
+    value = event.get(key)
+    if not isinstance(value, str):
+        return value
+    import yaml
+    try:
+        inner = yaml.safe_load(value)
+    except (yaml.YAMLError, RecursionError):
+        return value.strip()
+    if isinstance(inner, (dict, list)):
+        return inner
+    return inner.strip() if isinstance(inner, str) else value.strip()
+
+
+def _text(value: Any) -> str:
+    """A field as one line of text, empty for what is not a scalar."""
+    if value is None or isinstance(value, (dict, list)):
+        return ""
+    return str(value).strip()
+
+
+def _add_frame(thread: Thread, symbol: str, where: str | None) -> None:
+    """One frame of an event, written the way a dump writes it.
+
+    A managed frame becomes `pkg.Class.method(File.kt:12)`, the shape every
+    rule after this reads, and one without a place says `(Unknown Source)`,
+    as ART does. A native frame keeps its symbol and is counted above the
+    managed ones while none has come yet, as a native unwinder's dump is.
+    """
+    if _JAVA_SYMBOL.match(symbol):
+        thread.frames.append(f"{symbol}({where or 'Unknown Source'})")
+        return
+    thread.native.append(symbol + (f" ({where})" if where else ""))
+    if not thread.frames:
+        thread.above += 1
+
+
+def _event_threads(text: str) -> tuple[list[Thread], list[tuple[int, str]]]:
+    """The threads of an event's thread text, and the lines outside them."""
+    threads: list[Thread] = []
+    unread: list[tuple[int, str]] = []
+    current: Thread | None = None
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        named = EVENT.signature.match(line)
+        if named:
+            current = Thread(name=named.group("name"), state="")
+            threads.append(current)
+            continue
+        if current is None:
+            unread.append((number, line))
+            continue
+        if _OMITTED.match(line):
+            # Where the tool stopped writing the stack, as in an export.
+            current.cut = len(current.frames) + len(current.native)
+            continue
+        frame = _EVENT_FRAME.match(line)
+        if frame and frame.group("symbol"):
+            _add_frame(current, frame.group("symbol"), frame.group("where"))
+        else:
+            current.unread.append(line)
+    return threads, unread
+
+
+def _json_threads(items: list[Any]) -> list[Thread]:
+    """The threads of an event in the API's shape: a list of frame objects."""
+    threads = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        thread = Thread(name=_text(item.get("name") or item.get("threadName")), state="")
+        frames = item.get("frames")
+        for frame in frames if isinstance(frames, list) else []:
+            if isinstance(frame, str):
+                read = _EVENT_FRAME.match(frame if frame.lstrip().startswith("at")
+                                          else "at " + frame)
+                if read and read.group("symbol"):
+                    _add_frame(thread, read.group("symbol"), read.group("where"))
+                continue
+            if not isinstance(frame, dict) or not _text(frame.get("symbol")):
+                continue
+            file, line = _text(frame.get("file")), _text(frame.get("line"))
+            where = f"{file}:{line}" if file and line not in ("", "0") \
+                and file != "Native method" else file
+            _add_frame(thread, _text(frame["symbol"]), where or None)
+        threads.append(thread)
+    return threads
+
+
+def parse_event(text: str) -> Report:
+    """A Crashlytics event, as an agent's tool returns it, into a report.
+
+    The first event when the file holds several — what a batch call gives —
+    with the rest counted, as a second ANR in a drop box record is. The
+    thread text on its own, as an agent might paste it out of the tool's
+    answer, is read as an event with nothing else in it.
+    """
+    events = _event_data(text)
+    if events is None:
+        threads, unread = _event_threads(text)
+        return Report(head={}, threads=threads, source=EVENT.name,
+                      unread=unread, event=Event())
+    data = events[0]
+    raw = data.get("threads")
+    threads = (_event_threads(raw)[0] if isinstance(raw, str)
+               else _json_threads(raw) if isinstance(raw, list) else [])
+
+    issue = _field(data, "issue")
+    issue = issue if isinstance(issue, dict) else {}
+    version = _field(data, "version")
+    if isinstance(version, dict):
+        version = _text(version.get("displayName")) or " ".join(
+            x for x in (_text(version.get("displayVersion")),
+                        f"({_text(version.get('buildVersion'))})"
+                        if _text(version.get("buildVersion")) else "") if x)
+    stamp = data.get("buildStamp")
+    revision = _REVISION.search(stamp if isinstance(stamp, str)
+                                else json.dumps(stamp, default=str))
+    keys = _field(data, "customKeys")
+    state = _text(_field(data, "processState"))
+
+    head = {key: value for key, value in (
+        ("Application", _text(_field(data, "bundleOrPackage"))),
+        ("Version", _text(version)),
+        ("Issue", _text(issue.get("id"))),
+        ("Date", _text(_field(data, "eventTime"))),
+        ("Event", _text(_field(data, "eventId"))),
+    ) if value}
+    event = Event(
+        title=_text(issue.get("title")),
+        subtitle=_text(issue.get("subtitle")),
+        process_state="" if state.endswith("UNSPECIFIED") else state,
+        revision=revision.group("rev").lower() if revision else "",
+        custom_keys=tuple(str(k) for k in keys) if isinstance(keys, dict) else (),
+    )
+    return Report(head=head, threads=threads, source=EVENT.name,
+                  entries=len(events), event=event)
+
+
+def checkout_revision(root: Path) -> str | None:
+    """The commit `root` is checked out at; None outside git, or with no git."""
+    import subprocess
+    try:
+        done = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    head = done.stdout.strip()
+    return head if done.returncode == 0 and head else None
+
+
+def is_the_build(report: Report) -> bool | None:
+    """Whether the checkout is at the revision the event's build was made
+    from; None when either is unknown."""
+    revision = report.event.revision if report.event is not None else ""
+    if not revision or not report.checkout:
+        return None
+    return report.checkout.lower().startswith(revision)
 
 
 # --- a minified build -------------------------------------------------------
@@ -1651,6 +1934,11 @@ def locate(report: Report, root: Path,
     """
     index = source_index(root) if index is None else index
     report.declared = declared_packages(index) or None
+    if report.event is not None and report.event.revision:
+        # An event names the commit its build was made from, which a dump
+        # never does: whether this checkout is that commit is then a fact to
+        # state, not a guess from lines that moved (#525).
+        report.checkout = checkout_revision(root)
     if not index:
         # No sources: no frame of the report is missing from them.
         return [], []
@@ -1927,6 +2215,74 @@ def _short(symbol: str) -> str:
     return ".".join(parts[-2:]) if len(parts) > 2 else symbol
 
 
+def _standing(thread: Thread) -> str:
+    """The line over a thread's stack: its state, when the source gave one."""
+    if thread.state:
+        return f"State `{thread.state}`, standing on:"
+    return "No state in this input; standing on:"
+
+
+def _event_said(report: Report) -> list[str]:
+    """What an event says that a dump does not, under the header.
+
+    The partial input is said first, before any section reads as if the
+    file held the whole process: an event with one worker thread in it read
+    as if that worker were the whole story.
+    """
+    event = report.event
+    if event is None:
+        return []
+    names =", ".join(f"`{t.name or '(unnamed)'}`" for t in report.threads[:4])
+    many = (f"**{len(report.threads)} threads** ({names})" if len(report.threads) > 1
+            else f"**one thread**, {names}" if report.threads else "no thread")
+    out = [f"Read from a Crashlytics event as an agent's tool returns it: "
+           f"{many}, with no state, tid or lock note — what that leaves out "
+           f"is under \"What this report does not say\"."]
+    if event.subtitle or event.title:
+        # Crashlytics' own reading of the mechanism. Not this reader's
+        # finding, and said as its: on a deadlock it is the one thing the
+        # file knows about the lock.
+        said = ([f"_{event.subtitle}_"] if event.subtitle else []) \
+            + ([f"`{event.title}`"] if event.title else [])
+        out.append("Crashlytics files it as: " + " — ".join(said))
+    facts = []
+    if event.process_state:
+        facts.append(f"the app was in the **{event.process_state.lower()}**")
+    if event.revision:
+        facts.append(f"its build was made from revision `{event.revision[:12]}`")
+    if facts:
+        line = "; ".join(facts)
+        out.append(line[0].upper() + line[1:] + ".")
+    if event.custom_keys:
+        shown = ", ".join(f"`{k}`" for k in event.custom_keys[:8])
+        if len(event.custom_keys) > 8:
+            shown += f" and {len(event.custom_keys) - 8} more"
+        out.append(f"The app set {len(event.custom_keys)} custom key(s) on it: "
+                   f"{shown}. Their values are the app's data and are not "
+                   f"copied here — some name a user or a session; read the ones "
+                   f"you need in the event itself.")
+    return out
+
+
+def _revision_said(report: Report) -> list[str]:
+    """The event's revision against the checkout's, over the placed frames."""
+    revision = report.event.revision if report.event is not None else ""
+    if not revision:
+        return []
+    same = is_the_build(report)
+    if same:
+        return [f"This checkout is at the build's own revision, "
+                f"`{revision[:12]}`: the lines below are the build's.", ""]
+    if same is None:
+        return [f"The event names the build's revision, `{revision[:12]}`; "
+                f"this directory is not a git checkout to compare it with.", ""]
+    return [f"The event names the build's revision, `{revision[:12]}`, and this "
+            f"checkout is at `{(report.checkout or '')[:12]}`: a line placed "
+            f"here may have moved since. `git worktree add --detach <dir> "
+            f"{revision[:12]}` checks the build out, and `--root <dir>` places "
+            f"the frames there.", ""]
+
+
 def render(report: Report, code: tuple[list[Located], list[str]] | None = None) -> str:
     """The dump as a findings list — sections that have something to say."""
     out: list[str] = ["# ANR Report", ""]
@@ -1948,9 +2304,15 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
         counted += (f" · {report.elsewhere} from other processes in this "
                     f"record, not read")
     out.append(counted)
-    if report.entries > 1:
+    if report.entries > 1 and report.event is not None:
+        out.append(f"This file holds {report.entries} events. Everything below "
+                   f"is the first of them; give `anr` each event in a file of "
+                   f"its own.")
+    elif report.entries > 1:
         out.append("This file holds more than one ANR. Everything below is "
                    "the first of them.")
+    if report.event is not None:
+        out.extend(_event_said(report))
     out.extend(_retrace_note(report.retraced))
     out.append("")
 
@@ -2035,9 +2397,9 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
             out += [f"**Blocked**, denied `{main.lock.cls}` by tid "
                     f"{main.lock.owner}. The section above has the holder.", ""]
         elif gc is not None:
-            out += [_gc_said(gc), "", f"State `{main.state}`, standing on:", ""]
+            out += [_gc_said(gc), "", _standing(main), ""]
         else:
-            out += [f"State `{main.state}`, standing on:", ""]
+            out += [_standing(main), ""]
         out += ["```"] + _stack(main, ours) + ["```", ""]
         if main.cut is not None:
             out += [f"The source cut this stack after {main.cut} frames.", ""]
@@ -2119,7 +2481,9 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
                                                t.state.endswith("waiting")))
         for thread in ranked[:12]:
             where = thread.nearest(ours)
-            line = f"- **{thread.name}** ({thread.state}) — `{where}`"
+            # An event gives no state, and `()` would read as one.
+            state = f" ({thread.state})" if thread.state else ""
+            line = f"- **{thread.name}**{state} — `{where}`"
             if where != thread.top:
                 # The top said what the thread was standing on; this says
                 # what it was doing. Both, because they read differently.
@@ -2142,14 +2506,18 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
         out += ["## Where these frames are in this checkout", "",
                 "_the file and the line are the frame's own; each line was "
                 "checked against the function the frame names_", ""]
+        out += _revision_said(report)
         off = astray(placed, report)
         if off is not None:
             version = report.head.get("Version", "")
+            revision = report.event.revision if report.event is not None else ""
             out += [f"> ⚠️ {off} of the {sum(1 for f in placed if f.line is not None)} "
                     f"frames placed land outside the function they name: this "
                     f"checkout is probably not the build that froze"
                     + (f" ({version})" if version else "")
-                    + ". Check that build out before opening these lines.", ""]
+                    + ". Check that build out"
+                    + (f", revision `{revision[:12]}`," if revision else "")
+                    + " before opening these lines.", ""]
         for found in placed:
             mark = "" if found.exact else (
                 f"  ← one of {len(found.others) + 1} of that name, also "
@@ -2234,7 +2602,38 @@ _NO_REASON = {
     DUMPSYS.name: "This is ART's dump without the drop box's header — a trace "
                   "pulled from `/data/anr/` has no `Subject:` — and the drop "
                   "box entry for the same freeze has one",
+    EVENT.name: "A Crashlytics event carries no reason, component or intent "
+                "either; the device's own record does",
 }
+
+
+def _event_gap(report: Report) -> str:
+    """What an event as the tools give it cannot show, and where the rest is.
+
+    Said as one item, first: it is the limit every other section stands
+    on. A deadlock named by Crashlytics itself is said by name, since the
+    second thread of it is exactly what the input leaves out.
+    """
+    event = report.event
+    names = ", ".join(f"`{t.name or '(unnamed)'}`" for t in report.threads[:4])
+    held = (f"one thread, {names} — the one Crashlytics blamed —"
+            if len(report.threads) == 1 else
+            f"{len(report.threads)} threads, {names},")
+    said = (f"- The other threads, their states and their locks. A Crashlytics "
+            f"event as an agent's tool returns it carries {held} with no state, "
+            f"no tid and no lock note, and its stacks are often cut. So none of "
+            f"this can be read off it: who held the monitor a thread wanted, "
+            f"what the threads it does not carry were doing, and what the other "
+            f"side of a binder call was doing.")
+    if event is not None and "deadlock" in event.subtitle.lower():
+        said += (" Crashlytics files this one as a deadlock, and a deadlock is "
+                 "two threads each holding what the other wants: the second "
+                 "thread and both lock notes are in the full dump, not here.")
+    return (said + " The full dump is the console's export of this event, from "
+            "the issue page — every thread, with states and lock notes — or the "
+            "device's own record, which has the reason as well: `adb shell "
+            "dumpsys dropbox --print data_app_anr`. When the question is a "
+            "lock, ask the human for one of them.")
 
 
 def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
@@ -2244,6 +2643,8 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
     skipped, or silence reads as a clean bill.
     """
     gaps = []
+    if report.event is not None:
+        gaps.append(_event_gap(report))
     # Cut at the drop box's size limit, the dump reads as complete and a
     # holder past the cut as a thread that was not in it.
     if report.cut is not None:
@@ -2263,20 +2664,32 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
     # holding one, so the device's own record without a single note says that
     # none was — which is not a gap, and pointing the reader at that same
     # record for the notes it already lacks was wrong.
-    if report.threads and not report.lock_notes and report.source != DUMPSYS.name:
+    # An event never carries one, and its own item above says so.
+    if report.threads and not report.lock_notes \
+            and report.source not in (DUMPSYS.name, EVENT.name):
         gaps.append("- Who was holding what. No thread in this file carries a "
                     "lock note (`waiting to lock … held by`), so a monitor "
                     "chain cannot be read off it: an empty chain list here "
                     "means the file cannot say, not that nothing was blocked. "
                     "The device's own record (`dumpsys dropbox`) keeps the notes.")
-    if report.threads and report.main is None:
+    if report.threads and report.main is None and report.event is not None:
+        # Crashlytics blamed a worker, and the event carries that worker
+        # alone: read as it stood, the report made the worker the whole story.
+        gaps.append("- What the main thread was doing. The event carries the "
+                    "thread Crashlytics blamed, and it is not the main thread: "
+                    "whether the main thread was waiting for it, or for "
+                    "something else, the event cannot show. The console's "
+                    "export of the same event has the main thread.")
+    elif report.threads and report.main is None:
         gaps.append("- What the main thread was doing. No thread in this file "
                     "is named `main` or runs `ActivityThread.main`, so it is "
                     "not in it, and the threads below may be all the file has.")
     if heap_bound(report) is not None:
         # The question the report raises and cannot answer, with the two
         # records that can. "No line of yours to open" stood here before.
-        alone = (" This file holds the main thread alone; the whole event "
+        whole = ("the console's export of the same event" if report.event is not None
+                 else "the whole event")
+        alone = (f" This file holds the main thread alone; {whole} "
                  "has the others, and those stopped for the same collection "
                  "were allocating at that moment." if len(report.threads) == 1
                  else "")
@@ -2443,6 +2856,20 @@ def summary(report: Report,
             # Most placed frames land outside their function: probably not
             # the build that froze.
             "not_the_build": astray(code[0], report) is not None,
+            # The commit the checkout is at, read when the event names the
+            # build's revision, and whether it is that revision; both null
+            # when either is unknown.
+            "checkout": report.checkout,
+            "is_the_build": is_the_build(report),
+        },
+        # What a Crashlytics event says beside its threads; null for a dump.
+        # `custom_keys` are names only: the values are the app's data.
+        "event": None if report.event is None else {
+            "title": report.event.title or None,
+            "subtitle": report.event.subtitle or None,
+            "process_state": report.event.process_state or None,
+            "revision": report.event.revision or None,
+            "custom_keys": list(report.event.custom_keys),
         },
         "load": [{"share": s, "process": n} for s, n in report.load],
         "own_frames": any(t.own(ours) for t in of_interest(report)),
