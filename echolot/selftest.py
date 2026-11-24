@@ -8303,6 +8303,44 @@ def _(report):
         )
 
 
+# --- the report as a page --------------------------------------------------
+
+
+@check("report page: where to start is never more checks than Dig deeper takes without "
+       "saying to tick fewer")
+def _(report):
+    """The page said "Tick the 4 that need attention and press Dig deeper",
+    and the dialog, with those 4 ticked, said "Tick fewer" (#932). The advice
+    took every check that needs attention; the dialog spoke past
+    `kit.FOCUS`. The advice now stops at `kit.FOCUS`: of more that need
+    attention, the ones that found the largest thing, and the sentence and
+    the button say how many of how many. The dialog's note names the same
+    number, and three that need attention are still all three.
+    """
+    from . import files, plain
+    from .pages import kit, report_page
+    ids = ("main_thread_block", "main_thread_waits", "monitor_contention", "uninstrumented_cpu")
+
+    def made(n: int) -> dict:
+        rows = [{"id": d, "checked": True,
+                 "rows": [{"location": "main", "runs": "3/3", "count": 1, "total_ms": 300.0 + 50 * i}]}
+                for i, d in enumerate(ids[:n])]
+        return plain.annotate({"schema": files.REPORT_SCHEMA, "scenario": "coldStart", "runs": 3,
+                               "window": {"process": "com.example.app", "duration_ms": 2000.0}, "detectors": rows})
+
+    four = made(4)
+    assert [d["attention"] for d in four["detectors"]] == [plain.NEEDS_ATTENTION] * 4, four["detectors"]
+    picks = [c["key"] for c in report_page.where_to_start(report_page.checks(four))]
+    assert picks == ["uninstrumented_cpu", "monitor_contention", "main_thread_waits"] and len(picks) == kit.FOCUS, picks
+    page = report_page.render(four)
+    assert f">Tick the {kit.FOCUS} largest that need attention</button>" in page, page
+    assert f"Tick the {kit.FOCUS} largest of the 4 that need attention and press <b>Dig deeper</b>" in page, page
+    assert f'data-focus="{kit.FOCUS}"' in page and f"Tick fewer, at most {kit.FOCUS}: " in kit.MANY_NOTE
+    three = made(3)
+    assert len(report_page.where_to_start(report_page.checks(three))) == 3
+    assert "Tick the 3 that need attention and press" in report_page.render(three)
+
+
 # --- echolot ui ------------------------------------------------------------
 
 

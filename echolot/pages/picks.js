@@ -8,6 +8,10 @@
   var E = window.echolot, $ = E.$, all = E.all;
   var dock = $('dock'), ask = $('ask');
   if (!dock || !ask) return;
+  // The most checks one question holds (`kit.FOCUS`, on the dialog): more
+  // ticked, and the dialog says to tick fewer, so the button that ticks where
+  // to start ticks no more (#932). A dialog that names none limits nothing.
+  var focus = +ask.dataset.focus || Infinity;
 
   function picks() { return all('.pick'); }
   function ticked() {
@@ -25,13 +29,14 @@
     E.onPick.forEach(function (f) { f(); });
   }
   function setPick(id, on) { picks().forEach(function (c) { if (c.dataset.id === id) c.checked = on; }); }
-  // Where to start: the checks that need attention, or with none of those
-  // the two that found the largest thing. One investigation, one question.
+  // Where to start: the checks that need attention, the `focus` largest of
+  // them when there are more, or with none of those the two that found the
+  // largest thing. One investigation, one question.
   function toStart() {
     var seen = {}, own = picks().filter(function (c) { if (seen[c.dataset.id]) return false; seen[c.dataset.id] = 1; return true; });
     var red = own.filter(function (c) { return c.dataset.level === 'red'; });
-    if (red.length) return red;
-    return own.sort(function (a, b) { return (+b.dataset.weight || 0) - (+a.dataset.weight || 0); }).slice(0, 2);
+    var largest = function (a, b) { return (+b.dataset.weight || 0) - (+a.dataset.weight || 0); };
+    return red.length ? red.sort(largest).slice(0, focus) : own.sort(largest).slice(0, 2);
   }
   function startTicked() {
     var on = {}; ticked().forEach(function (c) { on[c.dataset.id] = 1; });
@@ -63,7 +68,7 @@
   E.request = request;
   E.ticked = ticked;
   $('dock-go').addEventListener('click', function () {
-    var many = $('ask-many'), n = ticked().length, focus = +ask.dataset.focus || 3;
+    var many = $('ask-many'), n = ticked().length;
     if (many) {
       many.hidden = n <= focus;
       many.firstElementChild.textContent = (ask.dataset.manyNote || '').split('{n}').join(String(n));

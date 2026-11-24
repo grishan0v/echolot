@@ -386,7 +386,9 @@ answers one question, so the request
 ([as the report puts it together](analysing.md#the-report-as-a-page)) leads
 with one, carries the report's warnings, and lists the ticked rows as its
 evidence. With more than three ticked, the page says that one investigation
-looks at one question and suggests ticking fewer.
+looks at one question and suggests ticking three at most; the button that
+ticks where to start never ticks more, and of more than three that need
+attention it ticks the three that found the largest thing.
 
 The dialog has **Copy the request**, for an agent of your own, and, where
 the page can start one, **Start it from here**. echolot has no model of its
