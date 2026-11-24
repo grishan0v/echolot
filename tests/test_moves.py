@@ -345,6 +345,44 @@ def test_launches_that_overlap_are_no_change():
     check("one slow launch after does not hide a change", v["movement"] == moves.BETTER, v)
 
 
+def kept(before_launches, after_launches, **kw):
+    """The verdict of two reports that keep each launch's window, as a merged
+    report does (#532): `compare` gives the window's move a range."""
+    reps = []
+    for launches in (before_launches, after_launches):
+        rep = report([], launches=launches, **kw)
+        rep["window"]["values"] = [float(v) for v in launches]
+        reps.append(rep)
+    return reading(*reps)["verdict"]
+
+
+def test_a_window_whose_move_does_not_hold_is_no_change_however_far_the_medians_are():
+    """Four of five launches after beat every launch before, and the fifth is
+    as slow as any of them: by the medians alone that read as better. The
+    window's range, 95% sure, runs through zero, as the Holds beside it in
+    the table says, and the verdict does not say otherwise (#532)."""
+    before, after = (1900.0, 1920.0, 1940.0, 1960.0, 1980.0), (1100.0, 1120.0, 1140.0, 1160.0, 3000.0)
+    check("by the medians alone, better", verdict(before, after)["movement"] == moves.BETTER)
+    v = kept(before, after)
+    check("by the window's range, no change", v["movement"] == moves.NO_CHANGE
+          and v["headline"] == "No clear change", v)
+    check("and why, with the range and the launches that would settle it", v["text"]
+          == "The launch took 1.9 s before and 1.1 s after, 41% less. That is more than 20%, but the "
+             "launches of each side scatter too much to be 95% sure of it: the move lies anywhere from "
+             "-0.9 s to +1.1 s, so it is not counted as a change. More launches a side would settle it. "
+             "Measured on 5 launches before and 5 after.", v["text"])
+    v = kept((*before, 2000.0, 2020.0), (*after[:-1], 1180.0, 1200.0, 3000.0))
+    check("from seven a side one slow launch no longer hides it", v["movement"] == moves.BETTER, v)
+
+
+def test_a_window_whose_move_holds_is_judged_by_the_fifth_as_before():
+    v = kept((1418.0, 1421.0, 1477.0, 1450.0), (1968.0, 2118.0, 2166.0, 2050.0))
+    check("worse, in the same sentence", v["movement"] == moves.WORSE and v["headline"] == "Slower by 0.7 s", v)
+    v = kept((2035.0, 2041.0, 2079.0, 2060.0), (2378.0, 2388.0, 2596.0, 2400.0))
+    check("a move that holds and is under a fifth is still no change",
+          v["movement"] == moves.NO_CHANGE and "a change under 20% is not counted" in v["text"], v)
+
+
 def test_fewer_than_three_launches_a_side_give_no_verdict():
     v = verdict((2118.0,), (1421.0,))
     check("one a side", v["movement"] == moves.NO_CHANGE and v["text"]
