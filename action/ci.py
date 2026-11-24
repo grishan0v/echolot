@@ -283,13 +283,68 @@ def cmd_baseline(args: argparse.Namespace) -> int:
 
 # --- the comparison ---------------------------------------------------------
 
+# How many of the rows that hold `held-rows` names.
+HELD_NAMED = 5
+
+
+def outputs_of(cmp: dict[str, Any]) -> dict[str, str]:
+    """What a workflow reads of a comparison to tell a change from noise.
+
+    All of it is comparison.json's, never the text of the table. `moved`
+    counts every row past the noise floor, and on one build against itself
+    that was 48 to 73 rows; `held` counts the ones whose move also holds,
+    1 to 12 on the same pairs (#535). The verdict is the plain reading's, by
+    the scenario's window, and `unlike` the ids of the warnings that reading
+    says the two sides were not recorded alike by. A comparison made without
+    `--plain` has no reading, and leaves those two empty.
+    """
+    summary = cmp["summary"]
+    held = [r for r in cmp.get("rows") or []
+            if r.get("change") in ("grew", "shrank") and r.get("holds") is True]
+    reading = cmp.get("plain") or {}
+    verdict = reading.get("verdict") or {}
+    unlike = next((n.get("warnings") or [] for n in reading.get("notes") or []
+                   if n.get("id") == "unlike"), [])
+    delta = (cmp.get("window") or {}).get("delta_ms")
+    return {
+        "moved": str(summary["moved"]),
+        "appeared": str(summary.get("appeared", 0)),
+        "vanished": str(summary.get("vanished", 0)),
+        "held": str(len(held)),
+        "held-rows": json.dumps([_held_row(r) for r in held[:HELD_NAMED]],
+                                ensure_ascii=False, separators=(",", ":")),
+        "verdict": str(verdict.get("movement") or ""),
+        # One line: $GITHUB_OUTPUT takes `key=value` a line.
+        "headline": " ".join(str(verdict.get("headline") or "").split()),
+        "window-delta-ms": "" if delta is None else str(delta),
+        "comparable": "true" if cmp.get("comparable", True) else "false",
+        "warnings": ",".join(dict.fromkeys(str(w.get("id")) for w in cmp.get("warnings") or [])),
+        "unlike": ",".join(unlike),
+    }
+
+
+def _held_row(r: dict[str, Any]) -> dict[str, Any]:
+    shift = r.get("shift") or {}
+    row = {"detector": r.get("detector"), "location": r.get("location")}
+    if r.get("detail") is not None:
+        row["detail"] = r["detail"]
+    return {**row, "delta_ms": r.get("delta_ms"), "low_ms": shift.get("low_ms"),
+            "high_ms": shift.get("high_ms"), "on_main": bool(r.get("on_main"))}
+
+
+# Every output of the compare step, empty: there was no comparison.
+NOTHING = dict.fromkeys(["baseline", "comparison", "moved", "appeared", "vanished", "held",
+                         "held-rows", "verdict", "headline", "window-delta-ms", "comparable",
+                         "warnings", "unlike"], "")
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     out = Path(args.out)
     baseline = Path(args.baseline) if args.baseline else None
     if baseline is None or not baseline.is_file():
         if baseline is not None:
             warn(f"the baseline `{baseline}` is not a file; nothing to compare against")
-        output(baseline="", comparison="", moved="", appeared="", vanished="", failed="")
+        output(**NOTHING, failed="")
         return 0
     # Beside the report, under a name that reads well in the comparison's
     # header, and kept in the artifact: the comparison can be made again from
@@ -298,23 +353,24 @@ def cmd_compare(args: argparse.Namespace) -> int:
     kept.parent.mkdir(parents=True, exist_ok=True)
     if baseline.resolve() != kept.resolve():
         shutil.copyfile(baseline, kept)
+    # `--plain` keeps the plain reading in comparison.json, where the verdict
+    # is, and prints it to the log in place of the table, which the summary
+    # and the artifact still carry.
     done = subprocess.run([args.echolot, "compare", "baseline/report.json", "report.json",
-                           "-c", str(Path(args.config).resolve()), "-o", str(out.resolve())],
+                           "-c", str(Path(args.config).resolve()), "-o", str(out.resolve()),
+                           "--plain"],
                           cwd=out, check=False)
     comparison = out / "comparison.json"
     if done.returncode != 0 or not comparison.is_file():
         warn(f"`echolot compare` exited {done.returncode}; the report is kept, "
              f"without a comparison")
-        output(baseline="", comparison="", moved="", appeared="", vanished="",
-               failed=f"`echolot compare` exited {done.returncode}")
+        output(**NOTHING, failed=f"`echolot compare` exited {done.returncode}")
         return 0
     # `moved` is the rows that grew or shrank. One that appeared, a new block
     # of the main thread, is counted apart, and a workflow reading `moved`
     # alone would see no change.
-    summary = json.loads(comparison.read_text(encoding="utf-8"))["summary"]
-    output(baseline=str(kept), comparison=str(comparison), moved=str(summary["moved"]),
-           appeared=str(summary.get("appeared", 0)), vanished=str(summary.get("vanished", 0)),
-           failed="")
+    cmp = json.loads(comparison.read_text(encoding="utf-8"))
+    output(**{**outputs_of(cmp), "baseline": str(kept), "comparison": str(comparison)}, failed="")
     return 0
 
 
@@ -335,7 +391,8 @@ def page(out: Path, *, artifact: str, branch: str, note: str, run: str,
                   else "the report it was given")
         head += [f"Compared with {source}. `compare` reports and never fails "
                  f"the job; whether the build got slower is the benchmark's "
-                 f"answer.", "", comparison.read_text(encoding="utf-8").strip(), ""]
+                 f"answer.", "", *_verdict(out),
+                 comparison.read_text(encoding="utf-8").strip(), ""]
         if whole and report.is_file():
             head += ["<details>", "<summary>The report</summary>", "",
                      report.read_text(encoding="utf-8").strip(), "", "</details>", ""]
@@ -354,6 +411,23 @@ def page(out: Path, *, artifact: str, branch: str, note: str, run: str,
     if whole and report.is_file():
         head += [report.read_text(encoding="utf-8").strip(), ""]
     return "\n".join(head)
+
+
+def _verdict(out: Path) -> list[str]:
+    """Above the table, what its header does not say: the verdict, and how
+    many of the rows that moved hold. Read from comparison.json, as the
+    outputs are."""
+    try:
+        cmp = json.loads((out / "comparison.json").read_text(encoding="utf-8"))
+        got = outputs_of(cmp)
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    lines = []
+    if got["headline"]:
+        text = ((cmp.get("plain") or {}).get("verdict") or {}).get("text") or ""
+        lines += [f"**{got['headline']}.** {text}".rstrip(), ""]
+    return [*lines, f"Of the {got['moved']} row(s) that moved past the noise floor, "
+                    f"**{got['held']}** hold.", ""]
 
 
 def cmd_summary(args: argparse.Namespace) -> int:

@@ -348,7 +348,8 @@ echolot compare old.json new.json --html      # comparison.html рядом с co
 с полями `change` (`appeared`, `grew`, `shrank`, `vanished`, `steady`),
 `shift` (`ms`, `low_ms`, `high_ms`, `resolves_ms`, `runs_needed`), `holds` и
 `on_main` (время главного потока или кадров). При `--plain`/`--html`
-добавляется секция `plain`; у её `verdict` есть `by` (`window` или `frames`)
+добавляется секция `plain`; у её заметки `unlike` есть `warnings` — id
+предупреждений, которые она называет; у её `verdict` есть `by` (`window` или `frames`)
 и, если окно идёт до конца записи, `frames` с поздними кадрами каждой
 стороны, а у проверки, судимой по главному потоку, — `main`.
 
@@ -360,6 +361,10 @@ echolot compare old.json new.json --html      # comparison.html рядом с co
 дать ответ *почему* замедлилось, а не стоять простым пороговым барьером.
 Единственный gate в этом репозитории — порог покрытия тестов `pytest` в
 `pyproject.toml`.
+
+Action тоже не роняет джоб из-за того, что сдвинулось, но даёт workflow,
+которому нужен свой gate, выходы, отличающие изменение от шума: см.
+[Изменение или шум](#изменение-или-шум).
 
 ## В CI
 
@@ -401,7 +406,73 @@ Action устанавливает `echolot` указанного тега (ил�
 | `python` | `python3` | интерпретатор Python ≥3.10 |
 | `token` | токен джоба | токен для чтения артефактов и комментариев |
 
-Выходы: `report`, `baseline`, `comparison`, `moved`, `appeared`, `vanished`.
+Выходы:
+
+- `report`, `baseline`, `comparison` — пути к `report.json` этого прогона,
+  к базовому отчёту и к `comparison.json`;
+- `moved` — сколько строк выросло или уменьшилось выше порога шума;
+  `appeared` и `vanished` — сколько появилось и пропало, отдельно от `moved`;
+- `held` — сколько из строк `moved` ещё и держится (столбец Holds: «да»);
+- `held-rows` — первые пять из них в порядке сравнения, JSON-массивом:
+  `detector`, `location`, `detail` (если у детектора он есть), `delta_ms`,
+  границы интервала `low_ms` и `high_ms`, `on_main`;
+- `verdict` — вердикт простого чтения по окну сценария: `better`, `worse`,
+  `no_change` или `not_compared`; `headline` — он же словами, например
+  `Slower by 1.2 s`;
+- `window-delta-ms` — на сколько сдвинулось окно, «после» минус «до», в мс;
+- `comparable` — `false`, если отчёты не об одном: два процесса, два окна
+  или якорь, который не нашёл ни один прогон;
+- `warnings` — id предупреждений сравнения через запятую, например
+  `drift,runs`;
+- `unlike` — те из них, что говорят: стороны записаны или прочитаны не
+  одинаково (скорость или нагрев телефона, конфиг, пороги, запись,
+  компиляция, версия echolot), — то, что простое чтение перечисляет в
+  «Not recorded alike».
+
+Все, кроме первого, пусты, когда сравнивать не с чем. Читаются они из
+`comparison.json`, а не из текста таблицы. `.github/workflows/action.yml`
+проверяет их на демо: в заложенном изменении две строки блокировки
+сдвигаются и держатся, а запуск, длиннее на 2%, — `no_change`.
+
+### Изменение или шум
+
+`moved` считает всё, что выше порога, а порог — не проверка: одна сборка
+против самой себя (два набора по 15 холодных стартов большого приложения,
+поделённые 7 на 8 по-разному) дала `moved` от 48 до 73, и столько же
+`appeared` и `vanished`. `held` на тех же парах — от 1 до 12, больше всего при
+делении по времени, где [дрейф](#повторы-которые-дрейфуют) набора
+сказывается целиком. Вердикт грубее всех и устойчивее всех: на 1 479 парах
+неизменённых наборов он не сдвинулся ни разу.
+
+Сам Action не роняет джоб из-за сдвигов. Workflow, которому нужен свой gate,
+строит его отдельным шагом:
+
+```yaml
+  - uses: grishan0v/echolot@v0.18.0
+    id: echolot
+    with:
+      traces: app/benchmark/build/outputs/**/StartupBenchmark_startup_iter*.perfetto-trace
+
+  # Правило проекта: запуск медленнее при сторонах, записанных одинаково,
+  # и без дрейфа ни в одной, останавливает сборку.
+  - name: Stop on a slower launch
+    if: >-
+      steps.echolot.outputs.verdict == 'worse'
+      && steps.echolot.outputs.unlike == ''
+      && !contains(steps.echolot.outputs.warnings, 'drift')
+    env:
+      HEADLINE: ${{ steps.echolot.outputs.headline }}
+      HELD_ROWS: ${{ steps.echolot.outputs.held-rows }}
+    run: |
+      echo "::error title=echolot::$HEADLINE"
+      echo "$HELD_ROWS" | jq -r '.[] | "\(.delta_ms) ms (\(.low_ms) to \(.high_ms))  \(.detector)  \(.location)"'
+      exit 1
+```
+
+`worse` уже означает, что отчёты сравнимы: несравнимая пара получает
+`not_compared`. `no_change` при строках, которые держатся, как на демо, —
+изменение внутри запуска, не удлинившее его на пятую часть; останавливать ли
+на нём сборку — решение проекта, и для этого есть `held`.
 
 ### Несколько сценариев
 

@@ -594,17 +594,24 @@ def _notes(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
                     "title": "Not certain check by check yet.",
                     "text": f"{ctx.a_side[0].upper() + ctx.a_side[1:]} are too few to say which single changes "
                             "hold. It takes four a side, or three against five."})
-    unlike = []
+    # The warnings' ids go with the note, for a reader that is not a person:
+    # the GitHub Action's `unlike` output is this list (#535).
+    unlike, ids = [], []
     for warning in cmp.get("warnings") or []:
         said = _UNLIKE.get(warning.get("id"))
-        if said and said not in unlike:
+        if said is None:
+            continue
+        if warning["id"] not in ids:
+            ids.append(warning["id"])
+        if said not in unlike:
             unlike.append(said)
     if unlike and cmp.get("comparable", True):
         things = "one thing" if len(unlike) == 1 else f"{len(unlike)} things"
         out.append({"id": "unlike", "attention": plain.WORTH_A_LOOK,
                     "title": "Not recorded alike.",
                     "text": f"Besides the app, {things} differed between the two: {'; '.join(unlike)}. "
-                            "A time can move for that reason alone. The technical comparison says more."})
+                            "A time can move for that reason alone. The technical comparison says more.",
+                    "warnings": ids})
     named = _one_side_note(cmp.get("names") or {}, ctx)
     if named is not None:
         out.append(named)
