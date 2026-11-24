@@ -37,7 +37,7 @@ echolot doctor
   ok    the right process is picked, the foreign one is dropped
   ...
 
-All 199 checks passed — the pipeline computes correctly.
+All 200 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
@@ -51,7 +51,7 @@ again.
 ```
 echolot 0.17.0 · trace_processor v59.1 · perfetto 0.59.1 · python 3.14.7
 layer: current (10 files)
-self-check: 199 of 199 passed
+self-check: 200 of 200 passed
 ```
 
 Exit code 0/1, and 2 on a first run that could not download trace_processor
@@ -181,7 +181,7 @@ the Runs column have something to say. The sources sit where the contention
 slice says the lock is taken and waited for, so the lock's row gets its
 "In the code" cell.
 
-The README's sample report is what `analyze` prints for it, and
+The README's sample report is what `analyze` prints for it in a terminal, and
 `tests/test_doc_samples.py` holds the two together character for character.
 A change to a detector or to the renderer that moves the sample fails that
 test, and `python docs/assets/render.py` writes the sample again.
@@ -192,7 +192,7 @@ fixture only.
 
 ## What the detectors were checked against
 
-The detectors were validated against a synthetic trace — 199 checks inside
+The detectors were validated against a synthetic trace — 200 checks inside
 `doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.

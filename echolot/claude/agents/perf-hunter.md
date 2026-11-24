@@ -138,6 +138,8 @@ waiting for one.
    round = 1
 
 1. report = echolot analyze <traces> -c echolot.yml --hunt <n>
+   what it prints is the overview `echolot report` prints: the window, its
+   warnings, a line per detector — step 2 reads those warnings
    read .echolot/out/report.json — the schema is what `echolot guide report`
    prints, do not discover it by hand
    report.markers.rows is every AGENTTMP_ name and every `domains` name,
@@ -239,7 +241,9 @@ echolot doctor -q                                  three lines, four with Codex;
 echolot collect -c echolot.yml --hunt <n>          a round: the set before it moves aside,
                                                    recorded under investigation <n>
 echolot analyze <traces> -c echolot.yml --hunt <n> report → .echolot/out/ next to the config,
-                                                   and a copy filed under <n> for compare
+                                                   and a copy filed under <n> for compare;
+                                                   prints the overview, not report.md —
+                                                   --full is a terminal's, not yours
 echolot analyze … --hunt <n> -o <dir>              the same, elsewhere; it files a copy for
                                                    compare too, so a round runs one or the other
 echolot analyze … --defaults                       every detector, built-in thresholds

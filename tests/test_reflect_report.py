@@ -140,7 +140,7 @@ def test_a_session_that_ran_on_a_copy_is_judged_by_the_copy(tmp_path: Path, monk
     (tdir / "s1.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows),
                                    encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    code, said = _reflect("--last", "--project", str(project), "--transcripts", str(tdir))
+    code, said = _reflect("--last", "--full", "--project", str(project), "--transcripts", str(tdir))
     rep = json.loads((project / ".echolot" / "reflect" / "s1.json").read_text(
         encoding="utf-8")) if code == 0 else {}
     cfg = (rep.get("context") or {}).get("config") or {}
@@ -163,7 +163,7 @@ def test_a_config_changed_since_the_session_is_said(tmp_path: Path, monkeypatch)
             r["config"] = {"path": "echolot.yml", "sha": "0123456789ab"}
     log.write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
     monkeypatch.chdir(project)
-    code, said = _reflect("--from-log", "--project", str(project))
+    code, said = _reflect("--from-log", "--full", "--project", str(project))
     check("the header says the file is not what the session read",
           code == 0 and "The file changed after this session ran" in said
           and "`0123456789ab`" in said, said[:900])

@@ -616,7 +616,7 @@ writes a config.
 - **The README.** `tests/test_docs.py` reads the number in "runs sixteen
   SQL detectors" and in the sample report's `Detectors fired: **N of 16**`,
   and fails while either disagrees with the files. The sample report is what
-  `analyze` prints for the demo app, `echolot/demo.py`, and
+  `analyze` prints in a terminal for the demo app, `echolot/demo.py`, and
   `tests/test_doc_samples.py` holds it to that character for character, down
   to the **Silent** line, which names every detector that did not fire there
   — a new detector included. The README's table of detectors is a picture
