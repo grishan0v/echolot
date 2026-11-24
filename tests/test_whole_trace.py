@@ -205,7 +205,7 @@ def test_the_whole_trace_is_the_recording_in_words() -> None:
     v = plain.verdict(rep)
     check("its length is the recording's, and nothing to judge it against",
           v["text"].startswith("The recording takes 15.0 s.") and v["warning"] is None, v)
-    check("it does not end where a scenario does", plain._Ctx(rep).closed is False)
+    check("it does not end where a scenario does", plain._closed(rep["window"]) is False)
     check("the page asks about the trace, not about a scenario's time",
           report_page.question(rep).startswith("The whole trace runs 15,000 ms, and no scenario "
                                                 "cuts it."), report_page.question(rep))

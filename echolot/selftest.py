@@ -715,7 +715,7 @@ def _(report):
                if r["location"] == "AppStart")
     assert row["total_ms"] == 1006.0, row
     assert row["self_ms"] < row["total_ms"], f"children not subtracted: {row}"
-    assert row["self_ms"] == 115.0, f"1006 minus 891 ms of children: {row}"
+    assert row["self_ms"] == 101.0, f"1006 minus 905 ms of children: {row}"
 
 
 @check("main_thread_block: self time never exceeds the window")
@@ -1006,19 +1006,59 @@ def _(report):
 
 # --- main_thread_waits --------------------------------------------------------
 
-@check("main_thread_waits: the app's thread that ended each sleep, idle or blocked")
+@check("main_thread_waits: the app's thread that let the main thread go, in the slice it waited in")
 def _(report):
-    """Room's two disk threads woke the main thread: once while it sat in
-    `loadConfig`, once while it was idle with nothing open below the anchor.
-    One row for both, their digits folded. The third wakeup ended a sleep
-    that began in the GC lock's contention, and a lock's wait is left to the
-    detectors of locks."""
+    """Room's two disk threads let the main thread go twice, once in
+    `loadConfig` and once in `readSession`. One row for both, their digits
+    folded, that names the slice it waited longest in. The third wakeup ended
+    a sleep that began in the GC lock's contention, and a lock's wait is left
+    to the detectors of locks."""
     row = only_row(report, "main_thread_waits")
     assert (row["location"], row["count"], row["total_ms"], row["max_ms"]) \
         == ("arch_disk_io_#", 2, 18.0, 12.0), row
-    # 12 ms idle, 6 blocked: shares, so that a merged row's median total and
-    # its worst repeat's evidence do not read as a sum.
-    assert row["detail"] == "67% idle · 33% blocked in loadConfig", row
+    assert row["detail"] == "blocked in readSession", row
+
+
+@check("main_thread_waits: the looper's idle between messages is no wait")
+def _(report):
+    """A start of an app with a WebView (`fixture.looper_waits`): Chromium's IO
+    thread posts to the idle looper, 210 ms of sleeps with no slice open, and
+    lets the main thread go three times inside a frame's `animation`, 26 ms.
+    The row is the 26 ms, and ranks above SharedPreferences' 20 ms in
+    `activityStart` because they are waits, not because it posts the most.
+    The compositor's thread only ever woke the idle looper, and is no row
+    (#926). Read as one, the IO thread's row was 236 ms, 89% of it idle."""
+    cfg = Config({**FIXTURE_CONFIG, "scenario": {
+        "name": "webview", "start": {"name": "bindApplication"},
+        "end": {"name": "Screen.firstFrame"}}})
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "looper.perfetto-trace"
+        path.write_bytes(fixture.looper_waits())
+        got = _analyze(path, cfg)
+    waits = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"])
+             for r in rows(got, "main_thread_waits")]
+    assert waits == [("Chrome_IOThread", 3, 26.0, 10.0, "blocked in animation"),
+                     ("SharedPreferenc", 1, 20.0, 20.0, "blocked in activityStart")], waits
+
+
+@check("main_thread_waits: a row written before #926 is read by its waits, not its idle time")
+def _(report):
+    """A report from before #926 adds the idle looper's sleeps to a row's
+    waits and gives the shares in `detail`. Its page says the part blocked
+    inside a slice, and weighs only that, also in a window an end anchor
+    closed: 4.1 s, 92% of it idle, reads as 0.3 s of waiting."""
+    from . import plain
+    old = {"location": "Chrome_IOThread", "runs": "5/5", "count": 1290, "total_ms": 4116.0,
+           "max_ms": 1001.0, "detail": "92% idle · 8% blocked in animation"}
+    det = {"id": "main_thread_waits", "title": "", "rows": [old], "error": None, "checked": True}
+    rep = {"window": {"duration_ms": 13324.0, "startup": {"type": "cold", "dur_ms": 398.0},
+                      "start_anchor": {"glob": "bindApplication", "matches": 1},
+                      "end_anchor": {"glob": "activityPause", "matches": 1}},
+           "runs": 5, "detectors": [det]}
+    said = plain.found(det, rep)
+    assert said.startswith("The main thread waited 0.3 s for `Chrome_IOThread`"), said
+    assert "3.8 s it sat idle" in said and "is not counted" in said, said
+    assert plain.attention(det, rep) == plain.WORTH_A_LOOK, plain.attention(det, rep)
 
 
 @check("main_thread_kernel_waits: the main thread held in the kernel, by the thread that let it out")
@@ -6435,10 +6475,10 @@ def _(report):
     merged = report_mod.aggregate(runs)
     rows = next(d for d in merged["detectors"] if d["id"] == "main_thread_block")["rows"]
     order = [r["location"] for r in rows]
-    # 500 ms × 1/5 is 100: below the 180, 120, 115 and 104 found every time,
+    # 500 ms × 1/5 is 100: below the 180, 120, 104 and 101 found every time,
     # above the 64 that was. One trace orders by the median, as before.
     assert order[:4] == ["waitWhileAllocatingLocked", "collection_mapping",
-                         "AppStart", "Steady_heavy"], order
+                         "Steady_heavy", "AppStart"], order
     assert order[4:6] == ["spike_once", "spike_twice"], order
     single = next(d for d in report["detectors"] if d["id"] == "main_thread_block")["rows"]
     assert [r["self_ms"] for r in single] == sorted(

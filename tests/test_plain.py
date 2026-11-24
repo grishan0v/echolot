@@ -286,9 +286,11 @@ def test_a_stretch_that_is_not_a_launch_is_a_run():
 def test_what_a_row_does_not_say_a_sentence_does_not_say():
     """Three places where a template could claim more than the row holds."""
     inside = row("worker_pool_#", 700.0, count=2, detail="33% blocked in loadConfig")
-    check("inside a slice for a third of it is not 'at the time'",
-          "at the time" not in says("main_thread_waits", [inside]),
-          says("main_thread_waits", [inside]))
+    said = says("main_thread_waits", [inside])
+    check("a row written before #926 waited for its blocked third, inside the slice, "
+          "and the idle rest is no wait",
+          said.startswith("The main thread waited 0.2 s") and "at the time" in said
+          and "The 0.5 s it sat idle" in said and "0.7 s" not in said, said)
     near = row("AGENTTMP_x", 90.0, count=2,
                detail="near miss: entered from 2: A,B — on com.example.app; occurrences too unlike")
     said = says("repeated_work", [near])
@@ -329,7 +331,7 @@ def test_milliseconds_the_way_a_person_says_them(ms, want):
     check(str(ms), plain.hum(ms) == want, plain.hum(ms))
 
 
-# --- an idle main thread (#554) ---------------------------------------------------
+# --- an idle main thread (#554, #926) ---------------------------------------------
 
 def scroll(rows, duration=2000.0, **window):
     """A report of a window without anchors, whose length the script fixes."""
@@ -366,22 +368,41 @@ def test_a_blocked_wait_in_a_window_of_fixed_length_still_needs_attention():
           said.startswith("The main thread waited 0.4 s") and "inside `loadConfig`" in said, said)
 
 
-def test_idle_time_before_a_launch_ends_keeps_its_weight():
-    """The detector's own case: a first launch sat idle while Room filled its database."""
+def test_idle_time_before_a_launch_ends_is_no_wait_either():
+    """Before #926 idle time kept its weight in a window that ends where the
+    scenario does, for a first launch that sat idle while Room filled its
+    database. A journey an end anchor closed, with a WebView's thread waking
+    the idle looper, read as seconds of waiting by the same rule."""
     level_, said = read(closed_launch([row("arch_disk_io_0", 660.0, detail="idle")]))
-    check("33% of a launch whose end matched, all idle, needs attention",
-          level_ == "needs_attention", level_)
-    check("with the idle sentence, and that the launch may have waited",
-          "nothing to do for 0.7 s" in said and "launch may have been waiting" in said, said)
+    check("33% of a launch whose end matched, all idle, is worth a look",
+          level_ == "worth_a_look", level_)
+    check("with the idle sentence, and no wait in it",
+          "nothing to do for 0.7 s" in said and "waited" not in said
+          and "may have been waiting" not in said and "could still draw" in said, said)
 
 
-def test_only_the_blocked_part_of_a_mixed_row_counts_in_a_fixed_window():
+def test_only_the_blocked_part_of_a_mixed_row_counts_in_any_window():
     rows = [row("worker_pool_#", 800.0, detail="67% idle · 33% blocked in loadConfig")]
     level_, said = read(scroll(rows))
     check("40% of the run weighs as 13.2%, worth a look", level_ == "worth_a_look", level_)
-    check("the sentence gives the idle share", "For 67% of that time it had nothing to do." in said, said)
-    check("the same row in a launch that ended where it should needs attention",
-          read(closed_launch(rows))[0] == "needs_attention")
+    check("the sentence says the blocked part, and that the idle part is not counted",
+          said.startswith("The main thread waited 0.3 s") and "inside `loadConfig`" in said
+          and "The 0.5 s it sat idle until that thread posted its next message is not counted."
+          in said, said)
+    check("the same row in a launch that ended where it should weighs the same",
+          read(closed_launch(rows))[0] == "worth_a_look", read(closed_launch(rows)))
+
+
+def test_the_waits_rank_the_rows_of_a_report_written_before_926():
+    """The idle looper's sleeps ranked a WebView's IO thread first: read by
+    their waits, a row of less time and more waiting comes first."""
+    rows = [row("Chrome_IOThread", 4116.0, detail="92% idle · 8% blocked in animation"),
+            row("SharedPreferenc", 400.0, detail="blocked in activityStart"),
+            row("VizWebView", 358.0, detail="idle")]
+    said = says("main_thread_waits", rows, duration=13324.0)
+    check("SharedPreferences first, then one other thread waited for; the idle one is none",
+          said.startswith("The main thread waited 0.4 s for `SharedPreferenc`")
+          and said.endswith("It also waited for 1 other thread."), said)
 
 
 def test_idle_time_in_a_window_whose_anchor_missed_needs_no_attention():
@@ -393,10 +414,10 @@ def test_idle_time_in_a_window_whose_anchor_missed_needs_no_attention():
           "may have been waiting" not in said and "could still draw" in said, said)
 
 
-def test_a_launch_the_platform_closed_is_a_window_that_ends_with_the_scenario():
+def test_a_launch_the_platform_closed_weighs_no_idle_time():
     rep = make([entry("main_thread_waits", [row("arch_disk_io_0", 660.0, detail="idle")])])
     rep["window"].update({"start_anchor": None, "end_anchor": None, "defined_by": "launch"})
-    check("idle time keeps its weight", read(rep)[0] == "needs_attention", read(rep))
+    check("idle time is no wait there either (#926)", read(rep)[0] == "worth_a_look", read(rep))
 
 
 # --- the level: one sentence each, and where a number moves a row -----------------

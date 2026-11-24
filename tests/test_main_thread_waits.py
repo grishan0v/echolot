@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""`main_thread_waits`: the main thread's sleeps, by the thread of the app
-that ended each one (#128).
+"""`main_thread_waits`: the main thread's waits, by the thread of the app
+that let it go (#128).
 
 The fixture holds one row's worth, and the self-check pins it. Here every
 rule gets a sleep of its own on one main thread: blocked inside its work
-until SharedPreferences let it go, idle until Room's threads and a pool's
-woke it, and the sleeps the detector leaves to others — a lock's wait, and
-the ones `RenderThread`, a binder thread, another process or nobody ended.
+until SharedPreferences, Room's threads and a pool's let it go; idle, with no
+slice open, until Room's thread or WebView's IO thread posted its next
+message, which is no wait (#926); and the sleeps the detector leaves to
+others — a lock's wait, and the ones `RenderThread`, a binder thread, another
+process or nobody ended.
 """
 
 from __future__ import annotations
@@ -26,30 +28,38 @@ PID = 7200
 APP = "com.example.app"
 THREADS = {PID: APP, 7201: "arch_disk_io_0", 7202: "arch_disk_io_1",
            7203: "SharedPreferenc", 7204: "RenderThread", 7205: f"binder:{PID}_2",
-           7206: "pool-14-thread-"}
+           7206: "pool-14-thread-", 7207: "Chrome_IOThread"}
 SYSTEM = 1000
 SYSTEM_THREADS = {SYSTEM: "system_server", 1001: "android.display"}
 CPU = {tid: i + 1 for i, tid in enumerate([*THREADS][1:] + [1001])}
-# No anchors: the window is the process's slices, `AppStart` from 0 to 240,
+# No anchors: the window is the process's slices, `AppStart` from 0 to 300,
 # which spans it and so is no place to wait in.
 CONFIG = {"project": {"package": APP, "process": APP}, "scenario": {"name": "waits"}}
 
-SLICES = [("AppStart", 0, 240, [
+# `openDatabase`, `decodeImage` and `bindRow` are under `main_thread_block`'s
+# bar, so no other row stands for the waits inside them.
+SLICES = [("AppStart", 0, 300, [
     ("bindApplication", 10, 40, []),
     ("Lock contention on a monitor lock (owner tid: 7202)", 60, 10, []),
+    ("openDatabase", 98, 14, []),
+    ("decodeImage", 198, 12, []),
+    ("bindRow", 228, 12, []),
 ])]
 
 # The main thread's sleeps: (from, to, who woke it, or None).
 SLEEPS = [
     (20, 40, 7203),     # blocked in bindApplication until SharedPreferences loaded
-    (50, 58, 7201),     # idle, until Room's thread posted
+    (50, 58, 7201),     # idle: Room's thread posted the next message, no wait
     (60, 70, 7202),     # in a lock's contention: monitor_contention's
-    (100, 110, 7202),   # idle again, Room's other thread
+    (100, 110, 7202),   # in openDatabase until Room's other thread let it go
     (120, 130, 7204),   # RenderThread: the frame pipeline
     (140, 150, 7205),   # a binder thread: a reply, binder_txn's
     (160, 170, 1001),   # another process: not the app's to change
     (180, 190, None),   # nobody recorded as waking it
-    (200, 217, 7206),   # idle, a pool's thread with two digits in its name
+    (200, 209, 7206),   # in decodeImage, a pool's thread with two digits in its name
+    (212, 226, 7207),   # idle: WebView's IO thread posted, no wait however long
+    (230, 239, 7206),   # in bindRow, the pool's thread again
+    (245, 290, 7207),   # idle again
 ]
 
 
@@ -97,19 +107,31 @@ def _rows(report: dict) -> list[dict]:
     return det["rows"]
 
 
-def test_each_sleep_goes_to_the_thread_of_the_app_that_ended_it(tmp_path: Path) -> None:
+def test_each_wait_goes_to_the_thread_of_the_app_that_ended_it(tmp_path: Path) -> None:
     rows = _rows(_analyzed(tmp_path))
     got = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"]) for r in rows]
     check("blocked in its work until SharedPreferences let it go",
           got[0] == ("SharedPreferenc", 1, 20.0, 20.0, "blocked in bindApplication"),
           got)
-    check("idle until Room's threads woke it, the two of them one row; the lock's wait "
-          "that one of them ended is not among them",
-          got[1] == ("arch_disk_io_#", 2, 18.0, 10.0, "idle"), got)
-    check("two digits fold to one #",
-          got[2] == ("pool-#-thread-", 1, 17.0, 17.0, "idle"), got)
-    check("and nothing for RenderThread, a binder thread, another process or nobody",
-          len(got) == 3, got)
+    check("two digits fold to one #, and the slice it waited in is named, the first "
+          "by name of two it waited in as long",
+          got[1] == ("pool-#-thread-", 2, 18.0, 9.0, "blocked in bindRow"), got)
+    check("and nothing for Room's 10 ms under the bar, or for the threads that only woke "
+          "the idle looper, or for RenderThread, a binder thread, another process or nobody",
+          len(got) == 2, got)
+
+
+def test_the_idle_looper_is_no_wait(tmp_path: Path) -> None:
+    """WebView's IO thread ended 59 ms of the main thread's sleeps, more than
+    any thread let it go, and none of them began inside a slice: it posted
+    the looper's next message each time. Before #926 it was the first row."""
+    rows = _rows(_analyzed(tmp_path, cli_overrides={"main_thread_waits": {"min_total_ms": 0.5}}))
+    check("no row for the IO thread at any bar",
+          all(r["location"] != "Chrome_IOThread" for r in rows), rows)
+    room = next(r for r in rows if r["location"] == "arch_disk_io_#")
+    check("and Room's row holds its wait in openDatabase, not the idle sleep it ended",
+          (room["count"], room["total_ms"], room["detail"]) == (1, 10.0, "blocked in openDatabase"),
+          room)
 
 
 def test_the_bar_is_the_total(tmp_path: Path) -> None:
@@ -118,26 +140,42 @@ def test_the_bar_is_the_total(tmp_path: Path) -> None:
           [r["location"] for r in rows] == ["SharedPreferenc"], rows)
 
 
-def test_the_sleeps_count_in_the_coverage(tmp_path: Path) -> None:
-    """The idle sleeps are the main thread's time that no other row stands
-    for; the blocked one lies inside `bindApplication`, which
-    `main_thread_block` already counts, and is counted once."""
+def test_the_waits_count_in_the_coverage(tmp_path: Path) -> None:
+    """The pool's waits lie in slices no other row stands for, and count
+    here. SharedPreferences' lies inside `bindApplication`, which
+    `main_thread_block` already counts, and is counted once. The idle sleeps
+    are no row's time."""
     on = _analyzed(tmp_path)["window"]["main_thread"]
     off = _analyzed(tmp_path, {**CONFIG, "detectors": {"main_thread_waits": False}})
     off = off["window"]["main_thread"]
     check("counted, not listed as uncounted",
           "main_thread_waits" not in (on.get("in_rows_uncounted") or []), on)
-    check("8 + 10 + 17 ms of idle sleep more than without it",
-          round(on["in_rows_ms"] - off["in_rows_ms"], 1) == 35.0, (on, off))
+    check("9 + 9 ms of the pool's waits more than without it",
+          round(on["in_rows_ms"] - off["in_rows_ms"], 1) == 18.0, (on, off))
 
 
 def test_what_other_detectors_explain_is_left_out_whatever_the_bar(tmp_path: Path) -> None:
     """At a bar of half a millisecond every sleep that is counted is a row,
     so a sleep counted by mistake shows."""
     rows = _rows(_analyzed(tmp_path, cli_overrides={"main_thread_waits": {"min_total_ms": 0.5}}))
-    check("the app's own threads, and no RenderThread, binder thread, other process "
-          "or unknown waker",
+    check("the app's own threads that let the main thread go, and no RenderThread, binder "
+          "thread, other process, unknown waker or idle looper",
           sorted(r["location"] for r in rows)
           == ["SharedPreferenc", "arch_disk_io_#", "pool-#-thread-"], rows)
     check("and the lock's wait not in Room's row",
-          next(r for r in rows if r["location"] == "arch_disk_io_#")["count"] == 2, rows)
+          next(r for r in rows if r["location"] == "arch_disk_io_#")["count"] == 1, rows)
+
+
+def test_the_fixture_s_webview_start_is_read_by_its_waits(tmp_path: Path) -> None:
+    """The doctor check on `fixture.looper_waits`, here too: Chromium's IO
+    thread posts 210 ms to the idle looper and lets the main thread go for
+    26 ms inside `animation`; the compositor's thread only posts."""
+    path = tmp_path / "looper.perfetto-trace"
+    path.write_bytes(fixture.looper_waits())
+    cfg = Config({**CONFIG, "scenario": {"name": "webview", "start": {"name": "bindApplication"},
+                                         "end": {"name": "Screen.firstFrame"}}})
+    rows = _rows(analyze_trace(path, cfg))
+    got = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"]) for r in rows]
+    check("the IO thread's waits in animation, then SharedPreferences', and no VizWebView",
+          got == [("Chrome_IOThread", 3, 26.0, 10.0, "blocked in animation"),
+                  ("SharedPreferenc", 1, 20.0, 20.0, "blocked in activityStart")], got)

@@ -1,25 +1,27 @@
 -- @id: main_thread_waits
 -- @title: The main thread's waits on the app's own threads
--- @why: a start that waits on its own background work spends that time
---       asleep, and no slice says what it waited for. The kernel does: the
---       thread that ended each sleep is the one that woke the main thread
--- @param: min_total_ms = 16 ms — the time the main thread slept until one
---       thread of the app woke it, summed, for that thread to be a row
+-- @why: a main thread that waits on its own background work in the middle
+--       of a piece of work spends that time asleep inside the slice, and no
+--       slice says what it waited for. The kernel does: the thread that ended
+--       each sleep is the one that let the main thread go
+-- @param: min_total_ms = 16 ms — the time the main thread slept inside its
+--       own work until one thread of the app let it go, summed, for that
+--       thread to be a row
 -- @param: lock_glob = *contention* — GLOB over slice names: a lock's
 --       contention slice. A sleep inside one is `monitor_contention`'s, and
 --       left out here
 -- @fires: total_ms >= {{min_total_ms}}
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location
--- @column: location — the thread of the app that woke the main thread,
+-- @column: location — the thread of the app that let the main thread go,
 --       with the numbers the runtime chose folded: `arch_disk_io_#`,
 --       `DefaultDispatch`
--- @column: count — the main thread's sleeps it ended
+-- @column: count — the main thread's sleeps inside its own work that this
+--       thread ended
 -- @column: total_ms — their time, summed
 -- @column: max_ms — the longest one
--- @column: detail — where the main thread was while it slept: idle, or
---       blocked in the slice it waited longest in, with the share of each
---       when it was both
+-- @column: detail — the slice the main thread waited longest in:
+--       `blocked in animation`
 -- @plain_title: The screen waits for background work
 -- @plain_why: The main thread draws the screen and answers taps. While it
 --       is held up waiting for another thread of the app, it can do neither.
@@ -42,17 +44,37 @@
 -- waited. Those traces caught the end of a start the system had begun on its
 -- own, right after a force-stop, and the launch that followed was warm.
 --
+-- Only the large app's kind is a wait (#926). A sleep that began inside a
+-- slice stopped the main thread in the middle of its work, and the work went
+-- on when the other thread let it go. A sleep with no slice open is the
+-- looper with nothing to do, asleep until a message comes, and the thread
+-- that ended it is the one that posted the message: a delivery, not a wait.
+-- The main thread could have drawn a frame or answered a tap the moment one
+-- came. An app that shows a WebView has the shape at its plainest: one of
+-- Chromium's threads wakes the idle looper hundreds of times in a run, and
+-- added to the few waits inside the frame's `animation` that made a row of
+-- seconds that ranked first and read as the main thread waiting all that
+-- time. Idle time also runs the wrong way for a comparison: in a run whose
+-- length the script fixes, a main thread that gets faster idles more.
+--
+-- So the idle sleeps are no row's, Room's above among them. The wakeups
+-- alone cannot tell a launch that waited for background work with its main
+-- thread idle from a looper that had nothing to do; the path the launch took
+-- through the other threads can (#402). Until then the start's breakdown
+-- shows the main thread sleeping, and `uninstrumented_cpu` the CPU of the
+-- threads that worked.
+--
 -- A row is a thread of the app, named with the numbers the runtime chose
 -- folded (`_name_family`, #831), so that `arch_disk_io_0` to `_3` are one
 -- row, and `pool-14-thread-` is the same row in a repeat where it is
 -- `pool-15-thread-`. The kernel keeps 15
 -- characters of a thread's name, so every coroutine worker is
--- `DefaultDispatch` already. `detail` says where the main thread was:
--- idle, with no slice open, or blocked inside the slice that was open when
--- it went to sleep, the one it waited longest in, and with both the share of
--- each: `67% idle · 33% blocked in loadConfig`. A slice that spans the
--- whole window is the scenario's anchor and holds the idle moments too, so
--- it is no place to wait in, as for `main_thread_block`'s intervals.
+-- `DefaultDispatch` already. `detail` names the slice that was open when
+-- the main thread went to sleep, the one it waited longest in:
+-- `blocked in loadConfig`. A slice that spans the whole window is the
+-- scenario's anchor and holds the idle moments too, so it is no place to
+-- wait in, as for `main_thread_block`'s intervals: a sleep under it alone
+-- is idle.
 --
 -- Other detectors keep the waits they already explain:
 -- - a sleep inside a lock's contention slice (`lock_glob`) is
@@ -98,32 +120,31 @@ sleeps AS MATERIALIZED (
       AND w.name NOT GLOB 'binder:*'
 )
 -- The thread and the slice under the names the runtime's numbers are
--- folded out of, the same fold every detector groups by (#831).
+-- folded out of, the same fold every detector groups by (#831). A sleep
+-- with no slice open is the idle looper's, and no wait (#926).
 SELECT s.ts, s.dur,
        COALESCE(fi.family, s.inside)                               AS inside,
        COALESCE(f.family, s.waker)                                 AS location
 FROM sleeps s
 LEFT JOIN _name_family f  ON f.name = s.waker
 LEFT JOIN _name_family fi ON fi.name = s.inside
-WHERE s.inside IS NULL OR s.inside NOT GLOB '{{lock_glob}}';
+WHERE s.inside IS NOT NULL AND s.inside NOT GLOB '{{lock_glob}}';
 
 WITH grouped AS (
     SELECT location,
            COUNT(*)                                                AS count,
            SUM(dur)                                                AS total_ns,
-           MAX(dur)                                                AS max_ns,
-           SUM(CASE WHEN inside IS NULL THEN dur ELSE 0 END)       AS idle_ns
+           MAX(dur)                                                AS max_ns
     FROM _det_main_thread_waits
     GROUP BY location
 ),
--- The slice the main thread spent most of its blocked time in, per row.
+-- The slice the main thread spent most of its waits in, per row.
 blocked_in AS (
     SELECT location, inside
     FROM (SELECT location, inside,
                  ROW_NUMBER() OVER (PARTITION BY location
                                     ORDER BY SUM(dur) DESC, inside) AS k
           FROM _det_main_thread_waits
-          WHERE inside IS NOT NULL
           GROUP BY location, inside)
     WHERE k = 1
 )
@@ -132,24 +153,16 @@ SELECT
     g.count,
     ROUND(g.total_ns / 1e6, 2)                                     AS total_ms,
     ROUND(g.max_ns / 1e6, 2)                                       AS max_ms,
-    -- Shares rather than milliseconds: merged, `detail` comes from the
-    -- worst repeat and `total_ms` is the median, and milliseconds of one
-    -- beside the other read as a sum that does not add up.
-    CASE WHEN b.inside IS NULL THEN 'idle'
-         WHEN g.idle_ns = 0 THEN 'blocked in ' || b.inside
-         ELSE CAST(ROUND(g.idle_ns * 100.0 / g.total_ns) AS INT) || '% idle · '
-              || (100 - CAST(ROUND(g.idle_ns * 100.0 / g.total_ns) AS INT))
-              || '% blocked in ' || b.inside
-    END                                                            AS detail
+    'blocked in ' || b.inside                                      AS detail
 FROM grouped g
-LEFT JOIN blocked_in b USING (location)
+JOIN blocked_in b USING (location)
 ORDER BY total_ms DESC, location;
 
 -- @intervals
 --
--- A row stands for the sleeps its thread ended, as the first query wrote
+-- A row stands for the waits its thread ended, as the first query wrote
 -- them down: the main thread's own time, clipped to the window. Sleeps do
--- not overlap one another.
+-- not overlap one another, and the idle ones are no row's (#926).
 
 SELECT ts, dur
 FROM _det_main_thread_waits
