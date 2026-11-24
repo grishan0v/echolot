@@ -47,8 +47,14 @@ def project_state(project: Path, config: str = "echolot.yml",
                           if st["plugin_init"] or st["plugin_claude_left_out"] else None)
     st["hosts"] = hosts.load_choice(project)
     # Where Codex is used: whether a rule lets echolot out of its sandbox.
-    said = codex.one_line(project, hosts.keys(project))
+    keys = hosts.keys(project)
+    said = codex.one_line(project, keys)
     st["codex_line"] = said[1] if said else None
+    # Where Codex is used and the plugin is in Claude Code only: `--for
+    # plugin` gives Codex nothing, so `next` names Codex's own `init`, the
+    # one its line names (#841).
+    st["plugin_codex_init"] = (codex.init_command(keys, project)
+                               if said and plugin.codex_left_out(project) else None)
     # Where Cursor has a copy of the plugin from another release: a copy does
     # not follow an upgrade of echolot (#399).
     st["cursor_line"] = plugin.stale_line()
@@ -611,6 +617,13 @@ def next_step(st: dict) -> str:
                     # want different commands: both, and which is whose.
                     line += (". In Claude Code, which has no echolot plugin: "
                              "`echolot init`, which installs the .claude/ layer it reads")
+                if st.get("plugin_codex_init"):
+                    # The mirror: the plugin in Claude Code only, and this
+                    # may be Codex (#841).
+                    line += (f". In Codex, which has no echolot plugin: "
+                             f"`{st['plugin_codex_init']}`, run outside its sandbox — "
+                             f"AGENTS.md points Codex at echolot and the rule lets "
+                             f"echolot out of the sandbox")
                 return line
             if st.get("plugin_claude_left_out"):
                 # In Claude Code, with the plugin in another agent only.

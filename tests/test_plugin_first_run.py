@@ -213,3 +213,28 @@ def test_after_init_for_plugin_the_layer_is_left_out(project, home):
           st["layer_verdict"])
     check("and nothing asks for init again", "init" not in next_step(st).split(" —")[0],
           next_step(st))
+
+
+@pytest.mark.parametrize("case", ["codex-used", "in-claude-code", "no-codex"])
+def test_with_the_plugin_in_claude_code_only_codex_gets_its_own_init(
+        project, home, monkeypatch, case):
+    """The mirror of #740: `--for plugin` gives Codex no pointer and no
+    rule, and sends it to a plugin skill it does not have (#841)."""
+    write(home / ".claude" / "settings.json", {"enabledPlugins": {"echolot@echolot": True}})
+    if case != "no-codex":
+        (project / ".codex").mkdir()
+    if case == "in-claude-code":
+        monkeypatch.setenv("CLAUDECODE", "1")
+    rows = status(project)
+    nxt = rows.get("next", "")
+    check("the plugin's init first, for Claude Code", nxt.startswith(
+        "echolot init --for plugin — the echolot plugin is in Claude Code"), rows)
+    if case != "codex-used":
+        check("and nothing else (#598)", "In Codex" not in nxt, rows)
+        return
+    command = "echolot init --for agents,codex"
+    check("and Codex's own init beside it, said as Codex's",
+          f"In Codex, which has no echolot plugin: `{command}`, run outside its sandbox"
+          in nxt, rows)
+    check("the same command the codex line names", f"`{command}`" in rows.get("codex", ""),
+          rows)
