@@ -570,6 +570,8 @@ def attention(det: dict[str, Any], report: dict[str, Any],
 
 _BLOCKED_IN = re.compile(r"(?:(\d+)% )?blocked in (\S+)")
 _OUTLIER = re.compile(r"median ([\d.]+) ms of (\d+)")
+# Where most of the worst occurrence went, the deepest slice last (#912).
+_MOSTLY = re.compile(r"mostly in (?:.* › )?(.+) \(([\d.]+) ms\)$")
 _ENTERED = re.compile(r"entered from (\d+)")
 _FRAMES = re.compile(r"(\d+) of (\d+) frames")
 _NO_SECTION = "(no section)"
@@ -664,6 +666,10 @@ def _f_outlier(rows, ctx):
                + f": {hum(_value(top))} together, {hum(longest)} at worst{apart}.")
     if usual:
         out += f" It usually takes {hum(float(usual.group(1)))}."
+    mostly = _MOSTLY.search(str(top.get("detail") or ""))
+    if mostly:
+        out += (f" Most of the longest was {_name(mostly.group(1))}, "
+                f"{hum(float(mostly.group(2)))}.")
     out += _share(_value(top), ctx, "That is" if count <= 1 else "Together that is")
     out += _also(rows, "more step did", "more steps did", "the same.")
     return out
