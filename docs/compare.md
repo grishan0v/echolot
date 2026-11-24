@@ -339,6 +339,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `version` | the two reports were written by different versions of echolot, or one does not say which wrote it. A side that does not say leaves every row without a verdict — see [Which echolot wrote each](#which-echolot-wrote-each) |
 | `detector-changed` | a detector read the trace with different code on the two sides. Its rows stay, without a verdict |
 | `same-traces` | both sides are the same recordings — the same trace names, pid and window to the hundredth of a millisecond — so whatever moved is the tool's or the config's, and no row carries a verdict |
+| `drift` | the runs of one side, or of both, drift from the first to the last: the rows found in every run follow the order of the runs more closely than chance would, so that side's medians are no one state of the device, and a row that drifts with it can hold with nothing changed. Named with each side's `p` and the rows that follow the order closest; the verdicts stand — see [Runs that drift](#runs-that-drift) |
 
 ### Two windows
 
@@ -523,6 +524,32 @@ Then `thresholds`. After `echolot calibrate` the numbers in
 report against a default one produces a page of rows that appeared and vanished
 without anything in the app changing. Re-run both sides with `--defaults` when
 that happens.
+
+### Runs that drift
+
+The Holds column treats the runs of a side as alike: any one could have come
+first. A side recorded on a device that warmed up, heated or settled from its
+first run to its last is a slope instead, and the halves of one such set,
+compared with each other, held 12 and 7 rows past the floor where a random
+split of the same runs held 3 and 1. A before and an after are recorded one
+after the other, so a comparison gets the slope in full, on top of whatever
+the device did between the two sittings.
+
+Each report says whether its runs drift (see
+[Runs that drift](analysing.md#runs-that-drift-from-the-first-to-the-last)),
+and `drift` repeats it here for either side:
+
+```text
+> ⚠️ The runs before drift from the first to the last (before, p = 0.026 — closest: `io_wait` com.example.app · main 610.3 → 687.1 ms (ρ +0.74); …). A median over such runs is no one state of the device: rows that drift with them can read as moved, and hold, with nothing changed in the app. Before acting on a row that holds, record the two sides back to back and compare again.
+```
+
+A report written before the check is read on the spot from the per-run values
+it already keeps, so an old pair gets the warning too. The verdicts stand, as
+for every condition above. The check sees a slope inside a side, not a step
+between two sittings that are each steady in themselves, which no report of
+one side can show. Recording the two sides back to back narrows that: one APK
+against itself on the launch runner held 3 rows of 205 back to back, and 31
+of 203 an hour later.
 
 ## What `analyze` keeps for it
 

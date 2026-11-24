@@ -48,6 +48,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from . import drift as drift_mod
 from . import launch as launch_mod
 from . import when as when_mod
 from . import needs as needs_mod
@@ -631,6 +632,7 @@ def _check(before: dict, after: dict,
     out.extend(_outside_moved(before, after))
     out.extend(_compose_names_moved(before, after))
     out.extend(_compile_moved(before, after))
+    out.extend(drift_mod.warnings(before, after))
 
     nb, na = _runs(before), _runs(after)
     if nb != na:
