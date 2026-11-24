@@ -943,8 +943,8 @@ def cmd_analyze(args) -> int:
         traces, same = _distinct_recordings(sorted(args.traces, key=run_order))
         if same:
             print(f"[!] {report_mod.same_recording_said(same)}", file=sys.stderr)
-        # Side by side, each in its own trace_processor, and merged in the
-        # order given (#488). See parallel.py.
+        # Side by side, each in its own trace_processor, and merged in that
+        # order (#488). See parallel.py.
         jobs = parallel.jobs_for(traces, getattr(args, "jobs", None))
         if jobs > 1:
             # The pinned binary settled once, here, before the workers ask

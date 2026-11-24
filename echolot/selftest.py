@@ -4111,7 +4111,10 @@ def _(report):
     refuses `DROP VIEW` on a table, and a second CREATE without a drop, so a
     script whose drop and create disagree works once and fails the second
     time it runs in a session. Nothing runs them twice today; this does, and
-    holds every drop in the shipped scripts to its create.
+    holds every drop in the shipped scripts to its create. And `_slice_win` is
+    indexed by `slice_id`: the view handed a join on the id to slice's own
+    lookup, and without one app_init's walk down the startup tree read the
+    whole window for every row.
     """
     import re as _re
     from .main import SQL_DIR, _resolve_process, _setup_context
@@ -4129,6 +4132,11 @@ def _(report):
             made[name] = kind
     for name in WINDOW_TABLES:
         assert made.get(name) == "PERFETTO TABLE", (name, made.get(name))
+    # A view over `slice` had slice's lookup by id; the table has its own, or
+    # every join on `slice_id` reads the whole window per row.
+    assert _re.search(r"^CREATE PERFETTO INDEX \w+ ON _slice_win\(slice_id\);",
+                      (SQL_DIR / "window.sql").read_text(encoding="utf-8"), _re.M), (
+        "window.sql: _slice_win is not indexed by slice_id")
 
     cfg = Config(FIXTURE_CONFIG)
 
@@ -4164,14 +4172,15 @@ def _two_fixtures(tmp: str) -> list[Path]:
     return [crowded, plain]
 
 
-@check("analyze: the traces of a set read side by side give the report one after another gives, in the order given")
+@check("analyze: the traces of a set read side by side give the report one after another gives, in the set's order")
 def _(report):
     """Each trace is read by a trace_processor of its own, and `analyze` now
     reads the set's traces at once (#488). The merge is where the order could
-    leak in — the report is sensitive to the order of its inputs (#581) — so
-    the reports have to reach it in the order the traces were named, however
-    the workers finish. Two recordings, analysed side by side and one after
-    another, merge into the same report, and both list the traces as given.
+    leak in — the report is sensitive to the order of its inputs — so the
+    reports have to reach it in the set's order, the one `analyze` puts the
+    recordings in first (#581), however the workers finish. Two recordings,
+    handed in out of name order, analysed side by side and one after another,
+    merge into the same report, and both list the traces as handed in.
     """
     from . import parallel
     from . import report as rep
@@ -4192,7 +4201,7 @@ def _(report):
 
 @check("analyze: a trace that cannot be read ends a run read side by side with its error, and closes the sessions still reading")
 def _(report):
-    """The first failure in the order given is the run's, as it was one trace
+    """The first failure in the set's order is the run's, as it was one trace
     at a time. The traces still being read when it comes are not waited out:
     their trace_processors are closed from the main thread — a worker is out
     of reach of signals and of Ctrl-C, and only the group that opened its
