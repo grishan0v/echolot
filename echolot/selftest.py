@@ -9119,6 +9119,80 @@ def _(report):
         dig._shell, dig.own_bin = saved_shell, saved_bin
 
 
+@check("ui: what scan read of the repository is kept between pages, and read again when a file it "
+       "reads changes or a source comes or goes, not when a source is edited")
+def _(report):
+    """The start page ran `scan` at every view and once more for every
+    press: on a repository of about a million lines that was 9.6 s of CPU
+    idle and 88 s under load, and a page took up to two and a half minutes
+    (#931). The reading is kept with a stamp of the tree and taken again when
+    a build script, a manifest or the build code changes, or a source comes
+    or goes. A source edited in an ordinary module does not change what
+    `scan` says, and is the moment the page is opened again. Each page gets
+    the facts as they were read, not as the page before left them.
+    """
+    import os
+    from . import scan as scan_mod
+    from . import scan_cache
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        main = root / "app" / "src" / "main"
+        (main / "java").mkdir(parents=True)
+        (main / "AndroidManifest.xml").write_text("<manifest/>", encoding="utf-8")
+        (root / "app" / "build.gradle.kts").write_text("android {}\n", encoding="utf-8")
+        screen = main / "java" / "Screen.kt"
+        screen.write_text("class Screen\n", encoding="utf-8")
+        read: list[Path] = []
+
+        def describe(here: Path) -> scan_mod.Facts:
+            read.append(here)
+            return scan_mod.Facts(root=str(here), notes=["read"])
+        kept = scan_cache.Kept(describe=describe, ask_devices=lambda facts: None)
+
+        def later(path: Path) -> None:
+            st = path.stat()
+            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+        first = kept(root)
+        first.notes.append("a page's own")
+        assert kept(root).notes == ["read"] and len(read) == 1, (kept(root).notes, len(read))
+        later(screen)
+        kept(root)
+        assert len(read) == 1, "a source edited read the repository again"
+        later(root / "app" / "build.gradle.kts")
+        kept(root)
+        assert len(read) == 2, "a build script changed and the reading was kept"
+        (main / "java" / "Feed.kt").write_text("class Feed\n", encoding="utf-8")
+        kept(root)
+        assert len(read) == 3, "a source came and the reading was kept"
+        later(main / "AndroidManifest.xml")
+        kept(root)
+        assert len(read) == 4, "a manifest changed and the reading was kept"
+
+
+@check("ui: Refresh forgets what scan read of the repository and sends the browser to the start page")
+def _(report):
+    """Refresh says it reads everything anew. With the repository's reading
+    kept between pages (#931) it has to forget that reading too, or a change
+    the stamp does not see, a constant a benchmark names from another file,
+    would stay unsaid until the server stops. A read that writes nothing."""
+    from . import ready, scan_cache, ui
+    from . import scan as scan_mod
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        kept = scan_cache.Kept(describe=lambda here: scan_mod.Facts(root=str(here)), ask_devices=lambda facts: None)
+        site = ui.Site(project=root, config="echolot.yml", token="selftest", port=1,
+                       src=ready.Sources(scan=kept, pick_device=lambda serial: "", kept=kept))
+        kept(root)
+        assert kept.reads == 1 and kept.read_at is not None
+        reply = ui.answer(site, "GET", "/selftest/anew", {"Host": site.host})
+        assert reply.status == 303 and dict(reply.headers).get("Location") == "/selftest/", (reply.status,
+                                                                                            reply.headers)
+        assert kept.read_at is None, "the reading was kept after Refresh"
+        kept(root)
+        assert kept.reads == 2, kept.reads
+        assert not any(root.iterdir()), sorted(p.name for p in root.iterdir())
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor

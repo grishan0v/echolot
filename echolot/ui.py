@@ -1,11 +1,13 @@
 """`echolot ui`: a local page that shows whether the setup is ready, checks
 the app at the press of a button and opens the reports.
 
-A server from the standard library on 127.0.0.1. It keeps no state: every
-page is drawn when it is asked for, from the files under `.echolot/` and from
-the functions that stand behind `status`, `doctor`, `scan` and `hunt --list`
-(`echolot/ready.py`). It is a face for a person over the same commands and
-files; the agent's path stays the CLI.
+A server from the standard library on 127.0.0.1. It keeps one thing between
+two pages: what `scan` read of the repository, while nothing it read has
+changed (`echolot/scan_cache.py`, #931). Everything else is drawn when it is
+asked for, from the files under `.echolot/` and from the functions that stand
+behind `status`, `doctor`, `scan` and `hunt --list` (`echolot/ready.py`).
+Refresh forgets the kept reading too. It is a face for a person over the same
+commands and files; the agent's path stays the CLI.
 
 A page that is only read writes nothing. Two requests do more, and both are
 a form a page of this server sends: one starts a check (`echolot/check.py`:
@@ -233,6 +235,17 @@ def _start(visit: Visit, params: dict[str, str]) -> Page:
                if site.url("dig") else "")
     return Page(start_page.render(view, site.url, visit.steps("start"), check=found, setup=setup, limit=limit,
                                   dig_html=digging))
+
+
+def _anew(visit: Visit, params: dict[str, str]) -> Page:
+    """Refresh: forget what `scan` read of the repository, and send the
+    browser to the start page, which reads it anew with everything else. A
+    read that changes nothing on disk: the next page would take the same
+    reading the moment a file it read changed."""
+    kept = visit.site.src.kept
+    if kept is not None:
+        kept.forget()
+    return Page("", 303, visit.site.url("start"))
 
 
 def _nothing(visit: Visit, title: str, text: str, status: int = 404) -> Page:
@@ -698,6 +711,7 @@ def _agent_home(visit: Visit, params: dict[str, str]) -> str | None:
 
 ROUTES: list[Route] = [
     Route("start", "", _start, step="Start"),
+    Route("anew", "anew", _anew),
     Route("report", "report", _report, step="Report", there=_has_report),
     Route("report-of", "report/{scenario}", _report),
     Route("hunt-report", "hunt/{n}/report/{k}", _hunt_report),

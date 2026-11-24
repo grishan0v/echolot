@@ -19,8 +19,10 @@ It runs until Ctrl-C. Start it in the project's folder, the one `echolot.yml`
 is in or will be in; `-c` names a config elsewhere.
 
 The page is a face for a person over the same commands and files. It reads the
-project anew every time it is opened and keeps nothing in memory between two
-pages. An agent's path stays the command line.
+project anew every time it is opened, with one exception: what `echolot scan`
+reads of the repository is kept between two pages while nothing it read has
+changed (see [the start page](#the-start-page)). An agent's path stays the
+command line.
 
 ## Setting a project up
 
@@ -297,6 +299,26 @@ as you change them.
 Red is something in the way, and the sentence says what to do. Grey is
 something echolot cannot tell from here; it stops nothing. **Refresh**
 reads everything anew.
+
+**The repository is read once, not at every page.** What the page says of the
+app, its builds and its benchmark comes from `echolot scan`, and on a
+repository of a million lines `scan` takes seconds of CPU on an idle machine
+and more than a minute on a busy one. So the server keeps what it read, with a
+stamp of the files, and reads the repository again on the next page after:
+
+- a build script, a `settings.gradle(.kts)`, a version catalog or a manifest
+  changed, came or went;
+- a file of the build code changed (`buildSrc`, and the builds the settings
+  include);
+- a source of a benchmark module changed;
+- a source file came or went anywhere.
+
+A source edited in any other module does not read it again: nothing `scan`
+says follows from it. The stamp is one walk of the tree with a `stat` of the
+files that count; a constant a benchmark names from another module's file is
+not in it, and **Refresh** reads the repository anew as well. Under **All
+settings** the page says when it was last read. The phone is asked at every
+page, as before: it comes and goes without a file changing.
 
 **What to do next** is there when the next step is neither the button's nor
 [a setup the page does itself](#setting-a-project-up): `echolot doctor` after

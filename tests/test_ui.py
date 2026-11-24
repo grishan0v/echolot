@@ -701,12 +701,17 @@ def test_every_link_of_every_page_leads_to_a_page(project):
             continue
         seen.add(href)
         reply = ui.answer(site, "GET", href, {"Host": site.host})
+        if reply.status == 303:
+            # Refresh forgets what `scan` read and sends the browser on to
+            # the start page (#931): a link that ends at a page all the same.
+            queue.append(dict(reply.headers)["Location"])
+            continue
         check(f"{href.replace(site.token, 'T')} opens", reply.status == 200, reply.status)
         queue += [a.attrs["href"] for a in read(reply.body).all("a") if not a.attrs["href"].startswith("#")]
     opened = {href.replace(f"/{site.token}/", "") for href in seen}
-    check("the start, each scenario's report, and every investigation's page and reports",
-          opened == {"", "report", "report/coldStart", "report/feedScroll", "answer", "hunt/1/answer", "hunt/2/answer",
-                     "hunt/1/report/1", "hunt/1/report/2", "hunt/2/report/1"}, sorted(opened))
+    check("the start, Refresh, each scenario's report, and every investigation's page and reports",
+          opened == {"", "anew", "report", "report/coldStart", "report/feedScroll", "answer", "hunt/1/answer",
+                     "hunt/2/answer", "hunt/1/report/1", "hunt/1/report/2", "hunt/2/report/1"}, sorted(opened))
 
 
 def test_the_steps_are_a_path_once_there_are_two(project):
@@ -733,8 +738,8 @@ def test_everything_ready(project):
     check("the app, and which build", said["The app"] == ("green", f"ready: {APP} can be measured on the benchmark build."), said)
     check("the app is in the headline", page.one("h1").text == f"Let's see how fast {APP} is")
     again = [a for a in page.all("a", "btn") if a.text == "Refresh"]
-    check("Refresh reads the page anew, and is not the screen's one step now",
-          len(again) == 1 and again[0].attrs["href"].endswith("/the-token-of-a-test/")
+    check("Refresh reads the page anew, the repository with it (#931), and is not the screen's one step now",
+          len(again) == 1 and again[0].attrs["href"].endswith("/the-token-of-a-test/anew")
           and "line" in again[0].attrs["class"], [a.attrs for a in again])
 
 

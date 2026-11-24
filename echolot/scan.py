@@ -444,8 +444,10 @@ class BuildCode:
     consts: dict[str, str | None] = field(default_factory=dict)
 
 
-def build_code(root: Path) -> BuildCode:
-    """`buildSrc` and every build `settings.gradle(.kts)` includes, read once."""
+def build_code_dirs(root: Path) -> list[Path]:
+    """Where the project's build code is: `buildSrc`, and every build
+    `settings.gradle(.kts)` includes. `echolot ui` watches what is under
+    them to know when to read the repository again (#931)."""
     dirs = [root / "buildSrc"]
     for name in ("settings.gradle.kts", "settings.gradle"):
         settings = root / name
@@ -453,12 +455,15 @@ def build_code(root: Path) -> BuildCode:
             text = _strip(settings.read_text(encoding="utf-8", errors="replace"))
             dirs += [root / d for d in _INCLUDE_BUILD.findall(text)]
     top = root.resolve()
+    # Inside the project, and not the project itself: a build included
+    # from elsewhere is not this repository's to read.
+    return [d for d in dirs if d.is_dir() and top in d.resolve().parents]
+
+
+def build_code(root: Path) -> BuildCode:
+    """`buildSrc` and every build `settings.gradle(.kts)` includes, read once."""
     texts: dict[str, str] = {}
-    for d in dirs:
-        # Inside the project, and not the project itself: a build included
-        # from elsewhere is not this repository's to read.
-        if not d.is_dir() or top not in d.resolve().parents:
-            continue
+    for d in build_code_dirs(root):
         for base, subdirs, names in os.walk(d):
             # Gradle's output is a `build` folder of a module; under `src/`
             # one is a package, `com.example.build`, and holds the code.
@@ -1694,15 +1699,22 @@ def describe(root: Path, *, devices: bool = True) -> Facts:
     _id_note(facts)
     facts.allowed = allowed_paths(root)
     if devices:
-        from .runner import RunnerError
-        try:
-            facts.devices = devices_attached()
-        except RunnerError as e:
-            facts.notes.append(f"adb is on PATH but did not list the devices: {e.gist}")
-        else:
-            if facts.devices is None:
-                facts.notes.append("adb is not on PATH, so no device was asked")
+        ask_devices(facts)
     return facts
+
+
+def ask_devices(facts: Facts) -> None:
+    """The devices adb lists, into the facts, with a note where adb could
+    not be asked. Apart from the repository: `echolot ui` keeps what it read
+    of that between two pages, and asks for the devices on each (#931)."""
+    from .runner import RunnerError
+    try:
+        facts.devices = devices_attached()
+    except RunnerError as e:
+        facts.notes.append(f"adb is on PATH but did not list the devices: {e.gist}")
+    else:
+        if facts.devices is None:
+            facts.notes.append("adb is not on PATH, so no device was asked")
 
 
 # --- the output ---------------------------------------------------------------
