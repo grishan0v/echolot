@@ -86,3 +86,12 @@ def test_the_header_speaks_of_the_crowd_only_when_there_was_one() -> None:
           report_mod._crowding_lines({"threads": 13, "cores": 9, "peak": 5,
                                       "above_cores_ms": 0.0}) == [])
     check("not recorded, nothing said", report_mod._crowding_lines(None) == [])
+    check("more than the cores for under a millisecond, nothing said (#711)",
+          report_mod._crowding_lines({"threads": 40, "cores": 8, "peak": 9,
+                                      "above_cores_ms": 0.02}) == [])
+    check("a millisecond is a line",
+          "for 1 ms of the window" in report_mod._crowding_lines(
+              {"threads": 40, "cores": 8, "peak": 9, "above_cores_ms": 1.0})[0])
+    check("12.4 ms is still 12",
+          "for 12 ms of the window" in report_mod._crowding_lines(
+              {"threads": 40, "cores": 8, "peak": 9, "above_cores_ms": 12.4})[0])

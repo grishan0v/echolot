@@ -1209,8 +1209,12 @@ def _crowding_lines(c: dict[str, Any] | None) -> list[str]:
     crowd explains no wait, and a line saying so would be read past. With
     other processes taking a large part of the CPUs, the wait is behind them
     as well, and the line says so instead of putting it on the app (#596).
+
+    Nothing under a millisecond either: rounded, it read "more than 8 for 0
+    ms of the window", and so short a crowd explains no wait that
+    `runnable_starvation` would report (#711).
     """
-    if not c or not c.get("above_cores_ms"):
+    if not c or (c.get("above_cores_ms") or 0) < 1:
         return []
     outside = outside_load(c)
     behind = (f"behind the app's own work and other processes', which took "
