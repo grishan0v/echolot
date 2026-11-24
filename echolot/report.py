@@ -2615,7 +2615,24 @@ def _source_note(d: dict[str, Any]) -> str:
 
 def _table(rows: list[dict[str, Any]]) -> str:
     return table.render([_with_fired(r) for r in rows], order=COLUMNS,
-                        headers=HEADERS, skip=HIDDEN)
+                        headers=_headers(rows), skip=HIDDEN)
+
+
+def _headers(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """`Max of any run` over rows merged from repeats.
+
+    There Self and Total are medians and Max the longest any repeat saw
+    (#512): one launch's longest call beside the median launch's total, so a
+    row with one call a launch read "Total 65.86, Max 99.59" (#712). The
+    header says the two come from different repeats.
+    """
+    def repeats(row: dict[str, Any]) -> int:
+        try:
+            return int(str(row["runs"]).split("/")[1])
+        except (KeyError, IndexError, ValueError):
+            return 1
+    merged = any(repeats(r) > 1 for r in rows)
+    return {**HEADERS, "max_ms": "Max of any run, ms"} if merged else HEADERS
 
 
 def _with_fired(row: dict[str, Any]) -> dict[str, Any]:
