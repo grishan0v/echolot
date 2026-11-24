@@ -7153,6 +7153,67 @@ def _(report):
             "a project's own AGENTS.md was edited"
 
 
+@check("guide: `guide report` is a page of 8 KB at most, and every part it "
+       "leaves out is a topic it names")
+def _(report):
+    """The report reference was one file, 77 KB, and `guide report` printed
+    it whole: an agent that wanted one field paid for all of them (#493).
+    The page is how to read a report; the schema, the window, the device, the
+    markers, the checks, the columns, the detectors and `compare` are a topic
+    each, and a topic the page does not name is text nobody is sent to (#854).
+    """
+    from .layer import GUIDE_REPORT_LIMIT, REPORT_TOPIC_PREFIX, guide_text, guide_topics
+
+    topics = guide_topics()
+    page = guide_text(topics["report"])
+    size = len(page.encode("utf-8"))
+    assert size <= GUIDE_REPORT_LIMIT, \
+        f"`echolot guide report` prints {size} bytes, over {GUIDE_REPORT_LIMIT}"
+    parts = sorted(t for t in topics if t.startswith(REPORT_TOPIC_PREFIX))
+    assert parts, "the report reference has no topics of its own"
+    unnamed = [t for t in parts if f"`echolot guide {t}`" not in page]
+    assert not unnamed, f"`guide report` never sends anyone to {unnamed}"
+    for t in parts:
+        assert guide_text(topics[t]).startswith("# "), f"`guide {t}` prints no title"
+
+
+@check("explain: a detector says how to read its rows, from the report "
+       "reference's page on the detectors")
+def _(report):
+    """What the header has no room for — `frame_jank`'s Buffer Stuffing is
+    latency, `io_wait` has nothing to profile — was in the 77 KB reference
+    alone. `explain <id>` prints that detector's notes after its columns, so
+    one detector is one screen (#854). A heading that is no detector's is
+    notes nobody reads; a detector the table leaves out is one the page
+    does not list.
+    """
+    from . import explain as explain_mod
+    from .analyze import DETECTOR_DIR
+    from .layer import REFERENCES_DIR
+    from .tp import load_detectors
+
+    detectors = load_detectors(DETECTOR_DIR)
+    ids = [d.id for d in detectors]
+    explain_mod._all_notes.cache_clear()
+    notes = explain_mod._all_notes()
+    stray = sorted(set(notes) - set(ids))
+    assert not stray, f"{explain_mod.NOTES}: notes under no detector's id: {stray}"
+    assert "frame_jank" in notes and "io_wait" in notes, sorted(notes)
+    page = (REFERENCES_DIR / explain_mod.NOTES).read_text(encoding="utf-8")
+    listed = re.findall(r"^\| `([a-z0-9_]+)` \|", page, re.M)
+    assert sorted(listed) == sorted(ids), \
+        f"the table lists {sorted(set(ids) - set(listed))} short, {sorted(set(listed) - set(ids))} over"
+    entries = explain_mod.entries(detectors, None)
+    for e in entries:
+        text = explain_mod.one(e, None, None)
+        said = notes.get(e["id"])
+        if said is None:
+            assert "Reading its rows" not in text, f"{e['id']}: notes from nowhere"
+            continue
+        first = " ".join(said.split("\n\n")[0].split())
+        assert first in text, f"`explain {e['id']}` leaves out its notes"
+
+
 # The pointer 0.4.0 wrote, as it wrote it: the only release whose section had
 # no end marker. Kept as text rather than built from today's, so that the
 # migration below is checked against a file a real install left behind.

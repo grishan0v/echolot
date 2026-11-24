@@ -208,11 +208,14 @@ three ways:
                               "at least"
    That is all step 1 reads. report.json is the file compare, the verdict
    check and the `--json` views read, not you: never cat it, never cut it up
-   with jq or python. `echolot guide report` is its schema and every
-   detector at length — look one field up there when a `--json` view shows
-   it and nothing else explains it, not before the first hypothesis. What
-   one detector's thresholds and columns mean, and the values it ran with
-   here, is `echolot explain <detector>`: one screen, not the guide
+   with jq or python. What one detector reads, its thresholds and the
+   values it ran with here, what its columns mean and how to read its rows
+   is `echolot explain <detector>`: one screen. A field a `--json` view
+   shows and nothing else explains is in one topic of the guide:
+   `echolot guide report` is a page that names the topic for each key
+   (`echolot guide report-schema`, `report-window`, `report-checks`, …).
+   Read that one topic, never the guide whole, and not before the first
+   hypothesis
 
 2. check the config before concluding anything. The overview says each of
    these in a ⚠️ line; `echolot report --window --json` has the fields:
@@ -361,7 +364,8 @@ echolot anr <report> --root .                      an ANR report: the lock chain
 echolot mark --from-anr <report>                   markers on what was on the stack
 echolot explain [<detector>]                       one detector: what it reads, its thresholds
                                                    with units and the values in force, what
-                                                   its columns mean; without one, the list
+                                                   its columns mean, how to read its rows;
+                                                   without one, the list
 ```
 
 **Stopping is hard-coded, not a feeling.** `loop.max_rounds` comes from the

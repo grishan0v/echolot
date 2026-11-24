@@ -616,7 +616,10 @@ of the same CLI a human types.
     │                                analyze · report · compare · probe · anr · mark
     │                                domains · calibrate
     │
-    ├─ references/report.md          report · analyze · compare · probe · collect
+    ├─ references/report.md          report · analyze · probe · explain · guide
+    │  └─ references/report-*.md     compare · collect · mark · names: schema, window,
+    │                                environment, markers, checks, columns,
+    │                                detectors, compare
     ├─ references/config.md          domains · calibrate    → references/naming.md
     ├─ references/naming.md          names
     ├─ references/collect.md         collect · calibrate
@@ -644,6 +647,7 @@ echolot guide                        the same map, for a client without `.claude
     ├─ guide reflect                 commands/echolot-reflect.md, printed
     ├─ guide report | config         references/*.md, printed
     │  | naming | collect
+    │  └─ guide report-<topic>       the report's topics, one at a time
     └─ guide/anr.md                  anr · mark
 
 plugins/echolot/skills/              the plugin: four skills, each a door to a topic
@@ -679,9 +683,13 @@ thread masks are masks — `comm` is cut to fifteen characters. Nothing in the
 layer sits more than three hops from `/echolot`. Two references are opened
 from below as well, by the topic `guide` prints them under, so the same line
 works with the layer and without it: `perf-hunter` looks a field up in
-`echolot guide report` rather than working the schema out by hand — one
-field a `--json` view showed it, never the whole reference on its first
-step, which reads the overview and `echolot report -d` (#493) — and setup
+the one topic of the report reference that holds it — `echolot guide report`
+is a page of 8 KB at most that names a topic for each key, `guide
+report-schema` and the rest — rather than working the schema out by hand,
+and one detector up in `echolot explain <id>`, which prints its part of
+`report-detectors` after the header's words (#854); never the whole
+reference, and never on its first step, which reads the overview and
+`echolot report -d` (#493). Setup
 reads
 `echolot guide collect` to capture the probe trace while there is still no
 config.

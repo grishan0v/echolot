@@ -49,6 +49,15 @@ def guide_topics() -> dict[str, Path]:
     return topics
 
 
+# The most `echolot guide report` may print, in bytes. The reference was one
+# file of 77 KB that an agent read whole to look one field up (#493, #854);
+# it is now a page on how to read a report, and every part it leaves out is
+# a topic of its own, `report-<topic>`, which the page names.
+GUIDE_REPORT_LIMIT = 8 * 1024
+# The topics the report reference was cut into, by the prefix of their files.
+REPORT_TOPIC_PREFIX = "report-"
+
+
 def guide_text(path: Path) -> str:
     """A topic's text as printed: without the frontmatter a subagent file has."""
     text = path.read_text(encoding="utf-8")

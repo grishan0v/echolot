@@ -770,7 +770,7 @@ detector carries three fixed texts in its `.sql` header, beside `@title` and
 (`@plain_why`) and what a clean result says (`@plain_clean`). What was found is
 one sentence from a template per detector over its rows, in `echolot/plain.py`.
 The same words are in `report.json`, so the terminal, the page and an agent
-read alike (see `references/report.md` for the keys). The stretch is called "the
+read alike (see `references/report-schema.md` for the keys). The stretch is called "the
 launch" when the trace holds a startup, and "the run" otherwise.
 
 How much attention a check needs:
