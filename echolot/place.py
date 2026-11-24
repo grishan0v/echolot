@@ -50,10 +50,12 @@ from .domains import source_files
 # comes without it. The waiter's frame is there either way, and it is usually
 # the project's own code (#269).
 # The other shape, `Lock contention on a monitor lock (owner tid: N)`, names
-# nobody and is left alone.
+# nobody and is left alone. What the detector adds after the slice's name,
+# ` · owner: running 60%, …` (#417), is not part of the waiter's frame.
 _CONTENTION = re.compile(
     r"^monitor contention with owner (?P<owner>.+?) \((?P<tid>\d+)\)"
-    r"(?: at (?P<at>.+?))? waiters=(?P<waiters>\d+) blocking from (?P<blocked>.+)$")
+    r"(?: at (?P<at>.+?))? waiters=(?P<waiters>\d+) blocking from (?P<blocked>.+?)"
+    r"(?: · .*)?$")
 
 # A frame as the runtime prints it: `<ret> pkg.Class.method(args)(File.kt:41)`.
 # The return type is a single token and is not always there. What is in the

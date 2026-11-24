@@ -544,7 +544,20 @@ What decides the query:
   `_det_<id>`, or `_det_<id>_` and more, and is written with `OR REPLACE`, so
   that a second run of the query in one session does not fail. A file that writes another name, writes without
   `OR REPLACE`, or reads a `_det_` table its first query does not write is
-  refused as it is read. A second query that is one filter over the window's
+  refused as it is read. A `SPAN_JOIN` of the detector's own is a virtual
+  table under the same name rule, and since a virtual table has no
+  `OR REPLACE`, `DROP TABLE IF EXISTS` in front of it does that job and is
+  required the same way: `monitor_contention` splits its waits by the
+  owner's states and `main_thread_waits` its sleeps by the waking thread's
+  (#417, #418):
+
+  ```sql
+  DROP TABLE IF EXISTS _det_my_detector_by;
+  CREATE VIRTUAL TABLE _det_my_detector_by
+  USING SPAN_JOIN(_det_my_detector PARTITIONED utid, _tstate_win PARTITIONED utid);
+  ```
+
+  A second query that is one filter over the window's
   tables, as `gc_pressure`'s is, gains nothing from a table and keeps that
   filter.
 
@@ -624,6 +637,14 @@ counted twice, and any detector that sums durations — coverage, on-CPU time,
 a share of the window — reports a number that is too large with nothing
 anywhere saying so.
 
+Against more than one interval on the other side it can go the other way.
+The same two joined against `[0,40)`, `[40,80)` and `[80,180)` come back as
+`[0,40)`, `[40,80)`, `[80,100)` and `[80,150)`: the second interval's
+`[50,80)` is gone. That is the shape of two threads waiting for one lock's
+owner at once, joined against the owner's states — why `monitor_contention`
+partitions by the pair of the waiting thread and the owner, not by the owner
+alone (#417).
+
 So the guarantee has to come from the input, and it has to be written down:
 
     DROP TABLE IF EXISTS _cpu_in_slice;
@@ -632,7 +653,9 @@ So the guarantee has to come from the input, and it has to be written down:
 
 `PARTITIONED utid` is safe here because two Running intervals of one thread
 cannot overlap. `PARTITIONED cpu` in `environment.sql` is safe for a different
-reason: one core runs one thread at a time. Both are properties of the machine
+reason: one core runs one thread at a time. A pair of threads, one waiting
+and one holding the lock, is safe because one thread waits for one lock at a
+time. All three are properties of the machine
 rather than of the query, so say which one you are leaning on — the next
 person cannot re-derive it from the SQL, and nothing will tell them they were
 wrong.

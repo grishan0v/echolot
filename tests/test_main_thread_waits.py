@@ -109,7 +109,10 @@ def _rows(report: dict) -> list[dict]:
 
 def test_each_wait_goes_to_the_thread_of_the_app_that_ended_it(tmp_path: Path) -> None:
     rows = _rows(_analyzed(tmp_path))
-    got = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"]) for r in rows]
+    # Where it waited; what the waking thread did meanwhile is
+    # test_other_thread_state's.
+    got = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"].split(" · ")[0])
+           for r in rows]
     check("blocked in its work until SharedPreferences let it go",
           got[0] == ("SharedPreferenc", 1, 20.0, 20.0, "blocked in bindApplication"),
           got)
@@ -130,7 +133,8 @@ def test_the_idle_looper_is_no_wait(tmp_path: Path) -> None:
           all(r["location"] != "Chrome_IOThread" for r in rows), rows)
     room = next(r for r in rows if r["location"] == "arch_disk_io_#")
     check("and Room's row holds its wait in openDatabase, not the idle sleep it ended",
-          (room["count"], room["total_ms"], room["detail"]) == (1, 10.0, "blocked in openDatabase"),
+          (room["count"], room["total_ms"], room["detail"].split(" · ")[0])
+          == (1, 10.0, "blocked in openDatabase"),
           room)
 
 
@@ -175,7 +179,8 @@ def test_the_fixture_s_webview_start_is_read_by_its_waits(tmp_path: Path) -> Non
     cfg = Config({**CONFIG, "scenario": {"name": "webview", "start": {"name": "bindApplication"},
                                          "end": {"name": "Screen.firstFrame"}}})
     rows = _rows(analyze_trace(path, cfg))
-    got = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"]) for r in rows]
+    got = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"].split(" · ")[0])
+           for r in rows]
     check("the IO thread's waits in animation, then SharedPreferences', and no VizWebView",
           got == [("Chrome_IOThread", 3, 26.0, 10.0, "blocked in animation"),
                   ("SharedPreferenc", 1, 20.0, 20.0, "blocked in activityStart")], got)

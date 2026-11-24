@@ -2396,6 +2396,27 @@ def clip(text: Any, width: int) -> str:
     return text if len(text) <= width else text[:width - 1] + "…"
 
 
+# What the other thread of a wait was doing, at the end of the evidence:
+# `monitor_contention`'s owner and `main_thread_waits`' waking thread
+# (#417, #418).
+_THEIR_STATE = re.compile(r" · (?:owner|its threads?): [^·]+$")
+
+
+def clip_evidence(text: Any, width: int) -> str:
+    """Evidence cut to `width`, the other thread's state at its end kept.
+
+    A lock's evidence is ART's slice name, two frames long, and the owner's
+    state after it is what tells the three fixes apart: cut from the end, it
+    was the one part a view of the rows never showed. So the slice's name is
+    what gives way.
+    """
+    text = "" if text is None else str(text)
+    tail = _THEIR_STATE.search(text)
+    if len(text) <= width or not tail:
+        return clip(text, width)
+    return clip(text[:tail.start()], max(width - len(tail.group(0)), 24)) + tail.group(0)
+
+
 def _minor(version: str | None) -> tuple[int, int] | None:
     m = re.match(r"\s*(\d+)\.(\d+)", str(version or ""))
     return (int(m.group(1)), int(m.group(2))) if m else None
@@ -2626,7 +2647,7 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
             # end is what a reader of the row came for, and it is short by
             # construction — two names a list, each cut to stacks.LONGEST.
             if r.get("detail") is not None and not r.get("stacks"):
-                r["detail"] = clip(r["detail"], 100)
+                r["detail"] = clip_evidence(r["detail"], 100)
         shown.append(r)
     out.append(_table(shown))
     if len(rows) > top:
