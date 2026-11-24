@@ -21,7 +21,7 @@ from . import recording as recording_mod
 from . import stats, table
 from . import when as when_mod
 
-COLUMNS = ["location", "runs", "count", "self_ms", "total_ms", "max_ms",
+COLUMNS = ["location", "threads", "runs", "count", "self_ms", "total_ms", "max_ms",
            "covered_ms", "code", "detail"]
 # Keys a row may carry that are not columns. `_table` renders anything it does
 # not know as an extra column, which is right for a detector that invents one
@@ -33,6 +33,7 @@ HIDDEN = {"spread", "places", "stacks", "unfinished", "parents", "variants", "fi
           "floors", "unfinished_runs", "open_ms"}
 HEADERS = {
     "location": "Where",
+    "threads": "Threads",
     "runs": "Runs",
     "count": "N",
     "self_ms": "Self, ms",
@@ -45,6 +46,13 @@ HEADERS = {
 
 # Columns merged across repeats: by median, except `max_ms`, the largest.
 NUMERIC = ["count", "self_ms", "total_ms", "max_ms", "covered_ms"]
+
+# How many threads of one name a row adds up, on the detectors that group by
+# thread (#511). The kernel cuts a name to fifteen characters, so a pool's
+# workers arrive under one, and a row of 3.8 s of waiting in a 5.7 s window is
+# eight threads' time and not the window's. Merged, the largest any repeat
+# found; it is not part of a row's name, and `compare` pairs rows without it.
+THREADS = "threads"
 
 # Columns whose per-run values survive the merge, in `spread`. The median alone
 # cannot say whether a number is steady: 120 ms from (118, 119, 121) and 120 ms
@@ -624,7 +632,7 @@ def _one_run(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if len(rows) == 1:
         return rows[0]
     out = dict(max(rows, key=_rank))
-    for col in ("count", "self_ms", "total_ms", "covered_ms"):
+    for col in ("count", "self_ms", "total_ms", "covered_ms", THREADS):
         values = [r[col] for r in rows if r.get(col) is not None]
         if values:
             out[col] = round(sum(values), 2)
@@ -745,6 +753,12 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
                     spread[col]["resolves_ms"] = reach
                     spread[col]["resolves_pct"] = (
                         round(reach / row[col] * 100, 1) if row[col] else None)
+        # How many threads the row adds up: the most any repeat found. It is
+        # what the pool is, not a measurement with a middle — a worker that
+        # did nothing in one repeat was not counted there (#511).
+        pools = [f[THREADS] for f in found if f.get(THREADS) is not None]
+        if pools:
+            row[THREADS] = max(pools)
         calls = [f["count"] for f in found if f.get("count") is not None]
         if counts and calls:
             spread["count"] = {"min": min(calls), "max": max(calls), "values": calls}
@@ -1949,6 +1963,10 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
         out.append(_table(d["rows"]))
         out.append("")
+        pooled = _threads_note(d["rows"])
+        if pooled:
+            out.append(pooled)
+            out.append("")
         # Failed in some repeats and ran in the rest: the rows are from the
         # rest, and `runs` counts those.
         part = short_runs(d.get("failed_runs"))
@@ -2290,7 +2308,7 @@ def overview(report: dict[str, Any], cmd: str = "echolot report") -> str:
             "detector": d["id"],
             "rows": len(found) if found else "—",
             "thresholds": d.get("params_source") or "default",
-            "top row": clip(top.get("location"), 48) if top else (
+            "top row": clip(top.get("location"), 48) + _of_threads(top) if top else (
                 "failed" if d.get("error")
                 else "not checked" if d.get("checked") is False else "silent"),
             "metric": (f"{metric_of(top).replace('_ms', '')} {top.get(metric_of(top))} ms"
@@ -2350,6 +2368,10 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
         out.append("")
         out.append(f"_Showing {top} of {len(rows)};{_left_once(rows[top:])} "
                    f"`--top {len(rows)}` for all._")
+    pooled = _threads_note(rows[:top])
+    if pooled:
+        out.append("")
+        out.append(pooled)
     legend = EVIDENCE_LEGEND.get(det_id)
     if legend:
         out.append("")
@@ -2639,6 +2661,30 @@ def _source_note(d: dict[str, Any]) -> str:
     if d.get("defaults"):
         note += f", defaults would be {d['defaults']}"
     return note
+
+
+def _of_threads(row: dict[str, Any]) -> str:
+    """` (8 threads)` after the name of a row that adds up a pool, or nothing."""
+    n = row.get(THREADS)
+    return f" ({n} threads)" if isinstance(n, int) and n > 1 else ""
+
+
+def _threads_note(rows: list[dict[str, Any]]) -> str | None:
+    """What a row of several threads is, under a table that has one (#511).
+
+    The reference said not to add such a row up as time of the window, and the
+    report did not: an agent read `DefaultDispatch`'s 3.8 s of waiting in a
+    5.7 s cold start as the start's, and opened an investigation that was
+    abandoned four days later. Contention was 2% of that start.
+    """
+    pooled = [r for r in rows if _of_threads(r)]
+    if not pooled:
+        return None
+    named = ", ".join(f"`{r['location']}` {r[THREADS]}" for r in pooled[:3])
+    more = f" and {len(pooled) - 3} more" if len(pooled) > 3 else ""
+    return (f"_Threads: a row adds up every thread of its name — {named}{more}. "
+            "Their time together is not time of the window, and can be longer "
+            "than it; how the window was spent is in `--window`._")
 
 
 def _table(rows: list[dict[str, Any]]) -> str:

@@ -30,7 +30,8 @@ CONFIG = {
     "scenario": {"name": "blind", "start": {"name": "bindApplication"},
                  "end": {"name": "Screen.firstFrame"}},
 }
-MAIN = fixture.BLIND_THREADS[fixture.TID_MAIN]
+# The main thread's row, by its tid rather than its name (#511).
+MAIN = "main"
 
 
 def _set(tmp_path: Path, loops: tuple[float, ...]) -> dict:

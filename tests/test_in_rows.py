@@ -142,7 +142,8 @@ def _about_main(det_id: str, row: dict) -> bool:
     if det_id == "io_wait":
         return detail.startswith("main")
     if det_id in ("runnable_starvation", "monitor_contention", "uninstrumented_cpu"):
-        return loc == MAIN
+        # Named `main`, by its tid (#511).
+        return loc == "main"
     if det_id in ("main_thread_block", "gc_pressure"):
         return detail == MAIN
     if det_id == "repeated_work":

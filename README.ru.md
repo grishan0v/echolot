@@ -158,18 +158,18 @@ _the pair to main_thread_block. That one asks where the main thread's time went 
 ## Monitor contention
 _ART writes a "Lock contention on ..." slice with the owner's tid — ready-made evidence_
 
-| Where | Runs | N | Total, ms | Max, ms | In the code | Evidence |
-|---|---|---|---|---|---|---|
-| com.example.app | 5/5 | 9 | 61.6 | 25.09 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:61 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:61) |
+| Where | Threads | Runs | N | Total, ms | Max, ms | In the code | Evidence |
+|---|---|---|---|---|---|---|---|
+| main | 1 | 5/5 | 9 | 61.6 | 25.09 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:61 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:61) |
 
 <sub>detector `monitor_contention`, params: {'min_block_ms': 8, 'max_total_ms': 50, 'name_glob': 'Lock contention on a monitor lock*', 'name_glob_alt': 'monitor contention with owner*'}</sub>
 
 ## Blind spots: threads burning CPU with no instrumentation
 _names a thread that burns CPU with no slice around it. The agent does not guess — it is handed the fact "thread T ran for 340 ms, zero slices". That is exactly where adding trace{} pays off._
 
-| Where | Runs | N | Total, ms | Instrumented, ms | Evidence |
-|---|---|---|---|---|---|
-| DefaultDispatch | 5/5 | 0 | 522.09 | 0.0 | 100.0% of CPU outside slices |
+| Where | Threads | Runs | N | Total, ms | Instrumented, ms | Evidence |
+|---|---|---|---|---|---|---|
+| DefaultDispatch | 1 | 5/5 | 0 | 522.09 | 0.0 | 100.0% of CPU outside slices |
 
 <sub>detector `uninstrumented_cpu`, params: {'min_running_ms': 50, 'max_covered_pct': 50}</sub>
 

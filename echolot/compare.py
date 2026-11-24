@@ -86,8 +86,8 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
     # Which thread a row is of, by the app's own name for its main thread.
     whose = plain._Ctx(after if (after.get("window") or {}).get("process") else before)
 
-    by_id_before = {d["id"]: _upgraded(d) for d in before.get("detectors", [])}
-    by_id_after = {d["id"]: _upgraded(d) for d in after.get("detectors", [])}
+    by_id_before = {d["id"]: _upgraded(d, before) for d in before.get("detectors", [])}
+    by_id_after = {d["id"]: _upgraded(d, after) for d in after.get("detectors", [])}
 
     for det_id in [*by_id_before, *(k for k in by_id_after if k not in by_id_before)]:
         db = by_id_before.get(det_id)
@@ -1324,8 +1324,16 @@ def _failed(d: dict | None) -> bool:
 
 # --- pairing rows across two reports ---------------------------------------
 
-def _upgraded(d: dict) -> dict:
+def _upgraded(d: dict, report: dict | None = None) -> dict:
     """A detector's block from an older report, read with the identity it has now.
+
+    The main thread's row of `uninstrumented_cpu`, `runnable_starvation` and
+    `monitor_contention` is `main` since #511. An older report names it as the
+    kernel names the thread, the last fifteen characters of the process's
+    name, and its rows carry no `threads`: read under the old name, the main
+    thread's row would be gone on one side and new on the other. That report
+    cannot tell the main thread from a worker that carried the same name, and
+    it never could: its own plain reading took the name for the main thread.
 
     `runnable_starvation` named a row by `detail`, `state R` or `state R+`,
     until the main thread's evidence went into `detail`; the state is a column
@@ -1334,6 +1342,7 @@ def _upgraded(d: dict) -> dict:
     would meet its `R+` row: the mistake `_match` exists to prevent. So the
     older block gets its `state` read back out of `detail`.
     """
+    d = _main_named(d, report)
     identity = identity_of(d)
     if d.get("id") != "runnable_starvation" or "state" in identity \
             or "detail" not in identity:
@@ -1342,6 +1351,19 @@ def _upgraded(d: dict) -> dict:
             for row in d.get("rows") or []]
     return {**d, "identity": ["state" if c == "detail" else c for c in identity],
             "rows": rows}
+
+
+def _main_named(d: dict, report: dict | None) -> dict:
+    """`_upgraded`'s first half: the main thread's row named `main`."""
+    rows = d.get("rows") or []
+    if (d.get("id") not in plain.NAMED_MAIN or not rows
+            or any(report_mod.THREADS in r for r in rows)):
+        return d
+    kernel = plain.kernel_name(report or {})
+    if not kernel:
+        return d
+    return {**d, "rows": [{**r, "location": plain.MAIN} if r.get("location") == kernel
+                          else r for r in rows]}
 
 
 def _identity(db: dict | None, da: dict | None) -> tuple[str, ...]:

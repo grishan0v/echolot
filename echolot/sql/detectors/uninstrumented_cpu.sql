@@ -50,35 +50,47 @@
 -- name, so it took a median over a mix of threads; `compare` paired them by
 -- report order, and each got the samples of all of them. The pool is the
 -- unit a reader can act on, and `@intervals` and `@samples` already pick
--- threads by name.
+-- threads by name. `threads` says how many threads the row adds up: a pool's
+-- CPU outside slices is several threads' time, and can be longer than the
+-- window it was measured in (#511).
+--
+-- The main thread is `main`: the thread whose tid is the pid. Its name is the
+-- last fifteen characters of the process's, which nobody reads as the main
+-- thread, and which a worker that never named itself carries too — on the
+-- name alone the two were one row, held to the main thread's bar.
 
 WITH running AS (
-    -- `main` marks the name the process's main thread goes by: the thread
-    -- whose tid is the pid.
-    SELECT w.thread_name, SUM(w.dur) AS running_ns,
-           MAX(w.tid = p.pid)                              AS main
+    SELECT CASE WHEN w.tid = p.pid THEN 'main' ELSE w.thread_name END
+                                                       AS thread_name,
+           SUM(w.dur)                                  AS running_ns,
+           COUNT(DISTINCT w.tid)                       AS threads,
+           MAX(w.tid = p.pid)                          AS main
     FROM _tstate_win w
     CROSS JOIN _proc p
     WHERE w.state = 'Running'
-    GROUP BY w.thread_name
+    GROUP BY 1
 ),
 covered AS (
     -- _cpu_in_slice is prepared by the context: a SPAN_JOIN of on-CPU time
     -- with top-level slices. Doing that interval-overlap join by hand makes
     -- SQLite run a nested loop that does not finish within ten minutes on a
     -- live trace.
-    SELECT t.name AS thread_name, SUM(c.dur) AS sliced_ns
+    SELECT CASE WHEN t.tid = p.pid THEN 'main' ELSE t.name END AS thread_name,
+           SUM(c.dur)                                  AS sliced_ns
     FROM _cpu_in_slice c
     JOIN thread t ON t.utid = c.utid
-    GROUP BY t.name
+    CROSS JOIN _proc p
+    GROUP BY 1
 ),
 counted AS (
-    SELECT thread_name, COUNT(*) AS slice_count
+    SELECT CASE WHEN is_main_thread = 1 THEN 'main' ELSE thread_name END
+                                                       AS thread_name,
+           COUNT(*)                                    AS slice_count
     FROM _slice_win
-    GROUP BY thread_name
+    GROUP BY 1
 ),
 blind AS (
-    SELECT r.thread_name, r.running_ns, r.main,
+    SELECT r.thread_name, r.running_ns, r.main, r.threads,
            COALESCE(c.sliced_ns, 0)                        AS sliced_ns,
            r.running_ns - COALESCE(c.sliced_ns, 0)         AS outside_ns
     FROM running r
@@ -86,6 +98,7 @@ blind AS (
 )
 SELECT
     b.thread_name                                          AS location,
+    b.threads                                              AS threads,
     COALESCE(n.slice_count, 0)                             AS count,
     ROUND(b.outside_ns / 1e6, 2)                           AS total_ms,
     NULL                                                   AS max_ms,
@@ -112,7 +125,7 @@ CROSS JOIN _proc p
 WHERE t.upid = p.upid
   AND t.tid = p.pid
   AND c.instrumented IS NULL
-  AND t.name IN (SELECT location FROM _rows);
+  AND 'main' IN (SELECT location FROM _rows);
 
 -- @samples
 --
@@ -122,8 +135,11 @@ WHERE t.upid = p.upid
 -- callsite: sampled and not unwound is a different answer from not sampled.
 -- `_samples_win` is already this process's alone.
 
-SELECT t.name AS location, s.callsite_id
-FROM _samples_by_slice s
-JOIN thread t ON t.utid = s.utid
-WHERE s.instrumented IS NULL
-  AND t.name IN (SELECT location FROM _rows);
+SELECT w.location, w.callsite_id
+FROM (SELECT CASE WHEN t.tid = p.pid THEN 'main' ELSE t.name END AS location,
+             s.callsite_id
+      FROM _samples_by_slice s
+      JOIN thread t ON t.utid = s.utid
+      CROSS JOIN _proc p
+      WHERE s.instrumented IS NULL) w
+WHERE w.location IN (SELECT location FROM _rows);

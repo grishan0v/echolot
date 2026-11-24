@@ -74,8 +74,12 @@ evidence AS (
     LEFT JOIN main_idle i USING (state)
     WHERE h.app_ns + h.other_ns + h.idle_ns > 0
 )
+-- The main thread is `main`, by its tid and not by its name, and `threads`
+-- says how many threads a row adds up: see `monitor_contention` (#511).
 SELECT
-    s.thread_name                     AS location,
+    CASE WHEN s.tid = p.pid THEN 'main' ELSE s.thread_name END
+                                      AS location,
+    COUNT(DISTINCT s.tid)             AS threads,
     COUNT(*)                          AS count,
     ROUND(SUM(s.dur) / 1e6, 2)        AS total_ms,
     ROUND(MAX(s.dur) / 1e6, 2)        AS max_ms,
@@ -88,7 +92,7 @@ FROM _tstate_win s
 CROSS JOIN _proc p
 LEFT JOIN evidence e ON e.state = s.state
 WHERE s.state IN ('R', 'R+')
-GROUP BY s.thread_name, s.state
+GROUP BY s.thread_name, s.tid = p.pid, s.state
 HAVING SUM(s.dur) >= {{min_runnable_ms}} * 1000000
 ORDER BY total_ms DESC
 LIMIT 20;
@@ -96,13 +100,13 @@ LIMIT 20;
 -- @intervals
 --
 -- The main thread's time ready and denied a CPU, in the states its rows name.
--- `_rows` carries `location` and `detail`, and `detail` opens with the state.
+-- `_rows` carries the row's `state`: `detail` opened with it until #515, and
+-- matched on that, the main thread's waits stopped counting in the window's
+-- account when it no longer did.
 
 SELECT t.ts, t.dur
 FROM _tstate_win t
 CROSS JOIN _proc p
-JOIN _rows r ON r.location = t.thread_name
-            AND (r.detail = 'state ' || t.state
-                 OR r.detail LIKE 'state ' || t.state || ' · %')
+JOIN _rows r ON r.location = 'main' AND r.state = t.state
 WHERE t.tid = p.pid
   AND t.state IN ('R', 'R+');

@@ -25,8 +25,11 @@
 -- time. The proper answer is `echolot calibrate`, which derives thresholds
 -- from known-healthy runs.
 
+-- `threads`: how many threads of that name the row adds up (#511). The
+-- main thread is one; a background row can be a whole pool.
 SELECT
     thread_name                       AS location,
+    COUNT(DISTINCT tid)               AS threads,
     COUNT(*)                          AS count,
     ROUND(SUM(dur) / 1e6, 2)          AS total_ms,
     ROUND(MAX(dur) / 1e6, 2)          AS max_ms,

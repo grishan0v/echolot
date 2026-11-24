@@ -41,9 +41,20 @@
 -- out: the outer one stays, because it names both frames — which `code`
 -- places in the checkout — and the owner by name. One that stands alone is
 -- a wait of its own, and counts.
+--
+-- A row is a thread name, and the main thread is called `main` (#511). The
+-- kernel cuts a name to fifteen characters, so every coroutine worker is
+-- `DefaultDispatch` and its row adds up the pool: on a large app's cold start
+-- 3.8 s of waiting in a 5.7 s window, read as time of the start until a
+-- reader counted the threads. `threads` counts them. The main thread carries
+-- the last fifteen characters of the process's name, which nobody reads as
+-- the main thread — and a worker that never named itself carries them too, so
+-- the main thread is told apart by its tid, the pid, and not by its name.
 WITH waits AS (
     SELECT
-        s.thread_name,
+        CASE WHEN s.is_main_thread = 1 THEN 'main'
+             ELSE s.thread_name END       AS thread_name,
+        s.tid,
         s.ts,
         s.dur,
         s.name,
@@ -81,6 +92,7 @@ told AS (
 )
 SELECT
     w.thread_name                     AS location,
+    COUNT(DISTINCT w.tid)             AS threads,
     COUNT(*)                          AS count,
     ROUND(SUM(w.dur) / 1e6, 2)        AS total_ms,
     ROUND(MAX(w.dur) / 1e6, 2)        AS max_ms,
@@ -119,4 +131,4 @@ SELECT s.ts, s.dur
 FROM _slice_win s
 WHERE s.is_main_thread = 1
   AND (s.name GLOB '{{name_glob}}' OR s.name GLOB '{{name_glob_alt}}')
-  AND s.thread_name IN (SELECT location FROM _rows);
+  AND 'main' IN (SELECT location FROM _rows);

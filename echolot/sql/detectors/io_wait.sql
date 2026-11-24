@@ -55,9 +55,11 @@
 -- stopped in, and in what order they come, changes from one repeat to the
 -- next, and a name built from them made one thread a different row in each
 -- repeat: merged, a row per variant, each seen once; compared, one row gone
--- and another new.
+-- and another new. `threads` says how many threads of that name the row
+-- adds up (#511).
 SELECT
     t.thread_name                                   AS location,
+    COUNT(DISTINCT t.tid)                           AS threads,
     COUNT(*)                                        AS count,
     ROUND(SUM(t.dur) / 1e6, 2)                      AS total_ms,
     ROUND(MAX(t.dur) / 1e6, 2)                      AS max_ms,

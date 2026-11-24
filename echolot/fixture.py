@@ -1391,6 +1391,66 @@ def blind_main(loop_ms: float = BLIND_LOOP_MS) -> bytes:
     return builder.serialize()
 
 
+# --- a pool under one name -------------------------------------------------------
+#
+# `pool()` only, a scene of its own (#511). The kernel keeps fifteen characters
+# of a thread's name, so three coroutine workers arrive as `DefaultDispatch`,
+# and every detector that groups by thread name adds them up. Each waits 20 ms
+# for a monitor, is preempted for 30 ms and runs 150 ms with no slice around
+# it: one row per detector, of three threads, 60, 90 and 450 ms — the last
+# longer than the 395 ms window it was measured in.
+#
+# The main thread waits 30 ms for the monitor and is preempted for 25, its
+# work all inside `AppStart`. Beside it a native worker that never named
+# itself, and so carries the process's name as the main thread does: it waits
+# 25 ms for a monitor and runs 60 ms with no slice. By name the two were one
+# row, and the worker's blind CPU was held to the main thread's bar and read
+# as the main thread's.
+POOL_TIDS = (4501, 4502, 4503)
+POOL_NATIVE = 4510
+POOL_THREADS = {TID_MAIN: APP_NAME[-15:], POOL_NATIVE: APP_NAME[-15:],
+                **{tid: "DefaultDispatch" for tid in POOL_TIDS}}
+POOL_WAIT = ("monitor contention with owner Thread-9 (4600) at void "
+             "com.example.Cache.load()(Cache.java:20) waiters=2 blocking from "
+             "void com.example.Cache.get()(Cache.java:9)")
+
+
+def pool() -> bytes:
+    """The scene above: `com.example.app`'s start from `AppStart` to the end
+    of `Screen.firstFrame`, 395 ms, with three workers of one name, the main
+    thread, and a worker that carries the main thread's name."""
+    slices = {
+        TID_MAIN: [("AppStart", 0, 400, [(POOL_WAIT, 100, 30, []),
+                                         ("Screen.firstFrame", 390, 5, [])])],
+        POOL_NATIVE: [("Lock contention on a monitor lock (owner tid: 4100)", 60, 25, [])],
+        **{tid: [(POOL_WAIT, 50, 20, [])] for tid in POOL_TIDS},
+    }
+    sched = [(0, TID_MAIN, 0, 100, S), (0, TID_MAIN, 130, 200, R),
+             (0, TID_MAIN, 225, 400, S),
+             (4, POOL_NATIVE, 20, 60, S), (4, POOL_NATIVE, 85, 105, S)]
+    for cpu, tid in enumerate(POOL_TIDS, start=1):
+        sched += [(cpu, tid, 10, 50, S), (cpu, tid, 70, 150, R), (cpu, tid, 180, 210, S)]
+
+    builder = TraceProtoBuilder()
+    config(builder, frames=False)
+    process_tree(builder, [(APP_PID, APP_NAME, POOL_THREADS)])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {}
+    for cpu, tid, start, end, end_state in sched:
+        idle = f"swapper/{cpu}"
+        by_cpu.setdefault(cpu, []).extend([
+            (ms(start), next(seq), "sched", idle, 0, R, POOL_THREADS[tid], tid),
+            (ms(end), next(seq), "sched", POOL_THREADS[tid], tid, end_state, idle, 0),
+        ])
+    cpu_of = {tid: cpu for cpu, tid, *_ in sched}
+    for tid, tree in slices.items():
+        for ts, order, kind, name in _flatten(tree, [], seq):
+            buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+            by_cpu[cpu_of[tid]].append((ts, order, "print", tid, buf))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # --- the recording's own account of itself ---------------------------------------
 #
 # The tracing service writes the config a recording ran with at the head of

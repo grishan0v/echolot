@@ -233,6 +233,17 @@ at fifteen characters by Linux rather than by echolot: every worker of that
 pool reaches the trace as `DefaultDispatch`, so write thread masks with the
 truncation in mind.
 
+So a row can be a whole pool, and `threads` says how many threads it adds
+up — here, and in `monitor_contention`, `runnable_starvation`, `binder_txn`
+and `io_wait`, which group by thread name too; the report says so under the
+table. Eight workers' 3.8 s of waiting in a 5.7 s cold start is their time
+together and not the start's: contention there was 2% of the start, which
+`report --window` shows. The main thread's row of `uninstrumented_cpu`,
+`runnable_starvation` and `monitor_contention` is `main`. It is told apart by
+its tid, the pid: its own name, the last fifteen characters of the
+process's, reads as nothing in particular, and a worker that never named
+itself carries it too.
+
 A row's `total_ms` is the thread's time on a CPU outside every top-level
 slice, and `covered_ms` its time inside one: the blind spot and the rest,
 which add up to the thread's CPU. Rows are ranked and compared on the blind

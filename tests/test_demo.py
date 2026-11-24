@@ -71,7 +71,7 @@ def test_the_planted_change_is_what_compare_puts_on_top(demo_report, demo_change
           moved == [("main_thread_block",
                      "Lock contention on a monitor lock (owner tid: #)",
                      compare.GREW, True),
-                    ("monitor_contention", demo.APP_NAME, compare.GREW, True)], moved)
+                    ("monitor_contention", "main", compare.GREW, True)], moved)
     check("and the two rounds are comparable", cmp["comparable"] is True, cmp["warnings"])
 
 

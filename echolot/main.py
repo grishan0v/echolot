@@ -2809,13 +2809,17 @@ def _stacks_behind(tp, d, params: dict, rows: list[dict], package: str,
 def _rows_table(tp, rows: list[dict]) -> None:
     """One detector's rows as `_rows`, for the queries after its first.
 
+    `location`, `detail` and `state`, the column `runnable_starvation` names
+    a row by besides its thread, NULL on a row without one.
+
     One statement at a time — `exec_script` splits on `;`, and a slice name is
     free to contain one.
     """
     tp.query("DROP TABLE IF EXISTS _rows")
     tp.query("CREATE TABLE _rows AS " + " UNION ALL ".join(
         f"SELECT {_sql_text(r.get('location'))} AS location, "
-        f"{_sql_text(r.get('detail'))} AS detail" for r in rows))
+        f"{_sql_text(r.get('detail'))} AS detail, "
+        f"{_sql_text(r.get('state'))} AS state" for r in rows))
 
 
 def _sql_text(value) -> str:
