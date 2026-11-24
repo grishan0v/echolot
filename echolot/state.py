@@ -23,6 +23,7 @@ from . import codex, hosts, layer, plugin, recorder, runner
 from . import hunt as hunt_mod
 from .anchors import UNPICKED
 from .config import Config, ConfigError
+from .config import PACKAGE, PROCESS
 
 
 def project_state(project: Path, config: str = "echolot.yml",
@@ -75,10 +76,10 @@ def project_state(project: Path, config: str = "echolot.yml",
             st["config"] = {
                 "path": cfg_path, "scenario": cfg.scenario_name,
                 "scenarios": cfg.scenarios,
-                "process": cfg.get("project.process") or cfg.get("project.package"),
+                "process": cfg.value(PROCESS) or cfg.value(PACKAGE),
                 "thresholds": "from the config" if calibrated else "built-in defaults",
                 "local": cfg.local_path is not None,
-                "runner": str(cfg.runner.get("mode", "launch")) if cfg.runner else None,
+                "runner": str(cfg.value(runner.MODE)) if cfg.runner else None,
                 "sha": cfg.sha,
                 "confirmed": cfg.confirmed(),
                 "temp_prefix": cfg.get("instrumentation.temp_prefix"),
@@ -94,7 +95,7 @@ def project_state(project: Path, config: str = "echolot.yml",
             # The runner of that scenario: read before the choice, it was
             # the first scenario's, or the top level's under a scenario that
             # has a runner of its own (#501).
-            st["config"]["runner"] = (str(cfg.runner.get("mode", "launch"))
+            st["config"]["runner"] = (str(cfg.value(runner.MODE))
                                       if cfg.runner else None)
             # The anchors of that scenario `scan` left as a question: the
             # step by hand is to record once and pick, not to record five

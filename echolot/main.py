@@ -61,6 +61,8 @@ from . import report as report_mod
 from . import stacks as stacks_mod
 from . import verdict as verdict_mod
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
+from .config import PACKAGE, PROCESS
+from .runner import DEVICE, ITERATIONS, MODE, PROJECT_ROOT
 from .pages import answer_page
 from .pages import compare_page
 from .pages import report_page
@@ -132,7 +134,7 @@ def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
     process = args.process
     source = "--process"
     if not process and cfg is not None:
-        named = cfg.get("project.process") or cfg.get("project.package")
+        named = cfg.value(PROCESS) or cfg.value(PACKAGE)
         if isinstance(named, str) and named:
             process = named
             source = "project.process"
@@ -674,7 +676,7 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     # Refused here, like a threshold of the wrong kind: before a trace is opened.
     budget_ms = cfg.scenario_budget_ms
     results = []
-    package = str(cfg.get("project.package") or "")
+    package = str(cfg.value(PACKAGE) or "")
     # The build's R8 mapping, read before the trace is opened: a path that is
     # not there is the config's mistake, and is said before any work is done.
     mapping = cfg.mapping
@@ -1333,7 +1335,7 @@ def _markers_against_code(rep: dict[str, Any], cfg: Config) -> None:
     if not unbuilt and not removed:
         return
     try:
-        mode = str(cfg.runner.get("mode", "launch"))
+        mode = str(cfg.value(MODE))
     except ConfigError:
         mode = "launch"
     install = [] if mode == "gradle" else _install_tasks(root, cfg)
@@ -1903,7 +1905,7 @@ def _own_composables(tp, cfg: Config) -> None:
         "SELECT DISTINCT name FROM _slice_win "
         "WHERE is_main_thread = 1 AND name GLOB '* ([A-Za-z]*.kt:[0-9]*)'")]
     root = cfg.sources if cfg.path or cfg.root_override else None
-    own = place_mod.own_composables(names, root, cfg.get("project.package"))
+    own = place_mod.own_composables(names, root, cfg.value(PACKAGE))
     tp.exec_script("DROP TABLE IF EXISTS _compose_own;")
     tp.exec_script("CREATE TABLE _compose_own (name TEXT PRIMARY KEY);")
     if own:
@@ -3916,7 +3918,7 @@ def cmd_hunt(args) -> int:
         print(f"\nNext, the loop, which needs an agent: {door}.", file=sys.stderr)
         named = scenario if cfg is not None and len(cfg.scenarios) > 1 else None
         try:
-            runner = str((cfg.runner or {}).get("mode", "launch")) if cfg is not None else None
+            runner = str(cfg.value(MODE)) if cfg is not None else None
         except ConfigError:
             runner = None  # a runner section that is no mapping: collect says so itself
         # A macrobenchmark names its own traces and their number, so the
@@ -4120,7 +4122,7 @@ def _anchor_lines(cfg: Config | None, st: dict) -> list[str]:
         elif not note.sure:
             try:
                 one = Config(cfg.raw, cfg.path, cfg.local_path).select(note.scenario)
-                mode = str(one.runner.get("mode", "launch")) if one.runner else None
+                mode = str(one.value(MODE)) if one.runner else None
             except ConfigError:
                 mode = None
             line = state.collect_line_for(note.scenario if many else None, mode,
@@ -4359,7 +4361,7 @@ def cmd_mark(args) -> int:
     if config is not None:
         try:
             cfg = Config.load(config, getattr(args, "local", None))
-            package = cfg.get("project.package") or cfg.get("project.process")
+            package = cfg.value(PACKAGE) or cfg.value(PROCESS)
             allowed = cfg.allowed
             prefix = str(cfg.get("instrumentation.temp_prefix") or prefix)
         except ConfigError as e:
@@ -4525,7 +4527,7 @@ def _record_modes(cfg: Config) -> set[str]:
     """`runner.mode` of every scenario the config names; empty when it cannot be read."""
     chosen = cfg.scenario_key
     try:
-        return {str(cfg.select(name).runner.get("mode", "launch")) for name in cfg.scenarios}
+        return {str(cfg.select(name).value(MODE)) for name in cfg.scenarios}
     except ConfigError:
         return set()
     finally:
@@ -4541,7 +4543,7 @@ def _install_tasks(root: Path, cfg: Config | None) -> list[str]:
     """
     from . import scan as scan_mod
 
-    package = str(cfg.get("project.package") or "") if cfg is not None else ""
+    package = str(cfg.value(PACKAGE) or "") if cfg is not None else ""
     try:
         return scan_mod.install_tasks(root, package)
     except OSError:
@@ -4553,7 +4555,7 @@ def _install_step(cfg: Config | None, root: Path) -> str:
     tasks = _install_tasks(root, cfg)
     if tasks:
         return f"build and install the app with {report_mod.install_command(tasks)}"
-    package = str(cfg.get("project.package") or "") if cfg is not None else ""
+    package = str(cfg.value(PACKAGE) or "") if cfg is not None else ""
     return "build and install " + (f"the variant that installs as {package}" if package
                                    else "the variant the config measures")
 
@@ -4632,7 +4634,7 @@ def cmd_collect(args) -> int:
         # keys apply, the investigation's included.
         _pick_scenario(cfg, args.scenario, inside=inside is not None)
         section = cfg.runner
-        package = cfg.get("project.package") or cfg.process
+        package = cfg.value(PACKAGE) or cfg.process
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         recorder.failed(f"config error: {e}")
@@ -4643,19 +4645,19 @@ def cmd_collect(args) -> int:
         return 2
     n = inside["n"] if inside is not None else None
 
-    mode = str(section.get("mode", "launch"))
+    mode = str(MODE.read(section))
     iterations = (args.iterations if args.iterations is not None
-                  else section.get("iterations", 5))
+                  else ITERATIONS.read(section))
     out_dir = _out_dir(args.out, cfg)
     project = _project_root(cfg)
     # project_root follows the config, as -o and the investigation already
     # do: a relative path is taken from the directory echolot.yml is in. It
     # used to be taken from wherever `echolot` was started, so the same
     # config ran gradle in two different places depending on the shell.
-    root = Path(str(section.get("project_root") or ".")).expanduser()
+    root = Path(str(PROJECT_ROOT.read(section) or ".")).expanduser()
     section = {**section, "project_root": str(root if root.is_absolute()
                                               else project / root)}
-    device = args.device or section.get("device")
+    device = args.device or DEVICE.read(section)
     # Whose the set this run is about to push aside is: read before the
     # progress file below is written over.
     whose = _whose_set(state.collect_state(project), cfg.scenario_name, n)

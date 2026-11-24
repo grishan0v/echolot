@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -105,18 +107,143 @@ _SECTIONS = ("project", "scenario", "scenarios", "runner", "detectors",
              "instrumentation", "domains", "loop", "threads", "toolchain", "tp_binary")
 
 
-# The keys of `project:`, read by the accessors below (`process`, `sources`,
-# `mapping`) and `package` by every command that looks for the app.
-PROJECT_KEYS = ("package", "process", "source_root", "root", "mapping")
-# The keys of `toolchain:`: `Config.tp_binary`.
-TOOLCHAIN_KEYS = ("tp_binary",)
-# The keys of `loop:`: `max_rounds` is read by `reflect` and the hunt,
-# `on_exhausted` by the agent, as its skill says.
-LOOP_KEYS = ("max_rounds", "on_exhausted")
-# The keys of `instrumentation:`. `allowed` is read by `mark`, `reflect` and
-# the page, through `Config.allowed`; `temp_prefix` by `mark`, `hunt` and
-# `reflect`; `cleanup` by the agent, as its skill says.
-INSTRUMENTATION_KEYS = ("allowed", "temp_prefix", "cleanup")
+# --- the keys of each section -------------------------------------------------
+#
+# A key is declared once, by `key()`, and the declaration is both what lets a
+# config set it and how the code reads it (#828). The lists of allowed keys
+# used to be kept by hand beside the code that read them, and the two drifted:
+# `power.py` read `runner.min_battery`, no list named it, and 0.18.0 refused
+# every config that set it, the local.yml `collect` itself advised (#834).
+#
+# So `Config.get` refuses to read a key of these sections nobody declared,
+# `Config.load` refuses a config that sets one, and both answer from the same
+# table. A module that reads keys of its own declares them at its top and
+# reads them through `Key.read` or `Config.value`.
+
+
+class Kind:
+    """What a key's value is, in the words a refusal or the reference uses."""
+
+    def __init__(self, said: str, accepts: Callable[[Any], bool]):
+        self.said = said
+        self.accepts = accepts
+
+    def __repr__(self) -> str:
+        return f"Kind({self.said!r})"
+
+
+def finite(value: Any) -> bool:
+    """A number, and one arithmetic can use: not a bool, not `.nan`, not
+    `.inf`. YAML reads `.nan` and `.inf` as floats, and a threshold of either
+    went into a detector's SQL as the bare word `nan` (#852)."""
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and math.isfinite(value))
+
+
+TEXT = Kind("text", lambda v: isinstance(v, str))
+NUMBER = Kind("a number", finite)
+WHOLE = Kind("a whole number", lambda v: not isinstance(v, bool) and isinstance(v, int))
+FLAG = Kind("true or false", lambda v: isinstance(v, bool))
+TEXTS = Kind("text, or a list of text",
+             lambda v: isinstance(v, str)
+             or isinstance(v, list) and all(isinstance(x, str) for x in v))
+# A key whose reader takes more than one shape, and says which in its own
+# refusal: `runner.sampling` is `true`, `false` or a rate; `runner.cooldown`
+# is `false` or a block.
+SHAPES = Kind("one of the shapes its reader names", lambda v: True)
+
+
+@dataclass(frozen=True)
+class Key:
+    """One key of one section: what it holds, what it is when the config does
+    not set it, and what it means."""
+
+    section: str
+    name: str
+    kind: Kind
+    default: Any
+    meaning: str
+
+    @property
+    def dotted(self) -> str:
+        return f"{self.section}.{self.name}"
+
+    def read(self, block: dict[str, Any] | None) -> Any:
+        """The value in `block`, the section already read, or the default
+        when the key is not there. `null` written out is read as `null`,
+        as it always was."""
+        return (block or {}).get(self.name, self.default)
+
+
+_TABLE: dict[tuple[str, str], Key] = {}
+
+# The sections whose keys are declared, and so checked on load and on read.
+# `scenario`, `scenarios` and `detectors` check their own shape where they
+# are read; `domains` and `threads` hold names of the project's own.
+DECLARED_SECTIONS = ("project", "runner", "toolchain", "loop", "instrumentation")
+
+# The modules that declare keys of their own, imported before the table is
+# read so that every declaration has run. A test fails on a module that
+# calls `key()` and is not here.
+_DECLARING = ("runner", "stabilize", "composenames", "power")
+
+
+def key(section: str, name: str, kind: Kind, default: Any, meaning: str) -> Key:
+    """Declare a key, once. Its section is one of DECLARED_SECTIONS."""
+    if section not in DECLARED_SECTIONS:
+        raise ValueError(f"{section} is not a section whose keys are declared")
+    if (section, name) in _TABLE:
+        raise ValueError(f"{section}.{name} is declared twice")
+    declared_key = Key(section, name, kind, default, meaning)
+    _TABLE[(section, name)] = declared_key
+    return declared_key
+
+
+def declared(section: str | None = None) -> list[Key]:
+    """Every declared key, or a section's, in the order they were declared."""
+    import importlib
+    for name in _DECLARING:
+        importlib.import_module(f"{__package__}.{name}")
+    return [k for k in _TABLE.values() if section is None or k.section == section]
+
+
+def keys_of(section: str) -> tuple[str, ...]:
+    """The names a section takes."""
+    return tuple(k.name for k in declared(section))
+
+
+def declaration(dotted: str) -> Key | None:
+    """The declaration of `section.key`, or None when there is none."""
+    section, _, name = dotted.partition(".")
+    declared()
+    return _TABLE.get((section, name))
+
+
+PACKAGE = key("project", "package", TEXT, None,
+              "The app's package as installed on the device. Every command that "
+              "looks for the app reads it.")
+PROCESS = key("project", "process", TEXT, None,
+              "The process to measure, as a glob, when it is not the package.")
+SOURCE_ROOT = key("project", "source_root", TEXT, None,
+                  "Read by no command; `root` is the checkout.")
+ROOT = key("project", "root", TEXT, None,
+           "The checkout rows are placed in, from the config's directory.")
+MAPPING = key("project", "mapping", TEXT, None,
+              "The build's R8 or ProGuard mapping.txt, from the config's directory.")
+TP_BINARY = key("toolchain", "tp_binary", TEXT, None,
+                "Your own trace_processor_shell. Usually in local.yml.")
+MAX_ROUNDS = key("loop", "max_rounds", WHOLE, 3,
+                 "How many rounds an investigation takes before it stops; read by "
+                 "`reflect`, the hunt and the page.")
+ON_EXHAUSTED = key("loop", "on_exhausted", TEXT, None,
+                   "What the agent does when the rounds run out, as its skill says.")
+ALLOWED = key("instrumentation", "allowed", TEXTS, None,
+              "The folders `mark` may put markers in, as globs. Empty allows "
+              "every place.")
+TEMP_PREFIX = key("instrumentation", "temp_prefix", TEXT, "AGENTTMP_",
+                  "What every temporary marker's name starts with.")
+CLEANUP = key("instrumentation", "cleanup", TEXT, None,
+              "When the agent takes its markers out, as its skill says.")
 
 
 def _known_sections(raw: dict[str, Any], p: Path) -> None:
@@ -153,25 +280,18 @@ def _section_keys(raw: dict[str, Any], p: Path, section: str,
             f"It takes {', '.join(keys)}")
 
 
-def runner_keys() -> tuple[str, ...]:
-    """The keys of `runner:`, kept beside the code that reads each one."""
-    from . import composenames, power, runner, stabilize
-    return runner.KEYS + stabilize.KEYS + composenames.KEYS + power.KEYS
-
-
 def _keys_of_sections(raw: dict[str, Any], p: Path) -> None:
-    """Refuse a key a section does not have, in every section that has a
-    list of its keys (#737). `detectors:` and the scenarios check their own,
-    and `runner:` is a mapping in a scenario under `scenarios:` too."""
-    for section, keys in (("project", PROJECT_KEYS), ("runner", runner_keys()),
-                          ("toolchain", TOOLCHAIN_KEYS), ("loop", LOOP_KEYS),
-                          ("instrumentation", INSTRUMENTATION_KEYS)):
-        _section_keys(raw, p, section, keys)
+    """Refuse a key a section does not declare, in every section whose keys
+    are declared (#737, #828). `detectors:` and the scenarios check their
+    own, and `runner:` is a mapping in a scenario under `scenarios:` too."""
+    for section in DECLARED_SECTIONS:
+        _section_keys(raw, p, section, keys_of(section))
     many = raw.get("scenarios")
     if isinstance(many, dict):
         for name, block in many.items():
             if isinstance(block, dict) and isinstance(block.get("runner"), dict):
-                _section_keys(block, p, "runner", runner_keys(), where=f"scenarios.{name}.runner")
+                _section_keys(block, p, "runner", keys_of("runner"),
+                              where=f"scenarios.{name}.runner")
 
 
 def _named_by_text(raw: dict[str, Any], p: Path) -> None:
@@ -408,7 +528,7 @@ class Config:
         resolved there was no file. A bare name is a command on PATH unless
         the config's directory holds a file of that name.
         """
-        value = self.get("toolchain.tp_binary") or self.get("tp_binary")
+        value = self.value(TP_BINARY) or self.get("tp_binary")
         if not value:
             return None
         text = str(value)
@@ -421,12 +541,49 @@ class Config:
         return str(beside)
 
     def get(self, dotted: str, default: Any = None) -> Any:
+        """The raw value at `dotted`, or `default`.
+
+        A key of a section whose keys are declared is read only when it is
+        declared: a key nobody declared is one `Config.load` refuses, so
+        reading it is a mistake in the code, said here rather than found
+        as a config nobody can write (#828). Setup's own notes, the keys
+        that start with `_`, are read as the load lets them through.
+        """
+        section, _, rest = dotted.partition(".")
+        if (section in DECLARED_SECTIONS and rest and not rest.startswith("_")
+                and declaration(dotted) is None):
+            raise KeyError(f"{dotted} is read but not declared: declare it with "
+                           f"config.key(), which also lets a config set it")
         node: Any = self.raw
         for part in dotted.split("."):
             if not isinstance(node, dict) or part not in node:
                 return default
             node = node[part]
         return node
+
+    def value(self, declared_key: Key) -> Any:
+        """A declared key's value, or its default. A runner key is read from
+        the runner section with the selected scenario's laid over it."""
+        if declared_key.section == "runner":
+            return declared_key.read(self.runner)
+        block = self.get(declared_key.section)
+        return declared_key.read(block if isinstance(block, dict) else None)
+
+    def written(self, declared_key: Key) -> Any:
+        """What the config itself writes for a declared key, None when it
+        writes nothing: for a record of the config as it is, where the
+        default would claim something nobody wrote."""
+        if declared_key.section == "runner":
+            return self.runner.get(declared_key.name)
+        block = self.get(declared_key.section)
+        return block.get(declared_key.name) if isinstance(block, dict) else None
+
+    @property
+    def temp_prefix(self) -> str:
+        """`instrumentation.temp_prefix`: what every temporary marker's name
+        starts with. Read here and nowhere else, with its one default."""
+        value = self.value(TEMP_PREFIX)
+        return str(value) if value else TEMP_PREFIX.default
 
     def confirmed(self) -> dict[str, Any]:
         """Every value a person confirmed, by its dotted key.
@@ -456,7 +613,7 @@ class Config:
 
     @property
     def process(self) -> str:
-        proc = self.get("project.process") or self.get("project.package")
+        proc = self.value(PROCESS) or self.value(PACKAGE)
         if not proc:
             raise ConfigError("neither project.process nor project.package set")
         return str(proc)
@@ -475,7 +632,7 @@ class Config:
         if self.root_override is not None:
             return self.root_override.resolve()
         here = Path(self.path).resolve().parent if self.path else Path.cwd()
-        value = self.get("project.root")
+        value = self.value(ROOT)
         if value is None or value == "":
             return here
         if not isinstance(value, str):
@@ -492,7 +649,7 @@ class Config:
         `app/src/main` refused every place, and the lone `*` of `feature/*`
         allowed every one (#735). Anything else is refused by name.
         """
-        value = self.get("instrumentation.allowed")
+        value = self.value(ALLOWED)
         if value is None:
             return []
         if isinstance(value, str):
@@ -533,14 +690,14 @@ class Config:
         What the value cannot mean is the config's mistake and is refused: a
         value that is no path, and a mapping without the package it is for.
         """
-        value = self.get("project.mapping")
+        value = self.value(MAPPING)
         if value is None or value == "":
             return None
         if not isinstance(value, str):
             raise ConfigError(
                 f"project.mapping must be a path to the build's mapping.txt — "
                 f"got {value!r}")
-        if not self.get("project.package"):
+        if not self.value(PACKAGE):
             raise ConfigError(
                 "project.mapping needs project.package: the mapping names back "
                 "the frames of that package, as it is installed on the device")

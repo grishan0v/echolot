@@ -36,6 +36,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .config import FLAG, SHAPES, WHOLE, key
 from .runner import RunnerError
 
 # What `cooldown.sensor` may name. `battery` is read from `dumpsys battery`,
@@ -51,6 +52,18 @@ POLL_S = 10
 _KEYS = ("max_c", "sensor", "timeout_s")
 
 
+# The keys of `runner:` read here: `cooldown_of` and `knobs_of` below.
+COOLDOWN = key("runner", "cooldown", SHAPES, None,
+               "Wait before each repeat for a sensor to cool: false, or a block "
+               "with max_c, sensor and timeout_s.")
+FIXED_PERFORMANCE = key("runner", "fixed_performance", FLAG, False,
+                        "Hold the device in fixed performance mode for the set.")
+AIRPLANE_MODE = key("runner", "airplane_mode", FLAG, False,
+                    "Hold the device in airplane mode for the set.")
+BRIGHTNESS = key("runner", "brightness", WHOLE, None,
+                 "Hold the screen at this level, 0 to 255, for the set.")
+
+
 @dataclass(frozen=True)
 class Cooldown:
     max_c: float
@@ -60,7 +73,7 @@ class Cooldown:
 
 def cooldown_of(section: dict[str, Any]) -> Cooldown | None:
     """`runner.cooldown`, or None when it is off: absent, or `false`."""
-    value = section.get("cooldown")
+    value = COOLDOWN.read(section)
     if value is None or value is False:
         return None
     if not isinstance(value, dict):
@@ -91,22 +104,18 @@ def cooldown_of(section: dict[str, Any]) -> Cooldown | None:
     return Cooldown(float(max_c), sensor, int(timeout))
 
 
-# The keys of `runner:` read here: `cooldown_of` and `knobs_of` below.
-KEYS = ("cooldown", "fixed_performance", "airplane_mode", "brightness")
-
-
 def knobs_of(section: dict[str, Any]) -> dict[str, Any]:
     """The state to hold the device in, from the runner section: only what
     is set, each refused in a sentence when it cannot be meant."""
     knobs: dict[str, Any] = {}
-    for key in ("fixed_performance", "airplane_mode"):
-        value = section.get(key)
+    for switch in (FIXED_PERFORMANCE, AIRPLANE_MODE):
+        value = switch.read(section)
         if value is None or value is False:
             continue
         if value is not True:
-            raise RunnerError(f"runner.{key}: {value!r} is not true or false")
-        knobs[key] = True
-    level = section.get("brightness")
+            raise RunnerError(f"{switch.dotted}: {value!r} is not true or false")
+        knobs[switch.name] = True
+    level = BRIGHTNESS.read(section)
     if level is not None:
         if isinstance(level, bool) or not isinstance(level, int) or not 0 <= level <= 255:
             raise RunnerError(

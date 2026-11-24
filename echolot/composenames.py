@@ -39,6 +39,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .config import FLAG, key
 from .runner import RunnerError, installed
 
 RECEIVER = "androidx.tracing.perfetto.TracingReceiver"
@@ -57,12 +58,14 @@ _ANSWER = re.compile(r'^Broadcast completed: result=(?P<code>-?\d+)'
 
 
 # The key of `runner:` read here, by `wanted`.
-KEYS = ("compose_names",)
+COMPOSE_NAMES = key("runner", "compose_names", FLAG, False,
+                    "Record the names of composables, through the app's own "
+                    "tracing receiver.")
 
 
 def wanted(section: dict[str, Any]) -> bool:
     """`runner.compose_names`, refused in a sentence when it cannot be meant."""
-    value = section.get("compose_names")
+    value = COMPOSE_NAMES.read(section)
     if value is None or value is False:
         return False
     if value is not True:

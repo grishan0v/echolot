@@ -19,7 +19,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from ..config import Config
+from ..config import MAX_ROUNDS, PROCESS, SOURCE_ROOT, Config
 from ..mark import under_allowed
 from . import shell
 from .model import MAIN, Call, Session, SubAgent, strip_heredocs, ts_to_epoch
@@ -951,7 +951,7 @@ def hunts(session: Session, cfg: Config | None) -> list[dict[str, Any]]:
             "prompt_mentions": (_prompt_mentions(s.prompt)
                                 if session.shows("briefs") else None),
             "rounds": rounds,
-            "max_rounds": (cfg.get("loop.max_rounds") if cfg else None),
+            "max_rounds": (cfg.written(MAX_ROUNDS) if cfg else None),
             "analyze_calls": len(analyzes),
             "re_records": len(rerecords),
             "tools": tools,
@@ -1540,9 +1540,9 @@ def config_snapshot(cfg: Config | None) -> dict[str, Any]:
         # A config with several: their names, and the thresholds each one
         # sets itself over the top-level ones.
         "scenarios": cfg.scenarios if cfg.get("scenarios") is not None else None,
-        "process": cfg.get("project.process"),
-        "source_root": cfg.get("project.source_root"),
-        "max_rounds": cfg.get("loop.max_rounds"),
+        "process": cfg.written(PROCESS),
+        "source_root": cfg.written(SOURCE_ROOT),
+        "max_rounds": cfg.written(MAX_ROUNDS),
         "instrumentation_allowed": cfg.allowed or None,
         "temp_prefix": cfg.get("instrumentation.temp_prefix"),
         "detector_overrides": cfg.shared_overrides,
