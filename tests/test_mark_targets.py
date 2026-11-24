@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import anr, mark, place  # noqa: E402
+from echolot import anr, domains, mark, place  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_anr import run  # noqa: E402
 from tests.test_anr_frames import INLINED, filler_checkout  # noqa: E402
@@ -83,6 +83,65 @@ def test_on_create_is_the_class_s_own(tmp_path: Path) -> None:
     found = {p.kind: p.line for p in mark.plan(tmp_path).proposals}
     check("in one file, each class gets its own",
           found.get("app_oncreate") == 2 and found.get("activity_oncreate") == 8, found)
+
+
+ROOM_IN_A_TEST = """\
+class DatabaseTest {
+    @Before
+    fun open() {
+        db = Room.databaseBuilder(context, Db::class.java, "test").build()
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("source_set", [
+    "androidTest", "test", "testDebug", "androidTestFreeDebug", "testFixtures",
+    "androidUnitTest", "commonTest"])
+def test_a_test_source_set_is_not_proposed(tmp_path: Path, source_set: str) -> None:
+    """#814: an `androidTest` file that builds the database is not where the
+    app opens it, and a line in it cannot be marked."""
+    _project(tmp_path, "class App : Application()\n")
+    write(tmp_path, f"core/database/src/{source_set}/kotlin/DatabaseTest.kt", ROOM_IN_A_TEST)
+    write(tmp_path, "core/database/src/main/kotlin/DatabaseModule.kt",
+          'fun db(c: Context) = Room.databaseBuilder(c, Db::class.java, "db").build()\n')
+    pl = mark.plan(tmp_path, allowed=["core/*/src/main"])
+    rooms = [p.file for p in pl.proposals if p.kind == "room_open"]
+    check("only the app's own Room.databaseBuilder",
+          rooms == ["core/database/src/main/kotlin/DatabaseModule.kt"], rooms)
+    check("nothing proposed outside allowed",
+          all(p.reason != mark._OUTSIDE for p in pl.proposals),
+          [(p.file, p.reason) for p in pl.proposals])
+
+
+@pytest.mark.parametrize("rel, test", [
+    ("app/src/main/kotlin/A.kt", False),
+    ("app/src/debug/kotlin/A.kt", False),
+    ("app/src/freeRelease/kotlin/A.kt", False),
+    ("app/src/test/kotlin/A.kt", True),
+    ("app/src/testDebug/kotlin/A.kt", True),
+    ("app/src/androidTestFree/kotlin/A.kt", True),
+    ("app/src/androidInstrumentedTest/kotlin/A.kt", True),
+    ("src/test/checkout/app/src/main/kotlin/A.kt", True),
+])
+def test_what_is_a_test_set(tmp_path: Path, rel: str, test: bool) -> None:
+    check(rel, domains.in_test_set(tmp_path / rel, tmp_path) is test)
+    if rel.startswith("src/test/checkout/"):
+        inner = tmp_path / "src/test/checkout"
+        check("below the root only", not domains.in_test_set(tmp_path / rel, inner))
+
+
+def test_a_checkout_under_a_test_directory_is_still_read(tmp_path: Path) -> None:
+    """The source set is read below the root: a checkout parked at
+    `…/src/test/` is not all tests."""
+    root = tmp_path / "src/test/checkout"
+    _project(root, "class App : Application() {\n"
+                   "    override fun onCreate() {\n"
+                   "        super.onCreate()\n"
+                   "    }\n"
+                   "}\n")
+    kinds = [p.kind for p in mark.plan(root).proposals]
+    check("App.onCreate found", "app_oncreate" in kinds, kinds)
 
 
 def test_a_construct_in_a_comment_is_not_the_construct(tmp_path: Path) -> None:
