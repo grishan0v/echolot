@@ -620,7 +620,8 @@ def comparison(report_dir: Path) -> dict[str, Any] | None:
         found = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found):
+    if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found) \
+            or compare_page.misshapen(found):
         return None
     if made + 1 < _newest([report_dir / "report.json"]):
         return None
@@ -652,6 +653,21 @@ def compare_reads(report_dir: Path, since: float) -> tuple[str, str] | None:
             return said + ".", "reading"
     said = compare_says(report_dir, since)
     return (said, "table") if said else None
+
+
+def comparison_fault(report_dir: Path) -> str | None:
+    """What is wrong with the comparison there, in words, when it is one
+    `compare` wrote with its plain reading and a part of that reading does
+    not hold what `compare` writes (`compare_page.misshapen`, #733). None for
+    any other file, or for none: those are no comparison to draw, and the
+    page says there is none yet."""
+    try:
+        found = json.loads((report_dir / "comparison.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found):
+        return None
+    return compare_page.misshapen(found)
 
 
 def _tally(report_path: Path) -> list[tuple[str, int, str]] | None:
