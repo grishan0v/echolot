@@ -950,7 +950,8 @@ and its `low` and `high` over the runs, `runs` — where the window runs to the
 end of the recording), `window` (each side's median, least and
 most launch, and the runs), `notes` (`id`: `budget`, `few_runs`, `unlike`,
 `names`;
-`attention`, a `title` and a `text`) and `checks`, one item per detector:
+`attention`, a `title` and a `text`; `unlike` also lists the ids of the
+warnings it says, under `warnings`) and `checks`, one item per detector:
 `movement`, `title`, `why`, the sentence `text`, how many `findings` went, came
 and stayed, and under `before` and `after` what that report said of the check:
 its `attention`, its findings added up for a typical launch (`ms`, `null` for
@@ -987,6 +988,10 @@ CI does hold one gate, and it measures this repository rather than a device:
 `pytest` fails when statement coverage drops below the threshold in
 `pyproject.toml`. That number comes out the same on every runner, which is
 exactly what a trace threshold does not.
+
+The action fails no job over what moved either. What it gives a workflow
+that wants a gate of its own is outputs that tell a change from noise, read
+from `comparison.json`: see [A change, or noise](#a-change-or-noise).
 
 ## In CI
 
@@ -1071,13 +1076,74 @@ Its outputs are:
 - `comparison`: `comparison.json`;
 - `moved`: how many rows grew or shrank past the noise floor;
 - `appeared` and `vanished`: how many rows appeared or vanished, counted
-  apart from `moved` — a new block of the main thread is one that appeared.
+  apart from `moved` — a new block of the main thread is one that appeared;
+- `held`: how many of the `moved` rows also hold, the ones
+  [the Holds column](#the-holds-column) says yes to;
+- `held-rows`: the first five of them, in the comparison's order, as a JSON
+  array of `detector`, `location`, `detail` where the detector has one,
+  `delta_ms`, the interval's `low_ms` and `high_ms`, and `on_main`;
+- `verdict`: the verdict of [the plain reading](#a-plain-reading), by the
+  scenario's window: `better`, `worse`, `no_change` or `not_compared`; and
+  `headline`, the same in words, such as `Slower by 1.2 s`;
+- `window-delta-ms`: how far the window moved, after minus before, in ms;
+- `comparable`: `false` when the two reports are not of one thing — two
+  processes, two windows, or an anchor no run found;
+- `warnings`: the ids of the comparison's warnings, comma-separated, such as
+  `drift,runs` (see [When two reports may not be compared](#when-two-reports-may-not-be-compared));
+- `unlike`: those of them that say the two sides were not recorded or read
+  alike, the ones the plain reading lists under "Not recorded alike": the
+  phone's speed or heat, the config, the thresholds, the recording, the
+  compilation, the version of echolot.
 
-All but the first are empty when there was nothing to compare against.
+All but the first are empty when there was nothing to compare against. They
+are read from `comparison.json`, never from the table's text.
 `.github/workflows/action.yml` runs the action this way on the demo app's
 traces for every pull request here, on the demo's planted change, where
-exactly the lock's two rows have to move, and on one of two scenarios in one
-config, where the report has to be that scenario's.
+exactly the lock's two rows have to move and hold while the launch, 2%
+longer, reads as no clear change, and on one of two scenarios in one config,
+where the report has to be that scenario's.
+
+### A change, or noise
+
+`moved` counts every row past the floor, and the floor is no test: one build
+compared with itself, two sets of 15 cold starts of a large app split 7
+against 8 in several ways, moved 48 to 73 rows, with as many appeared and
+vanished. `held` on the same pairs was 1 to 12, the most on splits by time,
+where a set's [drift](#runs-that-drift) lands in full. The verdict is the
+coarsest of the three and the steadiest: on 1,479 pairs of unchanged sets it
+moved in none (see "When a move is called" under
+[A plain reading](#a-plain-reading)).
+
+The action still fails no job over what moved, for the reasons
+[above](#there-is-no-performance-gate-on-purpose). A workflow that wants to
+stop on a slower build has the outputs to do it with, in a step of its own:
+
+```yaml
+  - uses: grishan0v/echolot@v0.18.0
+    id: echolot
+    with:
+      traces: app/benchmark/build/outputs/**/StartupBenchmark_startup_iter*.perfetto-trace
+
+  # This project's own rule: a slower launch between two sides recorded
+  # alike, with no drift in either, stops the build.
+  - name: Stop on a slower launch
+    if: >-
+      steps.echolot.outputs.verdict == 'worse'
+      && steps.echolot.outputs.unlike == ''
+      && !contains(steps.echolot.outputs.warnings, 'drift')
+    env:
+      HEADLINE: ${{ steps.echolot.outputs.headline }}
+      HELD_ROWS: ${{ steps.echolot.outputs.held-rows }}
+    run: |
+      echo "::error title=echolot::$HEADLINE"
+      echo "$HELD_ROWS" | jq -r '.[] | "\(.delta_ms) ms (\(.low_ms) to \(.high_ms))  \(.detector)  \(.location)"'
+      exit 1
+```
+
+`worse` already means the two reports are comparable: a pair that is not
+gets `not_compared`. A verdict of `no_change` with rows that hold, as on the
+demo, is a change inside a launch that did not get a fifth longer; whether
+that should stop a build is the project's call, and `held` is there for it.
 
 ### Several scenarios
 

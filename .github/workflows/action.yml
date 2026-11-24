@@ -8,7 +8,8 @@ name: action
 #   its own. A pull request is compared with main, and a push to main with the
 #   run before it;
 # - on the demo's planted change, against the report the first call wrote,
-#   where exactly the lock's two rows have to move;
+#   where exactly the lock's two rows have to move and hold, and the launch,
+#   2% longer, has to read as no clear change;
 # - with the `scenario` input, on the second of two scenarios in one config,
 #   where the report has to be that scenario's: its name, and the window its
 #   anchors cut. It keeps its own report, and compares with the one the last
@@ -102,6 +103,13 @@ jobs:
           REPORT: ${{ steps.base.outputs.report }}
           COMPARISON: ${{ steps.changed.outputs.comparison }}
           MOVED: ${{ steps.changed.outputs.moved }}
+          HELD: ${{ steps.changed.outputs.held }}
+          HELD_ROWS: ${{ steps.changed.outputs.held-rows }}
+          VERDICT: ${{ steps.changed.outputs.verdict }}
+          HEADLINE: ${{ steps.changed.outputs.headline }}
+          WINDOW_DELTA_MS: ${{ steps.changed.outputs.window-delta-ms }}
+          COMPARABLE: ${{ steps.changed.outputs.comparable }}
+          UNLIKE: ${{ steps.changed.outputs.unlike }}
           SCENARIO_REPORT: ${{ steps.scenario.outputs.report }}
         run: |
           test -s "$REPORT" || { echo "::error::the first call left no report.json"; exit 1; }
@@ -111,6 +119,26 @@ jobs:
             exit 1
           fi
           echo "the change moved the lock's two rows, and nothing else"
+          # What a workflow that gates reads: the two rows hold, and the
+          # launch, 2% longer, is no clear change, between two sides alike.
+          python - <<'EOF'
+          import json, os
+          rows = {(r["detector"], r["on_main"]) for r in json.loads(os.environ["HELD_ROWS"])}
+          said = {k: os.environ[k] for k in ("HELD", "VERDICT", "HEADLINE", "COMPARABLE", "UNLIKE")}
+          want = {"HELD": "2", "VERDICT": "no_change", "HEADLINE": "No clear change",
+                  "COMPARABLE": "true", "UNLIKE": ""}
+          if said != want or rows != {("main_thread_block", True), ("monitor_contention", True)}:
+              print(f"::error::the planted change holds in the lock's two rows on the main thread "
+                    f"and does not move the launch a fifth: want {want}, the action said {said}, "
+                    f"held rows {sorted(rows)}")
+              raise SystemExit(1)
+          if not float(os.environ["WINDOW_DELTA_MS"]) > 0:
+              print(f"::error::the change makes the launch longer, and window-delta-ms is "
+                    f"{os.environ['WINDOW_DELTA_MS']!r}")
+              raise SystemExit(1)
+          print(f"held {said['HELD']}, verdict {said['VERDICT']}, "
+                f"window {os.environ['WINDOW_DELTA_MS']} ms, comparable")
+          EOF
           python - "$SCENARIO_REPORT" <<'EOF'
           import json, sys
           report = json.load(open(sys.argv[1], encoding="utf-8"))
