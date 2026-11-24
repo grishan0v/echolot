@@ -127,6 +127,51 @@ def test_a_file_git_tracks_is_left_as_it_is(tmp_path: Path, capsys) -> None:
           not {"/AGENTS.md", "/.claude/settings.json", "/.gitignore"} & set(_block(project)))
 
 
+@pytest.mark.parametrize("edited", [False, True], ids=["as-installed", "edited-since"])
+def test_private_after_a_shared_install_puts_the_teams_files_back(
+        tmp_path: Path, capsys, edited: bool) -> None:
+    """#929: a shared install's permission and .gitignore lines stayed, and
+    `--private` said git saw none of it."""
+    team = {".gitignore": "build/\n",
+            ".claude/settings.json": '{"hooks": {"Stop": []}}\n'}
+    project = _repo(tmp_path / "app", team)
+    _init(project, capsys, "--for", "claude")
+    check("the shared install changed both",
+          {" M .gitignore", " M .claude/settings.json"} <= set(_status(project)), _status(project))
+    if edited:
+        settings = project / ".claude/settings.json"
+        settings.write_text(settings.read_text(encoding="utf-8").replace(
+            PERMISSION, f'{PERMISSION}", "Bash(ls:*)'), encoding="utf-8")
+
+    out = _init(project, capsys, "--private")
+    check(".gitignore is the team's again", (project / ".gitignore").read_text(
+        encoding="utf-8") == team[".gitignore"] and "↓ .gitignore" in out, out)
+    if not edited:
+        check("and so is settings.json", (project / ".claude/settings.json").read_text(
+            encoding="utf-8") == team[".claude/settings.json"]
+            and "↓ .claude/settings.json" in out, out)
+        check("git shows nothing, as said", _status(project) == []
+              and "git sees none of it" in out, (_status(project), out))
+        return
+    check("settings.json with an edit beside echolot's is left, and named",
+          _status(project) == [" M .claude/settings.json"]
+          and "! git still shows .claude/settings.json changed here" in out
+          and "git sees none of it" not in out, (_status(project), out))
+
+
+def test_private_after_a_shared_install_keeps_what_it_created_from_git(
+        tmp_path: Path, capsys) -> None:
+    """#929: a settings.json and a .gitignore the shared install created hold
+    nothing of the team's."""
+    project = _repo(tmp_path / "app")
+    _init(project, capsys, "--for", "claude")
+    out = _init(project, capsys, "--private")
+    check("git shows nothing, as said", _status(project) == []
+          and "git sees none of it" in out, (_status(project), out))
+    check("both kept from git", {"/.gitignore", "/.claude/settings.json"} <= set(_block(project)),
+          _block(project))
+
+
 def test_a_project_in_a_subdirectory_is_anchored_where_it_is(tmp_path: Path, capsys) -> None:
     top = _repo(tmp_path / "monorepo", {"android/build.gradle": "\n"})
     _init(top / "android", capsys, "--private", "--for", "claude")

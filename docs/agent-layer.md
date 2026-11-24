@@ -204,6 +204,12 @@ which installs the same files and keeps all of them out of git.
   - A tracked pointer file, such as an `AGENTS.md` with the team's rules,
     is left alone. `init` prints the section to paste, as it does for a
     file that is the project's own.
+  - After a shared install, `--private` puts back what that one added to
+    a tracked `.claude/settings.json` and `.gitignore` when echolot's edit
+    is all that differs from the last commit. A file with other changes
+    beside it is left as it is and named, and `init` does not then say git
+    sees none of the install. A `settings.json` or `.gitignore` the shared
+    install created with nothing else in it goes into the block.
 - **The choice is kept.** It goes into `.echolot/hosts.json` with the choice
   of agents, so a later plain `init` stays private: the one `/echolot` runs
   when the layer goes stale, or the plugin door's `init --for plugin`. The
