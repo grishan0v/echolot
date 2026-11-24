@@ -509,7 +509,11 @@ echolot report --html                          # the same reading as a page, rep
 Without a path it reads `.echolot/out/report.json` next to the config, or
 under the working directory when there is none. A config with several
 scenarios keeps each one's latest report in `.echolot/out/<scenario>/`, and
-`--scenario` says whose to read, the first one's without it. A detector's view cuts the
+`--scenario` says whose to read, the first one's without it. The latest report
+is one made on the config's thresholds: an `analyze` with `--defaults` or
+`--set` is a look, and without `-o` it goes to `look/` under that directory,
+`.echolot/out/look/report.json`, so that it never becomes the start page's
+report or the next check's "before". Its overview names that path. A detector's view cuts the
 location at 60 characters and the evidence at 100; `--wide` keeps both
 whole. `--json` keeps everything and cuts only the rows, and only when
 `--top` says how many.

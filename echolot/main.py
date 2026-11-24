@@ -490,6 +490,35 @@ def _out_dir(out: str, cfg: Config) -> Path:
     return Path(cfg.path).resolve().parent / p
 
 
+# Where `analyze` puts a look by default, under the scenario's report
+# directory: a report made on thresholds other than the config's.
+LOOK_DIR = "look"
+
+
+def _not_the_latest(*, defaults: bool = False, overrides: bool = False,
+                    both_named: bool = False) -> str | None:
+    """Why a run may not write its scenario's latest files; None when it may.
+
+    The scenario's report directory holds what the project stands on:
+    `report.*` is the latest report, which `status` and the start page show
+    and the next check sets as its "before", and `comparison.*` is the page's
+    "After the fix". Only a run that measures the scenario as the config does
+    writes there by default. An `analyze` with `--defaults` or `--set` is a
+    look, on thresholds the config does not have: as the latest, the agent's
+    look became the next check's "before" (#922). A `compare` of two reports
+    named by hand is about those two: written there, it stood as the page's
+    comparison of a pair the page never made (#923). `-o` puts either one
+    anywhere, and the default directory too.
+    """
+    if defaults:
+        return "made with --defaults"
+    if overrides:
+        return "made with --set"
+    if both_named:
+        return "both reports named"
+    return None
+
+
 def _shown_path(path: Path, root: Path) -> str:
     """A file as a person in the project would name it: from the project's
     root when it is inside, in full when it is not."""
@@ -711,7 +740,13 @@ def cmd_analyze(args) -> int:
         cli_overrides = parse_set(args.set or [], load_detectors(DETECTOR_DIR))
         # Before the traces are read: an -o that names a file used to fail
         # at the end, after the whole analysis, with a traceback. Without -o,
-        # the scenario's own directory when the config names several.
+        # the scenario's own directory when the config names several, and a
+        # look beside its latest report rather than over it.
+        look = _not_the_latest(defaults=args.defaults, overrides=bool(cli_overrides))
+        if args.out is None and look is not None:
+            args.out = f"{cfg.report_dir}/{LOOK_DIR}"
+            print(f"[i] {look}: the report goes to {args.out}/, and the latest report "
+                  f"stays the one made on the config's thresholds", file=sys.stderr)
         args.out = args.out or cfg.report_dir
         planned = _out_dir(args.out, cfg)
         if planned.exists() and not planned.is_dir():
@@ -1497,9 +1532,13 @@ def cmd_compare(args) -> int:
     # accepted and ignored, and a CI script comparing two downloaded reports
     # got nothing on disk.
     out_dir = None
-    if args.cfg is not None or args.out is not None:
-        out_dir = (_out_dir(args.out or args.cfg.report_dir, args.cfg) if args.cfg is not None
-                   else Path(args.out))
+    # Two reports named by hand are about those two, and the scenario's
+    # comparison is the page's: only `-o` writes theirs to disk.
+    mine = _not_the_latest(both_named=len(args.paths or []) == 2)
+    if args.out is not None:
+        out_dir = _out_dir(args.out, args.cfg) if args.cfg is not None else Path(args.out)
+    elif args.cfg is not None and mine is None:
+        out_dir = _out_dir(args.cfg.report_dir, args.cfg)
     # The same comparison for a person: `--plain` prints it in place of the
     # table, `--html` writes it as a page beside the comparison, and either
     # keeps the reading in comparison.json under `plain`. A page that already
@@ -1534,6 +1573,10 @@ def cmd_compare(args) -> int:
             print(f"\u2192 {page}  (" + ("the same comparison as a page: open it in a browser" if args.html else
                                          "it stood there from an earlier comparison: written again from this one")
                   + ")", file=sys.stderr)
+    elif args.cfg is not None and mine is not None:
+        print(f"\n[i] {mine}, so nothing was written over the scenario's comparison.* — "
+              f"the comparison above is the whole output; -o <folder> writes it to disk",
+              file=sys.stderr)
     elif unloaded is not None and Path(args.config).exists():
         print(f"\n[!] {args.config} does not load, so nothing was written to "
               f"disk — the comparison above is the whole output: {unloaded}",
@@ -5410,7 +5453,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="where report.md and report.json go; a relative path "
                          "is taken from the config's directory (default: "
                          ".echolot/out next to the config, and "
-                         ".echolot/out/<scenario> for a config with scenarios:)")
+                         ".echolot/out/<scenario> for a config with scenarios:; "
+                         "with --defaults or --set, look/ under it, beside the "
+                         "latest report)")
     an.add_argument("--set", action="append", default=[],
                     metavar="DETECTOR.PARAM=VALUE",
                     help="override one threshold for this run only, e.g. "
@@ -5464,7 +5509,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="an investigation's first report against its last")
     cp.add_argument("-o", "--out", default=None,
                     help="where comparison.md and comparison.json go (default "
-                         ".echolot/out next to the config)")
+                         ".echolot/out next to the config; with two reports named, "
+                         "nowhere: the comparison is printed)")
     cp.add_argument("--floor-ms", type=float, default=compare_mod.FLOOR_MS,
                     metavar="MS",
                     help="a move at or below this many ms is steady "

@@ -1071,7 +1071,9 @@ def test_a_page_that_stands_there_is_written_again_and_none_is_written_unasked(p
     first = (out / "report.html").read_text(encoding="utf-8")
 
     # Another analysis of the same recording, one detector's bar set where it finds nothing.
-    code, _, err = run("analyze", trace, "--set", "main_thread_block.min_slice_ms=100000")
+    # Named with -o: by default a run with --set goes beside the latest (#922).
+    code, _, err = run("analyze", trace, "--set", "main_thread_block.min_slice_ms=100000",
+                       "-o", ".echolot/out")
     page = (out / "report.html").read_text(encoding="utf-8")
     rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
     check("the page that stood there is written again, without --html", code == 0 and page != first, err[-300:])

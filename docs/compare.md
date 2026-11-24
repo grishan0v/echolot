@@ -42,7 +42,10 @@ it went by that, since a look at part of a round that leaves the round's first
 recording out passes for a round there. Name two paths for any other pair.
 
 It writes `comparison.md` and `comparison.json` next to the report, by the same
-rule `analyze` uses: a relative `-o` is taken from the config's directory, so
+rule `analyze` uses. Not with two reports named and no `-o`: those two are not
+the scenario's latest, and `comparison.*` there is what the start page shows
+under "After the fix". Then the comparison is printed and nothing is written,
+and stderr says so. Where `-o` names a folder: a relative `-o` is taken from the config's directory, so
 running it from a build folder full of traces still lands the output in the
 project. The config is `echolot.yml` in the working directory, or else the
 nearest one up the tree within the checkout, so `compare` run from a build
@@ -1007,7 +1010,7 @@ opens from disk, nothing fetched, and the same two reports give the same
 bytes.
 
 ```bash
-echolot compare old.json new.json --html      # comparison.html beside comparison.json
+echolot compare old.json new.json -o out --html   # comparison.html beside comparison.json
 ```
 
 Top to bottom:
