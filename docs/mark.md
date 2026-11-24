@@ -157,12 +157,17 @@ on the phone and builds nothing, so the markers reach a trace only once the
 app is built and installed again. The line names the gradle task that does
 it, `./gradlew :app:installBenchmark`, where the app module's build script
 shows which variant installs as `project.package`. Two or three that do are
-named together, since which of them is on the phone is not written anywhere;
-with more than three, or none, the line names the package instead. A
+named together, since which of them is on the phone is not written anywhere.
+With more than three, those of the build type to measure on are named if
+they are three at most; with more still, or none, the line names the package
+instead. A
 debuggable variant is never named: a debug install would put a build that
 runs slower and differently in place of the one measured. A build type that
 starts from another with `initWith` installs and is debuggable as that one
-is, since AGP copies both along with the rest. In gradle mode the
+is, since AGP copies both along with the rest. Where the app module applies
+`androidx.baselineprofile`, the plugin's `benchmarkRelease` comes first, and
+its `nonMinifiedRelease`, built without R8 to generate profiles, is never
+named. In gradle mode the
 macrobenchmark builds and installs the app, and the line says to record.
 `--json` carries the same line as `next`.
 

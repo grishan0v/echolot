@@ -84,7 +84,8 @@ taken from the config's directory, and R8 writes the file to
 
 `echolot scan` names it in the config it drafts when the variant to measure
 is minified: its build type sets `minifyEnabled`, or starts with `initWith`
-from one that does. The file is written when the variant is built, so it may
+from one that does, or is the `benchmarkRelease` the `androidx.baselineprofile`
+plugin adds, minified as `release` is. The file is written when the variant is built, so it may
 not be there yet: `gradle` mode builds the variant with the first collect,
 and in `launch` mode the person does. A mapping not there yet is said on
 stderr and at the top of the report, `config.mapping.found` is false, and
