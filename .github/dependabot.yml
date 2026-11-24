@@ -33,4 +33,6 @@ updates:
 # binary means different trace semantics with the SQL unchanged — pyproject.toml
 # says so at length. Raising that pin is a decision with a self-check attached,
 # and a bot opening it weekly would be arguing with the policy rather than
-# serving it.
+# serving it. What the policy does want ahead of that decision — which checks
+# the newest perfetto would fail — workflows/perfetto-canary.yml finds out each
+# week without proposing anything.

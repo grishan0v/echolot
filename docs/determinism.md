@@ -315,6 +315,23 @@ The TP version is also written into `report.json`. When numbers diverge between
 two reports, the first question is whether anything underneath changed, and the
 field answers it immediately instead of after an hour of digging.
 
+### Notice before the bump
+
+The fixture makes a bump reviewable. It does not say when one is due, or what
+it will cost before somebody makes it. `.github/workflows/perfetto-canary.yml`
+does that every Tuesday. It installs echolot as CI does, replaces the pinned
+perfetto with the newest one on PyPI — and with it the `trace_processor` that
+package's manifest names — and runs three things there: `doctor`, the
+fixture's report compared value by value with the one the pin writes, and the
+whole test suite. The run's summary puts the two versions side by side, names
+the checks and tests that fail, and lists the report values that moved.
+
+A red run is the notice; GitHub mails it to whoever last edited the schedule.
+The pin itself is not touched: the canary opens no pull request and proposes
+nothing. Started by hand (Actions → perfetto-canary → Run workflow), it takes
+a version to try instead of the newest — a version known to differ is how to
+see that it still names what fails.
+
 ### Your own binary
 
 A trace_processor of your own goes in one of two ways:

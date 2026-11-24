@@ -94,6 +94,55 @@ outputs:
   vanished:
     description: How many rows vanished since the baseline; empty without a comparison.
     value: ${{ steps.compare.outputs.vanished }}
+  # What tells a change from noise. `moved` counts every row past the floor,
+  # and a build compared with itself had dozens; these are what a workflow
+  # that wants to stop on a change reads. All are comparison.json's.
+  verdict:
+    description: >-
+      The comparison's verdict, by the scenario's window: `better`, `worse`,
+      `no_change` or `not_compared` (two apps, two windows, an anchor that
+      never matched, the same recordings on both sides, or no window to
+      compare). A window that runs to the end of the recording is judged by
+      the frames the app made late. Empty without a comparison.
+    value: ${{ steps.compare.outputs.verdict }}
+  headline:
+    description: The verdict in words, such as `Slower by 1.2 s`; empty without a comparison.
+    value: ${{ steps.compare.outputs.headline }}
+  held:
+    description: >-
+      How many of the `moved` rows also hold, the ones the table's Holds
+      column says yes to: their shift's 95% interval stays past the row's
+      noise floor on one side. Empty without a comparison.
+    value: ${{ steps.compare.outputs.held }}
+  held-rows:
+    description: >-
+      The first five of the rows `held` counts, in the comparison's order, as
+      a JSON array of `detector`, `location`, `detail` where the detector has
+      one, `delta_ms`, the interval's `low_ms` and `high_ms`, `floor_ms`, the
+      floor they cleared, and `on_main`. Empty without a comparison.
+    value: ${{ steps.compare.outputs.held-rows }}
+  window-delta-ms:
+    description: >-
+      How far the scenario's window moved, after minus before, in ms: the
+      difference of the two medians. Empty without a comparison or a window.
+    value: ${{ steps.compare.outputs.window-delta-ms }}
+  comparable:
+    description: >-
+      `false` when the two reports are not of one thing: two processes, two
+      windows, or an anchor no run found. Empty without a comparison.
+    value: ${{ steps.compare.outputs.comparable }}
+  warnings:
+    description: >-
+      The ids of the comparison's warnings, comma-separated, such as
+      `drift,runs`. Empty when it has none, or there is no comparison.
+    value: ${{ steps.compare.outputs.warnings }}
+  unlike:
+    description: >-
+      Those of `warnings` that say the two sides were not recorded or read
+      alike (the phone's speed or heat, the config, the thresholds, the
+      recording, the compilation, the version of echolot), comma-separated:
+      a time can move for any of them alone. Empty when there are none.
+    value: ${{ steps.compare.outputs.unlike }}
 
 runs:
   using: composite

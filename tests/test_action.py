@@ -287,8 +287,9 @@ def test_a_baseline_that_is_not_there_leaves_the_outputs_empty(tmp_path: Path, m
     check("a warning, and the step passes", code == 0
           and "::warning" in capsys.readouterr().out)
     check("with nothing to compare", outputs.read_text()
-          == "baseline=\ncomparison=\nmoved=\nappeared=\nvanished=\nfailed=\n",
-          outputs.read_text())
+          == "baseline=\ncomparison=\nmoved=\nappeared=\nvanished=\nheld=\nheld-rows=\n"
+             "verdict=\nheadline=\nwindow-delta-ms=\ncomparable=\nwarnings=\nunlike=\n"
+             "failed=\n", outputs.read_text())
 
 
 # --- what a person reads ----------------------------------------------------
