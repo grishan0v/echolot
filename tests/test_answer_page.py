@@ -684,12 +684,18 @@ def test_how_sure_is_the_agents_words_and_what_echolot_looked_at_itself(states):
     page = page_of(states["many"])
     trust = fold(page, "How sure the agent is")
     said = [(li.all("b")[0].text, li.one("p").text) for li in trust.one("ul", "sure").all("li")]
+    # Nothing was recorded before the change: the agent's word is about what
+    # a place costs, and that it is what changed is echolot's "not measured".
+    changed = " That it is what changed: not measured, with nothing recorded to set it against."
     check("per cause, the agent's own word and why",
           said == [("Every item card is inflated on the main thread, one after another",
-                    "High. five launches in each of two rounds, within 10% of each other"),
+                    "That it costs this: High. five launches in each of two rounds, within 10% of each other."
+                    + changed),
                    ("The main thread waits for a lock the store holds",
-                    "Medium. the wait is measured; that the snapshot removes all of it is not"),
-                   ("Text is laid out again for every card", "The agent did not say.")], said)
+                    "That it costs this: Medium. the wait is measured; that the snapshot removes all of it is "
+                    "not." + changed),
+                   ("Text is laid out again for every card", "That it costs this: The agent did not say."
+                    + changed)], said)
     check("the agent's word has no level's icon", not trust.one("ul", "sure").all("svg"))
     seen = [(li.one("b").text, li.one("p").text) for li in trust.one("ul", "quiet-list").all("li")]
     check("then what echolot looked at: the rows cited, and the markers in the code",
@@ -704,6 +710,35 @@ def test_how_sure_is_the_agents_words_and_what_echolot_looked_at_itself(states):
     check("an agent that did not say is said not to have",
           "The agent did not say how sure it is of what it found." in fold(read(answer_page.render(hunt, reports)),
                                                                            "How sure the agent is").text)
+
+
+def test_the_page_says_what_the_build_was_set_against(states):
+    """With no reference the causes are where the build spends its time, and
+    the page says so under the headline whatever the summary's words; with
+    one, it names the reference; a record from before the field says neither
+    (#538)."""
+    def against(page):
+        return [p.text for p in page.all("p") if p.text.startswith(("No reference.", "Set against"))]
+
+    said = against(page_of(states["many"]))
+    check("no reference, said under the headline", said == [
+        "No reference. Nothing was recorded before the change to set this build against, so the causes are "
+        "where it spends its time. None of them is shown to be what changed: a set of an earlier build, "
+        "recorded under the investigation, would."], said)
+    hunt, reports = changed(states["many"], against={"report": 1, "what": "the release before, 4.1"})
+    hunt["verdict_check"]["against"] = 1
+    page = page_of((hunt, reports))
+    check("a reference, named", against(page) == [
+        "Set against report 1, the release before, 4.1: the causes are what changed since it."], against(page))
+    sure = [li.one("p").text for li in fold(page, "How sure the agent is").one("ul", "sure").all("li")]
+    check("and the agent's confidence is about the change, as it gave it",
+          sure[0] == "High. five launches in each of two rounds, within 10% of each other", sure)
+    hunt, reports = copy.deepcopy(states["many"])
+    hunt["verdict_check"].pop("against")
+    page = page_of((hunt, reports))
+    check("a record from before the field says neither", against(page) == [], against(page))
+    sure = [li.one("p").text for li in fold(page, "How sure the agent is").one("ul", "sure").all("li")]
+    check("and its confidence reads as it did", sure[0].startswith("High. five launches"), sure)
 
 
 @pytest.mark.parametrize("claimed, left, title, said", [

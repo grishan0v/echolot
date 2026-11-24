@@ -913,7 +913,8 @@ def test_a_window_whose_end_was_not_found_is_not_judged(budget):
           v["text"])
     check("and the warning says what was not found, in how many recordings",
           v["warning"] == "echolot did not find where this scenario ends (`app_marker`) in 3 of 3 recordings, so "
-                          "the numbers below are about the whole recording, not about the scenario.", v["warning"])
+                          "the numbers below are about everything the app did in the recording, not about the "
+                          "scenario.", v["warning"])
     if budget:
         check("the limit is named as not applied", "not held against the time limit of 2.0 s" in v["text"], v["text"])
 

@@ -3185,6 +3185,88 @@ def _(report):
         assert compared(same, same) == (True, []), compared(same, same)
 
 
+# --- the whole trace (#519) ------------------------------------------------
+#
+# `analyze --whole-trace`, and a scenario with `window: whole`: a recording
+# made outside the config's scenarios, measured without letting its anchors
+# miss. The window is the trace's own first and last moments, and the one
+# window a report may call the whole trace.
+
+def _whole(build=fixture.build, scenario: dict | None = None) -> tuple[dict, dict]:
+    """A trace analysed over its whole length, and the trace's own bounds.
+
+    Under `--whole-trace` by default; with `scenario`, a config whose
+    scenario names the window instead."""
+    from .tp import TraceSession
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "whole.perfetto-trace"
+        trace.write_bytes(build())
+        cfg = Config({**FIXTURE_CONFIG, "scenario": scenario or FIXTURE_CONFIG["scenario"]})
+        cfg.whole_trace = scenario is None
+        got = _analyze(trace, cfg)
+        with TraceSession(trace, _binary) as tp:
+            bounds = tp.query("SELECT start_ts AS ts_start, end_ts AS ts_end FROM trace_bounds")[0]
+    return got, bounds
+
+
+@check("whole trace: the window is the trace, named so, with no anchor to miss")
+def _(report):
+    from . import report as report_mod
+    got, bounds = _whole()
+    w = got["window"]
+    assert (w["ts_start"], w["ts_end"]) == (bounds["ts_start"], bounds["ts_end"]), (w, bounds)
+    assert w["defined_by"] == "whole" and "report_fully_drawn" not in w, w
+    # The config's anchors are not looked for: there is nothing to miss.
+    assert w["start_anchor"] is None and w["end_anchor"] is None, w
+    assert got["scenario"] == "whole-trace", got["scenario"]
+    text = report_mod.to_markdown(got)
+    head = text.split("\n## ", 1)[0]
+    assert "The window is the whole trace" in head, head
+    assert "Scenario window" not in head and "anchor" not in head.lower(), head
+    # The startup the trace holds is described against it, as the platform's.
+    assert w["startup"]["dur_ms"] == 1065.0, w["startup"]
+    # `window: whole` in the config is the same window under the scenario's name.
+    named, _ = _whole(scenario={"name": "adhoc", "window": "whole"})
+    assert (named["window"]["ts_start"], named["window"]["ts_end"]) == (w["ts_start"], w["ts_end"])
+    assert named["scenario"] == "adhoc" and named["window"]["defined_by"] == "whole", named["window"]
+    # And the anchored report says none of it.
+    assert "defined_by" not in report["window"], report["window"]
+
+
+@check("whole trace: app_init with no start of the process in the window is not checked, not silent")
+def _(report):
+    from . import report as report_mod
+    got, _ = _whole(fixture.pool)
+    by_id = {d["id"]: d for d in got["detectors"]}
+    app_init = by_id["app_init"]
+    assert app_init["checked"] is False and app_init["rows"] == [], app_init
+    assert "no start of the app's process" in app_init["reason"], app_init["reason"]
+    # The activity manager's records were there: only the window lacks what
+    # the check reads, and `anr`, which reads the whole trace, looked.
+    assert "activity records" not in app_init["reason"], app_init["reason"]
+    assert by_id["anr"]["checked"] is True, by_id["anr"]
+    text = report_mod.to_markdown(got)
+    said = next(ln for ln in text.splitlines() if "what they read is not in this window" in ln)
+    assert "`app_init`" in said and not said.startswith("> ⚠️"), said
+    silent = next(ln for ln in text.splitlines() if ln.startswith("**Silent:**"))
+    assert "app_init" not in silent, silent
+    # A window that holds the start looks, as the fixture's own does.
+    assert next(d for d in report["detectors"] if d["id"] == "app_init")["checked"] is True
+
+
+@check("compare refuses the whole trace against a scenario's window")
+def _(report):
+    from . import compare as cmp_mod
+    whole, _ = _whole()
+    cmp = cmp_mod.build(report, whole, before_path="b.json", after_path="a.json")
+    said = [w["text"] for w in cmp["warnings"] if w["id"] == "window"]
+    assert cmp["comparable"] is False and said, cmp["warnings"]
+    assert "by the config's start and end anchors before" in said[0] \
+        and "as the whole trace" in said[0], said
+    again = cmp_mod.build(whole, whole, before_path="b.json", after_path="a.json")
+    assert again["comparable"] is True, again["warnings"]
+
+
 # --- anr, anr_risk ---------------------------------------------------------
 
 def _lowered_bar():
@@ -5143,7 +5225,8 @@ def _(report):
 
 
 # A trace_processor_shell that takes its time to listen, then answers its
-# /status: the wait measured is the start's, not this machine's.
+# /status: the wait measured is the start's, not this machine's. It says
+# where it listens as trace_processor does, before it serves (#807).
 _SLOW_SHELL = """
 import sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -5155,7 +5238,9 @@ class Status(BaseHTTPRequestHandler):
         self.end_headers()
     def log_message(self, *_):
         pass
-HTTPServer(("127.0.0.1", port), Status).serve_forever()
+server = HTTPServer(("127.0.0.1", port), Status)
+print(f"[HTTP] Starting HTTP server on [::1]:{port}", file=sys.stderr, flush=True)
+server.serve_forever()
 """
 
 
@@ -5232,6 +5317,120 @@ def _(report):
     assert len(set(ports)) == len(ports), f"two shells on one port: {sorted(ports)}"
     wrong = [traces[i].name for i, (_, n) in seen.items() if n != alone[traces[i]]]
     assert not wrong, f"read another session's trace: {wrong}"
+
+
+@check("trace_processor: a shell whose port another process holds is stopped before anything is sent to it, and the session starts on a port of its own")
+def _(report):
+    """A shell whose port on 127.0.0.1 another process took before it
+    listened does not stop: it listens on [::1] alone, and the client
+    reached the other one, fed it its trace and ran its SQL there. Between
+    test workers starting shells side by side on Linux that read `view _proc
+    already exists`, `no such table: process` and a connection reset (#807).
+
+    The shell says so on stderr, and that is what is held, on two real
+    shells and one port: the second is `Taken` and stopped, the first still
+    answers and says it is its own. A session whose first port is taken
+    opens on another and reads its own trace.
+    """
+    from . import tpshell
+    from .tp import TraceSession, resolve_binary_path
+
+    binary = resolve_binary_path(_binary)
+    draw = tpshell._free_port
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = _two_fixtures(tmp)[1]
+        with TraceSession(trace, _binary) as tp:
+            alone = tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"]
+        first = tpshell.Shell(binary)
+        try:
+            first.wait()
+            assert first.listens() is True, f"the first shell did not say: {first._heard()!r}"
+            tpshell._free_port = lambda: first.port
+            try:
+                second = tpshell.Shell(binary)
+            finally:
+                tpshell._free_port = draw
+            pid = second.pid
+            try:
+                second.wait()
+            except tpshell.Taken as e:
+                said = str(e)
+            else:
+                second.close()
+                raise AssertionError("a shell on a port another holds was taken for the one that answered")
+            assert tpshell.TAKEN in said, said
+            assert second.pid is None, "the shell whose port was taken is still held"
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, 0)
+                raise AssertionError(f"trace_processor {pid} is still running")
+            assert tpshell._answers(first.port) and first.listens() is True
+
+            ports = iter([first.port])
+            tpshell._free_port = lambda: next(ports, None) or draw()
+            try:
+                with TraceSession(trace, _binary) as tp:
+                    port = tp._tp.shell.port
+                    n = tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"]
+            finally:
+                tpshell._free_port = draw
+        finally:
+            first.close()
+    assert port != first.port, "the session opened on the port another holds"
+    assert n == alone, f"read {n} sched rows, its trace has {alone}"
+
+
+_LEASE = """
+import sys
+from echolot import tpshell
+assert tpshell._lease(int(sys.argv[1]))
+print("held", flush=True)
+sys.stdin.read()
+"""
+
+
+@check("trace_processor: a port another echolot drew for its shell is not drawn here until that one lets go")
+def _(report):
+    """Between drawing a port and its shell listening on it, the port is
+    free as far as the kernel knows, and on Linux the next process to ask
+    may be handed it (#807). The draw takes a lease on it first — a lock on
+    the port's byte of one file in the temporary directory — and a draw
+    that finds another process's lease draws again. Held on a process that
+    leases a port and keeps it: the lease is refused here, and granted once
+    that process has ended, however it ends.
+    """
+    import signal
+    import socket
+    import subprocess
+    import sys
+    from . import tpshell
+
+    with tpshell._lock:
+        if tpshell._lease_file() < 0:
+            raise Skipped("the temporary directory refuses the lease file")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    root = str(Path(__file__).resolve().parent.parent)
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _LEASE, str(port)], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, env={**os.environ, "PYTHONPATH": root})
+    try:
+        held = holder.stdout.readline().strip() == b"held"
+        with tpshell._lock:
+            refused = not tpshell._lease(port)
+            if not refused:
+                tpshell._lease(port, take=False)
+    finally:
+        holder.send_signal(getattr(signal, "SIGKILL", signal.SIGTERM))
+        holder.wait(10)
+        holder.stdin.close()
+        holder.stdout.close()
+    assert held, "the other process took no lease"
+    assert refused, f"port {port} was leased here while another process held it"
+    with tpshell._lock:
+        granted = tpshell._lease(port)
+        tpshell._lease(port, take=False)
+    assert granted, f"the lease on {port} outlived the process that took it"
 
 
 @check("reflect: a signal that broke is not checked, and does not read as checked")
@@ -6754,6 +6953,133 @@ def _(report):
     assert "exit with that as the conclusion" in step, (
         "the loop is told the value is the person's, and not what to do "
         "instead of changing it")
+
+
+@check("hunt verdict: a regression names the reference it was set against, and "
+       "without one its causes read as where the build spends its time")
+def _(report):
+    """Five blind hunts with no build from before the change all named the
+    same long-standing hotspot, a control with no change among them, and the
+    answer form called it the place of the regression (#538). A sentence in
+    the summary cannot be held to the difference; `against` can.
+
+    With it, the reference is a report the investigation filed, of the same
+    scenario, and every cause cites a row outside it. Without it, the verdict
+    is recorded as set against nothing, and reads back as the costliest
+    places, the agent's confidence as what they cost and "what changed" as
+    not measured. A record from before the field says neither.
+    """
+    from . import verdict as v
+
+    def rep(scenario, *locations):
+        return {"scenario": scenario, "markers": {"rows": []},
+                "detectors": [{"id": "main_thread_block",
+                               "rows": [{"location": loc} for loc in locations]}]}
+
+    reports = {1: rep("coldStart", "Store.fill"), 2: rep("coldStart", "Store.fill", "inflate")}
+    cause = {"title": "t", "where": ["Store.kt:70"], "confidence": "high",
+             "evidence": [{"report": 2, "location": "Store.fill"}]}
+    regression = {"summary": "s", "causes": [cause],
+                  "against": {"report": 1, "what": "the release before the change"}}
+    assert v.validate(regression, reports) == [], v.validate(regression, reports)
+    before_only = {**regression, "causes": [{**cause, "evidence": [
+        {"report": 1, "location": "Store.fill"}]}]}
+    why = v.validate(before_only, reports)
+    assert len(why) == 1 and "the reference — a change shows in a row of the build measured" \
+        in why[0], why
+    other = {1: rep("feed_scroll", "Store.fill"), 2: reports[2]}
+    assert any("a reference is the same scenario on another build" in w
+               for w in v.validate(regression, other)), v.validate(regression, other)
+    assert any(w.startswith("against.what: required")
+               for w in v.validate({**regression, "against": {"report": 1}}, reports))
+
+    hotspots = {"summary": "s", "causes": [cause]}
+    assert v.validate(hotspots, reports) == []
+    record = v.record(hotspots, reports, {}, "2026-11-24T00:00:00+00:00")
+    assert record["against"] is None and v.reads_as(hotspots, record) == "hotspots", record
+    text = "\n".join(v.lines(hotspots, record))
+    assert v.NO_REFERENCE in text and "high that it costs this" in text \
+        and v.NOT_MEASURED in text, text
+    said = "\n".join(v.lines(regression, v.record(regression, reports, {}, "now")))
+    assert "against: report 1 — the release before the change" in said \
+        and "that it costs this" not in said and v.NOT_MEASURED not in said, said
+    old = {"checked_at": "then", "reports": [1, 2], "cited": 1}
+    assert v.reads_as(hotspots, old) is None and "against:" not in "\n".join(v.lines(hotspots, old))
+
+
+@check(".claude/ layer: a hunt with no reference says what counts as slow, skips "
+       "compare between rounds, and names hotspots, not a regression")
+def _(report):
+    """A complaint about how it is now — "the list stutters" — has no earlier
+    build to compare with, and the loop was built around `compare` between
+    rounds, which with nothing changed in the app compares only the markers
+    the agent added (#538). The door asks for a reference first, the brief
+    carries what it got, and the loop's branch for one build holds it to the
+    scenario's measure and keeps it from calling a hotspot a regression.
+    """
+    from .layer import CLAUDE_DIR, GUIDE_DIR
+
+    hunter = (CLAUDE_DIR / "agents" / "perf-hunter.md").read_text(encoding="utf-8")
+    branch = " ".join(hunter.split("## What the build is set against", 1)[-1]
+                      .split("## The protocol", 1)[0].split())
+    for said in ("`Reference: none`", "What counts as slow, first", "`budget_ms`",
+                 "`window.frames.late` of `count`", "`Buffer Stuffing` is latency",
+                 "No `compare` between rounds", "The answer names hotspots, not a regression",
+                 "The verdict has no `against`"):
+        assert said in branch, f"perf-hunter's branch for one build lacks {said!r}"
+    step4 = " ".join(hunter.split("4. from round 2 on", 1)[-1].split("echolot compare", 1)[0].split())
+    assert "not with `Reference: none`" in step4, step4
+    shape = hunter.split("## What to return upward", 1)[-1].split("```")[1]
+    assert shape.lstrip().startswith("Against:"), shape[:80]
+
+    texts = {"echolot-hunt.md": (CLAUDE_DIR / "commands" / "echolot-hunt.md").read_text(encoding="utf-8"),
+             "guide/hunt.md": (GUIDE_DIR / "hunt.md").read_text(encoding="utf-8")}
+    plugin = CLAUDE_DIR.parent.parent / "plugins" / "echolot" / "skills" / "echolot-hunt" / "SKILL.md"
+    if plugin.is_file():            # a source checkout; the wheel ships no plugin
+        texts["the plugin's hunt"] = plugin.read_text(encoding="utf-8")
+    for name, text in texts.items():
+        flat = " ".join(text.split())
+        assert "A reference" in flat and "not what changed" in flat, \
+            f"{name} does not ask for a reference before a hunt with no change named"
+    for name in ("guide/hunt.md", "the plugin's hunt"):
+        if name in texts:
+            assert "\nReference: <" in texts[name].replace("   Reference: <", "Reference: <"), \
+                f"{name}'s brief does not carry the reference"
+
+
+@check(".claude/ layer: a question no scenario measures gets a scenario of its own, "
+       "and --scenario's refusal says the two shapes one takes")
+def _(report):
+    """A question about a list stuttering went into the one scenario there
+    was, a cold start, and its scroll traces were recorded by hand outside
+    `collect` (#539). With one scenario the hunt never asked. Now the words
+    are held to the scenario even when there is one, a journey none measures
+    is added through setup first, and a name the config lacks is refused
+    with the two shapes that work.
+    """
+    from .config import NEW_SCENARIO, Config, ConfigError
+    from .layer import CLAUDE_DIR, GUIDE_DIR
+
+    command = " ".join((CLAUDE_DIR / "commands" / "echolot-hunt.md").read_text(encoding="utf-8").split())
+    guide = " ".join((GUIDE_DIR / "hunt.md").read_text(encoding="utf-8").split())
+    setup = (CLAUDE_DIR / "commands" / "echolot-setup.md").read_text(encoding="utf-8")
+    assert "With one, the words still have to fit it" in command \
+        and "propose adding one before anything is recorded" in command, \
+        "the hunt command takes the one scenario whatever the question"
+    assert "With one, the words still have to fit it" in guide and "Adding a scenario" in guide, \
+        "the guide takes the one scenario whatever the question"
+    adding = " ".join(setup.split("## Adding a scenario", 1)[-1].split())
+    for said in ("400 ms or more a swipe", "`reset_policy: none`", "`FrameTimingMetric`"):
+        assert said in adding and said in NEW_SCENARIO, f"{said!r} is not in both places"
+
+    one = Config({"project": {"package": "com.example.app", "process": "com.example.app"},
+                  "scenario": {"name": "coldStart", "window": "launch"}}, None)
+    try:
+        one.select("feed_scroll")
+    except ConfigError as e:
+        assert "this config has one scenario, `coldStart`" in str(e) and NEW_SCENARIO in str(e), str(e)
+    else:
+        raise AssertionError("a scenario the config lacks was taken")
 
 
 @check(".claude/ layer: the skill and the agent have frontmatter")

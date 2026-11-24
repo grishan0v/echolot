@@ -20,13 +20,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from . import files
 
 # Relative on purpose: every reader spells it `project / LOG_FILE`, and the
 # project is not always the working directory. `at()` below is what tells the
@@ -177,7 +178,8 @@ _SESSION_ENV: tuple[tuple[str, str | None], ...] = (
 # file must never carry a home directory or whatever else a host happened to
 # put there. `reflect --from-log` names a report file after the id, so it is
 # also a name every filesystem takes.
-_SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# The reader of the log holds a `session` to the same token (`files.RUN`).
+_SESSION_ID = files.SESSION_ID
 
 
 def session(env: Any = None) -> tuple[str | None, str | None]:
@@ -250,57 +252,11 @@ def record(args: Any, argv: list[str] | None, started: float,
         _reason = None
 
 
-# What `record` writes in each field of a line. A field that holds anything
-# else is dropped as the line is read, the line itself kept.
-_FIELDS: dict[str, tuple[type, ...]] = {
-    "ts": (str,), "cmd": (str,), "argv": (list,), "cwd": (str,),
-    "exit": (int,), "ms": (int, float), "version": (str,),
-    "config": (dict,), "facts": (dict,), "error": (str,),
-    "session": (str,), "agent": (str,),
-}
-
-
 def read(path: Path | None = None) -> list[dict[str, Any]]:
     """All recorded runs, oldest first. Missing file → empty list.
 
-    Each line `record` writes is an object, one per line. A line that is
-    anything else is skipped: one that is no text, one that is no JSON, and
-    one that is JSON and no object (`[1,2]`, `null`, `42`), which every
-    reader took for a run and ended `echolot`, `status` and every page of
-    `echolot ui` in a traceback on its first `.get` (#555). Such a line comes
-    from a hand edit, a merge of two clones' logs or another tool appending
-    here, and the lines around it still read.
+    `files.read_runs`, the one reader of the log: a line that is no run is
+    skipped, and a field that holds what `record` never writes there is
+    dropped with its line kept (#555).
     """
-    p = path or log_file()
-    if not p.exists():
-        return []
-    out: list[dict[str, Any]] = []
-    for raw in p.read_bytes().splitlines():
-        try:
-            run = json.loads(raw.decode("utf-8"))
-        except ValueError:   # no UTF-8 text, or no JSON; a blank line too
-            continue
-        if isinstance(run, dict):
-            out.append(_as_written(run))
-    return out
-
-
-def _as_written(run: dict[str, Any]) -> dict[str, Any]:
-    """The line without the fields that hold what `record` never writes
-    there: a `facts` that is a list, a `ts` that is a number, an `exit` of
-    true. Read as they are, a doctor's `facts: [1]` ended `status` in a
-    traceback (#555); dropped, the run reads as one that left no such
-    field. A count that is no finite number is no count, and a `session`
-    that is no token is no session."""
-    def fits(key: str, value: Any) -> bool:
-        kinds = _FIELDS.get(key)
-        if kinds is None or value is None:
-            return True
-        if key == "session":
-            # The same token `record` writes, or none: a hand-edited
-            # `../../x` here would become the name of a report file.
-            return isinstance(value, str) and bool(_SESSION_ID.fullmatch(value))
-        if isinstance(value, bool) or not isinstance(value, kinds):
-            return False
-        return not isinstance(value, float) or value == value and abs(value) != float("inf")
-    return {k: v for k, v in run.items() if fits(k, v)}
+    return list(files.read_runs(path or log_file()))

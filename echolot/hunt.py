@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 
-from . import atomic
+from . import atomic, files
 from . import verdict as verdict_mod
 from .when import ago as _ago
 from .when import iso_epoch as _epoch
@@ -57,6 +57,21 @@ FRESH_MINUTES = 30
 
 # Long enough that the previous question is no longer on anyone's mind.
 STALE_DAYS = 7
+
+
+# What `--since` holds when the human could not name the change: the word the
+# hunt texts pass for it, or nothing at all.
+UNKNOWN_CHANGE = ("", "unknown")
+
+
+def change_named(since: object) -> bool:
+    """Whether an investigation names the change it is after.
+
+    Without one, nothing says what to set the build against, and a hunt
+    returns where that build spends its time — the costliest places, changed
+    or not (#538). `hunt` says so when it opens one.
+    """
+    return isinstance(since, str) and since.strip().lower() not in UNKNOWN_CHANGE
 
 
 def _now() -> str:
@@ -114,8 +129,9 @@ def load(project: Path) -> dict[str, Any] | None:
     is not silent about it, though: `unreadable` says why, and `status`,
     `hunt` and the start page say that line where the investigation would be.
 
-    Each field is read by its type (`_typed`): one that holds what echolot
-    never writes there reads as absent, and the rest of the record is read.
+    Each field is read by its type (`files.HUNT`): one that holds what
+    echolot never writes there reads as absent, and the rest of the record
+    is read.
     """
     return _read(path(project))[0]
 
@@ -147,75 +163,12 @@ def unreadable_line(project: Path, then: bool = True) -> str | None:
 
 def _read(p: Path) -> tuple[dict[str, Any] | None, str | None]:
     """A record file as (record, None), (None, why it does not load), or
-    (None, None) when there is no file."""
-    try:
-        text = p.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None, None
-    except UnicodeDecodeError:
-        return None, "it is not UTF-8 text"
-    except OSError as e:
-        return None, f"it cannot be read ({e.strerror or e})"
-    if not text.strip():
-        return None, "it is empty"
-    try:
-        h = json.loads(text)
-    except ValueError as e:
-        where = f" at line {e.lineno}" if isinstance(e, json.JSONDecodeError) else ""
-        return None, f"it is not whole JSON{where}"
-    if not isinstance(h, dict):
-        return None, f"it holds {_kind(h)}, not a record"
-    return _typed(h), None
-
-
-def _kind(value: object) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true or false"
-    if isinstance(value, (int, float)):
-        return "a number"
-    if isinstance(value, str):
-        return "text"
-    return "a list"
-
-
-# The type each field of a record holds when echolot wrote it: `open_new`,
-# `touch`, `record_report`, `record_traces` and `conclude` write nothing else.
-_FIELDS: dict[str, type] = {
-    "n": int, "collects": int, "analyzes": int, "reports": int,
-    "question": str, "since": str, "scenario": str, "config_sha": str, "status": str,
-    "conclusion": str, "opened_at": str, "touched_at": str, "closed_at": str,
-    "confirmed": dict, "verdict": dict, "verdict_check": dict, "traces": list,
-}
-
-
-def _typed(h: dict[str, Any]) -> dict[str, Any]:
-    """A record with each field that holds what echolot never writes there
-    left out, so it reads as unknown: the rest of the record is still read.
-
-    `"reports": "abc"`, `"n": "x"`, `"traces": 7` or a number in `opened_at`
-    stopped `hunt --show`, `hunt --list` and every page of `echolot ui`
-    that reads the record, and `"question": 5` printed a question nobody
-    asked (#580). The same rule `state` holds report.json and collect.json
-    to (#470, #474), by field here: a record is a person's question and the
-    work behind it, worth showing what still reads of it. A number is a
-    whole one, not true or false, never below zero, and `n` is one or more,
-    since it names a directory; a trace set is a path.
-    """
-    out = dict(h)
-    for key, kind in _FIELDS.items():
-        value = out.get(key)
-        if value is None:
-            continue
-        ok = isinstance(value, kind) and not isinstance(value, bool)
-        if ok and kind is int:
-            ok = value >= (1 if key == "n" else 0)
-        if not ok:
-            del out[key]
-        elif key == "traces":
-            out[key] = [t for t in value if isinstance(t, str)]
-    return out
+    (None, None) when there is no file: `files.read_hunt`, the one reader
+    of a record (#833)."""
+    got = files.read_hunt(p)
+    if isinstance(got, files.Refusal):
+        return None, None if got.absent else got.why
+    return dict(got), None
 
 
 def set_aside_unreadable(project: Path) -> Path | None:
@@ -578,6 +531,7 @@ def open_new(project: Path, question: str, since: str | None = None,
         archive(project, previous)
 
     hunt = {
+        "schema": files.HUNT_SCHEMA,
         "n": next_n(project),
         "question": question,
         "since": since,
@@ -1086,7 +1040,10 @@ def _did(hunt: dict[str, Any]) -> list[str]:
     if isinstance(verdict, dict):
         causes = [c for c in verdict.get("causes") or [] if isinstance(c, dict)] \
             if isinstance(verdict.get("causes"), list) else []
-        bits.append(f"verdict: {len(causes)} cause(s)")
+        kind = verdict_mod.reads_as(verdict, hunt.get("verdict_check"))
+        bits.append(f"verdict: {len(causes)} cause(s)"
+                    + (f" against report {verdict_mod.against(verdict)}" if kind == "regression"
+                       else ", no reference" if kind == "hotspots" else ""))
     return bits
 
 

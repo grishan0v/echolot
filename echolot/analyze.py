@@ -30,7 +30,7 @@ from . import place as place_mod
 from . import recording as recording_mod
 from . import report as report_mod
 from . import stacks as stacks_mod
-from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
+from .config import LAUNCH, NO_ANCHOR, WHOLE, Config, ConfigError
 from .tp import TraceSession, load_detectors, render_sql, sql_value, toolchain_info
 
 
@@ -558,7 +558,8 @@ def _setup_context(tp, cfg: Config, upid: int,
     A scenario with `window: launch` has no anchors to read the two numbers
     from: they come from the launch the platform records (launch.py), with
     what closed the window beside them. `trace` names the file when that
-    launch is not there.
+    launch is not there. One with `window: whole`, and any under
+    `--whole-trace`, takes the trace's own first and last moments (#519).
     """
     tp.exec_script(render_sql(
         (SQL_DIR / "context.sql").read_text(encoding="utf-8"),
@@ -575,6 +576,8 @@ def _setup_context(tp, cfg: Config, upid: int,
             "recorded: echolot probe <trace>")
     if cfg.scenario_window == LAUNCH:
         bounds = launch_mod.find(tp, upid, trace)
+    elif cfg.scenario_window == WHOLE:
+        bounds = launch_mod.whole(tp)
     for phase in ("window.sql", "environment.sql"):
         tp.exec_script(render_sql(
             (SQL_DIR / phase).read_text(encoding="utf-8"),
@@ -710,8 +713,9 @@ def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None)
     that be visible rather than guessed at.
 
     `launch` is what `launch.find` returned for a scenario whose window is
-    the launch. Such a window has no anchors to prove; it says what closed it
-    (`defined_by`), and its startup block is that launch.
+    the launch, or `launch.whole` for one that is the whole trace. Such a
+    window has no anchors to prove; it says what defined it (`defined_by`),
+    and a launch's startup block is that launch.
     """
     rows = tp.query(
         "SELECT ts_start, ts_end, "
@@ -893,6 +897,8 @@ def _startup_info(tp, window: dict, process: str, launch: dict | None = None) ->
     if start is None or end is None:
         return None
     package = process.split(":", 1)[0]
+    if launch is not None and launch.get("startup_id") is None:
+        launch = None  # the whole trace: built from no launch
     own = f" OR startup_id = {int(launch['startup_id'])}" if launch else ""
     try:
         tp.exec_script("INCLUDE PERFETTO MODULE android.startup.startups;")

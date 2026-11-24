@@ -468,9 +468,14 @@ def test_show_prints_the_verdict_as_text(tmp_path: Path) -> None:
                  "report 2 · AGENTTMP_insert_cards",
                  "fix:        One transaction for the whole fill.",
                  "expected:   300–400 ms",
-                 "confidence: high — three runs in each of two rounds",
+                 # Set against nothing: its confidence is about what the place
+                 # costs, and whether it is what changed was not measured (#538).
+                 "against: nothing — no reference was recorded, so the causes are where the "
+                 "build measured spends its time; none is shown to be what changed",
+                 "confidence: high that it costs this — three runs in each of two rounds",
+                 "changed:    not measured — nothing was recorded to set it against",
                  "cleanup: removed — echolot found none left in the sources",
-                 "verdict: 1 cause(s)"):
+                 "verdict: 1 cause(s), no reference"):
         check(f"says: {want}", want in out, out)
     check("the summary is not said twice", out.count("Nearly all of the extra time") == 1, out)
 
@@ -783,3 +788,137 @@ def test_a_cost_reads_as_a_measurement_and_an_estimate_as_an_estimate() -> None:
               shown(**odd))
     check("a description that is not text is left out",
           cost_line(shown(cost_ms=5, cost_of=3)) == ["       cost:       5 ms"])
+
+
+# --- what the build is set against (#538) ------------------------------------
+#
+# Five blind hunts with no build from before the change each named the same
+# long-standing hotspot, a control with no change among them, and the answer
+# form called it the place of the regression. A verdict names the report of
+# its reference in `against`; without one its causes read as where the build
+# measured spends its time, whatever its summary says.
+
+REFERENCE = report(uninstrumented_cpu=["pool-1-thread-1"], main_thread_block=["Store.fill"])
+AGAINST = {"report": 1, "what": "the release before the change, 4.1, on the same phone"}
+SET_AGAINST: dict[str, Any] = {
+    **VERDICT, "against": AGAINST,
+    "inside": {"report": 3, "location": "AGENTTMP_fill"},
+    "causes": [{**VERDICT["causes"][0], "evidence": [
+        {"report": 1, "detector": "main_thread_block", "location": "Store.fill"},
+        {"report": 2, "detector": "uninstrumented_cpu", "location": "arch_disk_io_0"},
+        {"report": 3, "location": "AGENTTMP_insert_cards"},
+    ]}],
+}
+
+
+def test_a_verdict_set_against_a_reference_reads_as_a_regression(tmp_path: Path) -> None:
+    p = hunt_with(tmp_path, REFERENCE, ROUND_1, ROUND_2)
+    code, out, err = run(p, "hunt", "--verdict", write(p, SET_AGAINST))
+    check("the check accepts it and says what it is set against", code == 0
+          and "against report 1: a regression — each cause cites a row of the build measured, "
+              "outside the reference" in out, out + err)
+    code, out, err = run(p, "hunt", "--done", "--verdict", write(p, SET_AGAINST))
+    check("closing says it too", code == 0 and "against report 1: a regression" in out, out + err)
+    h = hunt_mod.load(p)
+    check("kept as it came, and the reference beside it",
+          h["verdict"] == SET_AGAINST and h["verdict_check"]["against"] == 1, h["verdict_check"])
+    _, out, _ = run(p, "hunt", "--show", "1")
+    check("--show names the reference", "against: report 1 — the release before the change, 4.1, "
+          "on the same phone" in out, out)
+    check("and its confidence is the agent's about the change, with no second answer",
+          "confidence: high — three runs" in out and "changed:" not in out
+          and "that it costs this" not in out, out)
+    check("--list says what it was set against",
+          "verdict: 1 cause(s) against report 1" in run(p, "hunt", "--list")[1])
+
+
+def test_a_verdict_with_no_reference_reads_as_where_the_build_spends_its_time(
+        tmp_path: Path) -> None:
+    p = hunt_with(tmp_path, ROUND_1, ROUND_2)
+    code, out, _ = run(p, "hunt", "--verdict", write(p, VERDICT))
+    check("accepted, and said what it is without one", code == 0
+          and "against nothing: no reference, so its causes read as where this build spends "
+              "its time, not as what changed" in out, out)
+    run(p, "hunt", "--done", "--verdict", write(p, VERDICT))
+    check("recorded as set against nothing",
+          hunt_mod.load(p)["verdict_check"]["against"] is None, hunt_mod.load(p)["verdict_check"])
+
+
+def test_a_verdict_recorded_before_echolot_asked_reads_as_it_did() -> None:
+    """A record with no `against` in its check is from before the field: its
+    silence says nothing about a reference, and nothing is claimed for it."""
+    check_then = {"checked_at": "2026-10-01T10:00:00+00:00", "reports": [1, 2], "cited": 3}
+    text = "\n".join(verdict_mod.lines(VERDICT, check_then))
+    check("no line about a reference", "against:" not in text and "changed:" not in text, text)
+    check("and the confidence as the agent gave it", "confidence: high — three runs" in text, text)
+    check("nor in --list's line", verdict_mod.reads_as(VERDICT, check_then) is None)
+
+
+@pytest.mark.parametrize("entry, says", [
+    (1, 'against: has to be an object like {"report": 1, "what": "the release before the change"}'),
+    ({"report": 1}, "against.what: required, a non-empty string — which build the reference is"),
+    ({"report": 1, "what": " "}, "against.what: required"),
+    ({"report": 0, "what": "4.1"}, "against.report: the number of the report this investigation "
+                                   "filed for the reference, 1 or more"),
+    ({"report": "1", "what": "4.1"}, "against.report: the number of the report"),
+    ({"report": 9, "what": "4.1"}, "against: report 9 is not one of this investigation's reports "
+                                   "(it has 1, 2, 3)"),
+    ({"report": 1, "what": "4.1", "build": "x"}, "against: no such field build — the fields are "
+                                                 "report, what"),
+])
+def test_what_against_may_hold(entry: Any, says: str) -> None:
+    why = problems({**SET_AGAINST, "against": entry}, REFERENCE, ROUND_1, ROUND_2)
+    check(f"refused: {says}", any(says in w for w in why), why)
+
+
+def test_a_reference_has_to_be_set_against_a_row_of_the_build_measured(tmp_path: Path) -> None:
+    """A cause whose every row is the reference's is the earlier build's, and
+    says nothing of what changed; nor is the piece found the reference's."""
+    only_before = {**SET_AGAINST, "inside": {"report": 1, "location": "Store.fill"},
+                   "causes": [{**SET_AGAINST["causes"][0], "evidence": [
+                       {"report": 1, "detector": "main_thread_block", "location": "Store.fill"}]}]}
+    why = problems(only_before, REFERENCE, ROUND_1, ROUND_2)
+    check("both refused, by name", len(why) == 2
+          and why[0] == "inside: report 1 is the reference — the piece found is the build "
+                        "measured's, in a report other than the reference"
+          and why[1] == "causes[0].evidence: every row it cites is in report 1, the reference — "
+                        "a change shows in a row of the build measured, in a report other than "
+                        "the reference", why)
+    p = hunt_with(tmp_path, REFERENCE, ROUND_1, ROUND_2)
+    err = refused(p, only_before)
+    check("and the close says it on stderr", "every row it cites is in report 1, the reference"
+          in err, err)
+    check("a hunt that found nothing against its reference is still a verdict",
+          problems({**SET_AGAINST, "inside": {"report": 2, "location": "Store.fill"},
+                    "causes": []}, REFERENCE, ROUND_1, ROUND_2) == [])
+
+
+def test_a_reference_of_another_scenario_is_refused() -> None:
+    scroll = {**REFERENCE, "scenario": "feed_scroll"}
+    launch = {**ROUND_1, "scenario": "coldStart"}
+    later = {**ROUND_2, "scenario": "coldStart"}
+    why = problems(SET_AGAINST, scroll, launch, later)
+    check("each report it is set against, named", why == [
+        "against: report 1 measured `feed_scroll` and report 2 measured `coldStart` — a "
+        "reference is the same scenario on another build",
+        "against: report 1 measured `feed_scroll` and report 3 measured `coldStart` — a "
+        "reference is the same scenario on another build"], why)
+    check("the same scenario passes", problems(SET_AGAINST, {**REFERENCE, "scenario": "coldStart"},
+                                               launch, later) == [])
+    check("and a report that names none is taken as it is",
+          problems(SET_AGAINST, scroll, ROUND_1, ROUND_2) == [])
+
+
+def test_opening_with_no_change_named_says_what_the_hunt_can_answer(tmp_path: Path) -> None:
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    for since in (["--since", "unknown"], ["--since", " Unknown "], []):
+        code, out, err = run(tmp_path, "hunt", "the list stutters", *since)
+        check(f"{since}: opened, and said there is nothing to set the build against", code == 0
+              and "the answer is where this build spends its time, not what changed" in out
+              and '`echolot guide hunt`, "A reference"' in out, out + err)
+    code, out, _ = run(tmp_path, "hunt", "cold start 3 s → 7 s", "--since", "the tab redesign")
+    check("with a change named, the change and nothing more",
+          code == 0 and "  after: the tab redesign\n" in out and "spends its time" not in out, out)
+    check("change_named", [hunt_mod.change_named(s) for s in (None, "", " unknown", "UNKNOWN",
+                                                              "4.1", "since Tuesday")]
+          == [False, False, False, False, True, True])

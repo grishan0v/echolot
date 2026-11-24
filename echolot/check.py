@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import hunt as hunt_mod
+from . import files as files_mod
 from . import job, ready, recorder, state, stats, when
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
 from .pages import compare_page, report_page
@@ -615,13 +616,12 @@ def comparison(report_dir: Path) -> dict[str, Any] | None:
     Which report that side was is told by when it was written, a stamp each
     report carries and the comparison keeps."""
     path = report_dir / "comparison.json"
+    found = files_mod.read_comparison(path)
+    if isinstance(found, files_mod.Refusal) or not compare_page.has_reading(found):
+        return None
     try:
         made = path.stat().st_mtime
-        found = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found) \
-            or compare_page.misshapen(found):
+    except OSError:
         return None
     if made + 1 < _newest([report_dir / "report.json"]):
         return None
@@ -629,9 +629,7 @@ def comparison(report_dir: Path) -> dict[str, Any] | None:
         beside = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    after = found.get("after")
-    if not isinstance(beside, dict) or not isinstance(after, dict) \
-            or after.get("generated_at") != beside.get("generated_at"):
+    if not isinstance(beside, dict) or found["after"].get("generated_at") != beside.get("generated_at"):
         return None
     return found
 
@@ -656,18 +654,12 @@ def compare_reads(report_dir: Path, since: float) -> tuple[str, str] | None:
 
 
 def comparison_fault(report_dir: Path) -> str | None:
-    """What is wrong with the comparison there, in words, when it is one
-    `compare` wrote with its plain reading and a part of that reading does
-    not hold what `compare` writes (`compare_page.misshapen`, #733). None for
-    any other file, or for none: those are no comparison to draw, and the
-    page says there is none yet."""
-    try:
-        found = json.loads((report_dir / "comparison.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found):
-        return None
-    return compare_page.misshapen(found)
+    """Why the comparison there does not read, in words (`files.read_comparison`,
+    #733, #870). None where there is none, or where it reads: one that reads
+    and is no page to draw (written without its plain reading, or of another
+    report) is no comparison yet, and the page says so."""
+    found = files_mod.read_comparison(report_dir / "comparison.json")
+    return found.why if isinstance(found, files_mod.Refusal) and not found.absent else None
 
 
 def _tally(report_path: Path) -> list[tuple[str, int, str]] | None:

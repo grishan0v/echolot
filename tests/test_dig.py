@@ -191,7 +191,9 @@ def test_the_request_of_an_agent_started_from_the_page():
         "--hunt 4` that names all 3 trace files there (it takes files, not a folder), and do not record them again. "
         "Every later round records anew, once markers are in: build and install the app, then "
         "`echolot collect --hunt 4` and `echolot analyze --hunt 4`."), rest[2])
-    check("after which change", rest[3] == "- After which change: unknown.")
+    check("after which change, with nothing to set the build against", rest[3] == (
+        "- After which change: unknown. Reference: none — no earlier build was recorded to set this one against, "
+        "so the answer is where this build spends its time, not what changed."), rest[3])
     check("what it may do, and that the rest is refused", rest[4] == "- You may run `echolot`, `./gradlew` and `adb` "
           "without asking, and edit files under `app/src/main` and `feature/*/src/main`, and `.echolot/verdict.json`. "
           "Everything else is refused: git, any other program, any other file. Do not commit anything.")
