@@ -283,6 +283,23 @@ def test_a_stretch_that_is_not_a_launch_is_a_run():
           plain.verdict(rep)["text"])
 
 
+def test_a_window_after_the_launch_or_before_it_is_a_run_though_the_trace_holds_a_startup():
+    """A page load recorded after a cold start read "The launch takes 1.3 s …
+    Measured on 5 launches" (#927)."""
+    def kind(**startup):
+        rep = make([entry("main_thread_waits", SAMPLES["main_thread_waits"][0])])
+        rep["window"]["startup"] = {"type": "cold", "dur_ms": 600.0, "reasons": {}, **startup}
+        return plain._Ctx(rep).kind, plain.verdict(rep)["text"]
+    after = kind(from_window_start_ms=-2400.0, from_window_end_ms=-3100.0, in_window_ms=0.0)
+    check("a window that opens after the startup ended is a run", after[0] == "run"
+          and after[1].startswith("The run takes"), after)
+    before = kind(from_window_start_ms=350.0, from_window_end_ms=-20000.0, in_window_ms=600.0)
+    check("one that opens before the app started, with no start anchor, is a run", before[0] == "run", before)
+    on = kind(from_window_start_ms=-140.0, from_window_end_ms=-300.0, in_window_ms=460.0)
+    check("one from bindApplication, inside the startup, is the launch", on[0] == "launch"
+          and on[1].startswith("The launch takes"), on)
+
+
 def test_what_a_row_does_not_say_a_sentence_does_not_say():
     """Three places where a template could claim more than the row holds."""
     inside = row("worker_pool_#", 700.0, count=2, detail="33% blocked in loadConfig")
@@ -827,7 +844,8 @@ def test_build_carries_the_budget_and_aggregate_the_reading():
         return report_mod.build(
             "t.perfetto-trace",
             {"process": MAIN, "pid": 1, "duration_ms": window_ms,
-             "startup": {"type": "cold", "dur_ms": window_ms, "reasons": {}}},
+             "startup": {"type": "cold", "dur_ms": window_ms, "reasons": {}, "from_window_start_ms": -120.0,
+                         "from_window_end_ms": -120.0, "in_window_ms": window_ms - 120.0}},
             [entry("main_thread_waits", [waits])], scenario="coldStart", budget_ms=500.0)
 
     reports = [one(ms) for ms in (1900.0, 2000.0, 2100.0)]

@@ -279,6 +279,9 @@ def _reports(view: dict[str, Any], link: Link) -> str:
         warning = verdict.get("warning")
         warned = (f'<div class="callout">{kit.icon("red")}<p class="small">{kit.prose(warning)}</p></div>'
                   if warning else "")
+        # And what the CLI says of the window beside its length (#927).
+        warned += "".join(f'<div class="callout">{kit.icon("yellow")}<p class="small">{kit.prose(note)}</p></div>'
+                          for note in rep.get("notes") or [])
         cards.append(
             f'<li class="rep"><div class="rowf">{kit.verdict_pill(verdict.get("level"))}{name}</div>{warned}'
             f'<p class="measure">{e(verdict.get("text") or "")}</p>'

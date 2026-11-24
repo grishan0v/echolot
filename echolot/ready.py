@@ -632,7 +632,8 @@ def latest(st: dict) -> list[dict[str, Any]]:
                                   "to write it anew.")
             else:
                 entry.update(verdict=report["verdict"], path=rep["path"],
-                             plain=report_words(rep, report, entry["said"]))
+                             plain=report_words(rep, report, entry["said"]),
+                             notes=report_page.window_notes(report))
         out.append(entry)
     return out
 
