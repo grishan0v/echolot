@@ -41,7 +41,11 @@ def cmd_reflect(args) -> int:
     shell or from CI — it falls back to the recorder log alone. That report
     is smaller and says so: see `from_log.py`.
     """
-    project = Path(args.project or ".").resolve()
+    # The project `main` resolved: `--project`, else the one this folder is
+    # in. From `app/`, reflect read `app/.echolot/log` and wrote its report
+    # under `app/` (#835).
+    from ..project import resolve
+    project = (getattr(args, "where", None) or resolve(args)).folder
     # (reader, ref), newest first, whichever agent wrote the session.
     found: list = []
     tdir = None
