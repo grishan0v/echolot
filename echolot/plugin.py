@@ -223,6 +223,18 @@ def claude_left_out(project: Path, home: Path | None = None) -> bool:
     return bool(found) and "claude" not in found
 
 
+def codex_left_out(project: Path, home: Path | None = None) -> bool:
+    """Whether the plugin is in Claude Code, not in Codex, and nothing says
+    this runs in Claude Code.
+
+    The mirror of `claude_left_out`: `init --for plugin` there gives Codex
+    no pointer and no rule, and sends it to a plugin skill it does not have
+    (#841). In Claude Code it is the right command, as before (#598).
+    """
+    found = for_project(project, home)
+    return "claude" in found and "codex" not in found and running_in() != "claude"
+
+
 def init_for(project: Path, home: Path | None = None) -> str | None:
     """The `init` a project with the plugin runs, or None when no plugin is found.
 
