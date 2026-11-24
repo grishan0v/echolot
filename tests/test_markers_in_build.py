@@ -21,6 +21,10 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
+import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -42,13 +46,16 @@ SOURCE = "app/src/main/kotlin/App.kt"
 
 
 def answer(*names: str, prefix: str = "AGENTTMP_", apks: int = 1, files: int = 3,
-           tested: bool = True, status: str | None = None) -> str:
-    """What the phone prints for the build read: grep's own test, a line per APK, the names, grep's status."""
-    lines = [f"echolot-selftest {prefix}echolot"] if tested else []
-    lines += [f"echolot-apk  29675248                     {files} files"] * apks
-    lines += list(names)
-    lines.append(f"echolot-grep {status if status is not None else ('0' if names else '1')}")
-    return "\n".join(lines) + "\n"
+           tested: bool = True, status: str | None = None, end: str = "\0") -> str:
+    """What the phone prints for the build read: grep's own test, a line per APK, the names, grep's status.
+
+    `end` is how grep ends each name it prints: a zero byte on Android's
+    toybox, as on GNU grep (#907), a line break on BSD grep.
+    """
+    out = f"echolot-selftest {prefix}echolot{end}\n" if tested else "\n"
+    out += f"echolot-apk  29675248                     {files} files\n" * apks
+    out += "".join(name + end for name in names)
+    return out + f"\necholot-grep {status if status is not None else ('0' if names else '1')}\n"
 
 
 def planted(*names: str) -> runner.Planted:
@@ -84,11 +91,120 @@ def test_the_phone_s_answer_is_the_names_or_why_not() -> None:
     for out, why in ((answer(apks=0), "`pm path` lists no APK"),
                      (answer(files=0), "`unzip` on the phone lists no code"),
                      (answer(tested=False), "`grep` on the phone does not read"),
-                     (answer("AGENTTMP_a", status="2"), "`grep` on the phone does not read"),
+                     (answer("AGENTTMP_a", status="2"),
+                      "`grep` on the phone ended with status 2 on the app's code"),
+                     (answer("AGENTTMP_a").rsplit("echolot-grep", 1)[0],
+                      "the phone's answer stops before `grep` on the app's code said"),
                      (answer().replace("AGENTTMP_echolot", "\x11AGENTTMP_echolot"),
                       "`grep` on the phone does not read")):
         names, said = read(out, "AGENTTMP_")
         check(f"cannot tell: {why}", names is None and said.startswith(why), (names, said))
+
+
+# What `-z -o` prints is grep's own: each name ends with the zero byte it was
+# read by on toybox (measured on Android 15) and GNU grep, with a line break
+# on BSD grep, the one on a Mac; adb's older shell turned each line break into
+# CR LF on its way through a terminal; a sed that is handed the test's zero
+# byte may keep it, drop it, or add a line break after it.
+FORMS = {
+    "zero bytes, as toybox and GNU grep print": "\0",
+    "line breaks, as BSD grep prints": "\n",
+    "zero bytes and CR LF, through adb's older shell": "\0",
+    "line breaks as CR LF, through adb's older shell": "\n",
+}
+
+
+@pytest.mark.parametrize("form", FORMS)
+def test_the_names_are_read_however_the_phone_s_grep_ends_them(form: str) -> None:
+    out = answer("AGENTTMP_a", "AGENTTMP_a", "AGENTTMP_load_42", end=FORMS[form])
+    if "CR LF" in form:
+        out = out.replace("\n", "\r\n")
+    check(form, runner._build_names_read(out, "AGENTTMP_")
+          == ({"AGENTTMP_a", "AGENTTMP_load_42"}, ""), repr(out))
+    split = out.replace("echolot-apk", "echolot-apk  0                     0 files\necholot-apk", 1)
+    check("a split APK without code adds none", runner._build_names_read(split, "AGENTTMP_")
+          == ({"AGENTTMP_a", "AGENTTMP_load_42"}, ""), repr(split))
+
+
+def test_the_answer_a_phone_gave_the_first_version_of_the_script_is_read() -> None:
+    """#907, as a phone with Android 15 answered: toybox's grep ended the
+    test's name with a zero byte, sed kept it, and the APK's line followed
+    with no line break between. Read by lines, the test failed, no line
+    started with `echolot-apk`, and the reason given was `pm path`."""
+    out = ("echolot-selftest AGENTTMP_echolot\0echolot-apk  14678464                     "
+           "3 files\necholot-grep 1\n")
+    check("a build with none of them, not a phone that cannot tell",
+          runner._build_names_read(out, "AGENTTMP_") == (set(), ""),
+          runner._build_names_read(out, "AGENTTMP_"))
+
+
+def test_a_grep_that_fails_its_test_is_the_reason_whatever_else_is_missing() -> None:
+    """The test is what says the rest of the answer can be read at all: a
+    reason about the APKs, given while grep printed something else, sent the
+    reader to `pm path`, which listed the APK fine."""
+    read = runner._build_names_read
+    names, said = read(answer("AGENTTMP_a", tested=False, apks=0), "AGENTTMP_")
+    check("grep's, not pm path's", names is None and said.startswith(
+        "`grep` on the phone does not read the app's code the way this needs (handed a "
+        "string whose answer is AGENTTMP_echolot, it printed nothing)"), said)
+    glued = answer().replace("AGENTTMP_echolot\0\n", "AGENTTMP_echolot-apk  14678464\n")
+    names, said = read(glued, "AGENTTMP_")
+    check("and what it printed, when it printed something else",
+          names is None and said.endswith("it printed 'AGENTTMP_echolot-apk  14678464')"), said)
+    check("which is never read as a build without the markers",
+          read(answer(tested=False), "AGENTTMP_")[0] is None)
+
+
+@pytest.mark.skipif(shutil.which("sh") is None or shutil.which("grep") is None,
+                    reason="no POSIX shell here")
+@pytest.mark.parametrize("zero", [False, True], ids=["this machine's grep",
+                                                    "its names ended with zero bytes"])
+def test_the_script_reads_a_build_with_this_machine_s_shell_and_grep(
+        tmp_path: Path, zero: bool) -> None:
+    """The script run whole, with `pm` and `unzip` stood in for and this
+    machine's own sh, grep, sed and tail: BSD grep on a Mac ends what it
+    prints with line breaks, GNU grep on Linux, as on CI, with zero bytes,
+    the way toybox does on a phone. The first version read right on a Mac
+    and on no phone (#907), so the same grep is also run with every line
+    break it prints turned into a zero byte: toybox's answer, on any machine.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if zero:
+        (bin_dir / "grep").write_text(
+            "#!/bin/sh\n"
+            f'{shlex.quote(shutil.which("grep") or "grep")} "$@" > "$0.out"; s=$?\n'
+            "tr '\\n' '\\0' < \"$0.out\"\n"
+            "exit $s\n")
+    # Two dex files in the base APK, each string preceded by its length and
+    # ended with a zero byte, as in a dex's string data; a split without code.
+    dex = (r"dex\n035\000\012AGENTTMP_a\000\005Hello\000\020AGENTTMP_load_\000"
+           r"\003\001\002\000\011xAGENTTMP_b\000")
+    (bin_dir / "pm").write_text(
+        "#!/bin/sh\n"
+        "echo package:/data/app/com.example.app/base.apk\n"
+        "echo package:/data/app/com.example.app/split_config.arm64_v8a.apk\n")
+    (bin_dir / "unzip").write_text(
+        "#!/bin/sh\n"
+        'case "$1 $2" in\n'
+        "  '-l '*base.apk) printf -- ' 1000  classes.dex\\n 800  classes2.dex\\n"
+        "--------  -------\\n     1800  2 files\\n' ;;\n"
+        "  '-l '*) printf -- '--------  -------\\n        0  0 files\\n' ;;\n"
+        f"  '-p '*base.apk) printf '{dex}'; printf '{dex}' ;;\n"
+        "esac\n")
+    for stub in bin_dir.iterdir():
+        stub.chmod(0o755)
+
+    def phone(args, stdin=None, timeout=120):
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        return subprocess.run(["sh", "-c", args[-1]], capture_output=True, text=True,
+                              env=env, timeout=timeout).stdout
+
+    found = runner.build_names(SERIAL, PACKAGE, "AGENTTMP_", run=phone)
+    check("every prefixed name in the code, and nothing said against it",
+          found == ({"AGENTTMP_a", "AGENTTMP_load_", "AGENTTMP_b"}, ""), found)
+    lacking = runner.unbuilt(SERIAL, PACKAGE, planted("AGENTTMP_a", "AGENTTMP_c"), run=phone)
+    check("and the one the build lacks named", lacking == (["AGENTTMP_c"], ""), lacking)
 
 
 def test_the_script_is_given_the_package_and_the_prefix_quoted() -> None:
