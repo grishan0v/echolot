@@ -333,6 +333,12 @@ def _after(visit: Visit, params: dict[str, str]) -> Page:
             return _nothing(visit, "No such scenario", "The config names no scenario by that name.")
         rep, mine = found["report"], bool(found.get("focus"))
     found = _comparison(visit, rep) if rep else None
+    fault = check.comparison_fault(Path(rep["path"]).parent) if found is None and rep and not rep.get("error") else None
+    if fault:
+        return _nothing(visit, "The comparison does not read",
+                        f"The comparison beside the last report does not hold what `echolot compare` writes: {fault}. "
+                        "It was edited by hand or written by another tool. Running `echolot compare --html` "
+                        "again writes it anew.")
     if found is None:
         return _nothing(visit, "No comparison yet", "It appears here once the app has been checked a second time: "
                         "the new report is then compared with the one before it. A comparison made in a terminal "
