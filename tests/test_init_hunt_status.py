@@ -615,3 +615,31 @@ def test_the_line_to_collect_by_hand_has_no_count_for_a_macrobenchmark(
     check("and the line hunt prints, inside the investigation it opened",
           line.strip() + " --hunt 1," in by and by.endswith("--hunt 1")
           and (config is CONFIG or ("-n " not in by and "_iter" not in by)), err[-500:])
+
+
+@pytest.mark.parametrize("finished", [False, True], ids=["running", "finished"])
+def test_hunt_waits_for_a_running_collect(tmp_path: Path, monkeypatch, finished: bool) -> None:
+    """#717: a new question while a collect records for the open one."""
+    project = _project(tmp_path)
+    monkeypatch.chdir(project)
+    _run("hunt", "cold start slow")
+    now = time.time()
+    progress = {"scenario": "coldStart", "pid": os.getpid(), "iterations": 5, "done": 2,
+                "finished": now if finished else None, "hunt": 1, "started": now - 60}
+    if finished:
+        progress["exit"] = 0
+    (project / runner.PROGRESS_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (project / runner.PROGRESS_FILE).write_text(json.dumps(progress), encoding="utf-8")
+    loose = sorted((project / ".echolot" / "traces").glob("*.perfetto-trace"))
+    code, _, err = _run("hunt", "is the list scroll janky")
+    h = hunt_mod.load(project)
+    if finished:
+        check("once it finished, hunt opens as before", code == 0 and h["n"] == 2, err)
+        return
+    check("refused, saying a collect is running", code == 2
+          and "a collect is running: coldStart, 2/5 iterations" in err
+          and "for #1" in err and "wait for it to finish" in err, err)
+    check("no second collect offered", "echolot collect" not in err, err)
+    check("the open investigation stays open", h["n"] == 1 and h["status"] == "open", h)
+    check("its repeats stay where the collect writes them",
+          sorted((project / ".echolot" / "traces").glob("*.perfetto-trace")) == loose)

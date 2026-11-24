@@ -3707,6 +3707,20 @@ def cmd_hunt(args) -> int:
             print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
             recorder.failed(str(e))
             return 2
+        # Nor while a collect runs. Its repeats so far were set aside into a
+        # folder of their own and the rest landed loose, the investigation it
+        # records for was closed as abandoned under it, and the line by hand
+        # was a second collect on the same phone (#717). `status` and the
+        # page's Dig deeper already say to wait.
+        run = state.collect_state(project)
+        if (run or {}).get("status") == "running":
+            inside = f" for #{run['hunt']}" if run.get("hunt") else ""
+            said = (f"a collect is {state.collect_line({'collect': run})}{inside} — "
+                    f"wait for it to finish (`echolot` says how far it got), then ask again")
+            print(f"error: {said}", file=sys.stderr)
+            print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
+            recorder.failed(said)
+            return 2
         scenario = cfg.scenario_name if cfg else None
         sha = cfg.sha if cfg else None
         confirmed = cfg.confirmed() if cfg else {}
