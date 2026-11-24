@@ -65,7 +65,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from . import needs as needs_mod
-from . import orphans, sandbox
+from . import orphans, sandbox, tpshell
 from .config import NUMBER, ConfigError
 
 _CALIB = re.compile(
@@ -1132,6 +1132,12 @@ class TraceSession:
             self._tp = orphans.open_processor(
                 binary, lambda address: TraceProcessor(
                     trace=_then(path, extra), remote=address))
+        except tpshell.Failed as e:
+            self.close()
+            # A shell that would not start: the binary's fault, or the
+            # machine's, and never the trace's — but the trace is what the
+            # person is looking at, so it is named too (#872).
+            raise tpshell.Failed(f"{path}: {e}") from e
         except TraceProcessorException as e:
             self.close()
             # A file that is there and is not a trace: a capture cut short, a
@@ -1139,8 +1145,8 @@ class TraceSession:
             # PerfettoException traceback, and one such file among the
             # repeats took a whole multi-trace `analyze` with it without
             # saying which. Only the parse is the file's fault — a
-            # trace_processor that would not start is not, and stays what it
-            # is.
+            # trace_processor that would not start is not, and is
+            # `tpshell.Failed` above.
             said = str(e)
             if "parsing trace" not in said:
                 raise

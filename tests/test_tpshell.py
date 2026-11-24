@@ -11,6 +11,7 @@ another before that shell listens on it.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -59,24 +60,22 @@ def test_sessions_after_the_first_are_ready_in_well_under_a_second(trace: Path) 
 
 
 def test_a_shell_that_ends_before_it_answers_says_so_at_once(tmp_path: Path) -> None:
-    from perfetto.trace_processor import TraceProcessorException
-
     binary = _binary(tmp_path, 'echo "boom: not a trace_processor" >&2; exit 3')
     started = time.monotonic()
     shell = tpshell.Shell(binary)
     pid = shell.pid
-    with pytest.raises(TraceProcessorException) as e:
+    with pytest.raises(tpshell.Failed) as e:
         shell.wait()
     assert time.monotonic() - started < 5, "waited out the limit for a shell that had ended"
-    assert "Trace processor failed to start." in str(e.value)
-    assert "boom: not a trace_processor" in str(e.value)
+    said = str(e.value)
+    assert said.startswith(f"trace_processor did not start: {binary} exited with code 3 "
+                           "before it answered."), said
+    assert said.endswith("It printed:\n  boom: not a trace_processor"), said
     assert shell.pid is None and not _running(pid)
     assert shell.port not in tpshell._handed
 
 
 def test_a_shell_that_never_answers_is_stopped_at_the_limit(tmp_path: Path) -> None:
-    from perfetto.trace_processor import TraceProcessorException
-
     shell = tpshell.Shell(_binary(tmp_path, "echo listening-nowhere >&2; exec sleep 60"))
     pid = shell.pid
     # A script written a moment ago takes ~0.4 s to start on macOS: the
@@ -84,8 +83,9 @@ def test_a_shell_that_never_answers_is_stopped_at_the_limit(tmp_path: Path) -> N
     printed = time.monotonic() + 10
     while os.fstat(shell._err.fileno()).st_size == 0 and time.monotonic() < printed:
         time.sleep(0.01)
-    with pytest.raises(TraceProcessorException) as e:
+    with pytest.raises(tpshell.Failed) as e:
         shell.wait(limit=time.monotonic() - shell._started + 0.3)
+    assert re.search(r"did not answer within [\d.]+ s, and was stopped\.", str(e.value)), str(e.value)
     assert "listening-nowhere" in str(e.value)
     assert shell.asked > 3, shell.asked
     assert not _running(pid), "the shell outlived the error"

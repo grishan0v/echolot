@@ -109,10 +109,10 @@ def open_processor(binary: str, connect: Callable[[str], Any]) -> Any:
         except tpshell.Taken as e:
             close(tp)
             if not left:
-                from perfetto.trace_processor import TraceProcessorException
-                raise TraceProcessorException(
-                    f"Trace processor failed to start: it could not listen on "
-                    f"127.0.0.1 on any of {tpshell.TRIES} ports.\n{e}") from e
+                raise tpshell.Failed(
+                    f"trace_processor did not start: it could not listen on "
+                    f"127.0.0.1 on any of {tpshell.TRIES} ports, each taken by "
+                    f"another program as it started. {e}") from e
         except BaseException:
             close(tp)
             raise
