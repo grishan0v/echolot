@@ -169,7 +169,7 @@ which it was: `window.defined_by` is `launch` or `launch+reportFullyDrawn`.
 `window` takes the place of `start` and `end`: a scenario holds a window or
 anchors, and one with both does not load. It is written as the word, or as a
 block with `name: launch` beside `_source` and `_evidence`, the way an anchor
-is. `launch` is the only window there is; any other scenario names its
+is. Besides `launch` there is `whole`, below; any other scenario names its
 anchors. `echolot scan` drafts it for an app with a launcher Activity and no
 macrobenchmark, together with `runner.mode: launch`. It drafts it too, with
 `runner.mode: gradle`, for a macrobenchmark class that measures the launch:
@@ -193,6 +193,15 @@ launch window and an anchored one, though the scenario's name is the same.
 `compare` refuses such a pair. When a change adds or removes the app's
 `reportFullyDrawn()` call, name `start` and `end` for that comparison, so that
 both sides are cut the same way.
+
+`window: whole` takes the whole trace, its first moment to its last, for
+recordings made outside any scenario (#519): `window.defined_by` is `whole`.
+It takes no `budget_ms`, which is refused beside it: the recording is as long
+as somebody let it run. For a single trace there is no need to write it:
+`analyze <trace> --whole-trace` measures it as a scenario of its own called
+`whole-trace`, on the top-level thresholds, into `.echolot/out/whole-trace`.
+Use that, not an edit of the scenario's anchors, for a trace of another
+journey. `compare` refuses a whole-trace report against any other window.
 
 ### `scenario.budget_ms`
 
@@ -231,7 +240,17 @@ scenarios:
     runner:                    # the runner keys this scenario changes
       mode: command
       command: "adb shell input swipe 500 1500 500 300 600"
+      reset_policy: none       # nothing between repeats: the app stays where it is
 ```
+
+A swipe takes its last number as its length in milliseconds: 400 or more,
+since a shorter one lands as a tap on a loaded phone. A scroll may also keep
+no `start` or `end`, and the whole recording is then the scenario, with
+`duration_ms` longer than the script; or it is the project's own
+frame-timing macrobenchmark (`FrameTimingMetric`) in `gradle` mode, which
+`echolot scan` lists among the benchmarks. A question about a journey no
+scenario measures gets one of these before it is hunted, never the one
+scenario there is.
 
 Each key is the scenario's name, and its traces carry it:
 `feed_scroll_iter000.perfetto-trace`. A name is letters, digits, `_`, `.` and

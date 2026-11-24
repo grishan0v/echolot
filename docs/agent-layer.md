@@ -708,22 +708,28 @@ whole thing exists to remove sets in.
 The subagent works in its own window and returns only the conclusion:
 
 ```
+Against:       <the reference: report N, which build> | none — where this
+               build spends its time, against <the budget | late frames>;
+               not shown to be what changed
 Place:         <file:line or module>
 Evidence:      <detector, numbers from the report — measured, nothing else>
 Mechanism:     <why this costs that much time; steps it did not measure
                marked (inferred), steps it could not check marked (gap)>
 Suggestion:    <what to do>
-Confidence:    high | medium | low — and why
+Confidence:    high | medium | low — and why; with no reference, that it
+               costs this, and that it is what changed: not measured
 Ruled out:     <what it checked and did not carry to a cause>
 Also measured: <every marker it planted, one line and one number each>
 Cleanup:       temporary instrumentation removed | none was added
 ```
 
-Eight fields, and `reflect` checks for all eight. The last two were added
-after hunts that lost something: an agent measured the redundant work it was
-looking for at 252.7 ms and returned a conclusion about something else, with
-no field to put the number in; and a suspect nobody measured to the end costs
-the next hunt a round spent rediscovering it.
+Nine fields, and `reflect` checks for the eight below `Against`. `Ruled out`
+and `Also measured` were added after hunts that lost something: an agent
+measured the redundant work it was looking for at 252.7 ms and returned a
+conclusion about something else, with no field to put the number in; and a
+suspect nobody measured to the end costs the next hunt a round spent
+rediscovering it. `Against` came from hunts with nothing to compare: see
+[A hunt with no reference](#a-hunt-with-no-reference).
 
 The same answer is also written as a verdict file, which echolot can check and
 keep in a form that reads back; see [Closing with a verdict](#closing-with-a-verdict).
@@ -845,11 +851,53 @@ The scenario is the question's, so a config that no longer has it is drift,
 named among the signs that the investigation is not the one being asked
 about. `/echolot-hunt` picks it from the human's words, by the scenarios'
 names and anchors that `echolot status` and `echolot.yml` give, and asks
-when the words fit none of them or more than one. `/echolot-setup` adds a
-scenario to a config that has one without starting over: the scenario there
-moves under `scenarios:` as it was, and the new one is probed and anchored
-with the human the way the first was — its start from the probe's start
-candidates, the tap or the intent a command's journey begins with.
+when the words fit more than one. With one scenario the words are held to it
+all the same, by its name, its window and its runner: a question about a list
+that stutters once went into the only scenario there was, a cold start, and
+its scroll traces were recorded by hand outside `collect` (#539). When the
+words fit none, the hunt proposes a scenario of its own before anything is
+recorded. `/echolot-setup` adds one to a config that has one without starting
+over: the scenario there moves under `scenarios:` as it was, and the new one
+is probed and anchored with the human the way the first was — its start
+from the probe's start candidates, the tap or the intent a command's
+journey begins with. A journey a
+script paces is a `command` runner that drives the screen with
+`adb shell input swipe` (400 ms or more a swipe: a shorter one lands as a tap
+on a loaded phone), `reset_policy: none`, no anchors so the whole recording is
+the scenario, and `duration_ms` longer than the script; or the project's own
+frame-timing macrobenchmark (`FrameTimingMetric`) in `gradle` mode. `--scenario`
+with a name the config lacks refuses with exit 2, opens nothing, and says
+those two shapes.
+
+### A hunt with no reference
+
+A regression is a change, and a change is two builds. Asked "after which
+change", the human often has nothing better than "unknown", or the words are
+about how it is now: "the list stutters". In a fault-injection run, five
+blind cold-start hunts with no build from before the change all named the
+same place, a cost the app has had all along, and a control with no change
+at all named it as its cause with medium confidence. With one set, the loop
+returns the costliest place, changed or not.
+
+So before anything is recorded the hunt asks for a reference, the cheapest
+first: traces of an earlier build already on disk (an earlier
+investigation's rounds, a set recorded on a release before), an earlier build
+to install and record (the store build, a release's APK, a commit before the
+change), or none. With one, it is a regression hunt: the reference is
+analysed under the investigation first, filed as a report of its own, and
+`compare` sets the build measured against it. The same build recorded twice
+is no reference: it says how far the numbers wander, which each report's
+repeats already say.
+
+With none, the brief says `Reference: none` and the loop answers another
+question, where this build spends its time. It says first what counts as slow
+for the scenario and how the build stands against it — the window against
+`budget_ms` for a launch, the frames the app made late for a scroll, `Buffer
+Stuffing` being latency rather than a stutter — skips `compare` between rounds,
+which with nothing changed in the app would compare only its own markers, and
+asks of each candidate how much of the slow part it accounts for. Its verdict
+names no reference, and echolot reads it as the costliest places wherever it
+is shown. `echolot hunt "<q>"` with no change named says so when it opens.
 
 ### Who opens it, and who closes it
 
@@ -898,6 +946,7 @@ echolot hunt --verdict .echolot/verdict.json            # only checks it, record
 ```json
 {
   "summary": "Nearly all of the extra time is one call, Store.fill(): 1.5 s of the 2.1 s launch.",
+  "against": {"report": 1, "what": "the release before the change, 4.1, recorded on the same phone"},
   "inside": {"report": 2, "location": "AGENTTMP_fill"},
   "causes": [
     {
@@ -934,10 +983,10 @@ echolot hunt --verdict .echolot/verdict.json            # only checks it, record
 
 Required: `summary`; `causes`, a list that is empty when nothing was found; and
 in each cause `title`, `where` (a list of places in the code) and `evidence`.
-A verdict with one cause and no estimate is a verdict. Optional: `mechanism`,
-`cost_ms` with `cost_of`, `fix`, `expected_ms`, `confidence` (`high`, `medium`
-or `low`) with `confidence_why`, `inside` and `cleanup` (`removed`,
-`none_added` or `left`) — and three lists at the top of the verdict.
+A verdict with one cause and no estimate is a verdict. Optional: `against`,
+`mechanism`, `cost_ms` with `cost_of`, `fix`, `expected_ms`, `confidence`
+(`high`, `medium` or `low`) with `confidence_why`, `inside` and `cleanup`
+(`removed`, `none_added` or `left`) — and three lists at the top of the verdict.
 `ruled_out` and `also_measured` are the `Ruled out` and `Also measured` lines of
 the text conclusion, one string each. `suggestions` are changes that belong to
 no one cause, such as one change that makes several go away: each is
@@ -956,6 +1005,18 @@ never taken for a guess, by a reader of the verdict or by a page drawn from it.
 Only their shape is checked: echolot does not recompute a cost from the rows,
 and `hunt --show` says a single measured number as it is and a single estimate
 as "about".
+
+**Against.** `against` is what the build measured was set against: `report`,
+the number the reference's report is filed under, and `what`, which build it
+is, in words, since no report records a build. It is held to the reports: the
+reference is one this investigation filed and reads, it measured the same
+scenario as the reports set against it, every cause cites a row of a report
+other than the reference, and `inside` is in one of those. A verdict without
+it is one with no reference: `--show`, `--list` and the page read its causes as
+where the build spends its time, each cause's `confidence` as what it costs,
+and say beside it that whether it is what changed was not measured. That is
+decided by the field, not by the summary's words, so a hotspot is never shown
+as a regression because a sentence called it one.
 
 **What is checked.** Every `evidence` entry, and `inside`, has to be a row of a
 report this investigation filed. `report` is the number a report is filed
@@ -983,7 +1044,8 @@ again, so the two ends judge a verdict by the same rules. Like `--done`, it exit
 
 **What is recorded.** `hunt.json` gains `verdict`, the file as it came, and
 `verdict_check`, what echolot found when it was handed in: the reports it held,
-how many rows the verdict cites, and the temporary markers that `hunt` counts
+how many rows the verdict cites, the report it was set against (`against`,
+`null` with no reference), and the temporary markers that `hunt` counts
 in the sources (the same count `hunt "<q>"` makes for the previous
 investigation) next to what the verdict said about them. A disagreement is not a
 refusal; it is said on stderr and kept in both halves. `conclusion` is the
@@ -1010,7 +1072,9 @@ bytes. From the top:
 
 - **The verdict**: the first sentence of `summary` as the headline, the rest
   under it, and how many rounds the investigation took. A round is one report
-  it filed.
+  it filed. Under it, what the build was set against: the reference's report
+  and build, or "No reference", which says the causes are where the build
+  spends its time and none is shown to be what changed.
 - **A split bar**, when the verdict names a piece with `inside` and that row
   is still in its report: the piece against the rest of the window.
 - **A table of causes**, in the order the agent gave them: what happens, where
@@ -1023,8 +1087,9 @@ bytes. From the top:
   where its rows were, and the page is written all the same.
 - **Checking again**: the command that records the app once more and compares
   it with the investigation's first report, to copy.
-- **Folds**: how sure the agent is of each cause, with what echolot looked at
-  itself (the rows cited, the markers left in the sources); how it got there,
+- **Folds**: how sure the agent is of each cause — with no reference, that it
+  costs this, and beside it that it is what changed was not measured — with
+  what echolot looked at itself (the rows cited, the markers left in the sources); how it got there,
   round by round; what was ruled out and what else was measured; and the
   investigation's own facts.
 

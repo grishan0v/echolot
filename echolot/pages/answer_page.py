@@ -471,6 +471,25 @@ def _piece(verdict: dict[str, Any], cited: _Cited) -> str:
     return f'<div class="fig">{kit.split(parts, f"measured in round {n}, {measured}")}</div>'
 
 
+def _against(verdict: dict[str, Any], kind: str | None) -> str:
+    """What the build measured was set against, under the headline (#538).
+
+    With a reference the causes are what changed since it. With none they are
+    where the build spends its time, which a hunt with nothing to compare
+    finds whether or not anything changed, and the page says so whatever the
+    summary's words. A verdict recorded before echolot asked says neither."""
+    entry = verdict.get("against")
+    if kind == "regression" and isinstance(entry, dict):
+        what = _str(entry.get("what"))
+        return (f'<p class="measure"><b>Set against report {e(str(entry.get("report")))}</b>'
+                + (f", {_said(what)}" if what else "") + ": the causes are what changed since it.</p>")
+    if kind == "hotspots":
+        return ('<p class="measure"><b>No reference.</b> Nothing was recorded before the change to set '
+                "this build against, so the causes are where it spends its time. None of them is shown to "
+                "be what changed: a set of an earlier build, recorded under the investigation, would.</p>")
+    return ""
+
+
 def _nothing(verdict: dict[str, Any]) -> str:
     """A verdict with no cause: said plainly, with what was looked at shown
     at once, because that is what this answer holds."""
@@ -511,15 +530,23 @@ def _again(again: str | None, action_html: str) -> str:
 # the folds
 
 
-def _trust(causes: list[dict[str, Any]], check: dict[str, Any], cited: _Cited) -> str:
+def _trust(causes: list[dict[str, Any]], check: dict[str, Any], cited: _Cited,
+           kind: str | None = None) -> str:
     """How sure the agent is of each cause, in its own words, and what echolot
-    looked at itself: the rows the answer cites, and the markers in the code."""
+    looked at itself: the rows the answer cites, and the markers in the code.
+    With no reference the agent's word is about what a place costs, and that
+    it is what changed was not measured: two answers, the second echolot's."""
     out = []
     if any(c["confidence"] for c in causes):
         items = []
         for c in causes:
             said = (f"<b>{e(c['confidence'])}.</b>" + (f" {_said(c['why'])}" if c["why"] else "")) \
                 if c["confidence"] else "The agent did not say."
+            if kind == "hotspots":
+                end = "." if c["confidence"] and c["why"] and not c["why"].rstrip().endswith((".", "!", "?")) \
+                    else ""
+                said = (f"That it costs this: {said}{end} That it is what changed: <b>not measured</b>, "
+                        "with nothing recorded to set it against.")
             items.append(f"<li><b>{e(c['title'])}</b><p>{said}</p></li>")
         out.append(f'<ul class="sure">{"".join(items)}</ul>')
     elif causes:
@@ -747,6 +774,8 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
         # `--done "<text>" --verdict <file>` keeps both: the text is said too.
         words = f'<p class="measure">{_said(conclusion)}</p>' \
             if conclusion and conclusion != _str(verdict.get("summary")) else ""
+        kind = verdict_mod.reads_as(verdict, hunt.get("verdict_check"))
+        words += _against(verdict, kind)
         parts.append(_head(kit.state("Investigation finished", "found", large=True), beside, headline, lead, words))
         # The panels first: they look the cited rows up, and what the page
         # says of the rounds and of the citations is counted from that.
@@ -756,7 +785,7 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
             parts += [_NO_SCRIPT, piece, _table(causes, more), _again(again, action_html)]
         else:
             parts += [piece, _nothing(verdict)]
-        folds.append(_trust(causes, _dict(hunt.get("verdict_check")), cited))
+        folds.append(_trust(causes, _dict(hunt.get("verdict_check")), cited, kind))
         folds.append(kit.fold("How it got there, round by round", _timeline(rounds, hunt, cited), "big"))
         if rows and _lists(verdict):
             folds.append(kit.fold("What was ruled out, and what else was measured", _lists(verdict), "big"))

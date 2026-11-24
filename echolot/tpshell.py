@@ -19,12 +19,26 @@ same trace over the same HTTP, and only the wait is shorter.
 The port is asked of the kernel and let go before the shell takes it, as
 perfetto does: trace_processor cannot be handed a socket. A shell whose port
 was taken in between does not stop. It says so on stderr and listens on
-[::1] alone, and the client reaches whoever holds 127.0.0.1 — with the
-traces of a set read side by side (#488), another session of the same run.
-So within this process a port handed to a shell is not handed out again
-until that shell listens on it, and from then on the kernel keeps it.
-Between processes it is as it was: on macOS a released port comes round
-again only after the other sixteen thousand, on Linux at random.
+[::1] alone, and the client reaches whoever holds 127.0.0.1: another
+session's shell, which is then fed this session's trace and runs its SQL.
+Within a process that was closed by #487. Between processes it was not, and
+on Linux, where the kernel hands a released port out again at random, test
+workers starting shells side by side drew one port often enough to fail CI
+in three runs of a hundred and twenty-four: `view _proc already exists`, `no
+such table: process`, a connection reset (#807).
+
+So a port is held from its draw until its shell listens on it, in two ways:
+within this process by `_handed`, and between processes by a lease — a lock
+on the port's byte of one file in the temporary directory, taken while the
+socket that drew the port still holds it. A process that draws a port
+another has leased draws again. Once its shell listens, the kernel keeps it.
+
+And before anything is sent to the shell that answers, the shell this
+session started says whether it is the one: it prints on stderr that its
+port on 127.0.0.1 was taken, or goes on to [::1]. One whose port was taken
+is stopped, and the session starts another on another port (`Taken`). That
+covers what a lease cannot: an echolot from before it, or any other program
+that drew the port in between.
 """
 
 from __future__ import annotations
@@ -46,33 +60,106 @@ from typing import Any
 # The limit is perfetto's `load_timeout`.
 EVERY = 0.01
 LIMIT = 30.0
+# How long a shell that answered has to say whether the answer was its own,
+# and how many shells a session starts before it stops looking for a port.
+SETTLE = 1.0
+TRIES = 3
+
+# What trace_processor prints on stderr as its server starts, v52 to v59:
+#   [HTTP] Starting HTTP server on 127.0.0.1:<port>
+#   Failed to listen on IPv4 socket: "127.0.0.1:<port>" (… Address already in use)
+#   [HTTP] Starting HTTP server on [::1]:<port>
+# The second line only when another process holds the port; the third once
+# the first is behind it, either way.
+TAKEN = "Failed to listen on IPv4"
 
 _lock = threading.Lock()
 _handed: set[int] = set()   # ports given to a shell that does not listen yet
+_leases: int | None = None  # the lease file, once opened; -1 where it cannot be
+
+
+class Taken(Exception):
+    """The shell could not listen on its port on 127.0.0.1 — another process
+    holds it, as a rule — so whatever answers there is not this shell. The
+    shell is stopped, and nothing was sent to what answered."""
+
+
+def _lease_file() -> int:
+    """The file whose byte N is the lease on port N, opened once a process.
+
+    One a user, so that a file another user made in a shared /tmp is not
+    this one's to open. -1 where it cannot be opened, and then a port is
+    held within this process alone, as before #807.
+    """
+    global _leases
+    if _leases is None:
+        uid = os.getuid() if hasattr(os, "getuid") else None
+        name = "echolot-ports" if uid is None else f"echolot-ports-{uid}"
+        try:
+            _leases = os.open(os.path.join(tempfile.gettempdir(), name),
+                              os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError:
+            _leases = -1
+    return _leases
+
+
+def _lease(port: int, take: bool = True) -> bool:
+    """The lease on `port` taken (or let go), with `_lock` held; False when
+    another process holds it.
+
+    A byte-range lock, which the kernel drops when its process ends however
+    it ends, so no lease outlives its echolot. Within a process it does not
+    exclude (on POSIX a process does not conflict with itself): `_handed`
+    does that. A lock refused for any reason but another's lease leaves the
+    port unleased, as before #807.
+    """
+    fd = _lease_file()
+    if fd < 0:
+        return True
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, port, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK if take else msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.lockf(fd, (fcntl.LOCK_EX | fcntl.LOCK_NB) if take
+                        else fcntl.LOCK_UN, 1, port)
+    except OSError as e:
+        return not take or e.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK)
+    return True
 
 
 def _free_port() -> int:
-    """A port no shell of this process is about to listen on.
+    """A port no other shell is about to listen on: none of this process's
+    (`_handed`) and none of another echolot's (its lease).
 
-    Bound and let go. A sandbox with no network refuses the bind with EPERM
-    before anything starts, and that is the refusal sandbox.py names (#190).
-    On 127.0.0.1, where the shell listens: a sandbox that lets a command bind
-    localhost and nothing else lets this through as it lets the shell.
+    Bound, leased while it is still bound — so that no echolot can draw it
+    in between — and let go. A sandbox with no network refuses the bind with
+    EPERM before anything starts, and that is the refusal sandbox.py names
+    (#190). On 127.0.0.1, where the shell listens: a sandbox that lets a
+    command bind localhost and nothing else lets this through as it lets the
+    shell.
     """
     with _lock:
         for _ in range(64):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind(("127.0.0.1", 0))
                 port = s.getsockname()[1]
-            if port not in _handed:
-                _handed.add(port)
-                return port
+                if port in _handed or not _lease(port):
+                    continue
+            _handed.add(port)
+            return port
     raise OSError(errno.EADDRINUSE, "no free port on 127.0.0.1")
 
 
 def _release(port: int) -> None:
+    """The port handed back, and its lease: its shell listens on it now, or
+    nobody will."""
     with _lock:
-        _handed.discard(port)
+        if port in _handed:
+            _handed.discard(port)
+            _lease(port, take=False)
 
 
 def _answers(port: int) -> bool:
@@ -114,6 +201,7 @@ class Shell:
 
     def __init__(self, binary: str):
         self.port = _free_port()
+        self._held = True
         self.asked = 0
         self.waited: float | None = None
         self._proc: subprocess.Popen | None = None
@@ -152,30 +240,91 @@ class Shell:
         return f"127.0.0.1:{self.port}"
 
     def wait(self, limit: float = LIMIT) -> None:
-        """Until the shell answers, asking every `EVERY` seconds.
+        """Until the shell answers and the answer is its own, asking every
+        `EVERY` seconds.
 
         A shell that ends first, or does not answer within `limit`, is an
-        error in perfetto's words, with what the shell printed.
+        error in perfetto's words, with what the shell printed. A shell that
+        says its port was another's is stopped, and `Taken`: what answered
+        was the other one.
+
+        Its own answer comes after it has said where it listens — it prints
+        that before it serves — so it is taken at once. An answer before the
+        shell has said is another's, from a shell that has not tried the port
+        yet; it is given `SETTLE` to say so. A trace_processor that says
+        neither, in words other than these, is taken at its answer as it was
+        before #807, a second late.
         """
         from perfetto.trace_processor import TraceProcessorException
 
         deadline = self._started + limit
+        answered: float | None = None
         try:
             while (proc := self._proc) is not None and proc.poll() is None:
                 self.asked += 1
-                if _answers(self.port):
-                    self.waited = time.monotonic() - self._started
+                if answered is None and _answers(self.port):
+                    answered = time.monotonic()
+                says = self.listens()
+                if says is False:
+                    break
+                now = time.monotonic()
+                if answered is not None and (says or now - answered >= SETTLE):
+                    self.waited = now - self._started
                     return
-                if time.monotonic() >= deadline:
+                if now >= deadline:
                     break
                 time.sleep(EVERY)
         finally:
-            _release(self.port)
+            self._let_go()
         said = self._said()
         self.close()
+        if TAKEN in said[1]:
+            raise Taken(
+                f"Trace processor could not listen on {self.address}, so what "
+                f"answers there is not this one.\nstderr: {said[1]}\n")
         raise TraceProcessorException(
             f"Trace processor failed to start.\nstdout: {said[0]}\n"
             f"stderr: {said[1]}\n")
+
+    def listens(self) -> bool | None:
+        """Whether the shell says it listens on 127.0.0.1 at its port: False
+        when it says another process holds the port, None until it has
+        said either."""
+        heard = self._heard()
+        if TAKEN in heard:
+            return False
+        if f"[::1]:{self.port}" in heard:
+            return True
+        return None
+
+    def _heard(self) -> str:
+        """What the shell has printed on stderr so far.
+
+        The file is the shell's stderr, and the offset it writes at is the
+        one this side would move: read with pread, which leaves it alone.
+        Windows has none, and there it is moved back to the end, where the
+        next line goes.
+        """
+        f = self._err
+        try:
+            fd = f.fileno()
+            size = os.fstat(fd).st_size
+            if hasattr(os, "pread"):
+                data = os.pread(fd, size, 0)
+            else:
+                os.lseek(fd, 0, os.SEEK_SET)
+                data = os.read(fd, size)
+                os.lseek(fd, 0, os.SEEK_END)
+        except (AttributeError, OSError, ValueError):
+            return ""
+        return data.decode("utf-8", "replace")
+
+    def _let_go(self) -> None:
+        """The port and its lease handed back, once: from here the shell
+        holds the port, or it is stopped."""
+        held, self._held = self._held, False
+        if held:
+            _release(self.port)
 
     def _said(self) -> tuple[str, str]:
         """What the shell printed, once it has stopped printing."""
@@ -206,7 +355,7 @@ class Shell:
             if f is not None:
                 with contextlib.suppress(Exception):
                     f.close()
-        _release(self.port)
+        self._let_go()
 
 
 class Processor:

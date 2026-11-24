@@ -670,6 +670,19 @@ second shorter than the table says, and `doctor`, which opens a few dozen
 sessions, takes seconds rather than forty. Most of what is left is each
 detector asked twice on a set, at its thresholds and with them open.
 
+Each trace_processor listens on a port of its own on 127.0.0.1. echolot asks
+the kernel for the port and lets it go before the shell starts, and a shell
+whose port another process took in between does not stop: it listens on
+[::1] alone, and the client reached whoever held 127.0.0.1 — another
+session, fed this one's trace and running this one's SQL. That is how tests
+run side by side on Linux, where the kernel hands a released port out again
+at random, failed with `view _proc already exists`. Now a lease holds the
+port from the draw until its shell listens — a lock on the port's byte of
+one file in the temporary directory — and another echolot draws another
+port. And before anything is sent to what answered, echolot reads its own
+shell's stderr: a shell that says it could not listen on 127.0.0.1 means the
+answer came from another process, and it is started again on another port.
+
 ## When a detector could not look
 
 A detector with no rows says it ran and nothing cleared its bar. Some are
@@ -702,6 +715,17 @@ off, grouped by what they lack, and the **Silent** line does not name them:
 
 ```
 > ⚠️ 2 detector(s) could not run, because the trace does not hold what they read. Their silence says nothing about the app. `io_wait`, `main_thread_kernel_waits` — The recording does not carry the phone's own state, such as why a thread went to sleep, so there was nothing for this check to read. A recording that holds what they read lets them look; until then those checks are open.
+```
+
+One source is asked of the window and not of the recording: the start of the
+app's process, its `bindApplication`, which `app_init` reads. A scroll, a tap,
+a warm start, or a recording with no launch in it holds none in its window,
+and `app_init` is not checked there either. Nothing is wrong with such a
+recording, and no other recording of the same window would let the check
+look, so that is a line of its own, without the warning sign:
+
+```
+> 1 detector(s) did not look, because what they read is not in this window. Their silence says nothing about the app. `app_init` — The window holds no start of the app's process (`bindApplication`): what this check measures runs only as the process starts, on a cold start, so there was nothing for it to read.
 ```
 
 `echolot report` says `not checked` in its table where it said `silent`, and
@@ -800,7 +824,7 @@ took: that length is the recording's. Where the trace holds the platform's own
 startup, the verdict gives it as the platform's number. The plain reading and
 the page say what was not found before anything else ("echolot did not find
 where this scenario ends (`app_marker`) in 5 of 5 recordings, so the numbers
-below are about the whole recording, not about the scenario"), the shares in
+below are about everything the app did in the recording, not about the scenario"), the shares in
 the sentences are "of the recording", and `report.json` keeps that line as
 `verdict.warning`.
 
@@ -1016,6 +1040,49 @@ the header warns: the interpreter and the JIT carried the launch, and its
 numbers are slower than what most users see. On the SM-A515F a large app's
 launch took ~1.4 s on its benchmark build and ~8.8 s on a debuggable build of
 it that nothing had compiled. `compare` warns when two rounds differ in it.
+
+## The whole trace as the window
+
+A recording made outside the config's scenarios — a scroll recorded by hand,
+a teammate's trace, a `.pftrace` from Android Studio — has none of the
+scenario's anchors in it. Measured as the scenario, its anchors miss, the
+window falls back to everything the process did, and the report opens with a
+warning that its numbers are not about the scenario, under the scenario's
+name. `--whole-trace` measures it as what it is:
+
+```bash
+echolot analyze scroll.perfetto-trace --whole-trace
+```
+
+The window is the trace, from its first moment to its last; no anchor is
+looked for, so none can miss. The report's scenario is `whole-trace`, it
+runs on the config's top-level thresholds, and it goes to
+`.echolot/out/whole-trace`, where no scenario's latest report is:
+
+```
+Scenario: `whole-trace`
+Process: `com.example.app` (pid 4100)
+Window: **400.0 ms**
+The window is the whole trace, from its first moment to its last: no scenario cut it, so every number below is about everything the app did while the recording ran.
+```
+
+`report.json` says `window.defined_by: "whole"`, and the run log keeps it as
+`window_defined_by`. This is the one window a report calls the whole trace:
+one whose anchors matched nothing runs over the process's own first and last
+slices, and says so. A scenario the config names for such recordings can ask
+for the same window with `window: whole` in place of `start` and `end`; it
+keeps its own name and thresholds, and takes no `budget_ms`, since the
+recording is as long as somebody let it run. `--whole-trace` beside
+`--scenario` is refused: the two are two answers to where the window is.
+
+The plain reading calls such a window the recording and holds it against no
+limit. A launch inside the trace is still described in the header, as the
+platform's measure set against the window. Where the trace holds no start of
+the app's process, `app_init` says it did not look (see
+[When a detector could not look](#when-a-detector-could-not-look)). `compare`
+refuses a whole-trace report against one of a scenario's window, and says how
+to make the two alike: both with `--whole-trace`, or both without (see
+[compare](compare.md#two-windows)).
 
 ## What the device was set to do
 

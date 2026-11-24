@@ -4,7 +4,7 @@
 --       here, and the platform traces neither. What has a name is what
 --       libraries write themselves; the rest is one row that says how much
 --       nobody named.
--- @needs: atrace:am
+-- @needs: atrace:am, process_start
 -- @param: min_stretch_ms = 80 ms — how long the stretch from the end of
 --       makeApplication to the end of bindApplication has to be for any of
 --       its rows to be reported. One bar for the whole result, not per row

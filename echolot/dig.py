@@ -301,7 +301,7 @@ def _listed(items: Sequence[str]) -> str:
 def facts(n: int, aside: tuple[str, int] | None) -> list[str]:
     """The three facts of the hunt as every client started from the page is
     told them: the investigation open for it and how to file a round in it,
-    its first evidence, and after which change.
+    its first evidence, and after which change, with no reference.
 
     The evidence is round 1, and every later round records anew: told only
     not to record the recordings set aside again, a live Codex recorded
@@ -328,7 +328,11 @@ def facts(n: int, aside: tuple[str, int] | None) -> list[str]:
         f"another, and close it at the end. Run every `collect` and `analyze` in it with `--hunt {n}`: without "
         "it nothing is filed under it.",
         evidence,
-        "- After which change: unknown.",
+        # The page opens it with `--since unknown` and has no earlier build to
+        # name, so the hunt is one build's: its answer is where that build
+        # spends its time, and its verdict names no reference (#538).
+        "- After which change: unknown. Reference: none — no earlier build was recorded to set this one against, "
+        "so the answer is where this build spends its time, not what changed.",
     ]
 
 

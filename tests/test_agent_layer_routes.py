@@ -520,6 +520,62 @@ def test_the_hunter_works_inside_the_investigation_and_does_not_open_one() -> No
     check("and no `hunt` call in its text closes", all("--done" not in c for c in calls), calls)
 
 
+# --- a complaint with nothing to compare, a question no scenario measures --
+
+def test_a_complaint_with_no_change_named_goes_down_the_branch_for_one_build(
+        tmp_path: Path) -> None:
+    """#538: "the list stutters", the change unknown. The open says what the
+    hunt can answer, the brief carries `Reference: none`, the loop's branch
+    for it has no `compare` between rounds, and a verdict with no reference
+    reads back as the build's hotspots."""
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    code, text = run(tmp_path, "hunt", "the list stutters when scrolling", "--since", "unknown")
+    check("opened, and said it is one build's answer", code == 0
+          and "the answer is where this build spends its time, not what changed" in text, text)
+    root = Path(__file__).resolve().parent.parent
+    guide = (root / "echolot/guide/hunt.md").read_text(encoding="utf-8")
+    check("the brief has the reference's line", "Reference: <the earlier build's traces, each file by "
+          "name, and which build | none>" in guide, guide)
+    hunter = _read("agents/perf-hunter.md")
+    branch = " ".join(hunter.split("## What the build is set against", 1)[1]
+                      .split("## The protocol", 1)[0].split())
+    check("the branch says what counts as slow, for a launch and for a scroll",
+          "`budget_ms`" in branch and "`window.frames.late` of `count`" in branch, branch)
+    check("and drops compare between rounds", "No `compare` between rounds" in branch
+          and "not with `Reference: none`" in " ".join(hunter.split()), branch)
+    (tmp_path / ".echolot" / "out").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".echolot/out/report.json").write_text(json.dumps(
+        {"detectors": [{"id": "frame_jank", "rows": [{"location": "Self Jank"}]}]}), encoding="utf-8")
+    hunt_mod.record_report(tmp_path, tmp_path / ".echolot" / "out")
+    (tmp_path / "v.json").write_text(json.dumps({"summary": "Late on 3% of frames.", "causes": [{
+        "title": "Rows bound on the main thread", "where": ["List.kt:40"], "confidence": "medium",
+        "evidence": [{"report": 1, "location": "Self Jank"}]}]}), encoding="utf-8")
+    code, text = run(tmp_path, "hunt", "--done", "--verdict", "v.json")
+    check("closed, as set against nothing", code == 0 and "against nothing: no reference" in text, text)
+    code, text = run(tmp_path, "hunt", "--show", "1")
+    check("and shown as where the build spends its time", "medium that it costs this" in text
+          and "changed:    not measured" in text, text)
+
+
+def test_a_question_no_scenario_measures_is_not_hunted_on_the_one_there_is(
+        tmp_path: Path) -> None:
+    """#539: one launch scenario, and a question about scrolling. The hunt
+    holds the words to the one scenario and proposes a new one; naming one
+    the config lacks opens nothing and says the two shapes."""
+    command = " ".join(_read("commands/echolot-hunt.md").split())
+    check("with one scenario the words are still held to it",
+          "With one, the words still have to fit it" in command, command)
+    check("and a journey none measures gets a scenario first, through setup",
+          "propose adding one before anything is recorded, through `/echolot-setup`'s \"Adding a "
+          "scenario\"" in command, command)
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    code, text = run(tmp_path, "hunt", "the list stutters when scrolling", "--scenario", "feed_scroll")
+    check("--scenario with a name the config lacks: exit 2, nothing opened", code == 2
+          and hunt_mod.load(tmp_path) is None and "Nothing was opened" in text, text)
+    check("and the refusal says the two shapes", "adb shell input swipe" in text
+          and "frame-timing macrobenchmark (`FrameTimingMetric`)" in text, text)
+
+
 # --- help that lists every choice -------------------------------------------
 
 def _help(verb: str) -> str:

@@ -134,6 +134,51 @@ Then the loop, with two differences: the recording has to be long enough for
 detector to open first when `anr_risk` reports its time as neither on a CPU nor
 waiting for one.
 
+## What the build is set against
+
+The brief's `Reference:` line says what you compare with. A regression is a
+change, and a change needs two builds: the one measured, and one from before.
+
+**A reference** — traces of an earlier build, named with the build they are:
+analyse them first, `echolot analyze <those traces> -c echolot.yml --hunt <n>`,
+so they are filed as a report of their own, then the traces of the build
+measured. `echolot compare` then sets the second against the first, and a row
+that moved and holds is a change. Your verdict names the reference's report
+in `against`, and every cause cites a row of the build measured.
+
+**`Reference: none`** — one build. Five blind hunts with no build from before
+the change all named the same place, a long-standing cost of the app, and a
+control with no change at all named it as its cause: with one set, the
+costliest place is what comes back, changed or not. So this branch answers
+another question, where this build spends its time, and the loop changes in
+three ways:
+
+- **What counts as slow, first.** Before the first hypothesis, say what the
+  scenario is held to and how this build stands against it; the first line
+  of `echolot report --plain` says it. A launch: the window against
+  `budget_ms` — within it, up to a quarter over, or more; with no budget, the
+  window in milliseconds and nothing to judge it by, said as that. A scroll,
+  or any journey a script paces: the frames the app made late,
+  `window.frames.late` of `count` in `echolot report --window --json`, and
+  `frame_jank`'s `Self Jank` rows with the worst overrun; `Buffer Stuffing` is
+  latency, a frame behind the finger, not a stutter. "Late on 3% of frames"
+  is the answer's first line, before any place. A scenario within its budget,
+  or with no late frames, is that answer: the build as recorded is not slow
+  by its measure, and the complaint may be about a journey this scenario does
+  not record.
+- **No `compare` between rounds.** Nothing in the app changes between your
+  rounds, so step 4 would measure only your own markers. Skip it. Each round
+  answers instead "how much of the slow part does this candidate account
+  for": its marker's time against the window (`echolot report --markers`, and
+  `inside` in the verdict), or, for frames, its time on the main thread
+  against the late frames' overrun.
+- **The answer names hotspots, not a regression.** The causes are where this
+  build spends its time. The verdict has no `against`, and echolot reads it
+  that way wherever it is shown. `Confidence` is about what a place costs;
+  that it is what changed was not measured, and is not yours to rate. When
+  the brief names a change but no reference, a place inside that change's
+  diff is a lead — say so, `(inferred)` — not a measurement of the change.
+
 ## The protocol
 
 ```
@@ -143,6 +188,8 @@ waiting for one.
    round = 1
 
 1. report = echolot analyze <traces> -c echolot.yml --hunt <n>
+   (a Reference: its traces first, the same way, then these; none: say what
+   counts as slow before anything else — "What the build is set against")
    what it prints is the overview `echolot report` prints: the window, its
    warnings, a line per detector — step 2 reads those warnings
    then, one command each, the rows the overview points at:
@@ -201,7 +248,8 @@ waiting for one.
 3. hypotheses: firing detectors → domains → files
    localised to a place in the code → exit with the finding
 
-4. from round 2 on, before anything else:
+4. from round 2 on, before anything else — not with `Reference: none`,
+   where nothing changed between rounds but your markers:
    echolot compare
    the investigation's last two `analyze` runs that are rounds, sorted by
    what moved: the previous round against this one. A look is left out — an
@@ -414,17 +462,26 @@ Keep it short. Do not retell the search: nobody will see it and it is not
 needed.
 
 ```
+Against:       <the reference: report N, which build> | none — where this
+               build spends its time, measured against <the budget | late
+               frames>; not shown to be what changed
 Place:         <file:line or module>
 Evidence:      <detector, numbers from the report — measured, nothing else>
 Mechanism:     <why this costs that much time; mark a step you did not
                measure (inferred), and one you could not check (gap)>
 Suggestion:    <what to do>
-Confidence:    high | medium | low — and why
+Confidence:    high | medium | low — and why; with no reference, that it
+               costs this, and that it is what changed: not measured
 Ruled out:     <what you checked and did not carry to a cause, strongest
                evidence first — or `nothing else was checked`>
 Also measured: <every marker you planted, one line and one number each>
 Cleanup:       temporary instrumentation removed | none was added
 ```
+
+**`Against` comes first because it decides what the rest means.** With a
+reference, `Place` is where the build changed. With none it is the costliest
+place of the one build measured, and a reader who takes it for the change
+fixes a cost that was always there and leaves the regression in place.
 
 **`Evidence` is measured and `Mechanism` is usually not.** They sit next to
 each other and read alike, and a reader who takes both as measured has been
@@ -480,6 +537,7 @@ things in a form that can be checked, and your `Ruled out` and
 ```json
 {
   "summary": "Nearly all of the extra time is one call, Store.fill(): 1.5 s of the 2.1 s launch.",
+  "against": {"report": 1, "what": "the release before the change, 4.1, recorded on the same phone"},
   "inside": {"report": 2, "location": "AGENTTMP_fill"},
   "causes": [
     {
@@ -517,10 +575,18 @@ things in a form that can be checked, and your `Ruled out` and
 - **Required:** `summary`; `causes`, a list, empty when nothing was found; and
   in each cause `title`, `where` (a list of places in the code) and
   `evidence`. One cause with no estimate is a verdict. Everything else is
-  optional: `mechanism`, `fix`, `expected_ms`, `confidence` (`high`, `medium`
-  or `low`) with `confidence_why`, `cost_ms` with `cost_of`, `inside`,
-  `cleanup`, and the three lists below. A field that is not listed here is
-  refused.
+  optional: `against`, `mechanism`, `fix`, `expected_ms`, `confidence`
+  (`high`, `medium` or `low`) with `confidence_why`, `cost_ms` with
+  `cost_of`, `inside`, `cleanup`, and the three lists below. A field that is
+  not listed here is refused.
+- **`against` is your `Against` line**: `report`, the number the reference's
+  report is filed under, and `what`, which build it is, in words. echolot
+  holds it: the report is this investigation's, it measured the same
+  scenario, every cause cites a row of another report, the build measured,
+  and `inside` is in one of those. **Leave it out with no reference**: the
+  verdict then reads, in `--show`, `--list` and on the page, as where this
+  build spends its time, and each cause's `confidence` as what it costs,
+  with "what changed: not measured" beside it.
 - **Causes in the order of what they cost**, the largest first. In `mechanism`
   mark the steps you did not measure with `(inferred)` and `(gap)`, as above.
 - **`cost_ms` is what the cause costs, measured, and `expected_ms` is what your

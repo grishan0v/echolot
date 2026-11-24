@@ -24,10 +24,10 @@ One file, nothing fetched, and the same comparison gives the same bytes.
 from __future__ import annotations
 
 import re
-from typing import Any, Iterator, Sequence
+from typing import Any, Sequence
 
 from .. import compare as compare_mod
-from .. import moves, plain
+from .. import files, moves, plain
 from .. import report as report_mod
 from . import kit, md
 from .kit import e
@@ -64,57 +64,13 @@ def has_reading(cmp: Any) -> bool:
 
 
 def misshapen(cmp: dict[str, Any]) -> str | None:
-    """The first part of a comparison's plain reading that does not hold
-    what `compare` writes there, in words, or None.
-
-    `compare` writes `plain.notes` and `plain.checks` as lists of objects,
-    each check's `before` and `after` as objects, `plain.window.before` and
-    `.after` as objects whose `runs` is a whole number, each `movement` and
-    `attention` as text, and `rows` as a list. Anything else came from a
-    hand edit or another tool, and ended the "After the fix" page of
-    `echolot ui` in a 500 (#733), as the same in report.json did the report
-    page (`state.misshapen`, #555). A field that is left out is no fault:
-    the page draws without it. `has_reading` is asked first."""
-    return next(_faults(cmp), None)
-
-
-def _faults(cmp: dict[str, Any]) -> Iterator[str]:
-    from ..state import kind_of
-
-    def odd(value: Any, want: type, name: str, what: str) -> Iterator[str]:
-        if value is not None and (not isinstance(value, want) or isinstance(value, bool)):
-            yield f"`{name}` is {kind_of(value)}, not {what}"
-
-    def leveled(item: dict[str, Any], name: str) -> Iterator[str]:
-        yield from odd(item.get("movement"), str, f"{name}.movement", "text")
-        yield from odd(item.get("attention"), str, f"{name}.attention", "text")
-
-    reading = cmp["plain"]
-    yield from leveled(reading["verdict"], "plain.verdict")
-    for key in ("notes", "checks"):
-        items = reading.get(key)
-        yield from odd(items, list, f"plain.{key}", "a list")
-        for i, item in enumerate(items if isinstance(items, list) else []):
-            name = f"plain.{key}[{i}]"
-            if not isinstance(item, dict):
-                yield f"`{name}` is {kind_of(item)}, not an object"
-                continue
-            yield from leveled(item, name)
-            for side in ("before", "after") if key == "checks" else ():
-                face = item.get(side)
-                yield from odd(face, dict, f"{name}.{side}", "an object")
-                if isinstance(face, dict):
-                    yield from leveled(face, f"{name}.{side}")
-    for side in ("before", "after"):
-        face = reading["window"].get(side)
-        yield from odd(face, dict, f"plain.window.{side}", "an object")
-        if isinstance(face, dict):
-            yield from odd(face.get("runs"), int, f"plain.window.{side}.runs", "a whole number")
-    rows = cmp.get("rows")
-    yield from odd(rows, list, "rows", "a list")
-    for i, row in enumerate(rows if isinstance(rows, list) else []):
-        if isinstance(row, dict):
-            yield from odd(row.get("change"), str, f"rows[{i}].change", "text")
+    """The first part of a comparison that does not hold what `compare`
+    writes there, in words, or None: `files.check_comparison`, the one
+    reader of comparison.json (#833). A field of the wrong type ended the
+    "After the fix" page of `echolot ui` in a 500, in the plain reading
+    (#733) and in the rows (#870). `has_reading` is asked first."""
+    got = files.check_comparison(cmp)
+    return got.why if isinstance(got, files.Refusal) else None
 
 
 def _is_number(value: Any) -> bool:

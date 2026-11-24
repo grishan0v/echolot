@@ -1169,7 +1169,7 @@ def _merge_window_checks(reports: list[dict[str, Any]]) -> dict[str, Any]:
     These fields are checks rather than measurements, and a check holds for
     the set only if it held in each repeat. Copied from the first repeat, a
     start anchor that missed in the third read `matches: 1`: that repeat's
-    window was the whole trace, its rows were in the medians, and the warning
+    window ran from the process's first slice, its rows were in the medians, and the warning
     that has to be shouted never was. So the worst case speaks: the fewest
     matches per anchor, with `missed` counting the repeats where it found
     nothing; `opened_inside` from a repeat where it is material; and the
@@ -2185,7 +2185,9 @@ def to_markdown(report: dict[str, Any]) -> str:
             f"narrow `project.process`."
         )
     if w.get("duration_ms") is not None:
-        line = f"Scenario window: **{w['duration_ms']} ms**"
+        # The whole trace is no scenario's window, and is not called one.
+        line = (f"{'Window' if launch_mod.is_whole(w) else 'Scenario window'}: "
+                f"**{w['duration_ms']} ms**")
         low, high = w.get("duration_ms_min"), w.get("duration_ms_max")
         if low is not None:
             # The shortest and the longest repeat: right after a duration,
@@ -2198,7 +2200,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_crowding_lines(w.get("crowding")))
     out.extend(_outside_lines(w.get("crowding")))
-    out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
+    out.extend(_startup_lines(w.get("startup"), launch_mod.is_launch(w)))
     out.extend(_window_warning_lines(w))
     out.extend(_drift_lines(report))
 
@@ -2321,7 +2323,9 @@ def _diverged_lines(w: dict[str, Any]) -> list[str]:
     return [f"> ⚠️ Repeat windows diverged {high / low:.1f}x. These are not "
             f"repeats of one scenario: "
             + ("the launches did different things"
-               if w.get("defined_by") else
+               if launch_mod.is_launch(w) else
+               "the recordings ran for different lengths"
+               if launch_mod.is_whole(w) else
                "either the anchors did not match or the runs did different things")
             + ". A median over such numbers is meaningless."]
 
@@ -2402,7 +2406,7 @@ def _window_warning_lines(w: dict[str, Any]) -> list[str]:
     # boundary; thread states are clipped, so the beginning of a stall that
     # started before the anchor is simply not in the report.
     inside = w.get("opened_inside")
-    if inside and inside.get("material") and w.get("defined_by"):
+    if inside and inside.get("material") and launch_mod.is_launch(w):
         # A launch window has no anchor to move: the app was already running
         # when it was brought to the front.
         out.append(
@@ -2602,7 +2606,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_crowding_lines(w.get("crowding")))
     out.extend(_outside_lines(w.get("crowding")))
-    out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
+    out.extend(_startup_lines(w.get("startup"), launch_mod.is_launch(w)))
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(recording_mod.header_lines(report.get("recording")))
     out.extend(_no_sources_lines(report.get("no_sources")))
@@ -2832,7 +2836,7 @@ def window_view(report: dict[str, Any]) -> str:
     if inside and inside.get("material"):
         out.append(f"⚠️ opened with the main thread already blocked: `{inside['state']}` "
                    f"for {inside['total_ms']} ms, {inside['before_ms']} ms of it before the "
-                   + ("launch" if w.get("defined_by") else "anchor"))
+                   + ("launch" if launch_mod.is_launch(w) else "anchor"))
     return "\n".join(out)
 
 

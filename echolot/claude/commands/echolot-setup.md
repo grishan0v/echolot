@@ -214,7 +214,7 @@ Look not at the findings but at `window`:
   closed the window, and the window is about as long as the startup line
   says the launch was. `analyze` stopping at `no launch of <process>` means
   the app was not started inside the recording: use `runner.mode: launch`
-- the window is nearly the whole trace — the anchors did not work
+- the window is nearly as long as the recording — the anchors did not work
 - **every detector screaming at once** — almost certainly the process or the
   boundaries are off
 
@@ -259,7 +259,11 @@ leave a mark in the report.
 
 A project that has a config may want another journey measured, a feed scroll
 beside the cold start. That is no new setup: the scenario that is there stays
-as it was, and the new one gets a window and a runner of its own.
+as it was, and the new one gets a window and a runner of its own. A hunt
+comes here too, when the question is about a journey no scenario measures:
+a list that stutters, asked of a config that records only a cold start, is
+not hunted on the cold start (`echolot hunt --scenario` with a name the
+config lacks refuses with the two shapes below).
 
 1. **Move the config to `scenarios:`.** The `scenario:` block goes under
    `scenarios:`, keyed by its `name`, with `name` dropped and everything else
@@ -274,6 +278,7 @@ as it was, and the new one gets a window and a runner of its own.
        runner:
          mode: command
          command: "adb shell input swipe 500 1500 500 300 600"
+         reset_policy: none
    ```
 
    The key is the name its traces and reports carry, so the scenario that was
@@ -282,9 +287,17 @@ as it was, and the new one gets a window and a runner of its own.
    it is. Whatever was calibrated there was calibrated on the scenario that
    was there, and the new one runs on it until step 5.
 2. **What drives the new journey.** Its `runner:` holds only the keys that
-   differ from the top-level one: `mode: command` and the command that
-   scrolls, or, in `gradle` mode, the class in `gradle_args` whose test drives
-   it. When the repository does not say, ask the human: a macrobenchmark test,
+   differ from the top-level one. A journey a script paces takes one of two
+   shapes:
+   - `mode: command` with the command that drives the screen,
+     `adb shell input swipe 500 1500 500 300 600` and the like — 400 ms or
+     more a swipe, since a shorter one lands as a tap on a loaded phone —
+     `reset_policy: none`, and `duration_ms` longer than the script;
+   - the project's own frame-timing macrobenchmark (`FrameTimingMetric`),
+     `mode: gradle` with its class in `gradle_args`, when `scan` lists one
+     among the benchmarks.
+
+   When the repository does not say, ask the human: a macrobenchmark test,
    a UI test, an `adb` command.
 3. **A probe of it**, with no anchors yet, so its window is everything the
    process did in the recording:
@@ -301,6 +314,9 @@ as it was, and the new one gets a window and a runner of its own.
    milliseconds before the command acted. The earliest is the usual answer.
    "None" stays an option; when the list is empty, `echolot names <trace>
    --grep <word>` finds a section of the app's own to start at.
+   A scroll a script drives may keep neither: the whole recording is then
+   the scenario, and its frames, the late ones among them, are what it is
+   held to.
 
    ```
    Where the journey begins — Android's own events in the probe, earliest first:

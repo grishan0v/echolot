@@ -507,7 +507,7 @@ top, the way the Marker Report already states an anchor that never matched.
 | `few` | too few repeats to be 95% sure of any move, so the Holds column is empty throughout. How many are enough is under [the Holds column](#the-holds-column) |
 | `detectors` | the two runs did not use the same set of detectors |
 | `detector-failed` | a detector failed on that side, with its error. It did not look there, so its rows on the other side are left out of the table rather than listed as gone or new, its params stay out of `thresholds`, and "Detectors that changed state" says `failed` |
-| `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording does not hold what they read, named with their reasons (see [When a detector could not look](analysing.md#when-a-detector-could-not-look)). Their rows are left out of the table on both sides rather than listed as gone or new, and "Detectors that changed state" says `not checked` |
+| `not-checked-before` / `not-checked-after` | detectors that could not run on that side, because its recording or its window does not hold what they read, named with their reasons (see [When a detector could not look](analysing.md#when-a-detector-could-not-look)). Their rows are left out of the table on both sides rather than listed as gone or new, and "Detectors that changed state" says `not checked` |
 | `not-checked-both` | the same detectors could not run on either side, for the same reasons: one warning in place of the two above. They are left out of the comparison |
 | `instrumentation` | markers that appeared, each named once, carry the config's `instrumentation.temp_prefix`: markers added between the rounds, a breakdown of what was already there rather than new work. The slices they sit in directly are named too: their self time went into the markers, so those rows are judged on their total — see [Markers added between rounds](#markers-added-between-rounds). Only with that key in the config — without it they are ordinary appeared rows |
 | `instrumentation-removed` | the same in the other direction: temporary markers that are gone were taken out between the rounds, not work that went away, and the slices they sat in, whose self time came back, are judged on their total |
@@ -556,6 +556,19 @@ To compare the two sides, analyze both sets of traces with one config. When
 the change under test adds or removes the `reportFullyDrawn()` call, a launch
 window cannot be the same on both sides: name `start` and `end` in the
 scenario for that comparison.
+
+A report of the whole trace (`analyze --whole-trace`, or `window: whole`;
+`window.defined_by: "whole"`) is refused against any other window for the
+larger reason: one side is about the scenario, the other about everything the
+app did while its recording ran, as long as somebody let it run. Its
+scenario is `whole-trace`, which no config's scenario is called, so the
+window is what the refusal names, with what to do:
+
+```
+error: these two reports cannot be compared: the windows were defined differently: by the config's start and end anchors before, as the whole trace (`--whole-trace` or `window: whole`) after (…). To compare them, analyze both sets the same way: both with `--whole-trace`, or both with the scenario's window
+```
+
+Two whole-trace reports are compared as any two reports are.
 
 The one to read first is `environment`, because it is the only one that can
 make the whole table say the opposite of what it looks like. A duration is the

@@ -33,7 +33,7 @@ from echolot.tp import Detector, load_detectors, parse_meta  # noqa: E402
 # holds them to it.
 DECLARED = {
     "anr": ("atrace:am",),
-    "app_init": ("atrace:am",),
+    "app_init": ("atrace:am", "process_start"),
     "binder_txn": ("atrace:binder_driver",),
     "composables": ("composable_names",),
     "frame_jank": ("frame_timeline",),

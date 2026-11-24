@@ -377,6 +377,22 @@ def test_hunt_refuses_a_scenario_it_cannot_measure(tmp_path: Path, monkeypatch) 
     check("exit 2, in a sentence", code == 2 and "no such scenario" in err, err[-400:])
     check("nothing opened, nothing moved", hunt_mod.load(tmp_path) is None
           and (traces / "loaded_iter000.perfetto-trace").is_file())
+    # A journey the config does not measure is a scenario to add, and the
+    # refusal says the two shapes one takes (#539).
+    for shape in ("A journey this config does not measure gets a scenario of its own",
+                  "`echolot guide setup`, \"Adding a scenario\"",
+                  "a `command` runner that drives the screen", "400 ms or more a swipe",
+                  "`reset_policy: none`, no `start` or `end`, so the whole recording is the scenario",
+                  "`duration_ms` longer than the script",
+                  "frame-timing macrobenchmark (`FrameTimingMetric`)", "`echolot scan` lists"):
+        check(f"the refusal shows: {shape}", shape in err, err[-1200:])
+    one = {"project": PROJECT, "scenario": {"name": "coldStart", "window": "launch"}}
+    write(tmp_path, one)
+    code, _, err = run("hunt", "--scenario", "feed_scroll", "the list stutters when scrolling")
+    check("with one scenario, the same: exit 2, its name, and the two shapes", code == 2
+          and "this config has one scenario, `coldStart`" in err
+          and "a `command` runner that drives the screen" in err
+          and "frame-timing macrobenchmark" in err and hunt_mod.load(tmp_path) is None, err[-1200:])
     # Beside the project, not in it: from a folder inside it, the project's
     # echolot.yml is found above (#721).
     bare = tmp_path.parent / f"{tmp_path.name}-bare"
