@@ -517,7 +517,7 @@ def test_the_top_bar_takes_the_steps_and_this_one_is_after_the_fix():
     nav = page.one("nav", "steps")
     check("the path", [a.text for a in nav.all("a")] == ["Start", "Report", "After the fix"])
     check("and where the reader is", nav.one("a", aria_current="page").text == "After the fix")
-    check("the app and the scenario are beside the name", page.one("span", "crumb").text == "com.example.appcoldStart")
+    check("the app and the scenario are beside the name", page.one("span", "crumb").text == "com.example.app coldStart")
     check("a page on disk has no path", not page_of(*known()).all("nav", "steps"))
     check("the title names the scenario", page.one("title").text == "echolot comparison: coldStart")
 

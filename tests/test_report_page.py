@@ -940,7 +940,7 @@ def test_a_mark_past_the_end_of_the_axis_is_not_drawn():
 def test_the_top_bar_takes_the_steps_of_the_pages_to_come():
     bar = read(kit.topbar(["com.example.app", None, "coldStart"],
                           [("Start", "#start", False), ("Report", "#report", True)]))
-    check("where the page is about, without what is not known", bar.one("span", "crumb").text == "com.example.appcoldStart")
+    check("where the page is about, without what is not known", bar.one("span", "crumb").text == "com.example.app coldStart")
     steps = bar.one("nav").all("a")
     check("the steps as a path, the current one marked for a screen reader",
           [(a.text, a.attrs.get("aria-current")) for a in steps] == [("Start", None), ("Report", "page")])

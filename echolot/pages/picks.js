@@ -18,6 +18,7 @@
   function refresh() {
     var n = ticked().length, total = +$('dock-all').dataset.n;
     $('dock-t').textContent = n === 0 ? 'Nothing ticked yet' : n + (n === 1 ? ' item' : ' items') + ' selected';
+    dock.setAttribute('data-n', String(n));
     $('dock-go').disabled = n === 0;
     $('dock-clear').hidden = n === 0;
     $('dock-all').hidden = n >= total || (n > 0 && startTicked());

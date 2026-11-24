@@ -91,7 +91,9 @@ def topbar(crumbs: Sequence[str], steps: Sequence[tuple[str, str, bool]] = ()) -
     """The bar at the top: the mark, the name, where this page is about (the
     app, the scenario), and the steps as a path when there are other pages to
     go to. A step is `(label, href, is_this_page)`."""
-    crumb = '<i aria-hidden="true"></i>'.join(e(c) for c in crumbs if c)
+    # A space either side of the slash: the line breaks there, between two
+    # names, and never inside one ("col / dStart", #825).
+    crumb = ' <i aria-hidden="true"></i> '.join(e(c) for c in crumbs if c)
     path = ""
     if steps:
         here_attr = ' aria-current="page"'
@@ -333,7 +335,7 @@ def dock(total: int, start: str = "Tick where to start") -> str:
     is ticked. `total` is how many rows can be ticked, and `start` the words
     of the button that ticks the ones to start from (`picks.js` picks them:
     those that need attention, or the two largest)."""
-    return (f'<div class="dock needs-js" id="dock"><div class="dock-in"><p class="dock-t" id="dock-t" role="status">Nothing ticked yet</p><div class="dock-b">'
+    return (f'<div class="dock needs-js" id="dock" data-n="0"><div class="dock-in"><p class="dock-t" id="dock-t" role="status">Nothing ticked yet</p><div class="dock-b">'
             f'<button type="button" class="btn quiet" id="dock-all" data-n="{total}">{e(start)}</button>'
             '<button type="button" class="btn quiet" id="dock-clear" hidden>Clear</button></div>'
             '<button type="button" class="btn primary" id="dock-go" disabled>Dig deeper</button></div></div>')

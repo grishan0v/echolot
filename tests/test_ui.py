@@ -1004,7 +1004,7 @@ def test_all_settings_of_a_launch_window(project):
     # own: the page sets it as it sets the limit of a file it wrote (#818).
     check("nothing in it can be changed but the number of launches, which belongs to the button, and the time limit",
           [(i.attrs.get("name"), i.attrs.get("form"), i.attrs.get("value")) for i in fold.all("input")
-           if i.attrs.get("type") != "hidden"] == [("launches", "check-form", "3"), ("limit", None, "0.5")]
+           if i.attrs.get("type") != "hidden"] == [("launches", "check-form", "5"), ("limit", None, "0.5")]
           and not fold.all("select") and not fold.all("textarea")
           and [b.text for b in fold.all("button")] == ["Set the limit"], [i.attrs for i in fold.all("input")])
     check("the build, and whether to measure on it, in scan's words",
@@ -1016,6 +1016,8 @@ def test_all_settings_of_a_launch_window(project):
           and "reportFullyDrawn" in setting(page, "What is measured").text)
     check("runs and their length, with where each number is from",
           setting(page, "Runs").text == "5, the default." and setting(page, "Each run records for").text == "12 s, the default.")
+    check("the field of launches starts at the same number, the one collect takes (#825)",
+          fold.one("input", id="launches").attrs["value"] == "5")
     check("the limit, as a person says it and as the config writes it",
           setting(page, "Time limit").text.startswith("0.5 s (budget_ms: 500)"), setting(page, "Time limit").text)
     check("the thresholds", "All 16 checks run on their built-in thresholds." in setting(page, "Thresholds").text)
@@ -1080,7 +1082,7 @@ def test_a_project_with_several_scenarios(project):
           [(c.attrs["value"], "checked" in c.attrs) for c in cards] == [("record:coldStart", True), ("record:feedScroll", False)],
           [c.attrs for c in cards])
     check("and what a press runs names its scenario",
-          setting(page, "What a press runs").all("pre")[0].text == "echolot collect -c echolot.yml -n 3 --scenario coldStart")
+          setting(page, "What a press runs").all("pre")[0].text == "echolot collect -c echolot.yml -n 5 --scenario coldStart")
     reports = page.one("ul", "reps").all("li")
     check("each scenario's last report, or that it has none",
           reports[0].text.startswith("coldStart No report yet.") and reports[1].one("a").attrs["href"].endswith("/report/feedScroll"),
