@@ -871,7 +871,12 @@ BETTER        Faster by 0.7 s. The launch went from 2.1 s to 1.4 s, 33% less. Me
 
 No model writes any of it: the same two reports give the same words. The
 verdict is by the scenario's window, or by the frames the app made late when
-the window runs to the end of the recording (below). Up to four notes follow it: whether the
+the window runs to the end of the recording (below). A window that did not
+move clearly while checks below it did says so: "No clear change in the
+launch, but 2 checks moved", and the sentence names each with its two sums. A
+500 ms wait added to a library's `onCreate` grew a launch that ended on
+`reportFullyDrawn` by 7%, under the fifth, while two checks went 0.9 s to
+1.3 s and 0.3 s to 0.7 s; the headline said only "No clear change". Up to four notes follow it: whether the
 launch is within `scenario.budget_ms`, in the sentence the report's own
 [plain reading](analysing.md#a-plain-reading) has for it; that the repeats are
 too few for the Holds column, or, with fewer than three a side, for anything to
@@ -1174,7 +1179,8 @@ few runs. `confidence` is the level the ranges are drawn at.
 With `--plain` or `--html` the file holds one more key, `plain`, after all the
 others: `scenario` and `process`, what the two reports are of; `verdict`
 (`movement`: `better`, `worse`, `no_change` or `not_compared`; a
-`headline` and the sentence, `text`; `by`, `window` or `frames`, what it was
+`headline` and the sentence, `text`; `checks_moved`, the ids of the checks
+that moved under a verdict of no clear change; `by`, `window` or `frames`, what it was
 read from, and `frames`, each side's late frames — `late` and `count`, the
 medians, `share` and its `low` and `high` over the runs, `runs`, and `middle`,
 the `late` and `count` of the run the share is of, or of the two it is halfway
