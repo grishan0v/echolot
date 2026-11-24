@@ -1082,6 +1082,10 @@ is recorded whoever pushes it aside: the set a run outside the investigation
 moves is still filed under the investigation that recorded it, read off the
 last collect's progress file, since it is that investigation's evidence and
 the record is the one place that says where it went.
+A new question moves the loose set aside the same way, and files it under the
+investigation it closes only when that one recorded it: not when the last
+collect says it ran outside it, nor when the traces were written after it
+was concluded.
 
 `echolot hunt --done` marks the record concluded where it is;
 `echolot hunt "<q>"` is what moves it here. Bare `echolot hunt` reads the one

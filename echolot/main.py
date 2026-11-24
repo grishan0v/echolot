@@ -3749,7 +3749,9 @@ def cmd_hunt(args) -> int:
         h = hunt_mod.open_new(project, question,
                               since=getattr(args, "hunt_since", None),
                               scenario=scenario, config_sha=sha,
-                              traces_aside=aside, confirmed=confirmed)
+                              traces_aside=aside, confirmed=confirmed,
+                              # Whose the set moved aside is (#718).
+                              last_collect=run)
         print(f'opened #{h["n"]}: "{h["question"]}"')
         # The one before it is closed by this, as abandoned when it was still
         # open: a page of it that stands there is written again to say so.

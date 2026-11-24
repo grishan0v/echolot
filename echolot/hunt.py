@@ -441,7 +441,8 @@ def open_new(project: Path, question: str, since: str | None = None,
              scenario: str | None = None, config_sha: str | None = None,
              status: str = "abandoned",
              traces_aside: Path | None = None,
-             confirmed: dict[str, Any] | None = None) -> dict[str, Any]:
+             confirmed: dict[str, Any] | None = None,
+             last_collect: dict[str, Any] | None = None) -> dict[str, Any]:
     """Close whatever was open, archive it, and start a new investigation.
 
     `status` is what the previous one is recorded as — `abandoned` when the
@@ -454,16 +455,20 @@ def open_new(project: Path, question: str, since: str | None = None,
     `traces_aside` is where the loose set of traces was moved to make room.
     That set is the *previous* investigation's evidence, so it is recorded on
     the record being closed. Without it the archive remembers the question and
-    forgets what was measured, which makes it decoration.
+    forgets what was measured, which makes it decoration. Only when it was
+    recorded for that one (`_its_evidence`): `last_collect` is what
+    `.echolot/log/collect.json` says of the run that left it.
     """
     set_aside_unreadable(project)
     previous = load(project)
     if previous:
         previous.setdefault("status", "open")
+        ours = traces_aside is not None and _its_evidence(project, previous, traces_aside,
+                                                         last_collect)
         if previous["status"] == "open":
             previous["status"] = status
             previous["closed_at"] = _now()
-        if traces_aside is not None:
+        if ours:
             previous.setdefault("traces", []).append(str(traces_aside))
         archive(project, previous)
 
@@ -484,6 +489,35 @@ def open_new(project: Path, question: str, since: str | None = None,
     }
     save(project, hunt)
     return hunt
+
+
+def _its_evidence(project: Path, hunt: dict[str, Any], aside: Path,
+                  last_collect: dict[str, Any] | None) -> bool:
+    """Whether the set just moved aside was recorded for `hunt`, the
+    investigation about to be closed.
+
+    Not when the collect that left it says it ran outside `hunt`, and not
+    when it was written after `hunt` was concluded. Filed all the same, a
+    baseline recorded months after the question was answered read in
+    `hunt --show` as the evidence for that answer (#718), the outcome #498
+    kept `collect` and `analyze` from. A collect that does not say where it
+    ran, from before it wrote that, is taken as the investigation's, as it
+    always was.
+    """
+    if recorded_outside(hunt, last_collect):
+        return False
+    closed = hunt.get("closed_at") if hunt.get("status", "open") != "open" else None
+    if not closed:
+        return True
+    try:
+        closed_at = _epoch(closed)
+        folder = aside if aside.is_absolute() else project / aside
+        newest = max((f.stat().st_mtime for f in folder.iterdir() if f.is_file()), default=None)
+    except (OSError, TypeError, ValueError):
+        return True
+    # `closed_at` is kept to the second: a trace written within that second
+    # was written before the close as likely as after it.
+    return closed_at is None or newest is None or newest < closed_at + 1
 
 
 def touch(project: Path, *, collect: bool = False, analyze: bool = False,
