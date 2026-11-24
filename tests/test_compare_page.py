@@ -400,7 +400,8 @@ def test_how_a_movement_is_decided_says_the_rule_with_its_numbers():
     page = page_of(*every_movement())
     fold = next(d for d in page.all("details") if d.one("summary").text == "How a movement is decided")
     names = [li.one("b").text for li in fold.all("li")]
-    check("a sentence per movement", names == ["Better, worse", "Gone, new", "No change", "Fine both times", "Not checked"])
+    check("a sentence per movement", names == ["Better, worse", "Gone, new", "No change", "Not compared", "Fine both times",
+                                             "Not checked"])
     check("with the numbers the reading is made with", "changed by at least 20% and by at least 5% of the launch" in fold.text
           and "It takes 3 launches a side." in fold.text and "seen in one launch of three adds nothing" in fold.text, fold.text)
     check("each with the icon of its movement", all(li.all("svg") for li in fold.all("li")))
@@ -603,3 +604,33 @@ def test_html_with_nowhere_to_write_says_so(pair):
     check("the comparison is printed and nothing is written", code == 0 and out.startswith("# Comparison")
           and not list(pair.glob("**/comparison.html")), err)
     check("and it says what the flag needs", "--html writes the page beside comparison.json: name a folder with -o" in err, err)
+
+
+def test_a_check_not_measured_alike_has_no_red_and_no_green():
+    """#713: a threshold of 83.3 ms against 16 ms on the same recordings drew a red "Worse"."""
+    before = report([entry("main_thread_block", [steady("inflate", 300)], params={"min_slice_ms": 83.3}),
+                     entry("binder_txn", [steady("binder transaction", 600)])])
+    after = report([entry("main_thread_block", [steady("inflate", 300), steady("bind", 600)],
+                          params={"min_slice_ms": 16}),
+                    entry("binder_txn", [steady("binder transaction", 300)])])
+    page = page_of(before, after)
+    rows = rows_of(page)
+    pill = rows["mv-main_thread_block"].one("div", "c-l").one("span", "st")
+    check("grey, and says it was not compared", pill.text == "Not compared"
+          and pill.attrs["class"].split()[1] == "grey", pill.attrs)
+    check("with the threshold in its sentence", "min_slice_ms from 83.3 to 16 ms"
+          in rows["mv-main_thread_block"].one("p", "tr-f").text)
+    check("the other check keeps its green", rows["mv-binder_txn"].one("div", "c-l").one("span", "st").text == "Better")
+    views = [b.attrs["data-view"] for b in page.all("button", "view")]
+    check("the filter has it, and every row is in a group the filter has", "uncompared" in views
+          and {r.attrs["data-group"] for r in rows.values()} <= set(views), views)
+    for rep in (before, after):
+        rep["traces"] = [f"coldStart_iter00{i}.perfetto-trace" for i in range(3)]
+        for d in rep["detectors"]:
+            d["params"] = {}
+    same = page_of(before, after)
+    top = same.one("main").one("span", "lg")
+    check("the same recordings: the verdict is grey and says so", top.text == "Not compared"
+          and "grey" in top.attrs["class"], top.attrs)
+    tints = {r.one("div", "c-l").one("span", "st").attrs["class"].split()[1] for r in rows_of(same).values()}
+    check("and no check is red or green", tints == {"grey"}, tints)

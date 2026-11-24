@@ -45,7 +45,8 @@ PANEL_DETAIL = 160
 
 # What the filter above the table shows together: a movement's direction.
 GROUP = {moves.BETTER: "better", moves.GONE: "better", moves.WORSE: "worse", moves.NEW: "worse",
-         moves.NO_CHANGE: "same", moves.FINE_BOTH: "fine", moves.NOT_CHECKED: "unchecked"}
+         moves.NO_CHANGE: "same", moves.FINE_BOTH: "fine", moves.NOT_CHECKED: "unchecked",
+         moves.NOT_COMPARED: "uncompared"}
 _QUIET = (moves.FINE_BOTH, moves.NOT_CHECKED)
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]+")
@@ -299,12 +300,15 @@ _NO_SCRIPT = ("<noscript><div class=\"callout fig\"><p><b>Script is switched off
 
 
 def _views(checks: list[dict[str, Any]]) -> str:
-    count = {g: sum(1 for c in checks if c["group"] == g) for g in ("better", "same", "worse", "fine", "unchecked")}
+    count = {g: sum(1 for c in checks if c["group"] == g)
+             for g in ("better", "same", "worse", "uncompared", "fine", "unchecked")}
     items = [("all", "", "All", len(checks)),
              ("better", kit.move_icon(moves.BETTER), "Got better", count["better"]),
              ("same", kit.move_icon(moves.NO_CHANGE), "Did not change", count["same"])]
     if count["worse"]:
         items.append(("worse", kit.move_icon(moves.WORSE), "Got worse", count["worse"]))
+    if count["uncompared"]:
+        items.append(("uncompared", kit.move_icon(moves.NOT_COMPARED), "Not compared", count["uncompared"]))
     items += [("fine", kit.icon("green"), "Fine both times", count["fine"]),
               ("unchecked", kit.icon("grey"), "Not checked", count["unchecked"])]
     return kit.views(items)
@@ -321,6 +325,9 @@ def _rule(noun: str, plural: str) -> str:
         (moves.NO_CHANGE, "No change",
          f"The check found something on a side, and the change is smaller than that, or single {plural} of the two "
          f"sides overlap, or the {plural} are too few. Its sentence says which."),
+        (moves.NOT_COMPARED, "Not compared",
+         "The check ran both times, but not by one measure: its thresholds changed, the version of echolot "
+         "that read it did, or both sides are the same recordings. Its sentence says which."),
         (moves.FINE_BOTH, "Fine both times", "The check ran both times and found nothing above its limit."),
         (moves.NOT_CHECKED, "Not checked",
          "The check could not run on one side or on both, so there is nothing to compare."),
