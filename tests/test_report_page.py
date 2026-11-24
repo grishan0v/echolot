@@ -359,6 +359,26 @@ def test_two_times_of_the_verdict_and_its_range_never_read_alike():
           main_.one("p", "lead").text)
 
 
+def test_a_page_load_with_no_end_anchor_whose_repeats_diverged_says_what_the_cli_says():
+    """The page called a page load "the launch" and dropped the CLI's
+    "Repeat windows diverged" and "No end anchor" (#927)."""
+    rep = make([entry("main_thread_waits", [row("worker", 700.0)])], duration=1300.0, startup=False, runs=5)
+    rep["window"] |= {"duration_ms_min": 1300.0, "duration_ms_max": 5100.0,
+                      "start_anchor": {"glob": "pageLoad", "matches": 5}, "end_anchor": None}
+    rep = plain.annotate(rep)
+    main_ = page_of(rep).one("main")
+    check("a run, not a launch", main_.one("h1").text == "The run takes 1.3 s"
+          and "Measured on 5 runs" in main_.one("p", "lead").text, (main_.one("h1").text, main_.one("p", "lead").text))
+    notes = [p.text for p in main_.one("div", id="window-notes").all("p")]
+    check("and the two lines report.md writes, near the headline", len(notes) == 2
+          and notes[0].startswith("Repeat windows diverged 3.9x. These are not repeats of one scenario")
+          and notes[1].startswith("No end anchor in the scenario: the window runs to where the process's last "
+                                  "slice ends"), notes)
+    written = report_mod.to_markdown(rep)
+    check("in its words", all(n.split(":")[0] in written for n in notes))
+    check("a report with neither has no such note", not page_of(known()).all("div", id="window-notes"))
+
+
 def test_a_report_with_no_budget_is_grey_and_says_why():
     rep = plain.annotate(make([entry("gc_pressure", [])], duration=1136.0, budget=None, runs=5))
     main_ = page_of(rep).one("main")

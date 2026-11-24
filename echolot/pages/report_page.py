@@ -336,7 +336,29 @@ def _verdict(report: dict[str, Any], ctx: Any) -> str:
              f'<p>{kit.prose(warning)}</p></div>' if warning else "")
     return (f'<div class="stack gap-3">{first}<div class="rowf">{kit.verdict_pill(v.get("level"), large=True)}{scenario}</div>'
             f'<h1 class="h1">{e(headline.rstrip("."))}</h1>'
-            + (f'<p class="lead">{e(rest)}</p>' if rest else "") + "</div>")
+            + (f'<p class="lead">{e(rest)}</p>' if rest else "") + _notes(report) + "</div>")
+
+
+def window_notes(report: dict[str, Any]) -> list[str]:
+    """What the CLI says of the window beside its length, in its own words:
+    repeats that diverged several-fold, and a scenario with no start or end
+    anchor, whose window runs to the edge of what the process did. The
+    lines `report.md` writes, from the functions that write them; the page
+    had neither (#927)."""
+    w = report.get("window") or {}
+    try:
+        lines = report_mod._diverged_lines(w) + report_mod._window_warning_lines(w)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return []
+    return [re.sub(r"^>\s*(?:⚠️\s*)?", "", line).replace("**", "") for line in lines]
+
+
+def _notes(report: dict[str, Any]) -> str:
+    notes = window_notes(report)
+    if not notes:
+        return ""
+    said = "".join(f"<p>{kit.prose(n)}</p>" for n in notes)
+    return f'<div class="callout" id="window-notes" role="note">{kit.icon("yellow")}<div class="stack gap-2">{said}</div></div>'
 
 
 def _measured(report: dict[str, Any], ctx: Any) -> str:

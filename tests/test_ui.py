@@ -55,7 +55,7 @@ from echolot import when as when_mod  # noqa: E402
 from echolot.pages import answer_page, kit, start_page  # noqa: E402
 from tests import answer_fixture as fx  # noqa: E402
 from tests.support import check  # noqa: E402
-from tests.test_report_page import SCHEME, _blocks, known, outside, read  # noqa: E402
+from tests.test_report_page import SCHEME, _blocks, entry, known, make, outside, read, row  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGES = Path(echolot.__file__).resolve().parent / "pages"
@@ -839,6 +839,19 @@ def test_a_package_whose_suffix_is_not_read(project):
     check("green, and the name may be another build's on the phone (#812)", tone == "green"
           and "can be measured on the benchmark build." in text
           and f"adb shell pm list packages {APP} lists" in text, text)
+
+
+def test_a_report_card_says_a_run_and_what_the_cli_says_of_its_window(project):
+    """"browseScroll: The launch takes 23.6 s" for a journey with no end
+    anchor, and no word of the windows that diverged (#927)."""
+    from echolot import plain
+    rep = make([entry("main_thread_waits", [row("worker", 700.0)])], duration=23600.0, startup=False, runs=5)
+    rep["window"] |= {"duration_ms_min": 9000.0, "duration_ms_max": 30000.0,
+                      "start_anchor": {"glob": "browse_start", "matches": 5}, "end_anchor": None}
+    card = start(project.ready().report(data=plain.annotate(rep))).one("li", "rep")
+    check("a run, not a launch", "The run takes 23.6 s" in card.text and "launch takes" not in card.text, card.text)
+    check("with the lines report.md writes of its window", "Repeat windows diverged 3.3x" in card.text
+          and "No end anchor in the scenario" in card.text, card.text)
 
 
 def test_a_config_whose_code_is_elsewhere(project):

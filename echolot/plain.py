@@ -246,8 +246,11 @@ class _Ctx:
         window = report.get("window") or {}
         self.window_ms = float(window.get("duration_ms") or 0)
         self.main = kernel_name(report)
-        # A startup is a launch; any other stretch is a run.
-        self.kind = "launch" if window.get("startup") else "run"
+        # A window that is the launch, or that opens on the app's startup,
+        # is a launch; any other stretch is a run. The trace holds a startup
+        # whenever collect started the app, and a page load or a scroll
+        # recorded after it was called a launch (#927).
+        self.kind = "launch" if is_launch_window(window) else "run"
         # What a share is a share of. A window whose anchor missed is the
         # recording, whatever the scenario is (#557): "56% of the launch" of
         # such a window is a share of something that is not the launch. The
@@ -262,6 +265,25 @@ class _Ctx:
     @property
     def plural(self) -> str:
         return self.noun + ("es" if self.noun == "launch" else "s")
+
+
+def is_launch_window(window: dict[str, Any]) -> bool:
+    """Is the window the app's launch: built from the launch (`window:
+    launch`), or opened at or after the start of the app's startup and
+    sharing time with it, as a window from `bindApplication` does? Not a
+    window that opens after the startup ended, nor one that opens before the
+    app was started, such as one with no start anchor (#927)."""
+    if launch_mod.is_launch(window):
+        return True
+    startup = window.get("startup")
+    if not isinstance(startup, dict):
+        return False
+    began, shared = startup.get("from_window_start_ms"), startup.get("in_window_ms")
+    if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (began, shared)):
+        # A startup that does not say where it sits against the window, as
+        # in a report written before it did: a launch, as it was read then.
+        return True
+    return shared > 0 and began <= 0
 
 
 def _anchors(window: dict[str, Any]) -> list[dict[str, Any]]:
