@@ -182,23 +182,14 @@ def unattended(n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> s
     the hunt goes here, which investigation and recordings, what the rules
     let out of the sandbox and what it may edit, and how it ends."""
     where = dig._listed([p or "." for p in paths])
-    if aside:
-        folder, count = aside
-        evidence = (f"- Its first evidence is the {count} recording{'s' if count != 1 else ''} behind the report, "
-                    f"moved aside when it opened, into `{folder}/`. Do not record {'them' if count != 1 else 'it'} "
-                    "again.")
-    else:
-        evidence = "- No recordings were set aside when it opened: record them in its first round."
     return "\n".join([
         "This run was started from echolot ui, and nobody is at the keyboard. Nothing you ask can be answered, and a "
         "run that waits for an answer is ended. So do not ask, and do not wait. Decide with what you have, and say in "
         "your answer what you would have asked.",
         "- /echolot-hunt is Claude Code's command; here `echolot guide hunt` prints the same steps. Run it first, and "
         "follow it.",
-        f"- The investigation is open: #{n}, opened for this question by the page. Carry on in it, do not open "
-        "another, and close it at the end.",
-        evidence,
-        "- After which change: unknown.",
+        # The three facts, word for word what Claude Code is told (`dig.facts`).
+        *dig.facts(n, aside),
         f"- The rules in `{codex_mod.RULE_SHOWN}` let `echolot`, `./gradlew` and `adb` out of your sandbox; anything "
         f"else runs inside it, with no network. Edit files under {where}, and `{dig.VERDICT}`, and nothing else: the "
         "page lists every other file you change. Do not commit anything.",

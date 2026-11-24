@@ -321,7 +321,8 @@ def test_a_press_opens_the_investigation_then_starts_codex_in_it(project, monkey
     request = argv[-1]
     check("the request: the report's, then what nobody there means for Codex", request.startswith(
         "/echolot-hunt `coldStart` takes 1,920 ms") and "- /echolot-hunt is Claude Code's command; here `echolot "
-        "guide hunt` prints the same steps." in request and "- The investigation is open: #1" in request, request)
+        "guide hunt` prints the same steps." in request and "- The investigation is open: #1" in request
+        and "with `--hunt 1`: without it nothing is filed under it." in request, request)
     check("without the names it must not find", not {"CLAUDECODE", "CODEX_SANDBOX_NETWORK_DISABLED"} & set(codex_.env))
     state = job.read(project.root, dig.JOB)
     check("its job names the client, and has no spending cap", state["what"]["client"] == "codex"

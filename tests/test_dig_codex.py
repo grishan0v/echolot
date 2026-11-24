@@ -200,6 +200,10 @@ def test_the_request_of_a_codex_started_from_the_page():
           "Code's command; here `echolot guide hunt` prints the same steps. Run it first, and follow it.")
     check("the three facts and the investigation, as for Claude Code", lines[2:5] == dig.unattended(
         4, (".echolot/traces/coldStart-20261122-101500", 3), ["app/src/main"]).split("\n")[1:4], lines[2:5])
+    check("from the one place both are told them", lines[2:5] == dig.facts(
+        4, (".echolot/traces/coldStart-20261122-101500", 3)))
+    check("so it files its rounds under the investigation, as `--hunt` alone does", "Run every `collect` and "
+          "`analyze` in it with `--hunt 4`: without it nothing is filed under it." in lines[2], lines[2])
     check("what the rules let out, what it may edit, and that the rest is listed", lines[5] == "- The rules in "
           "`.codex/rules/echolot.rules` let `echolot`, `./gradlew` and `adb` out of your sandbox; anything else runs "
           "inside it, with no network. Edit files under `app/src/main`, and `.echolot/verdict.json`, and nothing "

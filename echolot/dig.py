@@ -299,11 +299,10 @@ def _listed(items: Sequence[str]) -> str:
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def unattended(n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> str:
-    """What an agent started from the page is told beyond the request a
-    person would copy: that nobody can answer it, which investigation it
-    works in and on which recordings, what it may do, and how it ends."""
-    where = _listed([p or "." for p in paths])
+def facts(n: int, aside: tuple[str, int] | None) -> list[str]:
+    """The three facts of the hunt as every client started from the page is
+    told them: the investigation open for it and how to file a round in it,
+    its first evidence, and after which change."""
     if aside:
         folder, count = aside
         evidence = (f"- Its first evidence is the {count} recording{'s' if count != 1 else ''} behind the report, "
@@ -311,15 +310,27 @@ def unattended(n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> s
                     "again.")
     else:
         evidence = "- No recordings were set aside when it opened: record them in its first round."
-    return "\n".join([
-        "This run was started from echolot ui, and nobody is at the keyboard. Nothing you ask can be answered: "
-        "a question, or anything that needs a person's approval, is refused and the run goes on. So do not ask. "
-        "Decide with what you have, and say in your answer what you would have asked.",
+    return [
         f"- The investigation is open: #{n}, opened for this question by the page. Carry on in it, do not open "
         f"another, and close it at the end. Run every `collect` and `analyze` in it with `--hunt {n}`: without "
         "it nothing is filed under it.",
         evidence,
         "- After which change: unknown.",
+    ]
+
+
+def unattended(n: int, aside: tuple[str, int] | None, paths: Sequence[str]) -> str:
+    """What an agent started from the page is told beyond the request a
+    person would copy: that nobody can answer it, which investigation it
+    works in and on which recordings, what it may do, and how it ends."""
+    where = _listed([p or "." for p in paths])
+    return "\n".join([
+        "This run was started from echolot ui, and nobody is at the keyboard. Nothing you ask can be answered: "
+        "a question, or anything that needs a person's approval, is refused and the run goes on. So do not ask. "
+        "Decide with what you have, and say in your answer what you would have asked.",
+        # The facts come from one place for every client: Codex's request once
+        # kept a copy of its own, and it missed `--hunt` when that came in here.
+        *facts(n, aside),
         f"- You may run `echolot`, `./gradlew` and `adb` without asking, and edit files under {where}, and "
         f"`{VERDICT}`. Everything else is refused: git, any other program, any other file. Do not commit "
         "anything.",

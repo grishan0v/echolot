@@ -39,6 +39,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from echolot import hunt as hunt_mod  # noqa: E402
 from tests import fake_claude  # noqa: E402
 
 VERDICT = fake_claude.VERDICT
@@ -126,10 +127,12 @@ def prepare(project: Path, plan: dict[str, Any], events: Events) -> None:
     if plan.get("markers"):
         fake_claude._mark(project, plan["markers"])
     _change(project, plan.get("outside") or {})
+    # Each round filed under the open investigation, as the request says.
+    under = (hunt_mod.load(project) or {}).get("n")
     for n in range(1, int(plan.get("rounds", 2)) + 1):
-        events.ran("echolot collect -c echolot.yml -n 3", "3 launches recorded\n")
+        events.ran(f"echolot collect -c echolot.yml -n 3 --hunt {under}", "3 launches recorded\n")
         fake_claude._round(project, n)
-        events.ran("echolot analyze .echolot/traces -c echolot.yml", "report written\n")
+        events.ran(f"echolot analyze .echolot/traces -c echolot.yml --hunt {under}", "report written\n")
 
 
 def _leave_a_child(pipe: str) -> None:

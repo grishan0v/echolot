@@ -422,8 +422,9 @@ nothing. No permission is bypassed: `dontAsk` refuses what no rule allows,
 `--setting-sources project` leaves your own settings, hooks and plugins out
 while the project's commands for Claude Code, which `echolot init` installs,
 come in. The request says that nobody is at the keyboard, which investigation
-is open for it and on which recordings, what it may do, and to close the
-investigation with its verdict.
+is open for it (every `collect` and `analyze` goes into it with `--hunt <n>`)
+and on which recordings, what it may do, and to close the investigation with
+its verdict.
 
 **While it works**, its investigation's page is where the browser goes. The
 rounds come in as they always do (each report it files, round by round), and
@@ -508,10 +509,10 @@ codex exec --json -s workspace-write -C /path/to/the/project "<the request>"
 Under `exec` Codex asks nothing. A command runs in its sandbox, which has no
 network and writes only inside the project, and a command line a rule lets
 out runs outside it. No flag bypasses its approvals or its sandbox. The
-request is the same, with the lines Codex needs in place of Claude Code's:
-that `/echolot-hunt` is Claude Code's command and `echolot guide hunt` prints
-the same steps, and that a rule lets a command out only when it is that
-command alone, with no pipe or `&&`.
+request is the same, its facts word for word, `--hunt <n>` among them, with
+the lines Codex needs in place of Claude Code's: that `/echolot-hunt` is Claude
+Code's command and `echolot guide hunt` prints the same steps, and that a rule
+lets a command out only when it is that command alone, with no pipe or `&&`.
 
 **Nobody there.** Asked a question with nobody to answer, Codex takes it and
 then waits, for hours. The request says that nobody can answer. After ten
