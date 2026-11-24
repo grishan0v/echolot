@@ -92,13 +92,16 @@ def skipped(why: str | None) -> bool:
 
 
 @contextlib.contextmanager
-def _cursor_may_refuse():
-    """Cursor's sandbox refusing a `.cursor/` is a skip; anything else is not."""
+def _cursor_may_refuse(env: dict[str, str] | None = None):
+    """Cursor's sandbox refusing a `.cursor/` is a skip; anything else is not.
+
+    `env` stands in for the environment, for the check of this rule: the
+    environment doctor runs in may carry another agent's marks (#700)."""
     from . import sandbox
     try:
         yield
     except PermissionError as e:
-        if sandbox.host() == sandbox.CURSOR and ".cursor" in str(e.filename or e):
+        if sandbox.host(env) == sandbox.CURSOR and ".cursor" in str(e.filename or e):
             raise Skipped("Cursor's sandbox refuses to create .cursor/ in a "
                           "temporary project") from None
         raise
@@ -2644,28 +2647,26 @@ def _(report):
 def _(report):
     """Cursor's sandbox refuses a `.cursor/` it did not make. A check that
     writes one says so there and is not a failure; the same refusal anywhere
-    else, or another error there, still is."""
-    from . import selftest as st
+    else, or another error there, still is.
 
-    def refused(_report):
-        with st._cursor_may_refuse():
-            raise PermissionError(1, "Operation not permitted", "/tmp/x/.cursor")
+    Both environments are named here rather than set: the one doctor runs in
+    may carry another agent's marks, and Codex's, which `sandbox.host()`
+    reads first, failed this check whenever Codex ran doctor (#700)."""
+    from . import selftest as st
+    cursor = {"CURSOR_SANDBOX": "seatbelt"}
+
+    def refused_in(env):
+        def refused(_report):
+            with st._cursor_may_refuse(env):
+                raise PermissionError(1, "Operation not permitted", "/tmp/x/.cursor")
+        return refused
 
     def other(_report):
-        with st._cursor_may_refuse():
+        with st._cursor_may_refuse(cursor):
             raise PermissionError(1, "Operation not permitted", "/tmp/x/.idea")
 
-    before = os.environ.get("CURSOR_SANDBOX")
-    try:
-        os.environ["CURSOR_SANDBOX"] = "seatbelt"
-        inside = dict(st.run_checks({}, [("refused", refused), ("other", other)]))
-        del os.environ["CURSOR_SANDBOX"]
-        outside = dict(st.run_checks({}, [("refused", refused)]))
-    finally:
-        if before is None:
-            os.environ.pop("CURSOR_SANDBOX", None)
-        else:
-            os.environ["CURSOR_SANDBOX"] = before
+    inside = dict(st.run_checks({}, [("refused", refused_in(cursor)), ("other", other)]))
+    outside = dict(st.run_checks({}, [("refused", refused_in({}))]))
     assert st.skipped(inside["refused"]) and "Cursor's sandbox" in inside["refused"], inside
     assert inside["other"] and not st.skipped(inside["other"]), inside
     assert outside["refused"] and not st.skipped(outside["refused"]), outside
