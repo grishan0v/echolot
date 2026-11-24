@@ -1289,6 +1289,23 @@ FULLY_DRAWN_MS = 0.4
 FULLY_DRAWN_SEEN_AT_MS = 1162.5
 FULLY_DRAWN_SEEN_MS = 0.3
 
+# --- which activity the launch ended on, and a boot receiver ----------------------
+#
+# `build(activities=...)` and `build(boot=True)` only. An activity's creation
+# as Android 12 and on trace it, `performCreate:<class>` on the main thread:
+# the first inside `activityStart` at 396.5, the second inside
+# `activityResume` at 866, both inside the launch (40–1105). A launch the app
+# took on to another activity by itself creates both, the one started first,
+# and ends on the second (#909). And `BOOT_COMPLETED`'s receiver, as
+# ActivityThread names it, in a gap of the main thread inside `AppStart`
+# after `quick_thing`: what Android 15 runs on the first start after a
+# force-stop (#910). 4.5 ms, under every detector's threshold.
+CREATED_AT_MS = (397.0, 866.5)
+CREATED_MS = 1.0
+BOOT_RECEIVER = "broadcastReceiveComp: android.intent.action.BOOT_COMPLETED"
+BOOT_AT_MS = 410.0
+BOOT_MS = 4.5
+
 
 def _fully_drawn(kind: str) -> tuple[list, list]:
     """The slices of one `reportFullyDrawn()` call: the app's, and system_server's."""
@@ -1672,7 +1689,8 @@ def build(frames: bool = True, environment: bool = True,
           sampling: str | None = None, names: bool = False,
           crowded: bool = False, categories=None, composables: bool = True,
           fully_drawn: str | None = None, stuffed: bool = False,
-          smooth: bool = False, answered: bool = True, heap: bool = True) -> bytes:
+          smooth: bool = False, answered: bool = True, heap: bool = True,
+          activities: tuple[str, ...] = (), boot: bool = False) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1721,6 +1739,13 @@ def build(frames: bool = True, environment: bool = True,
     `heap=False` leaves out the runtime's heap counter: what a trace from an
     older device, or from a tool that recorded less, gives the standard
     library to read (#514).
+
+    `activities` plants a `performCreate:<class>` slice on the main thread for
+    each class named, in order, the way Android 12 and on trace an activity's
+    creation: a launch that ended on the last of them (#909). None by
+    default, as on an older phone. `boot=True` plants the app's
+    `BOOT_COMPLETED` receiver on the main thread inside the launch, as
+    Android 15 runs it on the first start after a force-stop (#910).
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -1771,11 +1796,14 @@ def build(frames: bool = True, environment: bool = True,
         all_slices = {tid: _without_composables(tree) for tid, tree in all_slices.items()}
     all_slices.update(OTHER_SLICES)
     drawn_app, drawn_seen = _fully_drawn(fully_drawn) if fully_drawn else ([], [])
+    created = [(f"performCreate:{cls}", at, CREATED_MS, [])
+               for cls, at in zip(activities, CREATED_AT_MS, strict=False)]
+    received = [(BOOT_RECEIVER, BOOT_AT_MS, BOOT_MS, [])] if boot else []
     for tid, tree_slices in all_slices.items():
         if tid == TID_MAIN:
             # After the thread's own: atrace nests by time, so an early call
             # lands inside `AppStart` wherever it is written here.
-            tree_slices = [*tree_slices, *drawn_app]
+            tree_slices = [*tree_slices, *drawn_app, *created, *received]
         events = _flatten(tree_slices, [], seq)
         cpu = tid_to_cpu[tid]
         tgid = tid_to_tgid[tid]

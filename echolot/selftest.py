@@ -1881,6 +1881,117 @@ def _(report):
         assert _cold_only([paths[1]]) == ([paths[1]], []), "alone, it is read as given"
 
 
+def _collect_ending(ended: list[str], n: int, where: Path,
+                    started: str = ".Main") -> tuple[list[dict], list[str]]:
+    """`runner.collect` of `n` cold launches of `com.example.app/<started>` on
+    a fake device whose `am start -W` says each ended on the next of `ended`,
+    in the short form a phone prints: the recordings made, and what was said."""
+    from . import runner
+    package, serial = "com.example.app", "emulator-5554"
+    ended = list(ended)
+
+    def adb(args, stdin=None, timeout=120):
+        args = list(args)
+        text = " ".join(args[4:]) if args[3:4] == ["shell"] else " ".join(args)
+        if text == "adb devices":
+            return f"List of devices attached\n{serial}\tdevice\n\n"
+        if text.startswith("pm path"):
+            return f"package:/data/app/{package}/base.apk\n"
+        if text.startswith("dumpsys power"):
+            return ("  mWakefulness=Awake\n  mIsPowered=true\n  mStayOn=true\n"
+                    "    mShowingDream=false mDreamingLockscreen=false\n"
+                    "    isKeyguardShowing=false\n")
+        if text.startswith("am start -W"):
+            to = ended.pop(0) if len(ended) > 1 else ended[0]
+            return (f"Status: ok\nLaunchState: COLD\nActivity: {package}/{to}\n"
+                    f"TotalTime: 523\nComplete\n")
+        if args[3:4] == ["pull"]:
+            Path(args[-1]).write_bytes(b"a trace")
+        return ""
+
+    said: list[str] = []
+    real = runner._run
+    runner._run = adb
+    try:
+        made = runner.collect(package, where, n, name="run",
+                              section={"activity": f"{package}/{started}"}, log=said.append)
+    finally:
+        runner._run = real
+    return made, said
+
+
+@check("collect keeps the activity each launch ended on and says when it was not the "
+       "one started; analyze leaves out the launches that ended elsewhere than most")
+def _(report):
+    """Wikipedia opens the page read last by itself when that was less than a
+    day ago: 2 of 13 cold starts ended on `PageActivity`, 497 and 572 ms
+    against 273–317 for the feed, and each was recorded as an ordinary `COLD`
+    with nothing said (#909). `am start -W` names the activity a launch ended
+    on; it is kept beside the trace, said under the repeat, counted at the end
+    of the set, and `analyze` leaves out the repeats that ended where fewer
+    did. A splash that hands over to the main activity ends every launch
+    elsewhere, and that is the app's start: one line, nothing left out.
+    """
+    from . import runner
+    from .main import _one_journey
+    main, page = "com.example.app.Main", "com.example.app.Page"
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([".Page", ".Main"], 3, Path(tmp))
+        kept = [runner.launch_record(r["path"]) for r in made]
+        assert [(k["activity"], k["asked"]) for k in kept] == [
+            (f"com.example.app/{page}", f"com.example.app/{main}"),
+            (f"com.example.app/{main}", f"com.example.app/{main}"),
+            (f"com.example.app/{main}", f"com.example.app/{main}")], kept
+        under = [s.strip() for s in said if "the launch ended on" in s]
+        assert under == [f"the launch ended on {page}, not on the {main} it started: the "
+                         f"app went on to another activity by itself"], said
+        assert kept[0]["notes"] == under and not kept[1]["notes"], kept
+        end = runner.activities_said(made) or ""
+        assert f"{page} in repeat 1, {main} in the other 2" in end, end
+        reports = [{"trace": str(r["path"]), "window": {}} for r in made]
+        read, left, mixed = _one_journey(reports)
+        assert [r["trace"] for r in read] == [str(r["path"]) for r in made[1:]], read
+        assert left == [{"trace": str(made[0]["path"]), "activity": page, "repeat": 1,
+                         "others": main}] and mixed is None, left
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([".Main"], 3, Path(tmp), started=".Splash")
+        under = [s for s in said if "the launch ended on" in s]
+        assert len(under) == 1 and said.index(under[0]) - 1 == next(
+            i for i, s in enumerate(said) if "[1/3]" in s), "said once, under repeat 1"
+        end = runner.activities_said(made) or ""
+        assert end.startswith(f"every launch of the 3 ended on {main}, not on the "
+                              f"com.example.app.Splash it started"), end
+        reports = [{"trace": str(r["path"]), "window": {}} for r in made]
+        assert _one_journey(reports) == (reports, [], None), "one journey: all read"
+
+
+@check("launch window: says which activity the launch ended on, and names the app's "
+       "BOOT_COMPLETED receiver inside it as the reset's work")
+def _(report):
+    """On Android 15 `am force-stop` leaves an app stopped, and its next start
+    is sent `BOOT_COMPLETED`: in 25 of 25 Wikipedia cold starts on an
+    SM-F711B its receiver ran on the main thread between `bindApplication`
+    and the first activity, 2.1–6.1 ms, and the report said nothing (#910). A
+    user's cold start after the system reclaimed the process runs none of it.
+    The trace's last `performCreate:` names where the launch ended (#909).
+    """
+    from . import report as report_mod
+    got = _launched(activities=("com.example.app.MainActivity",
+                                "com.example.app.PageActivity"), boot=True)
+    w = got["window"]
+    assert w["activity"] == "com.example.app.PageActivity", w.get("activity")
+    assert w["boot_receivers"] == [{"name": fixture.BOOT_RECEIVER, "count": 1,
+                                    "ms": fixture.BOOT_MS}], w["boot_receivers"]
+    text = report_mod.to_markdown(got)
+    assert "The launch ended on `com.example.app.PageActivity`." in text, text[:1200]
+    said = (f"> ⚠️ The main thread ran the app's `BOOT_COMPLETED` receiver inside the "
+            f"window: `{fixture.BOOT_RECEIVER}` {fixture.BOOT_MS} ms.")
+    assert said in text and "it is the reset's work, not the start's" in text, text[:1600]
+    assert said in report_mod.overview(got), "and in the overview analyze prints"
+    plain = report["window"]
+    assert plain.get("boot_receivers") is None and "activity" not in plain, plain
+
+
 def _powered(plugged: bool, level: int, saver: str = "0") -> str:
     """What the read before a repeat answers (screen.READ), cut to its lines:
     the screen on and unlocked, the phone plugged in or not."""

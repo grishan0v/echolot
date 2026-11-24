@@ -117,7 +117,16 @@ a byte copy under another name or a symlink beside the file is read once, and
 (the markdown warns under the Traces line). `not_cold` lists the traces left
 out because `collect` set them aside as not cold — stopped, and the process
 running again by the start — each with its launch state; the medians are over
-the others. Every number in it is then a median across them, and a few keys say
+the others. `ended_elsewhere` lists the launches left out because they ended
+on another activity than most of the set (`am start -W`'s `Activity:`, or the
+trace's last `performCreate:`): another journey, such as an app opening the
+page read last by itself; each has its `repeat`, its `activity` and the
+`others`' one. `window.activities` counts them instead when as many ended on
+each and none could be left out. `window.activity` is where a launch window's
+launches ended, and `window.boot_receivers` the app's `BOOT_COMPLETED`
+receivers the main thread ran inside the window, with their time and `runs`:
+on Android 15 every start after a force-stop runs them and a user's start does
+not, so their time is the reset's, not something to place in the start's code. Every number in it is then a median across them, and a few keys say
 how far the repeats spread: `window.duration_ms_min` and `_max`, with
 `window.values` each repeat's window in the order of `traces` (what `compare`
 tests the window's move with),

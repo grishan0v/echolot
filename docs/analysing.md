@@ -573,6 +573,18 @@ the trace, not from the trace, names it on stderr and under the Traces line,
 and lists it in `report.json` as `not_cold`. A set of such traces alone is
 read as given. See [launch mode](collecting.md#launch--we-drive-it).
 
+A launch that ended on another activity than most of the set's is left out
+the same way, and named with its repeat and the activity it ended on: an app
+that opens the page read last, a login or an onboarding by itself ends its
+launch there, and the window runs on through that screen. `analyze` reads
+where each launch ended from `collect`'s account (`am start -W`'s `Activity:`)
+or, without one, from the trace's last `performCreate:` inside the window, and
+lists the ones left out in `report.json` as `ended_elsewhere`. Where as many
+repeats ended on two activities, the one `collect` started is read; with none
+of them that one, every repeat is, `window.activities` counts them, and the
+report says the medians mix two journeys. See
+[A launch that ended elsewhere](collecting.md#a-launch-that-ended-elsewhere).
+
 ### Runs that drift from the first to the last
 
 A set's medians are one state of the device measured again and again — when
@@ -1000,6 +1012,19 @@ app that holds its splash screen until its content is ready. An app that
 draws a placeholder first is still loading after that frame, and only its
 `reportFullyDrawn()` call says when it is done: without the call, the work
 after the first frame is outside the window.
+
+The line ends with the activity the launch ended on, `The launch ended on
+`org.example.MainActivity`.`, where the trace names it: Android 12 and on
+write a `performCreate:<class>` slice for every activity created, and the
+last one inside the window is it (`window.activity` in `report.json`).
+
+Above the findings, the report names the app's `BOOT_COMPLETED` receiver when
+the main thread ran it inside the window, with its time over the repeats
+(`window.boot_receivers`): on Android 15 every start after a force-stop runs
+it, and a user's start does not. See
+[Android 15: what a force-stop adds to a cold start](collecting.md#android-15-what-a-force-stop-adds-to-a-cold-start).
+The line is said of any window that holds the receiver, an anchored one cut
+from `bindApplication` too.
 
 Such a window opens before the app's process exists, so the main thread has
 no state for its first stretch: `10% before the process started` above. That

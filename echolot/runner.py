@@ -1517,6 +1517,9 @@ def collect(package: str, out_dir: Path, iterations: int,
     spare = iterations if reset == "force-stop" else 0
     kept = again_used = short = 0
     checked = False
+    # The activity started, and the one the repeat before ended on (#909).
+    asked = component(activity) if mode == "launch" else None
+    ended_before: str | None = None
     # Composable names go on after the device is held still and off before
     # it is put back, so that the app is the last thing touched and the
     # first thing restored.
@@ -1644,6 +1647,15 @@ def collect(package: str, out_dir: Path, iterations: int,
             if restarted:
                 info["not_cold"] = True
                 notes.append("[!] " + _not_cold_line(package, left))
+            # Where the launch ended, against where it was started (#909).
+            # Said when it ended elsewhere, unless the repeat before ended
+            # there too: a splash that hands over to the app's main activity
+            # does that in every repeat, and one line says it.
+            ended = info.get("activity")
+            if ended and asked and ended != asked and ended != ended_before:
+                notes.append(_elsewhere_line(ended, asked))
+            if mode == "launch" and not restarted:
+                ended_before = ended
             # A trace is recorded and about to take the first name: the moment
             # the previous set has to make room, and not a moment earlier.
             make_room()
@@ -1671,8 +1683,14 @@ def collect(package: str, out_dir: Path, iterations: int,
                     "cold": (False if restarted else True
                              if mode == "launch" and reset == "force-stop"
                              and state == "COLD" else None),
+                    # The activity the launch ended on, as `am start -W`
+                    # said, and the one it started; None in command mode
+                    # (#909).
+                    "activity": info.get("activity"),
+                    "asked": asked,
                     "notes": notes,
                 }}
+            info["repeat"], info["asked"] = i + 1, asked
             recording.write(out, facts)
             results.append(info)
 
@@ -1821,6 +1839,64 @@ def _stopped_again_line(package: str, pids: str, waited: float, stops: int = 1) 
             f"{times} before the recording")
 
 
+def _elsewhere_line(ended: str, asked: str) -> str:
+    """The line under a repeat whose launch ended on another activity than the
+    one started (#909)."""
+    return (f"the launch ended on {activity_class(ended)}, not on the "
+            f"{activity_class(asked)} it started: the app went on to another "
+            f"activity by itself")
+
+
+def activities_said(results: list[dict]) -> str | None:
+    """What `collect` says at the end of a launch set whose repeats did not all
+    end on the activity started (#909), or None.
+
+    Repeats that ended on different activities measured two journeys: an app
+    that opens the page read last, a login or an onboarding by itself does
+    that now and then, and the launch's window runs on through the second
+    activity. Wikipedia's did it in 2 of 13 cold starts, 497 and 572 ms against
+    273–317, and each was recorded as an ordinary `COLD`. Which repeat is the
+    odd one out is the set's to say and not the activity started's: a splash
+    that hands over to the main activity ends every launch elsewhere, and that
+    is the app's start. So the set is counted, and `analyze` leaves out the
+    activity fewer repeats ended on.
+    """
+    from collections import Counter
+    ended = [(r.get("repeat"), r.get("activity")) for r in results if r.get("activity")]
+    if not ended:
+        return None
+    counts = Counter(a for _, a in ended)
+    asked = next((r.get("asked") for r in results if r.get("asked")), None)
+    if len(counts) == 1:
+        (only, n), = counts.items()
+        if not asked or only == asked:
+            return None
+        every = "the launch" if n == 1 else f"every launch of the {n}"
+        return (f"{every} ended on {activity_class(only)}, not on the "
+                f"{activity_class(asked)} it started: the app went on to it by "
+                f"itself, and the window runs until it drew. A splash that hands "
+                f"over does that; a login or an onboarding screen is not the start "
+                f"you meant to measure")
+    # The most repeats' first, the one started where as many ended elsewhere.
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0] != asked))
+    (most, n_most), rest = ranked[0], ranked[1:]
+    parts = []
+    for name, _ in rest:
+        repeats = [str(r) for r, a in ended if a == name and r is not None]
+        which = (f"repeat {repeats[0]}" if len(repeats) == 1
+                 else f"repeats {', '.join(repeats[:-1])} and {repeats[-1]}")
+        parts.append(f"{activity_class(name)} in {which}")
+    led = n_most > rest[0][1] or most == asked
+    then = ("analyze reads the activity most repeats ended on, and leaves out and "
+            "names the others" if led else
+            "as many ended on each, so analyze reads them all and says the medians "
+            "mix two journeys")
+    return (f"the launches did not end on one activity: {'; '.join(parts)}, "
+            f"{activity_class(most)} in the other {n_most}. A launch that ended on "
+            f"another activity measured another journey: the app went on to another "
+            f"screen by itself (a page read last, a login, an onboarding). {then}")
+
+
 def _aside_path(out: Path, state: str) -> Path:
     """Where a recording that did not start cold is kept: beside the set, as
     `<name>_iterNNN-warm.perfetto-trace` (`-hot`, `-relaunch`, `-not-cold`
@@ -1845,16 +1921,42 @@ def _not_cold_line(package: str, left: str) -> str:
             f"nor bindApplication")
 
 
+def component(name: str | None) -> str | None:
+    """An activity's component as one string whichever way it was written:
+    `pkg/.Main` as `pkg/pkg.Main`. `am start -W` prints the short form
+    (`com.sec.android.app.clockpackage/.ClockPackage` on an SM-F711B), a
+    config may hold either, and the two have to compare equal. None for
+    nothing, or for what is no component."""
+    if not name or "/" not in name:
+        return None
+    package, cls = name.strip().split("/", 1)
+    return f"{package}/{package}{cls}" if cls.startswith(".") else f"{package}/{cls}"
+
+
+def activity_class(name: str | None) -> str | None:
+    """The class of a component, `org.wikipedia.page.PageActivity` of
+    `org.wikipedia.alpha/org.wikipedia.page.PageActivity`: what a trace's
+    `performCreate:` slice names, and what the report shows."""
+    full = component(name)
+    return full.split("/", 1)[1] if full else None
+
+
 def _launch(device: str, activity: str) -> dict:
     started = _run(["adb", "-s", device, "shell", "am", "start", "-W",
                     "-n", activity], timeout=120)
     info: dict = {}
+    # `Activity:` is the one the launch ended on, which is not always the one
+    # started: an app that opens a page read last, a login or an onboarding
+    # by itself ends its launch there (#909).
     for key, field in (("TotalTime", "total_time_ms"),
-                       ("LaunchState", "launch_state")):
+                       ("LaunchState", "launch_state"),
+                       ("Activity", "activity")):
         m = re.search(rf"^{key}:\s*(.+)$", started, re.MULTILINE)
         if m:
             value = m.group(1).strip()
             info[field] = int(value) if value.isdigit() else value
+    if "activity" in info:
+        info["activity"] = component(str(info["activity"]))
     # What `am start` says when it starts nothing, and exits 0 with:
     # `Error: Activity class {…} does not exist.` under `Error type 3`.
     error = next((ln.strip() for ln in started.splitlines()

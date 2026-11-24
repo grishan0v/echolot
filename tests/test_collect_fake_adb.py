@@ -579,9 +579,11 @@ def test_each_recording_keeps_how_it_started_beside_it(tmp_path, adb):
         "startup_iter000.perfetto-trace", "startup_iter001-warm.perfetto-trace",
         "startup_iter001.perfetto-trace"], kept)
     first, warm, again = kept.values()
-    check("a cold start: its state, its time, cold, nothing said",
+    started = f"{PACKAGE}/{PACKAGE}.MainActivity"
+    check("a cold start: its state, its time, cold, where it ended, nothing said",
           first == {"repeat": 1, "attempt": 1, "state": "COLD", "total_time_ms": 622,
-                    "cold": True, "notes": []}, first)
+                    "cold": True, "activity": started, "asked": started, "notes": []},
+          first)
     check("the warm one: the repeat it was for, not cold, and both lines said under it",
           warm["repeat"] == 2 and warm["attempt"] == 1 and warm["state"] == "WARM"
           and warm["total_time_ms"] == 295 and warm["cold"] is False
