@@ -2101,6 +2101,38 @@ def _(report):
     assert runs and runs[0].get("error") == "collection error: no device", runs
 
 
+@check("run log: a line names the agent session that ran it, and never a path in its place")
+def _(report):
+    """Parallel sessions in one checkout write to one log at the same
+    seconds; the id is what keeps `reflect` from reading one session's runs
+    as another's (#543). It is written as the host gave it, an opaque token —
+    and nothing that is not one, since a home directory has no place here."""
+    import time as _time
+    claude = {"CLAUDE_CODE_SESSION_ID": "0f1e2d3c-0000-4000-8000-000000000001"}
+    assert recorder.session(claude) == (claude["CLAUDE_CODE_SESSION_ID"], "claude-code")
+    assert recorder.session({"CODEX_THREAD_ID": "019a0000-aaaa"}) == ("019a0000-aaaa", "codex")
+    assert recorder.session({"ECHOLOT_SESSION": "ci-42", **claude}) == ("ci-42", None), \
+        "a session the caller named outranks the host's"
+    for bad in ("/home/someone/work", "two words", "a/b", "x" * 200, ""):
+        assert recorder.session({"CLAUDE_CODE_SESSION_ID": bad}) == (None, None), bad
+    assert recorder.session({}) == (None, None)
+    with tempfile.TemporaryDirectory() as tmp, recorder.isolated():
+        root = Path(tmp)
+        recorder.at(root)
+        saved = {k: os.environ.pop(k, None) for k in ("ECHOLOT_NO_RECORD", "ECHOLOT_SESSION")}
+        try:
+            os.environ["ECHOLOT_SESSION"] = "doctor-check-1"
+            recorder.record(type("A", (), {"cmd": "status", "config": None})(),
+                            ["status"], _time.time(), exit_code=0)
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+        runs = recorder.read(root / recorder.LOG_FILE)
+    assert runs and runs[0].get("session") == "doctor-check-1" and "agent" not in runs[0], runs
+
+
 @check("status: a collect in flight, interrupted or failed is a line of its own")
 def _(report):
     import time as _time

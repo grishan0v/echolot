@@ -26,6 +26,7 @@ import pytest  # noqa: E402
 
 from echolot import recorder  # noqa: E402
 from echolot.main import main  # noqa: E402
+from echolot.reflect.render import to_markdown as render_md  # noqa: E402
 from tests.support import check  # noqa: E402
 
 
@@ -328,6 +329,57 @@ def build(root: Path, project: Path) -> Path:
     return pdir
 
 
+OTHER = "0f0f0f0f-1111-4111-8111-111111111111"   # a session working beside this one
+
+
+def run_log(project: Path) -> None:
+    """The project's run log, as two sessions working in it at once left it.
+
+    Another session's `analyze` failed at the very second this session's
+    started, and its `collect` ran while this one hunted: matched by time,
+    the first gave this session's call its exit code and both were read as
+    this session's runs (#543). One line carries no session id, as an older
+    echolot wrote it, and is matched by time as before.
+
+    And the reports: this session's first `analyze` ran on a window whose
+    end anchor matched nothing, and the last one's report — still on disk,
+    the run's own — says the app drew no frame in it. Both exited 0 (#545).
+    """
+    report = project / ".echolot" / "out" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"window": {"duration_ms": 3000, "drawn": {"count": 0}},
+                                  "summary": {"fired_ids": []}}), encoding="utf-8")
+    (project / ".echolot" / "out" / "report.md").write_text("# Marker Report\n" * 40,
+                                                           encoding="utf-8")
+    written = (T0 + timedelta(seconds=1600)).timestamp()
+    os.utime(report, (written, written))
+
+    def line(t, cmd, exit_code=0, ms=1000, session=SESSION, **facts):
+        row = {"ts": (T0 + timedelta(seconds=t)).isoformat(timespec="seconds"),
+               "cmd": cmd, "argv": [cmd], "cwd": str(project), "exit": exit_code,
+               "ms": ms, "version": "0.17.0"}
+        if session:
+            row.update(session=session, agent="claude-code")
+        if facts:
+            row["facts"] = facts
+        return row
+
+    rows = [
+        line(5, "doctor", checks=12, failed=[]),
+        line(120, "analyze", exit_code=3, session=OTHER),
+        line(121, "analyze", ms=25000, start_anchor_matches=1, end_anchor_matches=0,
+             window_ms=41000, drawn=320, report=str(report)),
+        line(170, "doctor", session=None, checks=12, failed=[]),
+        line(500, "collect", ms=60000, session=OTHER),
+        line(1581, "analyze", ms=25000, start_anchor_matches=1, end_anchor_matches=1,
+             window_ms=3000, report=str(report)),
+    ]
+    rows[1]["error"] = "another session's analyze failed"
+    log = project / recorder.LOG_FILE
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
 @pytest.fixture(scope="module")
 def reflected(tmp_path_factory):
     """One transcript, one reflect run, one report — read by every check below."""
@@ -346,6 +398,7 @@ def reflected(tmp_path_factory):
         "instrumentation:\n  allowed: [\"app/src/main\"]\n  temp_prefix: AGENTTMP_\n",
         encoding="utf-8")
     transcripts = build(root / "projects", project)
+    run_log(project)
 
     here = os.getcwd()
     os.chdir(project)
@@ -357,6 +410,8 @@ def reflected(tmp_path_factory):
                 contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()):
             mp.delenv("ECHOLOT_NO_RECORD", raising=False)
+            for var, _host in recorder._SESSION_ENV:
+                mp.delenv(var, raising=False)
             code = main(["reflect", "--last", "--transcripts", str(transcripts),
                          "--project", str(project)])
     finally:
@@ -508,12 +563,15 @@ def test_every_planted_signal_fired(reflected):
         expect(all("12:27:00" not in r["ts"] for r in x["rows"]),
                f"a copied-out baseline is not a loss: {x['rows']}")
     x = sig.get("echolot_failures")
-    expect(x and x["severity"] == "info" and x["rows"][0]["where"] == "shell",
+    # "shell (no run recorded)": the run log is there and holds no line for
+    # it, which says the same thing twice
+    expect(x and x["severity"] == "info" and x["rows"][0]["where"].startswith("shell"),
            f"shell failure classified: {x}")
     # the skipped analyze is a shell failure too, even though the Bash tool
-    # itself reported success
+    # itself reported success — and the analyze another session failed at
+    # the same second is no failure of this one
     expect(x and len(x["rows"]) == 2 and x["rows"][1]["sub"] == "analyze"
-           and x["rows"][1]["where"] == "shell" and x["rows"][1]["exit"] is None,
+           and x["rows"][1]["where"].startswith("shell") and x["rows"][1]["exit"] is None,
            f"glob miss classified as shell failure: {x}")
     x = sig.get("retries")
     expect(x and x["rows"][0]["sub"] == "calibrate", f"calibrate retry: {x}")
@@ -556,6 +614,50 @@ def test_every_planted_signal_fired(reflected):
     x = sig.get("config_bypassed")
     expect(x and all(r.get("phase") == "after setup" for r in x["rows"]),
            f"config bypass phase: {x}")
+
+
+def test_a_session_working_beside_this_one_is_not_read_as_this_one(reflected):
+    """Two sessions in one checkout, one run log, the same seconds (#543)."""
+    report, _ = reflected
+    runs = report["runs_recorded"]
+    expect(all(r.get("session") in (SESSION, None) for r in runs),
+           f"no line of the other session is among this one's runs: {runs}")
+    expect(report["runs_by"] == {"by_session": 3, "by_time": 1, "other_sessions": 2},
+           f"three by id, the old line by time, two of the other session left out: "
+           f"{report['runs_by']}")
+    first = next(c for c in report["echolot_calls"]
+                 if c["sub"] == "analyze" and c["ts"].endswith("12:02:00.000Z"))
+    expect((first["recorded"] or {}).get("session") == SESSION and first["exit"] == 0,
+           f"the call took its own line, not the other session's failure a second "
+           f"nearer: {first['recorded']}")
+    doctor = next(c for c in report["echolot_calls"]
+                  if c["sub"] == "doctor" and c["agent"] != "main")
+    expect(doctor["recorded"] and "session" not in doctor["recorded"],
+           f"a line without an id is still matched by time: {doctor['recorded']}")
+
+
+def test_a_report_that_was_not_the_scenario_raises_a_signal(reflected):
+    """An `analyze` that exited 0 on a window that was not the scenario's (#545)."""
+    report, _ = reflected
+    sig = {x["id"]: x for x in report["signals"]}
+    x = sig.get("report_not_the_scenario")
+    expect(x and x["severity"] == "warn" and len(x["rows"]) == 2,
+           f"two analyze runs: the whole-trace window, the round with no frame: {x}")
+    if not x or len(x["rows"]) != 2:
+        return
+    anchor, dead = x["rows"]
+    expect("end anchor matched nothing" in anchor["said"] and anchor["round"] == "0m10s"
+           and "read back 1×" in anchor["seen"],
+           f"read off the run's line; the agent cut the report up and went on: {anchor}")
+    expect("drew no frame" in dead["said"] and dead["report"].startswith("this run's")
+           and dead["seen"].startswith("printed "),
+           f"read off the report, which is still the run's own: {dead}")
+    reps = [r for r in report["reports"] if r["agent"] == "main" and r["recorded"]]
+    expect([r["on_disk"] for r in reps] == ["a later run's", "this run's"],
+           f"the first run's report was written over and is not read for it: {reps}")
+    md = render_md(report)
+    expect("## Reports the session built" in md and "carry this session's id" in md,
+           "the page shows the reports and how the runs were told apart")
 
 
 def test_the_signals_with_nothing_planted_stayed_quiet(reflected):

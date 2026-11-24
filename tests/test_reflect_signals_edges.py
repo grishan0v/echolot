@@ -279,3 +279,85 @@ def test_only_the_projects_own_config_is_written() -> None:
         Call(id="w", ts=_ts(3), tool="Write", path="/work/app/local.yml",
              input={"content": "device: {serial: x}\n"})]) == ["echolot.yml", "echolot.yml",
                                                              "local.yml"])
+
+
+# --- what the reports said (#545) ---------------------------------------------
+
+def _analyze_run(at: float, exit: int = 0, session: str = "s", **facts) -> dict:
+    return {"ts": (T0 + timedelta(seconds=at)).isoformat(timespec="seconds"),
+            "cmd": "analyze", "argv": ["analyze"], "exit": exit, "ms": 5000,
+            "version": "0.17.0", "session": session, "facts": facts}
+
+
+def _analyze(at: float, out: str = "# Marker Report", **kw) -> Call:
+    return _bash(at, f"echolot analyze t{int(at)}.perfetto-trace -c echolot.yml", out, **kw)
+
+
+def test_an_analyze_that_was_not_about_the_scenario_raises_a_signal() -> None:
+    """Exit 0 on a window that was the whole trace, on markers the phone's
+    build did not have after `mark --apply`, on a round that drew a tenth of
+    the frames of the one before, on a warm run in a cold set."""
+    s = _session([
+        _analyze(10, chars=40000),
+        _bash(20, "echolot mark --apply -c echolot.yml"),
+        _analyze(30),
+        _analyze(40),
+        _analyze(50),
+        _analyze(60, "Exit code 2\nerror: no trace", error=True),
+        _analyze(70),
+    ])
+    runs = [_analyze_run(10, end_anchor_matches=0, drawn=400),
+            _analyze_run(10, session="other", start_anchor_matches=0),
+            _analyze_run(30, unbuilt_markers=7, drawn=380),
+            _analyze_run(40, drawn=30),
+            _analyze_run(50, not_cold=1, drawn=350),
+            _analyze_run(60, exit=2, end_anchor_matches=0),
+            _analyze_run(70, start_anchor_matches=1, end_anchor_matches=1, drawn=340)]
+    sig = signals_mod.report_not_the_scenario(s, facts_mod.gather(s, None, runs), None)
+    said = [(r["ts"], r["said"]) for r in sig.rows] if sig else []
+    check("four rows: a refusal is a failure, and a clean round is none",
+          sig and sig.severity == "warn" and [t for t, _ in said]
+          == ["10:00:10", "10:00:30", "10:00:40", "10:00:50"], said)
+    if len(said) != 4:
+        return
+    check("the whole-trace window, and not the other session's start anchor",
+          "end anchor matched nothing" in said[0][1] and "start" not in said[0][1], said[0])
+    check("what the agent took in of it", sig.rows[0]["seen"] == "printed 40000 chars",
+          sig.rows[0])
+    check("markers missing after mark --apply", "7 marker(s)" in said[1][1]
+          and "after `mark --apply` at 10:00:20" in said[1][1], said[1])
+    check("a tenth of the frames of the round before", "30 frame(s), against 380"
+          in said[2][1], said[2])
+    check("a warm run in the set", "1 run(s) of the set were not cold" in said[3][1], said[3])
+    check("the round's cost: until the agent's next analyze",
+          [r["round"] for r in sig.rows] == ["0m20s", "0m10s", "0m10s", "0m10s"], sig.rows)
+
+
+def test_a_report_is_read_only_while_it_is_still_the_run_s(tmp_path) -> None:
+    """`.echolot/out/report.json` is written over by every analyze: read for
+    an earlier run, the last round's numbers would be put on the first."""
+    import json
+    import os
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"window": {"drawn": {"count": 0}}}), encoding="utf-8")
+    (tmp_path / "report.md").write_text("# Marker Report\n", encoding="utf-8")
+    stamp = (T0 + timedelta(seconds=32)).timestamp()
+    os.utime(report, (stamp, stamp))
+    s = _session([_analyze(10), _analyze(30)])
+    runs = [_analyze_run(10, report=str(report)), _analyze_run(30, report=str(report))]
+    reps = facts_mod.reports(s, facts_mod.gather(s, None, runs).echolot_calls)
+    check("the first run's report is a later run's, and not read",
+          reps[0]["on_disk"] == "a later run's" and reps[0]["drawn"] is None
+          and not reps[0]["said"], reps[0])
+    check("the last one's is its own: its size, and the round that drew nothing",
+          reps[1]["on_disk"] == "this run's" and reps[1]["json_bytes"] > 0
+          and reps[1]["md_bytes"] > 0 and reps[1]["drawn"] == 0
+          and any("drew no frame" in x for x in reps[1]["said"]), reps[1])
+
+
+def test_a_session_whose_reports_said_nothing_raises_nothing() -> None:
+    s = _session([_analyze(10), _analyze(20)])
+    runs = [_analyze_run(10, start_anchor_matches=1, end_anchor_matches=1, drawn=300),
+            _analyze_run(20, start_anchor_matches=1, end_anchor_matches=1, drawn=290)]
+    check("quiet", signals_mod.report_not_the_scenario(
+        s, facts_mod.gather(s, None, runs), None) is None)

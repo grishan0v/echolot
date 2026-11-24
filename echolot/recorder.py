@@ -160,6 +160,39 @@ def version() -> str:
 _version = version   # the name the rest of this module uses
 
 
+# Where an agent host puts the id of the session whose command this is, and
+# the host's name as `reflect`'s readers spell it. Claude Code exports
+# `CLAUDE_CODE_SESSION_ID`, the name of the session's transcript file; Codex
+# `CODEX_THREAD_ID`, the thread's — a subagent's commands carry the
+# subagent's own thread. `ECHOLOT_SESSION` comes first, for any other host, a
+# hook or CI to name its own; Cursor gives its commands no id yet. Without
+# one the line has no `session`, the same as a line written before there was
+# such a field, and `reflect` matches it by time as it always has (#543).
+_SESSION_ENV: tuple[tuple[str, str | None], ...] = (
+    ("ECHOLOT_SESSION", None),
+    ("CLAUDE_CODE_SESSION_ID", "claude-code"),
+    ("CODEX_THREAD_ID", "codex"),
+)
+# An id is an opaque token. Anything else in one of those variables — a path,
+# a sentence, a value with a slash or a space in it — is not written: this
+# file must never carry a home directory or whatever else a host happened to
+# put there. `reflect --from-log` names a report file after the id, so it is
+# also a name every filesystem takes.
+# The reader of the log holds a `session` to the same token (`files.RUN`).
+_SESSION_ID = files.SESSION_ID
+
+
+def session(env: Any = None) -> tuple[str | None, str | None]:
+    """`(id, host)` of the agent session running this command; `(None,
+    None)` when the environment names none that reads as an id."""
+    env = os.environ if env is None else env
+    for var, host in _SESSION_ENV:
+        value = str(env.get(var) or "").strip()
+        if _SESSION_ID.fullmatch(value):
+            return value, host
+    return None, None
+
+
 def record(args: Any, argv: list[str] | None, started: float,
            exit_code: int | None, error: BaseException | None = None) -> None:
     global _reason
@@ -176,6 +209,14 @@ def record(args: Any, argv: list[str] | None, started: float,
             "ms": int((time.time() - started) * 1000),
             "version": _version(),
         }
+        # Which agent session asked. Three sessions working in one checkout
+        # write to one log at the same seconds, and time alone cannot tell
+        # their lines apart (#543).
+        sid, host = session()
+        if sid:
+            entry["session"] = sid
+            if host:
+                entry["agent"] = host
         try:
             stamp = _config_stamp(getattr(args, "config", None))
         except Exception:

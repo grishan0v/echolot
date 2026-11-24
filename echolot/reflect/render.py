@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .. import table
-from .facts import Facts
+from .facts import Facts, size_text
 from .model import Session
 from .signals import Signal
 
@@ -69,7 +69,9 @@ def build(session: Session, facts: Facts, signals: list[Signal]) -> dict[str, An
         "conclusion": facts.conclusion,
         "instrumentation": facts.instrumentation,
         "cost": {**facts.cost, "top_outputs": facts.top_outputs, "gaps": facts.gaps},
+        "reports": facts.reports,
         "runs_recorded": facts.runs,
+        "runs_by": facts.runs_by,
         "notes": session.notes,
     }
 
@@ -455,10 +457,39 @@ def _cost(report: dict[str, Any], out: list[str]) -> None:
     out.append("")
 
 
+def _reports(report: dict[str, Any], out: list[str]) -> None:
+    """Each report an analyze built: what it said about its window, its size
+    and how much of it reached the agent (#545)."""
+    reps = report.get("reports") or []
+    if not reps:
+        return
+    out.append("## Reports the session built")
+    out.append("")
+    out.append(_table([{
+        "time": _t(r.get("ts")), "agent": r.get("agent"), "exit": r.get("exit"),
+        "frames": r.get("drawn"),
+        "report": r.get("on_disk", "—") + (f", {size_text(r['json_bytes'])} + "
+                                           f"{size_text(r.get('md_bytes'))} md"
+                                           if r.get("json_bytes") else ""),
+        "printed": r.get("printed"), "read back": r.get("read_after"),
+        "said": _oneline("; ".join(r.get("said") or []) or "—", 90),
+    } for r in reps]))
+    out.append("")
+
+
 def _recorder(report: dict[str, Any], out: list[str]) -> None:
     runs = report.get("runs_recorded") or []
     out.append("## Recorder (`.echolot/log/runs.jsonl`)")
     out.append("")
+    by = report.get("runs_by") or {}
+    if by.get("by_session") or by.get("other_sessions"):
+        # Which lines are this session's is the claim the table rests on, so
+        # it says how it knows: the id a line carries, or its time alone —
+        # the honest unknown of a line written without one (#543).
+        out.append(f"_{by.get('by_session', 0)} line(s) carry this session's id, "
+                   f"{by.get('by_time', 0)} carry none and are taken by time; "
+                   f"{by.get('other_sessions', 0)} line(s) of other sessions left out._")
+        out.append("")
     if runs:
         out.append(_table([{
             "time": _t(r.get("ts", "")), "cmd": r.get("cmd"), "exit": r.get("exit"),
@@ -479,7 +510,7 @@ def _sources(report: dict[str, Any], out: list[str]) -> None:
 
 _SECTIONS = (_head, _tally, _signals, _passed, _not_checked, _entry, _timeline,
              _echolot_calls, _questions, _conclusion, _hunts, _instrumentation,
-             _cost, _recorder, _sources)
+             _cost, _reports, _recorder, _sources)
 
 
 # ------------------------------------------------------------------ helpers

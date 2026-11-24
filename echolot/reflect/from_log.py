@@ -20,13 +20,22 @@ opened directly", which on this source would be a green tick over a question
 nobody asked. `Session.carries` is what stops it — a reader says what it can
 show, and a check needing more is reported as not checked.
 
-## A sitting, not a session
+## A session where the line names one, a sitting where it does not
 
-The log is a stream, not a set of files, so there is no session id in it. What
-there is, is gaps: a run half a second after the last one belongs with it, and
-one four hours later does not. Sittings are cut at `GAP_MINUTES`, the same
-notion `hunt` already uses to decide whether it is looking at the same sitting
-before asking a question.
+A line carries the id of the agent session that ran it when the host exports
+one — Claude Code and Codex do, and `ECHOLOT_SESSION` names one for anybody
+else. Those lines are grouped by it: three sessions working in one checkout
+at the same seconds are three reports, not one with a single `cwd` and a
+subagent's `analyze` filed as the main context's (#543), and a session that
+came back after lunch is still one. The report is named by the id, so
+`--session` takes the one from the transcript.
+
+A line without one — written by an older echolot, by a host that gives its
+commands no id, by a person at a shell — has only its time. What there is,
+is gaps: a run half a second after the last one belongs with it, and one four
+hours later does not. Those are cut into sittings at `GAP_MINUTES`, the same
+notion `hunt` already uses to decide whether it is looking at the same
+sitting before asking a question.
 """
 
 from __future__ import annotations
@@ -56,6 +65,8 @@ class SessionRef:
     mtime: float
     size: int
     entries: list[dict[str, Any]]
+    # The id is the agent session's own, from the lines, not a sitting's hash.
+    named: bool = False
 
 
 def log_path(project: Path) -> Path:
@@ -64,9 +75,23 @@ def log_path(project: Path) -> Path:
 
 def sittings(runs: list[dict[str, Any]],
              gap_minutes: int = GAP_MINUTES) -> list[list[dict[str, Any]]]:
-    """Consecutive runs, cut wherever the tool was left alone for a while."""
+    """The runs of each agent session the lines name, whatever the gaps
+    between them; the rest consecutive, cut wherever the tool was left alone
+    for a while. In the order each group started."""
     ordered = sorted((r for r in runs if r.get("ts")),
                      key=lambda r: ts_to_epoch(r["ts"]))
+    named: dict[str, list[dict[str, Any]]] = {}
+    for run in ordered:
+        if run.get("session"):
+            named.setdefault(run["session"], []).append(run)
+    groups = list(named.values()) + _by_gaps(
+        [r for r in ordered if not r.get("session")], gap_minutes)
+    groups.sort(key=lambda g: ts_to_epoch(g[0]["ts"]))
+    return groups
+
+
+def _by_gaps(ordered: list[dict[str, Any]],
+             gap_minutes: int) -> list[list[dict[str, Any]]]:
     out: list[list[dict[str, Any]]] = []
     gap = gap_minutes * 60
     end = 0.0
@@ -99,13 +124,16 @@ def list_sessions(project: Path) -> list[SessionRef]:
     refs = []
     for entries in sittings(runs):
         first = entries[0]["ts"]
-        # Stable across runs and unique per sitting: the filename it becomes
-        # must not change when the log grows, and must not collide with the
+        own = entries[0].get("session")
+        # The session's own id where the lines carry one: the name the
+        # transcript has, which `--session` can be given. Otherwise stable
+        # across runs and unique per sitting: the filename it becomes must
+        # not change when the log grows, and must not collide with the
         # sitting before it on the same day.
-        ident = hashlib.sha256(
+        ident = own or hashlib.sha256(
             f"{project}\n{first}".encode()).hexdigest()[:12]
         refs.append(SessionRef(ident, path, _last_end(entries),
-                               len(entries), entries))
+                               len(entries), entries, named=bool(own)))
     refs.sort(key=lambda r: r.mtime, reverse=True)
     return refs
 
@@ -145,6 +173,14 @@ def read_session(ref: SessionRef) -> Session:
             "its token usage are not in this source and are not reported",
         ],
     )
+    host = next((e.get("agent") for e in entries if e.get("agent")), None)
+    if ref.named:
+        session.notes.append(
+            f"the runs of one {host or 'agent'} session, by the id its lines carry")
+    else:
+        session.notes.append(
+            "a sitting: runs whose lines carry no session id, grouped by the "
+            "gaps between them — parallel sessions without ids read as one")
     for i, entry in enumerate(entries):
         argv = entry.get("argv") or []
         # An argument is one word whatever it holds. A newline, `;`, `|` or

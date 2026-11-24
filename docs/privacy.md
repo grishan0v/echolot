@@ -41,7 +41,9 @@ In the project:
 - `echolot.yml`, which `setup` writes;
 - `.echolot/`: traces, reports, what reflect found, and the run log. The log
   holds one line per command: which command, when, for how long, its exit
-  code and a few facts it noted. `ECHOLOT_NO_RECORD=1` switches it off;
+  code, a few facts it noted, and the id of the agent session that ran it
+  when the host exports one — an opaque token, never a path.
+  `ECHOLOT_NO_RECORD=1` switches it off;
 - a few `.gitignore` lines, or with `init --private` the repository's own
   `.git/info/exclude`;
 - what `echolot init` installs for the agents you choose: the `.claude/`

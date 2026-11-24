@@ -17,7 +17,8 @@ A shape table is made of a few parts:
   - `TEXT`, `WHOLE`, `NUMBER`, `FLAG` and `ANY` for a single value. True and
     false are no number here, though Python takes a bool for an int.
   - `Whole(low)` for a whole number with a least value, `OneOf(...)` for text
-    that is one of a few words.
+    that is one of a few words, `Token(pattern)` for text that is all one
+    token of a pattern.
   - `ListOf(shape)` for a list whose every item has that shape.
   - `Obj({"key": need(shape) or may(shape)})` for an object: a field that is
     `need`ed must be there and not null; one that `may` be there may also be
@@ -35,6 +36,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Generic, Mapping, TypedDict, TypeVar, cast
@@ -137,6 +139,20 @@ class OneOf(Shape):
             return value, _wrong(value, at, "text")
         if value not in self.words:
             return value, f"`{at}` is `{value}`, not {self.what}"
+        return value, None
+
+
+@dataclass(frozen=True)
+class Token(Shape):
+    """Text that is, whole, one match of `pattern`: an id, never a path."""
+    pattern: re.Pattern[str]
+    what: str = "a token"
+
+    def fault(self, value: Any, at: str) -> tuple[Any, str | None]:
+        if not isinstance(value, str):
+            return value, _wrong(value, at, self.what)
+        if not self.pattern.fullmatch(value):
+            return value, f"`{at}` is not {self.what}"
         return value, None
 
 
@@ -684,6 +700,12 @@ def read_job(path: Path) -> Job | Refusal:
 # finite number is no count. In `facts`, the ones `status`, `next` and the
 # start page read off a self-check are held to what doctor writes: `failed` a
 # list, `checks` a count, `sandbox` a name.
+#
+# `session` is the id of the agent session whose command the line is, and
+# `agent` the host that named it (#543). The id is an opaque token, the same
+# one `recorder.session` writes: `reflect --from-log` names a report file
+# after it, so a hand-edited `../../x` here reads as a line with no session.
+SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 class Run(TypedDict, total=False):
@@ -698,12 +720,15 @@ class Run(TypedDict, total=False):
     config: dict[str, Any]
     facts: dict[str, Any]
     error: str
+    session: str
+    agent: str
 
 
 RUN: Spec[Run] = Spec(
     name="runs.jsonl",
     shape=Obj({
-        **{k: may(TEXT, drop=True) for k in ("ts", "cmd", "cwd", "version", "error")},
+        **{k: may(TEXT, drop=True) for k in ("ts", "cmd", "cwd", "version", "error", "agent")},
+        "session": may(Token(SESSION_ID, "a session id"), drop=True),
         "argv": may(Kind((list,), "a list"), drop=True),
         "exit": may(Kind((int,), "a whole number"), drop=True),
         "ms": may(Finite(), drop=True),
@@ -741,8 +766,8 @@ def read_runs(path: Path) -> list[Run]:
 
 
 __all__ = [
-    "ANY", "JOB", "JOB_SCHEMA", "Job", "read_job", "COLLECT", "COLLECT_SCHEMA", "Collect", "PID_MAX", "read_collect", "REPORT", "REPORT_SCHEMA", "Detector", "Report", "check_report", "read_report", "COMPARISON", "COMPARISON_SCHEMA", "FLAG", "HUNT", "HUNT_SCHEMA", "NUMBER", "RUN", "TEXT", "WHOLE",
+    "ANY", "JOB", "JOB_SCHEMA", "Job", "read_job", "COLLECT", "COLLECT_SCHEMA", "Collect", "PID_MAX", "read_collect", "REPORT", "REPORT_SCHEMA", "Detector", "Report", "check_report", "read_report", "COMPARISON", "COMPARISON_SCHEMA", "FLAG", "HUNT", "HUNT_SCHEMA", "NUMBER", "RUN", "SESSION_ID", "TEXT", "WHOLE",
     "ComparedSide", "Comparison", "Field", "Finite", "Hunt", "Kind", "ListOf", "Obj", "OneOf", "Refusal", "Row",
-    "Run", "Shape", "Spec", "Whole", "check_comparison", "kind_of", "load", "may", "need", "read_comparison",
+    "Run", "Shape", "Spec", "Token", "Whole", "check_comparison", "kind_of", "load", "may", "need", "read_comparison",
     "read_hunt", "read_runs",
 ]

@@ -1,9 +1,10 @@
 """Derived facts over a normalised session.
 
 Almost everything here is a pure function of the `Session` (plus the config
-and the recorder log). Three are not: `tree_check` and `building_the_tool`
-read the checkout, and `match_runs` writes each run's outcome onto the calls
-it matches. What comes out: the echolot invocations as a table, the milestones of the
+and the recorder log). Five are not: `tree_check` and `building_the_tool`
+read the checkout, `run_logs` looks for the logs the session's commands
+wrote, `reports` reads the reports its runs left, and `match_runs` writes
+each run's outcome onto the calls it matches. What comes out: the echolot invocations as a table, the milestones of the
 protocol, the number of hunt rounds, the cost, the balance of temporary
 instrumentation per file. Signals and the report both read from here, so a
 number appears the same way in both.
@@ -11,6 +12,7 @@ number appears the same way in both.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shlex
@@ -19,10 +21,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .. import files
 from ..config import Config
 from ..mark import under_allowed
+from ..recorder import LOG_FILE
 from . import shell
-from .model import MAIN, Call, Session, SubAgent, strip_heredocs, ts_to_epoch
+from .model import MAIN, TOOLS, Call, Session, SubAgent, strip_heredocs, ts_to_epoch
 
 
 class EcholotMatch:
@@ -228,6 +232,10 @@ class Facts:
     entry: dict[str, Any] = field(default_factory=dict)
     config: dict[str, Any] = field(default_factory=dict)
     runs: list[dict[str, Any]] = field(default_factory=list)
+    # How `runs` were told from other sessions' lines: by id, by time alone.
+    runs_by: dict[str, int] = field(default_factory=dict)
+    # The reports the session's analyze runs built, and what each said.
+    reports: list[dict[str, Any]] = field(default_factory=list)
     building: dict[str, Any] = field(default_factory=dict)
     conclusion: dict[str, Any] | None = None
     prior_doctor: dict[str, Any] | None = None
@@ -506,38 +514,240 @@ def echolot_calls(session: Session) -> list[EcholotCall]:
     return out
 
 
-def match_runs(calls: list[EcholotCall], runs: list[dict[str, Any]],
-               window: tuple[float, float] | None, slack_s: float = 15.0
-               ) -> list[dict[str, Any]]:
-    """Attach recorder entries to transcript calls by subcommand and time.
+def session_ids(session: Session) -> set[str]:
+    """The ids a run-log line written by this session can carry.
 
-    Returns the recorder entries that fall inside the session window (the
-    session's own view of the runs), having stamped the matching ones onto
-    the calls. The recorder's timestamp is the start of the run; the
+    The session's own, which is what Claude Code exports to its commands and
+    names the transcript after, and its subagents': a Codex subagent is a
+    thread of its own and its commands carry that thread's id (#543).
+    """
+    return {i for i in [session.id, *(s.id for s in session.subagents)] if i}
+
+
+def match_runs(calls: list[EcholotCall], runs: list[dict[str, Any]],
+               window: tuple[float, float] | None, slack_s: float = 15.0,
+               ids: set[str] | None = None) -> list[dict[str, Any]]:
+    """Attach recorder entries to transcript calls by session, subcommand and time.
+
+    Returns the session's own view of the runs, having stamped the matching
+    ones onto the calls. A line that names this session (`ids`) is its own,
+    and is matched first; a line that names another is never its own,
+    whatever its time — three sessions in one checkout write to one log at
+    the same seconds, and a call took another session's exit code (#543). A
+    line that names none, written by an older echolot or under a host that
+    gives its commands no id, is taken by time as before: inside the session
+    window. The recorder's timestamp is the start of the run; the
     transcript's is when the agent issued the Bash call — the two differ by
     the shell's own startup, so a few seconds of slack is expected.
     """
     inside = []
     for r in runs:
+        own = r.get("session")
+        if own is not None and ids is not None:
+            if own in ids:
+                inside.append(r)
+            continue
         t = ts_to_epoch(r.get("ts"))
         if window and not (window[0] - slack_s <= t <= window[1] + slack_s):
             continue
         inside.append(r)
     used: set[int] = set()
     for c in calls:
-        best, best_d = None, None
+        best, best_key = None, None
         for i, r in enumerate(inside):
             if i in used or r.get("cmd") != c.sub:
                 continue
             d = abs(ts_to_epoch(r.get("ts")) - ts_to_epoch(c.ts))
-            if d <= slack_s and (best_d is None or d < best_d):
-                best, best_d = i, d
+            # The session's own line before one that names nobody, and the
+            # nearer of two after that.
+            key = (r.get("session") is None, d)
+            if d <= slack_s and (best_key is None or key < best_key):
+                best, best_key = i, key
         if best is not None:
             used.add(best)
             c.recorded = inside[best]
             if c.exit is None or c.exit == 0:
                 c.exit = inside[best].get("exit", c.exit)
     return inside
+
+
+def runs_by_session(runs: list[dict[str, Any]], inside: list[dict[str, Any]],
+                    ids: set[str]) -> dict[str, int]:
+    """How the session's runs were told from the rest: by the id they carry,
+    by time alone, and how many lines of other sessions were left out."""
+    own = sum(1 for r in inside if r.get("session") in ids)
+    return {"by_session": own, "by_time": len(inside) - own,
+            "other_sessions": sum(1 for r in runs
+                                  if r.get("session") not in (None, *ids))}
+
+
+def run_logs(session: Session, project: Path | None = None) -> list[Path]:
+    """The run logs besides the project's that this session's commands wrote.
+
+    A line goes to the project its command was about: the directory a
+    `cd` took it into, or the one a `-c <dir>/echolot.yml` named. A session
+    that worked on a copy of the config in a directory of its own logged its
+    calls there, in nothing `reflect` read (#543). Only logs that exist;
+    every line in them is still matched by session and time like the
+    project's own.
+    """
+    base = Path(session.cwd or project or ".")
+    seen: set[Path] = set()
+    if project is not None:
+        with contextlib.suppress(OSError):
+            seen.add((project / LOG_FILE).resolve())
+    out: list[Path] = []
+    for c in echolot_calls(session):
+        if not c.ran or c.is_help:
+            continue
+        dirs = [base]
+        for _, target in _CD_INTO.findall(c.command):
+            here = Path(target).expanduser()
+            dirs.append(here if here.is_absolute() else base / here)
+        if c.config:
+            cfg = Path(c.config.strip("\"'")).expanduser()
+            dirs += [(cfg if cfg.is_absolute() else d / cfg).parent for d in dirs]
+        for d in dirs:
+            try:
+                log = (d / LOG_FILE).resolve()
+                if log in seen or not log.is_file():
+                    continue
+            except OSError:
+                continue
+            seen.add(log)
+            out.append(log)
+    return out
+
+
+# ------------------------------------------------------- what reports said
+
+# A call that reads a report back: its file by name, or `echolot report`.
+_READS_REPORT = re.compile(r"report\.(?:json|md)\b|(?:^|[\s;&|(])echolot\s+report\b")
+# A report bigger than this is not parsed; its size is still reported.
+_REPORT_PARSE_MAX = 8 * 1024 * 1024
+
+
+def _report_on_disk(path: str | None, rec: dict[str, Any]) -> dict[str, Any]:
+    """The report a run wrote, if the file is still the one it wrote.
+
+    Every `analyze` writes `.echolot/out/report.json` over the one before, so
+    the file there is the last run's: read for an earlier run it would put
+    the last round's numbers on the first. The run's own window decides — the
+    file was written between the start the log stamped and its end, which the
+    recorder measures after the report is in place. Two seconds either side,
+    for a start stamped to the second and a filesystem's coarse clock.
+    """
+    if not path:
+        return {"on_disk": "not recorded"}
+    p = Path(path)
+    try:
+        st = p.stat()
+    except OSError:
+        return {"on_disk": "gone"}
+    start = ts_to_epoch(rec.get("ts"))
+    end = start + (rec.get("ms") or 0) / 1000.0
+    if not start or not (start - 2 <= st.st_mtime <= end + 2):
+        return {"on_disk": "a later run's" if st.st_mtime > end else "not this run's"}
+    out: dict[str, Any] = {"on_disk": "this run's", "json_bytes": st.st_size}
+    with contextlib.suppress(OSError):
+        out["md_bytes"] = p.with_suffix(".md").stat().st_size
+    if st.st_size <= _REPORT_PARSE_MAX:
+        # The report's one reader: a file another version wrote, or one that
+        # does not read, says nothing here about its window.
+        report = files.read_report(p)
+        window = {} if isinstance(report, files.Refusal) else report.get("window") or {}
+        if isinstance(window, dict):
+            drawn = window.get("drawn")
+            if isinstance(drawn, dict) and isinstance(drawn.get("count"), int):
+                out["drawn"] = drawn["count"]
+            end_anchor = window.get("end_anchor")
+            if isinstance(end_anchor, dict) and end_anchor.get("unfinished"):
+                out["unfinished"] = str(end_anchor.get("glob") or "the end anchor")
+    return out
+
+
+def size_text(n: int | None) -> str:
+    """A file's size the way a person reads it: bytes below a kilobyte."""
+    if not n:
+        return "—"
+    return f"{n} B" if n < 1024 else f"{n / 1024:.0f} KB"
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def reports(session: Session, calls: list[EcholotCall]) -> list[dict[str, Any]]:
+    """The reports this session's `analyze` runs built: what each said about
+    its own window, how big it was, and how much of it the agent took in.
+
+    An `analyze` that exits 0 counted as a success whatever its header said.
+    On one day the costliest events of a session were exactly those: a round
+    recorded on a phone that had lost its network drew no frame, an anchor
+    that matched nothing turned the window into the whole trace, and `reflect`
+    raised nothing for either (#545). Most of what decides it is on the run's
+    line in the log, kept for every round: the anchors' matches, markers not
+    in the build, runs that were not cold, the frames drawn. The report file
+    adds what the log does not carry, and only while it is still that run's.
+
+    `printed` is what the call put into the agent's context; `read_after`
+    the calls that read the report back before the agent's next `analyze`.
+    Both None when the source holds echolot's calls alone: the run log does
+    not know what reached the agent.
+    `round_s` is what the round built on it cost: until that next `analyze`,
+    or the end of the session.
+    """
+    analyzes = [c for c in calls if c.sub == "analyze" and c.ran and not c.is_help]
+    marks = [c for c in calls if c.sub == "mark" and "--apply" in c.argv and c.ran]
+    later = sorted(session.calls, key=lambda x: ts_to_epoch(x.ts))
+    agent_seen = session.shows(TOOLS)
+    drawn_before: dict[str, int] = {}
+    out: list[dict[str, Any]] = []
+    for c in analyzes:
+        rec = c.recorded or {}
+        f = rec.get("facts") if isinstance(rec.get("facts"), dict) else {}
+        disk = _report_on_disk(f.get("report") if isinstance(f.get("report"), str) else None,
+                               rec) if rec else {"on_disk": "not recorded"}
+        drawn = f.get("drawn") if "drawn" in f else disk.get("drawn")
+        drawn = drawn if isinstance(drawn, int) and not isinstance(drawn, bool) else None
+        t = ts_to_epoch(c.ts)
+        said: list[str] = []
+        if f.get("start_anchor_matches") == 0:
+            said.append("the start anchor matched nothing: the window opened at the trace's start")
+        if f.get("end_anchor_matches") == 0:
+            said.append("the end anchor matched nothing: the window ran to the trace's end")
+        if disk.get("unfinished"):
+            said.append(f"`{disk['unfinished']}` never closed: the scenario had not "
+                        f"reached its end when the recording stopped")
+        if _count(f.get("unbuilt_markers")):
+            applied = [m for m in marks if ts_to_epoch(m.ts) < t]
+            said.append(f"{f['unbuilt_markers']} marker(s) not in the build on the phone"
+                        + (f", after `mark --apply` at {applied[-1].ts[11:19]}"
+                           if applied else ""))
+        if _count(f.get("not_cold")):
+            said.append(f"{f['not_cold']} run(s) of the set were not cold")
+        last = drawn_before.get(c.agent)
+        if drawn == 0:
+            said.append("the app drew no frame in the window: the scenario did not run")
+        elif drawn is not None and last and drawn * 10 <= last:
+            said.append(f"the app drew {drawn} frame(s), against {last} in the round before")
+        if drawn:
+            drawn_before[c.agent] = drawn
+        nxt = next((a for a in analyzes if a.agent == c.agent and ts_to_epoch(a.ts) > t), None)
+        until = ts_to_epoch(nxt.ts) if nxt else ts_to_epoch(session.ended)
+        reads = sum(1 for x in later
+                    if x.agent == c.agent and t < ts_to_epoch(x.ts) <= until
+                    and _READS_REPORT.search(" ".join(filter(None, (x.command, x.path, x.code)))))
+        out.append({
+            "ts": c.ts, "agent": c.agent, "argv": c.argv[:120],
+            "exit": c.exit, "recorded": bool(rec), "said": said,
+            "drawn": drawn, "window_ms": f.get("window_ms"),
+            "printed": c.output_chars if agent_seen else None,
+            "read_after": reads if agent_seen else None,
+            "round_s": round(until - t) if until and until > t else None,
+            **disk,
+        })
+    return out
 
 
 # How long a passing self-check in the run log answers for the environment.
@@ -605,7 +815,7 @@ def session_configs(session: Session, runs: list[dict[str, Any]],
     window = None
     if session.started and session.ended:
         window = (ts_to_epoch(session.started), ts_to_epoch(session.ended))
-    match_runs(calls, runs, window)
+    match_runs(calls, runs, window, ids=session_ids(session))
     found: dict[str, list[str]] = {}
     for c in calls:
         if c.sub not in CONFIG_SUBS or c.is_help or not c.ran:
@@ -1599,7 +1809,8 @@ def gather(session: Session, cfg: Config | None,
     window = None
     if session.started and session.ended:
         window = (ts_to_epoch(session.started), ts_to_epoch(session.ended))
-    inside = match_runs(calls, runs, window)
+    ids = session_ids(session)
+    inside = match_runs(calls, runs, window, ids=ids)
     return Facts(
         echolot_calls=calls,
         milestones=milestones(session, calls,
@@ -1613,6 +1824,8 @@ def gather(session: Session, cfg: Config | None,
         entry=entry(session, calls),
         config=config_snapshot(cfg),
         runs=inside,
+        runs_by=runs_by_session(runs, inside, ids),
+        reports=reports(session, calls),
         building=building_the_tool(project, calls),
         conclusion=conclusion(session),
         # Over the whole log: the self-check that counts usually ran before

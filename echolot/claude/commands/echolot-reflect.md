@@ -27,7 +27,8 @@ echolot reflect --all             # every session, plus summary.md
 
 What it prints to you is the row `--all` gives each session — its warnings by
 id — and the paths. Then read `.echolot/reflect/<id>.json` — the `signals` array first, then
-`hunts`, `echolot_calls`, `questions`, `entry`. The markdown is the same data
+`hunts`, `reports` (what each `analyze` said about its window, and how much of
+it reached the agent), `echolot_calls`, `questions`, `entry`. The markdown is the same data
 for a human, printed only to a terminal (or with `--full`); do not re-read the
 transcript itself.
 

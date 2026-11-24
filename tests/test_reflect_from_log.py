@@ -96,6 +96,65 @@ def test_the_id_is_stable_and_does_not_collide_within_a_day(tmp_path):
           all(len(i) == 12 for i in first), first)
 
 
+# --- sessions the lines name (#543) ------------------------------------------
+
+A = "aaaa1111-0000-4000-8000-000000000001"
+B = "bbbb2222-0000-4000-8000-000000000002"
+
+
+def _named_rows() -> list[dict]:
+    """Two agent sessions in the same minute, one of them back after lunch,
+    and a person at a shell between them."""
+    return [
+        line("2026-08-19T10:00:00+00:00", "doctor", ["doctor"], session=A, agent="claude-code"),
+        line("2026-08-19T10:00:05+00:00", "analyze", ["analyze", "a"], session=B, agent="codex"),
+        line("2026-08-19T10:00:10+00:00", "status", ["status"]),
+        line("2026-08-19T10:00:20+00:00", "analyze", ["analyze", "a"], session=A,
+             agent="claude-code"),
+        line("2026-08-19T12:30:00+00:00", "analyze", ["analyze", "b"], session=A,
+             agent="claude-code"),
+        line("2026-08-19T13:30:00+00:00", "status", ["status"]),
+    ]
+
+
+def test_two_sessions_in_the_same_minute_are_two_sessions():
+    """Cut by gaps, the minute above was one sitting with the runs of both
+    sessions and the person in it. Grouped by the id the lines carry, a
+    session that came back after lunch is still one; a line without an id
+    is cut by gaps as before."""
+    got = from_log.sittings(_named_rows())
+    shape = [(g[0].get("session"), [r["cmd"] for r in g]) for g in got]
+    check("A whole, B alone, and the two lines without an id by their gap",
+          shape == [(A, ["doctor", "analyze", "analyze"]), (B, ["analyze"]),
+                    (None, ["status"]), (None, ["status"])], shape)
+
+
+def test_a_session_is_named_by_its_own_id_and_found_by_it(tmp_path):
+    """`--session` takes the id from the transcript, and the listing says
+    these rows are sessions."""
+    (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
+    write_log(tmp_path, _named_rows())
+    refs = {r.id: r for r in from_log.list_sessions(tmp_path)}
+    check("named by the ids the lines carry", {A, B} <= set(refs)
+          and refs[A].named and refs[B].named, list(refs))
+    session = from_log.read_session(refs[A])
+    check("the session's runs, and a note on how they were grouped",
+          len(session.calls) == 3 and any("claude-code session" in n for n in session.notes),
+          session.notes)
+    env = dict(os.environ, ECHOLOT_NO_RECORD="1")
+    done = subprocess.run(
+        [sys.executable, "-m", "echolot.main", "reflect", "--session", A[:8],
+         "--from-log", "--project", str(tmp_path), "-o", str(tmp_path / "out")],
+        capture_output=True, text=True, cwd=tmp_path, env=env)
+    check("found by the transcript's id", done.returncode == 0, done.stderr[-400:])
+    listed = subprocess.run(
+        [sys.executable, "-m", "echolot.main", "reflect", "--list", "--all",
+         "--from-log", "--project", str(tmp_path)],
+        capture_output=True, text=True, cwd=tmp_path, env=env)
+    header = listed.stdout.splitlines()[0] if listed.stdout else ""
+    check("the listing's rows are sessions", header.startswith("session"), listed.stdout)
+
+
 # --- the session it produces ------------------------------------------------
 
 def test_the_session_carries_echolot_calls_and_says_it_carries_nothing_else(tmp_path):
@@ -273,7 +332,7 @@ def test_a_session_id_against_the_log_is_told_why_it_cannot_match(tmp_path):
     check("it names the unit the log actually has",
           "sitting" in done.stderr, done.stderr)
     check("says why an id from elsewhere cannot match",
-          "no session ids" in done.stderr, done.stderr)
+          "None of its lines carries a session id" in done.stderr, done.stderr)
     check("and hands over the command that lists them",
           "--from-log --list" in done.stderr, done.stderr)
 
@@ -372,3 +431,19 @@ def test_somebody_elses_project_is_never_mistaken_for_the_checkout(tmp_path):
 
     check("their project is their project",
           not _reflect(tmp_path)["context"]["building"])
+
+
+def test_a_report_that_was_not_the_scenario_is_seen_from_the_log_alone(tmp_path):
+    """`report_not_the_scenario` reads echolot's own lines and nothing else,
+    and does not claim to know what reached the agent (#545)."""
+    from echolot.reflect import facts as facts_mod
+    from echolot.reflect import signals as signals_mod
+    write_log(tmp_path, [line("2026-08-19T10:00:00+00:00", "analyze", ["analyze", "a"],
+                              facts={"end_anchor_matches": 0, "drawn": 210})])
+    runs = recorder.read(tmp_path / recorder.LOG_FILE)
+    session = from_log.read_session(from_log.list_sessions(tmp_path)[0])
+    sigs = {s.id: s for s in signals_mod.run(session, facts_mod.gather(session, None, runs), None)}
+    x = sigs.get("report_not_the_scenario")
+    check("checked, and raised", x is not None and x.severity == "warn", x)
+    check("what the agent saw is not in this source",
+          x is not None and x.rows[0]["seen"] == "not in this source", x and x.rows)
