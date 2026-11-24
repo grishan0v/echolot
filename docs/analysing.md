@@ -12,9 +12,9 @@ will see, `domains` maps a finding back to a file.
 echolot probe trace.perfetto-trace --process 'com.example.*'
 ```
 
-Processes, threads and the longest slices. This is what fills in the config
-during setup: the anchor candidates it prints come from a real trace rather
-than from someone's memory.
+Processes, threads, the longest slices and the start candidates. This is what
+fills in the config during setup: the anchor candidates it prints come from a
+real trace rather than from someone's memory.
 
 A mask that matches several processes is read as `analyze` reads it: the one
 with the most slices, with a line on stderr naming the others. The mask
@@ -32,6 +32,37 @@ no thread — usually the app's hand-written markers, and almost always the
 macrobenchmark's end marker. An anchor may name one. A detector never sees
 one, and an agent reading the `slices` column alone would have reported an
 app with two dozen named markers as uninstrumented.
+
+**Start candidates** come after the longest slices: the sections Android writes
+itself when a journey begins, the ones a journey driven by a command starts
+with. A tap reaches the window as `deliverInputEvent`, an intent reaches a
+running activity as `activityNewIntent`, a new screen is `activityPause`,
+`activityStart` and `activityResume`, a rotation `activityRestart`, a cold
+start `bindApplication`. Each is a few milliseconds long, and none reaches a
+list of the longest slices in a recording that holds seconds of other work.
+
+```
+| start              | event                                | thread  | first_at_ms | n |
+|--------------------|--------------------------------------|---------|-------------|---|
+| deliverInputEvent* | input reached a window: a tap, a key | (async) | 650.0       | 4 |
+| activityPause      | the activity in front paused, …      | main    | 730.0       | 1 |
+| activityStart      | an activity was created              | main    | 745.0       | 1 |
+
+Without a `start:`, the window opens at the process's first slice, at 40.0 ms.
+```
+
+The first column is what `scenario.start` takes: an input event's name carries
+the event's own numbers, so it is offered as `deliverInputEvent*`. `first_at_ms`
+is where `analyze` would open the window with it, from the start of the trace:
+the first slice of the process, a thread's or an async section, that the name
+matches — Android writes each input event twice, an async span first, and that
+is why the tap's thread reads `(async)`. The rows are in that order, earliest
+first, and the earliest is usually where the journey began. They are the
+process's own: a macrobenchmark runner's `bindApplication` is not listed. A
+fragment or a navigation library writes nothing of the kind, and its journey
+starts at the tap or the intent that led to it. A process with none of them
+says so; they need the `am` and `view` atrace categories, which `collect`
+records.
 
 It is also the cheapest check that a pulled or downloaded file is a whole
 trace. A file with no trace data in it — an empty file, a `report.json` — is

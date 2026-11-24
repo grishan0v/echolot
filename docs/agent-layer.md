@@ -848,7 +848,8 @@ names and anchors that `echolot status` and `echolot.yml` give, and asks
 when the words fit none of them or more than one. `/echolot-setup` adds a
 scenario to a config that has one without starting over: the scenario there
 moves under `scenarios:` as it was, and the new one is probed and anchored
-with the human the way the first was.
+with the human the way the first was — its start from the probe's start
+candidates, the tap or the intent a command's journey begins with.
 
 ### Who opens it, and who closes it
 

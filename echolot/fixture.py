@@ -1540,6 +1540,80 @@ def pool() -> bytes:
     return builder.serialize()
 
 
+# --- a journey a command drives --------------------------------------------------
+#
+# `journey()` only, a scene of its own (#615). `com.example.app` is running
+# when the recording starts, and a command taps an item that opens a screen.
+# What the journey begins with is short: two input events, a few milliseconds
+# each, then the platform's pause, start and resume of the activities. A
+# worker's 1400 ms sync and the frames before the tap are the longest slices,
+# and the start was in none of them.
+#
+# Android writes each input event twice: as an async span from the moment the
+# window queued it, and as the main thread's section that delivers it. Both
+# are named `deliverInputEvent …`, with the event's own numbers, and the span
+# begins first.
+#
+# Beside the app, a macrobenchmark's runner, `com.example.app.benchmark`,
+# which the mask `com.example.app*` matches as well: it binds an application
+# and starts an activity of its own, before the app's first slice. Neither is
+# the app's, and `analyze` never sees them (#727).
+JOURNEY_RUNNER_PID, JOURNEY_RUNNER_TID = 5100, 5101
+JOURNEY_RUNNER = "com.example.app.benchmark"
+JOURNEY_WORKER = 4201
+JOURNEY_THREADS = {TID_MAIN: APP_NAME[-15:], JOURNEY_WORKER: "DefaultDispatch"}
+JOURNEY_FIRST_MS = 40          # the app's first slice: a window with no start opens here
+JOURNEY_TAP_MS = 650           # the tap's input span is queued
+JOURNEY_END = "Detail.shown"
+
+
+def _input(at: float, event_id: int) -> str:
+    """An input event's name as ViewRootImpl writes it: the touchscreen's
+    source, the time the event was made, and its id."""
+    return (f"deliverInputEvent src=0x1002 eventTimeNano={ms(at)} "
+            f"id=0x{event_id:x}")
+
+
+def journey() -> bytes:
+    """The scene above: the tap at 650 ms opens a screen, shown at 905 ms."""
+    down, up = _input(JOURNEY_TAP_MS, 0x5E1A2B), _input(720, 0x2C3D4E)
+    main = [
+        ("Choreographer#doFrame 7001", JOURNEY_FIRST_MS, 12, [("traversal", 42, 8, [])]),
+        ("Choreographer#doFrame 7002", 200, 10, [("traversal", 201, 7, [])]),
+        (down, JOURNEY_TAP_MS + 0.5, 3, []),
+        (up, 720.5, 4, []),
+        ("activityPause", 730, 6, []),
+        ("activityStart", 745, 80, [("inflate", 750, 50, [])]),
+        ("activityResume", 830, 5, []),
+        ("Choreographer#doFrame 7003", 840, 40, [("traversal", 842, 35, [])]),
+        (JOURNEY_END, 900, 5, []),
+    ]
+    worker = [("sync_settings", 60, 1400, [])]
+    runner = [("bindApplication", 0, 25, []), ("activityStart", 30, 5, [])]
+
+    builder = TraceProtoBuilder()
+    config(builder, frames=False)
+    process_tree(builder, [
+        (APP_PID, APP_NAME, JOURNEY_THREADS),
+        (JOURNEY_RUNNER_PID, JOURNEY_RUNNER,
+         {JOURNEY_RUNNER_PID: JOURNEY_RUNNER[-15:], JOURNEY_RUNNER_TID: "roidJUnitRunner"}),
+    ])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {}
+    for cpu, pid, tid, tree in ((0, APP_PID, TID_MAIN, main), (1, APP_PID, JOURNEY_WORKER, worker),
+                                (2, JOURNEY_RUNNER_PID, JOURNEY_RUNNER_TID, runner)):
+        for ts, order, kind, name in _flatten(tree, [], seq):
+            buf = f"B|{pid}|{name}\n" if kind == "B" else f"E|{pid}\n"
+            by_cpu.setdefault(cpu, []).append((ts, order, "print", tid, buf))
+    for cookie, (name, start, dur) in enumerate(((down, JOURNEY_TAP_MS, 4),
+                                                 (up, 720, 5)), start=1):
+        by_cpu[0] += [(ms(start), next(seq), "print", TID_MAIN, f"S|{APP_PID}|{name}|{cookie}\n"),
+                      (ms(start + dur), next(seq), "print", TID_MAIN,
+                       f"F|{APP_PID}|{name}|{cookie}\n")]
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # --- the recording's own account of itself ---------------------------------------
 #
 # The tracing service writes the config a recording ran with at the head of

@@ -101,9 +101,11 @@ echolot probe <trace> --process '<package>*'
 echolot names <trace> --process '<package>*'
 ```
 
-`probe` gives processes, threads (sorted by CPU, so blind spots show at once)
-and anchor candidates. `names` shows whether the detector masks land on the
-names this device produces.
+`probe` gives processes, threads (sorted by CPU, so blind spots show at once),
+the longest slices as anchor candidates, and the start candidates: the
+platform's own events a journey begins with — a tap, an intent, an activity,
+a cold start — each with the time `analyze` would open the window at. `names`
+shows whether the detector masks land on the names this device produces.
 
 Pick the process deliberately: `com.example.app*` also catches `:pushservice`
 and `:webview`. A candidate whose thread reads `(async)` is a
@@ -125,8 +127,8 @@ What counts as "the app is ready to use" for you?  [1]
 ```
 
 The options are rows of probe's "Longest slices" table, with the thread and
-`max_ms` it prints; an `(async)` section is the usual end. Probe gives no
-start times, so the question names none.
+`max_ms` it prints; an `(async)` section is the usual end. That table gives
+no start times, so the question names none.
 
 1. **Which scenario** are we analysing (from the benchmarks found, or cold start)
 2. **What counts as the end** of the scenario — the only genuinely semantic
@@ -290,9 +292,24 @@ as it was, and the new one gets a window and a runner of its own.
    `echolot probe <its trace> --process '<package>*'`.
 4. **Where it ends, with the human**, as question 2 asks it: the options are
    the probe's longest slices, and the answer goes under the new scenario as
-   `end`, with `_source: confirmed_by_user`. Ask for a `start` the same way
-   when the journey begins later than the app's first slice does; without
-   one, the window opens at the process's first slice.
+   `end`, with `_source: confirmed_by_user`. **Where it begins**, the same
+   way, from probe's "Start candidates": the platform's own events, earliest
+   first, written as `start` exactly as the first column shows them, a tap
+   as `deliverInputEvent*`. Offer them with `first_at_ms`, the time the
+   window would open at, beside the line under the table that says where it
+   opens with no start: the process's first slice, often hundreds of
+   milliseconds before the command acted. The earliest is the usual answer.
+   "None" stays an option; when the list is empty, `echolot names <trace>
+   --grep <word>` finds a section of the app's own to start at.
+
+   ```
+   Where the journey begins — Android's own events in the probe, earliest first:
+     1) deliverInputEvent*   a tap, a key                 at 650.0 ms   n 4
+     2) activityPause        the activity in front paused at 730.0 ms   n 1
+     3) activityStart        an activity was created      at 745.0 ms   n 1
+     4) none — the window opens at the process's first slice, at 40.0 ms
+   Where does it begin?  [1]
+   ```
 5. **Its thresholds**, once there are healthy runs of it, as "Thresholds"
    above says: `echolot calibrate --scenario feed_scroll <its traces>` prints
    `scenarios.feed_scroll.detectors`, which goes under the new scenario. A

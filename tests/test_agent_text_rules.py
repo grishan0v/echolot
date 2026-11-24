@@ -329,6 +329,13 @@ def test_setup_adds_a_scenario_and_keeps_the_one_there():
           flat[-2000:])
     check("the new one is probed by name", "echolot collect --scenario feed_scroll -n 1" in flat,
           flat[-2000:])
+    # A command's journey begins with a tap or an intent, which the longest
+    # slices never hold: its start is asked from the list made for it (#615).
+    check("its start is asked from probe's start candidates",
+          "from probe's \"Start candidates\"" in flat and "`deliverInputEvent*`" in flat,
+          flat[-2000:])
+    check("with where the window opens without one",
+          "where it opens with no start" in flat, flat[-2000:])
     check("the plugin's setup points at it",
           "how to add a scenario" in _flat(PLUGIN / "echolot-setup" / "SKILL.md"))
 

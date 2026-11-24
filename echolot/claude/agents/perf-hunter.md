@@ -293,7 +293,9 @@ echolot names <trace> --grep 'contention' --json   one family of names, whole, a
                                                    and "Missed by the masks" at the end
 echolot probe <trace> --process '<pkg>*'           processes (slices, async), threads by CPU,
                                                    the longest slices as anchor candidates
-                                                   with (async) where there is no thread
+                                                   with (async) where there is no thread,
+                                                   and start candidates: a tap, an intent,
+                                                   an activity, a cold start, and when
 echolot domains --root .                           slice name → file
 echolot mark                                       the first markers for a project with none:
                                                    where and why; --apply puts them in,
