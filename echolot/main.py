@@ -4092,6 +4092,16 @@ def cmd_mark(args) -> int:
         recorder.note(removed_files=len(touched), kept_tagged=len(kept))
         return 0
 
+    if getattr(args, "mapping", None) and not args.from_anr:
+        print("error: --mapping names the build that froze, and goes with "
+              "--from-anr", file=sys.stderr)
+        return 2
+    named = Path(args.mapping).expanduser() if getattr(args, "mapping", None) else None
+    if named is not None and not named.is_file():
+        print(f"no such file: {named} — --mapping takes the build's mapping.txt",
+              file=sys.stderr)
+        return 2
+
     if getattr(args, "pools", False):
         # The third way in, and the only one that starts from the report
         # rather than from the code: a thread the JDK named, which nothing in
@@ -4113,8 +4123,11 @@ def cmd_mark(args) -> int:
             return 2
         report = anr_mod.parse(text)
         # The frames of a minified build are placed by their real names, as
-        # `echolot anr` places them, with the mapping the config names.
-        mapping = _config_mapping(Path(config), cfg) if cfg is not None else None
+        # `echolot anr` places them: with --mapping, else the mapping the
+        # config names.
+        mapping = named or (_config_mapping(Path(config), cfg, hint="; --mapping "
+                                            "names the build's mapping.txt")
+                            if cfg is not None else None)
         if mapping is not None:
             anr_mod.retrace(report, mapping)
         placed, missing = anr_mod.locate(report, root)
@@ -4132,6 +4145,20 @@ def cmd_mark(args) -> int:
                     f"{f.symbol} — {len(f.others) + 1} files of that name could "
                     f"be it: {', '.join([f.file, *f.others])}. Nothing in the "
                     f"frame says which one was built, so it is left to mark by hand")
+        # Why a plan is empty, or short, said of the report rather than of
+        # the manifest: the frames R8 named are no file of this checkout
+        # until a mapping names them back (#730).
+        still = anr_mod.minified_note(report)
+        if not pl.proposals:
+            if still:
+                pl.empty = f"nothing to mark from this report. What {still}"
+            elif not placed and not missing:
+                pl.empty = ("nothing to mark from this report: none of the "
+                            "frames on the threads it shows is this checkout's code")
+            else:
+                pl.empty = "nothing to mark from this report: the notes below say why"
+        elif still:
+            pl.notes.append(f"What {still}")
     else:
         pl = mark_mod.plan(root, package=package, allowed=allowed, prefix=prefix,
                            module=args.module)
@@ -6206,6 +6233,10 @@ def build_parser() -> argparse.ArgumentParser:
     mk.add_argument("--from-anr", metavar="REPORT",
                     help="take the targets from an ANR report's frames instead "
                          "of the manifest — what was on the stack when it froze")
+    mk.add_argument("--mapping", metavar="MAPPING",
+                    help="with --from-anr: the R8 mapping.txt of the build that "
+                         "froze, to name back the frames R8 renamed (default: "
+                         "project.mapping of the config)")
     mk.add_argument("--apply", action="store_true", help="insert the applicable markers")
     mk.add_argument("--remove", action="store_true",
                     help="delete the lines --apply wrote under --root; a line "

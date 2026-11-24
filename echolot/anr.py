@@ -834,6 +834,29 @@ def _as_lines(traced: mapping_mod.Retraced, file: str | None) -> list[str]:
     return [" | ".join(dict.fromkeys(names)) + f"({first.file})"]
 
 
+def minified_note(report: Report) -> str:
+    """The frames still in R8's names, how many and the first, and what names
+    them back; empty when there are none.
+
+    Read after "What": `anr` lists it among what the file cannot say, and
+    `mark --from-anr` says it in place of an empty plan's sentence, which
+    described the manifest's mode and read as code with nothing to mark
+    (#730).
+    """
+    left = _minified(report)
+    if not left:
+        return ""
+    if report.retraced is None:
+        return (f"{len(left)} frames are: they read as R8 named them, first "
+                f"`{left[0]}`. The build's `mapping.txt` names them back: "
+                f"`--mapping`, or `project.mapping` in the echolot.yml under "
+                f"`--root`.")
+    return (f"{len(left)} frames are: they still read as R8 named them after "
+            f"the mapping, first `{left[0]}`. Code that arrived minified, as "
+            f"some SDKs ship, is in no mapping of this build, and one from "
+            f"another build misses the app's own.")
+
+
 def _minified(report: Report) -> list[str]:
     """The frames worth reading that still read as R8 named them, first seen first."""
     seen: dict[str, None] = {}
@@ -2078,18 +2101,9 @@ def _gaps(report: Report, missing: list[str] | None = None) -> list[str]:
     if stray:
         gaps.append(f"- {stray} line(s) inside thread blocks that are neither "
                     f"frames nor a lock note.")
-    left = _minified(report)
-    if left and report.retraced is None:
-        gaps.append(f"- What {len(left)} frames are: they read as R8 named them, "
-                    f"first `{left[0]}`. The build's `mapping.txt` names them "
-                    f"back: `--mapping`, or `project.mapping` in the echolot.yml "
-                    f"under `--root`.")
-    elif left:
-        gaps.append(f"- What {len(left)} frames are: they still read as R8 named "
-                    f"them after the mapping, first `{left[0]}`. Code that "
-                    f"arrived minified, as some SDKs ship, is in no mapping of "
-                    f"this build, and one from another build misses the app's "
-                    f"own.")
+    still = minified_note(report)
+    if still:
+        gaps.append(f"- What {still}")
     if missing:
         first = missing[0]
         named = _FRAME.match(first)

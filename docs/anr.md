@@ -267,7 +267,8 @@ of the checkout and in no package it declares, so the report finds nothing
 of the project in it and says every frame belongs to the platform or a
 library. `--mapping` names the build's `mapping.txt`. Without the flag,
 `project.mapping` of the `echolot.yml` under `--root` is used, the key
-`analyze` reads; `mark --from-anr` reads it from the config it reads.
+`analyze` reads; `mark --from-anr` takes the same `--mapping`, or reads the
+key from the config it reads.
 
 The frames are named back before anything else is read, the way R8's own
 `retrace` does it: by the line, out through the methods inlined there. So

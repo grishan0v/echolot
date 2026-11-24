@@ -233,3 +233,64 @@ def test_mark_refuses_an_inlined_frame_whose_function_is_overloaded(tmp_path):
           and p.reason == "line 30 is past the end of the file: inlined code, and "
                           "`fill` is declared 2 times here — mark by hand", p)
     check("and not counted as another build", not plan.notes, plan.notes)
+
+
+# --- a dump of a minified build, with no mapping (#730) ------------------------
+
+MINIFIED = """\
+# Crashlytics -
+# Application: com.example.app
+# Platform: android
+# Version: 1.2.3 (45)
+
+main (blocked):tid=1 systid=1001 | waiting to lock <0x0a714d13> (java.lang.Object) held by thread 12
+       at cy.c(SourceFile:117)
+       at y71.m(SourceFile:10)
+       at android.app.Instrumentation.callApplicationOnCreate(Instrumentation.java:1277)
+
+Worker-2 (waiting):tid=12 systid=1012
+       at jdk.internal.misc.Unsafe.park(Native method)
+       at cy.b(SourceFile:102)
+       at java.lang.Thread.run(Thread.java:1012)
+"""
+
+
+def test_an_empty_plan_from_a_minified_dump_says_a_mapping_is_needed(tmp_path):
+    root = write_files(tmp_path / "checkout", {
+        f"{PKG}/A.kt": "package com.example.app\n\nclass A {\n    fun a() {\n    }\n}\n"})
+    report = write_files(tmp_path, {"anr.txt": MINIFIED}) / "anr.txt"
+    code, out, _ = run("mark", "--root", str(root), "--from-anr", str(report))
+    check("exit 0", code == 0, code)
+    check("it says the frames are R8's and what names them back",
+          "nothing to mark from this report. What 3 frames are: they read as R8 "
+          "named them, first `cy.c(SourceFile:117)`" in out and "`--mapping`" in out, out)
+    check("and not the manifest's sentence", "platform's vocabulary" not in out, out)
+    code, out, _ = run("mark", "--root", str(root), "--from-anr", str(report), "--json")
+    check("--json says it too", "R8 named them" in json.loads(out)["empty"], out)
+
+
+def test_mark_takes_the_mapping_as_anr_does(tmp_path):
+    from tests import lockapp
+
+    record = write_files(tmp_path, {"anr.txt": lockapp.record()}) / "anr.txt"
+    root = lockapp.checkout(tmp_path / "app")
+    mapping = write_files(tmp_path / "out", {"mapping.txt": lockapp.MAPPING}) / "mapping.txt"
+    code, out, err = run("mark", "--root", str(root), "--from-anr", str(record),
+                         "--mapping", str(mapping), "--json")
+    check("exit 0", code == 0, (code, err))
+    plan = json.loads(out)
+    files = {p["file"].rsplit("/", 1)[-1] for p in plan["proposals"]}
+    check("the frames are placed by their names",
+          {"Store.java", "MainActivity.java"} <= files, plan["proposals"])
+    check("and nothing says a mapping is needed", not plan["empty"]
+          and not any("R8 named" in n for n in plan["notes"]), plan)
+
+
+def test_a_mapping_flag_without_a_report_or_a_file_stops_mark(tmp_path):
+    code, _, err = run("mark", "--root", str(tmp_path), "--mapping", str(tmp_path / "m.txt"))
+    check("--mapping alone is refused", code == 2 and "--from-anr" in err, (code, err))
+    report = write_files(tmp_path, {"anr.txt": MINIFIED}) / "anr.txt"
+    code, _, err = run("mark", "--root", str(tmp_path), "--from-anr", str(report),
+                       "--mapping", str(tmp_path / "nope.txt"))
+    check("a mapping that is not there is said", code == 2 and "no such file" in err,
+          (code, err))

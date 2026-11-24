@@ -207,6 +207,9 @@ class Plan:
     notes: list[str] = field(default_factory=list)       # facts worth saying, not sites
     ambiguity: list[str] = field(default_factory=list)   # what needs a human's choice
     hidden: int = 0                                      # proposals beyond CAP
+    # Why there is nothing to propose, when the mode knows better than the
+    # manifest's sentence: an ANR report whose frames R8 named (#730).
+    empty: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -2209,7 +2212,8 @@ def render(pl: Plan) -> list[str]:
     for a in pl.ambiguity:
         out.append(f"! {a}")
     if not pl.proposals and not pl.ambiguity:
-        out.append("# nothing to mark from the platform's vocabulary in this tree")
+        out.append(f"# {pl.empty}" if pl.empty
+                   else "# nothing to mark from the platform's vocabulary in this tree")
     if pl.proposals:
         out.append("")
         w_file = max(len(f"{p.file}:{p.line}") for p in pl.proposals)

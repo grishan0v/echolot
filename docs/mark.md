@@ -203,6 +203,13 @@ were on the thread when the system gave up, with the file and the line the
 compiler wrote into each frame. Everything after the plan is the same code and
 the same tag, so `--apply` and `--remove` are unchanged.
 
+A report from a minified build names its frames as R8 did,
+`a.b.c(SourceFile:12)`, and none of them is a file of the checkout until the
+build's mapping names them back: `--mapping app/build/outputs/mapping/release/mapping.txt`,
+or `project.mapping` of the config, as `anr` takes it. Without either, an
+empty plan says how many frames read as R8 named them and what names them
+back (`--json`: `empty`).
+
 Expect most proposals to be refused, and read the reasons rather than working
 around them:
 
