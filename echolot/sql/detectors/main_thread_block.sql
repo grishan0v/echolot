@@ -3,9 +3,19 @@
 -- @why: measured as SELF time, children subtracted — otherwise one event
 --       lands in the report several times at different depths and the agent
 --       counts it twice
--- @param: min_slice_ms = 16
+-- @param: min_slice_ms = 16 ms — the self time a slice name has to add up
+--       to on the main thread in the window to be a row. One frame at 60 Hz,
+--       not calibrated
 -- @bar: min_slice_ms
 -- @identity: location, detail
+-- @column: location — the slice name
+-- @column: count — its slices on the main thread in the window
+-- @column: total_ms — their time with their children, summed
+-- @column: self_ms — their time less their children's, summed: what the
+--       rows add up by, and what the bar is on
+-- @column: max_ms — the longest slice, children included
+-- @column: detail — the main thread's name, cut to 15 characters by the
+--       kernel
 -- @plain_title: Heavy work on the main thread
 -- @plain_why: The main thread draws the screen and answers taps, so while it
 --       is busy with one piece of work it can do neither. Work that does not

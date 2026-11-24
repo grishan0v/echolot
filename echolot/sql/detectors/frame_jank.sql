@@ -5,9 +5,24 @@
 --       than "where did the total go" — and it needs no instrumentation in
 --       the app at all.
 -- @needs: frame_timeline
--- @param: min_frames = 3
--- @param: min_overrun_ms = 4
+-- @param: min_frames = 3 frames — late frames of one verdict in the window,
+--       Self Jank or Other Jank, all its types together, below which none of
+--       that verdict's rows is reported
+-- @param: min_overrun_ms = 4 ms — how far past its deadline a frame has to
+--       finish to count as late at all
 -- @calibrate: min_frames = top10(count) * 1.5
+-- @column: location — why the frames missed, the platform's jank_type: a
+--       comma-joined set, `App Deadline Missed, Buffer Stuffing` being one
+-- @column: count — frames of that type in the window
+-- @column: total_ms — bends the contract: their time past the deadline,
+--       summed, which is what the jank cost; 0 on a Buffer Stuffing row
+-- @column: max_ms — bends the contract: the worst frame's overrun past its
+--       deadline, not its duration, which is `longest` in detail; 0 on a
+--       Buffer Stuffing row
+-- @column: detail — whose fault (`Self Jank` the app's, `Other Jank` the
+--       system's), how many of all the app's frames, and the longest frame's
+--       own duration — the number a benchmark's percentiles are quoted in. A
+--       Buffer Stuffing row leads with `latency, not jank` instead
 -- @plain_title: Frames that came late
 -- @plain_why: The screen is redrawn many times a second. A frame that is not
 --       ready in time makes the picture stutter.
@@ -30,12 +45,11 @@
 -- `echolot collect` asks for it. Older traces and Android 11 and below leave
 -- these tables empty, and an empty table is silence rather than an error.
 --
--- Two columns that do not mean what they mean elsewhere, and the reason:
---   total_ms  the time past the deadline, summed. What the jank cost.
---   max_ms    the worst single frame's overrun.
--- Frame duration itself is in `detail` — that is the number a benchmark's
--- percentiles are quoted in, and having both is what lets a report be matched
--- against a FrameTimingMetric run.
+-- total_ms and max_ms do not mean what they mean elsewhere, as their
+-- `@column` lines say: the loss is the time past the deadline, and that is
+-- the actionable number. The frame's own duration is in `detail`, since a
+-- benchmark's percentiles are quoted in it, and having both is what lets a
+-- report be matched against a FrameTimingMetric run.
 --
 -- Rows are grouped by jank_type, which trace_processor renders as a
 -- comma-joined set: 'App Deadline Missed, Buffer Stuffing' is one diagnosis

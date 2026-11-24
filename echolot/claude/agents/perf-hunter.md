@@ -156,7 +156,9 @@ waiting for one.
    check and the `--json` views read, not you: never cat it, never cut it up
    with jq or python. `echolot guide report` is its schema and every
    detector at length — look one field up there when a `--json` view shows
-   it and nothing else explains it, not before the first hypothesis
+   it and nothing else explains it, not before the first hypothesis. What
+   one detector's thresholds and columns mean, and the values it ran with
+   here, is `echolot explain <detector>`: one screen, not the guide
 
 2. check the config before concluding anything. The overview says each of
    these in a ⚠️ line; `echolot report --window --json` has the fields:
@@ -300,7 +302,9 @@ echolot anr <report> --root .                      an ANR report: the lock chain
                                                    working, where the frames are; --json;
                                                    --mapping for a minified build's
 echolot mark --from-anr <report>                   markers on what was on the stack
-echolot explain                                    the detectors and their default params
+echolot explain [<detector>]                       one detector: what it reads, its thresholds
+                                                   with units and the values in force, what
+                                                   its columns mean; without one, the list
 ```
 
 **Stopping is hard-coded, not a feeling.** `loop.max_rounds` comes from the

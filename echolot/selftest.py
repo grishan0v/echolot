@@ -316,6 +316,32 @@ def _(report):
             f"that reason no longer holds")
 
 
+@check("every detector's rows hold the columns its header explains, and no other")
+def _(report):
+    # `echolot explain` says what each column of a detector's rows means, from
+    # the `@column` lines in its header (#494). Those are words beside a query,
+    # and nothing else ties the two: a column the query gained would reach the
+    # report with nobody saying what it is, and one it lost would go on being
+    # explained. Held against the rows themselves, on the one trace where
+    # every detector has some; anr_risk's need its bar lowered to the
+    # fixture's size. What the report adds to a row after the query — the
+    # place in the code, the samples, a merge's bookkeeping — is not the
+    # query's, and not counted.
+    from .main import DETECTOR_DIR
+    from .report import HIDDEN
+    from .tp import load_detectors
+
+    added = HIDDEN | {"code", "runs"}
+    lowered = _lowered_bar()
+    for d in load_detectors(DETECTOR_DIR):
+        got = rows(lowered if d.id in SILENT_ON_FIXTURE else report, d.id)
+        assert got, f"{d.id}: no rows on the fixture to hold its columns against"
+        returned = list(dict.fromkeys(k for r in got for k in r if k not in added))
+        assert set(returned) == set(d.columns), (
+            f"{d.id}: the query returns {returned}, the header explains "
+            f"{list(d.columns)}")
+
+
 # --- where the window went --------------------------------------------------
 
 @check("the window budget adds up to the window, exactly")
@@ -1166,6 +1192,46 @@ def _(report):
     assert (main["window_ms"], main["in_rows_ms"]) == (1520.0, 1515.0), main
     healthy = [r["location"] for r in rows(got[0], "uninstrumented_cpu")]
     assert healthy == ["DefaultDispatch"], healthy
+
+
+@check("compare lists a slice name in every run of one side and in no run of the "
+       "other, whatever numbers each run gave the rest")
+def _(report):
+    """The busy loop above, as two builds of three cold starts each: on a
+    real project such a loop gave no row on either side, and the one name
+    in all ten traces after and in none before was the JIT compilation of
+    the method the loop is in, which is where the code is. Agents found it
+    by setting two sets of `names` against each other in a script (#610).
+
+    Here the build with the loop compiles that method beside one both
+    builds compile, from another install directory. Every repeat gives its
+    frames, the render thread's fences and a pool's thread numbers of its
+    own. Of all of it, the compilation is the one name after only, and none
+    is before only."""
+    from . import compare as compare_mod
+    from . import report as report_mod
+    cfg = Config({**FIXTURE_CONFIG, "scenario": {
+        "name": "blind", "start": {"name": "bindApplication"},
+        "end": {"name": "Screen.firstFrame"}}})
+    with tempfile.TemporaryDirectory() as tmp:
+        sides = {}
+        for side, loop, runs, install, jit in (
+                ("before", 0, range(0, 3), fixture.INSTALL[0], (fixture.JIT_BOTH,)),
+                ("after", fixture.BLIND_LOOP_MS, range(10, 13), fixture.INSTALL[1],
+                 (fixture.JIT_BOTH, fixture.JIT_NEW))):
+            reports = []
+            for run in runs:
+                path = Path(tmp) / f"{side}-{run}.perfetto-trace"
+                path.write_bytes(fixture.blind_main(loop, run=run, install=install, jit=jit))
+                reports.append(_analyze(path, cfg))
+            sides[side] = report_mod.aggregate(reports)
+    cmp = compare_mod.build(sides["before"], sides["after"],
+                            before_path="a.json", after_path="b.json")
+    got = {side: [(r["name"], r["runs"], r["other"], r["threads"]) for r in cmp["names"][side]]
+           for side in ("before", "after")}
+    new = report_mod.slice_family(fixture.jit_name(fixture.JIT_NEW, fixture.INSTALL[1]))
+    assert got == {"before": [], "after": [(new, "3/3", "0/3", "Jit thread pool")]}, got
+    assert "/data/app/~~#/com.example.app-#/base.apk" in new, new
 
 
 @check("a row over a pool says how many threads it adds up, and the main "
@@ -5300,6 +5366,41 @@ def _(report):
             f"{d['id']} declares @identity {', '.join(identity)} and produced "
             f"two rows that share it: {[k for k in keys if keys.count(k) > 1]}"
         )
+
+
+@check("merging repeats: rows that climb from the first run to the last are said to drift")
+def _(report):
+    """A set is read as one state of the device measured again, and nothing
+    checked that it was (#508). Eight rows that grow 4% a run, with a
+    wobble of their own, are a slope; the same ten runs interleaved are
+    not, and a comparison with the sloped set says which side drifted."""
+    from . import compare as compare_mod
+    from .report import aggregate, to_markdown
+
+    wobble = (1.00, 0.97, 1.03, 0.99, 1.02, 0.98, 1.01, 1.04, 0.96, 1.00)
+
+    def run(i, at):
+        rows = [{"location": f"work{r}", "count": 1,
+                 "self_ms": round((40 + 30 * r) * (1 + 0.04 * i) * wobble[(i + 3 * r) % 10], 2),
+                 "total_ms": 500.0, "max_ms": 500.0} for r in range(8)]
+        return {"schema": 1, "trace": f"s_iter{at:03d}.perfetto-trace",
+                "window": {"duration_ms": 1000.0, "process": "com.example.app"},
+                "summary": {"detectors_run": 1, "detectors_fired": 1,
+                            "fired_ids": ["main_thread_block"]},
+                "detectors": [{"id": "main_thread_block", "title": "t", "why": "",
+                               "params": {}, "params_source": "default", "error": None,
+                               "identity": ["location"], "rows": rows}]}
+
+    sloped = aggregate([run(i, i) for i in range(10)])
+    mixed = aggregate([run(i, at) for at, i in enumerate((4, 9, 0, 6, 2, 8, 1, 5, 7, 3))])
+    assert sloped["drift"]["drifts"] is True and sloped["drift"]["p"] <= 0.01, sloped["drift"]
+    assert "> ⚠️ The runs drift" in to_markdown(sloped).split("## ")[0], sloped["drift"]
+    assert mixed["drift"]["drifts"] is False, mixed["drift"]
+    assert "The runs drift" not in to_markdown(mixed), mixed["drift"]
+    said = [w["text"] for w in compare_mod.build(sloped, mixed, before_path="a.json",
+                                                 after_path="b.json")["warnings"]
+            if w["id"] == "drift"]
+    assert len(said) == 1 and said[0].startswith("The runs before drift"), said
 
 
 @check("merging repeats: a single trace stays itself")

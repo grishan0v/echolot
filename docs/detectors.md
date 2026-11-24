@@ -9,8 +9,13 @@ A detector is one self-contained `.sql` file. Metadata in the header,
 -- @id: my_detector
 -- @title: What we are looking for
 -- @why: why it matters
--- @param: threshold_ms = 50
+-- @param: threshold_ms = 50 ms — how long one slice has to take to count
 -- @identity: location, detail
+-- @column: location — the slice name
+-- @column: count — its slices that took the threshold or longer
+-- @column: total_ms — their time, summed
+-- @column: max_ms — the longest one
+-- @column: detail — the thread they ran on
 -- @plain_title: Work that takes long
 -- @plain_why: One or two plain sentences on how it touches the app.
 -- @plain_clean: What a result with nothing in it says.
@@ -38,6 +43,26 @@ that groups by thread name fills `threads` too: how many threads the row adds
 up, since the kernel cuts a name to fifteen characters and a pool's workers
 arrive under one. Where it tells the main thread apart by its tid, the main
 thread's row is `main`.
+
+What a parameter and a column mean is said in the header too, because a
+name does not say it: `max_total_ms` of `binder_txn` is a floor, and
+`frame_jank`'s `max_ms` is a frame's overrun past its deadline, not its
+length. A number in `@param` is followed by its unit, a string by nothing,
+and the words come after a dash, going on below for as many lines as they
+need:
+
+```sql
+-- @param: min_overrun_ms = 4 ms — how far past its deadline a frame has to
+--       finish to count as late at all
+-- @param: name_glob = *GC — GLOB over slice names: ART's collection cycles
+-- @column: max_ms — the worst frame's overrun past its deadline
+```
+
+A detector writes a `@column` line for every column its query returns,
+after `@identity` and before the `@plain_*` keys, saying what each holds in
+this detector: what `count` counts, what `detail` carries. `echolot explain
+<detector>` prints them, with each threshold's value in this project, so the
+words live here and nowhere else.
 
 `@identity` names the columns that tell one row of the result from another —
 what the query groups by, as it reaches the report. It defaults to `location`
@@ -249,8 +274,9 @@ twice, which is what self time is for.
 That is allowed and it is not free: anything reading the report generically —
 `compare`, the markdown table — treats the numbers as milliseconds and gets
 milliseconds, but a reader who assumes duration reads them wrong. So the
-deviation is stated in the detector's own header, in the report reference, and
-here. A detector that bends the contract quietly is a bug.
+deviation is stated in the detector's own `@column` line, which `echolot
+explain` prints, in the report reference, and here. A detector that bends the
+contract quietly is a bug.
 
 ### Window functions are available, and worth reaching for
 
@@ -647,7 +673,11 @@ writes a config.
   on `self_ms` or `total_ms`: it takes that threshold for a floor under every
   row. `tests/test_report_page.py` pins which detectors those are, so a new
   one that joins them is looked at once: a row below the line would make the
-  line wrong.
+  line wrong. And the words for an agent: what each `@param` means, with a
+  number's unit, and a `@column` line for each column the query returns —
+  `tests/test_explain.py` fails for a parameter or a column without them, and
+  `doctor`'s check that the rows hold the columns the header explains fails
+  for a column the query returns and the header does not name.
 - **Only part of a row survives a merge.** Repeats are folded row by row, and
   a merged row keeps its `@identity` columns, `runs`, the numeric contract
   columns — `count`, `self_ms`, `total_ms`, `max_ms` and `covered_ms`, as

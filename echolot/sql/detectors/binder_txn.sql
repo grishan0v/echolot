@@ -2,13 +2,25 @@
 -- @title: Long binder transactions
 -- @why: synchronous IPC into another process is a common hidden cost at startup
 -- @needs: atrace:binder_driver
--- @param: min_txn_ms = 10
--- @param: max_total_ms = 50
--- @param: name_glob = binder transaction*
--- @param: skip_glob = *async*
+-- @param: min_txn_ms = 10 ms — a thread with one transaction this long is a
+--       row
+-- @param: max_total_ms = 50 ms — a thread whose transactions add up to this
+--       much is a row too, with none of them long. A floor despite its name
+-- @param: name_glob = binder transaction* — GLOB over slice names: the
+--       transactions counted
+-- @param: skip_glob = *async* — GLOB over slice names: those of the above
+--       left out. An async transaction does not block the thread that sent it
 -- @calibrate: min_txn_ms = top10(max_ms) * 1.5
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
 -- @identity: location, detail
+-- @column: location — the thread that sent the transactions
+-- @column: threads — how many threads of that name the row adds up: the
+--       kernel cuts a name to fifteen characters, and a pool's workers
+--       share one. Their time together is not the window's
+-- @column: count — its synchronous transactions in the window
+-- @column: total_ms — the time it waited on them, summed
+-- @column: max_ms — the longest one
+-- @column: detail — `main thread` or `background`
 -- @plain_title: Calls to the system or to other apps
 -- @plain_why: When the app asks the system or another app for something, the
 --       thread that asked waits until the answer comes back.

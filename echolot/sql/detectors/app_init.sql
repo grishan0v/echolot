@@ -5,9 +5,22 @@
 --       libraries write themselves; the rest is one row that says how much
 --       nobody named.
 -- @needs: atrace:am
--- @param: min_stretch_ms = 80
+-- @param: min_stretch_ms = 80 ms — how long the stretch from the end of
+--       makeApplication to the end of bindApplication has to be for any of
+--       its rows to be reported. One bar for the whole result, not per row
 -- @bar: min_stretch_ms
 -- @identity: location
+-- @column: location — a section in the stretch by its name, an androidx.startup
+--       Initializer opened out of `Startup`; `class initialization (ART)` for
+--       ART's section per class; `(no section)` for the time no section holds
+-- @column: count — occurrences of that section in the stretch
+-- @column: self_ms — its time less the sections inside it; on the
+--       `(no section)` row, the stretch less every section in it
+-- @column: total_ms — its time with the sections inside it
+-- @column: max_ms — its longest occurrence
+-- @column: detail — what the row is: an Initializer, one run inside another,
+--       ART's classes, a section under bindApplication; on `(no section)`,
+--       what runs there and writes nothing
 -- @plain_title: What runs before the first screen is created
 -- @plain_why: Libraries and the app's own setup code run before anything can
 --       be shown, so the time they take is added to the time until the first
@@ -107,12 +120,25 @@ inside AS (
 -- nested, and its time was its parent's (#512). Below the first level a
 -- section of ART's or of another detector stays where it is, in its
 -- parent's own time; neither is descended into.
+--
+-- Only a name shaped like an Initializer's is one. androidx.startup writes
+-- the class's simple name, so a name with a space, `#`, `(` or `:` is the
+-- platform's, written while the Initializer ran: a vsync request
+-- (`Choreographer#scheduleVsyncLocked`), a lock wait (`Lock contention on
+-- ClassLinker classes lock (owner tid: …)`), a binder call or an inflate.
+-- Taken as Initializers, they were rows that said "an androidx.startup
+-- Initializer" or "run inside ProfileInstallerInitializer" (#708). They stay
+-- in the time of the Initializer they ran in, as ART's sections do; under
+-- `Startup` itself, in the stretch's.
 startup (slice_id, up, name, dur, parent) AS (
     SELECT s.slice_id, NULL, s.name, s.dur, NULL
     FROM _slice_win s
     JOIN slice raw ON raw.id = s.slice_id
     JOIN inside i  ON raw.parent_id = i.slice_id
     WHERE i.name = 'Startup'
+      AND (s.name NOT GLOB '*[ #(:]*'
+           OR (s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
+           OR s.name GLOB 'VerifyClass *')
 
     UNION ALL
 
@@ -126,6 +152,7 @@ startup (slice_id, up, name, dur, parent) AS (
       AND NOT ((s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
                OR s.name GLOB 'VerifyClass *')
       AND s.name NOT IN (SELECT name FROM _claimed_name)
+      AND s.name NOT GLOB '*[ #(:]*'
 ),
 -- Self time is a section less the sections below it that are rows here: an
 -- Initializer's own work, apart from the ones it waited for.
@@ -233,6 +260,9 @@ startup (slice_id, name, ts, dur) AS (
     JOIN slice raw ON raw.id = s.slice_id
     JOIN inside i  ON raw.parent_id = i.slice_id
     WHERE i.name = 'Startup'
+      AND (s.name NOT GLOB '*[ #(:]*'
+           OR (s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
+           OR s.name GLOB 'VerifyClass *')
 
     UNION ALL
 
@@ -246,6 +276,7 @@ startup (slice_id, name, ts, dur) AS (
       AND NOT ((s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
                OR s.name GLOB 'VerifyClass *')
       AND s.name NOT IN (SELECT name FROM _claimed_name)
+      AND s.name NOT GLOB '*[ #(:]*'
 ),
 candidate AS (
     SELECT i.name, i.ts, i.dur

@@ -3,10 +3,21 @@
 -- @why: a start that waits on its own background work spends that time
 --       asleep, and no slice says what it waited for. The kernel does: the
 --       thread that ended each sleep is the one that woke the main thread
--- @param: min_total_ms = 16
--- @param: lock_glob = *contention*
+-- @param: min_total_ms = 16 ms — the time the main thread slept until one
+--       thread of the app woke it, summed, for that thread to be a row
+-- @param: lock_glob = *contention* — GLOB over slice names: a lock's
+--       contention slice. A sleep inside one is `monitor_contention`'s, and
+--       left out here
 -- @calibrate: min_total_ms = top10(total_ms) * 1.5
 -- @identity: location
+-- @column: location — the thread of the app that woke the main thread, its
+--       digits folded: `arch_disk_io_#`, `DefaultDispatch`
+-- @column: count — the main thread's sleeps it ended
+-- @column: total_ms — their time, summed
+-- @column: max_ms — the longest one
+-- @column: detail — where the main thread was while it slept: idle, or
+--       blocked in the slice it waited longest in, with the share of each
+--       when it was both
 -- @plain_title: The screen waits for background work
 -- @plain_why: The main thread draws the screen and answers taps. While it
 --       is held up waiting for another thread of the app, it can do neither.

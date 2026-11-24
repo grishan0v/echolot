@@ -92,14 +92,17 @@ def test_an_end_left_without_its_begin_is_still_a_leftover(tmp_path: Path) -> No
 def test_a_record_is_written_whole_or_not_at_all(tmp_path: Path, monkeypatch) -> None:
     hunt_mod.save(tmp_path, {"n": 1, "status": "open", "question": "kept"})
 
-    write = Path.write_text
+    from echolot import atomic
+    opened = atomic.os.open
 
-    def cut(self, data, encoding=None):
-        # Half of it reaches the disk, as when the process is killed mid-write.
-        write(self, data[:len(data) // 2], encoding=encoding)
+    def cut(path, flags, mode=0o777):
+        # The temporary file is opened, and the process is killed before
+        # anything is moved into place (#724: each writer has its own).
+        fd = opened(path, flags, mode)
+        atomic.os.close(fd)
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(Path, "write_text", cut)
+    monkeypatch.setattr(atomic.os, "open", cut)
     try:
         hunt_mod.save(tmp_path, {"n": 1, "status": "open", "question": "new"})
     except KeyboardInterrupt:

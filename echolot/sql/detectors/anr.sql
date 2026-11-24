@@ -7,6 +7,17 @@
 -- @needs: atrace:am
 -- @module: android.anrs
 -- @identity: location, detail
+-- @column: location — the platform's own reason for the ANR, its subject;
+--       the ANR's type, or `ANR`, when the record carries none
+-- @column: count — ANRs with this reason and this detail: one, as a rule,
+--       since the detail carries the record's id
+-- @column: total_ms — how long the ANR timer ran before it expired; 0 on a
+--       platform without that timer. Not a sum: the same number as max_ms
+-- @column: max_ms — the same, the longest of the row's
+-- @column: detail — where the record fell against the scenario's window:
+--       before it, inside it at +N ms, or after it, by how much; then the
+--       error id the platform gave the ANR, which the device's own record
+--       carries too
 -- @plain_title: Freezes the system recorded
 -- @plain_why: When an app stops answering for several seconds, the system
 --       shows a message that offers to close it.

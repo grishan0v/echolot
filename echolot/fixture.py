@@ -1354,17 +1354,28 @@ BLIND_THREADS = {TID_MAIN: APP_NAME[-15:], BLIND_POOL: "DefaultDispatch",
 BLIND_LOOP_MS = 300
 
 
-def blind_main(loop_ms: float = BLIND_LOOP_MS) -> bytes:
+def blind_main(loop_ms: float = BLIND_LOOP_MS, *, run: int | None = None,
+               install: str | None = None, jit: tuple[str, ...] = ()) -> bytes:
     """The scene above: `com.example.app`'s cold start from `bindApplication`
     to `Screen.firstFrame`, with `loop_ms` of busy loop on the main thread and
-    no slice around it."""
+    no slice around it.
+
+    `run`, `install` and `jit` draw the same start as one repeat of a build,
+    for the names `compare` sets against each other (#610), and leave the
+    scene above as it is when not given. `run` numbers what the runtime
+    numbers anew every time: each frame's vsync, the HWC fence the render
+    thread waits for, the number of a pool's thread. `jit` is the methods
+    the JIT compiles on its thread, each `jit_name`d as from `install`,
+    the build's install directory."""
+    frame = "Choreographer#doFrame" if run is None else "Choreographer#doFrame {}"
+    vsync = [] if run is None else [52_000 + 40 * run + i for i in range(3)]
     main = [
         ("bindApplication", 100, 300, []),
         ("activityStart", 405, 200, []),
-        ("Choreographer#doFrame", 610, 300, []),
-        ("Choreographer#doFrame", 915, 300, []),
+        (frame.format(*vsync[0:1]), 610, 300, []),
+        (frame.format(*vsync[1:2]), 915, 300, []),
         # The loop runs from 1215 on, after the gap.
-        ("Choreographer#doFrame", 1220 + loop_ms, 90, []),
+        (frame.format(*vsync[2:3]), 1220 + loop_ms, 90, []),
         ("Screen.firstFrame", 1315 + loop_ms, 5, []),
     ]
     room = [("room_query", 200, 100, []), ("room_query", 350, 100, []),
@@ -1372,23 +1383,55 @@ def blind_main(loop_ms: float = BLIND_LOOP_MS) -> bytes:
     sched = [(0, TID_MAIN, 100, 1320 + loop_ms, S),
              (1, BLIND_POOL, 300, 650, S),
              (2, BLIND_ROOM, 200, 600, S)]
+    threads = dict(BLIND_THREADS)
+    trees = [(0, TID_MAIN, main), (2, BLIND_ROOM, room)]
+    if run is not None:
+        threads[BLIND_RENDER] = "RenderThread"
+        threads[BLIND_WORKER] = f"Thread-{30 + run}"
+        trees += [(3, BLIND_RENDER, [
+            (f"waiting for HWC release {300 + 7 * run + i}", 620 + 305 * i, 4, [])
+            for i in range(3)]),
+            (4, BLIND_WORKER, [("prefetch", 450, 30, [])])]
+    if jit:
+        threads[BLIND_JIT] = "Jit thread pool"
+        trees.append((5, BLIND_JIT, [(jit_name(method, install or INSTALL[0]),
+                                      700 + 20 * i, BLIND_JIT_MS, [])
+                                     for i, method in enumerate(jit)]))
 
     builder = TraceProtoBuilder()
-    process_tree(builder, [(APP_PID, APP_NAME, BLIND_THREADS)])
+    process_tree(builder, [(APP_PID, APP_NAME, threads)])
     seq = iter(range(10**6))
     by_cpu: dict[int, list] = {}
     for cpu, tid, start, end, end_state in sched:
         idle = f"swapper/{cpu}"
         by_cpu.setdefault(cpu, []).extend([
-            (ms(start), next(seq), "sched", idle, 0, R, BLIND_THREADS[tid], tid),
-            (ms(end), next(seq), "sched", BLIND_THREADS[tid], tid, end_state, idle, 0),
+            (ms(start), next(seq), "sched", idle, 0, R, threads[tid], tid),
+            (ms(end), next(seq), "sched", threads[tid], tid, end_state, idle, 0),
         ])
-    for cpu, tid, tree in ((0, TID_MAIN, main), (2, BLIND_ROOM, room)):
+    for cpu, tid, tree in trees:
         for ts, order, kind, name in _flatten(tree, [], seq):
             buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
-            by_cpu[cpu].append((ts, order, "print", tid, buf))
+            by_cpu.setdefault(cpu, []).append((ts, order, "print", tid, buf))
     ftrace(builder, by_cpu)
     return builder.serialize()
+
+
+# The threads the repeats of `blind_main` add, and how long a compilation takes.
+BLIND_RENDER, BLIND_WORKER, BLIND_JIT = 4303, 4304, 4305
+BLIND_JIT_MS = 6
+# Two builds' install directories: Android picks both random parts anew at
+# every install.
+INSTALL = ("/data/app/~~kQ3v8Yw1Z0aB2c4d5e6f7g==/com.example.app-Hx2Lq9Rt4Vb7Nm1Pz3Kw5A==/",
+           "/data/app/~~Tz8Wq1Ld3Ns5Ma7Kc9Je0Q==/com.example.app-Ub6Yo4Ip2Fr8Ge0Hd1Sv3B==/")
+# A method both builds compile, and the one the build with the loop does: the
+# loop made it hot.
+JIT_BOTH = "void com.example.app.MainActivity.onCreate(android.os.Bundle)"
+JIT_NEW = "void com.example.app.feature.ListViewModel.prepare()"
+
+
+def jit_name(method: str, install: str) -> str:
+    """What ART calls the slice of a method's JIT compilation."""
+    return f"JIT compiling {method} (kind=Baseline) from {install}base.apk"
 
 
 # --- a pool under one name -------------------------------------------------------

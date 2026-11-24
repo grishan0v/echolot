@@ -287,6 +287,21 @@ def _runs(row: dict[str, Any], ctx: _Ctx) -> str:
     return f"in all {n} {ctx.plural}" if k == n else f"in {k} of {n} {ctx.plural}"
 
 
+def _apart(row: dict[str, Any], ctx: _Ctx) -> str:
+    """` in one launch` where a merged row's longest occurrence is one
+    repeat's, and nothing otherwise.
+
+    Merged over repeats, `max_ms` is the longest any repeat saw (#512) and
+    the totals beside it are medians: the slowest launch's longest call next
+    to the median launch's total, so "0.2 s on calls … the longest took
+    0.3 s" (#712). Said where the repeats' longest differ; where they are
+    all the same, the longest was no larger than any repeat's total.
+    """
+    values = ((row.get("spread") or {}).get("max_ms") or {}).get("values") or []
+    nums = [float(v) for v in values if isinstance(v, (int, float))]
+    return f" in one {ctx.noun}" if len(nums) > 1 and max(nums) != min(nums) else ""
+
+
 def _reason(det: dict[str, Any]) -> str:
     """Why an empty check did not look: its own reason, or that it failed, or that
     the report is too old to say."""
@@ -552,12 +567,18 @@ def _f_outlier(rows, ctx):
     top = rows[0]
     count = int(top.get("count") or 1)
     longest = float(top.get("max_ms") or _value(top))
+    apart = _apart(top, ctx)
     usual = _OUTLIER.search(str(top.get("detail") or ""))
-    out = (_sentence(f"One {_name(top['location'])} took {hum(longest)}", _runs(top, ctx))
-           if count <= 1 else
-           _clause(f"{_name(top['location'])} took far longer than usual {count} times",
-                   _runs(top, ctx))
-           + f": {hum(_value(top))} together, {hum(longest)} at worst.")
+    if count <= 1:
+        # One occurrence a repeat: its median, and the longest apart.
+        once = _value(top) if apart else longest
+        out = _sentence(f"One {_name(top['location'])} took {hum(once)}", _runs(top, ctx))
+        if apart and longest > once:
+            out += f" In one {ctx.noun} it took {hum(longest)}."
+    else:
+        out = (_clause(f"{_name(top['location'])} took far longer than usual {count} times",
+                       _runs(top, ctx))
+               + f": {hum(_value(top))} together, {hum(longest)} at worst{apart}.")
     if usual:
         out += f" It usually takes {hum(float(usual.group(1)))}."
     out += _share(_value(top), ctx, "That is" if count <= 1 else "Together that is")
@@ -577,7 +598,8 @@ def _f_binder(rows, ctx):
     top = rows[0]
     v = _value(top)
     calls = "calls to the system or to other apps"
-    longest = f" The longest took {hum(float(top['max_ms']))}." if top.get("max_ms") else ""
+    longest = (f" The longest took {hum(float(top['max_ms']))}{_apart(top, ctx)}."
+               if top.get("max_ms") else "")
     if _on_main("binder_txn", top, ctx):
         out = _sentence(f"The main thread waited {hum(v)} for {calls}", _runs(top, ctx))
         out += longest + _share(v, ctx)
@@ -595,7 +617,7 @@ def _f_monitor(rows, ctx):
     out = _sentence(f"{_who('monitor_contention', top, ctx)} waited {hum(v)} for a lock "
                     f"that another thread held", _runs(top, ctx))
     if top.get("max_ms"):
-        out += f" The longest wait was {hum(float(top['max_ms']))}."
+        out += f" The longest wait was {hum(float(top['max_ms']))}{_apart(top, ctx)}."
     if _on_main("monitor_contention", top, ctx):
         out += _share(v, ctx)
     return out + _also(rows, "more thread waited", "more threads waited", "for locks, too.")
@@ -644,7 +666,7 @@ def _f_gc(rows, ctx):
     out = _clause(f"Memory clean-up ran {_count(int(top.get('count') or 1), 'time', 'times')}"
                   f"{where}", _runs(top, ctx)) + f": {hum(v)} together"
     if top.get("max_ms"):
-        out += f", the longest {hum(float(top['max_ms']))}"
+        out += f", the longest {hum(float(top['max_ms']))}{_apart(top, ctx)}"
     out += "." + (_share(v, ctx) if main else "")
     return out + _also(rows, "more kind", "more kinds", "of clean-up ran a lot, too.")
 
@@ -655,7 +677,7 @@ def _f_runnable(rows, ctx):
     out = _sentence(f"{_who('runnable_starvation', top, ctx)} was ready to work but had no "
                     f"free processor core for {hum(v)}", _runs(top, ctx))
     if top.get("max_ms"):
-        out += f" The longest wait was {hum(float(top['max_ms']))}."
+        out += f" The longest wait was {hum(float(top['max_ms']))}{_apart(top, ctx)}."
     if _on_main("runnable_starvation", top, ctx):
         out += _share(v, ctx)
     return out + _also(rows, "more thread waited", "more threads waited", "too.")
@@ -667,7 +689,7 @@ def _f_io(rows, ctx):
     out = _sentence(f"{_who('io_wait', top, ctx)} slept {hum(v)} waiting for the disk",
                     _runs(top, ctx))
     if top.get("max_ms"):
-        out += f" The longest wait was {hum(float(top['max_ms']))}."
+        out += f" The longest wait was {hum(float(top['max_ms']))}{_apart(top, ctx)}."
     if _on_main("io_wait", top, ctx):
         out += _share(v, ctx)
     return out + _also(rows, "more thread waited", "more threads waited", "for the disk, too.")
@@ -715,7 +737,7 @@ def _f_jank(rows, ctx):
         out = (_clause(f"{_frames_of(top, ctx)} came late{whose}", _runs(top, ctx))
                + f": {hum(v)} past their deadlines together")
         if top.get("max_ms"):
-            out += f", {hum(float(top['max_ms']))} at worst"
+            out += f", {hum(float(top['max_ms']))} at worst{_apart(top, ctx)}"
         out += "." + _share(v, ctx, "Together that is")
         if _STUFFED in str(top.get("location") or ""):
             out += " That counts the time they waited in a queue behind the frame before, too."
@@ -747,13 +769,21 @@ def _f_risk(rows, ctx):
     top = rows[0]
     count = int(top.get("count") or 1)
     longest = float(top.get("max_ms") or _value(top))
+    apart = _apart(top, ctx)
     what = ("and nothing in the recording names what it was doing"
             if top.get("location") == "uninstrumented work on the main thread"
             else f"while {_name(top['location'])} was open")
-    start = (f"The main thread went {hum(longest)} without answering" if count <= 1 else
-             f"The main thread stopped answering {count} times, for up to {hum(longest)} at a time")
-    return (_sentence(f"{start}, {what}", _runs(top, ctx))
-            + _share(_value(top), ctx, "That is" if count <= 1 else "Together that is"))
+    if count <= 1:
+        start = f"The main thread went {hum(_value(top) if apart else longest)} without answering"
+    elif apart:
+        start = f"The main thread stopped answering {count} times"
+    else:
+        start = (f"The main thread stopped answering {count} times, "
+                 f"for up to {hum(longest)} at a time")
+    out = _sentence(f"{start}, {what}", _runs(top, ctx))
+    if apart and (count > 1 or longest > _value(top)):
+        out += f" The longest{apart}, {hum(longest)}."
+    return out + _share(_value(top), ctx, "That is" if count <= 1 else "Together that is")
 
 
 def _f_composables(rows, ctx):

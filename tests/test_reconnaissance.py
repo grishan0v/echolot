@@ -224,21 +224,38 @@ def test_names_lists_async_sections_and_says_what_reads_them(trace):
 
 # --- explain ----------------------------------------------------------------
 
-def test_explain_lists_every_shipped_detector_with_its_parameters():
-    """The agent's way to ask what can fire, without opening any .sql."""
+def test_explain_lists_every_shipped_detector_a_line_each(tmp_path, monkeypatch):
+    """The agent's way to ask what can fire, without opening any .sql. One
+    line a detector; its parameters are `explain <detector>`'s, below."""
     from echolot.main import DETECTOR_DIR
     from echolot.tp import load_detectors
 
+    monkeypatch.chdir(tmp_path)
     text = run("explain")
     shipped = load_detectors(DETECTOR_DIR)
     check("something is shipped", shipped, "no detectors found")
+    lines = text.splitlines()
     for d in shipped:
-        check(f"`{d.id}` is listed", d.id in text, text[:200])
+        line = next((ln for ln in lines if ln.split(" ", 1)[0] == d.id), None)
+        check(f"`{d.id}` has a line", line, text[:400])
+        check(f"with its title, {d.title!r}", d.title in line, line)
+
+
+def test_explain_one_detector_names_every_parameter(tmp_path, monkeypatch):
+    """What the list left out, for one detector at a time."""
+    from echolot.main import DETECTOR_DIR
+    from echolot.tp import load_detectors
+
+    monkeypatch.chdir(tmp_path)
+    for d in load_detectors(DETECTOR_DIR):
+        text = run("explain", d.id)
         for param in d.params:
-            check(f"with its parameter {d.id}.{param}", param in text, text[:400])
+            check(f"{d.id} names its parameter {param}", f"  {param} = " in text, text[:600])
 
 
-def test_explain_needs_no_trace_and_no_config():
+def test_explain_needs_no_trace_and_no_config(tmp_path, monkeypatch):
     """It reads the .sql files and nothing else, which is why it always works."""
-    text = run("explain")
-    check("a title came through", "why:" in text, text[:200])
+    monkeypatch.chdir(tmp_path)
+    text = run("explain", "io_wait")
+    check("the why came through", "kernel parked it" in text, text[:300])
+    check("and says the values are the defaults", "no echolot.yml here" in text, text[:300])

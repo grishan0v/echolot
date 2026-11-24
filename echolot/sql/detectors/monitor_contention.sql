@@ -3,12 +3,27 @@
 -- @why: ART writes a "Lock contention on ..." slice with the owner's tid —
 --       ready-made evidence
 -- @needs: atrace:dalvik
--- @param: min_block_ms = 8
--- @param: max_total_ms = 50
--- @param: name_glob = Lock contention on a monitor lock*
--- @param: name_glob_alt = monitor contention with owner*
+-- @param: min_block_ms = 8 ms — a thread with one wait this long is a row
+-- @param: max_total_ms = 50 ms — a thread whose waits add up to this much is
+--       a row too, with none of them long. A floor despite its name
+-- @param: name_glob = Lock contention on a monitor lock* — GLOB over slice
+--       names: ART's wait on a monitor, with the owner's tid
+-- @param: name_glob_alt = monitor contention with owner* — GLOB over slice
+--       names: the same wait with both methods and the owner by name; a
+--       slice of the first mask inside one of these counts once, as this one
 -- @calibrate: min_block_ms = top10(max_ms) * 1.5
 -- @calibrate: max_total_ms = top10(total_ms) * 1.5
+-- @column: location — the thread that waited for the lock; `main` for the
+--       main thread, told apart by its tid
+-- @column: threads — how many threads of that name the row adds up: the
+--       kernel cuts a name to fifteen characters, and a pool's workers
+--       share one. Their time together is not the window's
+-- @column: count — its waits in the window
+-- @column: total_ms — their time, summed
+-- @column: max_ms — the longest one
+-- @column: detail — its longest wait that names both methods, as ART wrote
+--       it; or else the owner's tid with its thread and the slice it was in,
+--       and the slice the waiter was in
 -- @plain_title: Threads waiting for each other
 -- @plain_why: Threads protect what they share with a lock, so that only one
 --       uses it at a time. A thread that needs it while another holds it

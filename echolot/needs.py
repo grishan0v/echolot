@@ -99,6 +99,9 @@ class Source:
     id: str
     holds: Callable[[Probe], bool]
     missing: Callable[[Probe], str]
+    # What it is and what puts it in a recording, for `echolot explain`
+    # (#494): an agent asking about one detector, before any trace is open.
+    about: str = ""
 
 
 def _platform_state(p: Probe) -> bool:
@@ -168,13 +171,22 @@ def _category(name: str) -> Source:
                     f"check reads.")
         return f"The recording did not ask for {what}, which this check reads."
 
-    return Source(f"atrace:{name}", holds, missing)
+    return Source(f"atrace:{name}", holds, missing,
+                  f"{CATEGORIES[name]} — the `{name}` atrace category, in "
+                  f"`runner.atrace_categories` by default")
 
 
 SOURCES: dict[str, Source] = {s.id: s for s in (
-    Source("platform_state", _platform_state, _no_platform_state),
-    Source("frame_timeline", _frame_timeline, _no_frame_timeline),
-    Source("composable_names", _composable_names, _no_composable_names),
+    Source("platform_state", _platform_state, _no_platform_state,
+           "why a thread went to sleep in the kernel, the "
+           "`sched/sched_blocked_reason` event: `collect` records it unless "
+           "`runner.environment: false`"),
+    Source("frame_timeline", _frame_timeline, _no_frame_timeline,
+           "SurfaceFlinger's record of every frame, its deadline and what it "
+           "took: Android 12 or newer, and `collect` asks for it"),
+    Source("composable_names", _composable_names, _no_composable_names,
+           "the names `runtime-tracing` writes for every composable call: "
+           "`runner.compose_names: true`, for an app that carries it"),
     *(_category(name) for name in CATEGORIES),
 )}
 

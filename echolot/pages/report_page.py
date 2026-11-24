@@ -215,7 +215,8 @@ def _mark(row: dict[str, Any], ctx: Any, subs: list[str], several: bool) -> tupl
     if _is_number(row.get("count")):
         tip.append(f"occurrences: {row['count']:,}")
     if _is_number(row.get("max_ms")):
-        tip.append(f"longest single one: {kit.exact(row['max_ms'])} ms")
+        tip.append(f"longest single one{f' in any {ctx.noun}' if several else ''}: "
+                   f"{kit.exact(row['max_ms'])} ms")
     # A pool's workers share one cut name, and the bar is their time together
     # (#511).
     threads = row.get(report_mod.THREADS)

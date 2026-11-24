@@ -10,7 +10,9 @@ take work out of.
 The output is one table, sorted by how much each row moved, with two
 exceptions (`_rank`): a move of the main thread's own time that holds comes
 before sums over other threads, and a move the runs do not back comes after
-the rest. The top row is usually the answer.
+the rest. The top row is usually the answer. Under it, the slice names that
+are in every run of one side and in no run of the other, which no detector
+reads (`_one_sided`).
 
 Three things it refuses to do quietly:
 
@@ -48,6 +50,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from . import drift as drift_mod
 from . import launch as launch_mod
 from . import when as when_mod
 from . import needs as needs_mod
@@ -200,6 +203,7 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
     counts = {k: 0 for k in (APPEARED, VANISHED, GREW, SHRANK, STEADY)}
     for r in rows:
         counts[r["change"]] += 1
+    names = _one_sided(before, after, [*rows, *markers], temp_prefix)
 
     return {
         # 2 since `overlap` gave way to `shift` and `holds`: a reader written
@@ -228,12 +232,86 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
             "silent_both": _silent_both(before, after),
             # Rows of the markers table that moved, by time or by calls.
             "markers_moved": sum(1 for r in markers if _marker_moved(r)),
+            # Slice names in every run of one side and in none of the other.
+            "only_after": len((names or {}).get("after") or []),
+            "only_before": len((names or {}).get("before") or []),
         },
         "rows": rows,
         # The report's markers table, paired by name: the only place an async
         # section the app writes is measured at all (#618).
         "markers": markers,
+        # Null when either report holds no slice names (#610).
+        "names": names,
     }
+
+
+# Slice names on one side only (#610). How many runs a side takes before a
+# name in every one of them and in none of the other's is news: two halves of
+# ten cold starts of one build, on a busy app, set against each other, had a
+# hundred such names of a millisecond or more with one run a side, five to
+# seventeen with two, three or four with three, and one at most from four
+# runs on: a method the JIT compiled in one half only.
+NAMES_LEAST_RUNS = 3
+# From this many runs, a name may be missing from one of them: the same
+# halves gave no more names when one run in five was let off.
+NAMES_ALL_BUT_ONE = 5
+# How many names of each side the comparison prints; `--names` prints all.
+NAMES_SHOWN = 10
+
+
+def _one_sided(before: dict, after: dict, listed: list[dict],
+               temp_prefix: str | None) -> dict[str, Any] | None:
+    """The slice names in every run of one side and in no run of the other (#610).
+
+    `compare` pairs detector rows, and a slice no detector reads never
+    reaches it, however clearly it tells the two builds apart. A planted
+    busy loop of 200 ms on the main thread, with no section of its own, grew
+    the window by 277 ms and gave no row on either side; the one name in all
+    ten traces after and in none of the ten before was the JIT compilation
+    of the method with the loop in it, which is where the code is. Agents
+    found it by setting two sets of `echolot names` against each other in a
+    script.
+
+    A name of one side is listed when the runs it is in are all of that
+    side's, or all but one from NAMES_ALL_BUT_ONE runs, and no run of the
+    other side holds it at all (`report._merge_names`). Not with fewer than
+    NAMES_LEAST_RUNS runs on either side: the names a run happens to have
+    then outnumber new ones, and the result says so (`too_few`). Names the
+    tables already have as new or gone are left out, the markers that were
+    planted between the rounds with them.
+
+    None when a report holds no names: one written before they were kept,
+    or by an echolot that held them some other way.
+    """
+    sides = {"before": before.get(report_mod.SLICE_NAMES),
+             "after": after.get(report_mod.SLICE_NAMES)}
+    if not sides["before"] or not sides["after"]:
+        return None
+    seen = {side: report_mod.names_seen(s) for side, s in sides.items()}
+    if seen["before"] is None or seen["after"] is None:
+        return None
+    runs = {side: int(s.get("runs") or 1) for side, s in sides.items()}
+    floor = max(float(s.get("floor_ms") or 0.0) for s in sides.values())
+    out: dict[str, Any] = {"runs": runs, "floor_ms": floor,
+                           "least_runs": NAMES_LEAST_RUNS, "after": [], "before": []}
+    if min(runs.values()) < NAMES_LEAST_RUNS:
+        out["too_few"] = True
+        return out
+    # By the name `report._merge_names` gives it, so that a row of the table
+    # and the same slice here are seen to be one.
+    own = frozenset(str(r["location"]) for r in listed if r.get("detector") == "markers")
+    tabled = {report_mod.slice_family(str(r["location"]), keep=temp_prefix, names=own)
+              for r in listed if r["change"] in (APPEARED, VANISHED)}
+    for side, other in (("after", "before"), ("before", "after")):
+        n = runs[side]
+        need = n - 1 if n >= NAMES_ALL_BUT_ONE else n
+        for row in report_mod.names_rows(sides[side]):
+            if (_found_in(row) < need or row["total_ms"] < floor
+                    or row["name"] in tabled
+                    or report_mod.name_digest(row["name"]) in seen[other]):
+                continue
+            out[side].append({**row, "other": f"0/{runs[other]}"})
+    return out
 
 
 def _frames_moved(before: dict, after: dict,
@@ -631,6 +709,7 @@ def _check(before: dict, after: dict,
     out.extend(_outside_moved(before, after))
     out.extend(_compose_names_moved(before, after))
     out.extend(_compile_moved(before, after))
+    out.extend(drift_mod.warnings(before, after))
 
     nb, na = _runs(before), _runs(after)
     if nb != na:
@@ -1687,6 +1766,8 @@ def to_markdown(cmp: dict[str, Any]) -> str:
         f"Moved **{s['moved']}** · appeared **{s['appeared']}** · "
         f"gone **{s['vanished']}** · steady {s['steady']}"
         + (f" · markers moved **{s['markers_moved']}**" if s.get("markers_moved") else "")
+        + (f" · names only after **{s['only_after']}**" if s.get("only_after") else "")
+        + (f" · only before **{s['only_before']}**" if s.get("only_before") else "")
     )
     out.append(
         f"Detectors fired: {len(s['fired_before'])} → {len(s['fired_after'])}"
@@ -1734,6 +1815,8 @@ def to_markdown(cmp: dict[str, Any]) -> str:
         out.append("")
         out.append(_markers_table(marked))
         out.append("")
+
+    out.extend(_names_lines(cmp.get("names"), NAMES_SHOWN))
 
     if s["state_changed"]:
         out.append("## Detectors that changed state")
@@ -1828,6 +1911,71 @@ def _markers_table(rows: list[dict[str, Any]]) -> str:
         "holds": _holds(r),
         "calls": _calls_text(r.get("calls")),
     } for r in rows], order=MARKER_COLUMNS, headers=MARKER_HEADERS)
+
+
+def _found_in(row: dict[str, Any]) -> int:
+    """How many runs a `slice_names` row was found in: the k of its `k/n`."""
+    try:
+        return int(str(row.get("runs")).split("/")[0])
+    except ValueError:
+        return 0
+
+
+NAMES_COLUMNS = ["name", "side", "runs", "total", "max", "threads"]
+NAMES_HEADERS = {"name": "Where", "side": "Only", "runs": "Runs",
+                 "total": "Total, ms", "max": "Longest, ms", "threads": "Thread"}
+
+
+def _names_lines(names: dict[str, Any] | None, shown: int | None) -> list[str]:
+    """The names on one side only: the section, or the line that says why
+    there is none. Nothing when neither side has any, or a report holds no
+    names to read. `shown` names of each side, every one with None."""
+    if not names:
+        return []
+    if names.get("too_few"):
+        runs = names["runs"]
+        return [f"**Names on one side only:** not looked for with {runs['before']} "
+                f"run(s) before and {runs['after']} after; it takes {names['least_runs']} "
+                f"a side, as with fewer the names a run happens to have outnumber "
+                f"new ones.", ""]
+    after, before = names.get("after") or [], names.get("before") or []
+    if not after and not before:
+        return []
+    out = ["## Names on one side only", "",
+           f"_the slice names of the app's process in the window, numbers folded, that "
+           f"are in every run of one side (all but one from {NAMES_ALL_BUT_ONE} runs) and "
+           f"in no run of the other, {names['floor_ms']:g} ms or more a run, and that no "
+           f"row above has as new or gone. Total is the median a run._", ""]
+    picked, rest = [], []
+    for side, rows in (("after", after), ("before", before)):
+        cut = rows if shown is None else rows[:shown]
+        picked += [(side, r) for r in cut]
+        if len(rows) > len(cut):
+            rest.append(f"{len(rows) - len(cut)} more {side}")
+    out.append(table.render([{
+        "name": r["name"],
+        "side": side,
+        "runs": f"{r['runs']} against {r['other']}",
+        "total": f"{r['total_ms']:g}",
+        "max": f"{r['max_ms']:g}",
+        "threads": r.get("threads") or "",
+    } for side, r in picked], order=NAMES_COLUMNS, headers=NAMES_HEADERS))
+    if rest:
+        out += ["", f"… and {' and '.join(rest)}: `compare --names` lists every one, "
+                    f"and comparison.json has them under `names`."]
+    out.append("")
+    return out
+
+
+def names_view(cmp: dict[str, Any]) -> str:
+    """`compare --names`: every name on one side only, and nothing else."""
+    lines = _names_lines(cmp.get("names"), None)
+    if lines:
+        return "\n".join(lines).rstrip() + "\n"
+    if cmp.get("names") is None:
+        return ("No names to compare: a report written before echolot kept the "
+                "window's slice names holds none. Run `analyze` again on its traces.\n")
+    return "No slice name is in every run of one side and in no run of the other.\n"
 
 
 def _calls_text(calls: dict[str, Any] | None) -> str:

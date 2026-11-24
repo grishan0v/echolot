@@ -4,9 +4,20 @@
 --       was served. This measures that length directly, so it can name a
 --       freeze the system has not declared yet — and it needs no ANR to have
 --       happened, unlike the detector next to it.
--- @param: min_stall_ms = 5000
--- @param: max_gap_ms = 2
+-- @param: min_stall_ms = 5000 ms — how long the main thread has to go
+--       without getting back to the message queue for the stretch to be a
+--       row. The platform's input dispatch timeout, not calibrated
+-- @param: max_gap_ms = 2 ms — the longest moment of nothing on the main
+--       thread that still does not end a stretch: the space between two
+--       messages, shorter than any idle moment
 -- @identity: location
+-- @column: location — the longest message inside the stretch, or
+--       `uninstrumented work on the main thread` when no slice is inside it
+-- @column: count — stretches with that name
+-- @column: total_ms — their length, summed
+-- @column: max_ms — the longest stretch
+-- @column: detail — the longest stretch split three ways: on a CPU, waiting
+--       for one, and neither (a lock, the disk), then how many slices it held
 -- @plain_title: Stretches where the app could not answer
 -- @plain_why: The main thread draws the screen and answers taps. If it does
 --       not get back to its work for several seconds, the app cannot answer,
