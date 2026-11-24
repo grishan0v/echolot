@@ -97,8 +97,8 @@ from PyPI, Claude Code and Codex fetch the plugin from
 
 Nothing. There is no telemetry, no crash report and no update check.
 
-Two connections stay on the machine: perfetto starts trace_processor and
-talks to it over HTTP on localhost, and `adb` talks to its server on
+Two connections stay on the machine: echolot starts trace_processor and
+talks to it over HTTP on 127.0.0.1, and `adb` talks to its server on
 localhost:5037, which reaches the phone over USB or your local network.
 
 `echolot ui` is a third, while it runs: a server on 127.0.0.1 that shows the

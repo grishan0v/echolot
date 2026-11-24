@@ -69,13 +69,14 @@ def in_codex(monkeypatch, tmp_path):
 
 @pytest.fixture
 def port_refused(monkeypatch):
-    """perfetto's request for a free port, refused the way a sandbox refuses it."""
-    from perfetto.trace_processor.platform import PlatformDelegate
+    """The bind that finds trace_processor a free port, refused the way a
+    sandbox refuses it."""
+    from echolot import tpshell
 
-    def refuse(self, port):
+    def refuse():
         raise PermissionError(errno.EPERM, "Operation not permitted")
 
-    monkeypatch.setattr(PlatformDelegate, "get_bind_addr", refuse)
+    monkeypatch.setattr(tpshell, "_free_port", refuse)
 
 
 @pytest.fixture

@@ -1,9 +1,10 @@
 """Keeping trace_processor from outliving echolot (#570).
 
-perfetto starts `trace_processor_shell -D --http-port N` in a session of its
-own and stops it only in `TraceProcessor.close()`. A server with no idle
-limit, it stayed behind, re-parented to init and holding the trace it had
-loaded, whenever echolot ended without that call:
+echolot starts `trace_processor_shell -D --http-port N` in a session of its
+own (tpshell.py, as perfetto did before #487) and stops it only in
+`TraceSession.close()`. A server with no idle limit, it stayed behind,
+re-parented to init and holding the trace it had loaded, whenever echolot
+ended without that call:
 
 - SIGTERM and SIGHUP end Python where it stands, without unwinding — and
   they are what `timeout`, an agent's harness, a cancelled CI job and a
@@ -11,15 +12,16 @@ loaded, whenever echolot ended without that call:
   the signal sent to echolot's group either. `hold_signals` turns both into
   `SystemExit` while a session is open, so the stack unwinds through
   `TraceSession.close()`, and the exit code is the signal's.
-- An interrupt inside perfetto's constructor — while the shell starts, or
-  while the trace is fed to it — escaped it with the child still running:
-  perfetto closes it only on its own parse error. `open_processor` stops
-  whatever the constructor had started, on any exception.
+- An interrupt while the shell starts, or while the trace is fed to it,
+  escaped with the child still running: perfetto closed it only on its own
+  parse error. `open_processor` stops the shell on any exception.
 - SIGKILL runs nothing in echolot at all. A watcher beside it, started once
   per process, holds the pid of every open session's child and kills those
   still held when echolot's end of its pipe closes, which the kernel does
-  however echolot ends. What it cannot cover is a SIGKILL within the second
-  perfetto spends starting the shell, before its pid is known here.
+  however echolot ends. The pid is held from the moment the shell is
+  started, before it is asked whether it listens; what the watcher cannot
+  cover is a SIGKILL between the start and that line to it. (While perfetto
+  started the shell, that was the whole second it waited.)
 
 And one more way, since `analyze` reads the traces of a set side by side
 (#488): the sessions are opened in worker threads, and none of the above
@@ -38,7 +40,7 @@ import signal
 import subprocess
 import sys
 import threading
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 _held = 0
 _before: dict[int, Any] = {}
@@ -82,27 +84,27 @@ def let_go() -> None:
     _before.clear()
 
 
-def open_processor(cls, config, trace_for: Callable[[Callable[[], None]], Iterable[bytes]]):
-    """`cls(trace=…, config=config)`, with nothing left running if it fails.
+def open_processor(binary: str, connect: Callable[[str], Any]) -> Any:
+    """A shell started on `binary`, with `connect(address)`'s client over it
+    (a `tpshell.Processor`), and nothing left running if any of it fails.
 
-    The object is made first and initialised after, so that a failure part
-    way through still has it to close. `trace_for` is handed what to call
-    once the child is up: the trace is fed to it from a generator, and its
-    first step is the first moment the child's pid can be read.
+    The watcher holds the shell's pid from its start. The thread's group
+    gets the session once the shell answers, before the trace is fed to it:
+    a run stopped while the trace is read closes it there.
     """
+    from . import tpshell
+
     group = getattr(_joined, "group", None)
     check_joined()
-    tp = cls.__new__(cls)
-
-    def started() -> None:
-        _watcher.hold(pid_of(tp))
+    tp = tpshell.Processor(tpshell.Shell(binary))
+    try:
+        _watcher.hold(tp.shell.pid)
+        tp.shell.wait()
         if group is not None:
             group.add(tp)
-
-    try:
-        tp.__init__(trace=trace_for(started), config=config)
-    except BaseException as e:
-        _stop(tp, e.__traceback__)
+        tp.client = connect(tp.shell.address)
+    except BaseException:
+        close(tp)
         raise
     return tp
 
@@ -181,38 +183,8 @@ def close(tp) -> None:
 
 
 def pid_of(tp) -> int | None:
-    proc = getattr(getattr(tp, "http", None), "subprocess", None)
-    return proc.pid if isinstance(proc, subprocess.Popen) else None
-
-
-def _stop(tp, tb) -> None:
-    """Whatever a failed constructor started.
-
-    Closed through the object when it got as far as holding the child. Before
-    that — an interrupt in the wait for the shell to answer — the child is a
-    local of the interrupted call, and only the traceback's frames hold it.
-    """
-    close(tp)
-    while tb is not None:
-        for value in list(tb.tb_frame.f_locals.values()):
-            with contextlib.suppress(Exception):
-                for proc in (value, getattr(value, "subprocess", None)):
-                    if isinstance(proc, subprocess.Popen) and proc.poll() is None:
-                        _kill(proc)
-        tb = tb.tb_next
-
-
-def _kill(proc: subprocess.Popen) -> None:
-    """The child and what it started: perfetto has it lead its own group."""
-    try:
-        if os.name == "posix" and os.getpgid(proc.pid) == proc.pid:
-            os.killpg(proc.pid, signal.SIGKILL)
-        else:
-            proc.kill()
-    except OSError:
-        pass
-    with contextlib.suppress(Exception):
-        proc.wait(timeout=5)
+    """The pid of a session's shell while it runs; None once closed."""
+    return getattr(getattr(tp, "shell", None), "pid", None)
 
 
 # The watcher's whole program. It reads `+pid` and `-pid` lines until its
@@ -251,8 +223,8 @@ class _Watcher:
         self._say("-", pid)
 
     def _say(self, sign: str, pid: int | None) -> None:
-        # POSIX only: on Windows perfetto puts the child in a job that is
-        # killed with its last handle, which is what this is for.
+        # POSIX only: on Windows the shell is in a job that is killed with
+        # its last handle (tpshell.py), which is what this is for.
         if not pid or os.name != "posix" or not sys.executable:
             return
         with self._lock:

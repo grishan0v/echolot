@@ -466,10 +466,14 @@ laptop with 36 GB, eleven at once:
 | views | 225.3 s | — |
 | tables | 57.4 s | 8.8 s |
 
-Of what is left of a trace's time one after another, about a second is
-trace_processor's start: perfetto's client waits a second for the shell to
-answer. Most of the rest is each detector asked twice on a set, at its
-thresholds and with them open.
+The table was measured while about a second of each trace was
+trace_processor's start: perfetto's client asked the shell whether it
+listened and, finding it not yet up, waited a second before asking again,
+for a shell that listens in 30 ms. echolot starts the shell itself now and
+asks every 10 ms, so one after another each trace after the first is about a
+second shorter than the table says, and `doctor`, which opens a few dozen
+sessions, takes seconds rather than forty. Most of what is left is each
+detector asked twice on a set, at its thresholds and with them open.
 
 ## When a detector could not look
 
