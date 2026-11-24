@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import contextlib
 import io
+import itertools
+import string
 import sys
 from pathlib import Path
 
@@ -99,3 +101,19 @@ def test_the_main_fixture_offers_its_cold_start(tmp_path):
     got = rows(section(probe(str(path), "--process", "com.example.app")))
     check("bindApplication first", [r[0] for r in got][:2] == ["bindApplication", "activityStart"],
           got)
+
+
+def test_short_ones_are_found_among_hundreds_of_longer_sections(tmp_path):
+    """On an app that writes hundreds of sections of its own, a tap and a
+    pause made `names` only with `--top 223`: shorter than every one of them.
+    The candidates are looked up by name, so their length is no bar."""
+    letters = ("".join(p) for p in itertools.product(string.ascii_lowercase, repeat=2))
+    own = [(f"section_{next(letters)}", 3 * i, 2, []) for i in range(300)]
+    starts = [("deliverInputEvent src=0x1002 eventTimeNano=1 id=0x1", 905, 0.02, []),
+              ("activityPause", 906, 0.01, [])]
+    path = tmp_path / "busy.perfetto-trace"
+    path.write_bytes(only_the_apps_own(app_slices=own + starts))
+    got = rows(section(probe(str(path), "--process", "com.example.app")))
+    check("both, the shortest slices of the process, earliest first",
+          [(r[0], r[3]) for r in got] == [("deliverInputEvent*", "905.0"),
+                                          ("activityPause", "906.0")], got)
