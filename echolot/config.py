@@ -155,8 +155,8 @@ def _section_keys(raw: dict[str, Any], p: Path, section: str,
 
 def runner_keys() -> tuple[str, ...]:
     """The keys of `runner:`, kept beside the code that reads each one."""
-    from . import composenames, runner, stabilize
-    return runner.KEYS + stabilize.KEYS + composenames.KEYS
+    from . import composenames, power, runner, stabilize
+    return runner.KEYS + stabilize.KEYS + composenames.KEYS + power.KEYS
 
 
 def _keys_of_sections(raw: dict[str, Any], p: Path) -> None:
