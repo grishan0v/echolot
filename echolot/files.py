@@ -50,10 +50,13 @@ class Refusal:
     """Why a file does not read, as a sentence a person can act on.
 
     `absent` is a file that is not there at all: most readers treat that as
-    nothing written yet rather than as a fault.
+    nothing written yet rather than as a fault. `stale` is a file refused
+    for its schema number alone: another version of echolot wrote it, and
+    no hand edited it.
     """
     why: str
     absent: bool = False
+    stale: bool = False
 
     def __str__(self) -> str:
         return self.why
@@ -136,6 +139,19 @@ class _Any(Shape):
     what = "anything"
 
     def fault(self, value: Any, at: str) -> tuple[Any, str | None]:
+        return value, None
+
+
+@dataclass(frozen=True)
+class Finite(Shape):
+    """A number that is neither NaN nor infinite: a count or a duration."""
+    what: str = "a number"
+
+    def fault(self, value: Any, at: str) -> tuple[Any, str | None]:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return value, _wrong(value, at, self.what)
+        if value != value or value in (float("inf"), float("-inf")):
+            return value, f"`{at}` is {value}, not a finite number"
         return value, None
 
 
@@ -233,19 +249,27 @@ class Spec(Generic[T]):
     `schema` is the number the writer puts in the file and the reader reads:
     the writer imports it from here. `upgrades` maps an older number to what
     turns a file of that schema into one of the next, so a file from before
-    a change reads after it. `again` is the command that writes the file
-    anew, said where it does not read.
+    a change reads after it. `unnumbered` is the schema a file with no
+    number is taken for: one written before its writer put the number in.
+    A file whose `kind` is not `kind` is no such file at all.
+
+    What a file that does not read is to do (write it again, set it aside,
+    or skip it) is the caller's: the command or the page that reads it
+    knows which command writes it anew.
     """
     name: str
     shape: Obj
     schema: int | None = None
     upgrades: Mapping[int, Callable[[dict[str, Any]], dict[str, Any]]] = field(default_factory=dict)
     kind: str | None = None
+    unnumbered: int | None = None
 
     def check(self, data: Any) -> T | Refusal:
         """A value already read as JSON, as this file: typed, or why not."""
         if not isinstance(data, dict):
             return Refusal(f"it holds {kind_of(data)}, not an object")
+        if self.kind is None and isinstance(data.get("kind"), str):
+            return Refusal(f"it is a {data['kind']}, not a {self.name}")
         if self.kind is not None and data.get("kind") != self.kind:
             got = data.get("kind")
             said = f"`{got}`" if isinstance(got, str) else kind_of(got)
@@ -262,16 +286,20 @@ class Spec(Generic[T]):
 
     def _upgraded(self, data: dict[str, Any]) -> dict[str, Any] | Refusal:
         n = data.get("schema")
+        if n is None and self.unnumbered is not None:
+            n = self.unnumbered
         if isinstance(n, bool) or not isinstance(n, int):
             return Refusal("it carries no schema number" if n is None else
                            f"its schema number is {kind_of(n)}, not a whole number")
         assert self.schema is not None
         if n > self.schema:
-            return Refusal(f"a newer echolot wrote it, in schema {n}; this one reads schema {self.schema}")
+            return Refusal(f"a newer echolot wrote it, in schema {n}; this one reads schema {self.schema}",
+                           stale=True)
         while n < self.schema:
             step = self.upgrades.get(n)
             if step is None:
-                return Refusal(f"an older echolot wrote it, in schema {n}; this one reads schema {self.schema}")
+                return Refusal(f"an older echolot wrote it, in schema {n}; this one reads schema {self.schema}",
+                               stale=True)
             data = {**step(data), "schema": n + 1}
             n += 1
         return data
@@ -421,8 +449,132 @@ def check_comparison(data: Any) -> Comparison | Refusal:
     return COMPARISON.check(data)
 
 
+# ---------------------------------------------------------------------------
+# hunt.json, the investigation record (`hunt.open_new`, `touch`,
+# `record_report`, `record_traces` and `conclude` write nothing else)
+
+# 1 from the first record that carried a number. A record with none is of the
+# same shape, written before it was kept.
+HUNT_SCHEMA = 1
+
+
+class Hunt(TypedDict, total=False):
+    """One investigation: a person's question and the work done on it."""
+    schema: int
+    n: int
+    question: str
+    since: str | None
+    scenario: str | None
+    config_sha: str | None
+    confirmed: dict[str, Any]
+    opened_at: str
+    touched_at: str
+    closed_at: str
+    status: str
+    collects: int
+    analyzes: int
+    reports: int
+    traces: list[str]
+    conclusion: str | None
+    verdict: dict[str, Any]
+    verdict_check: dict[str, Any]
+
+
+# A field that holds what echolot never writes there reads as absent, and the
+# rest of the record is read (#580): a record is a person's question and the
+# work behind it, worth showing what still reads of it. `"reports": "abc"`,
+# `"n": "x"`, `"traces": 7` or a number in `opened_at` stopped `hunt --show`,
+# `hunt --list` and every page of `echolot ui` that reads the record, and
+# `"question": 5` printed a question nobody asked. A count is a whole one, not
+# true or false, never below zero, and `n` is one or more, since it names a
+# directory; a trace set is a path.
+HUNT: Spec[Hunt] = Spec(
+    name="hunt.json", schema=HUNT_SCHEMA, unnumbered=1,
+    shape=Obj({
+        "n": may(Whole(1), drop=True),
+        **{k: may(WHOLE, drop=True) for k in ("collects", "analyzes", "reports")},
+        **{k: may(TEXT, drop=True) for k in ("question", "since", "scenario", "config_sha", "status",
+                                             "conclusion", "opened_at", "touched_at", "closed_at")},
+        **{k: may(Obj({}), drop=True) for k in ("confirmed", "verdict", "verdict_check")},
+        "traces": may(ListOf(TEXT, drop=True), drop=True),
+    }))
+
+
+def read_hunt(path: Path) -> Hunt | Refusal:
+    """An investigation record at `path`, or why it does not read."""
+    return HUNT.read(path)
+
+
+# ---------------------------------------------------------------------------
+# runs.jsonl, the run log (`recorder.record`): one object per line
+
+# The log is appended to by every version that runs in the project, and each
+# line names the version that wrote it (`version`), so its lines carry no
+# schema number. A line that is no object is skipped, and a field that holds
+# what `record` never writes there is dropped with the line kept (#555): a
+# doctor's `facts: [1]` ended `status` in a traceback. A count that is no
+# finite number is no count. In `facts`, the ones `status`, `next` and the
+# start page read off a self-check are held to what doctor writes: `failed` a
+# list, `checks` a count, `sandbox` a name.
+
+
+class Run(TypedDict, total=False):
+    """One line of the run log: one invocation of echolot."""
+    ts: str
+    cmd: str
+    argv: list[Any]
+    cwd: str
+    exit: int
+    ms: float
+    version: str
+    config: dict[str, Any]
+    facts: dict[str, Any]
+    error: str
+
+
+RUN: Spec[Run] = Spec(
+    name="runs.jsonl",
+    shape=Obj({
+        **{k: may(TEXT, drop=True) for k in ("ts", "cmd", "cwd", "version", "error")},
+        "argv": may(Kind((list,), "a list"), drop=True),
+        "exit": may(Kind((int,), "a whole number"), drop=True),
+        "ms": may(Finite(), drop=True),
+        "config": may(Obj({}), drop=True),
+        "facts": may(Obj({"failed": may(Kind((list,), "a list"), drop=True),
+                          "checks": may(Kind((int,), "a whole number"), drop=True),
+                          "sandbox": may(TEXT, drop=True)}), drop=True),
+    }))
+
+
+def read_runs(path: Path) -> list[Run]:
+    """Every run the log at `path` holds, oldest first; none for no file.
+
+    A line that does not read as a run is skipped: one that is no text, no
+    JSON, or JSON and no object (`[1,2]`, `null`, `42`), which every reader
+    took for a run and ended `echolot`, `status` and every page of `echolot
+    ui` in a traceback on its first `.get` (#555). Such a line comes from a
+    hand edit, a merge of two clones' logs or another tool appending here,
+    and the lines around it still read.
+    """
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return []
+    out: list[Run] = []
+    for line in raw.splitlines():
+        try:
+            run = json.loads(line.decode("utf-8"))
+        except ValueError:   # no UTF-8 text, or no JSON; a blank line too
+            continue
+        got = RUN.check(run)
+        if not isinstance(got, Refusal):
+            out.append(got)
+    return out
+
+
 __all__ = [
-    "ANY", "COMPARISON", "COMPARISON_SCHEMA", "FLAG", "NUMBER", "TEXT", "WHOLE",
-    "ComparedSide", "Comparison", "Field", "Kind", "ListOf", "Obj", "OneOf", "Refusal", "Row", "Shape",
-    "Spec", "Whole", "check_comparison", "kind_of", "load", "may", "need", "read_comparison",
+    "ANY", "COMPARISON", "COMPARISON_SCHEMA", "FLAG", "HUNT", "HUNT_SCHEMA", "NUMBER", "RUN", "TEXT", "WHOLE",
+    "ComparedSide", "Comparison", "Field", "Finite", "Hunt", "Kind", "ListOf", "Obj", "OneOf", "Refusal", "Row",
+    "Run", "Shape", "Spec", "Whole", "check_comparison", "kind_of", "load", "may", "need", "read_comparison",
+    "read_hunt", "read_runs",
 ]

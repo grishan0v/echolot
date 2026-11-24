@@ -24,7 +24,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import main as main_mod  # noqa: E402
-from echolot import recorder, state  # noqa: E402
+from echolot import files, recorder, state  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_ui import Project, adb, get, quiet, site_of  # noqa: E402,F401
 
@@ -106,10 +106,10 @@ def test_a_field_of_the_wrong_type_is_dropped_and_its_line_kept(tmp_path: Path, 
     written = json.loads(line)
     check("the line is a run", len(runs) == 1, runs)
     kept, dropped = runs[0], set(written) - set(runs[0])
-    check("what it keeps is what was written there", all(written[k] == kept[k] for k in kept), kept)
+    check("what it keeps is what was written there, a self-check's facts that do not hold left out of them",
+          all(written[k] == kept[k] or (k == "facts" and kept[k].items() <= written[k].items()) for k in kept), kept)
     check("and each field it drops held what `record` never writes there",
-          all(not isinstance(written[k], recorder._FIELDS[k]) or isinstance(written[k], float)
-              for k in dropped), dropped)
+          all(files.RUN.shape.fields[k].shape.fault(written[k], k)[1] for k in dropped), dropped)
 
 
 def test_a_line_as_record_writes_it_reads_as_it_was(tmp_path: Path, monkeypatch) -> None:
