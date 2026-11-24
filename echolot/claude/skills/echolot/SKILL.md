@@ -191,12 +191,13 @@ report. Three things decide how to read it:
 
 - **`change`** — `appeared`, `grew`, `shrank`, `vanished`, `steady`. An
   appeared row is usually the answer.
-- **`holds`** — `true` means the move's 95% range, in `shift`, is on one side
-  of zero and the move survives a re-record; `false` means the range runs
-  through zero — the runs disagree among themselves by more than the row
-  moved, so record another round before concluding — `shift.runs_needed` says
-  about how many runs a side, and hundreds means more rounds will not settle
-  it; `null` means the row is on one side only, or it has too few runs of its
+- **`holds`** — `true` means the move's 95% range, in `shift`, is past the
+  row's floor (`shift.floor_ms`) on one side and the move survives a
+  re-record; `false` means the range reaches into the floor or through zero —
+  the runs cannot tell the move from the floor, so record another round
+  before concluding — `shift.more_runs` says how many more on each side, and
+  `null` there with `shift.runs_needed` over a hundred means more rounds will
+  not settle it; `null` means the row is on one side only, or it has too few runs of its
   own: a row found in `2/5` runs gets `null` with no warning, and its
   `before.runs` and `after.runs` say why. For the report as a whole, too few
   repeats is the `single` or `few` warning.

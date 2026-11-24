@@ -293,7 +293,8 @@ def outputs_of(cmp: dict[str, Any]) -> dict[str, str]:
     All of it is comparison.json's, never the text of the table. `moved`
     counts every row past the noise floor, and on one build against itself
     that was 48 to 73 rows; `held` counts the ones whose move also holds,
-    1 to 12 on the same pairs (#535). The verdict is the plain reading's, by
+    1 to 12 on the same pairs when Holds asked the interval to clear zero
+    (#535), 0 to 4 now that it asks for the row's floor (#506). The verdict is the plain reading's, by
     the scenario's window, and `unlike` the ids of the warnings that reading
     says the two sides were not recorded alike by. A comparison made without
     `--plain` has no reading, and leaves those two empty.
@@ -328,8 +329,11 @@ def _held_row(r: dict[str, Any]) -> dict[str, Any]:
     row = {"detector": r.get("detector"), "location": r.get("location")}
     if r.get("detail") is not None:
         row["detail"] = r["detail"]
+    # The floor the interval cleared to hold (#506): what the two ends are
+    # read against, absent from a comparison that held its rows against zero.
+    floor = {"floor_ms": shift["floor_ms"]} if "floor_ms" in shift else {}
     return {**row, "delta_ms": r.get("delta_ms"), "low_ms": shift.get("low_ms"),
-            "high_ms": shift.get("high_ms"), "on_main": bool(r.get("on_main"))}
+            "high_ms": shift.get("high_ms"), **floor, "on_main": bool(r.get("on_main"))}
 
 
 # Every output of the compare step, empty: there was no comparison.

@@ -53,7 +53,7 @@ on stderr, with the reason when the config is there and does not load.
 |---|---|---|---|---|---|---|---|
 | SyncAdapterThre | — | uninstrumented_cpu | — | 1402.0 ±61 | **new** | — → 0 | — |
 | TeamRepository.loadAll | com.example.app | main_thread_block | 12.1 ±2 | 883.4 ±40 | **+871.3 ×73.01** | 1 → 1 | yes, +831.3 … +911.3 |
-| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | no, -13.4 … +162.6 · ~7 runs a side |
+| inflate | com.example.app | main_thread_block | 47.3 ±31 | 121.9 ±88 | +74.6 ×2.58 | 12 → 31 | no, -13.4 … +162.6 · ~8 runs a side |
 
 **One table, not one section per detector.** The Marker Report is grouped by detector
 because each answers a different question. A comparison has one question, so
@@ -171,18 +171,27 @@ report written before the names were kept is compared without the section.
 ## The Holds column
 
 This is the column that decides whether a row is worth acting on. It gives
-the range the move lies in, 95% sure, and a verdict read off that range.
+the range the move lies in, 95% sure, and a verdict read off that range: yes
+when the whole range is past the floor that listed the row, on one side —
+[5 ms or 10%](#what-is-a-move-at-all), whichever is larger.
 
 | value | meaning |
 |---|---|
-| `yes, +831.3 … +911.3` | the whole range is on one side of zero: the move survives a re-record, and the end nearer zero is the least it moved |
-| `no, -13.4 … +162.6 · ~7 runs a side` | the range runs through zero: the runs disagree among themselves by more than the row moved, and about seven runs a side would settle a move this size |
+| `yes, +831.3 … +911.3` | the whole range is past the floor: the move survives a re-record, and the end nearer zero is the least it moved |
+| `no, +6.0 … +27.0 · floor 10.0 · ~13 runs a side` | the range clears zero but not the floor: it moved, by how much the runs cannot yet tell from the floor. On one build set against itself, most of the ranges that clear zero are this kind |
+| `no, -13.4 … +162.6 · ~8 runs a side` | the range runs through zero: the runs disagree among themselves by more than the row moved, and about eight runs a side would settle a move this size |
+| `no, … · ~1 more after` | the same, with fifteen runs before and four after: one more run after does it |
+| `no, … · more runs will not settle it` | it would take more than a hundred runs a side |
 | `—` | nothing to test: the row is on one side only — it appeared or went — or there are too few runs to be 95% sure of anything |
 
 `no` does not mean the row is uninteresting. It means the honest next step is
 another round of `collect` rather than a conclusion, and the range says how
 open the question still is: `-13.4 … +162.6` is anything from no move at all
 to more than a doubling. The count after it says how big that round is.
+
+A line under the header says what the column asked for and what that left
+out: `Holds asks each range to clear the floor, not zero: 3 of 61 row(s)
+with a verdict do, and 5 more that clear zero alone read no.`
 
 **How the range is made.** Every run after is paired with every run before,
 and each pair gives a difference. The median of those differences is the move.
@@ -204,12 +213,38 @@ slower. Seven against eight, the old test caught the move in 15 comparisons of
 a hundred and this range in 51; five against five, in 27 and 36. More runs
 made the old test see less; they make this one see more.
 
-**What it costs.** At 95%, up to one row in twenty that did not move lands on
-one side of zero by chance. The floor below keeps most of those out of the
-table: on the same splits with nothing made slower, a row cleared the floor
-and held in about 2 comparisons of a hundred, where the old test called fewer
-than 1 apart. A `yes` that stands alone, with nothing around it in the table to
-explain it, is worth a second round before a conclusion.
+**Why the floor and not zero.** At 95%, up to one row in twenty that did not
+move lands on one side of zero by chance, and a comparison judges every row
+both sides have — about two hundred on a cold start of a large app. Three
+sets of fifteen cold starts of one build, each split at random seven against
+eight a hundred ways, held 4.0 rows a split against zero, 3.0 of them past
+the floor and listed as moved: rows that look like findings in a build set
+against itself. Against the floor they held 0.5 a split; five against five,
+1.3 rather than 5.8; four against four, 1.3 rather than 4.9.
+
+What it costs is a little of what a real move shows. With one row of the
+same splits made slower on the after side, seven against eight:
+
+| made slower by | held against zero | held against the floor |
+|---|---:|---:|
+| a fifth | 31 of 100 | 19 |
+| half | 63 | 54 |
+| twice | 91 | 88 |
+| three times | 100 | 100 |
+
+Correcting the 95% for the number of rows judged at once instead
+(Benjamini–Hochberg at 5%, over the rows listed as moved) left 0.1 rows a
+split, and a row made twice as slow held in 59 splits of a hundred seven
+against eight, and in none five against five: there the smallest chance a row
+can reach, 0.008, is more than sixty rows at once ask for. The floor is the
+bar the table already lists a row by, so the column now asks the same
+question of the range.
+
+What is left is mostly two kinds of row: one whose runs stray by far more
+than its floor, such as a sum over a pool of threads, and a set that drifts
+from its first run to its last, which [Runs that drift](#runs-that-drift)
+is about. A `yes` that stands alone, with nothing around it in the table to
+explain it, is still worth a second round before a conclusion.
 
 **How many runs.** Four a side is enough. With fewer on one side, the other
 has to make up for it: three need five against them, two need eight, one needs
@@ -220,15 +255,27 @@ values, and against five it gets `—` while the rest of the table has a verdict
 **What the runs can resolve.** A run after minus a run before is the move of
 the medians plus what the two runs strayed from their own medians. So the
 range is the strays' own range moved along by the move, exactly, and a row
-holds when its medians moved further than the strays reach on the far side.
-That reach is `shift.resolves_ms`: `inflate` above moved 74.6 ms, and these
-runs resolve nothing under 88.0. It shrinks with the square root of the runs,
-so a `no` carries about how many runs a side would bring it under this move —
-seven here, a round of `collect` away. A count in the hundreds is a different
-answer: more rounds will not settle the row, and either the spread comes down
-first — a settled device, a quieter scenario — or the move is below what this
-scenario can resolve. The count assumes the next runs stray as much as these
-did, which is why it is about.
+holds when its medians moved further than the floor and the strays' reach on
+the far side together. That reach is `shift.resolves_ms`: `inflate` above
+moved 74.6 ms, its floor is 5 ms, and these runs resolve nothing under 88.0.
+The reach shrinks with the square root of the runs, so a `no` carries about
+how many runs a side would bring it under the 69.6 ms the move leaves above
+the floor — eight here, a round of `collect` away. Past a hundred a side the
+cell says more runs will not settle it: either the spread comes down first —
+a settled device, a quieter scenario — or the move is below what this
+scenario can resolve.
+
+With sides of unequal size the count goes where it is cheapest. Fifteen runs
+before and four after stray as six and a third a side, and a move that needs
+seven a side needs one more run after, not three; the cell says `~1 more
+after`. Adding to the smaller side stops paying as it nears twice the
+larger one, and then the count is for both sides, `~20 runs a side`.
+`shift.more_runs` has the numbers for each side.
+
+The count is an order of magnitude, not a promise. It assumes the next runs
+stray as much as these did, and from four or five runs a side the range moves
+in whole steps, so the square root it scales by is rough there: read 8 as
+somewhere from 4 to 12.
 
 The report carries the same number for a single set, per row, under
 `spread` — see [below](#what-analyze-keeps-for-it) — so what a comparison
@@ -252,6 +299,11 @@ echolot compare --floor-ms 20 --floor-pct 25    # only the large moves
 
 Everything below the floor is counted in the summary and listed on one line
 under **Steady**. Nothing is dropped silently.
+
+The relative floor is a tenth of the **before** value, so the same two reports
+compared the other way round have slightly different floors, and a few rows
+near them cross: one pair listed 93 rows as moved one way and 91 the other.
+That is expected, and so is a row's Holds following its floor.
 
 How often a row was found is part of the move. A merged row's median covers
 the repeats it was found in, and Before and After print that share when it is
@@ -639,9 +691,10 @@ is unchanged — this lives in the JSON, where the readers that need it are.
 `compare` reads every value, not only the two ends: the Holds column pairs each
 one after with each one before.
 
-`resolves_ms` is the smallest move of this row a comparison could call real,
-against as many runs spread the same way, and `resolves_pct` the same against
-the median — see [What the runs can resolve](#the-holds-column). Here it is
+`resolves_ms` is how far this row's strays reach against as many runs spread
+the same way: a comparison calls a move of it real when it is larger than the
+floor and this together. `resolves_pct` is the same against the median — see
+[What the runs can resolve](#the-holds-column). Here it is
 214.7 ms on a 125.4 ms row, and the reason is the one slow run: five a side
 leaves two of the pairs with it at each end, and the next comparison of this
 row will not see less than that unless there are more runs or the slow one
@@ -875,6 +928,7 @@ needs the slices under a row, or the sampled stacks, kept for both sides.
               "delta_ms": 1776.4, "ratio": 2.5 },
   "noise_floor": { "abs_ms": 5.0, "ratio": 0.1 },
   "confidence": 0.95,
+  "holds_against": "floor",
   "summary": { "moved": 4, "appeared": 2, "vanished": 1, "steady": 17,
                "fired_before": [ … ], "fired_after": [ … ],
                "state_changed": [ { "id": "binder_txn",
@@ -893,7 +947,8 @@ needs the slices under a row, or the sampled stacks, kept for both sides.
                   "detail": "com.example.app" },
       "delta_ms": 871.3, "ratio": 73.01,
       "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3,
-                 "resolves_ms": 40.0, "runs_needed": null },
+                 "floor_ms": 5.0, "resolves_ms": 40.0, "runs_needed": null,
+                 "more_runs": null },
       "holds": true, "detail": "com.example.app", "on_main": true }
   ]
 }
@@ -931,15 +986,23 @@ rows[?change == 'appeared' || (change == 'grew' && holds)]
 A bare `true` in JMESPath is a field name, so `holds == true` would keep the
 rows with no verdict and drop the ones that hold; the literal is `` `true` ``.
 
-`holds: true` means the range in `shift` — `low_ms` to `high_ms` — is on one
-side of zero. `shift.ms` is the move it was read from: the median of every
-run-after-minus-run-before pair, close to `delta_ms`, the difference of the two
-medians, and not always equal to it. `shift.resolves_ms` is the smallest move
-of the medians these runs could call real, in this move's direction, and
-`shift.runs_needed` — only where the move does not hold — about how many runs
-a side would. `null` in both `shift` and `holds` means there was nothing to
-test: the row is on one side only — every `appeared` and `vanished` row — or
-there were too few runs. `confidence` is the level the ranges are drawn at.
+`holds: true` means the range in `shift` — `low_ms` to `high_ms` — is past
+`shift.floor_ms` on one side: above it, or below its negative. The floor is
+the row's, 5 ms or a tenth of the before value, whichever is larger, and
+`holds_against: "floor"` at the top says the file was written that way; a
+comparison without the field held its rows against zero, and `low_ms > 0 ||
+high_ms < 0` is that reading still. `shift.ms` is the move the range was read
+from: the median of every run-after-minus-run-before pair, close to
+`delta_ms`, the difference of the two medians, and not always equal to it.
+`shift.resolves_ms` is how far these runs' strays reach in this move's
+direction; the medians have to move further than the floor and that together.
+`shift.runs_needed` — only where the move does not hold — is about how many
+runs a side would settle it, and `shift.more_runs` the fewest more on each
+side, `{"before": 0, "after": 1}`, which with unequal sides may be the smaller
+one alone; `null` past a hundred a side, where more runs will not settle it.
+`null` in both `shift` and `holds` means there was nothing to test: the row is
+on one side only — every `appeared` and `vanished` row — or there were too
+few runs. `confidence` is the level the ranges are drawn at.
 
 With `--plain` or `--html` the file holds one more key, `plain`, after all the
 others: `scenario` and `process`, what the two reports are of; `verdict`
@@ -1081,7 +1144,8 @@ Its outputs are:
   [the Holds column](#the-holds-column) says yes to;
 - `held-rows`: the first five of them, in the comparison's order, as a JSON
   array of `detector`, `location`, `detail` where the detector has one,
-  `delta_ms`, the interval's `low_ms` and `high_ms`, and `on_main`;
+  `delta_ms`, the interval's `low_ms` and `high_ms`, `floor_ms`, the floor
+  they cleared, and `on_main`;
 - `verdict`: the verdict of [the plain reading](#a-plain-reading), by the
   scenario's window: `better`, `worse`, `no_change` or `not_compared`; and
   `headline`, the same in words, such as `Slower by 1.2 s`;
@@ -1108,8 +1172,10 @@ where the report has to be that scenario's.
 `moved` counts every row past the floor, and the floor is no test: one build
 compared with itself, two sets of 15 cold starts of a large app split 7
 against 8 in several ways, moved 48 to 73 rows, with as many appeared and
-vanished. `held` on the same pairs was 1 to 12, the most on splits by time,
-where a set's [drift](#runs-that-drift) lands in full. The verdict is the
+vanished. `held` on the same pairs was 1 to 12 when Holds asked only for
+zero, the most on splits by time, where a set's [drift](#runs-that-drift)
+lands in full; against the floor it is 0 to 4 (see
+[Why the floor and not zero](#the-holds-column)). The verdict is the
 coarsest of the three and the steadiest: on 1,479 pairs of unchanged sets it
 moved in none (see "When a move is called" under
 [A plain reading](#a-plain-reading)).
