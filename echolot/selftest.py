@@ -1598,6 +1598,41 @@ def _(report):
     assert "/data/app/~~#/com.example.app-#/base.apk" in new, new
 
 
+@check("analyze --noise splits the set against itself the way compare compares, "
+       "and says the same numbers twice")
+def _(report):
+    """The busy loop above, eight cold starts of one build recorded in two
+    sittings of four, the second 40 ms slower in the loop. Split in two
+    every way there is, each pair of halves merged and compared as
+    `analyze` and `compare` do it: nothing changed between the halves, so
+    what holds is the set's own noise (#569). The same reports give the
+    same reading twice; the first sitting is set against the second, where
+    the directories change; and the window, which the 40 ms moved, holds
+    there and in few of the random splits."""
+    from . import noise
+    cfg = Config({**FIXTURE_CONFIG, "scenario": {
+        "name": "blind", "start": {"name": "bindApplication"},
+        "end": {"name": "Screen.firstFrame"}}})
+    reports = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for run in range(8):
+            where = Path(tmp) / ("first" if run < 4 else "second")
+            where.mkdir(exist_ok=True)
+            path = where / f"blind_iter{run:03d}.perfetto-trace"
+            later = 40 if run >= 4 else 0
+            path.write_bytes(fixture.blind_main(fixture.BLIND_LOOP_MS + 7 * (run % 4) + later,
+                                                run=run))
+            reports.append(_analyze(path, cfg))
+    once, again = noise.read(reports), noise.read(reports)
+    assert once == again and noise.to_markdown(once) == noise.to_markdown(again)
+    rnd, order = once["random"], once["in_order"]
+    assert (rnd["splits"], rnd["of"], rnd["sizes"]) == (35, 35, [4, 4]), rnd
+    assert rnd["tested"]["median"] > 0, rnd
+    assert (order["at"], order["sizes"]) == ("sittings", [4, 4]), order
+    assert order["window"] is True and rnd["window_held"] * 20 <= rnd["splits"], once
+    assert "the first sitting against the second" in noise.to_markdown(once)
+
+
 @check("compare --plain says in how many launches a name of one side was, as the table does")
 def _(report):
     """From five runs a name may be missing from one of them and still be

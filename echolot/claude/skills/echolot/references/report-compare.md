@@ -79,6 +79,14 @@ values, and gets `null` with no warning above it, while `before.runs` and
 `after.runs` say why. For the report as a whole four repeats a side are always
 enough, and below that the `single` or `few` warning says so.
 
+How many rows hold by chance in this project's own scenario is not a
+constant: `echolot analyze <set> --noise` splits a recorded set against
+itself many times, compares each pair of halves as `compare` does, and
+writes `noise.md` and `noise.json` beside the report — the median and 95th
+percentile of rows that hold, how many splits held any, the first runs (or
+sitting) against the last, and the `--floor-ms` at which the median split
+holds none. Before calling one lone `holds: true` a finding, read it there.
+
 `shift.resolves_ms` is how far these two sets' strays reach in the direction
 this move went: `holds` is `true` exactly when the medians moved further than
 the floor and that together. When they did not, `shift.runs_needed` says about

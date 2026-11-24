@@ -262,6 +262,11 @@ from its first run to its last, which [Runs that drift](#runs-that-drift)
 is about. A `yes` that stands alone, with nothing around it in the table to
 explain it, is still worth a second round before a conclusion.
 
+These numbers are one app's on one phone. How many rows your own scenario
+holds with nothing changed, and the floor that quiets them, `analyze --noise`
+measures on a set you recorded: see
+[This scenario's own noise](#this-scenarios-own-noise).
+
 **How many runs.** Four a side is enough. With fewer on one side, the other
 has to make up for it: three need five against them, two need eight, one needs
 thirty-nine. Below that the column stays empty and the `few` warning at the
@@ -762,6 +767,127 @@ between two sittings that are each steady in themselves, which no report of
 one side can show. Recording the two sides back to back narrows that: one APK
 against itself on the launch runner held 3 rows of 205 back to back, and 31
 of 203 an hour later.
+
+### This scenario's own noise
+
+How many rows hold with nothing changed was measured above on one app and
+one phone. In another scenario it is another number: it depends on how far
+its runs stray, how many rows it has and the device it runs on. A reader of
+`holds: yes` in their own comparison needs theirs, and `analyze --noise`
+measures it on a set already recorded:
+
+```bash
+echolot analyze .echolot/traces/cold_start-20261120-101245 --noise
+```
+
+After the report it splits the set's runs in two, many times over, merges
+each half the way `analyze` merges a set and compares the two the way
+`compare` does, floor included. Nothing changed between the halves, so
+every row that holds is noise:
+
+```text
+# Noise: the set against itself
+
+15 runs split in two with nothing changed between the halves, so every row that holds is noise. Each pair of halves is merged as `analyze` merges a set and compared as `compare` compares two, at a floor of 5 ms or 10%.
+
+| Split | Runs | With a verdict | Hold | Hold, of those with a verdict | Window held |
+|---|---|---|---|---|---|
+| at random: 200 of 6435 splits, seed 569 | 7 against 8 | 201 | 3.5, 9 | 1.7%, 4.5% | 4 of 200 |
+| the first runs against the last | 7 against 8 | 198 | 11 | 5.6% | no |
+
+At random: the median over the splits, then the 95th percentile, a split as bad as one in twenty.
+
+- A row held in 187 of the 200 random splits (94%): in a comparison of 7 against 8 runs of this scenario, a `yes` on its own is what nothing at all gives that often. Read it with the rows around it.
+- `compare --floor-ms 78` leaves the median split with no row that holds; the floor here is 5 ms. A move under that is within what this scenario does by itself.
+- The first runs against the last held 11, as many as 4 of 200 random splits did: the runs change from the first to the last, and a comparison reads that as a move: see the report's drift line.
+
+Held the first runs against the last:
+
+| Detector | Where | Δ | Holds past |
+|---|---|---|---|
+| `io_wait` | com.example.app · main | +64.2 ms | 31.7 ms |
+| … | | | |
+```
+
+**At random.** Two hundred splits drawn from a fixed seed, no split twice,
+the half with fewer runs as the before; a set with no more splits than that
+gets every one (eight runs split 35 ways, fifteen 6435). Over the splits,
+the median and the 95th percentile, a split as bad as one in twenty: of the
+rows with a verdict, of the rows that hold, and of the second as a share of
+the first. Then how many splits held any row at all, which is the number
+that says whether a lone `yes` means something: on real sets most splits
+hold a few, and a comparison with none is the exception. The window is held
+against zero, as `compare` holds it, so about one split in twenty holds it
+by chance.
+
+**First against last.** The set cut in order instead. A set from one
+directory is cut at its middle: the [drift](#runs-that-drift) of the
+report, in a comparison's units. A set whose traces come from several
+directories, the way `collect` sets each round aside, is cut where one
+directory ends, the one nearest the middle:
+
+```bash
+echolot analyze .echolot/traces/cold_start-20261120-101245 .echolot/traces/cold_start-20261120-114012 --noise
+```
+
+That is two sittings of one build against each other, which is what a
+before and an after recorded apart get with nothing changed, and random
+halves, which mix the two sittings, cannot show it. Beside the count,
+how many random splits held as many rows or more: at one in twenty or
+fewer, the cut in order is not chance, and the line says what to do about
+it — read the drift, or record the two sides back to back.
+
+**The floor.** The smallest `--floor-ms` at which the median random split
+holds no row. For each row that held, `noise.json` keeps how far past zero
+its range stayed, `clears_ms`: the absolute floor it would need before it
+held no more. So one run answers for any floor above the one it was made
+at, without splitting again. Only the absolute part: `--floor-pct` stays
+as it is, and a row's floor is still the larger of the two.
+
+**What it measures at.** Halves: seven against eight for a set of fifteen.
+A comparison of fifteen against fifteen resolves smaller moves, and holds a
+little less by chance, so the halves read a little high for it. The table
+names the sizes. A set needs eight runs or more, four a side being the
+fewest a row is judged at; `analyze` refuses `--noise` with fewer traces
+before reading any.
+
+**What it costs.** No trace is read again. A split is two merges and a
+comparison of the repeats' reports `analyze` already holds: about a sixth of
+a second for a set of fifteen with three hundred rows a run, so two hundred
+splits add about half a minute to the analysis. `--splits N` asks for more
+or fewer, `--seed N` for another draw; the same set, splits and seed give
+the same numbers every time. The slice names on one side only are not
+counted: they are a list beside the table, and no row of it has a verdict.
+
+**Why `analyze` and not `compare`.** A split has to be merged from the
+repeats. A merged report keeps each row's per-run values, but not which
+run each came from where some runs did not find the row, so it cannot be
+cut into halves again; the repeats' own reports are what `analyze` holds
+just before it merges them.
+
+It is written beside the report, `noise.md` as printed and `noise.json`:
+
+```json
+{ "runs": 15, "traces": ["…/cold_start_iter000.perfetto-trace", "…"],
+  "floor": { "abs_ms": 5.0, "ratio": 0.1 },
+  "random": { "splits": 200, "of": 6435, "seed": 569, "sizes": [7, 8],
+              "tested": { "median": 201, "p95": 207, "max": 210 },
+              "holds": { "median": 3.5, "p95": 9, "max": 17 },
+              "holds_pct": { "median": 1.72, "p95": 4.46, "max": 8.1 },
+              "with_any": 187, "window_held": 4, "window_tested": 200,
+              "floor_ms": 78 },
+  "in_order": { "at": "middle", "sizes": [7, 8], "tested": 198, "holds": 11,
+                "holds_pct": 5.56, "window": false, "as_many": 4,
+                "rows": [ { "detector": "io_wait", "location": "com.example.app",
+                            "detail": "main", "delta_ms": 64.2, "clears_ms": 31.7 }, … ] },
+  "splits": [ { "before": [0, 3, 4, 6, 9, 11, 14], "tested": 203, "holds": 3,
+                "clears_ms": [41.2, 12.9, 6.3], "window": false }, … ] }
+```
+
+`floor_ms` is `null` when the median split holds no row at the floor given;
+`window_held` is `null` when no split's window had a verdict; `at` is
+`middle` or `sittings`; `before` is by place in `traces`, which are in the
+set's order.
 
 ## What `analyze` keeps for it
 
@@ -1356,7 +1482,9 @@ lands in full; against the floor it is 0 to 4 (see
 [Why the floor and not zero](#the-holds-column)). The verdict is the
 coarsest of the three and the steadiest: on 1,479 pairs of unchanged sets it
 moved in none (see "When a move is called" under
-[A plain reading](#a-plain-reading)).
+[A plain reading](#a-plain-reading)). How many rows a pair of this scenario
+holds by itself, with nothing changed, `analyze --noise` on the baseline's
+set measures (see [This scenario's own noise](#this-scenarios-own-noise)).
 
 The action still fails no job over what moved, for the reasons
 [above](#there-is-no-performance-gate-on-purpose). A workflow that wants to
