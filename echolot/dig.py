@@ -310,12 +310,16 @@ def facts(n: int, aside: tuple[str, int] | None) -> list[str]:
     if aside:
         folder, count = aside
         one = count == 1
+        # One `analyze` for the set: "naming each trace file" was read as one
+        # `analyze` per file, three rounds of one launch where there is one of three.
+        filing = (f"file it with `echolot analyze --hunt {n}` and the trace file there" if one else
+                  f"file them as one round, with a single `echolot analyze --hunt {n}` that names all {count} trace "
+                  "files there")
         evidence = (f"- Round 1's evidence is the {'recording' if one else f'{count} recordings'} behind the report, "
-                    f"moved aside when it opened, into `{folder}/`: file {'it' if one else 'them'} with "
-                    f"`echolot analyze` and `--hunt {n}`, naming {'the trace file' if one else 'each trace file'} "
-                    f"there (it takes files, not a folder), and do not record {'it' if one else 'them'} again. Every "
-                    "later round records anew, once markers are in: build and install the app, then "
-                    f"`echolot collect --hunt {n}` and `echolot analyze --hunt {n}`.")
+                    f"moved aside when it opened, into `{folder}/`: {filing} (it takes files, not a folder), and do "
+                    f"not record {'it' if one else 'them'} again. Every later round records anew, once markers are "
+                    f"in: build and install the app, then `echolot collect --hunt {n}` and "
+                    f"`echolot analyze --hunt {n}`.")
     else:
         evidence = (f"- No recordings were set aside when it opened: round 1 records them, with "
                     f"`echolot collect --hunt {n}` and then `echolot analyze --hunt {n}`, and every later round "
