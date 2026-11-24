@@ -415,9 +415,9 @@ def _instrumentation(report: dict[str, Any], out: list[str]) -> None:
     if tree.get("checked"):
         left = tree.get("files") or []
         out.append("The tree when this report was made: "
-                   + (f"{len(left)} file(s) still carry the prefix — "
+                   + (f"{len(left)} file(s) still carry temporary markers — "
                       + ", ".join(f"`{p}`" for p in left[:6]) if left
-                      else "no file carries the prefix."))
+                      else "no file carries a temporary marker."))
     out.append("")
 
 

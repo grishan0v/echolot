@@ -521,7 +521,7 @@ def test_every_planted_signal_fired(reflected):
            f"shell edits seen per file, the labelled grep read as clean: {inst}")
     expect(inst["cleanup_grep_after_last_edit"] == 1,
            f"`echolot names | grep` is not a cleanup grep: {inst}")
-    expect(inst["tree"] == {"checked": True, "files": []}, f"the tree was read: {inst['tree']}")
+    expect(inst["tree"]["checked"] and inst["tree"]["files"] == [], f"the tree was read: {inst['tree']}")
     x = sig.get("edits_outside_allowed")
     expect(x and x["severity"] == "warn" and len(x["rows"]) == 2 and
            all("Bench.kt" in r["file"] for r in x["rows"]), f"edits outside allowed: {x}")
@@ -678,22 +678,25 @@ def test_the_signals_with_nothing_planted_stayed_quiet(reflected):
 
 
 def test_allowed_roots_are_globs_and_the_tree_is_read(tmp_path):
-    """`domain/*/src/main` covers `domain/base/src/main/…`, and the tree says what is there."""
+    """`domain/*/src/main` covers `domain/base/src/main/…`, and the tree says
+    what is there — all of it, `allowed` or not (#838)."""
+    from echolot.mark import Markers
     from echolot.reflect import facts
-    expect(facts._under_any("domain/base/src/main/java/X.kt", ["domain/*/src/main"]),
-           "a glob segment matches a module")
-    expect(facts._under_any("app/src/main/kotlin/X.kt", ["app/src/main"]), "a plain root still works")
-    expect(not facts._under_any("benchmark/src/main/java/B.kt", ["domain/*/src/main", "app/src/main"]),
-           "outside stays outside")
+    m = Markers(tmp_path, allowed=["domain/*/src/main", "app/src/main"])
+    expect(m.allowed("domain/base/src/main/java/X.kt"), "a glob segment matches a module")
+    expect(m.allowed("app/src/main/kotlin/X.kt"), "a plain root still works")
+    expect(not m.allowed("benchmark/src/main/java/B.kt"), "outside stays outside")
     src = tmp_path / "feature/x/src/main/kotlin"
     src.mkdir(parents=True)
     (src / "A.kt").write_text('fun a() { trace("AGENTTMP_a") {} }\n', encoding="utf-8")
     (src / "B.kt").write_text("fun b() {}\n", encoding="utf-8")
     got = facts.tree_check(tmp_path, "AGENTTMP_", ["feature/*/src/main"])
-    expect(got == {"checked": True, "files": ["feature/x/src/main/kotlin/A.kt"]},
+    expect(got["checked"] and got["files"] == ["feature/x/src/main/kotlin/A.kt"] and not got["outside"],
            f"the file that carries the prefix is named: {got}")
-    expect(facts.tree_check(tmp_path, "AGENTTMP_", ["app/src/main"]) == {"checked": True, "files": []},
-           "outside the allowed roots nothing is read")
+    got = facts.tree_check(tmp_path, "AGENTTMP_", ["app/src/main"])
+    expect(got["files"] == ["feature/x/src/main/kotlin/A.kt"]
+           and got["outside"] == ["feature/x/src/main/kotlin/A.kt"],
+           f"outside the allowed roots it is read too, and said to be outside: {got}")
     expect(facts.tree_check(None, "AGENTTMP_", []) == {"checked": False, "files": []},
            "no project, no check — and it says so")
 

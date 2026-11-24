@@ -23,7 +23,7 @@ from typing import Any
 
 from .. import files
 from ..config import MAX_ROUNDS, PROCESS, SOURCE_ROOT, Config
-from ..mark import under_allowed
+from ..mark import TAG, Markers
 from ..recorder import LOG_FILE
 from . import shell
 from .model import MAIN, TOOLS, Call, Session, SubAgent, strip_heredocs, ts_to_epoch
@@ -1385,6 +1385,13 @@ _EXIT_LABEL = re.compile(r"\bexit(?:\s+code)?\s*[:=]\s*(\d+)\s*$", re.IGNORECASE
 _PATH_LINE = re.compile(r"^[^\s:]+\.\w+$")
 
 
+def _marked(line: str, prefix: str) -> bool:
+    """A line of grep's output that is a temporary marker: the prefix, or the
+    tag. The grep the agent texts give looks for both, and the line
+    `--remove` leaves carries only the tag (#749)."""
+    return prefix in line or TAG.removeprefix("// ") in line
+
+
 def _grep_verdict(output: str, prefix: str, command: str = "") -> bool | None:
     """What the cleanup grep found: True = nothing, False = still there.
 
@@ -1418,46 +1425,42 @@ def _grep_verdict(output: str, prefix: str, command: str = "") -> bool | None:
     m = re.search(r"(?:^|[\s:])(\d+)\s*$", first)
     if m and not _HIT.match(first):
         return int(m.group(1)) == 0
-    if any(_HIT.match(ln.strip()) and prefix in ln for ln in lines):
+    if any(_HIT.match(ln.strip()) and _marked(ln, prefix) for ln in lines):
         return False
     if any(_CLEAN.search(ln) for ln in lines):
         return True
-    if not any(prefix in ln for ln in lines):
+    if not any(_marked(ln, prefix) for ln in lines):
         return True
     return None
 
 
 def tree_check(project: Path | None, prefix: str, allowed: list[str]) -> dict[str, Any]:
-    """Whether the source tree carries the prefix now — read, not inferred.
+    """Whether the source tree carries temporary markers now — read, not inferred.
 
     The transcript says what the agent checked; this says what is there.
     A `git checkout` that restored a file leaves no edit the transcript can
     balance, and a grep wrapped in labels can be misread. The tree cannot.
-    Only the allowed roots are walked when there are any — the agent's
-    markers may go nowhere else — and the whole tree otherwise.
+
+    The count is `mark.Markers.leftovers`, the one `hunt`, `status`, the
+    page and `mark --remove` read (#829): the whole tree, and a line tagged
+    `echolot:mark` with no prefix on it as well as the prefix. This walked
+    only the allowed roots and looked for the prefix alone, so a marker
+    the agent put outside them (#838) and the `endSection()` wrap
+    `--remove` leaves (#749) read as a clean tree. `outside` is the files
+    of these outside `allowed`, and `kept` the tagged lines that go by hand.
     """
     if project is None or not Path(project).is_dir():
         return {"checked": False, "files": []}
-    from ..domains import source_files
-    found: list[str] = []
-    for path in source_files(Path(project)):
-        rel = path.relative_to(project).as_posix()
-        if allowed and not _under_any(rel, allowed):
-            continue
-        try:
-            if prefix in path.read_text(encoding="utf-8", errors="replace"):
-                found.append(rel)
-        except OSError:
-            continue
-        if len(found) >= 20:
-            break
-    return {"checked": True, "files": found}
+    left = Markers(Path(project), prefix, allowed).leftovers()
+    return {"checked": True, "files": left["places"], "kept": left["kept"],
+            "outside": left["outside"]}
 
 
 def instrumentation(session: Session, cfg: Config | None,
                     project: Path | None = None) -> dict[str, Any]:
     prefix = (cfg.get("instrumentation.temp_prefix") if cfg else None) or "AGENTTMP_"
     allowed = cfg.allowed if cfg else []
+    markers = Markers(project or Path("."), prefix, allowed)
     per_file: dict[str, dict[str, int]] = {}
     unprefixed: list[dict[str, Any]] = []
     outside: list[dict[str, Any]] = []
@@ -1481,7 +1484,7 @@ def instrumentation(session: Session, cfg: Config | None,
         # human asked for in the main context is a different matter, so only
         # subagent edits and prefixed edits are held against the list.
         temporary = prefix in new or prefix in old
-        if allowed and _is_source(rel) and not _under_any(rel, allowed) \
+        if _is_source(rel) and not markers.allowed(rel) \
                 and (c.agent != MAIN or temporary):
             outside.append({"ts": c.ts, "file": rel, "agent": c.agent,
                             "temporary": temporary})
@@ -1491,7 +1494,7 @@ def instrumentation(session: Session, cfg: Config | None,
         for rel in e["files"]:
             entry = per_file.setdefault(rel, {"added": 0, "removed": 0, "shell": 0})
             entry["shell"] += 1
-            if allowed and _is_source(rel) and not _under_any(rel, allowed):
+            if _is_source(rel) and not markers.allowed(rel):
                 outside.append({"ts": e["ts"], "file": rel, "agent": e["agent"],
                                 "temporary": True})
     touched = {f: v for f, v in per_file.items()
@@ -1564,23 +1567,6 @@ def _is_source(rel: str) -> bool:
     if rel.startswith("/") or "/scratchpad/" in rel or rel.startswith(".echolot/"):
         return False
     return rel.endswith((".kt", ".java", ".kts", ".xml"))
-
-
-def _under_any(rel: str, roots: list[str]) -> bool:
-    """Whether a path sits under one of the allowed roots, globs included.
-
-    `instrumentation.allowed` is written the way the skill shows it —
-    `feature/*/src/main` — and was compared as a plain prefix, so on a real
-    project every edit under `domain/base/src/main` was filed as outside
-    `domain/*/src/main`. Each segment of the root is a glob over the matching
-    segment of the path; the path may go deeper.
-
-    The rule itself is `mark.under_allowed`, so the command that writes the
-    markers and this report that audits where they went read the list the
-    same way. Only the empty list differs: `mark` takes it as no limit,
-    while here it holds nothing, and every caller asks only when there is one.
-    """
-    return bool(roots) and under_allowed(rel, roots)
 
 
 # --------------------------------------------------------------------- gaps

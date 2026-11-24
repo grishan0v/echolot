@@ -116,7 +116,7 @@ decision it lets you make:
 | Questions to the human | each `AskUserQuestion`: options, recommended, chosen, time to answer | are the questions needed, are the defaults right |
 | What the main context concluded | its last message, quoted — `conclusion` in the json | what the session came to; for one that read an ANR report or a report and ran no hunt, the whole result |
 | Subagent | rounds against `loop.max_rounds`, re-records, tools, tokens, what fed its window, whether the prompt named the traces / the regression / the change, whether the conclusion has all eight fields, and what it returned | is the loop behaving |
-| Temporary instrumentation | per file, prefix added vs removed; was there a grep after the last edit; what the source tree holds now | did cleanup happen |
+| Temporary instrumentation | per file, prefix added vs removed; was there a grep after the last edit; what the whole source tree holds now, counted the way `hunt` and `mark --remove` count it (the prefix or a line tagged `echolot:mark`) | did cleanup happen |
 | Cost | wall time, tokens for main and subagents separately, tools by type, largest tool outputs, longest silences | what eats the window |
 | Reports the session built | each `analyze`: frames drawn, whether its report on disk is still that run's and its size, how many characters reached the agent, how often it was read back, and what the run's record says about its window | which rounds the session built on numbers that were not the scenario's |
 | Recorder | the session's `runs.jsonl` lines — those that carry its id, and those that carry none inside its window — and how many lines of other sessions were left out | exit codes the transcript lost |

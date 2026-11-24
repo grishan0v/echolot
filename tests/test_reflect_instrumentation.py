@@ -171,3 +171,66 @@ def test_one_folder_written_as_text_is_the_folder(tmp_path: Path) -> None:
     check("and the snapshot holds the folder, not its letters",
           facts_mod.config_snapshot(cfg)["instrumentation_allowed"] == ["app/src/main"],
           facts_mod.config_snapshot(cfg)["instrumentation_allowed"])
+
+
+def _balanced(cwd: str, rel: str) -> Session:
+    """An agent that put a marker in and took it out again, as the transcript says."""
+    marker = 'trace("AGENTTMP_load") { work() }'
+    return _session([
+        _edit(1, f"{cwd}/{rel}", "work()", marker, agent="sub"),
+        _edit(2, f"{cwd}/{rel}", marker, "work()", agent="sub"),
+    ], cwd=cwd)
+
+
+def _cleanup(s: Session, cfg: Config | None, project: Path):
+    inst = facts_mod.instrumentation(s, cfg, project)
+    return signals_mod.cleanup_balance(s, facts_mod.Facts(instrumentation=inst), cfg), inst
+
+
+def test_a_marker_outside_allowed_is_still_in_the_tree(tmp_path: Path) -> None:
+    """The tree check walked only `allowed`, so a file the agent edited
+    outside it passed as clean while `hunt` counted its markers (#838)."""
+    rel = "app/src/main/kotlin/com/example/app/screens/MainActivity.kt"
+    (tmp_path / rel).parent.mkdir(parents=True)
+    (tmp_path / rel).write_text(
+        "class MainActivity {\n"
+        "    fun onCreate() {\n"
+        '        android.os.Trace.beginSection("AGENTTMP_x") // echolot:mark\n'
+        "        android.os.Trace.endSection() // echolot:mark\n"
+        "    }\n"
+        "}\n", encoding="utf-8")
+    path = tmp_path / "echolot.yml"
+    path.write_text("instrumentation:\n  allowed: app/src/main/kotlin/com/example/app/data\n",
+                    encoding="utf-8")
+    cfg = Config.load(path)
+    sig, inst = _cleanup(_balanced(str(tmp_path), rel), cfg, tmp_path)
+    check("a warning", sig is not None and sig.severity == "warn", sig)
+    check("that names the file", [r["file"] for r in sig.rows] == [rel], sig.rows)
+    check("and says it is outside allowed", sig.rows[0].get("outside_allowed") is True, sig.rows)
+    # Taken out, the same tree is clean.
+    (tmp_path / rel).write_text("class MainActivity {}\n", encoding="utf-8")
+    sig, _ = _cleanup(_balanced(str(tmp_path), rel), cfg, tmp_path)
+    check("a clean tree stays ok", sig is not None and sig.severity == "ok", sig)
+
+
+def test_a_tagged_line_without_the_prefix_is_a_marker_left(tmp_path: Path) -> None:
+    """What `--remove` leaves of a hand-wrapped marker has the tag and no
+    prefix: `reflect` looked for the prefix alone and called it clean (#749)."""
+    rel = "app/src/main/kotlin/Foo.kt"
+    (tmp_path / rel).parent.mkdir(parents=True)
+    (tmp_path / rel).write_text(
+        "class Foo {\n"
+        "    fun load() {\n"
+        "        try { parse() } finally { android.os.Trace.endSection() } // echolot:mark\n"
+        "    }\n"
+        "}\n", encoding="utf-8")
+    path = tmp_path / "echolot.yml"
+    path.write_text('instrumentation:\n  allowed: ["app/src/main"]\n', encoding="utf-8")
+    sig, inst = _cleanup(_balanced(str(tmp_path), rel), Config.load(path), tmp_path)
+    check("a warning naming the file", sig is not None and sig.severity == "warn"
+          and [r["file"] for r in sig.rows] == [rel], sig)
+    check("with the line that goes by hand", inst["tree"]["kept"] == [f"{rel}:3"], inst["tree"])
+    out = ("./app/src/main/kotlin/Foo.kt:3:        try { parse() } finally "
+           "{ android.os.Trace.endSection() } // echolot:mark\n")
+    check("the documented grep printing it found something",
+          facts_mod._grep_verdict(out, "AGENTTMP_") is False)

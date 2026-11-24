@@ -38,7 +38,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import mark  # noqa: E402
 from echolot.main import main as cli  # noqa: E402
-from echolot.reflect import facts  # noqa: E402
 from tests.support import check  # noqa: E402
 
 
@@ -568,7 +567,8 @@ def test_allowed_roots_are_globs_segment_by_segment():
     for rel, inside in cases.items():
         check(f"{rel} is {'inside' if inside else 'outside'}",
               mark.under_allowed(rel, allowed) is inside)
-        check(f"reflect reads {rel} the same way", facts._under_any(rel, allowed) is inside)
+        check(f"the service reads {rel} the same way",
+              mark.Markers(Path("."), allowed=allowed).allowed(rel) is inside)
     check("no list, no limit", mark.under_allowed("anything/at/all.kt", []))
     check("trailing slashes are the same root",
           mark.under_allowed("app/src/main/A.kt", ["app/src/main/"]))
