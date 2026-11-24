@@ -82,10 +82,14 @@ own, with `echolot scan`'s words under it, and the step stays the one under
 |---|---|
 | no module with a launcher Activity | that no Android app is in this folder |
 | an `applicationId`, or a suffix of the build to measure, set in a way `scan` does not read (a constant or an enum entry of `buildSrc` or `build-logic` it does read) | that it could not read the app's name from the build files |
-| a macrobenchmark that measures a section of its own, or names no metric `scan` reads | that where it begins and ends has to be picked from a trial recording |
 
 A macrobenchmark that measures the launch (`StartupTimingMetric`) is set up
-like an app with none: the same window, run by the benchmark.
+like an app with none: the same window, run by the benchmark. One that
+measures a section of its own, or names no metric `scan` reads, needs where
+its window begins and ends picked from a trial recording, so the page sets up
+how the app opens instead, as for an app with no benchmark: echolot opens the
+app itself (`runner.mode: launch`). A line beside the app's name names the
+benchmark and says an agent can set it up afterwards.
 
 Some steps come first, as before: files written by a newer echolot, a
 self-check that did not pass, and `echolot init` in a project that has an
