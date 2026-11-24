@@ -3728,30 +3728,34 @@ def cmd_hunt(args) -> int:
         # The whole point of the feature: a new investigation must not start
         # on the previous one's traces. Nothing is deleted — the set moves
         # aside exactly the way `collect` moves it between rounds.
-        aside = None
-        if scenario:
-            from . import runner
-            aside = runner.set_aside(project / ".echolot" / "traces", scenario,
-                                     log=lambda m: print(m, file=sys.stderr))
-            if aside is not None:
-                # Relative to the project, so the record survives the tree
-                # being moved or cloned somewhere else.
-                with contextlib.suppress(ValueError):
-                    aside = aside.resolve().relative_to(project.resolve())
-        damaged = hunt_mod.unreadable(project)
-        kept = hunt_mod.set_aside_unreadable(project)
-        if damaged:
-            print(f"[!] `{hunt_mod.HUNT_FILE.as_posix()}` did not load: {damaged}. "
-                  + (f"Set aside as {_shown_path(kept, project)}; this opens a new investigation beside it."
-                     if kept else "It could not be set aside and is written over."),
-                  file=sys.stderr)
-        before = hunt_mod.load(project)
-        h = hunt_mod.open_new(project, question,
-                              since=getattr(args, "hunt_since", None),
-                              scenario=scenario, config_sha=sha,
-                              traces_aside=aside, confirmed=confirmed,
-                              # Whose the set moved aside is (#718).
-                              last_collect=run)
+        # Moving the set aside and opening as one step, under the lock every
+        # change to the investigations takes: two questions asked at once
+        # split one set between them, and lost one of the two (#724).
+        with hunt_mod.lock(project, create=True):
+            aside = None
+            if scenario:
+                from . import runner
+                aside = runner.set_aside(project / ".echolot" / "traces", scenario,
+                                         log=lambda m: print(m, file=sys.stderr))
+                if aside is not None:
+                    # Relative to the project, so the record survives the tree
+                    # being moved or cloned somewhere else.
+                    with contextlib.suppress(ValueError):
+                        aside = aside.resolve().relative_to(project.resolve())
+            damaged = hunt_mod.unreadable(project)
+            kept = hunt_mod.set_aside_unreadable(project)
+            if damaged:
+                print(f"[!] `{hunt_mod.HUNT_FILE.as_posix()}` did not load: {damaged}. "
+                      + (f"Set aside as {_shown_path(kept, project)}; this opens a new investigation beside it."
+                         if kept else "It could not be set aside and is written over."),
+                      file=sys.stderr)
+            before = hunt_mod.load(project)
+            h = hunt_mod.open_new(project, question,
+                                  since=getattr(args, "hunt_since", None),
+                                  scenario=scenario, config_sha=sha,
+                                  traces_aside=aside, confirmed=confirmed,
+                                  # Whose the set moved aside is (#718).
+                                  last_collect=run)
         print(f'opened #{h["n"]}: "{h["question"]}"')
         # The one before it is closed by this, as abandoned when it was still
         # open: a page of it that stands there is written again to say so.
