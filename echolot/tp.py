@@ -1089,7 +1089,7 @@ class TraceSession:
         # By its absolute path. perfetto reads a string that does not start
         # with `/` or `.` and has a colon in it as `resolver:args`, so
         # `run12:00.perfetto-trace` failed with `KeyError: 'run12'`.
-        path = path.resolve()
+        path = self.path = path.resolve()
         # A recording that lost its tail: a pull that was interrupted, a full
         # disk, a download that stopped early. trace_processor drops the
         # unfinished packet without a word, and what the tail held went with
@@ -1168,7 +1168,13 @@ class TraceSession:
         except BaseException:
             self.close()
             raise
-        stopped = self._stopped_short(path)
+        # Its first query: a shell that stops on it, or an interrupt, closes
+        # the session as a failed start does.
+        try:
+            stopped = self._stopped_short(path)
+        except BaseException:
+            self.close()
+            raise
         if stopped:
             self.close()
             raise ConfigError(stopped)
@@ -1202,18 +1208,35 @@ class TraceSession:
     def exec_script(self, sql: str) -> None:
         """Runs a multi-statement script (DDL), discarding the output."""
         for stmt in _split_statements(sql):
-            orphans.check_joined()
-            list(self._tp.query(stmt))
+            list(self._ask(stmt))
 
     def query(self, sql: str) -> list[dict[str, Any]]:
-        # A worker's session closed from the main thread (#488): the run
-        # was stopped, and this ends the worker rather than every detector
-        # failing in turn. See orphans.Group.
+        return [dict(r.__dict__) for r in self._ask(sql)]
+
+    def _ask(self, sql: str):
+        """The shell's answer to one statement, every row of it read.
+
+        A worker's session closed from the main thread (#488): the run was
+        stopped, and this ends the worker rather than every detector failing
+        in turn. See orphans.Group.
+
+        A shell that stopped, or cannot be reached: `tpshell.Failed`, which
+        names the trace and how the shell ended (#873). As a connection
+        error it read as the failure of each detector in turn — "⚠️ Failed:
+        IncompleteRead(0 bytes read)", "[Errno 54] Connection reset by
+        peer" — in a report written whole with exit 0, or as a traceback
+        out of the window's setup.
+        """
         orphans.check_joined()
-        rows = []
-        for r in self._tp.query(sql):
-            rows.append(dict(r.__dict__))
-        return rows
+        tp = self._tp
+        try:
+            return tp.query(sql)
+        except tpshell.CONNECTION as e:
+            orphans.check_joined()
+            shell = getattr(tp, "shell", None)
+            if shell is None:
+                raise
+            raise tpshell.Failed(f"{self.path}: {tpshell.lost(shell, e)}") from e
 
     def close(self) -> None:
         tp, self._tp = self._tp, None
