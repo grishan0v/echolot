@@ -29,21 +29,26 @@ project and is committed.
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import re
 import shutil
+import threading
 import time
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
+from . import atomic
 from . import verdict as verdict_mod
 from .when import ago as _ago
 from .when import iso_epoch as _epoch
 
 HUNT_FILE = Path(".echolot") / "hunt.json"
 ARCHIVE_DIR = Path(".echolot") / "hunts"
+LOCK_FILE = Path(".echolot") / "hunt.lock"
 
 # Below this, a return is the same sitting rather than a new visit, and asking
 # would be noise. Above it, the human has been away long enough that "carry on
@@ -251,12 +256,109 @@ def _write(p: Path, hunt: dict[str, Any]) -> None:
 
     Written in place, a write cut short by Ctrl-C or a killed harness left
     half a file, which `load` reads as no investigation: its question,
-    rounds and conclusion were lost, and the next one took its number.
+    rounds and conclusion were lost, and the next one took its number. The
+    file beside it has a name of its own writer's: under one shared name,
+    one writer moved another's half-written file into place, or found it
+    gone (#724).
     """
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(json.dumps(hunt, ensure_ascii=False, indent=2) + "\n",
-                   encoding="utf-8")
-    os.replace(tmp, p)
+    atomic.write_text(p, json.dumps(hunt, ensure_ascii=False, indent=2) + "\n")
+
+
+# Held by this process: the lock of each project, how deep, and the file
+# that holds it against other processes.
+_held: dict[str, list[Any]] = {}
+_held_guard = threading.Lock()
+
+
+@contextlib.contextmanager
+def lock(project: Path, create: bool = False) -> Iterator[None]:
+    """One writer of a project's investigations at a time.
+
+    Every change to `hunt.json` reads it, changes it and writes it back,
+    and the writes are atomic while the three steps together were not: two
+    questions asked at once read the same record, took the same number, and
+    the second write replaced the first, so a question that said `opened
+    #N` left nothing behind (#724). A `collect` filing its round could
+    likewise write back the record a new question had just closed.
+
+    Held across processes by a lock on `.echolot/hunt.lock`, and within this
+    one by a lock that the same thread can take again, so a function that
+    holds it can call another that takes it. Where there is no `.echolot/`
+    there is nothing to write over, and none is made unless `create` says
+    the caller is about to write one; where the file cannot be opened or
+    locked, the change goes ahead as it did before there was a lock.
+    """
+    key = os.path.abspath(project / LOCK_FILE)
+    with _held_guard:
+        entry = _held.setdefault(key, [threading.RLock(), 0, None])
+    with entry[0]:
+        if entry[1] == 0:
+            entry[2] = _take(Path(key), create)
+        entry[1] += 1
+        try:
+            yield
+        finally:
+            entry[1] -= 1
+            if entry[1] == 0:
+                _give_back(entry[2])
+                entry[2] = None
+
+
+def _take(path: Path, create: bool) -> Any:
+    """The lock file, open and locked; None when there is none to take."""
+    try:
+        if create:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        elif not path.parent.is_dir():
+            return None
+        held = open(path, "a+b")  # noqa: SIM115 - held until _give_back
+    except OSError:
+        return None
+    try:
+        if os.name == "nt":
+            import msvcrt
+            held.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(held.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:  # LK_LOCK gives up after ten seconds
+                    continue
+        else:
+            import fcntl
+            fcntl.flock(held, fcntl.LOCK_EX)
+    except OSError:
+        held.close()
+        return None
+    return held
+
+
+def _give_back(held: Any) -> None:
+    if held is None:
+        return
+    with contextlib.suppress(OSError):
+        if os.name == "nt":
+            import msvcrt
+            held.seek(0)
+            msvcrt.locking(held.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(held, fcntl.LOCK_UN)
+    held.close()
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _one_writer(create: bool = False) -> Callable[[_F], _F]:
+    """Run the function under `lock` of the project it is given first."""
+    def wrap(f: _F) -> _F:
+        @functools.wraps(f)
+        def inner(project: Path, *args: Any, **kwargs: Any) -> Any:
+            with lock(project, create=create):
+                return f(project, *args, **kwargs)
+        return inner  # type: ignore[return-value]
+    return wrap
 
 
 def home(project: Path, hunt: dict[str, Any] | None) -> Path | None:
@@ -351,6 +453,7 @@ def _still(hunt: dict[str, Any] | None, n: int | None) -> bool:
     return bool(hunt) and hunt.get("status") == "open" and (n is None or hunt.get("n") == n)
 
 
+@_one_writer()
 def record_traces(project: Path, directory: Path, n: int | None = None) -> None:
     """Note that this directory of traces belongs to the open investigation,
     the one numbered `n` when it is given.
@@ -372,6 +475,7 @@ def record_traces(project: Path, directory: Path, n: int | None = None) -> None:
             save(project, hunt)
 
 
+@_one_writer()
 def record_report(project: Path, out_dir: Path, n: int | None = None) -> Path | None:
     """Copy the report just written into the open investigation's own history,
     the one numbered `n` when it is given.
@@ -437,11 +541,13 @@ def archive(project: Path, hunt: dict[str, Any]) -> Path | None:
     return dest
 
 
+@_one_writer(create=True)
 def open_new(project: Path, question: str, since: str | None = None,
              scenario: str | None = None, config_sha: str | None = None,
              status: str = "abandoned",
              traces_aside: Path | None = None,
-             confirmed: dict[str, Any] | None = None) -> dict[str, Any]:
+             confirmed: dict[str, Any] | None = None,
+             last_collect: dict[str, Any] | None = None) -> dict[str, Any]:
     """Close whatever was open, archive it, and start a new investigation.
 
     `status` is what the previous one is recorded as — `abandoned` when the
@@ -454,16 +560,20 @@ def open_new(project: Path, question: str, since: str | None = None,
     `traces_aside` is where the loose set of traces was moved to make room.
     That set is the *previous* investigation's evidence, so it is recorded on
     the record being closed. Without it the archive remembers the question and
-    forgets what was measured, which makes it decoration.
+    forgets what was measured, which makes it decoration. Only when it was
+    recorded for that one (`_its_evidence`): `last_collect` is what
+    `.echolot/log/collect.json` says of the run that left it.
     """
     set_aside_unreadable(project)
     previous = load(project)
     if previous:
         previous.setdefault("status", "open")
+        ours = traces_aside is not None and _its_evidence(project, previous, traces_aside,
+                                                         last_collect)
         if previous["status"] == "open":
             previous["status"] = status
             previous["closed_at"] = _now()
-        if traces_aside is not None:
+        if ours:
             previous.setdefault("traces", []).append(str(traces_aside))
         archive(project, previous)
 
@@ -486,6 +596,36 @@ def open_new(project: Path, question: str, since: str | None = None,
     return hunt
 
 
+def _its_evidence(project: Path, hunt: dict[str, Any], aside: Path,
+                  last_collect: dict[str, Any] | None) -> bool:
+    """Whether the set just moved aside was recorded for `hunt`, the
+    investigation about to be closed.
+
+    Not when the collect that left it says it ran outside `hunt`, and not
+    when it was written after `hunt` was concluded. Filed all the same, a
+    baseline recorded months after the question was answered read in
+    `hunt --show` as the evidence for that answer (#718), the outcome #498
+    kept `collect` and `analyze` from. A collect that does not say where it
+    ran, from before it wrote that, is taken as the investigation's, as it
+    always was.
+    """
+    if recorded_outside(hunt, last_collect):
+        return False
+    closed = hunt.get("closed_at") if hunt.get("status", "open") != "open" else None
+    if not closed:
+        return True
+    try:
+        closed_at = _epoch(closed)
+        folder = aside if aside.is_absolute() else project / aside
+        newest = max((f.stat().st_mtime for f in folder.iterdir() if f.is_file()), default=None)
+    except (OSError, TypeError, ValueError):
+        return True
+    # `closed_at` is kept to the second: a trace written within that second
+    # was written before the close as likely as after it.
+    return closed_at is None or newest is None or newest < closed_at + 1
+
+
+@_one_writer()
 def touch(project: Path, *, collect: bool = False, analyze: bool = False,
           n: int | None = None) -> None:
     """Record that the open investigation is still being worked on, the one
@@ -535,6 +675,7 @@ def archived_reports(project: Path, hunt: dict[str, Any] | None) -> verdict_mod.
     return out
 
 
+@_one_writer()
 def conclude(project: Path, conclusion: str, verdict: dict[str, Any] | None = None,
              reports: verdict_mod.Reports | None = None,
              left: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -780,11 +921,14 @@ def summary_line(hunt: dict[str, Any] | None, st: dict[str, Any]) -> str:
     With none open it says what opens one. `hunt "<q>"` refuses while
     echolot.yml is there and does not load, so then the promise waits on
     the config, and the config's own line above this one says why it does
-    not load. With no config at all a hunt opens one.
+    not load. With no config here or above, `hunt "<q>"` refuses too: an
+    investigation belongs to a project (#721).
     """
     if not hunt:
         if st.get("hunt_unreadable"):
             return st["hunt_unreadable"]
+        if not st.get("config"):
+            return "none open — a hunt opens one once the project has an echolot.yml"
         if (st.get("config") or {}).get("error"):
             return "none open — a hunt opens one once echolot.yml loads"
         return "none open — the next hunt opens one"

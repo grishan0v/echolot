@@ -17,20 +17,25 @@ import json
 import math
 import os
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from . import codex, hosts, layer, plugin, recorder, runner
 from . import hunt as hunt_mod
 from .config import Config, ConfigError
 
 
-def project_state(project: Path, config: str = "echolot.yml") -> dict:
+def project_state(project: Path, config: str = "echolot.yml",
+                  here: Path | None = None) -> dict:
     """Where this project stands with echolot: the facts `status` and `init`
     decide the next step from.
 
+    `here` is the folder the lines to run by hand are run from: the working
+    directory of the command that prints them. Without it they are run from
+    the project's folder, as the page offers them.
+
     Everything here is read from disk and the run log; nothing runs.
     """
-    st: dict = {"project": project}
+    st: dict = {"project": project, "shown": shown_from(project, config, here)}
     st["layer_verdict"], st["layer_line"] = layer.one_line(project)
     # The `init` a project with echolot's plugin runs, where the plugin is
     # found: plain `init` beside it installs every skill twice (#598).
@@ -699,7 +704,7 @@ def next_step(st: dict) -> str:
         return (f"{_door(st)} setup` — echolot.yml from the repository "
                 f"and a probe trace")
     if kind == "fix-config":
-        return f"fix echolot.yml — it does not load: {st['config']['error']}"
+        return f"fix {_config_name(st)} — it does not load: {st['config']['error']}"
     if kind == "resume-or-new":
         # The question itself is on the hunt line and heads the recap below:
         # said a third time here, it was the longest thing on screen (#501).
@@ -716,6 +721,12 @@ def next_step(st: dict) -> str:
                 "permission to a file that does not parse (the layer line "
                 "says what to merge in). Then: " + _hunt_step(st))
     return _hunt_step(st)
+
+
+def _config_name(st: dict) -> str:
+    """The config's file name, as the `config` line of `status` says it."""
+    path = (st.get("config") or {}).get("path")
+    return Path(path).name if path else "echolot.yml"
 
 
 def _hunt_step(st: dict) -> str:
@@ -749,6 +760,31 @@ def refused_by_analyze(cfg: Config) -> None:
         plan_detectors(one, detectors=shipped)
 
 
+def shown_from(project: Path, config: str = "echolot.yml",
+               here: Path | None = None) -> dict:
+    """How a line to run names the config and the project's files: `config`
+    for `-c`, and `base`, the project's folder seen from `here`, before each
+    `.echolot/...` path; "" when `here` is the project's folder.
+
+    The lines said `-c echolot.yml` and `.echolot/traces/...` whatever
+    config was given and wherever the command ran: with `perf.yml`, or from
+    `app/` with `-c ../echolot.yml`, the line pasted back failed with
+    "config not found" (#719).
+    """
+    def rel(target: Path, start: Path) -> str:
+        try:
+            return PurePath(os.path.relpath(target, start)).as_posix()
+        except (OSError, ValueError):  # another drive: no relative path to it
+            return target.as_posix()
+    try:
+        root = project.resolve()
+        start = (here or project).resolve()
+    except OSError:
+        return {"config": Path(config).name, "base": ""}
+    base = rel(root, start)
+    return {"config": rel(root / config, start), "base": "" if base == "." else base}
+
+
 def by_hand(st: dict) -> tuple[str, str]:
     """The step of the loop a person takes without an agent: the command's
     name and the line to run. `collect` while the scenario has no traces,
@@ -757,7 +793,8 @@ def by_hand(st: dict) -> tuple[str, str]:
     What `next` says after "or by hand", and what `echolot ui` offers to copy.
     With an investigation open, the step is its next one, and the line runs
     inside it (`--hunt N`): `next` says `resume-or-new` rather than this
-    when it is not clear that the human is still on it.
+    when it is not clear that the human is still on it. Its step is
+    `collect` while the traces there were recorded outside it.
     """
     traces = st["traces"]
     # With several scenarios, the one this step is about, by name: the open
@@ -765,13 +802,24 @@ def by_hand(st: dict) -> tuple[str, str]:
     scenario = (st.get("config") or {}).get("scenario") if st.get("scenarios") else None
     hunt = st.get("hunt") or {}
     n = hunt.get("n") if hunt.get("status") == "open" else None
-    if not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
-        return "collect", collect_line_for(scenario, (st.get("config") or {}).get("runner"), n)
-    return "analyze", analyze_line(traces.get("files"), scenario, n)
+    shown = st.get("shown") or {}
+    # Traces the last collect recorded outside the open investigation are
+    # not its evidence: `hunt` says so, and analysed with `--hunt N` they
+    # were filed as its round all the same (#720). The step is to record
+    # inside it.
+    outside = n is not None and hunt_mod.recorded_outside(hunt, st.get("collect"))
+    if outside or not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
+        return "collect", collect_line_for(scenario, (st.get("config") or {}).get("runner"), n,
+                                           shown=shown)
+    return "analyze", analyze_line(traces.get("files"), scenario, n, shown=shown)
+
+
+def _config_arg(shown: dict | None) -> str:
+    return " -c " + shlex.quote((shown or {}).get("config") or "echolot.yml")
 
 
 def collect_line_for(scenario: str | None = None, runner: str | None = None,
-                     hunt: int | None = None) -> str:
+                     hunt: int | None = None, shown: dict | None = None) -> str:
     """`echolot collect` for a scenario, named when the config has several.
 
     No `-n` for a macrobenchmark (`runner.mode: gradle`): its own
@@ -780,9 +828,12 @@ def collect_line_for(scenario: str | None = None, runner: str | None = None,
 
     `hunt` is the investigation the step is part of: `--hunt N` files the
     run under it, and without it the run is outside any (#498).
+
+    `shown` is how the config is named from where the line is run
+    (`shown_from`).
     """
     count = "" if runner == "gradle" else " -n 5"
-    return f"echolot collect -c echolot.yml{count}" + (
+    return f"echolot collect{_config_arg(shown)}{count}" + (
         f" --scenario {shlex.quote(scenario)}" if scenario else "") + _inside(hunt)
 
 
@@ -791,7 +842,7 @@ def _inside(hunt: int | None) -> str:
 
 
 def analyze_line(files: list[str] | None, scenario: str | None = None,
-                 hunt: int | None = None) -> str:
+                 hunt: int | None = None, shown: dict | None = None) -> str:
     """`echolot analyze` over the repeats of one scenario, each file named.
 
     `.echolot/traces/` keeps every scenario's set, since re-recording one
@@ -801,13 +852,20 @@ def analyze_line(files: list[str] | None, scenario: str | None = None,
     the guides tell an agent to: Codex keeps a line with a glob inside its
     sandbox, where trace_processor cannot start. With no scenario to name
     the files by, the line says what to put there.
+
+    `files` are named from the project's folder; `shown` (`shown_from`)
+    says how to reach them, and the config, from where the line is run.
     """
     named = (f" --scenario {shlex.quote(scenario)}" if scenario else "") + _inside(hunt)
+    base = (shown or {}).get("base") or ""
+
+    def there(f: str) -> str:
+        return (PurePath(base) / f).as_posix() if base else f
     if not files:
-        return ("echolot analyze <each trace of the scenario in "
-                ".echolot/traces, named> -c echolot.yml" + named)
-    return ("echolot analyze " + " ".join(shlex.quote(f) for f in files)
-            + " -c echolot.yml" + named)
+        return (f"echolot analyze <each trace of the scenario in "
+                f"{there('.echolot/traces')}, named>" + _config_arg(shown) + named)
+    return ("echolot analyze " + " ".join(shlex.quote(there(f)) for f in files)
+            + _config_arg(shown) + named)
 
 
 def repeats(scenario: str, n: int) -> list[str]:

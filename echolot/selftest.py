@@ -1169,6 +1169,46 @@ def _(report):
     assert healthy == ["DefaultDispatch"], healthy
 
 
+@check("compare lists a slice name in every run of one side and in no run of the "
+       "other, whatever numbers each run gave the rest")
+def _(report):
+    """The busy loop above, as two builds of three cold starts each: on a
+    real project such a loop gave no row on either side, and the one name
+    in all ten traces after and in none before was the JIT compilation of
+    the method the loop is in, which is where the code is. Agents found it
+    by setting two sets of `names` against each other in a script (#610).
+
+    Here the build with the loop compiles that method beside one both
+    builds compile, from another install directory. Every repeat gives its
+    frames, the render thread's fences and a pool's thread numbers of its
+    own. Of all of it, the compilation is the one name after only, and none
+    is before only."""
+    from . import compare as compare_mod
+    from . import report as report_mod
+    cfg = Config({**FIXTURE_CONFIG, "scenario": {
+        "name": "blind", "start": {"name": "bindApplication"},
+        "end": {"name": "Screen.firstFrame"}}})
+    with tempfile.TemporaryDirectory() as tmp:
+        sides = {}
+        for side, loop, runs, install, jit in (
+                ("before", 0, range(0, 3), fixture.INSTALL[0], (fixture.JIT_BOTH,)),
+                ("after", fixture.BLIND_LOOP_MS, range(10, 13), fixture.INSTALL[1],
+                 (fixture.JIT_BOTH, fixture.JIT_NEW))):
+            reports = []
+            for run in runs:
+                path = Path(tmp) / f"{side}-{run}.perfetto-trace"
+                path.write_bytes(fixture.blind_main(loop, run=run, install=install, jit=jit))
+                reports.append(_analyze(path, cfg))
+            sides[side] = report_mod.aggregate(reports)
+    cmp = compare_mod.build(sides["before"], sides["after"],
+                            before_path="a.json", after_path="b.json")
+    got = {side: [(r["name"], r["runs"], r["other"], r["threads"]) for r in cmp["names"][side]]
+           for side in ("before", "after")}
+    new = report_mod.slice_family(fixture.jit_name(fixture.JIT_NEW, fixture.INSTALL[1]))
+    assert got == {"before": [], "after": [(new, "3/3", "0/3", "Jit thread pool")]}, got
+    assert "/data/app/~~#/com.example.app-#/base.apk" in new, new
+
+
 @check("uninstrumented_cpu: the samples in a blind spot name what ran there")
 def _(report):
     # The worker's 28 stacks. What ran is the first named method from the

@@ -377,7 +377,9 @@ def test_hunt_refuses_a_scenario_it_cannot_measure(tmp_path: Path, monkeypatch) 
     check("exit 2, in a sentence", code == 2 and "no such scenario" in err, err[-400:])
     check("nothing opened, nothing moved", hunt_mod.load(tmp_path) is None
           and (traces / "loaded_iter000.perfetto-trace").is_file())
-    bare = tmp_path / "bare"
+    # Beside the project, not in it: from a folder inside it, the project's
+    # echolot.yml is found above (#721).
+    bare = tmp_path.parent / f"{tmp_path.name}-bare"
     bare.mkdir()
     monkeypatch.chdir(bare)
     code, _, err = run("hunt", "--scenario", "loaded", "a question")

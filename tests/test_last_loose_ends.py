@@ -193,7 +193,7 @@ def test_init_keeps_failed_for_a_self_check_that_ran_and_failed(project, monkeyp
 # --- the hunt line: no promise the config will not keep ---------------------
 
 @pytest.mark.parametrize("config,promised", [
-    (None, True),
+    (None, False),
     (CONFIG, True),
     (BROKEN, False),
 ], ids=["no-config", "a-config-that-loads", "a-config-that-does-not-load"])
@@ -208,7 +208,8 @@ def test_the_hunt_line_promises_only_what_hunt_does(project, config, promised):
     says_it_opens = "the next hunt opens one" in line
     check("the promise is there or not", says_it_opens == promised, line)
     if not promised:
-        check("and the line says what it waits on", "once echolot.yml loads" in line, line)
+        waits = "once the project has an echolot.yml" if config is None else "once echolot.yml loads"
+        check("and the line says what it waits on", waits in line, line)
 
     code, _, err = run("hunt", "cold start 3s → 7s")
     opened = code == 0 and hunt_mod.load(project) is not None

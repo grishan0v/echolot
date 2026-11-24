@@ -107,12 +107,25 @@ inside AS (
 -- nested, and its time was its parent's (#512). Below the first level a
 -- section of ART's or of another detector stays where it is, in its
 -- parent's own time; neither is descended into.
+--
+-- Only a name shaped like an Initializer's is one. androidx.startup writes
+-- the class's simple name, so a name with a space, `#`, `(` or `:` is the
+-- platform's, written while the Initializer ran: a vsync request
+-- (`Choreographer#scheduleVsyncLocked`), a lock wait (`Lock contention on
+-- ClassLinker classes lock (owner tid: …)`), a binder call or an inflate.
+-- Taken as Initializers, they were rows that said "an androidx.startup
+-- Initializer" or "run inside ProfileInstallerInitializer" (#708). They stay
+-- in the time of the Initializer they ran in, as ART's sections do; under
+-- `Startup` itself, in the stretch's.
 startup (slice_id, up, name, dur, parent) AS (
     SELECT s.slice_id, NULL, s.name, s.dur, NULL
     FROM _slice_win s
     JOIN slice raw ON raw.id = s.slice_id
     JOIN inside i  ON raw.parent_id = i.slice_id
     WHERE i.name = 'Startup'
+      AND (s.name NOT GLOB '*[ #(:]*'
+           OR (s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
+           OR s.name GLOB 'VerifyClass *')
 
     UNION ALL
 
@@ -126,6 +139,7 @@ startup (slice_id, up, name, dur, parent) AS (
       AND NOT ((s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
                OR s.name GLOB 'VerifyClass *')
       AND s.name NOT IN (SELECT name FROM _claimed_name)
+      AND s.name NOT GLOB '*[ #(:]*'
 ),
 -- Self time is a section less the sections below it that are rows here: an
 -- Initializer's own work, apart from the ones it waited for.
@@ -233,6 +247,9 @@ startup (slice_id, name, ts, dur) AS (
     JOIN slice raw ON raw.id = s.slice_id
     JOIN inside i  ON raw.parent_id = i.slice_id
     WHERE i.name = 'Startup'
+      AND (s.name NOT GLOB '*[ #(:]*'
+           OR (s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
+           OR s.name GLOB 'VerifyClass *')
 
     UNION ALL
 
@@ -246,6 +263,7 @@ startup (slice_id, name, ts, dur) AS (
       AND NOT ((s.name GLOB 'L*;' AND s.name NOT GLOB '* *')
                OR s.name GLOB 'VerifyClass *')
       AND s.name NOT IN (SELECT name FROM _claimed_name)
+      AND s.name NOT GLOB '*[ #(:]*'
 ),
 candidate AS (
     SELECT i.name, i.ts, i.dur

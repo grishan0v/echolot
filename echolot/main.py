@@ -697,6 +697,13 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         if cooled is not None:
             environment["cooldown"] = cooled
         markers = _markers_info(tp, cfg)
+        # Every slice name of the window, for `compare` to set against the
+        # other set's (#610). The merge keeps what it needs of it.
+        try:
+            names = _slice_names_info(tp, markers)
+        except Exception as e:  # the report stands without it, as without a detector
+            names = None
+            print(f"[!] slice names: {e}", file=sys.stderr)
         # How the trace was recorded: what it asked the device for, and what
         # `collect` kept beside it (#533).
         recording = recording_mod.of_trace(tp, trace)
@@ -793,11 +800,13 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     if window.get("frames"):
         window["frames"]["late"] = _late_frames(results)
 
-    return report_mod.build(str(trace), window, results,
-                            toolchain=toolchain_info(tp_binary, tp_source),
-                            absent=absent, environment=environment,
-                            markers=markers, scenario=cfg.scenario_name,
-                            budget_ms=budget_ms, recording=recording)
+    rep = report_mod.build(str(trace), window, results,
+                           toolchain=toolchain_info(tp_binary, tp_source),
+                           absent=absent, environment=environment,
+                           markers=markers, scenario=cfg.scenario_name,
+                           budget_ms=budget_ms, recording=recording)
+    rep[report_mod.NAMES_ALL] = names
+    return rep
 
 
 def _below_bar(tp, d, overrides: dict | None, sql: str,
@@ -924,6 +933,52 @@ def _markers_info(tp, cfg: Config) -> dict:
         f"SELECT DISTINCT name FROM slice WHERE name GLOB '{sql_value(globs[0])}'")})
     return {"prefix": prefix, "globs": globs, "rows": out, "absent": absent,
             "in_trace": in_trace}
+
+
+# What the inventory below calls the main thread: its name is the package's
+# last fifteen characters, which says nothing about whose thread it is.
+MAIN_THREAD = "(main)"
+
+
+def _slice_names_info(tp, markers: dict) -> dict[str, dict]:
+    """Every slice name of the window, thread and async, with its numbers (#610).
+
+    By name as `report.slice_family` folds it, so that the names of two
+    builds' traces can be set against each other in `compare`: a name and
+    the same with another tid, vsync, fence or line number, or another
+    install directory, are one. The project's own markers, from `markers`,
+    are kept as written. The threads are folded the same way, the main
+    thread named as such and an async section under `(async)`.
+
+    All of them, whatever they took: what `compare` needs of one side is
+    whether a name of the other was there at all. `report._merge_names`
+    keeps what it needs of it.
+    """
+    keep = markers.get("prefix")
+    own = frozenset(r["location"] for r in markers.get("rows") or [])
+    rows = tp.query(f"""
+        SELECT s.name AS name,
+               CASE WHEN s.is_main_thread = 1 THEN '{MAIN_THREAD}'
+                    ELSE COALESCE(s.thread_name, 'tid ' || s.tid) END AS thread,
+               SUM(MAX(s.dur, 0)) AS total_ns, MAX(MAX(s.dur, 0)) AS max_ns
+        FROM _slice_win s WHERE s.name IS NOT NULL
+        GROUP BY 1, 2
+        UNION ALL
+        SELECT a.name, '{ASYNC_THREAD}', SUM(MAX(a.dur, 0)), MAX(MAX(a.dur, 0))
+        FROM _aslice_win a WHERE a.name IS NOT NULL
+        GROUP BY a.name
+    """)
+    out: dict[str, dict] = {}
+    for r in rows:
+        name = report_mod.slice_family(r["name"], keep=keep, names=own)
+        row = out.setdefault(name, {"total_ns": 0, "max_ns": 0, "threads": set()})
+        row["total_ns"] += r["total_ns"] or 0
+        row["max_ns"] = max(row["max_ns"], r["max_ns"] or 0)
+        row["threads"].add(report_mod.slice_family(str(r["thread"])))
+    return {name: {"total_ms": round(row["total_ns"] / 1e6, 2),
+                   "max_ms": round(row["max_ns"] / 1e6, 2),
+                   "threads": sorted(row["threads"])}
+            for name, row in out.items()}
 
 
 def cmd_analyze(args) -> int:
@@ -1593,6 +1648,7 @@ def cmd_compare(args) -> int:
     s = cmp["summary"]
     recorder.note(comparable=cmp["comparable"], moved=s["moved"],
                   appeared=s["appeared"], vanished=s["vanished"],
+                  only_after=s["only_after"], only_before=s["only_before"],
                   warnings=[w["id"] for w in cmp["warnings"]])
 
     text = compare_mod.to_markdown(cmp)
@@ -1624,7 +1680,11 @@ def cmd_compare(args) -> int:
             cmp.pop("plain", None)
             print(f"[!] the plain reading could not be worked out, so the table is all there is: "
                   f"{type(e).__name__}: {e}", file=sys.stderr)
-    print(moves_mod.render(reading) if args.plain and reading is not None else text)
+    # `--names`: the names on one side only, every one, in place of the rest.
+    if getattr(args, "names", False):
+        print(compare_mod.names_view(cmp))
+    else:
+        print(moves_mod.render(reading) if args.plain and reading is not None else text)
 
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -3297,12 +3357,36 @@ def _project_and_config(args) -> tuple[Path, str]:
     Read from the working directory, `hunt -c ../echolot.yml` opened a second
     investigation in a subdirectory and `status -c` showed the project's
     config beside a build directory's empty state.
+
+    With no `-c` and no `echolot.yml` here, the nearest folder above that
+    holds one is the project, the way git finds `.git`: `hunt "<q>"` from
+    `app/` opened a second investigation in `app/.echolot/`, beside the
+    project's own one that stayed open (#721). Found nowhere, the working
+    directory is a project not set up yet.
     """
     config = getattr(args, "config", "echolot.yml")
     if Path(config).is_file():
         path = Path(config).resolve()
         return path.parent, str(path)
+    if config == "echolot.yml":
+        above = _config_above(Path.cwd())
+        if above is not None:
+            return above.parent, str(above)
     return Path.cwd(), config
+
+
+def _config_above(here: Path) -> Path | None:
+    """The `echolot.yml` of the nearest folder above `here` that holds one."""
+    try:
+        start = here.resolve()
+    except OSError:
+        return None
+    for folder in start.parents:
+        found = folder / "echolot.yml"
+        with contextlib.suppress(OSError):
+            if found.is_file():
+                return found
+    return None
 
 
 def _named_config_missing(args) -> bool:
@@ -3645,6 +3729,23 @@ def cmd_hunt(args) -> int:
         # succeeded: exit 2 stops it where the fix is, the way `fix-config`
         # stops `/echolot` at the door. Refused before anything is touched,
         # so asking again once the config loads loses nothing.
+        # With no config here or in any folder above, nothing is opened
+        # either: an investigation needs a project to belong to, and opened
+        # in whatever folder the shell was left in, it was a second one
+        # beside the project's (#721). `-c` naming a file that is not there
+        # is said as `analyze` says it.
+        if _named_config_missing(args):
+            print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
+            return 2
+        if not (project / config).is_file():
+            said = (f"no echolot.yml in {Path.cwd()} or in a folder above it — run "
+                    f"`echolot hunt` from the project's folder, or name its config "
+                    f"with -c; a project not set up yet: `echolot init`, then "
+                    f"`echolot` says the next step")
+            print(f"error: {said}", file=sys.stderr)
+            print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
+            recorder.failed(said)
+            return 2
         try:
             cfg = _hunt_config(project, config)
         except (ConfigError, OSError) as e:
@@ -3658,9 +3759,6 @@ def cmd_hunt(args) -> int:
         # is refused before anything is touched, as a config that does not
         # load is.
         try:
-            if cfg is None and args.scenario:
-                raise ConfigError(f"--scenario {args.scenario}: there is no "
-                                  f"{config} to name it in")
             if cfg is not None:
                 cfg.select(args.scenario)
                 _note_scenario(cfg, args.scenario)
@@ -3669,6 +3767,20 @@ def cmd_hunt(args) -> int:
             print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
             recorder.failed(str(e))
             return 2
+        # Nor while a collect runs. Its repeats so far were set aside into a
+        # folder of their own and the rest landed loose, the investigation it
+        # records for was closed as abandoned under it, and the line by hand
+        # was a second collect on the same phone (#717). `status` and the
+        # page's Dig deeper already say to wait.
+        run = state.collect_state(project)
+        if (run or {}).get("status") == "running":
+            inside = f" for #{run['hunt']}" if run.get("hunt") else ""
+            said = (f"a collect is {state.collect_line({'collect': run})}{inside} — "
+                    f"wait for it to finish (`echolot` says how far it got), then ask again")
+            print(f"error: {said}", file=sys.stderr)
+            print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
+            recorder.failed(said)
+            return 2
         scenario = cfg.scenario_name if cfg else None
         sha = cfg.sha if cfg else None
         confirmed = cfg.confirmed() if cfg else {}
@@ -3676,28 +3788,34 @@ def cmd_hunt(args) -> int:
         # The whole point of the feature: a new investigation must not start
         # on the previous one's traces. Nothing is deleted — the set moves
         # aside exactly the way `collect` moves it between rounds.
-        aside = None
-        if scenario:
-            from . import runner
-            aside = runner.set_aside(project / ".echolot" / "traces", scenario,
-                                     log=lambda m: print(m, file=sys.stderr))
-            if aside is not None:
-                # Relative to the project, so the record survives the tree
-                # being moved or cloned somewhere else.
-                with contextlib.suppress(ValueError):
-                    aside = aside.resolve().relative_to(project.resolve())
-        damaged = hunt_mod.unreadable(project)
-        kept = hunt_mod.set_aside_unreadable(project)
-        if damaged:
-            print(f"[!] `{hunt_mod.HUNT_FILE.as_posix()}` did not load: {damaged}. "
-                  + (f"Set aside as {_shown_path(kept, project)}; this opens a new investigation beside it."
-                     if kept else "It could not be set aside and is written over."),
-                  file=sys.stderr)
-        before = hunt_mod.load(project)
-        h = hunt_mod.open_new(project, question,
-                              since=getattr(args, "hunt_since", None),
-                              scenario=scenario, config_sha=sha,
-                              traces_aside=aside, confirmed=confirmed)
+        # Moving the set aside and opening as one step, under the lock every
+        # change to the investigations takes: two questions asked at once
+        # split one set between them, and lost one of the two (#724).
+        with hunt_mod.lock(project, create=True):
+            aside = None
+            if scenario:
+                from . import runner
+                aside = runner.set_aside(project / ".echolot" / "traces", scenario,
+                                         log=lambda m: print(m, file=sys.stderr))
+                if aside is not None:
+                    # Relative to the project, so the record survives the tree
+                    # being moved or cloned somewhere else.
+                    with contextlib.suppress(ValueError):
+                        aside = aside.resolve().relative_to(project.resolve())
+            damaged = hunt_mod.unreadable(project)
+            kept = hunt_mod.set_aside_unreadable(project)
+            if damaged:
+                print(f"[!] `{hunt_mod.HUNT_FILE.as_posix()}` did not load: {damaged}. "
+                      + (f"Set aside as {_shown_path(kept, project)}; this opens a new investigation beside it."
+                         if kept else "It could not be set aside and is written over."),
+                      file=sys.stderr)
+            before = hunt_mod.load(project)
+            h = hunt_mod.open_new(project, question,
+                                  since=getattr(args, "hunt_since", None),
+                                  scenario=scenario, config_sha=sha,
+                                  traces_aside=aside, confirmed=confirmed,
+                                  # Whose the set moved aside is (#718).
+                                  last_collect=run)
         print(f'opened #{h["n"]}: "{h["question"]}"')
         # The one before it is closed by this, as abandoned when it was still
         # open: a page of it that stands there is written again to say so.
@@ -3758,9 +3876,11 @@ def cmd_hunt(args) -> int:
         # files to analyze are not five echolot would name.
         files = state.repeats(scenario, 5) if scenario and runner != "gradle" else None
         # Inside the investigation just opened: a line without `--hunt` runs
-        # outside it, and files nothing for `compare` to read (#498).
-        print(f"By hand: {state.collect_line_for(named, runner, h['n'])}, then "
-              + state.analyze_line(files, named, h["n"]), file=sys.stderr)
+        # outside it, and files nothing for `compare` to read (#498). With
+        # the config given and from where this ran (#719).
+        shown = state.shown_from(project, config, Path.cwd())
+        print(f"By hand: {state.collect_line_for(named, runner, h['n'], shown=shown)}, then "
+              + state.analyze_line(files, named, h["n"], shown=shown), file=sys.stderr)
         return 0
 
     if conclusion is not None:
@@ -3804,7 +3924,8 @@ def cmd_status(args) -> int:
     if _named_config_missing(args):
         return 2
     project, config = _project_and_config(args)
-    st = state.project_state(project, config)
+    # The lines to run by hand are run from here, where this was run (#719).
+    st = state.project_state(project, config, here=Path.cwd())
     if getattr(args, "next", False):
         # One word for the skill to switch on; the prose is for people.
         print(state.next_kind(st))
@@ -3831,7 +3952,7 @@ def cmd_status(args) -> int:
     if cfg is None:
         lines.append(("config", "none — no echolot.yml here"))
     elif cfg.get("error"):
-        lines.append(("config", f"echolot.yml does not load: {cfg['error']}"))
+        lines.append(("config", f"{Path(cfg['path']).name} does not load: {cfg['error']}"))
     else:
         many = st.get("scenarios")
         bits = [f"{len(many)} scenarios" if many else f"scenario {cfg['scenario']}",
@@ -3840,7 +3961,8 @@ def cmd_status(args) -> int:
             bits.append(f"runner {cfg['runner']}")
         if cfg.get("local"):
             bits.append("local.yml applied")
-        lines.append(("config", "echolot.yml · " + " · ".join(bits)))
+        # The file given: `-c perf.yml` read as a project's echolot.yml (#719).
+        lines.append(("config", f"{Path(cfg['path']).name} · " + " · ".join(bits)))
     recap = state.next_kind(st) == "resume-or-new"
     lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"), st)))
     collecting = state.collect_line(st)
@@ -6513,6 +6635,10 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--html", action="store_true",
                     help="write the comparison as a page for a person, beside "
                          "comparison.json (comparison.html): one file that opens from disk")
+    cp.add_argument("--names", action="store_true",
+                    help="print every slice name that is in every run of one side and in "
+                         "no run of the other, in place of the comparison, which lists "
+                         f"{compare_mod.NAMES_SHOWN} a side")
     cp.set_defaults(func=cmd_compare)
 
     gd = add("guide", "agent", "[<topic>]",

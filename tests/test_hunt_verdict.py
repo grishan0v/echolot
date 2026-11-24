@@ -446,7 +446,8 @@ def test_a_closed_or_missing_hunt_is_still_said_before_the_verdict_is_read(
           and "already concluded" in err, err)
     check("and the first stands", hunt_mod.load(p)["verdict"] == VERDICT)
 
-    empty = tmp_path / "nothing"
+    # Beside the project: inside it, its echolot.yml is found above (#721).
+    empty = tmp_path.parent / f"{tmp_path.name}-nothing"
     empty.mkdir()
     code, _, err = run(empty, "hunt", "--done", "--verdict", "-", stdin="{}")
     check("no hunt", code == 1 and "no investigation is open" in err, err)

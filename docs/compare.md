@@ -128,6 +128,42 @@ its range read from each run's count. The section lists the markers that moved
 by time or by calls; the header counts them as `markers moved`. A report
 written before the table existed is compared without it.
 
+### Names on one side only
+
+A slice no detector reads never reaches the table, however clearly it tells
+the two builds apart. A busy loop of 200 ms planted on the main thread with
+no section of its own grew the window by 277 ms and gave no row on either
+side; the one slice name in all ten traces after and in none of the ten
+before was the JIT compilation of the method the loop is in, which is where
+the code is. So `analyze` keeps the window's slice names, thread and async,
+and `compare` lists the names that are in every run of one side and in no run
+of the other:
+
+| Where | Only | Runs | Total, ms | Longest, ms | Thread |
+|---|---|---|---|---|---|
+| JIT compiling void com.example.app.feature.ListViewModel.prepare() (kind=Baseline) from /data/app/~~#/com.example.app-#/base.apk | after | 3/3 against 0/3 | 6 | 6 | Jit thread pool |
+
+Every number in a name is folded, as in [the same thing under a new
+name](#the-same-thing-under-a-new-name), and so is the directory Android
+installs the APK in, which it picks anew at every install: without that,
+every compilation of the app's code would be new in a comparison of two
+builds. The project's own markers keep theirs. A name is listed when it takes
+a millisecond or more a run, by the median, and the other side holds it in no
+run at all, for however short a time; a name the other side ran under a
+millisecond grew and is not new. Total is that median, Longest the longest
+single occurrence. Names a row of the tables above already has as new or gone
+are left out, and with them the markers a round added.
+
+How many runs a side it takes: two halves of ten cold starts of one build of a
+busy app, set against each other, had about a hundred such names with one run
+a side, five to seventeen with two, three or four with three, and one at most
+from four on, a method the JIT compiled in one half only. So nothing is
+listed with fewer than three runs on either side, and a line says so; from
+five runs a name may be missing from one of them. The comparison shows ten
+names a side and counts the rest; `echolot compare … --names` prints every one
+in place of the comparison, and `comparison.json` has them under `names`. A
+report written before the names were kept is compared without the section.
+
 ## The Holds column
 
 This is the column that decides whether a row is worth acting on. It gives
@@ -592,6 +628,25 @@ leaves two of the pairs with it at each end, and the next comparison of this
 row will not see less than that unless there are more runs or the slow one
 goes away. Absent below four runs.
 
+`slice_names` is what [names on one side only](#names-on-one-side-only) is
+read from: every slice name of the window, folded, from every run.
+
+```json
+{ "runs": 10, "floor_ms": 1.0, "names": 17753, "kept": 946,
+  "rows_gz": "H4sIAAAAAAAC/…", "hash": "sha1:4", "seen": "AAGk…" }
+```
+
+`rows_gz` holds the `kept` names that are in all runs but one or more and take
+`floor_ms` or more a run, each with its `runs`, `total_ms` (the median),
+`max_ms` and `threads`; `seen` every one of the `names` any run held, whatever
+it took, as the first four bytes of its SHA-1, sorted. A name of the other
+side that is not in `seen` was in no run; two names share four bytes about
+once in four billion, and then a name is missed rather than made up. Both are
+packed, the rows as gzipped JSON, both in base64: ten cold starts of a busy
+app held 17,753 names, and as JSON the 946 rows alone were 228 KB beside the
+285 KB of the rest of the report. Packed, the two are 133 KB. What one trace
+holds is what [`echolot names`](analysing.md#names--how-art-names-things-here) prints.
+
 ## A plain reading
 
 `echolot compare --plain` says the same comparison to someone who has just
@@ -621,16 +676,18 @@ BETTER        Faster by 0.7 s. The launch went from 2.1 s to 1.4 s, 33% less. Me
 
 No model writes any of it: the same two reports give the same words. The
 verdict is by the scenario's window, or by the frames the app made late when
-the window runs to the end of the recording (below). Up to three notes follow it: whether the
+the window runs to the end of the recording (below). Up to four notes follow it: whether the
 launch is within `scenario.budget_ms`, in the sentence the report's own
 [plain reading](analysing.md#a-plain-reading) has for it; that the repeats are
 too few for the Holds column, or, with fewer than three a side, for anything to
-be called a change, and then that note comes first; and that the two sides were
+be called a change, and then that note comes first; that the two sides were
 not recorded alike,
 which is the warnings of
 [When two reports may not be compared](#when-two-reports-may-not-be-compared)
-said for a person. Then one item per check, with a sentence of what changed in
-the words that reading uses for the check.
+said for a person; and the work only one side has, up to three of
+[the names on one side only](#names-on-one-side-only) a side, which no check
+reads and so none moves for. Then one item per check, with a sentence of what
+changed in the words that reading uses for the check.
 
 A movement is not a level. On a report a check has a level of attention: how
 much it needs you. Here it has a movement: which way it went.
@@ -836,6 +893,14 @@ found it, `calls`: `before` and `after` (median calls per run), `delta`,
 `moved`, and `shift` (`low`, `high`) with `holds`, read from each run's count.
 `summary.markers_moved` counts the rows that moved by time or by calls.
 
+`names` holds [the names on one side only](#names-on-one-side-only): `after`
+and `before`, each a list of `name`, `runs` on its side and `other`, the
+other side's (`0/n`), `total_ms`, `max_ms` and `threads`; `runs`, how many
+each side had; `floor_ms` and `least_runs`, the bars; and `too_few`, true
+when a side had fewer runs than that and nothing was looked for.
+`summary.only_after` and `summary.only_before` count them. `names` is `null`
+when either report holds no names: one written before they were kept.
+
 `change` is one of `appeared`, `grew`, `shrank`, `vanished`, `steady`, so an
 agent can take the rows worth looking at without parsing any numbers. As a
 JMESPath filter:
@@ -864,7 +929,8 @@ others: `scenario` and `process`, what the two reports are of; `verdict`
 read from, and `frames`, each side's late frames — `late`, `count`, `share`
 and its `low` and `high` over the runs, `runs` — where the window runs to the
 end of the recording), `window` (each side's median, least and
-most launch, and the runs), `notes` (`id`: `budget`, `few_runs`, `unlike`;
+most launch, and the runs), `notes` (`id`: `budget`, `few_runs`, `unlike`,
+`names`;
 `attention`, a `title` and a `text`) and `checks`, one item per detector:
 `movement`, `title`, `why`, the sentence `text`, how many `findings` went, came
 and stayed, and under `before` and `after` what that report said of the check:
