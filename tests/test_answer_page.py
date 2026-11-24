@@ -841,7 +841,9 @@ def test_about_this_investigation(states):
                     ("Opened", "2026-03-02 09:00 UTC"), ("Closed", "2026-03-02 09:18 UTC, after 18 min 35 s"),
                     ("Rounds", "2 rounds, 10 recordings in all"),
                     ("Files", "The reports of the rounds are in the folder reports beside this page. "
-                              "echolot hunt --show 3 prints this investigation as text.")], about)
+                              "echolot hunt --show 3 prints this investigation as text, and "
+                              "echolot reflect --hunt 3 reports how the agent that worked in it went.")],
+          about)
     check("the folds, in their order", [d.one("summary").text for d in page.all("details")]
           == ["How sure the agent is", "How it got there, round by round",
               "What was ruled out, and what else was measured", "About this investigation"])

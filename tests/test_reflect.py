@@ -771,3 +771,282 @@ def test_the_same_transcript_in_the_tools_own_checkout_is_not_judged_as_a_hunt(
     fired = {s["id"] for s in report["signals"] if s["severity"] != "skip"}
     expect("trace_opened_directly" not in fired,
            "no warning about a rule that does not apply")
+
+
+# ---------------------------------------------------------------------------
+# The shapes behind the false warnings (#547)
+#
+# On one day's three sessions, three of reflect's eight warnings were right,
+# and the most frequent were the false ones: `doctor_first` three times, all
+# false, `trace_opened_directly` twice, one false, `conclusion_shape` once,
+# false. Each cause was fixed on its own (#529, #540, #541, #542, #544), and
+# each with a test of its own piece — none of them through the transcript a
+# real session leaves, read the way `reflect` reads it. This is that session:
+# every shape planted once, beside the one shape among them that is a real
+# warning, and a verdict for every signal.
+
+SHAPES = "fedcba98-2222-4222-8222-222222222222"
+SHAPES_AGENT = "b2c3d4e5f6a7b8c9d"
+SHAPES_T = 3 * 3600     # three hours after the first session, the same day
+SHAPES_BRIEF = ("Investigation #3. Traces: .echolot/traces/cold_000.perfetto-trace. "
+                "Regressed: cold start 640 ms, it was 410 ms. After: commit 1a2b3c. "
+                "Return Place / Evidence / Mechanism / Suggestion / Confidence / "
+                "Ruled out / Also measured / Cleanup.")
+SHAPES_CONCLUSION = ("Place: Store.kt:40\nEvidence: main_thread_block 212 ms\n"
+                     "Mechanism: a sync read on the main thread (inferred)\n"
+                     "Suggestion: move the read off the main thread\n"
+                     "Confidence: medium — one round of markers\n"
+                     "Ruled out: gc_pressure, 8 ms\nAlso measured: AGENTTMP_read 41 ms\n"
+                     "Cleanup: temporary instrumentation removed")
+
+
+def batch(rows, t, cwd, uid, commands, output, dt=1.0):
+    """Several shell commands in one call of a batch MCP tool (#542)."""
+    MSG[0] += 1
+    rows.append(assistant(t, cwd, [tool_use(
+        uid, "mcp__plugin_context-mode_context-mode__ctx_batch_execute",
+        {"commands": [{"label": c.split()[1], "command": c} for c in commands]})]))
+    rows.append(tool_result(t + dt, cwd, uid, output))
+
+
+def build_shapes(root: Path, project: Path) -> Path:
+    """A hunt whose every shape once raised a warning it did not deserve."""
+    cwd = str(project)
+    pdir = root / cwd.replace("/", "-")
+    (pdir / SHAPES / "subagents").mkdir(parents=True, exist_ok=True)
+
+    def at(t: float) -> float:
+        return SHAPES_T + t
+
+    def own(rows: list[dict]) -> list[dict]:
+        for r in rows:
+            r["sessionId"] = SHAPES
+        return rows
+
+    m: list[dict] = []
+    m.append(user_text(at(0), cwd, "<command-message>echolot-hunt</command-message>\n"
+                                    "<command-name>/echolot-hunt</command-name>"))
+    # Text handed to another command, not a call: the repository's name in
+    # `gh -R`, a next step said by `echo` (#529).
+    bash(m, at(5), cwd, "sh_gh", "gh issue view 12 -R owner/echolot --json title,body",
+         '{"title": "cold start"}')
+    bash(m, at(7), cwd, "sh_echo", 'echo "next: echolot collect -n 3 --hunt 3"',
+         "next: echolot collect -n 3 --hunt 3")
+    # The host refused the first Agent call, quoting the brief back — with
+    # the eight fields in it. No run of the subagent, and no conclusion
+    # (#541).
+    MSG[0] += 1
+    m.append(assistant(at(10), cwd, [tool_use("sh_refused", "Agent", {
+        "subagent_type": "perf-hunter", "description": "Find the cause",
+        "prompt": SHAPES_BRIEF})]))
+    m.append(tool_result(at(11), cwd, "sh_refused",
+                         "A hook changed this call's input after auto mode reviewed it. "
+                         f"Input was: {SHAPES_BRIEF}", is_error=True))
+    # The second one ran, in the background, and hands its answer back
+    # through SubagentHandback; the main context hears "not reported yet"
+    # twice in the meantime (#540).
+    MSG[0] += 1
+    m.append(assistant(at(15), cwd, [tool_use("sh_agent", "Agent", {
+        "subagent_type": "perf-hunter", "description": "Find the cause",
+        "prompt": SHAPES_BRIEF})]))
+    m.append(tool_result(at(16), cwd, "sh_agent", "Async agent launched", tur={
+        "isAsync": True, "status": "async_launched", "agentId": SHAPES_AGENT}))
+    for t in (600, 1200):
+        m.append(user_text(at(t), cwd,
+                 f"<task-notification>\n<task-id>{SHAPES_AGENT}</task-id>\n"
+                 f"<result>This agent has not reported yet: it is waiting on its own "
+                 f"background work and will deliver its report through "
+                 f"SubagentHandback when that finishes.</result>\n</task-notification>"))
+    # A listing of the traces is no opening of one.
+    bash(m, at(1700), cwd, "sh_ls", "ls -la .echolot/traces/*.perfetto-trace",
+         "-rw-r--r--  1 user  staff  41943040 cold_000.perfetto-trace")
+    # And the one real warning: a script written through a heredoc, then run
+    # on a trace (#529). Its queries say what the agent went looking for.
+    bash(m, at(1710), cwd, "sh_script",
+         "cat > verify.py <<'EOF'\n"
+         "import sys\nfrom perfetto.trace_processor import TraceProcessor\n"
+         "tp = TraceProcessor(trace=sys.argv[1])\n"
+         "# the numbers from the report, checked\n"
+         "rows = tp.query(\"select s.ts, s.dur from slice s join thread_track t "
+         "on s.track_id = t.id where s.name = 'inflate'\")\n"
+         "waits = tp.query('''SELECT state, dur FROM thread_state WHERE utid = 1''')\n"
+         "EOF", "")
+    bash(m, at(1715), cwd, "sh_run", "python3 -I verify.py .echolot/traces/cold_000.perfetto-trace",
+         "inflate 212 ms", dt=8.0)
+    MSG[0] += 1
+    m.append(assistant(at(1740), cwd, [{"type": "text", "text":
+             "Done: the read in Store.kt:40 runs on the main thread; the hunter's "
+             "answer is above."}]))
+    (pdir / f"{SHAPES}.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in own(m)) + "\n", encoding="utf-8")
+
+    s: list[dict] = []
+    s.append(user_text(at(17), cwd, SHAPES_BRIEF))
+    bash(s, at(20), cwd, "sb_guide", "echolot guide loop", "# The loop\n…")
+    # A batch tool's commands, each a call of its own (#542): two help
+    # lookups before the first use of either command, then a round.
+    batch(s, at(30), cwd, "sb_help",
+          ["echolot mark --help", "echolot anr --help"], "usage: echolot mark …")
+    batch(s, at(40), cwd, "sb_round",
+          ["echolot mark --apply", "echolot collect -n 3 --hunt 3",
+           "echolot analyze .echolot/traces/*.perfetto-trace --hunt 3"],
+          "markers placed\n3 runs recorded\n# Marker Report", dt=330.0)
+    MSG[0] += 1
+    s.append(assistant(at(1500), cwd, [{"type": "text", "text":
+             "Waiting for the build to finish before the next round."}]))
+    MSG[0] += 1
+    s.append(assistant(at(1560), cwd, [tool_use("sb_back", "SubagentHandback",
+                                                {"message": SHAPES_CONCLUSION})]))
+    (pdir / SHAPES / "subagents" / f"agent-{SHAPES_AGENT}.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in own(s)) + "\n", encoding="utf-8")
+    return pdir
+
+
+def shapes_log(project: Path) -> None:
+    """The run log the hunt left: no doctor of its own, but one that passed
+    twenty minutes before its first analyze, in a session of the person's
+    (#544); its round, filed under investigation 3 and carrying its id."""
+    def line(t, cmd, session=SHAPES, ms=1000, **facts):
+        row = {"ts": (T0 + timedelta(seconds=SHAPES_T + t)).isoformat(timespec="seconds"),
+               "cmd": cmd, "argv": [cmd], "cwd": str(project), "exit": 0, "ms": ms,
+               "version": "0.17.0"}
+        if session:
+            row.update(session=session, agent="claude-code")
+        if facts:
+            row["facts"] = facts
+        return row
+
+    log = project / recorder.LOG_FILE
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a", encoding="utf-8") as f:
+        for row in (line(40 - 20 * 60, "doctor", session=OTHER, checks=12, failed=[]),
+                    line(40, "mark"),
+                    line(41, "collect", ms=300000, inside=3),
+                    line(341, "analyze", ms=25000, inside=3, start_anchor_matches=1,
+                         end_anchor_matches=1, window_ms=640)):
+            f.write(json.dumps(row) + "\n")
+
+
+# What every signal says about each session, `None` for silence. A signal
+# added to SIGNALS without its verdict here fails the test below: a new
+# signal, or a change to one, lands with its case (#547).
+VERDICTS = {
+    "entry_fumbling": "info", "agent_prompt_gaps": "info", "doctor_first": "ok",
+    "trace_opened_directly": "ok", "loop_in_main_context": "ok", "guides_in_main": "ok",
+    "rounds_over_max": "ok", "instrumentation_prefix": "warn", "edits_outside_allowed": "warn",
+    "cleanup_balance": "ok", "conclusion_shape": "ok", "config_bypassed": "warn",
+    "thresholds_by_hand": "info", "confirmed_changed": None, "baseline_lost": "warn",
+    "report_sliced_by_hand": "info", "help_lookups": "info", "bypass_tools": "info",
+    "agent_reported_bugs": "info", "echolot_failures": "info", "report_not_the_scenario": "warn",
+    "retries": "info", "env_friction": "info", "code_read_by_hand": "warn", "long_gaps": "info",
+    "context_hogs": None,
+}
+SHAPES_VERDICTS = {
+    "entry_fumbling": None, "agent_prompt_gaps": None,
+    # A passing doctor in the run log twenty minutes before: #544.
+    "doctor_first": "ok",
+    # The script run on the trace, and nothing else — not `ls`: #529.
+    "trace_opened_directly": "warn",
+    "loop_in_main_context": "ok", "guides_in_main": "ok", "rounds_over_max": "ok",
+    "instrumentation_prefix": None, "edits_outside_allowed": None, "cleanup_balance": None,
+    # The answer through SubagentHandback, not the quoted brief: #540, #541.
+    "conclusion_shape": "ok",
+    "config_bypassed": None, "thresholds_by_hand": None, "confirmed_changed": None,
+    "baseline_lost": None, "report_sliced_by_hand": None,
+    # The batch's two help lookups: #542.
+    "help_lookups": "info",
+    "bypass_tools": None, "agent_reported_bugs": None, "echolot_failures": None,
+    "report_not_the_scenario": None, "retries": None,
+    # The refused Agent call is the host's friction, not a run: #541.
+    "env_friction": "info",
+    "code_read_by_hand": None, "long_gaps": "info", "context_hogs": None,
+}
+
+
+@pytest.fixture(scope="module")
+def shapes(tmp_path_factory):
+    """The session of shapes beside the first one, read by `--session`."""
+    root = tmp_path_factory.mktemp("shapes")
+    project = root / "app-project"
+    (project / "app/src/main/kotlin").mkdir(parents=True)
+    (project / "app/src/main/kotlin/Store.kt").write_text("class Store\n", encoding="utf-8")
+    (project / "echolot.yml").write_text(
+        "project:\n  process: app\n  source_root: app/src/main/kotlin\n"
+        "scenario:\n  name: cold\n"
+        "instrumentation:\n  allowed: [\"app/src/main\"]\n  temp_prefix: AGENTTMP_\n",
+        encoding="utf-8")
+    transcripts = build_shapes(root / "projects", project)
+    shapes_log(project)
+    here = os.getcwd()
+    os.chdir(project)
+    try:
+        with pytest.MonkeyPatch.context() as mp, \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            for var, _host in recorder._SESSION_ENV:
+                mp.delenv(var, raising=False)
+            code = main(["reflect", "--session", SHAPES[:8], "--transcripts", str(transcripts),
+                         "--project", str(project)])
+    finally:
+        os.chdir(here)
+    check("reflect exits 0 on the shapes", code == 0, f"exit {code}")
+    return json.loads((project / ".echolot" / "reflect" / f"{SHAPES[:8]}.json")
+                      .read_text(encoding="utf-8"))
+
+
+def test_every_signal_has_a_verdict_on_both_sessions():
+    """A signal is added with what it says about the planted sessions."""
+    from echolot.reflect import signals
+    names = {d.__name__ for d in signals.SIGNALS}
+    check("every signal has a verdict on the first session", set(VERDICTS) == names,
+          sorted(names ^ set(VERDICTS)))
+    check("and on the session of shapes", set(SHAPES_VERDICTS) == names,
+          sorted(names ^ set(SHAPES_VERDICTS)))
+
+
+def _verdicts(report: dict) -> dict:
+    sig = {x["id"]: x["severity"] for x in report["signals"]}
+    return {name: sig.get(name) for name in VERDICTS}
+
+
+def test_every_signal_says_what_it_should_on_the_first_session(reflected):
+    report, _ = reflected
+    got = _verdicts(report)
+    wrong = {k: (got[k], v) for k, v in VERDICTS.items() if got[k] != v}
+    check("each signal's verdict, warn to silence, is the one planted", not wrong,
+          f"(got, expected): {wrong}")
+
+
+def test_the_shapes_behind_the_false_warnings_read_as_what_they_are(shapes):
+    got = _verdicts(shapes)
+    wrong = {k: (got[k], v) for k, v in SHAPES_VERDICTS.items() if got[k] != v}
+    check("each signal's verdict on the shapes is the one planted", not wrong,
+          f"(got, expected): {wrong}")
+    sig = {x["id"]: x for x in shapes["signals"]}
+    calls = shapes["echolot_calls"]
+    check("`gh -R owner/echolot` and an echo are no calls; each command of a batch is one",
+          sorted(c["sub"] for c in calls)
+          == ["analyze", "anr", "collect", "guide", "mark", "mark"],
+          [c["command"][:60] for c in calls])
+    analyze = next(c for c in calls if c["sub"] == "analyze")
+    check("the batch's analyze took its own line of the log",
+          (analyze["recorded"] or {}).get("session") == SHAPES, analyze["recorded"])
+    check("one subagent, the one that ran: the refused call is none",
+          [h["id"] for h in shapes["hunts"]] == [SHAPES_AGENT], shapes["hunts"])
+    check("its answer is the hand-back, every field in it",
+          all(shapes["hunts"][0]["conclusion_fields"].values())
+          and shapes["hunts"][0]["confidence"] == "medium — one round of markers",
+          shapes["hunts"][0]["conclusion_fields"])
+    check("the doctor is the person's, twenty minutes before",
+          "20 min" in sig["doctor_first"]["title"], sig["doctor_first"]["title"])
+    opened = sig["trace_opened_directly"]
+    check("the script run on the trace is the one row; the listing is none",
+          [r["how"] for r in opened["rows"]] == ["ran verify.py, written to open the trace"],
+          opened["rows"])
+    check("and the advice names what its queries read",
+          "`slice`, `thread_track`, `thread_state`" in opened["hint"], opened["hint"])
+    kinds = {r["kind"] for r in sig["env_friction"]["rows"]}
+    check("the refusal is the host's friction", "hook redirected the call" in kinds, kinds)
+    check("the help advice names both lookups, before the first use, and the flag mark then took",
+          "`mark --help` (then ran with `--apply`)" in sig["help_lookups"]["hint"]
+          and "`anr --help`" in sig["help_lookups"]["hint"], sig["help_lookups"]["hint"])

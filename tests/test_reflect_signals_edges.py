@@ -361,3 +361,132 @@ def test_a_session_whose_reports_said_nothing_raises_nothing() -> None:
             _analyze_run(20, start_anchor_matches=1, end_anchor_matches=1, drawn=290)]
     check("quiet", signals_mod.report_not_the_scenario(
         s, facts_mod.gather(s, None, runs), None) is None)
+
+
+# ------------------------------------------------- advice that names the case
+#
+# The hint used to be one sentence per signal, the same in every session (#547).
+
+
+def test_help_advice_says_which_help_and_what_was_then_run() -> None:
+    s = _session([_bash(1, "echolot anr --help"),
+                  _bash(2, "echolot anr a.perfetto-trace --hunt 3 -c echolot.yml --top=5"),
+                  _bash(3, "echolot analyze a.perfetto-trace"),
+                  _bash(4, "echolot analyze --help"),
+                  _bash(5, "echolot compare --help"),
+                  _bash(6, "echolot explain main_thread_block")])
+    sig = _sig(s, "help_lookups")
+    rows = {r["command"]: r for r in sig.rows}
+    check("each lookup says whether the command ran before it and what it then ran with",
+          rows["echolot anr --help"]["used before"] == 0
+          and rows["echolot anr --help"]["then"] == "--hunt --top"
+          and rows["echolot analyze --help"]["used before"] == 1
+          and rows["echolot compare --help"]["then"] == "no `compare` after it"
+          and "then" not in rows["echolot explain main_thread_block"], sig.rows)
+    hint = sig.hint or ""
+    check("the flags every command takes are no part of it", "`-c`" not in hint, hint)
+    check("and the advice is the case, each kind said once",
+          "`anr --help` (then ran with `--hunt` and `--top`) before the first use" in hint
+          and "`analyze --help` after using it already" in hint
+          and "`compare --help` and did not run it" in hint
+          and "`explain main_thread_block`" in hint, hint)
+
+
+def test_the_parts_of_the_report_a_one_liner_took_are_named() -> None:
+    paths = facts_mod.report_paths
+    check("a chain of keys is one path, an index between keys too",
+          paths("r=json.load(open('report.json')); print(r['detectors'][0][\"rows\"][:3])")
+          == ["detectors.rows"])
+    check("`.get` is a key", paths("d.get('summary')") == ["summary"])
+    check("separate selections are separate paths",
+          paths("print(r['window']['duration_ms'], r['summary'])")
+          == ["window.duration_ms", "summary"])
+    check("a jq path is one", paths("jq '.window.duration_ms' .echolot/out/report.json")
+          == ["window.duration_ms"])
+    check("the file's name is no key", paths("json.load(open('report.json'))") == [])
+    s = _session([
+        _bash(1, "python3 -c \"import json; r=json.load(open('report.json')); print(r['window'])\""),
+        _bash(2, "jq '.window' .echolot/out/report.json"),
+        _bash(3, "python3 -c \"import json; r=json.load(open('report.json')); print(r['summary'])\"")])
+    sig = _sig(s, "report_sliced_by_hand")
+    check("the advice counts them, the most taken first",
+          "`window` (2×), `summary` (1×)" in (sig.hint or ""), sig.hint)
+
+
+def test_doctor_advice_says_what_the_log_and_the_session_held() -> None:
+    def hint(calls: list[Call], runs: list[dict]) -> str:
+        s = _session(calls)
+        sig = signals_mod.doctor_first(s, facts_mod.gather(s, None, runs), None)
+        check("doctor_first warns", sig.severity == "warn", sig.title)
+        return sig.hint or ""
+
+    analyze = _bash(1000, "echolot analyze a.perfetto-trace")
+    got = hint([analyze], [])
+    check("no doctor anywhere, and the door never ran",
+          "Neither the session nor the run log has a doctor" in got
+          and "never ran `echolot`" in got, got)
+    got = hint([_bash(900, "echolot 2>&1 | tail -20"), analyze],
+               [_doctor_run(1000 - 600, exit=1, failed=["adb", "tp"])])
+    check("a doctor that failed, said with what it failed on, and the door that ran",
+          "failed (adb, tp)" in got and "`echolot` ran at 10:15:00" in got, got)
+    got = hint([analyze], [_doctor_run(1000 - 30 * 3600)])
+    check("one that passed too long ago", "30 h before it — past the 24 h" in got, got)
+
+
+def test_trace_advice_names_what_the_queries_read() -> None:
+    s = _session([_bash(1, "trace_processor_shell -Q 'select dur from thread_state' a.perfetto-trace"),
+                  _bash(2, "strings -n 8 a.perfetto-trace | head")])
+    sig = _sig(s, "trace_opened_directly")
+    check("the tables a query read", sig.rows[0].get("queried") == "thread_state"
+          and "queried" not in sig.rows[1], sig.rows)
+    check("named in the advice", "Its queries read `thread_state`" in (sig.hint or ""), sig.hint)
+    s = _session([_bash(2, "strings -n 8 a.perfetto-trace | head")])
+    check("and said to be unseen when no query shows",
+          "The query itself is not in the transcript" in (_sig(s, "trace_opened_directly").hint or ""))
+    check("a python import is no table", facts_mod.sql_tables(
+        "from perfetto.trace_processor import TraceProcessor\n# select the rows from the report")
+        == [])
+
+
+def test_reading_advice_says_whether_the_loop_ran_mark() -> None:
+    def reading(with_mark: bool):
+        calls = [_bash(1, "echolot guide loop", agent="sub:h1")]
+        if with_mark:
+            calls.append(_bash(2, "echolot mark --apply", agent="sub:h1"))
+        calls += [_bash(3 + i, f"cat app/src/main/kotlin/F{i}.kt", agent="sub:h1", chars=4000)
+                  for i in range(12)]
+        s = _session(calls)
+        s.subagents = [SubAgent(id="h1", type="perf-hunter", started=_ts(0), ended=_ts(100))]
+        return _sig(s, "code_read_by_hand")
+
+    sig = reading(with_mark=False)
+    check("a loop that never ran mark is said to have read instead",
+          sig.rows[0]["echolot mark"] == 0 and "never ran `echolot mark`" in (sig.hint or ""),
+          (sig.rows, sig.hint))
+    sig = reading(with_mark=True)
+    check("one that did, with the reads after it",
+          sig.rows[0]["reads after mark"] == 12
+          and "read 12 more time(s) after it" in (sig.hint or ""), (sig.rows, sig.hint))
+
+
+def test_each_command_of_a_batch_takes_its_own_line() -> None:
+    def batch(i: int, cmd: str) -> Call:
+        return Call(id="b" + (f"#{i}" if i else ""), ts=_ts(0), tool="mcp__x__ctx_batch_execute",
+                    input={}, command=cmd, duration_s=330.0)
+
+    s = _session([batch(0, "echolot collect -n 3 --hunt 3"),
+                  batch(1, "echolot analyze .echolot/traces/*.perfetto-trace --hunt 3")])
+    runs = [{"ts": (T0 + timedelta(seconds=1)).isoformat(timespec="seconds"), "cmd": "collect",
+             "exit": 0, "ms": 300000},
+            {"ts": (T0 + timedelta(seconds=302)).isoformat(timespec="seconds"), "cmd": "analyze",
+             "exit": 3, "ms": 25000}]
+    calls = {c.sub: c for c in facts_mod.gather(s, None, runs).echolot_calls}
+    check("the analyze five minutes into the batch took its line and its exit",
+          calls["analyze"].recorded is not None and calls["analyze"].exit == 3, calls["analyze"])
+    check("the batch's commands share it, as a line's do",
+          calls["collect"].shared == 2 and calls["analyze"].shared == 2)
+    lone = _session([Call(id="x", ts=_ts(0), tool="Bash", input={}, command="echolot analyze a.perfetto-trace",
+                          duration_s=330.0)])
+    calls = {c.sub: c for c in facts_mod.gather(lone, None, runs).echolot_calls}
+    check("a call of its own still takes only a line that started with it",
+          calls["analyze"].recorded is None, calls["analyze"].recorded)

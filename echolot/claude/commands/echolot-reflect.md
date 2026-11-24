@@ -22,6 +22,7 @@ and signals, no conclusions. You draw those.
 echolot reflect --list            # which sessions are there
 echolot reflect --last            # the newest one that used echolot (default)
 echolot reflect --session <id>    # a specific one
+echolot reflect --hunt <n>        # the one that worked inside investigation n
 echolot reflect --all             # every session, plus summary.md
 ```
 
@@ -52,7 +53,10 @@ Rules:
 
 - **A signal is a pointer, not a verdict.** `report_sliced_by_hand` eight
   times means "look at what the one-liners selected", not "add a flag". Say
-  what the agent was after and only then what would have served it.
+  what the agent was after and only then what would have served it. A
+  signal's `hint` names the case where the facts carry one — the help the
+  agent read and the flags it then used, the parts of report.json it took —
+  and is where to start.
 - **Separate the tool's faults from the environment's.** A hook redirect or a
   missing python module is friction the tool may absorb, not a bug in it; say
   which side each item is on.

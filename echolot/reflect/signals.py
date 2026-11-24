@@ -28,6 +28,7 @@ import yaml
 
 from ..config import DEFAULT_PREFIX, Config
 from . import facts as facts_mod
+from . import shell as _shell
 from .facts import (
     RE_ECHOLOT,
     RE_RE_RECORD,
@@ -39,14 +40,16 @@ from .facts import (
     gaps,
     hunt_agents,
     opens_trace,
+    report_paths,
     runs_analyze,
     runs_guide,
     shell_edits,
+    sql_tables,
     trace_reads,
 )
 from .facts import SEGMENT as _SEGMENT
 from .facts import expand_vars as _expand_vars
-from .model import BRIEFS, MAIN, TOOLS, Session, ts_to_epoch
+from .model import BRIEFS, MAIN, TOOLS, Session, strip_heredocs, ts_to_epoch
 
 
 @dataclass
@@ -204,8 +207,55 @@ def doctor_first(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                   "The protocol starts with doctor: an unchecked environment can "
                   "compute a plausible but wrong report.",
                   [{"ts": _t(analyzes[0].ts), "agent": analyzes[0].agent}],
-                  "If this repeats, put doctor into analyze itself (a cached "
-                  "self-check) instead of asking the agent to remember.")
+                  _doctor_advice(s, analyzes[0], prior))
+
+
+_REDIRECTION = re.compile(r"^\d*(?:[<>]|&>)")
+
+
+def _door(s: Session, until: float) -> str | None:
+    """When the session ran `echolot` (or `status`) before `until`: the door
+    that says whether a doctor is due. None when it never did."""
+    for c in sorted(s.bash(), key=lambda x: ts_to_epoch(x.ts)):
+        if ts_to_epoch(c.ts) > until:
+            break
+        for cmd, h, _ in _shell.runs(strip_heredocs(c.shell)):
+            if _shell.name(cmd.words[h].value) != "echolot":
+                continue
+            rest = [w.value for w in cmd.words[h + 1:]
+                    if not w.value.startswith("-") and not _REDIRECTION.match(w.value)]
+            if not rest or rest[0] in ("status", "next"):
+                return c.ts
+    return None
+
+
+def _doctor_advice(s: Session, first, prior: dict[str, Any] | None) -> str:
+    """What the run log and the session say about the missing doctor, and
+    where that points: the advice used to be one sentence for every session,
+    "put doctor into analyze itself", whatever had happened (#547)."""
+    if prior is None:
+        log = "Neither the session nor the run log has a doctor before it."
+    elif not prior["passed"]:
+        failed = (f" ({', '.join(map(str, prior['failed']))})"
+                  if prior.get("failed") else "")
+        log = (f"The run log's last self-check, `{prior.get('cmd')}` "
+               f"{_age(prior['age_s'])} before it, failed{failed}, and none ran since.")
+    elif not prior["same_version"]:
+        log = (f"The run log's last passing `{prior.get('cmd')}` ran under echolot "
+               f"{prior.get('version')}, not the version that analysed.")
+    else:
+        log = (f"The run log's last passing `{prior.get('cmd')}` was "
+               f"{_age(prior['age_s'])} before it — past the "
+               f"{facts_mod.DOCTOR_FRESH_S // 3600} h `echolot` takes one for.")
+    door = _door(s, ts_to_epoch(first.ts))
+    if door:
+        where = (f"`echolot` ran at {_t(door)}, before the analyze, and says when a "
+                 "doctor is due: the session went on past what it said — the door's "
+                 "wording is what to look at.")
+    else:
+        where = ("The session never ran `echolot`, which asks for one: it went "
+                 "straight to `analyze`, so whatever sent it there skipped the door.")
+    return f"The analyze at {_t(first.ts)}. {log} {where}"
 
 
 def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
@@ -221,18 +271,35 @@ def trace_opened_directly(s: Session, f: Facts, cfg: Config | None) -> Signal | 
         # file it processes (#542).
         elif c.code is not None and (opens_trace(c.code)
                                      or (c.path and RE_TRACE_LITERAL.search(c.path))):
-            rows.append({"ts": _t(c.ts), "agent": c.agent,
-                         "how": f"{c.tool} ({c.language or 'code'})",
-                         "command": " ".join((c.code or "").split())[:120]})
+            row = {"ts": _t(c.ts), "agent": c.agent,
+                   "how": f"{c.tool} ({c.language or 'code'})",
+                   "command": " ".join((c.code or "").split())[:120]}
+            if sql_tables(c.code or ""):
+                row["queried"] = ", ".join(sql_tables(c.code or ""))
+            rows.append(row)
     if not rows:
         return Signal("trace_opened_directly", "ok", "the trace was never opened directly",
                       "Everything went through echolot, as the one rule says.")
     return Signal("trace_opened_directly", "warn", "the agent opened the trace itself",
                   "The one rule of the skill: the agent never looks at the trace. "
                   "When it does, the window fills and the run becomes unstable.",
-                  rows,
-                  "Whatever it went looking for is a missing view in echolot: "
-                  "see what the query was and consider a command for it.")
+                  rows, _trace_advice(rows))
+
+
+def _trace_advice(rows: list[dict[str, Any]]) -> str:
+    """What the agent ran on the trace and what its queries read: the view
+    it went looking for, named (#547)."""
+    hows = list(dict.fromkeys(r["how"] for r in rows))
+    tables = list(dict.fromkeys(t.strip() for r in rows
+                                for t in (r.get("queried") or "").split(",") if t.strip()))
+    said = f"It went round echolot {len(rows)} time(s): {'; '.join(hows)}."
+    if tables:
+        return (f"{said} Its queries read {', '.join(f'`{t}`' for t in tables)}: what it "
+                "asked of them is the view echolot did not give it. Look for it among the "
+                "detectors and in `names` first; if none answers it, that is the one to add.")
+    return (f"{said} The query itself is not in the transcript: the script or the "
+            "command it ran says what it was after, and that is the view echolot did "
+            "not give it.")
 
 
 def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
@@ -699,16 +766,18 @@ def _around(text: str, needle: str, width: int = 110) -> str:
 
 
 def report_sliced_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
-    rows = [{"ts": _t(c.ts), "agent": c.agent,
-             "command": _around(c.shell, "report.json")}
+    def row(c, command: str, code: str) -> dict[str, Any]:
+        return {"ts": _t(c.ts), "agent": c.agent, "command": command,
+                "selected": ", ".join(report_paths(code)) or None}
+
+    rows = [row(c, _around(c.shell, "report.json"), c.shell)
             for c in s.bash() if RE_REPORT_BY_HAND.search(c.shell)]
     # The same cut made in python through an execute tool: in one session
     # about ten of them, none listed (#542). A file handed to the tool
     # whole counts when it is the report.
-    rows += [{"ts": _t(c.ts), "agent": c.agent,
-              "command": _around(c.code or "", "report.json")
-              if "report.json" in (c.code or "") else f"{_short(c.path)}: "
-              + " ".join((c.code or "").split())[:80]}
+    rows += [row(c, _around(c.code or "", "report.json")
+                 if "report.json" in (c.code or "") else f"{_short(c.path)}: "
+                 + " ".join((c.code or "").split())[:80], c.code or "")
              for c in s.calls if c.code is not None
              and (RE_CODE_READS_REPORT.search(c.code)
                   or (c.path or "").endswith("report.json"))]
@@ -720,26 +789,118 @@ def report_sliced_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | 
                   "The skill says to read the json; the agent then needed several "
                   "one-liners to get at what it wanted. Each is a view the report "
                   "does not offer directly.",
-                  rows,
-                  "Look at what the one-liners select (a detector, top rows, the "
-                  "window): a filtered view or a shorter format would save them.")
+                  rows, _sliced_advice(rows))
+
+
+def _sliced_advice(rows: list[dict[str, Any]]) -> str:
+    """Which parts of the report the one-liners took, by how often (#547)."""
+    count: dict[str, int] = {}
+    for r in rows:
+        for path in (r.get("selected") or "").split(", "):
+            if path:
+                count[path] = count.get(path, 0) + 1
+    if not count:
+        return ("The one-liners select nothing by name — they print the report "
+                "whole or walk it: read them for what they were after, and the "
+                "report's schema reference for whether it says where that is.")
+    parts = ", ".join(f"`{p}` ({n}×)" for p, n in
+                      sorted(count.items(), key=lambda kv: (-kv[1], kv[0])))
+    return (f"The one-liners took {parts} out of report.json. Those are the parts "
+            "the agent wanted by themselves: `references/report-schema.md` is where "
+            "to say where they are, and a part asked for in most sessions is a view "
+            "`report` could print.")
+
+
+# Flags every command takes, which say nothing about what the agent was after.
+_EVERY_COMMAND = {"-c", "--config", "--local", "-q", "--quiet"}
+_FLAG = re.compile(r"(?:^|\s)(--?[A-Za-z][\w-]*)")
+
+
+def _flags(argv: str) -> list[str]:
+    return list(dict.fromkeys(f.split("=")[0] for f in _FLAG.findall(argv or "")
+                              if f.split("=")[0] not in _EVERY_COMMAND
+                              and f not in ("-h", "--help")))
 
 
 def help_lookups(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     # The invocation itself, not the head of a Bash line it shared with a
     # `cd` and a python one-liner.
-    rows = [{"ts": _t(c.ts), "agent": c.agent,
-             "command": f"echolot {c.sub} {c.argv}".strip()[:100]}
-            for c in f.echolot_calls if c.is_help]
+    real = sorted((c for c in f.echolot_calls if not c.is_help and c.ran),
+                  key=lambda c: ts_to_epoch(c.ts))
+    rows = []
+    for c in f.echolot_calls:
+        if not c.is_help:
+            continue
+        row = {"ts": _t(c.ts), "agent": c.agent,
+               "command": f"echolot {c.sub} {c.argv}".strip()[:100]}
+        # What the lookup was for: the command it was about, and what that
+        # command then ran with. `explain` is about a detector, and `help`
+        # alone is the list of commands; neither has a call to follow.
+        if c.sub not in ("help", "explain"):
+            at = ts_to_epoch(c.ts)
+            row["used before"] = sum(1 for r in real if r.sub == c.sub and ts_to_epoch(r.ts) < at)
+            after = next((r for r in real if r.sub == c.sub and ts_to_epoch(r.ts) >= at), None)
+            row["then"] = (" ".join(_flags(after.argv)) or "no flag") if after \
+                else f"no `{c.sub}` after it"
+        rows.append(row)
     if not rows:
         return None
     return Signal("help_lookups", "info",
                   f"the agent consulted --help / explain {len(rows)} time(s) mid-work",
                   "The skill and references did not answer a question about how to "
                   "call the tool.",
-                  rows,
-                  "See which subcommand and flag it was after; add that line to "
-                  "SKILL.md or the reference.")
+                  rows, _help_advice(rows))
+
+
+def _help_advice(rows: list[dict[str, Any]]) -> str:
+    """Which commands' help the agent needed, whether before their first use,
+    and the flags it then used: the line that belongs in the skill. The
+    advice used to be the same sentence in every session (#547)."""
+    first: dict[str, list[str]] = {}
+    again, unused, explained, listing = [], [], [], 0
+    for r in rows:
+        words = r["command"].split()
+        sub = words[1] if len(words) > 1 else ""
+        if sub == "explain":
+            explained.append(f"`{' '.join(words[1:3])}`")
+            continue
+        if "then" not in r:
+            listing += 1
+            continue
+        name = f"`{sub} --help`"
+        if r["used before"]:
+            again.append(name)
+        elif r["then"].startswith("no `"):
+            unused.append(name)
+        else:
+            first.setdefault(name, [w for w in r["then"].split() if w.startswith("-")])
+    said = []
+    if first:
+        said.append("It read " + _and([
+            f"{name} (then ran with {_and([f'`{x}`' for x in flags]) if flags else 'no flag'})"
+            for name, flags in first.items()])
+            + " before the first use: the text that sends the agent there does not "
+            "show how to call " + ("it" if len(first) == 1 else "them")
+            + ", and those flags are the line to add.")
+    if again:
+        said.append(f"It read {_and(again)} after using "
+                    + ("it" if len(again) == 1 else "them")
+                    + " already: a flag it went back for is missing from the reference.")
+    if unused:
+        said.append(f"It read {_and(unused)} and did not run "
+                    + ("it" if len(unused) == 1 else "them")
+                    + ": the help did not answer what it was after.")
+    if explained:
+        said.append(f"It asked for {_and(explained)}: the report's row did not say "
+                    "enough to act on.")
+    if listing:
+        said.append("It listed echolot's commands: it was looking for which one to run.")
+    return " ".join(said)
+
+
+def _and(items: list[str]) -> str:
+    items = list(dict.fromkeys(items))
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
 _COMPLAINT = re.compile(
@@ -1155,6 +1316,17 @@ def code_read_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None
         if share < 20 and src["calls"] < 10:
             continue
         worst = max(worst, share)
+        # Whether the loop ran `mark`, which proposes the first markers, and
+        # how much of the reading came after it (#547).
+        label = f"sub:{h['id']}"
+        marks = [c for c in f.echolot_calls
+                 if c.agent == label and c.sub == "mark" and c.ran and not c.is_help]
+        after = None
+        if marks:
+            at = ts_to_epoch(marks[0].ts)
+            prefix = (cfg.temp_prefix if cfg else None) or DEFAULT_PREFIX
+            after = sum(1 for c in s.calls_of(label) if ts_to_epoch(c.ts) > at
+                        and facts_mod.activity_of(c, prefix) == "source reading")
         rows.append({
             "agent": h["type"] or h["id"],
             "source reads": src["calls"],
@@ -1162,6 +1334,8 @@ def code_read_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None
             "share of window": f"{share}%",
             "before first instrumentation edit": w.get("source_reads_before_first_edit", 0),
             "echolot calls": ((w.get("by_activity") or {}).get("echolot") or {}).get("calls", 0),
+            "echolot mark": len(marks),
+            "reads after mark": after,
         })
     if not rows:
         return None
@@ -1173,11 +1347,27 @@ def code_read_by_hand(s: Session, f: Facts, cfg: Config | None) -> Signal | None
                   "report names system slices and threads and `domains` has no "
                   "instrumentation to map them to: the agent reads to decide where "
                   "the first markers go.",
-                  rows,
-                  "`echolot mark` proposes the first markers from the manifest and the "
-                  "SDK and `--apply` puts them in; if the agent read the app instead, "
-                  "check whether it ran mark at all (the echolot calls column), and if "
-                  "it did, which reads came after — those are what mark did not cover.")
+                  rows, _reading_advice(rows))
+
+
+def _reading_advice(rows: list[dict[str, Any]]) -> str:
+    """Whether each loop that read the app had run `mark`, said per loop:
+    the advice used to tell the reader to go and check (#547)."""
+    said = []
+    for r in rows:
+        who = f"`{r['agent']}` read sources {r['source reads']} time(s), " \
+              f"{r['before first instrumentation edit']} before its first marker"
+        if not r["echolot mark"]:
+            said.append(f"{who}, and never ran `echolot mark`: the loop placed its first "
+                        "markers by reading instead of from what mark proposes — the "
+                        "loop guide's step that sends it to mark is what to look at.")
+        else:
+            after = r["reads after mark"]
+            said.append(f"{who}; it ran `echolot mark` and read {after} more time(s) after "
+                        "it" + (": those reads are where mark proposed nothing, the places "
+                                "to teach it." if after else
+                                ": the reading was all before it, so the loop reached mark late."))
+    return " ".join(said)
 
 
 def long_gaps(s: Session, f: Facts, cfg: Config | None) -> Signal | None:

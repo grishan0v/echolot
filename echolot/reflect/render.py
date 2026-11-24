@@ -107,6 +107,15 @@ def _head(report: dict[str, Any], out: list[str]) -> None:
         out.append(f"cwd `{src['cwd']}`" + (f" · branch `{src['git_branch']}`"
                                             if src.get("git_branch") else ""))
     out.append(_config_line(ctx.get("config") or {}))
+    inv = ctx.get("investigation")
+    if inv:
+        # Why this session and not the newest: `--hunt N` read it off the
+        # run log (#826).
+        question = f' "{inv["question"]}"' if inv.get("question") else ""
+        out.append(f"Investigation #{inv['n']}{question} ({inv.get('status') or 'open'}): "
+                   f"{inv.get('runs', 0)} run(s) of this "
+                   + ("session logged inside it, by the id they carry" if inv.get("by") == "session"
+                      else "sitting logged inside it, which carry no session id"))
     # Said here rather than left to the Not-checked section. The checks held
     # back are the loudest number in the tally below, and a reader who
     # does not know why reads it as a report that failed to do its job.
@@ -304,7 +313,7 @@ def _call_notes(c: dict[str, Any]) -> list[str]:
     if not c.get("ran", True):
         note.append("shell skipped it")
     elif c.get("shared", 1) > 1:
-        note.append(f"{c['shared']} calls in one line")
+        note.append(f"{c['shared']} calls in one tool call")
     return note
 
 

@@ -1115,7 +1115,9 @@ bytes. From the top:
   costs this, and beside it that it is what changed was not measured — with
   what echolot looked at itself (the rows cited, the markers left in the sources); how it got there,
   round by round; what was ruled out and what else was measured; and the
-  investigation's own facts.
+  investigation's own facts, with the two commands about it: `echolot hunt
+  --show N` prints it as text, and `echolot reflect --hunt N` reports how the
+  agent that worked in it went ([Reflect](reflect.md)).
 
 A cause has no level of attention. A level is worked out by echolot from
 measurements (`plain`), and a cause carries the figures the agent gave:
