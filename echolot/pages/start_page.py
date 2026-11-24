@@ -277,7 +277,7 @@ def _reports(view: dict[str, Any], link: Link) -> str:
         warned = (f'<div class="callout">{kit.icon("red")}<p class="small">{kit.prose(warning)}</p></div>'
                   if warning else "")
         cards.append(
-            f'<li class="rep"><div class="rowf">{kit.pill(verdict.get("level"))}{name}</div>{warned}'
+            f'<li class="rep"><div class="rowf">{kit.verdict_pill(verdict.get("level"))}{name}</div>{warned}'
             f'<p class="measure">{e(verdict.get("text") or "")}</p>'
             f'<p class="small sub measure">{kit.prose(rep["plain"])}</p>'
             f'<div class="rowf"><a class="btn primary" href="{e(href)}">See the report</a></div></li>')

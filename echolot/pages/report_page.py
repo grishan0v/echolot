@@ -334,7 +334,7 @@ def _verdict(report: dict[str, Any], ctx: Any) -> str:
     # not the scenario's makes every number under it about something else.
     first = (f'<div class="callout" id="window-warning" role="note">{kit.icon("red")}'
              f'<p>{kit.prose(warning)}</p></div>' if warning else "")
-    return (f'<div class="stack gap-3">{first}<div class="rowf">{kit.pill(v.get("level"), large=True)}{scenario}</div>'
+    return (f'<div class="stack gap-3">{first}<div class="rowf">{kit.verdict_pill(v.get("level"), large=True)}{scenario}</div>'
             f'<h1 class="h1">{e(headline.rstrip("."))}</h1>'
             + (f'<p class="lead">{e(rest)}</p>' if rest else "") + "</div>")
 

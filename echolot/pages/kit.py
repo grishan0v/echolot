@@ -15,7 +15,8 @@ import re
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from ..plain import FINE, MOVE_MARKER, NEEDS_ATTENTION, NO_LIMIT, NOT_CHECKED, WORTH_A_LOOK
+from ..plain import (FINE, MOVE_MARKER, NEEDS_ATTENTION, NO_LIMIT, NOT_CHECKED, WORTH_A_LOOK,
+                     verdict_word)
 
 HERE = Path(__file__).parent
 
@@ -153,6 +154,14 @@ def pill(level: Any, large: bool = False) -> str:
     """A level as it is always shown: the icon, the word and the tint together."""
     kind = tone(level)
     return f'<span class="st {kind}{" lg" if large else ""}">{icon(kind)}{e(word(level))}</span>'
+
+
+def verdict_pill(level: Any, large: bool = False) -> str:
+    """The report's verdict as a pill: a check's colour, and words of the
+    time limit it judges (`plain.verdict_word`, #824)."""
+    kind = tone(level)
+    return (f'<span class="st {kind}{" lg" if large else ""}">{icon(kind)}'
+            f'{e(verdict_word(level))}</span>')
 
 
 def sprites() -> str:
