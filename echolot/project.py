@@ -136,3 +136,27 @@ def resolve(args: argparse.Namespace | None = None, here: Path | None = None) ->
         return Project(here, here / CONFIG, "none", here, root_flag, local)
     return Project(found.parent, found, "here" if found.parent == here else "above",
                    here, root_flag, local)
+
+
+def notices(project: Project) -> list[str]:
+    """What the project's config holds that is going away, a line each.
+
+    `project.source_root` is read by no command: placing a row, the leftover
+    check and `mark --remove` walk the whole checkout, which `project.root`
+    names when it is not the config's folder. Three keys called "root" with
+    three meanings was one of the ways a command chose its own (#830). Said
+    in this release, refused in the next.
+    """
+    if not project.set_up:
+        return []
+    from .config import _load_yaml
+    try:
+        raw = _load_yaml(project.config)
+    except Exception:       # the command that reads it says why
+        return []
+    section = raw.get("project") if isinstance(raw, dict) else None
+    if not isinstance(section, dict) or "source_root" not in section:
+        return []
+    return [f"[!] {project.shown()}: project.source_root is read by no command, and "
+            f"the next release refuses it. Take the line out; project.root names the "
+            f"checkout when it is not the config's folder."]

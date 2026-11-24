@@ -13,19 +13,14 @@
 # be mistaken for one that changes a run.
 
 # --- read by the code ------------------------------------------------------
-# Two keys in this part are the exception, read by no command:
-# project.source_root and instrumentation.cleanup — the hunt takes its markers
-# out whatever that one says.
+# One key in this part is the exception, read by no command:
+# instrumentation.cleanup — the hunt takes its markers out whatever it says.
 project:
   package: com.example.app
   # A GLOB over process.name. If the app lives in several processes
   # (:pushservice and friends), narrow this down — otherwise the largest one
   # by slice count is taken and the choice is only reported, not decided.
   process: com.example.app
-  # Read by no command, and kept as a note for a reader: placing a row, the
-  # leftover check and `mark --remove` walk the whole checkout, since markers
-  # may go into every path in instrumentation.allowed.
-  source_root: app/src/main/kotlin
   # The R8 or ProGuard mapping.txt of the build that was recorded, for a
   # minified build: analyze names its sampled frames and its lock slices back
   # with it, and anr the frames of an ANR record. It needs project.package,

@@ -471,7 +471,7 @@ def test_a_run_that_picks_a_scenario_says_the_hunt_json_does_not_load(tmp_path: 
     path.write_text("[1]", encoding="utf-8")
     cfg = main_mod.Config.load(tmp_path / "echolot.yml")
     with recorder.isolated():
-        main_mod._pick_scenario(cfg, None)
+        main_mod._pick_scenario(cfg, None, project=tmp_path)
     err = capsys.readouterr().err
     check("said", "`.echolot/hunt.json` does not load" in err and "first scenario, coldStart" in err, err)
 

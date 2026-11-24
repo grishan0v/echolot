@@ -1187,6 +1187,17 @@ to tell apart, `analyze` says so on stderr and in the report's header: every
 row is then left without a file, and `composables` finds none of the
 project's own to rank.
 
+Which project a command works on is decided once, the same way for every
+command and for the run log: the config `-c` names, else the nearest
+`echolot.yml` from the working directory up to the top of the git checkout,
+else the working directory, as a project not set up yet. So `analyze`,
+`hunt`, `mark` and the rest run from `app/` or a build folder work on the
+project above it, and `echolot` alone prints which. The checkout is then
+`--root`, else `project.root`, else the config's folder — for `analyze`,
+`mark`, `anr`, `domains` and `scan` alike. `project.source_root` is read by
+no command: a config that still has it is told so, and the next release
+refuses it.
+
 ## Two rows about one name
 
 A name can appear under both `main_thread_block` and `main_thread_outlier`,

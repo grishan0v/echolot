@@ -104,35 +104,43 @@ def cmd_probe(args) -> int:
     detectors match on (see `cmd_doctor`).
     """
     try:
-        cfg = _probe_config(args)
+        cfg = _binary_config(args, "probe uses", strict=True)
         return _probe(args, _tp_binary(args, cfg), cfg)
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
 
-def _probe_config(args) -> Config | None:
-    """The config `analyze` would read from here — for the binary it names.
+def _binary_config(args, then: str, strict: bool = False) -> Config | None:
+    """The config `analyze` would read — the project's (#830) — for the
+    trace_processor it names.
+
+    doctor used to read none. With `toolchain.tp_binary` in a local.yml,
+    `analyze` ran on that binary while doctor self-checked the pinned one:
+    a pass about a trace_processor the project's reports never touched.
 
     Only a config that is there is read: outside a project, or before setup
-    has written one, there is nothing to follow. One that is there and does
-    not load is said, and probe goes on without it, on the flag or on the
-    pin. `analyze` stops on the same error; a look at a trace has no reason
-    to.
+    has written one, there is nothing to follow; `strict` refuses a `-c`
+    that names no file. One that is there and does not load is said, and
+    the command goes on without it, on the flag or on the pin — `then` says
+    what it does instead. `analyze` stops on the same error; a look at a
+    trace, or the self-check, has no reason to.
     """
     found = _where(args)
     if not found.set_up:
-        if found.named:
+        if strict and found.named:
             raise ConfigError(f"-c {args.config}: no such file")
         return None
-    path = str(found.config) if found.found == "above" else (args.config or "echolot.yml")
+    # As typed when it is here, so its local.yml is named as a person sees it.
+    path = (args.config if found.named else
+            "echolot.yml" if found.found == "here" else found.config)
     try:
-        return Config.load(path)
+        return Config.load(path, getattr(args, "local", None))
     except ConfigError as e:
         instead = ("the one --tp-binary names" if getattr(args, "tp_binary", None)
                    else "the pinned one")
-        print(f"[!] {path} does not load, so a trace_processor it names cannot "
-              f"be followed — probe uses {instead}: {e}", file=sys.stderr)
+        print(f"[!] the config does not load, so a trace_processor it names "
+              f"cannot be followed — {then} {instead}: {e}", file=sys.stderr)
         return None
 
 
@@ -527,7 +535,8 @@ def _rel_to(path: Path, root: Path) -> str:
         return str(path)
 
 
-def _pick_scenario(cfg: Config, asked: str | None, inside: bool | None = None) -> None:
+def _pick_scenario(cfg: Config, asked: str | None, inside: bool | None = None, *,
+                   project: Path) -> None:
     """The scenario this run measures: `--scenario`, else the open
     investigation's, else the first.
 
@@ -542,15 +551,17 @@ def _pick_scenario(cfg: Config, asked: str | None, inside: bool | None = None) -
     a scroll investigation open was otherwise recorded and measured as the
     scroll (#498). None for the commands that read, `report` and
     `calibrate`: the open investigation's is the latest one they read.
+
+    `project` is the folder `main` resolved, whose investigation it is (#830).
     """
     names = cfg.scenarios
     if asked is None and len(names) > 1:
-        damaged = hunt_mod.unreadable_line(_project_root(cfg), then=False)
+        damaged = hunt_mod.unreadable_line(project, then=False)
         if damaged and inside is None:
             print(f"[!] {damaged}. Without it this is the "
                   f"config's first scenario, {names[0]}: --scenario picks another.",
                   file=sys.stderr)
-        hunt = hunt_mod.load(_project_root(cfg)) or {}
+        hunt = hunt_mod.load(project) or {}
         theirs = hunt.get("scenario") if hunt.get("status", "open") == "open" else None
         if theirs in names and inside is not False:
             cfg.select(theirs)
@@ -586,7 +597,7 @@ def _whole_trace(cfg: Config, asked: str | None) -> None:
     recorder.note(scenario=WHOLE_TRACE)
 
 
-def _working_in(cfg: Config, asked: int | None) -> dict[str, Any] | None:
+def _working_in(project: Path, asked: int | None) -> dict[str, Any] | None:
     """The investigation this `collect` or `analyze` runs inside, by `--hunt N`;
     None for a run outside any, which says so when one is open.
 
@@ -594,7 +605,7 @@ def _working_in(cfg: Config, asked: int | None) -> dict[str, Any] | None:
     an open investigation gets one line on stderr: the run is not filed
     under it, and how it would be. Said, because until #498 every run was.
     """
-    root = _project_root(cfg)
+    root = project
     hunt = hunt_mod.inside(root, asked)
     if hunt is None:
         open_one = hunt_mod.load(root)
@@ -623,18 +634,6 @@ def _note_scenario(cfg: Config, asked: str | None) -> None:
               file=sys.stderr)
     if len(names) > 1:
         recorder.note(scenario=cfg.scenario_name)
-
-
-def _project_root(cfg: Config) -> Path:
-    """The directory the config names, which is what "this project" means.
-
-    `analyze` is run from wherever the traces are — the agent calls it inside a
-    macrobenchmark's output directory. The report already follows the config
-    rather than the working directory (see `_out_dir`); the open investigation
-    has to follow it for the same reason, or a hunt is silently left untouched
-    and the freshness rule then reports it as abandoned.
-    """
-    return Path(cfg.path).resolve().parent if cfg.path else Path.cwd()
 
 
 def _where(args) -> project_mod.Project:
@@ -694,11 +693,12 @@ def cmd_analyze(args) -> int:
     _resolved_config(args)
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
-        inside = _working_in(cfg, args.hunt)
+        inside = _working_in(_where(args).folder, args.hunt)
         if getattr(args, "whole_trace", False):
             _whole_trace(cfg, args.scenario)
         else:
-            _pick_scenario(cfg, args.scenario, inside=inside is not None)
+            _pick_scenario(cfg, args.scenario, inside=inside is not None,
+                           project=_where(args).folder)
         if args.root:
             if not Path(args.root).is_dir():
                 raise ConfigError(f"--root {args.root}: no such directory")
@@ -844,7 +844,7 @@ def cmd_analyze(args) -> int:
     # Where it went, for `report` to name when its default is not there (#515).
     recorder.note(report=str((out_dir / "report.json").resolve()))
 
-    root = _project_root(cfg)
+    root = _where(args).folder
     # The page is of the report beside it. Asked for, it is written. One that
     # already stands there is written again from this report, flag or no flag:
     # left as it was, the page of the run before would read as this run's.
@@ -877,9 +877,9 @@ def cmd_analyze(args) -> int:
         print(report_mod.to_markdown(rep))
     else:
         json_path = out_dir / "report.json"
-        latest = _latest_here(out_dir, cfg)
+        latest = _latest_here(out_dir, cfg, _where(args).here)
         print(report_mod.overview(rep, cmd=_report_cmd(
-            None if latest else _rel_to(json_path.resolve(), Path.cwd().resolve()))))
+            None if latest else _rel_to(json_path.resolve(), _where(args).here))))
         print("\nThe overview, because the output is not a terminal: the whole "
               "report is report.md beside report.json, and `analyze --full` prints it.")
     print(f"\n→ {out_dir/'report.md'}\n→ {out_dir/'report.json'}",
@@ -912,7 +912,7 @@ def cmd_analyze(args) -> int:
     return 0
 
 
-def _latest_here(out_dir: Path, cfg: Config) -> bool:
+def _latest_here(out_dir: Path, cfg: Config, here: Path) -> bool:
     """Whether `echolot report` with no path, run from here, reads the
     report `analyze` just wrote to `out_dir`.
 
@@ -924,7 +924,7 @@ def _latest_here(out_dir: Path, cfg: Config) -> bool:
     if cfg.path is None or cfg.get("scenarios") is not None or cfg.whole_trace:
         return False
     home = Path(cfg.path).resolve().parent
-    return (Path.cwd().resolve() == home
+    return (here == home
             and out_dir.resolve() == _out_dir(cfg.report_dir, cfg).resolve())
 
 
@@ -3217,10 +3217,11 @@ def cmd_collect(args) -> int:
     # both used to pass the load and end in a traceback on the next line.
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
-        inside = _working_in(cfg, args.hunt)
+        inside = _working_in(_where(args).folder, args.hunt)
         # Before the runner is read: the scenario picked is whose runner
         # keys apply, the investigation's included.
-        _pick_scenario(cfg, args.scenario, inside=inside is not None)
+        _pick_scenario(cfg, args.scenario, inside=inside is not None,
+                       project=_where(args).folder)
         section = cfg.runner
         package = cfg.value(PACKAGE) or cfg.process
     except ConfigError as e:
@@ -3237,7 +3238,7 @@ def cmd_collect(args) -> int:
     iterations = (args.iterations if args.iterations is not None
                   else ITERATIONS.read(section))
     out_dir = _out_dir(args.out, cfg)
-    project = _project_root(cfg)
+    project = _where(args).folder
     # project_root follows the config, as -o and the investigation already
     # do: a relative path is taken from the directory echolot.yml is in. It
     # used to be taken from wherever `echolot` was started, so the same
@@ -3991,9 +3992,9 @@ def _init_finish(args, target: Path, chosen: list, rule: str | None) -> int:
     # project somewhere else.
     if not getattr(args, "no_doctor", False):
         print()
-        cfg = _doctor_config(argparse.Namespace(
+        cfg = _binary_config(argparse.Namespace(
             config=str(target / "echolot.yml"), local=None,
-            tp_binary=getattr(args, "tp_binary", None)))
+            tp_binary=getattr(args, "tp_binary", None)), "doctor checks")
         tp_binary, source = _tp_binary_source(args, cfg)
         code, ran = _doctor_quiet(args, toolchain_info(tp_binary, source),
                                   project=target, origin=_binary_origin(source, cfg))
@@ -4048,7 +4049,7 @@ def cmd_calibrate(args) -> int:
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
-    _pick_scenario(cfg, args.scenario)
+    _pick_scenario(cfg, args.scenario, project=_where(args).folder)
 
     tp_binary = _tp_binary(args, cfg)
     _note_local(cfg)
@@ -4472,32 +4473,6 @@ def _no_trace_processor(e: ToolchainError, info: dict) -> int:
     return 2
 
 
-def _doctor_config(args) -> Config | None:
-    """The config `analyze` would read from here — for the binary it names.
-
-    doctor used to read none. With `toolchain.tp_binary` in a local.yml,
-    `analyze` ran on that binary while doctor self-checked the pinned one:
-    a pass about a trace_processor the project's reports never touched.
-
-    Only a config that is there is read, the rule `names` follows too:
-    outside a project there is nothing to follow. One that is there and does
-    not load is said, and the check goes on without it — on the flag, or on
-    the pin. `analyze` stops on the same error, so this is where it is first
-    heard, not where it has to be handled.
-    """
-    path = getattr(args, "config", None) or "echolot.yml"
-    if not Path(path).exists():
-        return None
-    try:
-        return Config.load(path, getattr(args, "local", None))
-    except ConfigError as e:
-        instead = ("the one --tp-binary names" if getattr(args, "tp_binary", None)
-                   else "the pinned one")
-        print(f"[!] the config does not load, so a trace_processor it names "
-              f"cannot be followed — doctor checks {instead}: {e}", file=sys.stderr)
-        return None
-
-
 def _binary_origin(source: str | None, cfg: Config | None) -> str | None:
     """Who asked for a custom binary, down to the file when it was a file.
 
@@ -4535,7 +4510,7 @@ def cmd_doctor(args) -> int:
     if _refused_without_asserts():
         return 1
 
-    cfg = _doctor_config(args)
+    cfg = _binary_config(args, "doctor checks")
     tp_binary, source = _tp_binary_source(args, cfg)
     info = toolchain_info(tp_binary, source)
     origin = _binary_origin(source, cfg)
@@ -4776,7 +4751,7 @@ def _report_dir(args) -> str:
         if args.scenario:
             raise
         return ".echolot/out"
-    _pick_scenario(cfg, args.scenario)
+    _pick_scenario(cfg, args.scenario, project=_where(args).folder)
     return cfg.report_dir
 
 
@@ -4911,7 +4886,7 @@ def cmd_explain(args) -> int:
     if Path(args.config).is_file():
         try:
             cfg = Config.load(args.config, args.local, scenario=args.scenario)
-            _pick_scenario(cfg, args.scenario)
+            _pick_scenario(cfg, args.scenario, project=_where(args).folder)
             plan = plan_detectors(cfg, detectors=detectors)
         except ConfigError as e:
             print(f"error: {e}", file=sys.stderr)
@@ -5799,6 +5774,10 @@ def main(argv=None) -> int:
     # (#835).
     args.where = project_mod.resolve(args)
     recorder.at(_folder_there(args.where))
+    # Once a run, for a command that reads the config: a key going away.
+    if hasattr(args, "config") or args.func is cmd_status:
+        for said in project_mod.notices(args.where):
+            print(said, file=sys.stderr)
     heard = _LastWords(sys.stderr)
     try:
         with contextlib.redirect_stderr(heard):
