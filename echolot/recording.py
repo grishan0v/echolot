@@ -130,6 +130,10 @@ CONDITIONS: tuple[Condition, ...] = (
               differs=_sets("atrace_categories", "atrace categories")),
     Condition("ftrace_events", "ftrace events", "trace",
               differs=_sets("ftrace_events", "ftrace events")),
+    # How the phone was powered before the repeat (power.py, #524): a set on
+    # a draining battery, or in battery saver, is not one recorded charging.
+    Condition("power", "power", "collect"),
+    Condition("battery_saver", "battery saver", "collect"),
 )
 
 KEYS = tuple(c.key for c in CONDITIONS)
@@ -140,8 +144,9 @@ _FROM_COLLECT = tuple(c.key for c in CONDITIONS if c.source == "collect")
 # when it was off (#522); `markers_in_build`, the temporary markers `collect`
 # found in the build on the phone before it recorded (#536); `launch`, how
 # the repeat started and what `collect` said under it (#619, see
-# `runner.launch_record`).
-_ALSO = ("cooldown", "markers_in_build", "launch")
+# `runner.launch_record`); `battery_level`, the charge in percent before the
+# repeat (#524).
+_ALSO = ("cooldown", "markers_in_build", "launch", "battery_level")
 
 # What a detector's `@needs` source is fed by in the recording's config, so
 # that a difference there names the detectors that read it. Composable names

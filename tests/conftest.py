@@ -85,6 +85,29 @@ def no_first_look(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_phone_here(monkeypatch, tmp_path_factory):
+    """No test reaches a real phone. `runner._run` is the door to adb, and a
+    call through it to an adb the test did not plant under its own temporary
+    directory finds none, as on CI, whatever this machine has attached. Gradle
+    mode asks the phone around its task (#524), and its tests used to fake
+    nothing: on a laptop with a phone on the cable they read the real one.
+    A test that wants a device hands in a fake `_run`."""
+    import shutil
+
+    from echolot import runner
+    real = runner._run
+    planted = tmp_path_factory.getbasetemp().resolve()
+
+    def guarded(args, *rest, **kw):
+        if Path(str(args[0])).name == "adb":
+            found = shutil.which(str(args[0]))
+            if found is None or not Path(found).resolve().is_relative_to(planted):
+                raise runner.AdbNotFound("adb not found: a test reaches no real phone")
+        return real(args, *rest, **kw)
+    monkeypatch.setattr(runner, "_run", guarded)
+
+
+@pytest.fixture(autouse=True)
 def keep_cwd():
     """Several cases chdir into a temp project, and one of them may fail there.
 

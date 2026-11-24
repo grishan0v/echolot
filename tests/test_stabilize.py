@@ -20,7 +20,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import runner, stabilize  # noqa: E402
+from echolot import runner, screen, stabilize  # noqa: E402
 from echolot.runner import RunnerError  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_collect_fake_adb import PACKAGE, SERIAL, FakeAdb  # noqa: E402
@@ -321,8 +321,8 @@ def test_collect_cools_before_each_repeat_and_puts_the_screen_back(tmp_path, mon
     check("each repeat: the stop, then the readings, the screen and a last look",
           len(stops) == 3 and all(
               set(a[:-2]) == {"dumpsys battery"}
-              and a[-2:] == ["dumpsys power; dumpsys window policy",
-                             f"pidof {PACKAGE} || true"] for a in after), after)
+              and a[-2:] == [screen.READ, f"pidof {PACKAGE} || true"] for a in after),
+          after)
     check("the warm one waited", clock.slept == [10] and "  cooled to 33.0 °C in 10s" in said,
           (clock.slept, said))
     check("and the set says the app is stopped before each wait",

@@ -333,8 +333,8 @@ top, the way the Marker Report already states an anchor that never matched.
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
 | `compose_names` | one round was recorded with composable names and the other not, or only some of its repeats were. The names come with the app's Perfetto SDK loaded at its start, which cost a cold start 67 ms on the device it was measured on |
 | `compile` | the app was compiled differently in the two rounds, or in the repeats of one, or — where the traces could not say how — the JIT compiled several times more methods on one side — see below |
-| `recording` | the two sides were not recorded the same way: another runner or reset policy, a force-stop that found the app running on one side and already stopped on the other, or another trace config — data sources, atrace categories and ftrace events, each named on the side that had it. The detectors that read what one side recorded and the other did not are named — see [How the two were recorded](#how-the-two-were-recorded) |
-| `recording-mixed` | one side's own repeats were not recorded alike, by runner, reset policy or trace config, so its medians mix two ways of recording |
+| `recording` | the two sides were not recorded the same way: another runner or reset policy, a force-stop that found the app running on one side and already stopped on the other, the phone charging on one side and on battery on the other or in battery saver on one side only, or another trace config — data sources, atrace categories and ftrace events, each named on the side that had it. The detectors that read what one side recorded and the other did not are named — see [How the two were recorded](#how-the-two-were-recorded) |
+| `recording-mixed` | one side's own repeats were not recorded alike, by runner, reset policy, power, battery saver or trace config, so its medians mix two ways of recording |
 | `recording-unknown` | one side cannot say how it was recorded while the other can: a report from before reports kept it, traces recorded before `collect` wrote its account beside them or by something else, or traces with no config of their own |
 | `version` | the two reports were written by different versions of echolot, or one does not say which wrote it. A side that does not say leaves every row without a verdict — see [Which echolot wrote each](#which-echolot-wrote-each) |
 | `detector-changed` | a detector read the trace with different code on the two sides. Its rows stay, without a verdict |
@@ -457,6 +457,14 @@ start on either day; a repeat that waits now begins long after its stop, since
 app running is kept, and a difference in it is said; what most of a side's
 repeats did is that side's, since the first repeat of every `collect` finds
 the app as the last session left it.
+
+The account also says how the phone was powered before each repeat:
+`power`, `charging` or `not charging`, and `battery_saver`, `on` or `off`
+(see [Power](collecting.md#power)). A side recorded on battery against one
+recorded charging, or in battery saver against one without it, is said;
+a side whose phone lost its cable halfway is `recording-mixed`. A side that
+does not say, recorded before `collect` kept it, is unknown there, and gets
+no sentence of its own.
 
 A side that cannot say — traces recorded before `collect` kept its account,
 by another tool, or a report from before the block — gets `recording-unknown`

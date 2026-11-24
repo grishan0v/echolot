@@ -899,12 +899,17 @@ printf two > "$d/StartupBenchmark_startup_iter001_2026-09-28.perfetto-trace"
 
 
 @pytest.fixture
-def no_adb(monkeypatch):
-    """Gradle mode picks its device through gradle; adb is not ours to ask."""
-    def refuse(args, stdin=None, timeout=120):
-        raise AssertionError(f"gradle mode called adb: {args}")
-    monkeypatch.setattr(runner, "_run", refuse)
+def no_adb(monkeypatch) -> FakeAdb:
+    """Gradle mode picks its device through gradle, and drives nothing on it.
+    It asks the phone it names only around the task, and only to read: the
+    app's install before and after it, and its power before (#524)."""
+    fake = FakeAdb()
+    monkeypatch.setattr(runner, "_run", fake)
     monkeypatch.delenv("ANDROID_SERIAL", raising=False)
+    yield fake
+    asked = [k for k in fake.kinds() if k != "devices"]
+    check("gradle mode asked adb only to read around the task",
+          asked in ([], ["installed", "screen", "installed"]), fake.kinds())
 
 
 def test_gradle_mode_follows_the_config_not_the_shell(tmp_path, monkeypatch, capsys, no_adb):

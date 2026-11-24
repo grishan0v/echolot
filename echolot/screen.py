@@ -21,6 +21,12 @@ again before each repeat, with one adb call:
   `stay_on_while_plugged_in` holds the screen on: only while the phone
   charges. A screen that went off between repeats is said with them.
 
+The same read carries the phone's power, for power.py (#524): `mIsPowered`
+again, `mBatteryLevel` from the same dump, and battery saver from
+`settings get global low_power`, the setting the platform writes when saver
+comes on and reads at boot with 0 as its default, so a phone that never had it
+on answers `null`, and that is off.
+
 On the A51 the read takes about half a second, before the app is stopped
 and the recording starts. What the device does not print is not guessed at:
 a dumpsys without the line leaves that half of the check to the launch, and
@@ -45,6 +51,9 @@ SETTLE_S = 1.0
 _WAKEFULNESS = re.compile(r"\bmWakefulness=(\w+)")
 _POWERED = re.compile(r"\bmIsPowered=(true|false)")
 _STAY_ON = re.compile(r"\bmStayOn=(true|false)")
+_LEVEL = re.compile(r"\bmBatteryLevel=(\d+)")
+# Printed by the read itself (`read`): `1` on, `0` off, `null` never set.
+_SAVER = re.compile(r"^low_power=(1|0|null)\s*$", re.MULTILINE)
 # Where the lock screen is said. An SM-A515F (Android 13) prints it in the
 # policy section under `KeyguardStateMonitor`, as `mIsShowing`. The other two
 # are read for builds that print it under those names, older ones as
@@ -62,6 +71,9 @@ class Screen:
     locked: bool | None = None
     powered: bool | None = None
     stay_on: bool | None = None
+    # The battery's charge in percent, and battery saver (#524).
+    level: int | None = None
+    saver: bool | None = None
 
     @property
     def dark(self) -> bool:
@@ -91,13 +103,22 @@ def parse(text: str) -> Screen:
         locked = _flag(pattern, text)
         if locked is not None:
             break
+    level = _LEVEL.search(text)
+    saver = _SAVER.search(text)
     return Screen(wakefulness=m.group(1) if m else None, locked=locked,
-                  powered=_flag(_POWERED, text), stay_on=_flag(_STAY_ON, text))
+                  powered=_flag(_POWERED, text), stay_on=_flag(_STAY_ON, text),
+                  level=int(level.group(1)) if level else None,
+                  saver=None if saver is None else saver.group(1) == "1")
+
+
+# One adb call for all of it. `settings` prints the value bare, so it is
+# named here, where its line can be told from the dumps' own.
+READ = ("dumpsys power; dumpsys window policy; "
+        "echo low_power=$(settings get global low_power)")
 
 
 def read(device: str, run: Callable[..., str]) -> Screen:
-    return parse(run(["adb", "-s", device, "shell",
-                      "dumpsys power; dumpsys window policy"], timeout=30))
+    return parse(run(["adb", "-s", device, "shell", READ], timeout=30))
 
 
 def _why_dark(s: Screen) -> str:
