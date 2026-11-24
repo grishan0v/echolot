@@ -4084,7 +4084,7 @@ def cmd_mark(args) -> int:
         try:
             cfg = Config.load(config, getattr(args, "local", None))
             package = cfg.get("project.package") or cfg.get("project.process")
-            allowed = list(cfg.get("instrumentation.allowed") or [])
+            allowed = cfg.allowed
             prefix = str(cfg.get("instrumentation.temp_prefix") or prefix)
         except ConfigError as e:
             if not args.remove:

@@ -591,6 +591,30 @@ def test_plan_honours_a_glob(tmp_path):
     check("with the note", "outside instrumentation.allowed" in oc.reason, oc.reason)
 
 
+def test_one_folder_written_as_text_is_a_list_of_one(tmp_path):
+    """`list()` of the text was a list of letters: `app/src/main` refused the
+    folder it names, and the lone `*` of `feature/*` allowed every one (#735)."""
+    write(tmp_path, "app/src/main/AndroidManifest.xml", manifest(LAUNCHER, application=""))
+    rel = "app/src/main/java/com/example/app/MainActivity.kt"
+    write(tmp_path, rel, (
+        "class MainActivity : ComponentActivity() {\n"
+        "    override fun onCreate(savedInstanceState: Bundle?) {\n"
+        "        super.onCreate(savedInstanceState)\n"
+        "    }\n"
+        "}\n"))
+    config = tmp_path / "echolot.yml"
+    for allowed, applicable in (("app/src/main", True), ('"feature/*"', False)):
+        config.write_text(f"instrumentation:\n  allowed: {allowed}\n", encoding="utf-8")
+        code, out, err = run("mark", "--root", str(tmp_path), "-c", str(config))
+        line = next((ln for ln in out.splitlines() if f"{rel}:2" in ln), "")
+        check(f"allowed: {allowed} exits 0", code == 0, out + err)
+        check(f"allowed: {allowed} marks the launcher's onCreate"
+              if applicable else f"allowed: {allowed} refuses it",
+              line.lstrip().startswith("+" if applicable else "·"), out)
+        if not applicable:
+            check("and says why", "outside instrumentation.allowed" in out, out)
+
+
 def test_a_frame_outside_allowed_is_shown_not_dropped(tmp_path):
     """`--from-anr` skipped such a frame without a row, where `plan` shows a
     site outside and refuses it — and the docs said the same of both."""

@@ -105,6 +105,12 @@ _SECTIONS = ("project", "scenario", "scenarios", "runner", "detectors",
              "instrumentation", "domains", "loop", "threads", "toolchain", "tp_binary")
 
 
+# The keys of `instrumentation:`. `allowed` is read by `mark`, `reflect` and
+# the page, through `Config.allowed`; `temp_prefix` by `mark`, `hunt` and
+# `reflect`; `cleanup` by the agent, as its skill says.
+INSTRUMENTATION_KEYS = ("allowed", "temp_prefix", "cleanup")
+
+
 def _known_sections(raw: dict[str, Any], p: Path) -> None:
     """Refuse a section echolot.yml or local.yml does not have, by name."""
     unknown = [k for k in raw if k not in _SECTIONS and not str(k).startswith("_")]
@@ -112,6 +118,27 @@ def _known_sections(raw: dict[str, Any], p: Path) -> None:
         raise ConfigError(
             f"{p}: no section {', '.join(repr(k) for k in unknown)}. "
             f"The sections are {', '.join(_SECTIONS)}")
+
+
+def _section_keys(raw: dict[str, Any], p: Path, section: str,
+                  keys: tuple[str, ...]) -> None:
+    """Refuse a key `section` does not have, by name, with the keys it has.
+
+    A key nobody asks for was never looked at: `instrumentation.alowed` was
+    dropped, and the empty list left behind allows every place (#735).
+    Keys that start with `_` are setup's own notes.
+    """
+    node = raw.get(section)
+    if node is None:
+        return
+    if not isinstance(node, dict):
+        raise ConfigError(f"{p}: {section} must be a mapping with "
+                          f"{', '.join(keys)} under it, got {node!r}")
+    unknown = [k for k in node if k not in keys and not str(k).startswith("_")]
+    if unknown:
+        raise ConfigError(
+            f"{p}: no key {', '.join(repr(k) for k in unknown)} under {section}. "
+            f"It takes {', '.join(keys)}")
 
 
 def _named_by_text(raw: dict[str, Any], p: Path) -> None:
@@ -290,6 +317,7 @@ class Config:
         if not isinstance(raw, dict):
             raise ConfigError(f"{p}: expected a mapping at the top level")
         _known_sections(raw, p)
+        _section_keys(raw, p, "instrumentation", INSTRUMENTATION_KEYS)
         _named_by_text(raw, p)
 
         local_path = Path(local) if local else p.parent / "local.yml"
@@ -301,6 +329,7 @@ class Config:
             if not isinstance(overlay, dict):
                 raise ConfigError(f"{local_path}: expected a mapping")
             _known_sections(overlay, local_path)
+            _section_keys(overlay, local_path, "instrumentation", INSTRUMENTATION_KEYS)
             _named_by_text(overlay, local_path)
             raw = merge(raw, overlay)
             used_local = local_path
@@ -316,6 +345,9 @@ class Config:
         # with a traceback. Every loader already answers a config that does
         # not load. The scenarios too, for the same reason.
         cfg._detectors()
+        # The guard `mark` applies, for the same reason: a value it cannot
+        # read must not reach it as no guard at all.
+        cfg.allowed  # noqa: B018
         cfg.select(scenario)
         # And the window a single `scenario:` names, for the same reason.
         _window_named(*cfg._scenario())
@@ -416,6 +448,28 @@ class Config:
         if not isinstance(value, str):
             raise ConfigError(f"{self.path}: project.root must be a path, written as text, got {value!r}")
         return (here / Path(value).expanduser()).resolve()
+
+    @property
+    def allowed(self) -> list[str]:
+        """`instrumentation.allowed`: the folders `mark` may put markers in,
+        as globs. Empty allows every place.
+
+        One folder written as text is a list of one, as the page reads it
+        (`dig.allowed`). `list()` of the text was one entry per letter:
+        `app/src/main` refused every place, and the lone `*` of `feature/*`
+        allowed every one (#735). Anything else is refused by name.
+        """
+        value = self.get("instrumentation.allowed")
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            return list(value)
+        raise ConfigError(
+            f"instrumentation.allowed must be a folder or a list of folders, "
+            f"written as text, got {value!r}. For example "
+            f'`allowed: ["app/src/main", "feature/*/src/main"]`')
 
     @property
     def mapping(self) -> Path | None:
