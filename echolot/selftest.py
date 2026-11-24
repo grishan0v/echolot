@@ -2172,7 +2172,10 @@ def _drag(variant: dict) -> dict:
     from . import report as report_mod
     cfg = Config({**FIXTURE_CONFIG, "scenario": {"name": "drag", "start": {"name": "AppStart"}}})
     with tempfile.TemporaryDirectory() as tmp:
-        trace = Path(tmp) / "drag.perfetto-trace"
+        # Named by the build: two builds of one fixture have one pid and one
+        # window, and under one name `compare` reads them as the same
+        # recordings, whose checks it does not compare (#713).
+        trace = Path(tmp) / f"drag-{'-'.join(sorted(variant)) or 'janky'}.perfetto-trace"
         trace.write_bytes(fixture.build(**variant))
         one = _analyze(trace, cfg)
     return report_mod.aggregate([copy.deepcopy(one) for _ in range(3)])

@@ -614,6 +614,7 @@ much it needs you. Here it has a movement: which way it went.
 | gone | it found something before and finds nothing now, and what it found was more than a small or occasional thing |
 | new | the same the other way round |
 | no change | it found something on a side, and no move can be called: the sentence says why |
+| not compared | it looked both times, but not by one measure: its thresholds changed between the two (named, from what to what), the echolot that read it did (`version`, `detector-changed`), or both sides are the same recordings (`same-traces`). Whatever moved is the config's or the tool's, so it is called neither better nor worse. With the same recordings the verdict at the top says that too, as `not_compared` |
 | fine both times | it looked both times and found nothing |
 | not checked | it could not look on one side or on both, or one of the reports is too old to say (it says why); `compare` leaves such a check out of its table too |
 
@@ -719,7 +720,8 @@ Top to bottom:
 - the verdict, its notes, and one sentence on what a colour means here;
 - the whole window before and after as a chart, with the time limit as a line;
 - a filter by movement, which is the page's counts as well: all, got better,
-  did not change, got worse (when anything did), fine both times, not checked;
+  did not change, got worse and not compared (when any did), fine both times,
+  not checked;
 - the table: one row per check, with what changed in a sentence, the movement,
   and what the check found added up before and after. "nothing" is a side that
   found none, "at times" one whose findings are in a minority of the launches,

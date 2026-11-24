@@ -752,6 +752,17 @@ def _tool_moved(before: dict, after: dict) -> tuple[list[dict[str, str]], frozen
     return out, unjudged
 
 
+def unjudged(before: dict, after: dict) -> frozenset[str] | set[str]:
+    """The detectors whose rows carry no verdict because the tool may have
+    moved them (`ALL` for every one), as `build` decides it."""
+    return _tool_moved(before, after)[1]
+
+
+def same_recordings(before: dict, after: dict) -> str | None:
+    """Why the two sides look like one set of recordings, or None."""
+    return _same_recordings(before, after)
+
+
 def _stamp(report: dict) -> str | None:
     """Which echolot wrote a report, or None when it does not say."""
     tc = report.get("toolchain")
@@ -1240,6 +1251,14 @@ def _params_moved(before: dict, after: dict) -> list[str]:
     while `main_thread_block.min_slice_ms 16 → 3089.5` explains the whole
     report on its own.
     """
+    return [f"`{det_id}.{key}` {was} → {now}"
+            for det_id, moved in params_moved_by(before, after).items()
+            for key, was, now in moved]
+
+
+def params_moved_by(before: dict, after: dict) -> dict[str, list[tuple[str, Any, Any]]]:
+    """The parameters that differ, by detector: `(key, before, after)` each.
+    `moves` says them of the one check they belong to (#713)."""
     # A failed side reports the shipped params, not the ones it would have
     # run with; set against the other side's calibrated ones, that read as a
     # threshold change nobody made.
@@ -1247,12 +1266,12 @@ def _params_moved(before: dict, after: dict) -> list[str]:
           if not _failed(d)}
     pa = {d["id"]: (d.get("params") or {}) for d in after.get("detectors", [])
           if not _failed(d)}
-    moved = []
+    moved: dict[str, list[tuple[str, Any, Any]]] = {}
     for det_id in sorted(set(pb) & set(pa)):
         for key in sorted(set(pb[det_id]) | set(pa[det_id])):
             was, now = pb[det_id].get(key), pa[det_id].get(key)
             if was != now:
-                moved.append(f"`{det_id}.{key}` {was} → {now}")
+                moved.setdefault(det_id, []).append((key, was, now))
     return moved
 
 
