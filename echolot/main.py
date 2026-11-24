@@ -760,6 +760,9 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                         _stacks_behind(tp, d, params, rows, package, root)
                     except Exception as e:  # the rows stand without it
                         print(f"[!] {d.id} @samples: {e}", file=sys.stderr)
+            # Last of the four: run with its thresholds open, the first query
+            # writes its own tables again (`_det_<id>`, see tp._own_tables),
+            # and the two queries above read the pieces of these rows.
             opened = _below_bar(tp, d, overrides, sql, rows) if below_bar and not err else None
             entry = {
                 "id": d.id,

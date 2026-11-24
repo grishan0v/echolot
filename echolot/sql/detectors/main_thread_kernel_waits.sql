@@ -57,6 +57,10 @@
 -- — and then where the main thread was, the same way. Shares rather than
 -- milliseconds, as in `main_thread_waits`.
 
+-- The sleeps this detector counts, each under the row it belongs to, are
+-- written down once as its own table: both the rows below and the time
+-- they stand for (`@intervals`) are read from it (#490).
+CREATE OR REPLACE PERFETTO TABLE _det_main_thread_kernel_waits AS
 WITH states AS MATERIALIZED (
     -- The main thread's states in order, each with the waker of the next.
     SELECT s.ts, s.dur, s.state, s.io_wait, s.blocked_function, s.utid,
@@ -107,23 +111,22 @@ sleeps AS MATERIALIZED (
               AND l.ts <= c.raw_ts + c.raw_dur AND l.te >= c.raw_ts + c.raw_dur
             ORDER BY l.depth DESC LIMIT 1)                         AS waker_inside
     FROM candidates c
-),
-waits AS MATERIALIZED (
-    SELECT ts, dur, inside, waker_inside, fn,
-           -- Digits folded, a run of them to one `#`.
-           REPLACE(REPLACE(REPLACE(
-               REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                   waker, '0', '#'), '1', '#'), '2', '#'), '3', '#'), '4', '#'),
-                   '5', '#'), '6', '#'), '7', '#'), '8', '#'), '9', '#'),
-               '####', '#'), '##', '#'), '##', '#')                AS location
-    FROM sleeps
-),
-grouped AS (
+)
+SELECT ts, dur, inside, waker_inside, fn,
+       -- Digits folded, a run of them to one `#`.
+       REPLACE(REPLACE(REPLACE(
+           REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+               waker, '0', '#'), '1', '#'), '2', '#'), '3', '#'), '4', '#'),
+               '5', '#'), '6', '#'), '7', '#'), '8', '#'), '9', '#'),
+           '####', '#'), '##', '#'), '##', '#')                AS location
+FROM sleeps;
+
+WITH grouped AS (
     SELECT location,
            COUNT(*)                                                AS count,
            SUM(dur)                                                AS total_ns,
            MAX(dur)                                                AS max_ns
-    FROM waits
+    FROM _det_main_thread_kernel_waits
     GROUP BY location
 ),
 -- The slice that holds most of each row's time: the waking thread's, the
@@ -133,7 +136,7 @@ waker_top AS (
     FROM (SELECT location, waker_inside, SUM(dur) AS ns,
                  ROW_NUMBER() OVER (PARTITION BY location
                                     ORDER BY SUM(dur) DESC, waker_inside) AS k
-          FROM waits GROUP BY location, waker_inside)
+          FROM _det_main_thread_kernel_waits GROUP BY location, waker_inside)
     WHERE k = 1
 ),
 main_top AS (
@@ -141,7 +144,7 @@ main_top AS (
     FROM (SELECT location, inside, SUM(dur) AS ns,
                  ROW_NUMBER() OVER (PARTITION BY location
                                     ORDER BY SUM(dur) DESC, inside) AS k
-          FROM waits GROUP BY location, inside)
+          FROM _det_main_thread_kernel_waits GROUP BY location, inside)
     WHERE k = 1
 ),
 fn_top AS (
@@ -149,7 +152,7 @@ fn_top AS (
     FROM (SELECT location, fn,
                  ROW_NUMBER() OVER (PARTITION BY location
                                     ORDER BY SUM(dur) DESC, fn) AS k
-          FROM waits WHERE fn IS NOT NULL GROUP BY location, fn)
+          FROM _det_main_thread_kernel_waits WHERE fn IS NOT NULL GROUP BY location, fn)
     WHERE k = 1
 )
 SELECT
@@ -175,35 +178,10 @@ LIMIT 20;
 
 -- @intervals
 --
--- A row stands for the sleeps its thread ended: the main thread's own time,
--- clipped to the window. Sleeps do not overlap one another.
+-- A row stands for the sleeps its thread ended, as the first query wrote
+-- them down: the main thread's own time, clipped to the window. Sleeps do
+-- not overlap one another.
 
-WITH states AS MATERIALIZED (
-    SELECT s.ts, s.dur, s.state, s.io_wait, s.utid,
-           LEAD(s.waker_utid) OVER (ORDER BY s.ts)                 AS waker_utid
-    FROM thread_state s
-    WHERE s.utid = (SELECT t.utid FROM thread t CROSS JOIN _proc p
-                    WHERE t.upid = p.upid AND t.tid = p.pid
-                    ORDER BY t.utid DESC LIMIT 1)
-),
-sleeps AS MATERIALIZED (
-    SELECT MAX(s.ts, wn.ts_start)                                  AS ts,
-           MIN(s.ts + s.dur, wn.ts_end) - MAX(s.ts, wn.ts_start)    AS dur,
-           w.name                                                  AS waker
-    FROM states s
-    CROSS JOIN thread w ON w.utid = s.waker_utid
-    CROSS JOIN _proc p
-    CROSS JOIN _window wn
-    WHERE s.state IN ('D', 'DK') AND s.io_wait = 0 AND s.dur > 0
-      AND s.ts < wn.ts_end AND s.ts + s.dur > wn.ts_start
-      AND w.upid = p.upid AND w.tid != p.pid
-      AND w.name IS NOT NULL
-)
-SELECT s.ts, s.dur
-FROM sleeps s
-JOIN _rows r ON r.location =
-    REPLACE(REPLACE(REPLACE(
-        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-            s.waker, '0', '#'), '1', '#'), '2', '#'), '3', '#'), '4', '#'),
-            '5', '#'), '6', '#'), '7', '#'), '8', '#'), '9', '#'),
-        '####', '#'), '##', '#'), '##', '#');
+SELECT ts, dur
+FROM _det_main_thread_kernel_waits
+WHERE location IN (SELECT location FROM _rows);

@@ -73,7 +73,10 @@ def test_a_slow_frame_among_frames_of_their_own_names_is_an_outlier(tmp_path: Pa
     detector = Detector.from_file(DETECTOR_DIR / "main_thread_outlier.sql")
     with TraceSession(trace) as tp:
         _setup_context(tp, cfg, _resolve_process(tp, cfg.process)[0]["upid"])
-        spans = _spans_behind(tp, detector, dict(detector.params), rows)
+        # The second query reads the occurrences the first wrote down (#490).
+        sql, params = detector.render()
+        tp.query(sql)
+        spans = _spans_behind(tp, detector, params, rows)
     check("its interval is the slow frame", spans == [(fixture.ms(300), 80_000_000)],
           spans)
 
