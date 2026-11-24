@@ -37,7 +37,11 @@ it came from:
   trace**; the note says so, repeat it to the human immediately
 - the variants — flavour × build type, what each installs as, and which one
   to measure on: a `benchmark` build type (release-like, profileable) over
-  `release` over anything debuggable, which skews everything. And whether
+  `release` over anything debuggable, which skews everything. Where the app
+  module applies `androidx.baselineprofile`, the build types that plugin
+  adds are variants too, though no script names them: `benchmarkRelease`,
+  release-like and profileable, is the one to measure on, and
+  `nonMinifiedRelease`, built without R8 to generate profiles, is not. And whether
   that one is minified: its build type sets `minifyEnabled`, or starts with
   `initWith` from one that does. Then the skeleton names `project.mapping`,
   the R8 mapping AGP writes for that variant when it is built. `gradle` mode
@@ -45,7 +49,9 @@ it came from:
   human builds the variant. Until then `analyze` says so at the top of the
   report and leaves R8's names as they are
 - the module with `MacrobenchmarkRule`, its test classes and methods, the
-  package it drives, the `TraceSectionMetric` names it measures (anchor
+  package it drives (where its code takes the package at run time, the one
+  the app module its `targetProjectPath` names installs as), the
+  `TraceSectionMetric` names it measures (anchor
   candidates, and `domains` entries), its runner arguments, and the gradle
   tasks by variant. Each class says which kind it is: it measures the launch
   (`StartupTimingMetric`), it measures a section (`TraceSectionMetric`), it

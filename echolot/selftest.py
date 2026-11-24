@@ -4055,6 +4055,49 @@ def _(report):
     assert facts.allowed == ["app/src/main"], facts.allowed
 
 
+@check("scan: the build types androidx.baselineprofile adds are variants, and its benchmark one is measured on")
+def _(report):
+    """No build script names them, and `scan` read only the scripts.
+
+    On an open-source app it recommended `release`, said the app was not
+    profileable, named release's mapping and a task the benchmark module
+    does not have, and left the package the benchmark drives as `?`: its
+    code takes it from the instrumentation arguments. The plugin's
+    `benchmarkRelease` is release-like, profileable and minified as release
+    is; the module runs it with no flavour in its task name, against the
+    app its `targetProjectPath` names (#906).
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        script = root / "app/build.gradle"
+        script.write_text(
+            "plugins { id 'com.android.application'; id 'androidx.baselineprofile' }\n"
+            "android {\n  defaultConfig { applicationId = \"com.example.app\" }\n"
+            "  buildTypes { release { minifyEnabled true } }\n}\n", encoding="utf-8")
+        (root / "benchmark/build.gradle").write_text(
+            "plugins { id 'com.android.test'; id 'androidx.baselineprofile' }\n"
+            "android { targetProjectPath = ':app' }\n", encoding="utf-8")
+        bench = root / "benchmark/src/main/java/StartupBenchmark.kt"
+        bench.write_text(bench.read_text(encoding="utf-8").replace(
+            '"com.example.app.beta"', 'InstrumentationRegistry.getArguments().getString("targetAppId")'),
+            encoding="utf-8")
+        facts = scan.describe(root, devices=False)
+        text = "\n".join(scan.skeleton(facts))
+        install = scan.install_tasks(root, "com.example.app")
+    chosen = scan.preferred(facts.variants)
+    assert chosen["name"] == "benchmarkRelease" and chosen["debuggable"] is False, facts.variants
+    assert facts.app.get("profileable_by") == ["benchmarkRelease", "nonMinifiedRelease"], facts.app
+    assert not any("profileable" in n for n in facts.notes), facts.notes
+    assert "mapping: app/build/outputs/mapping/benchmarkRelease/mapping.txt" in text, text
+    assert 'gradle_task: ":benchmark:connectedBenchmarkReleaseAndroidTest"' in text, text
+    assert facts.benchmarks[0]["package_name"] == "com.example.app", facts.benchmarks
+    # What `mark --apply` says to install: the build measured, and never the
+    # one built without R8 to generate profiles.
+    assert install == [":app:installBenchmarkRelease", ":app:installRelease"], install
+
+
 # --- the markers table -----------------------------------------------------
 
 @check("markers: every planted name is measured, whatever the detectors say")

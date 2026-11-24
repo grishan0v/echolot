@@ -941,7 +941,10 @@ project:
 `echolot scan` writes the key into the config it drafts when the variant to
 measure is minified: its build type sets `minifyEnabled`, or starts with
 `initWith` from one that does, as a benchmark build type started from release
-usually is. The path is where AGP writes the mapping when the variant is
+usually is. The `benchmarkRelease` that the `androidx.baselineprofile` plugin
+adds, which no build script names, is minified as `release` is, and `scan`
+takes it as the variant to measure: it is profileable whatever the manifest
+says. The path is where AGP writes the mapping when the variant is
 built, so it may name a file that is not there yet. `gradle` mode builds the
 variant with the first collect; in `launch` mode it is there once you build
 the variant. Until then `analyze` says so, on stderr and at the top of the

@@ -243,7 +243,10 @@ def flavors_of(stext: str) -> list[dict[str, Any]]:
     return out
 
 
-def build_types_of(stext: str) -> list[dict[str, Any]]:
+def build_types_of(stext: str, baseline_profile: bool = False) -> list[dict[str, Any]]:
+    """The build types of a module: those its script declares, `debug` and
+    `release`, and, where it applies androidx.baselineprofile, the ones that
+    plugin adds (`baseline_profile_types`)."""
     body = block(stext, "buildTypes")
     found = {}
     if body is not None:
@@ -264,6 +267,8 @@ def build_types_of(stext: str) -> list[dict[str, Any]]:
         found.setdefault(name, {"name": name, "application_id_suffix": None,
                                 "debuggable": name == "debug", "profileable": None,
                                 "minify": None, "init_with": None, "implicit": True})
+    if baseline_profile:
+        baseline_profile_types(found)
     return list(found.values())
 
 
@@ -281,6 +286,99 @@ def _flag(body: str, key: str) -> bool | None:
     kotlin = "is" + key[:1].upper() + key[1:]
     m = re.search(rf"\b(?:{re.escape(kotlin)}|{re.escape(key)})\s*=?\s*(true|false)\b", body)
     return None if not m else m.group(1) == "true"
+
+
+# --- the androidx.baselineprofile plugin --------------------------------------
+
+# Applied to an app module, the plugin adds build types no script names
+# (#906): for `release`, `benchmarkRelease` to measure on and
+# `nonMinifiedRelease` to generate profiles with. Applied to a
+# `com.android.test` module, it gives that module the same two, which is
+# where the benchmark runs. Its `.consumer` part alone adds none.
+BASELINE_PROFILE = "androidx.baselineprofile"
+BENCHMARK_PREFIX = "benchmark"
+NON_MINIFIED_PREFIX = "nonMinified"
+_BASELINE_PROFILE_ID = r"androidx\.baselineprofile(?:\.apptarget|\.producer)?"
+_PLUGIN_ID = re.compile(rf"""(?:\bid\s*\(?\s*|\bapply\s+plugin\s*:\s*)["']{_BASELINE_PROFILE_ID}["']""")
+_PLUGIN_ALIAS = re.compile(r"\balias\s*\(?\s*\w+\.plugins\.([\w.]+)")
+# The names a version catalog usually gives it, for a catalog this does not read.
+_USUAL_ALIAS = re.compile(r"(?:[\w.]*\.)?baseline\.?profile(?:\.apptarget|\.producer)?")
+_CATALOG_ENTRY = re.compile(
+    rf'^\s*([\w.-]+)\s*=\s*(?:\{{[^}}\n]*\bid\s*=\s*)?"{_BASELINE_PROFILE_ID}(?::[^"]*)?"',
+    re.MULTILINE)
+
+
+def catalog_aliases(root: Path) -> set[str]:
+    """What `alias(libs.plugins.…)` calls the plugin, by `gradle/*.versions.toml`.
+
+    `baselineprofile = { id = "androidx.baselineprofile", … }` is
+    `libs.plugins.baselineprofile`; `androidx-baseline-profile =
+    "androidx.baselineprofile:1.3.0"` is `libs.plugins.androidx.baseline.profile`.
+    The alias is the catalog's to choose, so it is read there.
+    """
+    out = set()
+    for toml in sorted((root / "gradle").glob("*.versions.toml")):
+        try:
+            text = toml.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        out.update(re.sub(r"[-_]", ".", m.group(1)) for m in _CATALOG_ENTRY.finditer(text))
+    return out
+
+
+def applies_baseline_profile(script: str, aliases: set[str]) -> bool:
+    """Whether a build script, its comments out, applies androidx.baselineprofile.
+
+    By its id, `id("androidx.baselineprofile")` or `apply plugin:`, or by
+    the alias a version catalog gives it: `aliases` from `catalog_aliases`,
+    and the names catalogs usually choose.
+    """
+    if _PLUGIN_ID.search(script):
+        return True
+    return any(m.group(1) in aliases or _USUAL_ALIAS.fullmatch(m.group(1))
+               for m in _PLUGIN_ALIAS.finditer(script))
+
+
+def baseline_profile_types(found: dict[str, dict[str, Any]]) -> None:
+    """Add the build types androidx.baselineprofile makes, which no script names.
+
+    For every build type that is not debuggable, `release` whether declared
+    or not, and whose name does not already start with either prefix, the
+    plugin creates `benchmark<Type>` and `nonMinified<Type>` with
+    `initWith(<Type>)`, so both install with its applicationIdSuffix. It
+    makes both not debuggable and profileable, and AGP then writes
+    `<profileable android:shell="true"/>` into their merged manifest. The
+    benchmark one is minified as its build type is, with `-dontobfuscate`
+    added. The other is not minified at all: it is built to generate
+    profiles, and runs code R8 never touched. A build type of either name
+    the script declares itself is configured the same way rather than
+    created.
+
+    Read off the scripts alone they were not there: on an open-source app
+    `scan` recommended its `release`, which shows no application slices,
+    and said the app was not profileable, while the plugin's
+    `benchmarkRelease` was the build to measure (#906).
+    """
+    types = list(found.values())
+    for bt in types:
+        if inherited(bt, types, "debuggable") is True \
+                or bt["name"].startswith((BENCHMARK_PREFIX, NON_MINIFIED_PREFIX)):
+            continue
+        for prefix in (BENCHMARK_PREFIX, NON_MINIFIED_PREFIX):
+            name = prefix + _cap(bt["name"])
+            # `implicit`: there whether or not the script names it, as
+            # `debug` and `release` are.
+            made = found.setdefault(name, {"name": name, "application_id_suffix": None,
+                                           "minify": None, "init_with": bt["name"],
+                                           "implicit": True})
+            made.update(debuggable=False, profileable=True, added_by=BASELINE_PROFILE)
+            if prefix == NON_MINIFIED_PREFIX:
+                made["minify"] = False
+
+
+def for_profiles(variant: dict) -> bool:
+    """A `nonMinified…` variant androidx.baselineprofile makes to generate profiles."""
+    return bool(variant.get("added_by")) and variant["build_type"].startswith(NON_MINIFIED_PREFIX)
 
 
 def flavor_combinations(flavors: list[dict], dimensions: list[str]) -> list[list[dict]] | None:
@@ -381,14 +479,20 @@ def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: li
             name = words[0] + "".join(w[:1].upper() + w[1:] for w in words[1:])
             minify, minified_by = minified(bt, build_types)
             out.append({"name": name,
-                        "flavor": "".join(_cap(f["name"]) if i else f["name"]
-                                          for i, f in enumerate(combo)) or None,
+                        "flavor": _flavor_word([f["name"] for f in combo]) or None,
+                        "flavor_names": [f["name"] for f in combo],
                         "build_type": bt["name"], "application_id": app_id,
                         "debuggable": debuggable,
                         "measure": _measures({**bt, "debuggable": debuggable}),
                         "minified": minify, "minified_by": minified_by,
-                        "mapping": mapping_path(app, name) if minify else None})
+                        "mapping": mapping_path(app, name) if minify else None,
+                        "added_by": bt.get("added_by")})
     return out
+
+
+def _flavor_word(names: list[str]) -> str:
+    """Flavour names as a variant's name joins them: `free`, `paid` → `freePaid`."""
+    return "".join(_cap(n) if i else n for i, n in enumerate(names))
 
 
 def _minify_evidence(variant: dict, script: str) -> str:
@@ -397,6 +501,8 @@ def _minify_evidence(variant: dict, script: str) -> str:
     bt, by = variant["build_type"], variant["minified_by"]
     if by == bt:
         return f"minifyEnabled in buildTypes.{bt} of {script}"
+    if variant.get("added_by"):
+        return f"minifyEnabled in buildTypes.{by} of {script}, which {variant['added_by']}'s {bt} starts from"
     return f"minifyEnabled in buildTypes.{by} of {script}, which {bt} starts from with initWith"
 
 
@@ -404,6 +510,12 @@ def _measures(bt: dict) -> str:
     """Whether this build type is one to measure on, and why."""
     if bt.get("debuggable"):
         return "no — debuggable: the runtime runs slower and differently"
+    if bt.get("added_by") and bt["name"].startswith(NON_MINIFIED_PREFIX):
+        twin = BENCHMARK_PREFIX + bt["name"][len(NON_MINIFIED_PREFIX):]
+        return (f"no — built without R8 to generate profiles, so its code is not what users "
+                f"run: measure on {twin}")
+    if bt.get("added_by"):
+        return f"yes — release-like, and profileable by {bt['added_by']}"
     if bt.get("name") == "benchmark" or bt.get("profileable"):
         return "yes — release-like and profileable"
     if bt.get("name") == "release":
@@ -412,14 +524,20 @@ def _measures(bt: dict) -> str:
 
 
 def _rank(variant: dict) -> tuple:
-    """Benchmark over release over the rest, debuggable last, then by name."""
-    order = {"benchmark": 0, "release": 1}
-    return (order.get(variant["build_type"], 2), variant.get("debuggable") is True,
+    """Benchmark over the plugin's benchmark build types over release over
+    the rest, debuggable last; then the flavour a benchmark module runs
+    against (`_benchmark_targets`), then by name."""
+    bt = variant["build_type"]
+    order = {"benchmark": 0, "release": 2}.get(bt, 3)
+    if variant.get("added_by") and bt.startswith(BENCHMARK_PREFIX):
+        order = 1
+    return (order, variant.get("debuggable") is True, not variant.get("benchmarked"),
             variant["name"])
 
 
 def preferred(variants: list[dict]) -> dict | None:
-    """The variant to start from: benchmark over release over the rest, first flavour."""
+    """The variant to start from, as `_rank` orders them: a `benchmark` build
+    type, then the one androidx.baselineprofile adds, then release."""
     ranked = sorted(variants, key=_rank)
     return ranked[0] if ranked else None
 
@@ -432,6 +550,10 @@ _PACKAGE = re.compile(r"^\s*package\s+([\w.]+)", re.MULTILINE)
 _METRIC = re.compile(r"TraceSectionMetric\s*\(\s*(?:\"([^\"]+)\"|([\w.]+))")
 _RUNNER_ARG = re.compile(
     r'testInstrumentationRunnerArguments\s*(?:\[\s*|\.put\s*\(\s*)["\']([\w.]+)["\']\s*(?:\]\s*=|,)\s*["\']([^"\']*)["\']')
+# `missingDimensionStrategy("default", "alpha")`, Groovy's without the
+# parentheses, and a list whose first flavour is the one taken.
+_MISSING_DIMENSION = re.compile(
+    r'missingDimensionStrategy\s*\(?\s*["\']([\w-]+)["\']\s*,\s*(?:listOf\s*\(\s*|\[\s*)?["\']([\w-]+)["\']')
 
 
 # What a benchmark class measures, by what its own file constructs: the
@@ -571,14 +693,24 @@ def benchmarks_of(root: Path) -> list[dict[str, Any]]:
         while mdir != root and not (mdir / "build.gradle.kts").exists() and not (mdir / "build.gradle").exists():
             mdir = mdir.parent
         entry["dir"] = mark._rel(mdir, root)
+    aliases = catalog_aliases(root) if by_module else set()
     for entry in by_module.values():
         _, stext = _build_script(root / entry["dir"]) if entry["dir"] else (None, "")
-        s = android_block(_strip(stext))
+        whole = _strip(stext)
+        s = android_block(whole)
         entry["runner_args"] = dict(_RUNNER_ARG.findall(s))
         combos = flavor_combinations(flavors_of(s), flavor_dimensions(s)) or []
-        entry["flavors"] = ["".join(_cap(f["name"]) if i else f["name"] for i, f in enumerate(c))
-                            for c in combos if c]
-        entry["build_types"] = [b["name"] for b in build_types_of(s) if not b.get("implicit")]
+        entry["flavors"] = [_flavor_word([f["name"] for f in c]) for c in combos if c]
+        # The plugin gives a test module `benchmarkRelease` and
+        # `nonMinifiedRelease` whatever it declares, and the benchmark runs
+        # in the first: its task is `connectedBenchmarkReleaseAndroidTest`.
+        entry["baseline_profile"] = applies_baseline_profile(whole, aliases)
+        entry["build_types"] = [b["name"] for b in build_types_of(s, entry["baseline_profile"])
+                                if not b.get("implicit") or b.get("added_by")]
+        # The app module it runs against, and the flavours it takes from it:
+        # a dimension the module names here is one its variants do not have.
+        entry["target"] = _value(s, "targetProjectPath")
+        entry["missing_dimensions"] = dict(_MISSING_DIMENSION.findall(s))
         out.append(entry)
     return out
 
@@ -620,18 +752,100 @@ def gradle_tasks(bench: dict, variants: list[dict]) -> list[str]:
 
     A `com.android.test` module mirrors the app's flavours and build types
     it declares for itself; where it declares none, the app's are what
-    gradle will name. Either way `./gradlew :<module>:tasks --all | grep
-    connected` is the list that exists.
+    gradle will name, less the dimensions its `missingDimensionStrategy`
+    settles. Its build types include those androidx.baselineprofile gives
+    it. Either way `./gradlew :<module>:tasks --all | grep connected` is the
+    list that exists.
     """
     module = bench["module"]
     names = []
-    flavors = bench.get("flavors") or sorted({v["flavor"] for v in variants if v["flavor"]})
+    flavors = _module_flavors(bench, variants)
     types = bench.get("build_types") or sorted({v["build_type"] for v in variants})
     for bt in types:
         for fl in flavors or [None]:
-            cap = lambda s: s[:1].upper() + s[1:]  # noqa: E731
-            names.append(f"{module}:connected{cap(fl) if fl else ''}{cap(bt)}AndroidTest")
+            names.append(f"{module}:connected{_cap(fl) if fl else ''}{_cap(bt)}AndroidTest")
     return names
+
+
+def _pinned(bench: dict) -> set[str]:
+    """The app's flavours a benchmark module's `missingDimensionStrategy` takes."""
+    return set((bench.get("missing_dimensions") or {}).values())
+
+
+def _module_flavors(bench: dict, variants: list[dict]) -> list[str]:
+    """The flavours in a benchmark module's task names.
+
+    Its own where it declares them. Else the app's, from the variants it
+    can run against, without the flavours `missingDimensionStrategy` picks:
+    that dimension is not one of the module's. A module that settles the
+    app's only dimension that way has no flavour in its task names, as
+    `:baselineprofile:connectedBenchmarkReleaseAndroidTest` on an app whose
+    every variant has one.
+    """
+    if bench.get("flavors"):
+        return bench["flavors"]
+    pinned = _pinned(bench)
+    words = {_flavor_word([n for n in v.get("flavor_names") or [] if n not in pinned])
+             for v in variants if pinned <= set(v.get("flavor_names") or [])}
+    return sorted(words - {""})
+
+
+def measuring_task(bench: dict, variants: list[dict], chosen: dict | None) -> str | None:
+    """The benchmark module's task that runs against `chosen`, else its first.
+
+    Built from the chosen variant's flavour, as the module's task names
+    carry it, and its build type. A name match was all there was, and a
+    variant's whole name is in no task of a module without its flavour
+    dimension.
+    """
+    tasks = gradle_tasks(bench, variants)
+    if chosen:
+        word = chosen.get("flavor") if bench.get("flavors") else _flavor_word(
+            [n for n in chosen.get("flavor_names") or [] if n not in _pinned(bench)])
+        want = (f"{bench['module']}:connected{_cap(word) if word else ''}"
+                f"{_cap(chosen['build_type'])}AndroidTest")
+        if want in tasks:
+            return want
+    return next((t for t in tasks if chosen and chosen["name"].lower() in t.lower()),
+                tasks[0] if tasks else None)
+
+
+def _driven(bench: dict, variants: list[dict]) -> list[dict]:
+    """The app's variants a benchmark module runs against: of the flavours
+    its `missingDimensionStrategy` picks, in the build types it has where it
+    names its own."""
+    pinned, types = _pinned(bench), set(bench.get("build_types") or [])
+    return [v for v in variants if pinned <= set(v.get("flavor_names") or [])
+            and (not types or v["build_type"] in types)]
+
+
+def _benchmark_targets(facts: Facts) -> None:
+    """What the benchmark modules that target the app module say about it.
+
+    The package a benchmark drives is the applicationId of the variant its
+    module runs against, `targetProjectPath` naming the module. Where the
+    code passes it on at run time, as a benchmark the baselineprofile
+    plugin wires does (`InstrumentationRegistry.getArguments()
+    .getString("targetAppId")`), no string in the code says it, and the
+    module drove `?` (#906). And a module that takes one flavour with
+    `missingDimensionStrategy` runs against that flavour only: among
+    variants of one build type, the one to start from is of it, or the
+    config would name a package the benchmark never starts.
+    """
+    app = facts.app
+    if not app:
+        return
+    for bench in facts.benchmarks:
+        if not bench.get("target") or bench["target"] != app["module"]:
+            continue
+        driven = _driven(bench, facts.variants)
+        if _pinned(bench):
+            for v in driven:
+                v["benchmarked"] = True
+        target = preferred(driven)
+        if not bench.get("package_name") and target and target.get("application_id"):
+            bench["package_name"] = target["application_id"]
+            bench["package_by"] = {"target": bench["target"], "variant": target["name"]}
 
 
 # --- the rest -----------------------------------------------------------------
@@ -691,12 +905,15 @@ def allowed_paths(root: Path) -> list[str]:
 def _app_and_variants(root: Path, facts: Facts) -> None:
     """The app module, its flavours and build types, and the variants they make."""
     facts.app = app_module(root, facts)
-    stext = ""
+    whole = ""
     if facts.app and facts.app.get("build_script"):
-        stext = android_block(_strip(
-            (root / facts.app["build_script"]).read_text(encoding="utf-8", errors="replace")))
+        whole = _strip((root / facts.app["build_script"]).read_text(encoding="utf-8", errors="replace"))
+    stext = android_block(whole)
+    plugin = bool(whole) and applies_baseline_profile(whole, catalog_aliases(root))
+    if facts.app and plugin:
+        facts.app["plugins"] = [BASELINE_PROFILE]
     facts.flavors = flavors_of(stext)
-    facts.build_types = build_types_of(stext)
+    facts.build_types = build_types_of(stext, plugin)
     dims = flavor_dimensions(stext)
     facts.variants = variants_of(facts.app, facts.flavors, facts.build_types, dims)
     if facts.flavors and flavor_combinations(facts.flavors, dims) is None:
@@ -724,9 +941,14 @@ def install_tasks(root: Path, package: str | None) -> list[str]:
     slower and differently in place of the one measured. On a large Kotlin
     app the only variants the script showed installing as the measured
     package were debug ones, while the build on the phone was not
-    debuggable. Empty then, and when nothing installs as the package, when
-    more than INSTALL_TASKS_SHOWN do, or when the app module or its
-    applicationId cannot be read: the caller says it in words.
+    debuggable. Nor the `nonMinified…` one androidx.baselineprofile builds
+    to generate profiles, whose code R8 never touched; its `benchmark…`
+    one comes first, the build the plugin makes to measure (#906). Where
+    more than INSTALL_TASKS_SHOWN install as the package, only those of the
+    best build type, as `_rank` orders them. Empty then, and when nothing
+    installs as the package, when more than INSTALL_TASKS_SHOWN of that
+    build type do, or when the app module or its applicationId cannot be
+    read: the caller says it in words.
     """
     if not package:
         return []
@@ -735,7 +957,15 @@ def install_tasks(root: Path, package: str | None) -> list[str]:
     if not facts.app:
         return []
     found = [v for v in facts.variants
-             if v.get("application_id") == package and v.get("debuggable") is not True]
+             if v.get("application_id") == package and v.get("debuggable") is not True
+             and not for_profiles(v)]
+    if len(found) > INSTALL_TASKS_SHOWN:
+        # Too many: those of the build type to measure on, if they are few
+        # enough. The plugin's build types doubled what installs as one
+        # package, and three flavours that installed as the store's named
+        # their release builds before it and nothing after.
+        best = min(_rank(v)[0] for v in found)
+        found = [v for v in found if _rank(v)[0] == best]
     if len(found) > INSTALL_TASKS_SHOWN:
         return []
     module = facts.app["module"]
@@ -767,9 +997,12 @@ def _id_note(facts: Facts) -> None:
 def describe(root: Path, *, devices: bool = True) -> Facts:
     facts = Facts(root=str(root))
     _app_and_variants(root, facts)
+    # Before the notes: which flavour a benchmark module runs against
+    # decides the variant the applicationId note reads.
+    facts.benchmarks = benchmarks_of(root)
+    _benchmark_targets(facts)
     _profileable_note(facts)
     _id_note(facts)
-    facts.benchmarks = benchmarks_of(root)
     facts.allowed = allowed_paths(root)
     if devices:
         from .runner import RunnerError
@@ -823,6 +1056,9 @@ def skeleton(facts: Facts) -> list[str]:
     mapping = [f"  mapping: {minify['mapping']}"] if minify else []
     why = (f"; the mapping, written when the variant is built: {_minify_evidence(minify, where)}"
            if minify else "")
+    # A build type no script names says where it came from.
+    plugin = (f', whose {chosen["build_type"]} {chosen["added_by"]} adds'
+              if chosen and chosen.get("added_by") else "")
     if read_id:
         out = ["project:",
                f"  package: {read_id}",
@@ -830,7 +1066,7 @@ def skeleton(facts: Facts) -> list[str]:
                *mapping,
                "  _source: derived",
                f'  _evidence: "applicationId in {where}'
-               + (f', variant {chosen["name"]}' if chosen else "")
+               + (f', variant {chosen["name"]}{plugin}' if chosen else "")
                + (f' — the others: {", ".join(others[:6])}' if others else "") + why + '"']
     else:
         # Not read is not derived: a constant or a convention plugin sets it,
@@ -888,8 +1124,7 @@ def skeleton(facts: Facts) -> list[str]:
                 'the longest slice that means ready"}']
     out.append("")
     if bench:
-        tasks = gradle_tasks(bench, facts.variants)
-        task = next((t for t in tasks if chosen and chosen["name"].lower() in t.lower()), tasks[0] if tasks else None)
+        task = measuring_task(bench, facts.variants, chosen)
         cls = pick["name"] if pick else None
         out += ["runner:",
                 "  mode: gradle",
@@ -900,9 +1135,16 @@ def skeleton(facts: Facts) -> list[str]:
             out.append(f'    - "-Pandroid.testInstrumentationRunnerArguments.class={cls}"')
         # No `iterations`: the benchmark's measureRepeated sets the count, and
         # collect warns that the key does not reach it.
+        if bench.get("baseline_profile"):
+            whose = f"; {BASELINE_PROFILE} in its build script gives the module its build types"
+        elif bench.get("flavors") or bench.get("build_types"):
+            whose = "; the module declares its own variants"
+        else:
+            whose = ""
+        if _pinned(bench):
+            whose += "; missingDimensionStrategy runs it against " + ", ".join(sorted(_pinned(bench)))
         out += [f'  _evidence: "MacrobenchmarkRule in {pick["file"] if pick else bench["module"]}'
-                + ('; the module declares its own variants' if bench.get("flavors") or bench.get("build_types") else "")
-                + '"']
+                + whose + '"']
     else:
         out += ["runner:", "  mode: launch", "  iterations: 5", "  duration_ms: 20000",
                 '  _evidence: "no MacrobenchmarkRule in the tree; force-stop + am start"']
@@ -957,8 +1199,16 @@ def render(facts: Facts) -> str:
         if app["profileable"]:
             line = "yes — `<profileable android:shell=\"true\"/>` in " + app["manifest"]
         elif app.get("profileable_by"):
-            line = ("yes for " + ", ".join(f"`{b}`" for b in app["profileable_by"])
-                    + f", which sets `isProfileable`; {app['manifest']} has no tag")
+            added = {b["name"]: b["added_by"] for b in facts.build_types if b.get("added_by")}
+            own = [b for b in app["profileable_by"] if b not in added]
+            made = [b for b in app["profileable_by"] if b in added]
+            said = []
+            if own:
+                said.append(", ".join(f"`{b}`" for b in own) + ", which sets `isProfileable`")
+            if made:
+                said.append(", ".join(f"`{b}`" for b in made) + f", which {added[made[0]]} "
+                            "makes profileable")
+            line = "yes for " + "; ".join(said) + f"; {app['manifest']} has no tag"
         else:
             line = "**no** — release-like builds will trace without application slices"
         out.append("profileable: " + line)
@@ -969,6 +1219,15 @@ def render(facts: Facts) -> str:
         for v in facts.variants:
             out.append(f"| {v['name']} | `{v.get('application_id') or '?'}` | "
                        f"{'yes' if v.get('debuggable') else ('no' if v.get('debuggable') is False else '?')} | {v['measure']} |")
+        added = [b["name"] for b in facts.build_types if b.get("added_by") and b.get("implicit")]
+        if added and app:
+            out.append("")
+            out.append(", ".join(f"`{b}`" for b in added)
+                       + f" {'is' if len(added) == 1 else 'are'} not in {app.get('build_script')}: "
+                       f"{BASELINE_PROFILE}, applied there, adds them for each build type that is "
+                       "not debuggable — not debuggable and profileable, the benchmark one "
+                       "minified as its build type is, the other built without R8 to generate "
+                       "profiles.")
         chosen = preferred(facts.variants)
         if chosen:
             out.append("")
@@ -986,6 +1245,11 @@ def render(facts: Facts) -> str:
     for b in facts.benchmarks:
         out.append(f"`{b['module']}` — drives `{b.get('package_name') or '?'}`"
                    + (", a cold start" if b.get("startup") else ""))
+        if b.get("package_by"):
+            by = b["package_by"]
+            out.append(f"- no string in its code names the package: `{b['package_name']}` is what "
+                       f"`{by['variant']}` of `{by['target']}`, the module its targetProjectPath "
+                       "names, installs as")
         for c in b["classes"]:
             out.append(f"- `{c['name']}` ({c['file']}): " + (", ".join(c["tests"]) or "no @Test")
                        + " — " + _kind_words(c))
