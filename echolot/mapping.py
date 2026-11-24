@@ -217,6 +217,10 @@ class Frame:
     method: str
     file: str
     line: int | None
+    # The file is echolot's guess, `<Class>.java`, for a class the mapping
+    # gives no source file: not something the build wrote, so a checkout
+    # that has `<Class>.kt` instead does not disagree with it.
+    guessed: bool = field(default=False, compare=False)
 
     @property
     def symbol(self) -> str:
@@ -340,12 +344,14 @@ class Retracer:
                 if frame not in outer:
                     outer.append(frame)
             return Retraced(tuple((frame,) for frame in outer))
-        return Retraced(((Frame(named.real, method, self._file(named.real), None),),),
+        return Retraced(((Frame(named.real, method, self._file(named.real), None,
+                                guessed=self._guessed(named.real)),),),
                         outside=True)
 
     def _frame(self, named: _Named, r: Range, line: int | None) -> Frame:
         cls = r.owner or named.real
-        return Frame(cls, r.name, self._file(cls), r.original(line))
+        return Frame(cls, r.name, self._file(cls), r.original(line),
+                     guessed=self._guessed(cls))
 
     def _file(self, cls: str) -> str:
         """The file a class was written in: the mapping's word, else R8's guess.
@@ -357,6 +363,10 @@ class Retracer:
         outer = cls.split("$", 1)[0]
         return self._files.get(cls) or self._files.get(outer) \
             or outer.rsplit(".", 1)[-1] + ".java"
+
+    def _guessed(self, cls: str) -> bool:
+        """Whether `_file` had to guess: the mapping names no file for the class."""
+        return not (self._files.get(cls) or self._files.get(cls.split("$", 1)[0]))
 
 
 def _chains(ranges: list[Range]) -> list[list[Range]]:

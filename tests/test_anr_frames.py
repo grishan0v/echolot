@@ -742,3 +742,99 @@ def test_a_bridge_beside_its_method_is_no_stale_line(tmp_path):
     placed, _ = anr.locate(rep, root)
     check("the class declaration's line beside a matching frame is not counted",
           not any(f.astray for f in placed), [(f.frame, f.astray) for f in placed])
+
+
+# --- a line past the end of its file: Kotlin's inlined code (#725) -----------
+
+# Kotlin numbers the body of an `inline fun` it copied into a caller with the
+# lines after the caller file's last one. Each filler below has 16 lines and
+# declares `fill`; three of the four frames are past the end of their file.
+_FILLER = """\
+package com.example.app.filler
+
+import com.example.app.db.Db
+
+class {name} {{
+
+    fun fill(db: Db) {{
+        val items = db.loadList<Item>("{name}")
+        db.insert(items)
+    }}
+
+    private fun unused() {{
+    }}
+}}
+
+// end
+"""
+
+INLINED = """\
+# Crashlytics -
+# Application: com.example.app
+# Platform: android
+# Version: 1.2.3 (45)
+
+main (blocked):tid=1 systid=1001 | waiting to lock <0x0a714d13> (java.lang.Object) held by thread 12
+       at com.example.app.filler.ScenarioFiller.fill(ScenarioFiller.kt:18)
+       at com.example.app.filler.DatabaseFiller.fillMain(DatabaseFiller.kt:5)
+       at android.app.Instrumentation.callApplicationOnCreate(Instrumentation.java:1277)
+
+Worker-2 (waiting):tid=12 systid=1012
+       at jdk.internal.misc.Unsafe.park(Native method)
+       at com.example.app.filler.PerkFiller.fill(PerkFiller.kt:20)
+       at com.example.app.filler.GoodFiller.fill(GoodFiller.kt:17)
+       at java.lang.Thread.run(Thread.java:1012)
+"""
+
+_DATABASE_FILLER = """\
+package com.example.app.filler
+
+class DatabaseFiller {
+    fun fillMain() {
+        ScenarioFiller().fill(db)
+    }
+}
+"""
+
+
+def filler_checkout(tmp_path: Path) -> Path:
+    """The three fillers and the caller of one, in a checkout."""
+    src = "app/src/main/kotlin/com/example/app/filler"
+    files = {f"{src}/{name}.kt": _FILLER.format(name=name)
+             for name in ("ScenarioFiller", "PerkFiller", "GoodFiller")}
+    files[f"{src}/DatabaseFiller.kt"] = _DATABASE_FILLER
+    return write(tmp_path / "checkout", files)
+
+
+@pytest.fixture
+def fillers(tmp_path) -> Path:
+    return filler_checkout(tmp_path)
+
+
+def test_a_line_past_the_end_of_its_file_is_placed_at_the_function_it_names(fillers):
+    report = anr.parse(INLINED)
+    placed, missing = anr.locate(report, fillers)
+    check("every frame is placed", len(placed) == 4 and not missing, (placed, missing))
+    fill = next(f for f in placed if f.symbol.endswith("ScenarioFiller.fill"))
+    check("at the declaration of `fill`, with the frame's line kept",
+          fill.at == 7 and fill.line == 18 and not fill.astray, fill)
+    check("and says it is inlined code",
+          fill.inlined == "line 18 is past the end of the file: inlined code, "
+                          "placed at `fill`", fill.inlined)
+    check("three of four such frames are not another build",
+          anr.astray(placed, report) is None, [(f.frame, f.astray) for f in placed])
+    text = anr.render(report, (placed, missing))
+    check("the report places it at the declaration",
+          "ScenarioFiller.kt:7  ← line 18 is past the end of the file: inlined code, "
+          "placed at `fill`" in text, text)
+    check("and does not send the reader to another build",
+          "not the build that froze" not in text and "in no function now" not in text, text)
+
+
+def test_a_line_past_the_end_of_a_file_without_that_function_is_still_astray(fillers):
+    report = anr.parse(INLINED.replace("PerkFiller.fill(", "PerkFiller.load("))
+    placed, _ = anr.locate(report, fillers)
+    load = next(f for f in placed if f.symbol.endswith("PerkFiller.load"))
+    check("a file that declares no `load` does not explain the line",
+          load.astray == "line 20 is in no function now" and not load.inlined, load)
+
