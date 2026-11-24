@@ -114,6 +114,8 @@ above it ends, and nothing else in the file changes — a CRLF file stays CRLF.
 tag in the shape `--apply` writes, and gives every file back byte for byte:
 the self-check applies, removes and compares, and `tests/test_mark_edits.py`
 does the same over generated Kotlin and Java sources, CRLF files among them.
+Without `--root`, the root is the folder of the config `-c` names, the
+project `hunt -c` counts markers in, and the current directory without `-c`.
 A line that carries the tag in any other shape has more on it than a marker,
 so it stays where it is and `--remove` lists it with its file and line, to be
 cleaned by hand; `echolot hunt`, its cleanup check and the page in

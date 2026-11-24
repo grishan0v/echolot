@@ -4035,7 +4035,7 @@ def cmd_mark(args) -> int:
     """
     from . import mark as mark_mod
 
-    root = Path(args.root).resolve()
+    root = _mark_root(args)
     if not root.is_dir():
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
@@ -4252,6 +4252,22 @@ def _after_apply(cfg: Config | None, root: Path) -> str:
     return (f"next: {_install_step(cfg, root)}, then record with `echolot collect`. "
             f"In {where} `collect` records the build that is on the phone, and that "
             f"build has none of these markers.")
+
+
+def _mark_root(args) -> Path:
+    """Where `mark` looks: `--root`, else the folder of the config `-c` names,
+    else here.
+
+    `-c` alone picked the config and left the root here: `mark -c
+    ../echolot.yml --remove` from a subfolder found no marker, while `hunt
+    -c ../echolot.yml` counted them in the config's folder and said `mark
+    --remove` would take them out (#723).
+    """
+    if args.root is not None:
+        return Path(args.root).resolve()
+    if args.config is not None and Path(args.config).is_file():
+        return Path(args.config).resolve().parent
+    return Path.cwd().resolve()
 
 
 def _mark_config(args, root: Path) -> str | None:
@@ -6194,7 +6210,9 @@ def build_parser() -> argparse.ArgumentParser:
                     "points. Each row says where it comes from. --apply inserts "
                     "begin/end pairs tagged `// echolot:mark`; --remove deletes "
                     "exactly those lines.")
-    mk.add_argument("--root", default=".", help="repository root")
+    mk.add_argument("--root", default=None,
+                    help="repository root (default: the folder of the config -c names, "
+                         "else the current directory)")
     mk.add_argument("-c", "--config", default=None,
                     help="for project.package (which app module) and instrumentation.allowed")
     mk.add_argument("--local", help="path to local.yml (defaults to alongside)")
