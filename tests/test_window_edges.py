@@ -106,9 +106,10 @@ def test_without_anchors_an_open_slice_runs_the_window_to_the_end(
     check("the window runs from the first slice to the end of the trace",
           (_at(w["ts_start"]), _at(w["ts_end"])) == (10.0, 1400.0), w)
     rows = _rows(report, "main_thread_block")
+    # Under the names the runtime's numbers are folded out of (#831).
     check("the wait is the main thread's longest stretch of its own",
-          rows["monitor contention with owner worker (4101)"]["self_ms"] == 1350.0
-          and rows["Choreographer#doFrame 1"]["self_ms"] == 40.0, rows)
+          rows["monitor contention with owner worker (#)"]["self_ms"] == 1350.0
+          and rows["Choreographer#doFrame #"]["self_ms"] == 40.0, rows)
     check("and monitor_contention reports it", _rows(report, "monitor_contention"),
           report["detectors"])
 

@@ -225,6 +225,21 @@ WITH shallowest AS (
     FROM _slice_win
     GROUP BY name, utid
 ),
+-- The names under the fold every detector groups by (#831): a caller that
+-- is another frame or another worker each time is one caller.
+folded AS (
+    SELECT s.slice_id, s.name AS raw_name, s.dur,
+           COALESCE(fn.family, s.name)                             AS name,
+           COALESCE(ft.family, s.thread_name)                      AS thread_name,
+           p.name                                                  AS raw_parent,
+           COALESCE(fp.family, p.name)                             AS parent
+    FROM _slice_win s
+    JOIN slice raw    ON raw.id = s.slice_id
+    LEFT JOIN slice p ON p.id = raw.parent_id
+    LEFT JOIN _name_family fn ON fn.name = s.name
+    LEFT JOIN _name_family ft ON ft.name = s.thread_name
+    LEFT JOIN _name_family fp ON fp.name = p.name
+),
 nested AS (
     SELECT s.slice_id
     FROM _slice_win s
@@ -245,12 +260,12 @@ SELECT
     -- the columns, where merging repeats knows what to do with it.
     CASE WHEN (MAX(MAX(s.dur, 0)) * 1.0) / MIN(MAX(s.dur, 0))
               <= {{max_spread}}
-    THEN 'entered from ' || COUNT(DISTINCT COALESCE(p.name, '(top level)'))
-        || ': ' || GROUP_CONCAT(DISTINCT COALESCE(p.name, '(top level)'))
+    THEN 'entered from ' || COUNT(DISTINCT COALESCE(s.parent, '(top level)'))
+        || ': ' || GROUP_CONCAT(DISTINCT COALESCE(s.parent, '(top level)'))
         || ' — on ' || s.thread_name
     ELSE 'near miss: entered from '
-        || COUNT(DISTINCT COALESCE(p.name, '(top level)'))
-        || ': ' || GROUP_CONCAT(DISTINCT COALESCE(p.name, '(top level)'))
+        || COUNT(DISTINCT COALESCE(s.parent, '(top level)'))
+        || ': ' || GROUP_CONCAT(DISTINCT COALESCE(s.parent, '(top level)'))
         || ' — on ' || s.thread_name
         || '; occurrences too unlike to be one work. A marker inside a loop '
         || 'reads like this — wrap the unit instead.'
@@ -258,19 +273,17 @@ SELECT
 -- `_slice_win` carries no parent, and the parent is what makes this a claim
 -- about work rather than about a name: the same helper called from two places
 -- is the finding, and the same helper called twice from one place is a loop.
-FROM _slice_win s
-JOIN slice raw    ON raw.id = s.slice_id
-LEFT JOIN slice p ON p.id = raw.parent_id
+FROM folded s
 -- The leftovers, and only the leftovers — see "This detector works what the
 -- others left". Applied to the slice and to its caller alike: a name that
 -- belongs to another detector is no more a place work is called from than it
 -- is work.
-WHERE s.name NOT IN (SELECT name FROM _claimed_name)
-  AND COALESCE(p.name, '') NOT IN (SELECT name FROM _claimed_name)
+WHERE s.raw_name NOT IN (SELECT name FROM _claimed_name)
+  AND COALESCE(s.raw_parent, '') NOT IN (SELECT name FROM _claimed_name)
   AND s.slice_id NOT IN (SELECT slice_id FROM nested)
 GROUP BY s.name, s.thread_name
-HAVING COUNT(DISTINCT COALESCE(p.name, '(top level)')) >= 2
-   AND COUNT(DISTINCT COALESCE(p.name, '(top level)')) <= {{max_callers}}
+HAVING COUNT(DISTINCT COALESCE(s.parent, '(top level)')) >= 2
+   AND COUNT(DISTINCT COALESCE(s.parent, '(top level)')) <= {{max_callers}}
    AND SUM(MAX(s.dur, 0)) >= {{min_total_ms}} * 1000000
    -- An instant slice (dur = 0) has no cost to compare; dividing by it would
    -- be a ratio about nothing. An open slice already runs to the window's end
@@ -281,7 +294,7 @@ HAVING COUNT(DISTINCT COALESCE(p.name, '(top level)')) >= 2
    -- there, and every prefix anyone uses ends in one.
    AND ((MAX(MAX(s.dur, 0)) * 1.0) / MIN(MAX(s.dur, 0)) <= {{max_spread}}
         OR (SUBSTR(s.name, 1, LENGTH('{{marker_prefix}}')) = '{{marker_prefix}}'
-            AND COUNT(DISTINCT COALESCE(p.name, '(top level)')) = 2))
+            AND COUNT(DISTINCT COALESCE(s.parent, '(top level)')) = 2))
 ORDER BY total_ms DESC
 LIMIT 20;
 
@@ -292,9 +305,11 @@ LIMIT 20;
 -- the end of the row's `detail`, or what comes before the near miss's `;`.
 
 WITH ours AS (
-    SELECT s.ts, s.dur, r.detail, '— on ' || s.thread_name AS tail
+    SELECT s.ts, s.dur, r.detail, '— on ' || COALESCE(ft.family, s.thread_name) AS tail
     FROM _slice_win s
-    JOIN _rows r ON r.location = s.name
+    LEFT JOIN _name_family fn ON fn.name = s.name
+    LEFT JOIN _name_family ft ON ft.name = s.thread_name
+    JOIN _rows r ON r.location = COALESCE(fn.family, s.name)
     WHERE s.is_main_thread = 1
 )
 SELECT ts, dur

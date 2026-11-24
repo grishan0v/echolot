@@ -1223,26 +1223,29 @@ def _(report):
     """The rule is only a rule if it follows the masks rather than copies them.
 
     `_claimed_name` is built from what the detectors declare, the project's
-    overrides included. Narrow `monitor_contention` to something that matches
-    nothing and the wait stops being its business — at which point it becomes
-    this detector's, and the row the fixture plants comes straight back.
+    overrides included. Widen `monitor_contention`'s mask to a name this
+    detector reports, and that name becomes the other detector's business:
+    the row leaves.
 
     That is the control the whole rule rests on. Silence proves nothing on its
     own: a detector that had simply stopped working would be just as quiet,
     and so would one carrying a hand-written copy of somebody else's glob.
     Costs a second session over the fixture, which is what it takes to run the
-    pipeline with one mask moved.
+    pipeline with one mask moved. The other way round it once brought back
+    the lock wait under its two `waiters=` parents, which the fold of the
+    runtime's numbers now makes one caller (#831).
     """
+    before = {r["location"] for r in rows(report, "repeated_work")}
+    assert "fill_presets" in before, f"the fixture no longer plants the row: {sorted(before)}"
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
         trace.write_bytes(fixture.build())
-        freed = _analyze(trace, Config(FIXTURE_CONFIG), cli_overrides={
-            "monitor_contention": {"name_glob": "no-such-name*",
-                                   "name_glob_alt": "no-such-name*"}})
-    names = {r["location"] for r in rows(freed, "repeated_work")}
-    assert "Lock contention on a monitor lock (owner tid: 4455)" in names, (
-        "with no mask claiming the wait, `repeated_work` should see it again "
-        f"— the exclusion is not following the masks: {sorted(names)}")
+        claimed = _analyze(trace, Config(FIXTURE_CONFIG), cli_overrides={
+            "monitor_contention": {"name_glob": "fill_presets"}})
+    names = {r["location"] for r in rows(claimed, "repeated_work")}
+    assert "fill_presets" not in names, (
+        "with a mask claiming it, `repeated_work` should leave the row to that "
+        f"detector — the exclusion is not following the masks: {sorted(names)}")
 
 
 @check("repeated_work: a loop, a shared helper and unequal work are not repeats")

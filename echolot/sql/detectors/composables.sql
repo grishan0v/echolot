@@ -83,7 +83,8 @@ WITH calls AS MATERIALIZED (
     WHERE s.is_main_thread = 1
       AND s.name GLOB '{{name_glob}}'
 )
-SELECT c.slice_id, c.name, c.ts, c.dur,
+-- The name under the fold every detector groups by (#831).
+SELECT c.slice_id, COALESCE(f.family, c.name) AS name, c.ts, c.dur,
        -- The nearest call of the app's own that this one runs inside:
        -- its time is that call's, less this one's.
        (SELECT a.id FROM ancestor_slice(c.slice_id) a
@@ -94,7 +95,8 @@ SELECT c.slice_id, c.name, c.ts, c.dur,
        (SELECT a.id FROM ancestor_slice(c.slice_id) a
         WHERE a.name = 'Compose:recompose'
         ORDER BY a.depth DESC LIMIT 1)                         AS pass_id
-FROM calls c;
+FROM calls c
+LEFT JOIN _name_family f ON f.name = c.name;
 
 WITH composed AS (
     SELECT n.slice_id,
