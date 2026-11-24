@@ -13,8 +13,8 @@ from pathlib import Path, PureWindowsPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import hunt as hunt_mod  # noqa: E402
 from echolot import mark  # noqa: E402
+from echolot.mark import Markers
 from tests.support import check  # noqa: E402
 from tests.test_mark_edits import LAUNCHER, manifest, write  # noqa: E402
 
@@ -147,7 +147,7 @@ def test_remove_reaches_sources_outside_src(tmp_path: Path) -> None:
                  "        android.os.Trace.endSection() // echolot:mark\n"
                  "    }\n"
                  "}\n")
-    check("hunt counts them", hunt_mod.leftovers(tmp_path)["markers"] == 1)
+    check("hunt counts them", Markers(tmp_path).leftovers()["markers"] == 1)
     touched, _ = mark.remove(tmp_path)
     check("and --remove takes them out", touched and mark.TAG not in path.read_text())
 

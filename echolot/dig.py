@@ -57,6 +57,7 @@ from . import hunt as hunt_mod
 from . import job, state
 from .check import Refusal, _stops_recording
 from .config import Config, ConfigError
+from .mark import Markers, allowed_entry
 from .pages import report_page
 
 JOB = "dig"
@@ -217,7 +218,8 @@ def allowed(cfg: Config) -> list[str]:
     in forward slashes, with no `..`. `""` is the whole project (`.`).
     Refused with the entry named when one is none of those: the page puts
     nothing it cannot read into a rule. An empty list allows every place to
-    `echolot mark`, and the page does not hand that to an agent."""
+    `echolot mark`, as it does to every reader of `mark.Markers`, and the
+    page does not hand that to an agent."""
     raw = cfg.allowed
     if not raw:
         raise Refusal("Where may the agent put its markers?",
@@ -226,21 +228,21 @@ def allowed(cfg: Config) -> list[str]:
                       "example `app/src/main`, then come back.")
     out = []
     for entry in raw:
+        # Read the way `mark` reads it (`mark.allowed_entry`): `./app/src/main`
+        # and `app/src/main/` are `app/src/main`, and `.` is the whole project.
         text = str(entry).strip().replace("\\", "/")
-        while text.startswith("./"):
-            text = text[2:]
-        text = text.rstrip("/")
-        if text in ("", "."):
+        plain = allowed_entry(text)
+        if not plain:
             out.append("")
             continue
-        parts = text.split("/")
-        if text.startswith("/") or any(p in ("", ".", "..") for p in parts) \
+        parts = plain.split("/")
+        if text.startswith("/") or ".." in parts \
                 or not all(_SEGMENT.fullmatch(p) for p in parts):
             raise Refusal("A folder the page cannot hand on",
                           f"`instrumentation.allowed` holds `{entry}`, which is not a folder inside the project "
                           "written plainly. Write it relative to the project, with forward slashes, and "
                           "without `..`, spaces or quotes; then come back.")
-        out.append(text)
+        out.append(plain)
     return list(dict.fromkeys(out))
 
 
@@ -689,8 +691,7 @@ def _rounds(project: Path, hunt: dict[str, Any] | None) -> int:
 
 
 def _left(project: Path, st: dict[str, Any] | None) -> dict[str, Any]:
-    prefix = ((st or {}).get("config") or {}).get("temp_prefix")
-    return hunt_mod.leftovers(project, prefix)
+    return Markers(project, ((st or {}).get("config") or {}).get("temp_prefix")).leftovers()
 
 
 def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | None = None, *,

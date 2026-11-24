@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import hunt as hunt_mod  # noqa: E402
 from echolot import recorder, state  # noqa: E402
+from echolot.mark import Markers
 from tests.support import check  # noqa: E402
 
 
@@ -77,7 +78,7 @@ def test_an_end_left_without_its_begin_is_still_a_leftover(tmp_path: Path) -> No
     src.parent.mkdir(parents=True)
     src.write_text("fun load() {\n    work()\n"
                    "    android.os.Trace.endSection() // echolot:mark\n}\n", encoding="utf-8")
-    left = hunt_mod.leftovers(tmp_path)
+    left = Markers(tmp_path).leftovers()
     check("no marker by the prefix", left["markers"] == 0, left)
     check("but the tagged line is counted", left["lines"] == 1, left)
     check("and its file named", left["files"] == ["app/src/main/java/com/example/app/Store.kt"],

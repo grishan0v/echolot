@@ -143,6 +143,8 @@ def test_the_grant_for_several_allowed_folders(tmp_path):
     check("the whole project, where the config says so", dig.rules(dig.allowed(config(tmp_path, '["."]')))[3]
           == "Edit(/**)")
     check("a single folder written as text, not a list", dig.allowed(config(tmp_path, "app/src/main")) == ["app/src/main"])
+    check("a doubled slash is one, as `echolot mark` reads it (#839)",
+          dig.allowed(config(tmp_path, '["app//src/main"]')) == ["app/src/main"])
 
 
 def test_no_permission_is_bypassed_and_nobody_is_waited_for(tmp_path):
@@ -156,7 +158,7 @@ def test_no_permission_is_bypassed_and_nobody_is_waited_for(tmp_path):
           argv[1:3] == ["-p", "x"] and argv[argv.index("--allowedTools") + 1:] == dig.rules(["app/src/main"]))
 
 
-@pytest.mark.parametrize("entry", ["../elsewhere", "/abs/path", "my folder", "src/(main)", "a/../b", "a//b", "a;b"])
+@pytest.mark.parametrize("entry", ["../elsewhere", "/abs/path", "my folder", "src/(main)", "a/../b", "a;b"])
 def test_an_allowed_folder_the_page_cannot_put_into_a_rule_is_refused(tmp_path, entry):
     with pytest.raises(Refusal) as refused:
         dig.allowed(config(tmp_path, json.dumps([entry])))

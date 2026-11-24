@@ -55,7 +55,7 @@ from typing import Any
 CONFIDENCE = ("high", "medium", "low")
 
 # What the agent says about the temporary markers it put in. echolot counts
-# them itself either way (`hunt.leftovers`) and records both.
+# them itself either way (`mark.Markers.leftovers`) and records both.
 CLEANUP = ("removed", "none_added", "left")
 
 TOP_FIELDS = ("summary", "against", "inside", "causes", "suggestions", "ruled_out",

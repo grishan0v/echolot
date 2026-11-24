@@ -185,7 +185,10 @@ and the code no longer has.
 
 `instrumentation.allowed` from `echolot.yml` is honoured, globs included: each
 entry is matched path segment by path segment, so `feature/*/src/main` — the
-form `scan` writes — covers every module directly under `feature/`. A site
+form `scan` writes — covers every module directly under `feature/`. An entry
+is read without a leading `./`, a trailing `/` or a doubled one, so
+`./app/src/main` is `app/src/main`, and `.` is the whole project. An empty
+list allows every place, for `mark` and for every command that reads it. A site
 outside it is still shown (the joint is where it is) but not applied, with the
 note to mark the nearest allowed caller instead. A frame from `--from-anr` is
 shown the same way rather than left out, and a place to name from `--pools`
