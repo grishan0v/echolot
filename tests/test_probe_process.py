@@ -99,3 +99,46 @@ def test_the_runner_can_still_be_read_by_its_own_name(trace):
     check("its threads", "roidJUnitRunner" in section(out, "## Threads of process"), out)
     check("its slices", "measureBlock" in section(out, "anchor candidates"), out)
     check("and no word of other processes", "matched" not in err, err)
+
+
+# --- the numbers in the two tables (#729) -------------------------------------
+
+def threads_row(out: str, thread: str) -> list[str]:
+    body = section(out, "## Threads of process")
+    row = next(r for r in body.splitlines() if r.startswith(f"| {thread} |"))
+    return [c.strip() for c in row.strip("|").split("|")]
+
+
+def test_sliced_ms_counts_a_moment_once_however_deep(trace):
+    code, out, err = probe(str(trace), "--process", APP)
+    check("exit 0", code == 0, (code, err))
+    _, _, slices, sliced, _ = threads_row(out, APP)
+    check("three slices, two of them inside the third", slices == "3", slices)
+    check("100 ms in a slice, not 180", sliced == "100.0", sliced)
+
+
+def test_a_slice_still_open_counts_to_the_end_of_the_trace(tmp_path):
+    path = tmp_path / "open.perfetto-trace"
+    path.write_bytes(build(app_slices=[
+        *APP_SLICES,
+        # Begun at 200 ms and never ended. The trace ends at 900 ms, where
+        # the runner's `measureBlock` does.
+        ("Loading", 200, None, [("decode", 300, 100, [])]),
+    ]))
+    code, out, err = probe(str(path), "--process", APP)
+    check("exit 0", code == 0, (code, err))
+    _, _, _, sliced, _ = threads_row(out, APP)
+    check("100 ms closed and 700 ms open", sliced == "800.0", sliced)
+
+
+def test_a_family_is_counted_whole_past_two_thousand_names(tmp_path):
+    frames = [(f"Choreographer#doFrame {8538821 + i}", 200 + i * 0.5, 0.25, [])
+              for i in range(2100)]
+    path = tmp_path / "frames.perfetto-trace"
+    path.write_bytes(build(app_slices=[*APP_SLICES, *frames]))
+    code, out, err = probe(str(path), "--process", APP)
+    check("exit 0", code == 0, (code, err))
+    anchors = section(out, "anchor candidates")
+    row = next(r for r in anchors.splitlines() if "Choreographer#doFrame *" in r)
+    n = [c.strip() for c in row.strip("|").split("|")][2]
+    check("every frame is counted", n == "2100", row)

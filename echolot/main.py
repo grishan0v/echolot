@@ -189,14 +189,23 @@ def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
             # and hundreds of milliseconds of Running is precisely the blind
             # spot setup is looking for. By slice count it would sit at the
             # bottom.
+            #
+            # `sliced_ms` is the time the thread spent inside a slice, each
+            # moment once: its top-level slices only. Summed over every depth,
+            # a child's time was counted again in each parent, and a main
+            # thread with 2029 ms of slices showed 8087 ms of a 8926 ms trace
+            # (#729). A slice still open when the recording stopped counts to
+            # the end of the trace.
             _dump(tp, f"""
                 SELECT t.name AS thread, t.tid,
                   (SELECT COUNT(*) FROM slice s
                      JOIN thread_track tt ON s.track_id = tt.id
                     WHERE tt.utid = t.utid) AS slices,
-                  (SELECT ROUND(COALESCE(SUM(MAX(s.dur,0)),0)/1e6, 1) FROM slice s
+                  (SELECT ROUND(COALESCE(SUM(CASE WHEN s.dur >= 0 THEN s.dur
+                            ELSE (SELECT end_ts FROM trace_bounds) - s.ts END),0)/1e6, 1)
+                     FROM slice s
                      JOIN thread_track tt ON s.track_id = tt.id
-                    WHERE tt.utid = t.utid) AS sliced_ms,
+                    WHERE tt.utid = t.utid AND s.depth = 0) AS sliced_ms,
                   (SELECT ROUND(COALESCE(SUM(ts.dur),0)/1e6, 1)
                      FROM thread_state ts
                     WHERE ts.utid = t.utid AND ts.state = 'Running'
@@ -235,6 +244,11 @@ def _anchor_candidates(tp, upid: int) -> None:
     next trace when it was taken as an anchor. Such names are folded the way
     `names` folds them and shown as the glob to write (#515). Lock waits are
     left out.
+
+    Every name is read and folded before any is cut: cut to the longest
+    2000 names first, a family of short ones — the frames of a process
+    with 4728 names — lost members before it was counted, and `n` came out
+    short (#729). Only the rows shown are limited.
     """
     skip = " ".join(f"AND name NOT GLOB '{sql_value(g)}'" for g in _NOT_ANCHORS)
     rows = tp.query(" ".join(f"""
@@ -253,7 +267,7 @@ def _anchor_candidates(tp, upid: int) -> None:
               AND pt.type = '{ASYNC_TRACK}'
         )
         WHERE name IS NOT NULL {skip}
-        GROUP BY name ORDER BY dur DESC LIMIT 2000
+        GROUP BY name ORDER BY dur DESC, name
     """.split()))
     folded: dict[str, dict] = {}
     for r in rows:
