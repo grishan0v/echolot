@@ -48,9 +48,13 @@ def test_an_older_art_dump_s_statistics_are_no_header() -> None:
           not {"Build fingerprint", "Intern table", "JNI", "Heap",
                "Total time spent in GC"} & set(rep.head), sorted(rep.head))
     check("none of it unread", rep.unread == [], rep.unread)
+    # Nine statistics before the threads; the `Heap:` line among them is read
+    # by name (#591) and the other eight are passed over.
     check("passed over by position, and said",
-          anr.summary(rep)["unread"]["before_the_threads"] == 9
+          anr.summary(rep)["unread"]["before_the_threads"] == 8
           and "before and after the threads" in anr.render(rep), anr.summary(rep)["unread"])
+    check("the heap line read by name",
+          rep.heap == {"Heap": "49% free, 2MB/4MB; 31086 objects"}, rep.heap)
 
 
 LIBRARY_TOP = """\
