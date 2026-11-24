@@ -442,7 +442,7 @@ def cannot(project: Project, said: str, *words: str, no_app: bool = False):
     check("the page's own sentence comes first", box.all("p")[0].text.startswith("This page cannot set the project up by itself. " + said),
           box.all("p")[0].text)
     scan = re.sub(r"\s+", " ", said_by(["scan"]).replace("**", "").replace("`", ""))
-    behind = [p.text[len(p.one("span", "who").text):].strip() for p in box.all("p", "says")]
+    behind = [p.text[len(p.one("span", "who").text):].strip().removeprefix("says:").strip() for p in box.all("p", "says")]
     check("with what scan says under it", behind and all(p.one("span", "who").text == "echolot scan" for p in box.all("p", "says")), behind)
     for line in behind:
         check(f"in scan's own words: {line[:60]}", line.strip("_") in scan, scan[:600])
@@ -492,8 +492,38 @@ def test_a_package_the_build_files_do_not_say(project):
 
 
 def test_a_macrobenchmark_that_measures_a_section_of_its_own(project):
+    """The page refused such a project, and the agent's way was the only one (#817)."""
     benchmark_project(project.root, FeedBenchmark=SECTION_CLASS)
-    cannot(project.agents().doctor(), "This project has a macrobenchmark that measures something of its own", "FeedBenchmark")
+    site, init = serving(project.agents().doctor())
+    page = page_of(site)
+    card = page.one("label", "opt")
+    check("how the app opens is offered, opened by echolot itself", card.one("span", "opt-t").text == "How the app opens"
+          and card.one("span", "opt-d").text.startswith("From the tap on its icon"), card.text)
+    note = page.one("p", id="setup-benchmark").text
+    check("and the benchmark is said beside the app, left for an agent", "macrobenchmark in :benchmark (HomeBenchmark)"
+          in note and "An agent can set the benchmark up afterwards" in note, note)
+    check("taken", set_up(site, limit="1.5").status == 303)
+    cfg = Config.load(project.root / "echolot.yml")
+    check("the launch window, run by echolot's launches", cfg.scenario_window == LAUNCH_WINDOW
+          and cfg.runner.get("mode") == "launch" and cfg.scenario_budget_ms == 1500, cfg.runner)
+
+
+def test_a_line_of_scan_about_a_class_does_not_read_as_a_command(project, monkeypatch):
+    """`echolot scan` then a class name read as `echolot scan HomeBenchmark`, which is no command (#817)."""
+    benchmark_project(project.root, FeedBenchmark=SECTION_CLASS)
+    monkeypatch.setattr(setup_mod, "draft", _no_launch(setup_mod.draft))
+    box = page_of(site_of(project.agents().doctor())).one("div", id="setup-cannot")
+    said = [p.text for p in box.all("p", "says")]
+    check("each line says it is what scan says", said and all(t.startswith("echolot scan says: ") for t in said), said)
+
+
+def _no_launch(real):
+    """`draft` as it is for a project whose launch cannot be drafted either."""
+    def drafted(facts):
+        if facts is not None and not facts.benchmarks:
+            return {"can": False, "plain": "", "says": []}
+        return real(facts)
+    return drafted
 
 
 def test_a_repository_that_cannot_be_read(project):
@@ -572,9 +602,9 @@ def test_several_apps_in_one_repository_are_said_beside_the_name(project):
     (project.root / "wear" / "build.gradle.kts").write_text(GRADLE.replace(APP, "com.example.wear"), encoding="utf-8")
     box = page_of(site_of(project)).one("div", id="setup-app")
     said = box.one("p", "says").text
-    check("scan's note stands under the question, in its words", said.startswith("echolot scan several modules declare a "
+    check("scan's note stands under the question, in its words", said.startswith("echolot scan says: several modules declare a "
           "launcher Activity") and "the first is read; the others are apps too" in said, said)
-    check("which scan prints", said[len("echolot scan "):] in re.sub(r"\s+", " ", said_by(["scan"])))
+    check("which scan prints", said[len("echolot scan says: "):] in re.sub(r"\s+", " ", said_by(["scan"])))
 
 
 # --- other steps that come first -------------------------------------------------------------------

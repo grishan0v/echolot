@@ -149,6 +149,22 @@ def draft(facts: scan_mod.Facts | None) -> dict[str, Any]:
                          "installs under on a phone. Without it a recording cannot be told from any other app's."}
     window = scenario.get("window")
     if (window.get("name") if isinstance(window, dict) else window) != LAUNCH_WINDOW:
+        # A macrobenchmark that measures something of its own leaves its
+        # window to be picked from a trial recording. How the app opens is
+        # still there to set up: the draft `scan` writes for the same app
+        # with no benchmark, the first-run flow of every other project (#817).
+        # The benchmark stays the agent's, and the page says so.
+        launch = draft(dataclasses.replace(facts, benchmarks=[])) if facts.benchmarks else {"can": False}
+        if launch["can"]:
+            bench = facts.benchmarks[0]
+            names = [c["name"].rsplit(".", 1)[-1] for c in bench.get("classes") or []]
+            launch["benchmark"] = (
+                f"This project's macrobenchmark in `{bench['module']}`"
+                + (f" ({', '.join(f'`{n}`' for n in names[:4])})" if names else "")
+                + " measures something of its own, and where that begins and ends has to be picked from a "
+                  "trial recording. Set up here, echolot opens the app itself and measures how it opens. An "
+                  "agent can set the benchmark up afterwards: the way is under the button.")
+            return launch
         # Of what `scan` says of the benchmarks, the module and what each
         # class measures: the lines that say why. The rest is for an agent.
         said = _said(facts, "benchmarks")
@@ -368,7 +384,7 @@ def offer(project: Path, config: str, st: dict[str, Any], facts: scan_mod.Facts 
         writes += init_writes(project)
     return {
         "state": "offer", "init": runs_init, "package": drafted["package"], "variant": drafted["variant"],
-        "script": drafted["script"], "noted": drafted["noted"], "writes": writes,
+        "script": drafted["script"], "noted": drafted["noted"], "benchmark": drafted.get("benchmark"), "writes": writes,
         "config": config_text(drafted), "limit": (LIMIT_MIN_S, LIMIT_MAX_S), "other": _other(st, step),
         "choices": [{
             "name": LAUNCH, "title": "How the app opens",

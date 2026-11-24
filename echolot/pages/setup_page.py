@@ -45,8 +45,10 @@ def _other(other: dict[str, Any]) -> str:
 
 
 def _says(pairs: Sequence[tuple[str, str]]) -> str:
-    """The CLI's own words under a sentence of the page's."""
-    return "".join(f'<p class="says small sub"><span class="who">{e(who)}</span> {kit.prose(said)}</p>'
+    """The CLI's own words under a sentence of the page's. "says" after the
+    command: a line that begins with a class name read as a command to run,
+    `echolot scan FeedBenchmark`, which is none (#817)."""
+    return "".join(f'<p class="says small sub"><span class="who">{e(who)}</span> says: {kit.prose(said)}</p>'
                    for who, said in pairs if said)
 
 
@@ -85,7 +87,9 @@ def _offer(found: dict[str, Any], action: str) -> str:
     where = f" in <code>{e(found['script'])}</code>" if found.get("script") else ""
     app = (f'<div class="stack gap-2" id="setup-app"><p class="measure"><b>Is this your app?</b> echolot found '
            f'<code>{e(found["package"])}</code>{where}{build}. If that is your app, set it up. If the name is '
-           f'another app\'s, do not: an agent sets up the right one.</p>{_says(found["noted"])}</div>')
+           f'another app\'s, do not: an agent sets up the right one.</p>{_says(found["noted"])}'
+           + (f'<p class="small sub measure" id="setup-benchmark">{kit.prose(found["benchmark"])}</p>'
+              if found.get("benchmark") else "") + '</div>')
     low, high = found["limit"]
     limit = ('<div class="stack gap-2"><label class="field" for="limit">It should take no longer than '
              '<input type="text" inputmode="decimal" maxlength="6" id="limit" name="limit" autocomplete="off" '
