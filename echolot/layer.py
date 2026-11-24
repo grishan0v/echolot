@@ -504,10 +504,19 @@ def assess(project: Path) -> dict:
         # skill twice. The plugin's door forbids it; the first `echolot` in
         # the project said it (#598).
         plugged = plugin.init_for(project)
+        # A plugin in Cursor or Codex only: `--for plugin` would leave Claude
+        # Code with no skills, so the line says where the plugin is not (#740).
+        left_out = plugin.claude_left_out(project)
         if plugged:
             return {"verdict": "absent", "status": None, "files": {},
                     "command": plugged, "says": f"none installed here, and the "
-                    f"echolot plugin is in {plugin_hosts(project)}"}
+                    f"echolot plugin is in {plugin_hosts(project)}"
+                    + (", not Claude Code" if left_out else "")}
+        if left_out:
+            # Run in Claude Code: plain `init` installs the skills it reads.
+            return {"verdict": "absent", "status": None, "files": {},
+                    "command": "echolot init", "says": f"none installed here, and "
+                    f"Claude Code has no echolot plugin (it is in {plugin_hosts(project)})"}
         return {"verdict": "absent", "status": None, "files": {},
                 "command": "echolot init", "says": "none installed here"}
     if not hosts.wants_claude(project):

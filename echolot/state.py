@@ -35,7 +35,11 @@ def project_state(project: Path, config: str = "echolot.yml") -> dict:
     # The `init` a project with echolot's plugin runs, where the plugin is
     # found: plain `init` beside it installs every skill twice (#598).
     st["plugin_init"] = plugin.init_for(project)
-    st["plugin_hosts"] = layer.plugin_hosts(project) if st["plugin_init"] else None
+    # And where it is found, but not in Claude Code: there `--for plugin`
+    # leaves Claude Code with no skills (#740).
+    st["plugin_claude_left_out"] = plugin.claude_left_out(project)
+    st["plugin_hosts"] = (layer.plugin_hosts(project)
+                          if st["plugin_init"] or st["plugin_claude_left_out"] else None)
     st["hosts"] = hosts.load_choice(project)
     # Where Codex is used: whether a rule lets echolot out of its sandbox.
     said = codex.one_line(project, hosts.keys(project))
@@ -658,9 +662,20 @@ def next_step(st: dict) -> str:
     if kind == "init":
         if st["layer_verdict"] == "absent":
             if st.get("plugin_init"):
-                return (f"{st['plugin_init']} — the echolot plugin is in "
+                line = (f"{st['plugin_init']} — the echolot plugin is in "
                         f"{st['plugin_hosts']} and brings the skills, so .claude/ "
                         f"stays out; then the plugin's echolot skill")
+                if st.get("plugin_claude_left_out"):
+                    # Which agent runs this is not known here, and the two
+                    # want different commands: both, and which is whose.
+                    line += (". In Claude Code, which has no echolot plugin: "
+                             "`echolot init`, which installs the .claude/ layer it reads")
+                return line
+            if st.get("plugin_claude_left_out"):
+                # In Claude Code, with the plugin in another agent only.
+                return (f"echolot init — installs the .claude/ layer for Claude "
+                        f"Code, which has no echolot plugin (it is in "
+                        f"{st['plugin_hosts']}); then /echolot in Claude Code")
             # Nothing found is no proof there is no plugin: a person who
             # has it reads which line is theirs.
             return ("echolot init — installs the .claude/ layer; then /echolot in "
