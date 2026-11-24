@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import fixture, recorder, recording  # noqa: E402
+from echolot import report as report_mod  # noqa: E402
 from echolot.main import _cold_only, main  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -88,3 +89,5 @@ def test_analyze_leaves_the_warm_start_out_and_says_which(tmp_path: Path) -> Non
     check("report.md says it under the runs", said in md
           and md.index("Runs: **2**") < md.index(said), md[:900])
     check("and so does the run, before the report", said in err.getvalue(), err.getvalue())
+    check("and the overview `analyze` prints outside a terminal (#492)",
+          said in report_mod.overview(rep), report_mod.overview(rep)[:900])

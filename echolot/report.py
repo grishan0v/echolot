@@ -2184,6 +2184,8 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
         out.append(f"⚠️ {other}")
     if report.get("same_recording"):
         out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
+    if report.get("not_cold"):
+        out.append(f"> ⚠️ {not_cold_said(report['not_cold'], len(traces or [None]))}")
     out.extend(_diverged_lines(w))
     anchors = []
     for key, label in (("start_anchor", "start"), ("end_anchor", "end")):
