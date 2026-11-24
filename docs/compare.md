@@ -7,7 +7,9 @@ question people actually arrive with has two halves — *it was 3 s, now it is
 7 s, where did that go* — and the second half needs two sets.
 
 `echolot compare` takes two Marker Reports and returns one table, sorted by how
-far each row moved. The top row is usually the answer.
+far each row moved, with the main thread's own moves that hold first and the
+moves the runs do not back last ([the order](#the-order)). The top row is
+usually the answer.
 
 ```bash
 echolot compare                       # the open investigation: previous round vs latest
@@ -77,6 +79,34 @@ is `—`: evidence that differs between the rounds would be a coin toss to show.
 Thread names are cut the same way wherever they appear: `uninstrumented_cpu`
 names threads, and `SyncAdapterThread-1` reaches the trace as
 `SyncAdapterThre`, fifteen characters.
+
+### The order
+
+Rows are sorted by how far they moved, in three parts:
+
+1. a move of the main thread's own time, or of the frames, that holds and is a
+   twentieth of the window or more: time the scenario itself spent;
+2. every other row;
+3. a move the runs do not back: Holds is no.
+
+By size alone a sum over a pool of threads led the table above the cause it
+followed from. Faults injected into one app, five cold starts of 5.5 s against
+eighteen: a 400 ms sleep on the main thread inside an initializer moved
+`main_thread_block` by +419 ms, and it was ninth, under `monitor_contention`
+summed over the coroutine workers, −4.0 s and holding — with the main thread
+held longer the workers contended less — and under pool rows that did not
+hold. A 300 ms wait of the main thread on a monitor was thirteenth. Both are
+first now. A sum over a pool is not time the scenario spent; the main
+thread's is, and a frame's, by the rule the plain reading of a report uses to
+decide what can need attention (see
+[A plain reading](analysing.md#a-plain-reading)).
+
+The main thread does not go first whatever moved there. A cause off it, such
+as threads that burn the CPU, reaches the main thread as small waits that
+hold, and those would bury it: under a twentieth of the window they stay where
+their size puts them. In the same set the burning threads came fifth rather
+than seventh. With too few runs for Holds nothing holds, and the order is by
+size alone. Each row says whose time it is in `comparison.json` (`on_main`).
 
 ### Markers
 
@@ -263,7 +293,13 @@ the floor, gets its time per occurrence beside its count — `670 → 161.5 · 1
 that grew while the frames fell, such as the frames the app itself made late,
 is what the frame count does not explain. A row without a count on both sides
 keeps its verdict, so read rows like `uninstrumented_cpu` with the warning in
-mind.
+mind. Inside each half the rows keep [the order](#the-order).
+
+`analyze` also keeps how many of those frames the app made late
+(`window.frames.late`, each run's in `late_values`): the frames `frame_jank`'s
+rows tag `Self Jank`, by its own floors. The window of such a scenario does
+not move, and the share of late frames does: the plain reading judges it by
+that, see [A window that runs to the end of the recording](#a-window-that-runs-to-the-end-of-the-recording).
 
 ## When two reports may not be compared
 
@@ -533,7 +569,8 @@ BETTER        Faster by 0.7 s. The launch went from 2.1 s to 1.4 s, 33% less. Me
 ```
 
 No model writes any of it: the same two reports give the same words. The
-verdict is by the scenario's window. Up to three notes follow it: whether the
+verdict is by the scenario's window, or by the frames the app made late when
+the window runs to the end of the recording (below). Up to three notes follow it: whether the
 launch is within `scenario.budget_ms`, in the sentence the report's own
 [plain reading](analysing.md#a-plain-reading) has for it; that the repeats are
 too few for the Holds column, or, with fewer than three a side, for anything to
@@ -562,6 +599,15 @@ a whole shrinks, and judged by its largest row a fix reads as a regression.
 The sum is of a typical launch: each row's median over every launch of its
 side, a launch without the row counted as nothing. A row seen in one launch of
 three adds nothing, so one slow launch does not read as a move.
+
+**A check with rows on the main thread and on other threads** —
+`monitor_contention`, `runnable_starvation`, `uninstrumented_cpu` and others
+that name a thread — is judged by its main thread's rows alone when those
+moved and the sum did not move their way. A 300 ms wait of the main thread on
+a monitor came with 4.3 s less waiting among the coroutine workers, and the
+check's sum read as better. Now it reads as worse, in a sentence that gives
+both: on the main thread from 20 ms to 0.4 s, on the other threads, added up,
+from 8.6 s to 4.3 s.
 
 **When a move is called**, for the window and for a check's sum alike:
 
@@ -595,6 +641,38 @@ a change. A change smaller than a fifth is said with its two times and called
 no clear change. All of this is one app on one phone; the numbers are
 `SHARE`, `LAUNCH_SHARE` and `LEAST_RUNS` in `echolot/moves.py`, with the
 reasoning beside them.
+
+### A window that runs to the end of the recording
+
+A scenario with no end anchor, or one whose end anchor missed, has a window as
+long as the recording, and a scripted scroll or drag is recorded for a fixed
+time: the window does not move whatever the app does. Five pairs of sets of
+one drag — a build that recomposed a list on every move of a panel, against
+the build before it and the fix after it — all read "No clear change. The run
+took 14.9 s before and 14.9 s after", the window 8.6 ms apart at most, while
+the share of frames the app itself made late went 3% → 21% → 10%.
+
+Such a window is judged by that share instead: in each run the frames the app
+made late out of the frames it drew (see
+[Frame-paced scenarios](#frame-paced-scenarios)), by the window's own rule — a
+fifth of the larger share, more than half of the better side's runs under the
+worse side's best one — and by one frame in a hundred at least, so that 0.4%
+against 0.6% is not news:
+
+```
+WORSE         More frames came late. The app made 3.2% of its frames late before and 21% after: 21
+              of 650 frames a run, then 128 of 612. The run took 14.9 s before and 14.9 s after: the
+              window runs to the end of the recording, so its length is the recording's and not the
+              app's. Measured on 3 runs before and 3 after.
+```
+
+A window that does move — a UI test that waits for the app takes longer when
+the app does — keeps its verdict, with the late frames in its sentence, and
+when the two disagree neither is called a change. Without a frame timeline,
+or with a report written before the late frames were counted, the verdict
+says why the window says nothing and what to do. A window that ends where
+the scenario does, on an end anchor or a launch, is judged by its length as
+before. The floor is `FRAMES_FLOOR` in `echolot/moves.py`.
 
 With the flag the reading is kept in `comparison.json` as well, under `plain`.
 `comparison.md` stays the table. Without `--plain` and `--html` `compare`
@@ -687,10 +765,13 @@ needs the slices under a row, or the sampled stacks, kept for both sides.
       "delta_ms": 871.3, "ratio": 73.01,
       "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3,
                  "resolves_ms": 40.0, "runs_needed": null },
-      "holds": true, "detail": "com.example.app" }
+      "holds": true, "detail": "com.example.app", "on_main": true }
   ]
 }
 ```
+
+`on_main` says whether a row is time the main thread spent or lost, or a
+frame's: the rule [the order](#the-order) puts such a row first by.
 
 `summary.not_compared` lists the detectors one side or both could not run,
 with each side's reason, `null` for a side that could. Their rows are not in
@@ -726,13 +807,17 @@ there were too few runs. `confidence` is the level the ranges are drawn at.
 With `--plain` or `--html` the file holds one more key, `plain`, after all the
 others: `scenario` and `process`, what the two reports are of; `verdict`
 (`movement`: `better`, `worse`, `no_change` or `not_compared`; a
-`headline` and the sentence, `text`), `window` (each side's median, least and
+`headline` and the sentence, `text`; `by`, `window` or `frames`, what it was
+read from, and `frames`, each side's late frames — `late`, `count`, `share`
+and its `low` and `high` over the runs, `runs` — where the window runs to the
+end of the recording), `window` (each side's median, least and
 most launch, and the runs), `notes` (`id`: `budget`, `few_runs`, `unlike`;
 `attention`, a `title` and a `text`) and `checks`, one item per detector:
 `movement`, `title`, `why`, the sentence `text`, how many `findings` went, came
 and stayed, and under `before` and `after` what that report said of the check:
 its `attention`, its findings added up for a typical launch (`ms`, `null` for
-none), and its own sentence (`found`). A movement is never under a key called
+none), and its own sentence (`found`); a check judged by its main thread's
+rows has them added up under `main`. A movement is never under a key called
 `level` or `attention`: those are the reports' words for another thing.
 
 Schema 2 is this shape. Schema 1 carried `overlap` — whether the min–max

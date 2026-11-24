@@ -769,6 +769,8 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
 
     if window.get("main_thread"):
         window["main_thread"].update(_in_rows(window, spans, uncounted))
+    if window.get("frames"):
+        window["frames"]["late"] = _late_frames(results)
 
     return report_mod.build(str(trace), window, results,
                             toolchain=toolchain_info(tp_binary, tp_source),
@@ -2482,6 +2484,25 @@ def _frames_info(tp, window: dict) -> dict | None:
     if not rows or not rows[0]["seen"]:
         return None
     return {"count": rows[0]["n"]}
+
+
+def _late_frames(results: list[dict]) -> int | None:
+    """How many of the window's frames the app itself made late, by `frame_jank`.
+
+    The frames its rows tag `Self Jank`: the platform's word for a deadline
+    the app missed, with the detector's own floors, so the number is the one
+    its rows add up to. In a frame-paced scenario this is what moves when the
+    window cannot: a drag recorded for 15 s took 14.9 s on every build, while
+    the app made 3% of its frames late, then 21%, then 10% after the fix
+    (#586). Kept per recording, beside the frames it is a share of, so the
+    comparison can read the share of each run. None when `frame_jank` did not
+    run or could not look.
+    """
+    jank = next((d for d in results if d["id"] == "frame_jank"), None)
+    if jank is None or jank.get("error") or jank.get("checked") is False:
+        return None
+    return sum(int(r.get("count") or 0) for r in jank.get("rows") or []
+               if str(r.get("detail") or "").startswith("Self Jank"))
 
 
 # The slices a drawn frame leaves on the app's threads, from the `gfx` and
@@ -6235,7 +6256,8 @@ def build_parser() -> argparse.ArgumentParser:
     cp = add("compare", "pipeline", "[<before.json> [<after.json>]]",
              "what changed between two Marker Reports",
              description="The delta between two reports, sorted by how much "
-                    "each row moved. With an investigation open and no "
+                    "each row moved, the main thread's moves that hold "
+                    "first. With an investigation open and no "
                     "arguments: its previous round against the latest. One "
                     "path: that report against .echolot/out/report.json. "
                     "Two: exactly those.")

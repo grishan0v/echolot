@@ -248,6 +248,17 @@ STUFFED_FRAMES = [
     *[(40 + i, 920 + i * 20, 16, 14, FT.JANK_NONE) for i in range(6)],
 ]
 
+# The app's frames of a build that keeps up (#586), in place of the ones
+# above with `build(smooth=True)`: a frame every 16 ms across the window, 60
+# of them, 3 the app missed by 8 ms each, 5%. `APP_FRAMES` is the build that
+# janks: 24 frames in the same window, 5 the app missed, a fifth. A drag
+# recorded for a fixed time takes as long on either, and the share of frames
+# the app made late is what tells the two apart.
+SMOOTH_FRAMES = [
+    *[(1 + i, 105 + i * 16, 16, 14, FT.JANK_NONE) for i in range(57)],
+    *[(70 + i, 105 + (57 + i) * 16, 16, 24, FT.JANK_APP_DEADLINE_MISSED) for i in range(3)],
+]
+
 # Negative control: another app janking inside our window.
 OTHER_LAYER = "com.other.app/com.other.app.Main#0"
 OTHER_FRAMES = [
@@ -1437,7 +1448,8 @@ def config(builder, *, categories=RECORDED_CATEGORIES, environment: bool = True,
 def build(frames: bool = True, environment: bool = True,
           sampling: str | None = None, names: bool = False,
           crowded: bool = False, categories=None, composables: bool = True,
-          fully_drawn: str | None = None, stuffed: bool = False) -> bytes:
+          fully_drawn: str | None = None, stuffed: bool = False,
+          smooth: bool = False) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1478,7 +1490,8 @@ def build(frames: bool = True, environment: bool = True,
     it.
 
     `stuffed=True` draws the app's frames from `STUFFED_FRAMES`, a list that
-    runs a frame behind, in place of `APP_FRAMES`.
+    runs a frame behind, in place of `APP_FRAMES`; `smooth=True` from
+    `SMOOTH_FRAMES`, a build that keeps up.
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -1492,7 +1505,7 @@ def build(frames: bool = True, environment: bool = True,
                            (SS_PID, SS_NAME, SS_THREADS)])
 
     if frames:
-        _frames(builder, STUFFED_FRAMES if stuffed else APP_FRAMES)
+        _frames(builder, STUFFED_FRAMES if stuffed else SMOOTH_FRAMES if smooth else APP_FRAMES)
     if sampling:
         _samples(builder, arrived=sampling in ("arrived", "minified"),
                  minified=sampling == "minified")

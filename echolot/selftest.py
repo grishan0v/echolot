@@ -1882,6 +1882,53 @@ def _(report):
     assert "12 of 25 frames waited in a queue" in said and "without a stutter" in said, said
 
 
+@check("frame_jank: the window keeps how many of its frames the app made late")
+def _(report):
+    """The frames whose rows the platform tags `Self Jank`, by the
+    detector's own floors: the 5 the app was 44 ms late for, not the 3 of
+    the same kind 2 ms late, nor the system's 4, nor the 2 queued ones. Per
+    recording, beside the frames they are a share of, so `compare --plain`
+    can judge a frame-paced scenario by each run's share (#586)."""
+    assert report["window"]["frames"] == {"count": 24, "late": 5}, report["window"]["frames"]
+
+
+def _drag(variant: dict) -> dict:
+    """The fixture recorded three times the way `variant` says, with no end
+    anchor: a drag recorded for a fixed time, whose window runs to the end
+    of the recording."""
+    import copy
+
+    from . import report as report_mod
+    cfg = Config({**FIXTURE_CONFIG, "scenario": {"name": "drag", "start": {"name": "AppStart"}}})
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "drag.perfetto-trace"
+        trace.write_bytes(fixture.build(**variant))
+        one = _analyze(trace, cfg)
+    return report_mod.aggregate([copy.deepcopy(one) for _ in range(3)])
+
+
+@check("compare --plain judges a window that runs to the end of the recording "
+       "by the frames the app made late")
+def _(report):
+    """A drag recorded for a fixed time takes as long whatever the app does:
+    five pairs of sets of one, a build that janked against the build before
+    and the fix after, all read "No clear change", the window 8.6 ms apart
+    at most, while the app's own late frames went from 3% to 21% and back to
+    10%. Here the build that keeps up (`fixture.SMOOTH_FRAMES`, 3 of 60
+    frames late) against the one that janks (6 of 25 in a window open to the
+    end of the recording), 1.3 s each: worse by the share of late frames,
+    and the fix the other way round better. On `main` both read no change."""
+    from . import compare as compare_mod
+    from . import moves
+    smooth, janky = _drag({"smooth": True}), _drag({})
+    for before, after, movement, shares in ((smooth, janky, moves.WORSE, "5% of its frames late before and 24%"),
+                                            (janky, smooth, moves.BETTER, "24% of its frames late before and 5%")):
+        cmp = compare_mod.build(before, after, before_path="a.json", after_path="b.json")
+        v = moves.read(before, after, cmp)["verdict"]
+        assert (v["movement"], v["by"]) == (movement, "frames"), v
+        assert shares in v["text"] and "its length is the recording's" in v["text"], v["text"]
+
+
 @check("frame_jank: the worst frame in the trace is outside the window")
 def _(report):
     # 200 ms, 184 over, at ts 1200 — after Screen.firstFrame ends the window.
@@ -2135,6 +2182,65 @@ def _(report):
     assert [r["holds"] for r in cmp["rows"]] == [None, None], cmp["rows"]
     assert "does not say which echolot" in {w["id"]: w["text"] for w in cmp["warnings"]}.get(
         "version", ""), cmp["warnings"]
+
+
+def _cold_starts(rows: dict[tuple[str, str], list[float]]) -> dict:
+    """A merged report of four 5.5 s cold starts, with a row per
+    (detector, location) and these values. `com.example.app` is the main
+    thread's location: the last 15 characters of the process's name."""
+    side = _side_with({})
+    side["window"]["duration_ms"] = 5480.0
+    by_det: dict[str, list[dict]] = {}
+    for (det_id, location), values in rows.items():
+        by_det.setdefault(det_id, []).append(
+            {"location": location, "runs": f"{len(values)}/4", "count": 1,
+             "self_ms": sorted(values)[len(values) // 2],
+             "spread": {"self_ms": {"min": min(values), "max": max(values), "values": values}}})
+    side["detectors"] = [{"id": d, "title": d, "why": "", "params": {}, "params_source": "default",
+                          "error": None, "sha": "a" * 12, "rows": found} for d, found in by_det.items()]
+    side["summary"] = {"fired_ids": list(by_det)}
+    return side
+
+
+@check("compare lists the main thread's move that holds above a sum over a pool")
+def _(report):
+    """Faults injected into one app, 5 cold starts against 18: a 400 ms
+    sleep on the main thread in an initializer moved `main_thread_block` by
+    +419 ms, ninth, and over it sat `monitor_contention` on the coroutine
+    workers, −3996 ms, holding — the workers contended less while the main
+    thread was held — and pool rows that did not hold. The main thread's
+    300 ms wait on a monitor was thirteenth, under the same pool row at
+    −4286 ms (#595).
+
+    Both causes lead now. A pool row whose move does not hold goes after the
+    rest. A cause off the main thread keeps its place: a pool that burns the
+    CPU, with a main-thread knock-on that holds but is under a twentieth of
+    the window, is still first."""
+    from . import compare as compare_mod
+
+    def order(before: dict, after: dict) -> list[tuple[str, str]]:
+        cmp = compare_mod.build(_cold_starts(before), _cold_starts(after),
+                                before_path="a.json", after_path="b.json")
+        return [(r["detector"], r["location"]) for r in cmp["rows"] if r["change"] != "steady"]
+
+    pool = {("monitor_contention", "DefaultDispatch"): [8600.0, 8700.0, 8500.0, 8650.0],
+            ("runnable_starvation", "DefaultDispatch"): [900.0, 1500.0, 600.0, 1300.0]}
+    sleep = {("main_thread_block", "Initializer.create"): [40.0, 42.0, 38.0, 41.0], **pool}
+    got = order(sleep, {("main_thread_block", "Initializer.create"): [460.0, 458.0, 462.0, 459.0],
+                        ("monitor_contention", "DefaultDispatch"): [4600.0, 4650.0, 4700.0, 4620.0],
+                        ("runnable_starvation", "DefaultDispatch"): [700.0, 400.0, 900.0, 600.0]})
+    assert got == [("main_thread_block", "Initializer.create"), ("monitor_contention", "DefaultDispatch"),
+                   ("runnable_starvation", "DefaultDispatch")], got
+    wait = {("monitor_contention", "com.example.app"): [20.0, 22.0, 19.0, 21.0], **pool}
+    got = order(wait, {("monitor_contention", "com.example.app"): [350.0, 348.0, 352.0, 349.0],
+                       ("monitor_contention", "DefaultDispatch"): [4300.0, 4350.0, 4280.0, 4320.0],
+                       ("runnable_starvation", "DefaultDispatch"): [700.0, 400.0, 900.0, 600.0]})
+    assert got[:2] == [("monitor_contention", "com.example.app"), ("monitor_contention", "DefaultDispatch")], got
+    burn = {("uninstrumented_cpu", "Thread-25"): [10.0, 12.0, 9.0, 11.0],
+            ("runnable_starvation", "com.example.app"): [60.0, 62.0, 58.0, 61.0]}
+    got = order(burn, {("uninstrumented_cpu", "Thread-25"): [850.0, 860.0, 840.0, 855.0],
+                       ("runnable_starvation", "com.example.app"): [100.0, 102.0, 98.0, 101.0]})
+    assert got == [("uninstrumented_cpu", "Thread-25"), ("runnable_starvation", "com.example.app")], got
 
 
 @check("compare says when the two sides were recorded differently, and what reads it")

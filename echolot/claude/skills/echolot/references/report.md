@@ -347,7 +347,10 @@ this: 35% at rest, 42% with eight busy loops taking 68% of the device.
 frame timeline (`count`; merged, the median with each run's in `values`).
 `null` without a frame timeline. `compare` reads it: in a scripted scroll or
 drag the window is the gesture's length, and a build that janks draws fewer
-frames in it, so work done once a frame shrinks with them.
+frames in it, so work done once a frame shrinks with them. `late` is how many
+of them the app made late — the frames `frame_jank`'s rows tag `Self Jank` —
+with each run's in `late_values`; `compare --plain` judges a window that runs
+to the end of the recording by their share, since its length cannot move.
 
 **`window.drawn`** — how many frames the app's threads drew in the window, by
 their `DrawFrame` and `Choreographer#doFrame` slices (`count`; merged, the
@@ -954,7 +957,11 @@ The second case is more common than the first.
 
 ## The comparison — `echolot compare`
 
-Two Marker Reports in, one table out, sorted by how far each row moved. Written
+Two Marker Reports in, one table out, sorted by how far each row moved — a
+move of the main thread's own time (or the frames') that holds and is a
+twentieth of the window or more first, a move that does not hold last; each
+row's `on_main` says whose time it is, and a pool's sum is not the scenario's
+time. Written
 to `comparison.json` and `comparison.md` beside the report when `echolot.yml`
 is found; run from a folder without one, it prints the table and writes
 nothing. `echolot compare --plain` prints the same comparison in plain words
