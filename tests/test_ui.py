@@ -38,6 +38,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -47,10 +48,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import echolot  # noqa: E402
-from echolot import hunt as hunt_mod  # noqa: E402
 from echolot import main as main_mod  # noqa: E402
 from echolot import ready, recorder, runner, ui  # noqa: E402
 from echolot import scan as scan_mod  # noqa: E402
+from echolot import when as when_mod  # noqa: E402
 from echolot.pages import answer_page, kit, start_page  # noqa: E402
 from tests import answer_fixture as fx  # noqa: E402
 from tests.support import check  # noqa: E402
@@ -1195,6 +1196,42 @@ def test_a_report_with_a_part_analyze_never_writes(project, how):
     check("and its address says why", reply.status != 500 and "does not read" in reply.body, reply.body[-600:])
 
 
+@pytest.fixture
+def berlin(monkeypatch):
+    """This machine's clock in Central European time, for the test and no
+    longer. A Python built without `time.tzset` cannot change it once started:
+    there the test runs only when the whole run is under TZ=Europe/Berlin."""
+    monkeypatch.setenv("TZ", "Europe/Berlin")
+    reset = getattr(time, "tzset", None)
+    if reset:
+        reset()
+    if datetime(2026, 10, 15, 15, 38, tzinfo=timezone.utc).astimezone().strftime("%H:%M") != "17:38":
+        pytest.skip("this Python cannot change its clock's zone: run it under TZ=Europe/Berlin")
+    yield
+    monkeypatch.undo()
+    if reset:
+        reset()
+
+
+def test_one_moment_reads_the_same_on_the_start_page_and_the_answer_page(project, berlin):
+    """In local time with its zone, on both pages: the answer page said UTC,
+    two hours off what the start page and hunt --show said (#734)."""
+    project.ready().report()
+    project.hunt(5, "why is it slow", reports=1, conclusion="the lock is held over a read",
+                 opened_at="2026-10-15T15:38:00+00:00", closed_at="2026-10-15T15:42:03+00:00")
+    site = site_of(project)
+    start = read(get(site).body).one("ul", "invs").one("li").text
+    check("the start page says when it opened and ended, with the zone",
+          "2026-10-15 17:38 CEST" in start and "It ended on 2026-10-15 17:42 CEST" in start, start)
+    reply = get(site, "hunt/5/answer")
+    about = dict((d.one("dt").text, d.one("dd").text) for d in read(reply.body).one("dl", "props").all("div"))
+    check("the answer page says the same moments", reply.status == 200 and about["Opened"] == "2026-10-15 17:38 CEST"
+          and about["Closed"].startswith("2026-10-15 17:42 CEST"), about)
+    check("and no time in UTC", "UTC" not in read(reply.body).text)
+    shown = said_by(["hunt", "--show", "5"])
+    check("the clock hunt --show reads", "17:38" in shown and "17:42" in shown, shown)
+
+
 def test_the_investigations_and_what_each_filed(project):
     project.ready().traces().report()
     project.hunt(1, "why is it <slow>", reports=3, conclusion="the lock is held over a read", closed_at="2026-11-11T11:00:00+00:00")
@@ -1206,7 +1243,7 @@ def test_the_investigations_and_what_each_filed(project):
     items = page.one("ul", "invs").all("li")
     check("newest first, as hunt --list has them", [i.one("b").text for i in items] == ["#3", "#2", "#1"])
     check("the open one is said to be open", "open now" in items[0].one("p", "inv-h").text)
-    ended = hunt_mod._when("2026-11-11T11:00:00+00:00")
+    ended = when_mod.local("2026-11-11T11:00:00+00:00", seconds=False)
     check("what it did, in sentences, and what it came to", (
         f"The app was recorded 3 times and 3 reports were kept. It ended on {ended}, after 2 hours.") in items[2].text
         and "the lock is held over a read" in items[2].text, items[2].text)
@@ -1318,9 +1355,11 @@ def test_an_investigations_page_in_each_state(project, demo_report, state):
     check("the answer is a step of the path, and this page is it", [a.text for a in steps] == ["Start", "Agent's answer"]
           and [a.attrs.get("aria-current") for a in steps] == [None, "page"], [a.text for a in steps])
     # What `echolot hunt --show --html` writes, and the path to the other pages.
-    on_disk = answer_page.render(hunt, reports, again=main_mod._check_again_line(project.root, site.config, hunt, reports))
+    # The served page says its moments in local time, with the zone (#734).
+    on_disk = answer_page.render(hunt, reports, again=main_mod._check_again_line(project.root, site.config, hunt, reports),
+                                 local_time=True)
     served = BUTTON.sub(r"\1\2", STEPS_NAV.sub("", last.body)).replace(kit.SERVED, kit._POLICY)
-    check("but for the path, the button and what a served page may do, it is the page hunt --show --html writes",
+    check("but for the path, the button, what a served page may do and its clock, it is the page hunt --show --html writes",
           served == on_disk)
     start_links = read(get(site).body).one("ul", "invs").one("li").all("a")
     check("the start page's link says what it leads to", start_links[0].text == link

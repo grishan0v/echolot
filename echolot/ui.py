@@ -304,7 +304,7 @@ def _answer(visit: Visit, params: dict[str, str]) -> Page:
     mine = last is not None and hunt.get("n") == last.get("n")
     return Page(answer_page.render(hunt, reports, again=again, action_html=_again_button(visit, hunt),
                                    steps=visit.steps("answer" if mine else None), policy=kit.SERVED,
-                                   agent=_agent_parts(visit, hunt)))
+                                   agent=_agent_parts(visit, hunt), local_time=True))
 
 
 def _comparison(visit: Visit, rep: dict | None = None) -> dict[str, Any] | None:
