@@ -24,6 +24,7 @@ timer: the real processes are waited for by their exit and by a pipe.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shlex
@@ -276,6 +277,31 @@ def test_the_investigation_s_question_is_one_line_its_page_can_head():
     check("with none", dig.hunt_question(free) == "What is behind the 2,000 ms coldStart takes?")
     none = plain.annotate(make([entry("main_thread_waits", [row("worker", 700.0)])], duration=0))
     check("with no window", dig.hunt_question(none) == "What is behind what the report found in coldStart?")
+
+
+def test_a_start_missed_in_some_recordings_is_one_question_with_no_time():
+    """The screen said "no measured window" and the investigation asked about
+    "the 545 ms startup takes", which the report does not judge (#861)."""
+    from echolot import plain
+    from echolot.pages import report_page
+    some = copy.deepcopy(known())
+    some["window"]["start_anchor"] = {"glob": "bindApplication", "matches": 4, "missed": "1/5"}
+    some = plain.annotate(some)
+    asked, opened = report_page.question(some), dig.hunt_question(some)
+    check("both say the marker was missed in 1 of 5 recordings",
+          "echolot did not find where `coldStart` starts in 1 of 5 recordings" in asked
+          and opened == "What is behind what the report found in coldStart? echolot did not find where coldStart "
+                        "starts in 1 of 5 recordings.", (asked, opened))
+    check("and neither says the window is missing, or a time", "no measured window" not in asked
+          and not any(" ms" in q or " s " in q for q in (asked, opened)), (asked, opened))
+    every = copy.deepcopy(known())
+    every["window"]["start_anchor"] = {"glob": "bindApplication", "matches": 0, "missed": "5/5"}
+    every = plain.annotate(every)
+    asked, opened = report_page.question(every), dig.hunt_question(every)
+    check("missed in every recording: no window, and still no time", asked.startswith(
+          "`coldStart` has no measured window: echolot did not find where it starts, so the rows")
+          and opened == "What is behind what the report found in coldStart? echolot did not find where coldStart "
+                        "starts." and "ms" not in asked + opened, (asked, opened))
 
 
 # --- what a press may name -----------------------------------------------------------------------
