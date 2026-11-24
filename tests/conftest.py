@@ -53,6 +53,16 @@ def no_record(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_agent_session(monkeypatch):
+    """A run-log line names the agent session whose command it is, read off
+    the environment (#543). Run from inside an agent, every line a test
+    writes would carry that agent's id, and `reflect` would group them by it
+    on that machine and by time on CI. A test that wants one sets its own."""
+    for var, _host in recorder._SESSION_ENV:
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def no_cursor_here(monkeypatch, tmp_path_factory):
     """`echolot` and `doctor` look for a copy of the plugin in Cursor's folder
     under the home directory (#399). A test sees an empty home instead,

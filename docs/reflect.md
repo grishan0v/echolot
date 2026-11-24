@@ -46,7 +46,14 @@ Where things are looked for, when they are not where the defaults say:
 `.echolot/log/runs.jsonl`: what was asked (`argv`), where, when, exit code,
 duration, a hash of the config, a traceback if there was one, and a few facts
 the command chose to note — how many detectors fired, whether the anchor
-matched, what closed a window that is a launch. This is the only source that
+matched, what closed a window that is a launch, how many frames the app drew
+in it, where the report went. And which agent session asked, when the host
+exports one to its commands: Claude Code's `CLAUDE_CODE_SESSION_ID` (the name
+of the session's transcript), Codex's `CODEX_THREAD_ID`, or `ECHOLOT_SESSION`
+for any other host, a hook or CI to set. The id is written as given when it
+is an opaque token — letters, digits, `.`, `_`, `-` — and not at all
+otherwise, so a path never lands in the log; with none, the line has no
+`session`, like every line written before there was one. This is the only source that
 does not depend on which agent was typing: transcripts differ between agents
 and lose the exit code the moment a call is wrapped in `2>&1 | tail`; this
 file does not. `ECHOLOT_NO_RECORD=1` switches it off.
@@ -110,7 +117,8 @@ decision it lets you make:
 | Subagent | rounds against `loop.max_rounds`, re-records, tools, tokens, what fed its window, whether the prompt named the traces / the regression / the change, whether the conclusion has all eight fields, and what it returned | is the loop behaving |
 | Temporary instrumentation | per file, prefix added vs removed; was there a grep after the last edit; what the source tree holds now | did cleanup happen |
 | Cost | wall time, tokens for main and subagents separately, tools by type, largest tool outputs, longest silences | what eats the window |
-| Recorder | the `runs.jsonl` lines inside the session's window | exit codes the transcript lost |
+| Reports the session built | each `analyze`: frames drawn, whether its report on disk is still that run's and its size, how many characters reached the agent, how often it was read back, and what the run's record says about its window | which rounds the session built on numbers that were not the scenario's |
+| Recorder | the session's `runs.jsonl` lines — those that carry its id, and those that carry none inside its window — and how many lines of other sessions were left out | exit codes the transcript lost |
 
 Not in the report: thinking text (counted, not quoted), full tool outputs
 (sizes and error heads only), full prompts (truncated). It lives in
@@ -153,7 +161,9 @@ The ones that ship, by what they watch:
   Russian, that something in echolot was wrong — quoted rather than classified, since
   a sentence that names the defect is worth more than any rule
 - **failures** — echolot calls that failed, tracebacks apart from clean exits,
-  shell failures apart from the tool's own; retries, with what moved between
+  shell failures apart from the tool's own; `report_not_the_scenario`: an
+  `analyze` that exited 0 on a window that was not the scenario's (see
+  below); retries, with what moved between
   the two attempts; tool errors outside echolot, by kind (an exit 1 from
   `diff`, `cmp` or a grep is their answer, not an error, and is left out)
 - **cost** — silences of two minutes or more, each with its likely cause:
@@ -175,6 +185,32 @@ A `git checkout` that restored a file leaves no edit to balance, and a grep
 wrapped in `echo` labels once had the prefix read off its own label. The
 transcript's reading — additions against removals, a grep after the last edit
 — is what is left when the tree cannot be read.
+
+**Which runs are the session's.** Each transcript call is matched to its
+line in the run log by subcommand and time, and by session first: a line that
+carries the session's id is its own, one that carries another session's is
+never its own whatever its time, and one that carries none is taken by time,
+as before. Three sessions in one checkout write to one log at the same
+seconds — matched by time alone, a call took another session's exit code and
+the session's runs were mostly the other two's (#543). For Codex a
+subagent's commands carry its own thread's id, which counts as the session's.
+The log read is the project's, and the log of every directory the session's
+commands wrote to: one a `cd` took them into, one a `-c <dir>/echolot.yml`
+named. The Recorder section says how many lines were told apart which way.
+
+**What a report said about its window.** `analyze` exits 0 whatever the
+header of its report says, so a round recorded on a phone that had lost its
+network, or a window that was the whole trace, used to count as a success
+(#545). `report_not_the_scenario` reads it off the run's own line in the log,
+which keeps every round: an anchor that matched nothing, markers not in the
+build on the phone (and whether `mark --apply` came before), runs that were
+not cold, a round in which the app drew no frame, or a tenth of the frames
+of the agent's round before. The report file adds what the line does not
+carry, and only while it is still that run's — every `analyze` writes
+`.echolot/out/report.json` over the one before, so a file written after the
+run ended is a later run's and is not read for it. Each row says what the
+agent took in (`printed`, `read back`) and what the round built on it cost:
+the time until its next `analyze`.
 
 **The harness is not echolot.** A call the agent's harness refused at its
 permission screen, that the person declined, or that ran long enough to be
@@ -242,8 +278,9 @@ is which echolot commands ran, when, for how long, with what exit code, and
 the facts each attached.
 
 So the checks that read echolot's own calls run unchanged — `doctor_first`,
-`confirmed_changed`, `echolot_failures`, `retries`, `help_lookups`,
-`long_gaps`, the `FROM_CALLS_ALONE` set. The rest have nothing to read.
+`confirmed_changed`, `echolot_failures`, `report_not_the_scenario`,
+`retries`, `help_lookups`, `long_gaps`, the `FROM_CALLS_ALONE` set. The rest
+have nothing to read.
 
 `confirmed_changed` is there by design rather than by luck. An investigation
 records every value in `echolot.yml` a person confirmed when it opens, and
@@ -260,12 +297,17 @@ reader declares what its source can show, in `Session.carries`, and a check
 needing more is listed under **Not checked** with its silence named as no
 verdict rather than a clean one.
 
-A sitting stands in for a session. The log is a stream with no session id in
-it, so runs are cut into sittings wherever the tool was left alone for more
-than half an hour — the same notion `hunt` uses to decide whether it is looking
-at the same sitting before asking a question. The gap is measured from the end
-of the last run, so `collect -n 5` on a real device does not split one sitting
-in two.
+Lines that carry a session id are grouped by it: two sessions working at
+the same minute are two reports, a session that came back after lunch is
+one, and the report is named by the id, so `--session` takes the one from
+the transcript. A sitting stands in for a session only where the lines carry
+none — written by an older echolot, by a host that gives its commands no id,
+by a person at a shell. Those are cut into sittings wherever the tool was
+left alone for more than half an hour — the same notion `hunt` uses to
+decide whether it is looking at the same sitting before asking a question.
+The gap is measured from the end of the last run, so `collect -n 5` on a real
+device does not split one sitting in two. Parallel sessions without ids still
+read as one sitting; time cannot tell them apart.
 
 ## A session that was building the tool
 

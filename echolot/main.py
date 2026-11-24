@@ -1088,6 +1088,11 @@ def cmd_analyze(args) -> int:
         start_anchor_matches=(w.get("start_anchor") or {}).get("matches"),
         end_anchor_matches=(w.get("end_anchor") or {}).get("matches"),
         process_alternatives=len(w.get("process_alternatives") or []),
+        # The frames the app drew in the window. The report holding them is
+        # overwritten by the next `analyze`; `reflect` compares a round with
+        # the one before it off the log, and 0 is a round where the scenario
+        # never ran (#536, #545). None: the trace recorded no drawing at all.
+        drawn=(w.get("drawn") or {}).get("count"),
     )
     # A launch window has no anchors, so both counts above are empty: this is
     # what tells its line from one whose anchors were never looked up, and

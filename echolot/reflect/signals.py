@@ -986,6 +986,48 @@ def echolot_failures(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                   "and see whether the CLI could have accepted it.")
 
 
+def report_not_the_scenario(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
+    """An `analyze` that exited 0 on numbers that were not the scenario's.
+
+    The costliest events of a session left no trace in `reflect`: a round
+    where the scenario never ran, a window that was the whole trace, both
+    counted as a successful `analyze` (#545). Read off the run's own line in
+    the log and the report it wrote — see `facts.reports`.
+    """
+    rows = []
+    for r in f.reports:
+        if not r["said"] or r["exit"] not in (0, None):
+            continue   # a refusal is already a failure, in echolot_failures
+        if r["printed"] is None:
+            seen = "not in this source"
+        else:
+            seen = f"printed {r['printed']} chars" if r["printed"] else "printed nothing"
+        if r["read_after"]:
+            seen += f", read back {r['read_after']}×"
+        rows.append({"ts": _t(r["ts"]), "agent": r["agent"], "said": "; ".join(r["said"]),
+                     "seen": seen,
+                     "round": f"{r['round_s'] // 60}m{r['round_s'] % 60:02d}s"
+                              if r.get("round_s") is not None else "—",
+                     "report": r["on_disk"] + (f", {facts_mod.size_text(r['json_bytes'])}"
+                                               if r.get("json_bytes") else "")})
+    if not rows:
+        return None
+    return Signal("report_not_the_scenario", "warn",
+                  f"{len(rows)} analyze run(s) exited 0 on numbers that were not "
+                  f"about the scenario",
+                  "The run's own record says its window was not the scenario's — "
+                  "an anchor that matched nothing, markers missing from the build, "
+                  "a warm run in a cold set, a round in which the app drew no frame "
+                  "or a tenth of the round before. `analyze` exited 0 all the same, "
+                  "and what the agent did next was built on it: `round` is the time "
+                  "until its next analyze.",
+                  rows,
+                  "Read `seen` first: the header said so, and the agent did not "
+                  "take it in, or took it in and went on. A non-zero exit, or the "
+                  "warning as the first line of what `analyze` prints, is what "
+                  "would have stopped it.")
+
+
 def retries(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     rows = []
     calls = f.echolot_calls
@@ -1194,6 +1236,7 @@ SIGNALS: list[Detector] = [
     agent_reported_bugs,
     # failures
     echolot_failures,
+    report_not_the_scenario,
     retries,
     env_friction,
     # cost
@@ -1213,6 +1256,7 @@ FROM_CALLS_ALONE = {
     "doctor_first",
     "confirmed_changed",
     "echolot_failures",
+    "report_not_the_scenario",
     "retries",
     "help_lookups",
     "long_gaps",

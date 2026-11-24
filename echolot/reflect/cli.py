@@ -97,15 +97,22 @@ def cmd_reflect(args) -> int:
             # correctly — the actual answer is that they are asking the wrong
             # source for it.
             if only_log:
-                print(f"error: '{args.session}' does not name a sitting in "
+                ids = any(r.get("session") for r in recorder.read(from_log.log_path(project)))
+                why = ("Its lines that carry a session id are read under that "
+                       "id, and none starts with it." if ids else
+                       "None of its lines carries a session id: an older "
+                       "echolot wrote them, or a host that gives its commands "
+                       "none — Claude Code and Codex do, and ECHOLOT_SESSION "
+                       "names one for anybody else.")
+                print(f"error: '{args.session}' names no session in "
                       f"{recorder.LOG_FILE}.\n"
-                      f"  The run log carries no session ids. It is a stream, "
-                      f"cut into sittings wherever the tool was left alone for "
-                      f"a while, and each sitting is named by a hash of its "
-                      f"own — so an id from an agent transcript will never "
-                      f"match one, however it is spelled.\n"
-                      f"  `echolot reflect --from-log --list` names the "
-                      f"sittings this log has.",
+                      f"  {why} A line without one is cut into sittings "
+                      f"wherever the tool was left alone for a while, each "
+                      f"named by a hash of its own — so an id from an agent "
+                      f"transcript will never match one, however it is "
+                      f"spelled.\n"
+                      f"  `echolot reflect --from-log --list` names what this "
+                      f"log has.",
                       file=sys.stderr)
             else:
                 print(f"error: no session starting with '{args.session}'\n"
@@ -157,11 +164,14 @@ def cmd_reflect(args) -> int:
     # wrote one report file, and the second replaced the first.
     short = _short_ids([r.id for _, r in found])
     if args.list:
-        # The log has no sessions in it, so the column that names its rows
-        # must not say "session" — this listing is where somebody comes after
-        # being told an id did not match, and telling them the same wrong word
-        # again is how the misunderstanding survives being corrected.
-        unit = "sitting" if only_log else "session"
+        # A log whose lines carry no session id has no sessions in it, so the
+        # column that names its rows must not say "session" — this listing is
+        # where somebody comes after being told an id did not match, and
+        # telling them the same wrong word again is how the misunderstanding
+        # survives being corrected. Lines that carry one are sessions.
+        unit = ("sitting" if only_log and not any(getattr(r, "named", False)
+                                                   for _, r, _ in picked)
+                else "session")
         print(f"{unit:10} {'agent':11} {'started (UTC)':17} {'dur':>7} "
               f"{'echolot':>7} {'hunt':>4}  first prompt")
         for reader, ref, s in picked:
@@ -204,11 +214,17 @@ def cmd_reflect(args) -> int:
     reports = []
     written = []
     for _reader, ref, session in picked:
+        # The project's log, and the logs of the directories this session's
+        # own commands wrote to: a `-c work-a/echolot.yml` logged its runs
+        # under work-a/ (#543). Another session's lines in any of them are
+        # left out by the id they carry.
+        own = runs + [r for log in facts_mod.run_logs(session, project)
+                      for r in recorder.read(log)]
         cfg_path, source, logged = (
             (Path(args.config), "given", []) if given
-            else _session_config(session, runs, project))
+            else _session_config(session, own, project))
         cfg = load(cfg_path)
-        facts = facts_mod.gather(session, cfg, runs, project)
+        facts = facts_mod.gather(session, cfg, own, project)
         if cfg is not None:
             now = (recorder._config_stamp(str(cfg_path)) or {}).get("sha")
             facts.config.update(source=source, logged_sha=logged, sha_now=now,
