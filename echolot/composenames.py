@@ -56,6 +56,10 @@ _ANSWER = re.compile(r'^Broadcast completed: result=(?P<code>-?\d+)'
                      r'(?:, data="(?P<data>.*?)")?(?:, extras: .*)?\s*$', re.MULTILINE)
 
 
+# The key of `runner:` read here, by `wanted`.
+KEYS = ("compose_names",)
+
+
 def wanted(section: dict[str, Any]) -> bool:
     """`runner.compose_names`, refused in a sentence when it cannot be meant."""
     value = section.get("compose_names")

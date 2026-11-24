@@ -91,6 +91,10 @@ def cooldown_of(section: dict[str, Any]) -> Cooldown | None:
     return Cooldown(float(max_c), sensor, int(timeout))
 
 
+# The keys of `runner:` read here: `cooldown_of` and `knobs_of` below.
+KEYS = ("cooldown", "fixed_performance", "airplane_mode", "brightness")
+
+
 def knobs_of(section: dict[str, Any]) -> dict[str, Any]:
     """The state to hold the device in, from the runner section: only what
     is set, each refused in a sentence when it cannot be meant."""
