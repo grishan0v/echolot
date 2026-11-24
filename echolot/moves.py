@@ -61,6 +61,7 @@ from statistics import median
 from typing import Any
 
 from . import compare, plain, stats
+from . import launch as launch_mod
 from .report import metric_of
 
 BETTER, WORSE, NO_CHANGE, GONE, NEW, FINE_BOTH, NOT_CHECKED = (
@@ -291,11 +292,17 @@ class _Ctx:
 
     def __init__(self, before: dict[str, Any], after: dict[str, Any]):
         ctx = plain._Ctx(after if (after.get("window") or {}).get("duration_ms") else before)
+        wb, wa = before.get("window") or {}, after.get("window") or {}
+        # A report calls a window whose anchor missed in a repeat the
+        # recording (#557). A comparison says "the recording took" only of a
+        # window that runs to the end of one: one that missed its start in a
+        # repeat and closed on its end is still the scenario's (#869).
+        if ctx.noun == "recording" and not any(launch_mod.is_whole(w) or _open(w) for w in (wb, wa)):
+            ctx.noun = ctx.kind
         self.noun, self.plural = ctx.noun, ctx.plural
         # Whose thread a row is of, as the plain reading of a report tells it.
         self.whose = ctx
         self.nb, self.na = _runs(before), _runs(after)
-        wb, wa = before.get("window") or {}, after.get("window") or {}
         self.window_ms = max(_number(wb.get("duration_ms")) or 0.0,
                              _number(wa.get("duration_ms")) or 0.0)
 
@@ -337,9 +344,18 @@ def _window_side(report: dict[str, Any]) -> dict[str, Any]:
 def _open(window: dict[str, Any]) -> bool:
     """Does the window run to the end of the recording, by what its report
     says: no end anchor, or one that missed, and no launch to close it? A
-    window whose report names no anchors at all is not taken for one."""
+    window whose report names no anchors at all is not taken for one.
+
+    Only the end anchor says where a window ends. A start anchor missed in
+    one repeat of five moves that repeat's start back to the process's first
+    slice, and the window still ends on the scenario's end in every repeat:
+    read as open, it was judged by late frames and said to run to the end of
+    the recording (#869)."""
     if not window or plain._closed(window):
         return False
+    end = window.get("end_anchor")
+    if isinstance(end, dict):
+        return bool(end.get("missed") or not end.get("matches") or end.get("unfinished"))
     return "end_anchor" in window or plain._missed(window)
 
 
