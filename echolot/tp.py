@@ -65,7 +65,7 @@ from urllib.parse import urlsplit
 
 from . import needs as needs_mod
 from . import orphans, sandbox
-from .config import ConfigError
+from .config import NUMBER, ConfigError
 
 _CALIB = re.compile(
     r"^(\w+)\s*=\s*(p|top)(\d+)\s*\(\s*(\w+)\s*\)\s*(?:\*\s*([\d.]+))?$")
@@ -425,7 +425,10 @@ class Detector:
         int and float are one kind: `calibrate` derives 41.2 for a default of
         16, and that is the feature working as designed. A bool is not a
         number here whatever Python thinks — `min_slice_ms: yes` is a mistake,
-        not a threshold of one.
+        not a threshold of one. Nor is `.nan` or `.inf`, which YAML reads as
+        floats: either went into the query as the bare word `nan` or `inf`,
+        and the detector failed with "no such column" (#852). The kind is
+        the config's own `NUMBER`, the one its declared keys use.
 
         Raises ValueError. `plan_detectors` turns it into a ConfigError before
         a trace is opened, because that is what it is.
@@ -445,8 +448,8 @@ class Detector:
                 )
             default = self.params[key]
             if isinstance(default, (int, float)):
-                ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-                kind = "a number"
+                ok = NUMBER.accepts(value)
+                kind = NUMBER.said
             else:
                 ok = isinstance(value, str)
                 kind = "a string"

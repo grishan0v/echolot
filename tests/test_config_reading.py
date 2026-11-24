@@ -422,3 +422,24 @@ def test_a_section_written_twice_is_refused_with_both_lines(tmp_path: Path) -> N
                     "project:\n  package: com.example.other\n", encoding="utf-8")
     said = _refused(path)
     check("the key and both lines", "'project' is written twice, on lines 1 and 5" in said, said)
+
+
+@pytest.mark.parametrize("written", [".nan", ".inf", "-.inf"])
+def test_a_threshold_that_is_no_finite_number_is_refused_before_a_trace_is_opened(
+        tmp_path: Path, written: str) -> None:
+    """YAML reads `.nan` and `.inf` as floats. They passed as numbers, went
+    into the query as the bare word `nan`, and the detector failed with "no
+    such column" while `explain` showed them as the value in force (#852)."""
+    value = yaml.safe_load(written)
+    shared = Config.load(_config(tmp_path / "shared", {
+        **BASE, "detectors": {"main_thread_block": {"min_slice_ms": value}}}))
+    own = Config.load(_config(tmp_path / "own", {"project": BASE["project"], "scenarios": {
+        "cold": {"start": {"name": "AppStart"},
+                 "detectors": {"main_thread_block": {"min_slice_ms": value}}}}}))
+    plain = Config.load(_config(tmp_path / "plain", BASE))
+    for name, cfg, cli in (("detectors:", shared, None), ("a scenario's detectors:", own, None),
+                           ("--set", plain, {"main_thread_block": {"min_slice_ms": value}})):
+        with pytest.raises(ConfigError) as e:
+            plan_detectors(cfg, cli_overrides=cli)
+        check(name, "main_thread_block.min_slice_ms" in str(e.value)
+              and "must be a number" in str(e.value), str(e.value))
