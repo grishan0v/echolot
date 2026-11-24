@@ -636,6 +636,21 @@ def test_many_rows_are_all_drawn_and_four_go_to_the_agent():
         "- and 26 more of main_thread_block"], lines)
 
 
+def test_the_agent_gets_the_rows_every_recording_found_before_a_spike_found_once():
+    """The four rows the request carries are the report's first, and over
+    repeats a 500 ms spike in one recording of five counts for 100 ms: the
+    page used to sort by the median again and send the spike first (#495)."""
+    rows = [row("spike", 500.0, runs="1/5"), *(row(f"steady_{i}", 150.0 - i, runs="5/5")
+                                                for i in range(4))]
+    page = page_of(plain.annotate(make([entry("main_thread_block", rows)], runs=5)))
+    lines = rows_of(page)["main_thread_block"].one("input").attrs["data-req"].split("\n")
+    check("the four found every time go, the spike is the one more", [
+        line.split(" · ")[0] for line in lines] == [
+        "- steady_0", "- steady_1", "- steady_2", "- steady_3", "- and 1 more of main_thread_block"],
+        lines)
+    check("and every row is still drawn", len(panel_of(page, "main_thread_block").all("i", "bar")) == 5)
+
+
 def test_a_long_name_is_kept_whole_and_a_long_evidence_is_cut():
     name = "com.example.app.feature.collection." + "VeryLongGeneratedClassName" * 9 + ".invoke"
     detail = "monitor contention with owner " + "x" * 400

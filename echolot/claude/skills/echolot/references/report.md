@@ -461,7 +461,7 @@ views are those one-liners, done once:
 
 ```bash
 echolot report                                 # what fired: one line per detector
-echolot report --detector monitor_contention   # its rows, longest first, 5 of them
+echolot report --detector monitor_contention   # its rows by median × share of runs, 5 of them
 echolot report -d main_thread_block --top 12   # more; --wide keeps the evidence whole
 echolot report --window                        # anchors, the main thread, the device
 echolot report --markers                       # your own names, measured
@@ -631,6 +631,14 @@ The contract is shared, but not every detector fills every column.
 | `places` | the json behind `code`: every symbol the row names, with `file`, `line` and `role`, and `retraced` on one the build's mapping named back |
 | `stacks` | the json behind what `detail` says the samples named: `samples`, `with_stack`, and the ten largest of `leaf` and `ours`, each `frame` with its `samples` and `pct` |
 | `spread` | the per-run values behind the medians, for three columns — see below |
+
+**The rows come ranked, and in one order everywhere.** One trace orders them
+by `self_ms`, or `total_ms` where there is no self time. A merged report ranks
+them by that median times the share of repeats in `runs`: the median is over
+the repeats that found the row, so a 200 ms spike in `1/5` counts for 40 ms
+and comes after 60 ms in `5/5`. `report.json`, `report.md`, the overview's top
+row and `report -d` all keep that order; `report -d` shows the first five and
+says how many it left out, and how many of those one repeat alone found.
 
 **`code` and `places` save the grep.** A contention slice names both sides of
 the lock — the thread holding it and where it is, the method that waited and
