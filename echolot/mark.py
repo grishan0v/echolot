@@ -65,10 +65,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .config import TEMP_PREFIX
 from .domains import files_ending, files_named, gradle_module
 from .domains import source_files as domains_source_files
 
-DEFAULT_PREFIX = "AGENTTMP_"
+# The prefix a config that names none has: `instrumentation.temp_prefix`'s
+# default, declared once in config.py.
+DEFAULT_PREFIX = TEMP_PREFIX.default
 TAG = "// echolot:mark"
 # Exactly what `apply` writes, and nothing else. `remove` deletes whole lines,
 # so a rule as loose as "the tag is somewhere in it" takes the line's real code

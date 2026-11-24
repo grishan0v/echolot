@@ -61,7 +61,7 @@ from . import report as report_mod
 from . import stacks as stacks_mod
 from . import verdict as verdict_mod
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
-from .config import PACKAGE, PROCESS
+from .config import PACKAGE, PROCESS, TEMP_PREFIX
 from .runner import DEVICE, ITERATIONS, MODE, PROJECT_ROOT
 from .pages import answer_page
 from .pages import compare_page
@@ -844,8 +844,7 @@ def _markers_info(tp, cfg: Config) -> dict:
     on two threads is one marker, and the reader wants one row and the
     fact.
     """
-    from .mark import DEFAULT_PREFIX
-    prefix = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    prefix = cfg.temp_prefix
     globs = [prefix + "*"]
     for entry in cfg.get("domains") or []:
         name = entry.get("slice") if isinstance(entry, dict) else None
@@ -1602,7 +1601,6 @@ def _nearest_config(args) -> None:
 
 def cmd_compare(args) -> int:
     """The delta between two Marker Reports."""
-    from .mark import DEFAULT_PREFIX
     _nearest_config(args)
     unloaded = None
     try:
@@ -1631,8 +1629,7 @@ def cmd_compare(args) -> int:
         # The same fallback `analyze`, `names`, `mark` and `reflect` use: a
         # config without the key, or none, still has markers planted under
         # the default prefix.
-        prefix = (args.cfg.get("instrumentation.temp_prefix") if args.cfg else None) \
-            or DEFAULT_PREFIX
+        prefix = args.cfg.temp_prefix if args.cfg else TEMP_PREFIX.default
         cmp = compare_mod.build(
             before, after,
             before_path=str(before_path), after_path=str(after_path),
@@ -1926,8 +1923,7 @@ def _name_families(tp, cfg: Config) -> None:
     merge makes of it; the project's markers keep their digits. Only the
     names it changes are listed, and a name not listed is its own family.
     """
-    from .mark import DEFAULT_PREFIX
-    keep = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    keep = cfg.temp_prefix
     tp.exec_script("DROP TABLE IF EXISTS _name_family;")
     tp.exec_script("CREATE TABLE _name_family (name TEXT PRIMARY KEY, family TEXT);")
     names = [r["name"] for r in tp.query(
@@ -3186,7 +3182,7 @@ def _names_setup(args) -> tuple[dict, Any, str, str, str, set[str]]:
             overrides = cfg_names.detector_overrides
             off = cfg_names.disabled_detectors
             tp_bin = _tp_binary(args, cfg_names)
-            prefix = str(cfg_names.get("instrumentation.temp_prefix") or prefix)
+            prefix = cfg_names.temp_prefix
             if process is None:
                 process = _names_process(args.config, cfg_names)
                 if process is not None:
@@ -3513,7 +3509,7 @@ def _held_verdict(project: Path, config: str, last: dict[str, Any], source: str,
     except (ConfigError, OSError):
         cfg = None
     left = hunt_mod.leftovers(
-        project, cfg.get("instrumentation.temp_prefix") if cfg else None)
+        project, cfg.temp_prefix if cfg else None)
     return verdict, reports, left
 
 
@@ -3833,7 +3829,7 @@ def cmd_hunt(args) -> int:
         scenario = cfg.scenario_name if cfg else None
         sha = cfg.sha if cfg else None
         confirmed = cfg.confirmed() if cfg else {}
-        prefix = cfg.get("instrumentation.temp_prefix") if cfg else None
+        prefix = cfg.written(TEMP_PREFIX) if cfg else None
         # The whole point of the feature: a new investigation must not start
         # on the previous one's traces. Nothing is deleted — the set moves
         # aside exactly the way `collect` moves it between rounds.
@@ -4313,10 +4309,9 @@ def _domains_unwritten(cfg: Config, root: Path) -> list[str]:
     as absent from every window after it: said here, where the map is made.
     """
     from . import anchors
-    from .mark import DEFAULT_PREFIX
     entries = [str(e["slice"]) for e in cfg.get("domains") or []
                if isinstance(e, dict) and e.get("slice")]
-    prefix = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    prefix = cfg.temp_prefix
     missing = anchors.unwritten(root, entries, prefix)
     if not missing:
         return []
@@ -4363,7 +4358,7 @@ def cmd_mark(args) -> int:
             cfg = Config.load(config, getattr(args, "local", None))
             package = cfg.value(PACKAGE) or cfg.value(PROCESS)
             allowed = cfg.allowed
-            prefix = str(cfg.get("instrumentation.temp_prefix") or prefix)
+            prefix = cfg.temp_prefix
         except ConfigError as e:
             if not args.remove:
                 print(f"error: {config} does not load, and instrumentation.allowed "
@@ -4908,7 +4903,7 @@ def _planted(cfg: Config, root: Path):
     from . import mark as mark_mod
     from . import runner
 
-    prefix = str(cfg.get("instrumentation.temp_prefix") or mark_mod.DEFAULT_PREFIX)
+    prefix = cfg.temp_prefix
     names = mark_mod.planted(root, prefix)
     return runner.Planted(prefix, names, _install_step(cfg, root)) if names else None
 

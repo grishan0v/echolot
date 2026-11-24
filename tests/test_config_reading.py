@@ -281,8 +281,6 @@ def test_no_key_of_a_declared_section_is_read_around_its_declaration() -> None:
             continue
         for number, line in enumerate(text.splitlines(), 1):
             for m in (*dotted.finditer(line), *raw_runner.finditer(line)):
-                if "instrumentation.temp_prefix" in m.group(0):
-                    continue  # moved to `Config.temp_prefix` with #829
                 found.append(f"{name}:{number}: {m.group(0)}")
     check("none", not found, found)
 
@@ -443,3 +441,16 @@ def test_a_threshold_that_is_no_finite_number_is_refused_before_a_trace_is_opene
             plan_detectors(cfg, cli_overrides=cli)
         check(name, "main_thread_block.min_slice_ms" in str(e.value)
               and "must be a number" in str(e.value), str(e.value))
+
+
+def test_the_marker_prefix_has_one_reader_and_one_default(tmp_path: Path) -> None:
+    """`instrumentation.temp_prefix` was read in fifteen places, each with
+    a fallback of its own (#828)."""
+    from echolot import mark
+    from echolot.config import TEMP_PREFIX
+    check("mark's default is the declared one", mark.DEFAULT_PREFIX == TEMP_PREFIX.default)
+    check("unset", Config.load(_config(tmp_path / "a", BASE)).temp_prefix == "AGENTTMP_")
+    own = Config.load(_config(tmp_path / "b", {**BASE, "instrumentation": {"temp_prefix": "PRF_"}}))
+    check("set", own.temp_prefix == "PRF_" and own.written(TEMP_PREFIX) == "PRF_")
+    check("written: none when unset",
+          Config.load(_config(tmp_path / "c", BASE)).written(TEMP_PREFIX) is None)

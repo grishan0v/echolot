@@ -215,11 +215,10 @@ def check(cfg: Config, found: dict[str, set[str]] | None = None,
     named, every scenario by default. None when the config cannot be read
     this far.
     """
-    from . import mark
 
     try:
         root = cfg.sources
-        prefix = str(cfg.get("instrumentation.temp_prefix") or mark.DEFAULT_PREFIX)
+        prefix = cfg.temp_prefix
         wanted: list[tuple[str, str, str]] = []
         for name in scenarios if scenarios is not None else cfg.scenarios:
             one = Config(cfg.raw, cfg.path, cfg.local_path).select(name)
