@@ -195,7 +195,7 @@ _names a thread that burns CPU with no slice around it. The agent does not guess
 <sub>trace_processor v59.1</sub>
 ```
 
-What `analyze` prints for the demo that comes with echolot: five cold starts
+What `analyze` prints in a terminal for the demo that comes with echolot: five cold starts
 of an app that does not exist, built by code.
 
 </details>

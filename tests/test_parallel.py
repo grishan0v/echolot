@@ -168,8 +168,10 @@ def _analyze(root: Path, out: str, *argv: str) -> tuple[int, dict | None, str, s
 
 def test_j1_and_j3_write_the_same_report(tmp_path: Path) -> None:
     traces = _set(tmp_path)
-    c1, one, md1, _ = _analyze(tmp_path, "one", "-j", "1", *traces)
-    c3, three, md3, _ = _analyze(tmp_path, "three", "-j", "3", *traces)
+    # --full: the whole report, which names no time; the overview a pipe
+    # gets says when it was written (#492).
+    c1, one, md1, _ = _analyze(tmp_path, "one", "-j", "1", "--full", *traces)
+    c3, three, md3, _ = _analyze(tmp_path, "three", "-j", "3", "--full", *traces)
     check("both ran", c1 == c3 == 0, (c1, c3))
     one.pop("generated_at", None)
     three.pop("generated_at", None)

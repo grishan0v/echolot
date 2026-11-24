@@ -25,9 +25,11 @@ echolot reflect --session <id>    # a specific one
 echolot reflect --all             # every session, plus summary.md
 ```
 
-Then read `.echolot/reflect/<id>.json` — the `signals` array first, then
+What it prints to you is the row `--all` gives each session — its warnings by
+id — and the paths. Then read `.echolot/reflect/<id>.json` — the `signals` array first, then
 `hunts`, `echolot_calls`, `questions`, `entry`. The markdown is the same data
-for a human; do not re-read the transcript itself.
+for a human, printed only to a terminal (or with `--full`); do not re-read the
+transcript itself.
 
 ## What to return
 

@@ -1048,7 +1048,24 @@ def cmd_analyze(args) -> int:
     # logged, so `reflect` can say it without a transcript (#196).
     if inside is not None:
         _warn_confirmed_changed(root, cfg)
-    print(report_mod.to_markdown(rep))
+    # The whole report is for a person at a terminal. An agent reads what a
+    # command prints into its context, and on a large app's cold start that
+    # was 35 KB, 466 lines, in every round of a hunt and again with
+    # `--defaults` — of a report it then read again, the way the layer tells
+    # it to, with `echolot report` (#492). Outside a terminal it gets what
+    # `echolot report` prints, whose last line names the views of the rest.
+    # The terminal test is the one `names` makes (#111): the screen gets
+    # what fits a screen, a pipe gets what its reader can act on, and
+    # nothing either of them leaves out is out of reach.
+    if getattr(args, "full", False) or sys.stdout.isatty():
+        print(report_mod.to_markdown(rep))
+    else:
+        json_path = out_dir / "report.json"
+        latest = _latest_here(out_dir, cfg)
+        print(report_mod.overview(rep, cmd=_report_cmd(
+            None if latest else _rel_to(json_path.resolve(), Path.cwd().resolve()))))
+        print("\nThe overview, because the output is not a terminal: the whole "
+              "report is report.md beside report.json, and `analyze --full` prints it.")
     print(f"\n→ {out_dir/'report.md'}\n→ {out_dir/'report.json'}",
           file=sys.stderr)
     if args.html:
@@ -1074,6 +1091,22 @@ def cmd_analyze(args) -> int:
             print(f"→ {again}  (this investigation's page stood there: written again "
                   f"with this round)", file=sys.stderr)
     return 0
+
+
+def _latest_here(out_dir: Path, cfg: Config) -> bool:
+    """Whether `echolot report` with no path, run from here, reads the
+    report `analyze` just wrote to `out_dir`.
+
+    Only when it is sure: the config's own default directory, a config with
+    one scenario, run from the config's directory. Anywhere else the
+    overview's pointers name the report's path — `-o` elsewhere, a scenario
+    `report` might not pick, a build directory the agent ran from.
+    """
+    if cfg.path is None or cfg.get("scenarios") is not None:
+        return False
+    home = Path(cfg.path).resolve().parent
+    return (Path.cwd().resolve() == home
+            and out_dir.resolve() == _out_dir(cfg.report_dir, cfg).resolve())
 
 
 def run_order(path: str) -> tuple:
@@ -5707,9 +5740,16 @@ def cmd_report(args) -> int:
     for det in detectors:
         parts.append(report_mod.detector_view(rep, det, top=args.top or 5, wide=args.wide))
     if not parts:
-        parts.append(report_mod.overview(rep))
+        # A report named by its path is named in the pointers too: `report`
+        # with no path reads the latest, which this one may not be.
+        parts.append(report_mod.overview(rep, cmd=_report_cmd(args.report)))
     print("\n\n".join(parts))
     return 0
+
+
+def _report_cmd(path: str | None) -> str:
+    """`echolot report`, with the report's path when it is not the latest."""
+    return f"echolot report {shlex.quote(path)}" if path else "echolot report"
 
 
 def cmd_explain(args) -> int:
@@ -6225,6 +6265,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "as a page for a person, one file that opens from disk. A "
                          "report.html that is already there is written again without "
                          "this flag too")
+    an.add_argument("--full", action="store_true",
+                    help="print the whole report into a pipe too. Outside a terminal "
+                         "analyze prints the overview `echolot report` prints; a "
+                         "terminal gets the whole report anyway")
     an.add_argument("-j", "--jobs", type=_jobs, default=None, metavar="N",
                     help="how many traces to read at once, each in its own "
                          "trace_processor (default: as many as the cores and half "
@@ -6343,6 +6387,10 @@ def build_parser() -> argparse.ArgumentParser:
                       help="every session that used echolot, plus a summary")
     rf.add_argument("--list", action="store_true",
                     help="only list the candidate sessions, write nothing")
+    rf.add_argument("--full", action="store_true",
+                    help="print one session's whole report into a pipe too. Outside a "
+                         "terminal it is the session's row of the summary --all "
+                         "prints; a terminal gets the whole report anyway")
     rf.add_argument("--project", metavar="ROOT",
                     help="the application project the agent worked in (default: .)")
     rf.add_argument("--from-log", action="store_true",

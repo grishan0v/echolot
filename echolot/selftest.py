@@ -3985,6 +3985,66 @@ def _(report):
         assert after["analyzes"] == 1 and after["touched_at"] != _STALE, after
 
 
+@check("analyze: outside a terminal it prints the overview `report` prints, "
+       "and --full the whole report")
+def _(report):
+    """`analyze` printed the whole report wherever its output went, and an
+    agent reads what a command prints into its context: on a large app's
+    cold start that was 35 KB, 466 lines, in every round of a hunt, of a
+    report the layer then has it read again with `echolot report` (#492).
+    Outside a terminal — a pipe, an agent, this check's StringIO — it is the
+    overview `echolot report` prints for the same report, word for word, and
+    a line that says where the rest is; `--full` is the whole report, as a
+    terminal gets it.
+
+    `analyze_trace` hands back this check's own report, so no trace is read.
+    """
+    import copy
+    import io
+    import json
+
+    from . import main as main_mod
+    from . import report as report_mod
+
+    def run(argv: list[str]) -> str:
+        out, err = io.StringIO(), io.StringIO()
+        with recorder.isolated(), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = main_mod.main(argv)
+        assert code == 0, f"`echolot {' '.join(argv)}` exited {code}: {err.getvalue()[-400:]}"
+        return out.getvalue()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp).resolve()
+        (project / "echolot.yml").write_text(
+            "project:\n  process: com.example.app\nscenario:\n  name: coldStart\n",
+            encoding="utf-8")
+        trace = project / "a.perfetto-trace"
+        trace.write_bytes(b"a trace")
+        real, here = main_mod.analyze_trace, Path.cwd()
+        main_mod.analyze_trace = lambda *a, **kw: copy.deepcopy(report)
+        try:
+            # From the config's directory, the way the layer runs it: there
+            # `echolot report` with no path reads what `analyze` just wrote.
+            os.chdir(project)
+            piped = run(["analyze", str(trace)])
+            shown = run(["report"])
+            full = run(["analyze", str(trace), "--full"])
+            written = json.loads((project / ".echolot/out/report.json").read_text(encoding="utf-8"))
+        finally:
+            os.chdir(here)
+            main_mod.analyze_trace = real
+
+    assert "# Marker Report" not in piped, f"a pipe got the whole report: {piped[:300]}"
+    assert piped.startswith(shown), (
+        f"a pipe got something other than `echolot report`'s overview:\n{piped[:600]}\n"
+        f"---\n{shown[:600]}")
+    assert "`analyze --full` prints it" in piped[len(shown):], (
+        f"the overview does not say where the rest is: {piped[len(shown):]!r}")
+    assert full == report_mod.to_markdown(written) + "\n", (
+        f"--full is not the whole report: {full[:300]}")
+
+
 @check("collect: a run outside the open investigation leaves it as it was, and "
        "does not stand in for its work while it runs")
 def _(report):
