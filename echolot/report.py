@@ -240,6 +240,10 @@ def _merge_crowding(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
             "top": _merge_outside_top([o.get("top") or [] for o in outside]),
             "runs": f"{len(outside)}/{len(reports)}",
         }
+        # What the processes that draw the app took, kept apart from it (#914).
+        platform = [o["platform_pct"] for o in outside if o.get("platform_pct") is not None]
+        if platform:
+            out["outside"]["platform_pct"] = round(median(platform), 1)
     return out
 
 
@@ -1450,7 +1454,10 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
 # The share of the CPUs' time in the window other processes may take before
 # the report says the device was busy (#596). 13–17% on quiet cold starts of
 # an SM-A515F, and 10% on the workshop app's; 80% with eight busy loops of
-# the shell user running.
+# the shell user running. Those counted the processes that draw the app as
+# well; without them (#914, `analyze.PLATFORM_PROCESSES`), 9–17% on quiet cold
+# starts of Wikipedia on an SM-F711B, whose 287 ms window they had filled to
+# 53–70%.
 OUTSIDE_PCT = 40
 
 

@@ -1633,6 +1633,62 @@ def _crowding_info(tp) -> dict | None:
     return out
 
 
+# The processes that put the app on the screen and take its input, and the
+# recording's own. They run whenever the app draws, on a quiet phone as on a
+# busy one, and nobody can close them before recording again, so the share
+# other processes took leaves them out (#914). On Wikipedia's cold start on an
+# SM-F711B, a 287 ms window on 8 cores, they took 45–55% of the CPUs' time, 47%
+# the median: SurfaceFlinger 17.6%, system_server 12.2%, SystemUI 9.7%, the
+# composer HAL 3.0%. Counted as other load, they put each of 21 quiet starts in
+# two sets over the bar, and each was told to record again with nothing else
+# running.
+#
+# Globs over the process's name, matched without regard to case: a vendor
+# names its HALs and its home screen as it likes. A process that matches none
+# counts as other load, which is what it was before the list.
+PLATFORM_PROCESSES = (
+    # Composes every app's frames into the screen's, and the HALs it hands
+    # them to: the hardware composer (vendor.qti.hardware.display.composer-
+    # service on a Snapdragon, android.hardware.composer.hwc3-service.pixel on
+    # a Pixel) and the allocator of the buffers the app draws into.
+    "*/surfaceflinger",
+    "*/hw/*composer*",
+    "*/hw/*allocator*",
+    # The kernel's side of the same: the display driver's commit threads
+    # (crtc_commit:140 on a Snapdragon) and the Adreno GPU's.
+    "crtc_commit:*",
+    "crtc_event:*",
+    "kgsl*",
+    # Starts the activity, lays out its window, plays the window animation,
+    # and dispatches every touch.
+    "system_server",
+    # The status and navigation bars, and since Android 12 the shell
+    # transitions that animate a launch in.
+    "com.android.systemui",
+    # The home screen the app is launched from and animates over: Samsung's
+    # com.sec.android.app.launcher, a Pixel's nexuslauncher, AOSP's launcher3,
+    # Xiaomi's com.miui.home.
+    "*launcher*",
+    "com.miui.home",
+    # Forks the app on a cold start.
+    "zygote",
+    "zygote64",
+    "usap32",
+    "usap64",
+    # The recording itself: Perfetto's daemons (traced, traced_probes,
+    # traced_perf for the sampler), its command, and adbd, which carries it.
+    "*/traced*",
+    "*/perfetto",
+    "*/adbd",
+)
+
+
+def platform_process(name: str | None) -> bool:
+    """Whether a process is one of `PLATFORM_PROCESSES`, by its name."""
+    low = (name or "").lower()
+    return any(fnmatch.fnmatchcase(low, glob) for glob in PLATFORM_PROCESSES)
+
+
 def _outside_info(tp, cores: int) -> dict | None:
     """How much of the CPUs' time in the window went to other processes, and to whom.
 
@@ -1644,7 +1700,11 @@ def _outside_info(tp, cores: int) -> dict | None:
     capacity, cores times its length, is split here by who ran on it: `pct`
     is the share other processes took, with idle and the app left out, and
     `top` the largest of them, processes of one name and uid together, as
-    eight `sh` of the shell user are one load. 13–17% on a quiet cold start.
+    eight `sh` of the shell user are one load.
+
+    The processes that draw the app and record it are left out of both and
+    counted apart, as `platform_pct` (#914): 47% of a Wikipedia cold start on
+    an SM-F711B, which left 9–17% to the rest.
     """
     rows = tp.query("""
         WITH w AS (SELECT ts_start, ts_end FROM _window),
@@ -1671,11 +1731,17 @@ def _outside_info(tp, cores: int) -> dict | None:
     if not span or span <= 0 or not cores:
         return None
     capacity = cores * span
-    total = sum(r["ns"] or 0 for r in rows)
-    return {"pct": round(total / capacity * 100, 1),
+    platform = [r for r in rows if platform_process(r["name"])]
+    others = [r for r in rows if not platform_process(r["name"])]
+
+    def share(of: list[dict]) -> float:
+        return round(sum(r["ns"] or 0 for r in of) / capacity * 100, 1)
+
+    return {"pct": share(others),
             "top": [{"name": r["name"], "uid": r["uid"], "processes": r["processes"],
-                     "pct": round((r["ns"] or 0) / capacity * 100, 1)}
-                    for r in rows[:3]]}
+                     "pct": share([r])}
+                    for r in others[:3]],
+            "platform_pct": share(platform)}
 
 
 def _include_modules(tp, detectors) -> None:

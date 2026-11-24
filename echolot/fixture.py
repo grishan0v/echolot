@@ -1386,6 +1386,45 @@ def _crowded(sched: list, threads: dict, other_threads: dict) -> tuple[list, dic
     return sched, threads, other_threads
 
 
+# --- the processes that draw the app, busy -------------------------------------
+#
+# `build(drawing=True)` only. On a quiet phone a cold start keeps SurfaceFlinger
+# and system_server busy: 17.6% and 12.2% of the CPUs' time of Wikipedia's on
+# an SM-F711B (#914). Here every stretch of the window [100, 1105] that a CPU
+# stands idle in goes to a thread of one of them, SurfaceFlinger's on the even
+# CPUs and system_server's on the odd: other processes take most of the CPUs,
+# and none of it is load anybody could close.
+DRAWING_SF_TID = 610     # + the CPU's number
+DRAWING_SS_TID = 1230
+
+
+def idle_stretches(sched: list, cpu: int) -> list[tuple[float, float]]:
+    """The stretches of the window [100, 1105] in which `cpu` runs nothing,
+    half a millisecond in from what runs on either side."""
+    out, at = [], 100
+    busy = sorted((start, end) for c, _, start, end, _ in sched if c == cpu)
+    for start, end in [*busy, (1105, 1105)]:
+        start = min(start, 1105)
+        if start > at + 1:
+            out.append((at + 0.5, start - 0.5))
+        at = max(at, end)
+        if at >= 1105:
+            break
+    return out
+
+
+def _drawing(sched: list) -> tuple[list, dict, dict]:
+    sf, ss = dict(SF_THREADS), dict(SS_THREADS)
+    out = list(sched)
+    for cpu in sorted({cpu for cpu, *_ in sched}):
+        if cpu % 2 == 0:
+            tid, sf[DRAWING_SF_TID + cpu] = DRAWING_SF_TID + cpu, "RenderEngine"
+        else:
+            tid, ss[DRAWING_SS_TID + cpu] = DRAWING_SS_TID + cpu, "android.anim"
+        out += [(cpu, tid, start, end, S) for start, end in idle_stretches(sched, cpu)]
+    return out, sf, ss
+
+
 # --- a blind stretch on a well-marked main thread ------------------------------
 #
 # `blind_main()` only, a scene of its own: the default trace's main thread sits
@@ -1690,7 +1729,8 @@ def build(frames: bool = True, environment: bool = True,
           crowded: bool = False, categories=None, composables: bool = True,
           fully_drawn: str | None = None, stuffed: bool = False,
           smooth: bool = False, answered: bool = True, heap: bool = True,
-          activities: tuple[str, ...] = (), boot: bool = False) -> bytes:
+          activities: tuple[str, ...] = (), boot: bool = False,
+          drawing: bool = False) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1746,17 +1786,23 @@ def build(frames: bool = True, environment: bool = True,
     default, as on an older phone. `boot=True` plants the app's
     `BOOT_COMPLETED` receiver on the main thread inside the launch, as
     Android 15 runs it on the first start after a force-stop (#910).
+
+    `drawing=True` gives every idle stretch of the window to SurfaceFlinger
+    and system_server, the processes that draw a launch (see `_drawing`).
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
         sched, threads, other_threads = _crowded(sched, threads, other_threads)
+    sf_threads, ss_threads = SF_THREADS, SS_THREADS
+    if drawing:
+        sched, sf_threads, ss_threads = _drawing(sched)
     builder = TraceProtoBuilder()
     config(builder, categories=RECORDED_CATEGORIES if categories is None else categories,
            environment=environment, frames=frames, names=names, sampling=bool(sampling))
     process_tree(builder, [(APP_PID, APP_NAME, threads),
                            (OTHER_PID, OTHER_NAME, other_threads),
-                           (SF_PID, SF_NAME, SF_THREADS),
-                           (SS_PID, SS_NAME, SS_THREADS),
+                           (SF_PID, SF_NAME, sf_threads),
+                           (SS_PID, SS_NAME, ss_threads),
                            (KS_PID, KS_NAME, KS_THREADS)])
 
     if frames:
@@ -1772,6 +1818,8 @@ def build(frames: bool = True, environment: bool = True,
     tid_to_tgid.update({tid: OTHER_PID for tid in other_threads})
     names = dict(threads)
     names.update(other_threads)
+    names.update(sf_threads)
+    names.update(ss_threads)
 
     seq = iter(range(10**6))
 
