@@ -23,7 +23,11 @@
 -- with the spike visible only in max_ms, if anyone thinks to look.
 --
 -- So the gate here is a single occurrence against the median for that same
--- name, rather than a total against a threshold. Two floors under it, because
+-- name, rather than a total against a threshold. The name with the numbers
+-- the runtime chose folded (`_name_family`, built in main.py): every frame is
+-- `Choreographer#doFrame <its vsync id>`, so by the raw name each frame was
+-- a group of one and no frame was ever an outlier (#728). Its row is named
+-- `Choreographer#doFrame #`. Two floors under it, because
 -- a ratio on its own is worthless at small sizes:
 --
 --   min_abs_ms       "four times longer than 0.5 ms" is not a finding;
@@ -46,9 +50,11 @@ WITH ranked AS (
         dur,
         ROW_NUMBER() OVER (PARTITION BY name ORDER BY dur) AS rk,
         COUNT(*)     OVER (PARTITION BY name)              AS n
-    FROM _slice_win
-    WHERE is_main_thread = 1
-      AND dur > 0
+    FROM (SELECT COALESCE(f.family, s.name) AS name, s.dur
+          FROM _slice_win s
+          LEFT JOIN _name_family f ON f.name = s.name
+          WHERE s.is_main_thread = 1
+            AND s.dur > 0)
 ),
 baseline AS (
     -- The lower of the two middles on an even count, rather than their mean:
@@ -89,10 +95,12 @@ WITH ranked AS (
         dur,
         ROW_NUMBER() OVER (PARTITION BY name ORDER BY dur) AS rk,
         COUNT(*)     OVER (PARTITION BY name)              AS n
-    FROM _slice_win
-    WHERE is_main_thread = 1
-      AND dur > 0
-      AND name IN (SELECT location FROM _rows)
+    FROM (SELECT COALESCE(f.family, s.name) AS name, s.ts, s.dur
+          FROM _slice_win s
+          LEFT JOIN _name_family f ON f.name = s.name
+          WHERE s.is_main_thread = 1
+            AND s.dur > 0)
+    WHERE name IN (SELECT location FROM _rows)
 ),
 baseline AS (
     SELECT name, dur AS median_ns
