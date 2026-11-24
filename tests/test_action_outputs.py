@@ -160,6 +160,20 @@ def test_held_counts_the_rows_that_moved_and_hold_not_every_row_past_the_floor()
           and [r["location"] for r in json.loads(many["held-rows"])]
           == [f"row {n}" for n in range(ci.HELD_NAMED)], many["held-rows"])
     check("and the window's move beside them", said["window-delta-ms"] == "12.5", said)
+    check("with no verdict of its own where the comparison gives it none",
+          said["window-holds"] == "", said)
+
+
+def test_window_holds_is_the_windows_own_verdict() -> None:
+    """The window's move is tested as a row's (#532): `true` or `false` as its
+    `holds` says, empty where too few runs, or a report without each run's
+    window, give it none."""
+    for holds, said in ((True, "true"), (False, "false"), (None, "")):
+        cmp = _cmp([])
+        cmp["window"] = {"delta_ms": 12.5, "holds": holds}
+        got = ci.outputs_of(cmp)["window-holds"]
+        check(f"holds {holds} reads {said!r}", got == said, got)
+    check("and there is one with no comparison at all", ci.NOTHING["window-holds"] == "", ci.NOTHING)
 
 
 def _compared(tmp_path: Path, monkeypatch, before: dict, after: dict) -> dict[str, str]:
@@ -188,6 +202,7 @@ def test_the_planted_change_holds_where_the_window_does_not_move(
     check("while the launch, 2% longer, is no clear change",
           said["verdict"] == "no_change" and said["headline"] == "No clear change"
           and float(said["window-delta-ms"]) > 0, said)
+    check("its 24 ms do not hold either", said["window-holds"] == "false", said)
     check("of two reports alike", said["comparable"] == "true" and said["unlike"] == "", said)
     page = ci.page(tmp_path / "out", artifact="echolot-report", branch="main", note="",
                    run="", url="", whole=False)

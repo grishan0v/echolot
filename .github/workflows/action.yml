@@ -108,6 +108,7 @@ jobs:
           VERDICT: ${{ steps.changed.outputs.verdict }}
           HEADLINE: ${{ steps.changed.outputs.headline }}
           WINDOW_DELTA_MS: ${{ steps.changed.outputs.window-delta-ms }}
+          WINDOW_HOLDS: ${{ steps.changed.outputs.window-holds }}
           COMPARABLE: ${{ steps.changed.outputs.comparable }}
           UNLIKE: ${{ steps.changed.outputs.unlike }}
           SCENARIO_REPORT: ${{ steps.scenario.outputs.report }}
@@ -120,13 +121,15 @@ jobs:
           fi
           echo "the change moved the lock's two rows, and nothing else"
           # What a workflow that gates reads: the two rows hold, and the
-          # launch, 2% longer, is no clear change, between two sides alike.
+          # launch, 2% longer, is no clear change and does not hold, between
+          # two sides alike.
           python - <<'EOF'
           import json, os
           rows = {(r["detector"], r["on_main"]) for r in json.loads(os.environ["HELD_ROWS"])}
-          said = {k: os.environ[k] for k in ("HELD", "VERDICT", "HEADLINE", "COMPARABLE", "UNLIKE")}
+          said = {k: os.environ[k] for k in ("HELD", "VERDICT", "HEADLINE", "WINDOW_HOLDS",
+                                             "COMPARABLE", "UNLIKE")}
           want = {"HELD": "2", "VERDICT": "no_change", "HEADLINE": "No clear change",
-                  "COMPARABLE": "true", "UNLIKE": ""}
+                  "WINDOW_HOLDS": "false", "COMPARABLE": "true", "UNLIKE": ""}
           if said != want or rows != {("main_thread_block", True), ("monitor_contention", True)}:
               print(f"::error::the planted change holds in the lock's two rows on the main thread "
                     f"and does not move the launch a fifth: want {want}, the action said {said}, "
