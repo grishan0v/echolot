@@ -32,7 +32,17 @@ of their own (an agent: its builds, its recordings). Ending it alone would
 leave them running, so the processes under it are listed before anything is
 sent, and Ctrl-C goes to each of them as well; whatever is still there after
 the grace is ended, then killed. When such a step ends by itself, what is
-left in its process group is ended too.
+left in its process group is ended too. Such a step may also say how long
+nothing may move under it (`idle`): no file it names written, no process
+under it started, nothing running under it but the client's own. Its own are
+its helpers, known by name, and whatever started under it in the first
+seconds of the step (`STARTUP_S`): the programs its own settings start with
+it, such as MCP servers, run the whole time and say nothing, while a command
+it runs starts after its first reply. Once that long has passed, it is ended
+the same way, and the state says why (`"why": "idle"`): a client that waits
+for an answer nobody gives does not hold the page for hours. Where the
+processes cannot be listed (no `ps`), nothing reads as idle: a long build
+could not be told from a wait.
 
 Only the standard library is imported here: the process starts fast, and the
 page that started it waits for its first word.
@@ -135,7 +145,7 @@ def _as_a_job_writes(state: Any) -> bool:
     pid = state.get("pid")
     if not (_moment(state.get("started")) and (state.get("finished") is None or _moment(state["finished"]))
             and (pid is None or (_holds(pid, int) and 0 < pid <= _PID_MAX))
-            and isinstance(state.get("what", {}), dict)):
+            and isinstance(state.get("what", {}), dict) and _holds(state.get("why"), str)):
         return False
     return all(isinstance(step, dict) and isinstance(step.get("id"), str) and isinstance(step.get("status"), str)
                and all(step.get(key) is None or _moment(step[key]) for key in ("started", "finished"))
@@ -446,6 +456,98 @@ def _end_tree(proc: Any, clock: Callable[[], float], procs: Callable[[], list[di
     proc.wait()
 
 
+# How often a step that ends itself once nothing moves looks whether anything
+# did, in seconds: each look lists the processes of the computer.
+IDLE_EVERY_S = 15.0
+# What the state says of a run ended that way (`why`), beside `stopped`.
+IDLE = "idle"
+# How long after a step starts a process under it may start and still be the
+# client's own, in seconds: its helpers and the servers its settings start
+# (MCP servers) start with it, and a command it runs only after its first
+# reply. The plan's `idle` may say another number (`startup_s`).
+STARTUP_S = 30.0
+
+
+def _newest(path: Path) -> float:
+    """When a path last changed: a file's time, or for a folder the newest of
+    its own and its entries'. 0 where there is nothing."""
+    try:
+        newest = path.stat().st_mtime
+    except OSError:
+        return 0.0
+    if path.is_dir():
+        with contextlib.suppress(OSError):
+            for entry in os.scandir(path):
+                with contextlib.suppress(OSError):
+                    newest = max(newest, entry.stat(follow_symlinks=False).st_mtime)
+    return newest
+
+
+def _helper(args: str, helpers: tuple[str, ...]) -> bool:
+    """Whether a process is one of the client's own helpers, by the name of
+    the program it runs: `codex` or `codex-…` for `codex`."""
+    first = args.split(None, 1)[0] if args.strip() else ""
+    name = os.path.basename(first)
+    return any(name == h or name.startswith(h + "-") for h in helpers)
+
+
+class _Idle:
+    """Whether nothing under a step has moved for as long as its plan allows.
+
+    The plan's `idle` says how long (`seconds`), which files say it moved
+    when they are written (`watch`, relative to the project), and the names
+    of the client's own helper processes, which run the whole time and say
+    nothing (`helpers`). Nothing moved means all three: no file it watches
+    was written, no process under it started, and nothing runs under it but
+    the client's own: those helpers, and any process that itself started in
+    the step's first `STARTUP_S` (MCP servers its settings start, and the
+    client's real program under a wrapper that starts it). A process that
+    started later is something that runs, however it is related to an early
+    one: a build or a recording that runs long never reads as idle.
+    """
+
+    def __init__(self, project: Path, step: dict[str, Any], clock: Callable[[], float]):
+        given = step["idle"]
+        self.project, self.clock = project, clock
+        self.seconds = float(given["seconds"])
+        self.watch = [str(w) for w in given.get("watch") or ()]
+        self.helpers = tuple(str(h) for h in given.get("helpers") or ())
+        self.startup = float(given.get("startup_s", STARTUP_S))
+        self.started = float(step.get("started") or clock())
+        self.next = clock()
+
+    def due(self) -> bool:
+        """Whether it is time to look again: at once, then every `IDLE_EVERY_S`."""
+        now = self.clock()
+        if now < self.next:
+            return False
+        self.next = now + IDLE_EVERY_S
+        return True
+
+    def passed(self, pid: int, procs: Callable[[], list[dict[str, Any]]]) -> bool:
+        now = self.clock()
+        table = procs()
+        if not table:
+            # No list of processes (no `ps`, as on Windows): a build that runs
+            # long cannot be told from a wait, so nothing reads as idle.
+            return False
+        under = descendants(pid, table)
+        if any(not self._own(p, now) for p in under):
+            return False
+        stamps = [self.started, *(_newest(self.project / rel) for rel in self.watch)]
+        stamps += [now - p["age"] for p in under if isinstance(p.get("age"), (int, float))]
+        return now - max(stamps) >= self.seconds
+
+    def _own(self, p: dict[str, Any], now: float) -> bool:
+        """Whether a process under the step is the client's own: a helper by
+        name, or one that itself started in the step's first seconds. One
+        whose age is not known is not: it may be a command that runs."""
+        if _helper(p.get("args") or "", self.helpers):
+            return True
+        age = p.get("age")
+        return isinstance(age, (int, float)) and not isinstance(age, bool) and now - age <= self.started + self.startup
+
+
 def _reap(proc: Any, kill: Callable[[int, int], None]) -> None:
     """What is left in the process group of a command that ended: it was
     started in a session of its own, so the group is its own and nobody
@@ -492,6 +594,8 @@ def run(project: Path, name: str, plan: dict[str, Any], *,
             step["tree"] = True
         if given.get("unset"):
             step["unset"] = [str(v) for v in given["unset"]]
+        if given.get("tree") and isinstance(given.get("idle"), dict) and given["idle"].get("seconds"):
+            step["idle"] = dict(given["idle"])
     state: dict[str, Any] = {"job": name, "pid": os.getpid(), "started": clock(), "finished": None,
                              "what": plan.get("what") or {}, "steps": steps}
     _write(path, state)
@@ -527,12 +631,20 @@ def run(project: Path, name: str, plan: dict[str, Any], *,
             step["pid"] = proc.pid
             _write(path, state)
             how = None
+            idle = _Idle(project, step, clock) if step.get("idle") else None
             while True:
                 try:
                     code = proc.wait(timeout=POLL_S)
                     break
                 except subprocess.TimeoutExpired:
                     how = asked.how()
+                    if not how and idle is not None and idle.due() and idle.passed(proc.pid, procs or processes):
+                        # Nothing has moved for as long as the plan allows: it
+                        # is ended as a stop is, and the state says why, at
+                        # once, for a page drawn while it ends.
+                        how = STOPPED
+                        state["why"] = IDLE
+                        _write(path, state)
                     if how:
                         if step.get("tree"):
                             _end_tree(proc, clock, procs or processes, kill or os.kill)
