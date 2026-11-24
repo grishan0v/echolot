@@ -180,6 +180,25 @@ def test_a_comparison_with_a_field_of_the_wrong_kind_says_it_does_not_read(proje
           get(site).status == 200 and "After the fix" not in read(get(site).body).one("nav", "steps").text)
 
 
+@pytest.mark.parametrize("side", ["before", "after"])
+@pytest.mark.parametrize("value", [7, True, -1.5, "zz"])
+def test_a_row_of_the_wrong_kind_says_it_does_not_read(project, side, value):
+    """A row's `values` that is no list ended the page in a 500: the shape
+    check looked at the plain reading alone (#870)."""
+    folder = compared(project.ready())
+    found = json.loads((folder / "comparison.json").read_text(encoding="utf-8"))
+    i = next(i for i, r in enumerate(found["rows"]) if isinstance(r.get(side), dict))
+    found["rows"][i][side]["values"] = value
+    (folder / "comparison.json").write_text(json.dumps(found), encoding="utf-8")
+    site = site_of(project)
+    reply = get(site, "after")
+    text = read(reply.body).text
+    check("no 500: the page says the comparison does not read, where, and how to write it anew",
+          reply.status == 404 and "The comparison does not read" in text and f"rows[{i}].{side}.values is" in text
+          and "echolot compare --html" in text, (reply.status, text[:300]))
+    check("the start page still draws", get(site).status == 200)
+
+
 def test_each_scenario_has_its_own(project):
     project.app().config(SEVERAL).agents().doctor()
     project.report(".echolot/out/coldStart")
