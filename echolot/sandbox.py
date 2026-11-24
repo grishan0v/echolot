@@ -333,7 +333,7 @@ def message(what: str, where: str | None) -> str:
 
 def trace_processor_refused(e: OSError,
                             env: Mapping[str, str] | None = None) -> SandboxError:
-    """The error for the port perfetto asked for before starting trace_processor."""
+    """The error for the port asked for before trace_processor starts (tpshell)."""
     where = host(env)
     why = e.strerror or str(e)
     return SandboxError(

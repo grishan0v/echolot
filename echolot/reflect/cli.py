@@ -226,8 +226,16 @@ def cmd_reflect(args) -> int:
     recorder.note(sessions=len(reports),
                   warn=sum(r["summary"]["signals"].get("warn", 0) for r in reports))
 
-    if len(reports) == 1:
+    if len(reports) == 1 and (getattr(args, "full", False) or sys.stdout.isatty()):
         print(reflect_render.to_markdown(reports[0]))
+    elif len(reports) == 1:
+        # The rule `analyze` follows (#492): the whole report is for a person
+        # at a terminal, 15 to 36 KB of it for one session, and the agent the
+        # layer runs reads `<id>.json` after it anyway. Outside a terminal it
+        # gets the row `--all` prints for the session, and where the rest is.
+        print(_reflect_summary(reports, short))
+        print("\nThe summary, because the output is not a terminal: the whole "
+              "report is the .md beside the .json, and `reflect --full` prints it.")
     else:
         summary = _reflect_summary(reports, short)
         (out_dir / "summary.md").write_text(summary, encoding="utf-8")

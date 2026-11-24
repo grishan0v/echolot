@@ -148,8 +148,9 @@ def report_without_a_transcript(tmp_path):
         line("2026-08-19T10:02:00+00:00", "analyze",
              ["analyze", "b", "-c", "echolot.yml"], exit_code=1),
     ])
+    # --full: a pipe gets the summary, and these cases read the report (#492).
     done = subprocess.run(
-        [sys.executable, "-m", "echolot.main", "reflect", "--last",
+        [sys.executable, "-m", "echolot.main", "reflect", "--last", "--full",
          "--project", str(tmp_path)],
         capture_output=True, text=True, cwd=tmp_path,
         env=dict(os.environ, ECHOLOT_NO_RECORD="1"))
@@ -222,7 +223,7 @@ def test_from_log_can_be_asked_for_where_a_transcript_exists(tmp_path):
 
     def reflect(*flags):
         return subprocess.run(
-            [sys.executable, "-m", "echolot.main", "reflect", "--last", *flags,
+            [sys.executable, "-m", "echolot.main", "reflect", "--last", "--full", *flags,
              "--project", str(project)],
             capture_output=True, text=True, cwd=project, env=env)
 

@@ -111,8 +111,8 @@ writes an investigation the same way: what the agent found, where, and what to c
 `echolot ui` opens a page on this machine with whether everything is ready, a
 button that records and analyses the app, the reports and the agent's answers.
 In a project with no config yet it writes the first one, for how the app opens.
-From a report it starts your own Claude Code on the checks you tick, and shows
-its rounds as they come in.
+From a report it starts your own Claude Code or Codex on the checks you tick,
+and shows its rounds as they come in.
 
 <details>
 <summary><b>Example report</b></summary>
@@ -195,7 +195,7 @@ _names a thread that burns CPU with no slice around it. The agent does not guess
 <sub>trace_processor v59.1</sub>
 ```
 
-What `analyze` prints for the demo that comes with echolot: five cold starts
+What `analyze` prints in a terminal for the demo that comes with echolot: five cold starts
 of an app that does not exist, built by code.
 
 </details>

@@ -138,6 +138,8 @@ waiting for one.
    round = 1
 
 1. report = echolot analyze <traces> -c echolot.yml --hunt <n>
+   what it prints is the overview `echolot report` prints: the window, its
+   warnings, a line per detector — step 2 reads those warnings
    read .echolot/out/report.json — the schema is what `echolot guide report`
    prints, do not discover it by hand
    report.markers.rows is every AGENTTMP_ name and every `domains` name,
@@ -243,7 +245,9 @@ echolot status                                     its `starts` line: how each r
                                                    started, and what was set aside, read off disk.
                                                    Never collect again to read that back
 echolot analyze <traces> -c echolot.yml --hunt <n> report → .echolot/out/ next to the config,
-                                                   and a copy filed under <n> for compare
+                                                   and a copy filed under <n> for compare;
+                                                   prints the overview, not report.md —
+                                                   --full is a terminal's, not yours
 echolot analyze … --hunt <n> -o <dir>              the same, elsewhere; it files a copy for
                                                    compare too, so a round runs one or the other
 echolot analyze … --defaults                       every detector, built-in thresholds

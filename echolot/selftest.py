@@ -92,13 +92,16 @@ def skipped(why: str | None) -> bool:
 
 
 @contextlib.contextmanager
-def _cursor_may_refuse():
-    """Cursor's sandbox refusing a `.cursor/` is a skip; anything else is not."""
+def _cursor_may_refuse(env: dict[str, str] | None = None):
+    """Cursor's sandbox refusing a `.cursor/` is a skip; anything else is not.
+
+    `env` stands in for the environment, for the check of this rule: the
+    environment doctor runs in may carry another agent's marks (#700)."""
     from . import sandbox
     try:
         yield
     except PermissionError as e:
-        if sandbox.host() == sandbox.CURSOR and ".cursor" in str(e.filename or e):
+        if sandbox.host(env) == sandbox.CURSOR and ".cursor" in str(e.filename or e):
             raise Skipped("Cursor's sandbox refuses to create .cursor/ in a "
                           "temporary project") from None
         raise
@@ -1985,6 +1988,53 @@ def _(report):
     assert "12 of 25 frames waited in a queue" in said and "without a stutter" in said, said
 
 
+@check("frame_jank: the window keeps how many of its frames the app made late")
+def _(report):
+    """The frames whose rows the platform tags `Self Jank`, by the
+    detector's own floors: the 5 the app was 44 ms late for, not the 3 of
+    the same kind 2 ms late, nor the system's 4, nor the 2 queued ones. Per
+    recording, beside the frames they are a share of, so `compare --plain`
+    can judge a frame-paced scenario by each run's share (#586)."""
+    assert report["window"]["frames"] == {"count": 24, "late": 5}, report["window"]["frames"]
+
+
+def _drag(variant: dict) -> dict:
+    """The fixture recorded three times the way `variant` says, with no end
+    anchor: a drag recorded for a fixed time, whose window runs to the end
+    of the recording."""
+    import copy
+
+    from . import report as report_mod
+    cfg = Config({**FIXTURE_CONFIG, "scenario": {"name": "drag", "start": {"name": "AppStart"}}})
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "drag.perfetto-trace"
+        trace.write_bytes(fixture.build(**variant))
+        one = _analyze(trace, cfg)
+    return report_mod.aggregate([copy.deepcopy(one) for _ in range(3)])
+
+
+@check("compare --plain judges a window that runs to the end of the recording "
+       "by the frames the app made late")
+def _(report):
+    """A drag recorded for a fixed time takes as long whatever the app does:
+    five pairs of sets of one, a build that janked against the build before
+    and the fix after, all read "No clear change", the window 8.6 ms apart
+    at most, while the app's own late frames went from 3% to 21% and back to
+    10%. Here the build that keeps up (`fixture.SMOOTH_FRAMES`, 3 of 60
+    frames late) against the one that janks (6 of 25 in a window open to the
+    end of the recording), 1.3 s each: worse by the share of late frames,
+    and the fix the other way round better. On `main` both read no change."""
+    from . import compare as compare_mod
+    from . import moves
+    smooth, janky = _drag({"smooth": True}), _drag({})
+    for before, after, movement, shares in ((smooth, janky, moves.WORSE, "5% of its frames late before and 24%"),
+                                            (janky, smooth, moves.BETTER, "24% of its frames late before and 5%")):
+        cmp = compare_mod.build(before, after, before_path="a.json", after_path="b.json")
+        v = moves.read(before, after, cmp)["verdict"]
+        assert (v["movement"], v["by"]) == (movement, "frames"), v
+        assert shares in v["text"] and "its length is the recording's" in v["text"], v["text"]
+
+
 @check("frame_jank: the worst frame in the trace is outside the window")
 def _(report):
     # 200 ms, 184 over, at ts 1200 — after Screen.firstFrame ends the window.
@@ -2238,6 +2288,65 @@ def _(report):
     assert [r["holds"] for r in cmp["rows"]] == [None, None], cmp["rows"]
     assert "does not say which echolot" in {w["id"]: w["text"] for w in cmp["warnings"]}.get(
         "version", ""), cmp["warnings"]
+
+
+def _cold_starts(rows: dict[tuple[str, str], list[float]]) -> dict:
+    """A merged report of four 5.5 s cold starts, with a row per
+    (detector, location) and these values. `com.example.app` is the main
+    thread's location: the last 15 characters of the process's name."""
+    side = _side_with({})
+    side["window"]["duration_ms"] = 5480.0
+    by_det: dict[str, list[dict]] = {}
+    for (det_id, location), values in rows.items():
+        by_det.setdefault(det_id, []).append(
+            {"location": location, "runs": f"{len(values)}/4", "count": 1,
+             "self_ms": sorted(values)[len(values) // 2],
+             "spread": {"self_ms": {"min": min(values), "max": max(values), "values": values}}})
+    side["detectors"] = [{"id": d, "title": d, "why": "", "params": {}, "params_source": "default",
+                          "error": None, "sha": "a" * 12, "rows": found} for d, found in by_det.items()]
+    side["summary"] = {"fired_ids": list(by_det)}
+    return side
+
+
+@check("compare lists the main thread's move that holds above a sum over a pool")
+def _(report):
+    """Faults injected into one app, 5 cold starts against 18: a 400 ms
+    sleep on the main thread in an initializer moved `main_thread_block` by
+    +419 ms, ninth, and over it sat `monitor_contention` on the coroutine
+    workers, −3996 ms, holding — the workers contended less while the main
+    thread was held — and pool rows that did not hold. The main thread's
+    300 ms wait on a monitor was thirteenth, under the same pool row at
+    −4286 ms (#595).
+
+    Both causes lead now. A pool row whose move does not hold goes after the
+    rest. A cause off the main thread keeps its place: a pool that burns the
+    CPU, with a main-thread knock-on that holds but is under a twentieth of
+    the window, is still first."""
+    from . import compare as compare_mod
+
+    def order(before: dict, after: dict) -> list[tuple[str, str]]:
+        cmp = compare_mod.build(_cold_starts(before), _cold_starts(after),
+                                before_path="a.json", after_path="b.json")
+        return [(r["detector"], r["location"]) for r in cmp["rows"] if r["change"] != "steady"]
+
+    pool = {("monitor_contention", "DefaultDispatch"): [8600.0, 8700.0, 8500.0, 8650.0],
+            ("runnable_starvation", "DefaultDispatch"): [900.0, 1500.0, 600.0, 1300.0]}
+    sleep = {("main_thread_block", "Initializer.create"): [40.0, 42.0, 38.0, 41.0], **pool}
+    got = order(sleep, {("main_thread_block", "Initializer.create"): [460.0, 458.0, 462.0, 459.0],
+                        ("monitor_contention", "DefaultDispatch"): [4600.0, 4650.0, 4700.0, 4620.0],
+                        ("runnable_starvation", "DefaultDispatch"): [700.0, 400.0, 900.0, 600.0]})
+    assert got == [("main_thread_block", "Initializer.create"), ("monitor_contention", "DefaultDispatch"),
+                   ("runnable_starvation", "DefaultDispatch")], got
+    wait = {("monitor_contention", "com.example.app"): [20.0, 22.0, 19.0, 21.0], **pool}
+    got = order(wait, {("monitor_contention", "com.example.app"): [350.0, 348.0, 352.0, 349.0],
+                       ("monitor_contention", "DefaultDispatch"): [4300.0, 4350.0, 4280.0, 4320.0],
+                       ("runnable_starvation", "DefaultDispatch"): [700.0, 400.0, 900.0, 600.0]})
+    assert got[:2] == [("monitor_contention", "com.example.app"), ("monitor_contention", "DefaultDispatch")], got
+    burn = {("uninstrumented_cpu", "Thread-25"): [10.0, 12.0, 9.0, 11.0],
+            ("runnable_starvation", "com.example.app"): [60.0, 62.0, 58.0, 61.0]}
+    got = order(burn, {("uninstrumented_cpu", "Thread-25"): [850.0, 860.0, 840.0, 855.0],
+                       ("runnable_starvation", "com.example.app"): [100.0, 102.0, 98.0, 101.0]})
+    assert got == [("uninstrumented_cpu", "Thread-25"), ("runnable_starvation", "com.example.app")], got
 
 
 @check("compare says when the two sides were recorded differently, and what reads it")
@@ -2747,28 +2856,26 @@ def _(report):
 def _(report):
     """Cursor's sandbox refuses a `.cursor/` it did not make. A check that
     writes one says so there and is not a failure; the same refusal anywhere
-    else, or another error there, still is."""
-    from . import selftest as st
+    else, or another error there, still is.
 
-    def refused(_report):
-        with st._cursor_may_refuse():
-            raise PermissionError(1, "Operation not permitted", "/tmp/x/.cursor")
+    Both environments are named here rather than set: the one doctor runs in
+    may carry another agent's marks, and Codex's, which `sandbox.host()`
+    reads first, failed this check whenever Codex ran doctor (#700)."""
+    from . import selftest as st
+    cursor = {"CURSOR_SANDBOX": "seatbelt"}
+
+    def refused_in(env):
+        def refused(_report):
+            with st._cursor_may_refuse(env):
+                raise PermissionError(1, "Operation not permitted", "/tmp/x/.cursor")
+        return refused
 
     def other(_report):
-        with st._cursor_may_refuse():
+        with st._cursor_may_refuse(cursor):
             raise PermissionError(1, "Operation not permitted", "/tmp/x/.idea")
 
-    before = os.environ.get("CURSOR_SANDBOX")
-    try:
-        os.environ["CURSOR_SANDBOX"] = "seatbelt"
-        inside = dict(st.run_checks({}, [("refused", refused), ("other", other)]))
-        del os.environ["CURSOR_SANDBOX"]
-        outside = dict(st.run_checks({}, [("refused", refused)]))
-    finally:
-        if before is None:
-            os.environ.pop("CURSOR_SANDBOX", None)
-        else:
-            os.environ["CURSOR_SANDBOX"] = before
+    inside = dict(st.run_checks({}, [("refused", refused_in(cursor)), ("other", other)]))
+    outside = dict(st.run_checks({}, [("refused", refused_in({}))]))
     assert st.skipped(inside["refused"]) and "Cursor's sandbox" in inside["refused"], inside
     assert inside["other"] and not st.skipped(inside["other"]), inside
     assert outside["refused"] and not st.skipped(outside["refused"]), outside
@@ -4088,6 +4195,66 @@ def _(report):
         assert after["analyzes"] == 1 and after["touched_at"] != _STALE, after
 
 
+@check("analyze: outside a terminal it prints the overview `report` prints, "
+       "and --full the whole report")
+def _(report):
+    """`analyze` printed the whole report wherever its output went, and an
+    agent reads what a command prints into its context: on a large app's
+    cold start that was 35 KB, 466 lines, in every round of a hunt, of a
+    report the layer then has it read again with `echolot report` (#492).
+    Outside a terminal — a pipe, an agent, this check's StringIO — it is the
+    overview `echolot report` prints for the same report, word for word, and
+    a line that says where the rest is; `--full` is the whole report, as a
+    terminal gets it.
+
+    `analyze_trace` hands back this check's own report, so no trace is read.
+    """
+    import copy
+    import io
+    import json
+
+    from . import main as main_mod
+    from . import report as report_mod
+
+    def run(argv: list[str]) -> str:
+        out, err = io.StringIO(), io.StringIO()
+        with recorder.isolated(), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = main_mod.main(argv)
+        assert code == 0, f"`echolot {' '.join(argv)}` exited {code}: {err.getvalue()[-400:]}"
+        return out.getvalue()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp).resolve()
+        (project / "echolot.yml").write_text(
+            "project:\n  process: com.example.app\nscenario:\n  name: coldStart\n",
+            encoding="utf-8")
+        trace = project / "a.perfetto-trace"
+        trace.write_bytes(b"a trace")
+        real, here = main_mod.analyze_trace, Path.cwd()
+        main_mod.analyze_trace = lambda *a, **kw: copy.deepcopy(report)
+        try:
+            # From the config's directory, the way the layer runs it: there
+            # `echolot report` with no path reads what `analyze` just wrote.
+            os.chdir(project)
+            piped = run(["analyze", str(trace)])
+            shown = run(["report"])
+            full = run(["analyze", str(trace), "--full"])
+            written = json.loads((project / ".echolot/out/report.json").read_text(encoding="utf-8"))
+        finally:
+            os.chdir(here)
+            main_mod.analyze_trace = real
+
+    assert "# Marker Report" not in piped, f"a pipe got the whole report: {piped[:300]}"
+    assert piped.startswith(shown), (
+        f"a pipe got something other than `echolot report`'s overview:\n{piped[:600]}\n"
+        f"---\n{shown[:600]}")
+    assert "`analyze --full` prints it" in piped[len(shown):], (
+        f"the overview does not say where the rest is: {piped[len(shown):]!r}")
+    assert full == report_mod.to_markdown(written) + "\n", (
+        f"--full is not the whole report: {full[:300]}")
+
+
 @check("collect: a run outside the open investigation leaves it as it was, and "
        "does not stand in for its work while it runs")
 def _(report):
@@ -4355,6 +4522,98 @@ def _(report):
         except ProcessLookupError:
             continue
         raise AssertionError(f"trace_processor {pid} is still running")
+
+
+# A trace_processor_shell that takes its time to listen, then answers its
+# /status: the wait measured is the start's, not this machine's.
+_SLOW_SHELL = """
+import sys, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+time.sleep(0.2)
+port = int(sys.argv[sys.argv.index("--http-port") + 1])
+class Status(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *_):
+        pass
+HTTPServer(("127.0.0.1", port), Status).serve_forever()
+"""
+
+
+@check("trace_processor: a shell that is not listening yet is asked again in 10 ms, not a second later")
+def _(report):
+    """perfetto asked a starting shell for its /status, and when nothing
+    listened yet it slept a whole second before asking again. A shell listens
+    in 20–30 ms, so every session but a process's first waited a second for
+    it: 34 of `doctor`'s 40 s, and a second per trace of `analyze -j 1`
+    (#487). The shell is started by echolot now and asked every 10 ms.
+
+    Held on a stand-in that listens after 0.2 s: asked once a second, it is
+    asked twice; every 10 ms, a dozen times and more. The bar is three, for a
+    machine under load.
+    """
+    import shlex
+    import sys
+    from . import tpshell
+
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "slow.py"
+        script.write_text(_SLOW_SHELL, encoding="utf-8")
+        binary = Path(tmp) / "trace_processor_shell"
+        binary.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} "
+                          f"{shlex.quote(str(script))} \"$@\"\n", encoding="utf-8")
+        binary.chmod(0o755)
+        shell = tpshell.Shell(str(binary))
+        try:
+            shell.wait()
+        finally:
+            shell.close()
+    assert shell.asked >= 3, f"asked {shell.asked} times in {shell.waited:.2f} s"
+    assert shell.waited is not None and shell.waited < 5, shell.waited
+    assert shell.pid is None, "the shell is still held after close()"
+
+
+@check("trace_processor: sessions opened side by side each get a shell and a port of their own, and read their own trace")
+def _(report):
+    """`analyze` reads the traces of a set side by side (#488), each in a
+    session of its own, and each session's shell is started on a port the
+    kernel names and lets go of first. A shell whose port another took in
+    between does not stop: it listens on [::1] alone, and the session would
+    read the other one's trace. Within a run a port handed to a shell is not
+    handed out again until that shell listens on it (tpshell.py, #487).
+    """
+    import threading
+    from .tp import TraceSession
+
+    with tempfile.TemporaryDirectory() as tmp:
+        traces = _two_fixtures(tmp) * 3
+        alone = {}
+        for trace in traces[:2]:
+            with TraceSession(trace, _binary) as tp:
+                alone[trace] = tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"]
+        assert len(set(alone.values())) == 2, f"the two fixtures read alike: {alone}"
+
+        both = threading.Barrier(len(traces))
+        seen: dict[int, tuple] = {}
+
+        def read(i: int, trace: Path) -> None:
+            both.wait(30)
+            with TraceSession(trace, _binary) as tp:
+                seen[i] = (tp._tp.shell.port,
+                           tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"])
+
+        workers = [threading.Thread(target=read, args=(i, t))
+                   for i, t in enumerate(traces)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join(60)
+    assert len(seen) == len(traces), f"{len(traces) - len(seen)} sessions did not open"
+    ports = [port for port, _ in seen.values()]
+    assert len(set(ports)) == len(ports), f"two shells on one port: {sorted(ports)}"
+    wrong = [traces[i].name for i, (_, n) in seen.items() if n != alone[traces[i]]]
+    assert not wrong, f"read another session's trace: {wrong}"
 
 
 @check("reflect: a signal that broke is not checked, and does not read as checked")

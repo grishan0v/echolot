@@ -308,14 +308,29 @@ def _merge_crowding(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _merge_frames(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The frames drawn in the window across repeats: the median, and each run's."""
-    counts = [f["count"] for r in reports
-              if (f := (r.get("window") or {}).get("frames")) and f.get("count") is not None]
-    if not counts:
+    """The frames drawn in the window across repeats: the median, and each run's.
+
+    The frames the app made late (`late`) the same way, with each run's in
+    `late_values` in the order of `values`, so that a run's late frames are
+    read against its own: the share of each run is what `compare --plain`
+    judges a frame-paced scenario by (#586). Left out when a repeat does not
+    say, rather than counted as none.
+    """
+    drawn = [f for r in reports
+             if (f := (r.get("window") or {}).get("frames")) and f.get("count") is not None]
+    if not drawn:
         return None
-    mid = median(counts)
-    return {"count": int(mid) if mid == int(mid) else round(mid, 1),
-            "values": counts, "runs": f"{len(counts)}/{len(reports)}"}
+    counts = [f["count"] for f in drawn]
+
+    def whole(values: list) -> float:
+        mid = median(values)
+        return int(mid) if mid == int(mid) else round(mid, 1)
+
+    out = {"count": whole(counts), "values": counts, "runs": f"{len(counts)}/{len(reports)}"}
+    late = [f.get("late") for f in drawn]
+    if all(isinstance(n, int) for n in late):
+        out["late"], out["late_values"] = whole(late), late
+    return out
 
 
 def _merge_startup(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1805,92 +1820,14 @@ def to_markdown(report: dict[str, Any]) -> str:
             # a bare "from … to …" read as the window's start and end (#585).
             line += f" (from {low} to {high} across repeats)"
         out.append(line)
-        # Repeats of one scenario cannot differ several-fold. If they do, they
-        # are not repeats, and a median across them means nothing.
-        if low and high and high > 2 * low:
-            out.append(
-                f"> ⚠️ Repeat windows diverged {high / low:.1f}x. These are not "
-                f"repeats of one scenario: "
-                + ("the launches did different things"
-                   if w.get("defined_by") else
-                   "either the anchors did not match or the runs did different things")
-                + ". A median over such numbers is meaningless."
-            )
+        out.extend(_diverged_lines(w))
     out.extend(launch_mod.lines(w))
 
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_crowding_lines(w.get("crowding")))
     out.extend(_outside_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
-
-    # An anchor that never matched silently collapses the window onto the whole
-    # trace. That has to be shouted, not hidden: otherwise the report looks
-    # plausible and leads somewhere else entirely.
-    for key, label in (("start_anchor", "Start"), ("end_anchor", "End")):
-        anchor = w.get(key)
-        missed = short_runs(anchor.get("missed")) if anchor else None
-        if anchor and anchor.get("matches") == 0 and anchor.get("before_start"):
-            out.append(
-                f"> ⚠️ {label} anchor `{anchor['glob']}` occurs only before the "
-                f"start anchor ({anchor['before_start']} time(s)), so nothing "
-                f"closed the window and it ran to where the process's last "
-                f"slice ends. Are the "
-                f"two anchors swapped? The numbers below are not about your "
-                f"scenario."
-            )
-        elif missed:
-            out.append(
-                f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in "
-                f"{missed[0]} of {missed[1]} repeats — in those "
-                f"{FALLBACK[key]}, and their rows are in the "
-                f"medians below. Check against `probe`."
-            )
-        elif anchor and anchor.get("matches") == 0:
-            out.append(
-                f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in the "
-                f"trace — {FALLBACK[key]}. Check against "
-                f"`probe`; the numbers below are not about your scenario."
-            )
-        elif anchor and anchor.get("unfinished"):
-            out.append(
-                f"> ⚠️ {label} anchor `{anchor['glob']}` never closed: the "
-                f"scenario had not reached its end when the recording stopped, "
-                f"so the window runs to the end of the trace."
-            )
-    out.extend(_no_anchor_lines(w))
-    processes = w.get("processes")
-    if processes:
-        out.append(
-            f"> ⚠️ The repeats measured different processes: "
-            f"{', '.join(f'`{p}`' for p in processes)}. The process mask "
-            f"matched more than one, and the medians below mix them. Narrow "
-            f"`project.process` to the one you mean."
-        )
-
-    # A partial account looks exactly like a complete one, which is the only
-    # reason this is worth a line. Slices keep their real length across the
-    # boundary; thread states are clipped, so the beginning of a stall that
-    # started before the anchor is simply not in the report.
-    inside = w.get("opened_inside")
-    if inside and inside.get("material") and w.get("defined_by"):
-        # A launch window has no anchor to move: the app was already running
-        # when it was brought to the front.
-        out.append(
-            f"> ⚠️ The window opened with the main thread already blocked: "
-            f"state `{inside['state']}` for {inside['total_ms']} ms, of which "
-            f"{inside['before_ms']} ms happened before the launch began. "
-            f"Whatever put it there is outside this window, so the waiting "
-            f"below is the tail of it rather than the whole."
-        )
-    elif inside and inside.get("material"):
-        out.append(
-            f"> ⚠️ The window opened with the main thread already blocked: "
-            f"state `{inside['state']}` for {inside['total_ms']} ms, of which "
-            f"{inside['before_ms']} ms happened before the anchor matched. "
-            f"Whatever put it there is outside this window, so the waiting "
-            f"below is the tail of it rather than the whole. Move "
-            f"`scenario.start` earlier to see the cause."
-        )
+    out.extend(_window_warning_lines(w))
 
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(_no_sources_lines(report.get("no_sources")))
@@ -1995,6 +1932,101 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
         out.append(f"<sub>{note}</sub>")
     return "\n".join(out)
+
+
+def _diverged_lines(w: dict[str, Any]) -> list[str]:
+    """Repeats of one scenario cannot differ several-fold. If they do, they
+    are not repeats, and a median across them means nothing."""
+    low, high = w.get("duration_ms_min"), w.get("duration_ms_max")
+    if not (low and high and high > 2 * low):
+        return []
+    return [f"> ⚠️ Repeat windows diverged {high / low:.1f}x. These are not "
+            f"repeats of one scenario: "
+            + ("the launches did different things"
+               if w.get("defined_by") else
+               "either the anchors did not match or the runs did different things")
+            + ". A median over such numbers is meaningless."]
+
+
+def _window_warning_lines(w: dict[str, Any]) -> list[str]:
+    """What makes the numbers below not about the scenario: an anchor that
+    missed or never closed, a scenario with none, repeats of different
+    processes, a window that opened inside a wait.
+
+    The whole report says them above its findings, and so does the overview:
+    outside a terminal `analyze` prints the overview alone (#492), and these
+    are the lines that decide whether its table is worth reading at all.
+    """
+    out: list[str] = []
+    # An anchor that never matched silently collapses the window onto the whole
+    # trace. That has to be shouted, not hidden: otherwise the report looks
+    # plausible and leads somewhere else entirely.
+    for key, label in (("start_anchor", "Start"), ("end_anchor", "End")):
+        anchor = w.get(key)
+        missed = short_runs(anchor.get("missed")) if anchor else None
+        if anchor and anchor.get("matches") == 0 and anchor.get("before_start"):
+            out.append(
+                f"> ⚠️ {label} anchor `{anchor['glob']}` occurs only before the "
+                f"start anchor ({anchor['before_start']} time(s)), so nothing "
+                f"closed the window and it ran to where the process's last "
+                f"slice ends. Are the "
+                f"two anchors swapped? The numbers below are not about your "
+                f"scenario."
+            )
+        elif missed:
+            out.append(
+                f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in "
+                f"{missed[0]} of {missed[1]} repeats — in those "
+                f"{FALLBACK[key]}, and their rows are in the "
+                f"medians below. Check against `probe`."
+            )
+        elif anchor and anchor.get("matches") == 0:
+            out.append(
+                f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in the "
+                f"trace — {FALLBACK[key]}. Check against "
+                f"`probe`; the numbers below are not about your scenario."
+            )
+        elif anchor and anchor.get("unfinished"):
+            out.append(
+                f"> ⚠️ {label} anchor `{anchor['glob']}` never closed: the "
+                f"scenario had not reached its end when the recording stopped, "
+                f"so the window runs to the end of the trace."
+            )
+    out.extend(_no_anchor_lines(w))
+    processes = w.get("processes")
+    if processes:
+        out.append(
+            f"> ⚠️ The repeats measured different processes: "
+            f"{', '.join(f'`{p}`' for p in processes)}. The process mask "
+            f"matched more than one, and the medians below mix them. Narrow "
+            f"`project.process` to the one you mean."
+        )
+
+    # A partial account looks exactly like a complete one, which is the only
+    # reason this is worth a line. Slices keep their real length across the
+    # boundary; thread states are clipped, so the beginning of a stall that
+    # started before the anchor is simply not in the report.
+    inside = w.get("opened_inside")
+    if inside and inside.get("material") and w.get("defined_by"):
+        # A launch window has no anchor to move: the app was already running
+        # when it was brought to the front.
+        out.append(
+            f"> ⚠️ The window opened with the main thread already blocked: "
+            f"state `{inside['state']}` for {inside['total_ms']} ms, of which "
+            f"{inside['before_ms']} ms happened before the launch began. "
+            f"Whatever put it there is outside this window, so the waiting "
+            f"below is the tail of it rather than the whole."
+        )
+    elif inside and inside.get("material"):
+        out.append(
+            f"> ⚠️ The window opened with the main thread already blocked: "
+            f"state `{inside['state']}` for {inside['total_ms']} ms, of which "
+            f"{inside['before_ms']} ms happened before the anchor matched. "
+            f"Whatever put it there is outside this window, so the waiting "
+            f"below is the tail of it rather than the whole. Move "
+            f"`scenario.start` earlier to see the cause."
+        )
+    return out
 
 
 # --- views: what `echolot report` prints ---------------------------------------
@@ -2150,6 +2182,9 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
                        (report.get("summary") or {}).get("detectors_run"))
     if other:
         out.append(f"⚠️ {other}")
+    if report.get("same_recording"):
+        out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
+    out.extend(_diverged_lines(w))
     anchors = []
     for key, label in (("start_anchor", "start"), ("end_anchor", "end")):
         a = w.get(key)
@@ -2160,6 +2195,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
                            + (", ⚠️ never closed" if a.get("unfinished") else ""))
     if anchors:
         out.append("Anchors: " + " · ".join(anchors))
+    out.extend(_window_warning_lines(w))
     out.extend(launch_mod.lines(w))
     alts = w.get("process_alternatives")
     if alts:
@@ -2177,8 +2213,15 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     return out
 
 
-def overview(report: dict[str, Any]) -> str:
-    """One screen: the window, and every detector with what it found."""
+def overview(report: dict[str, Any], cmd: str = "echolot report") -> str:
+    """One screen: the window, and every detector with what it found.
+
+    What `echolot report` prints with no view named, and what `analyze`
+    prints when its output is not a terminal (#492). `cmd` is the command
+    its pointers name: `echolot report` for the latest report, with the
+    path in it for one elsewhere, which `report` with no path would not
+    read.
+    """
     out = ["# Report", ""]
     out.extend(_header_lines(report))
     m = report.get("markers") or {}
@@ -2186,7 +2229,7 @@ def overview(report: dict[str, Any]) -> str:
     if rows or absent:
         out.append(f"Markers: {len(rows)} measured"
                    + (f", {len(absent)} listed in `domains` and not in the window" if absent else "")
-                   + " — `echolot report --markers`")
+                   + f" — `{cmd} --markers`")
     out.append("")
     table_rows = []
     for d in report.get("detectors") or []:
@@ -2212,7 +2255,7 @@ def overview(report: dict[str, Any]) -> str:
         out.append("")
         out.append(unseen)
     out.append("")
-    out.append("One detector's rows: `echolot report --detector <id> --top 5`; "
+    out.append(f"One detector's rows: `{cmd} --detector <id> --top 5`; "
                "the window and the device: `--window`; the markers: `--markers`; "
                "any of them as json: `--json`.")
     return "\n".join(out)

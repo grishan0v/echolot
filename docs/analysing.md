@@ -421,6 +421,32 @@ location at 60 characters and the evidence at 100; `--wide` keeps both
 whole. `--json` keeps everything and cuts only the rows, and only when
 `--top` says how many.
 
+### What `analyze` prints
+
+In a terminal `analyze` prints the whole `report.md`, as it always did.
+Anywhere else — a pipe, a script, an agent — it prints what `echolot report`
+prints with no view named, and says so in its last line; the files are the
+same either way. An agent reads what a command prints into its context: on
+a large app's cold start the whole report was 35 KB, 466 lines, in every
+round of a hunt, and the layer then had it read the report again with
+`echolot report`. The overview keeps every warning the whole report puts
+above its findings — an anchor that missed in some repeats, repeats whose
+windows diverged, repeats of different processes, a window that opened
+inside a wait — and its pointers name the report's path whenever
+`echolot report` with no path would read another one: an `-o` elsewhere, a
+config with several scenarios, a run from outside the config's directory.
+
+```bash
+echolot analyze traces/*.perfetto-trace | head        # the overview, about 35 lines
+echolot analyze traces/*.perfetto-trace --full > r.md # the whole report, into a pipe too
+```
+
+The test is the one `names` makes, turned the other way: the screen gets what
+fits a screen, a pipe gets what its reader acts on, and nothing either leaves
+out is out of reach. `reflect` of one session follows the same rule: outside
+a terminal it prints the row `--all` gives that session, and `--full` the
+whole report.
+
 ### One recording, one repeat
 
 `analyze` counts each recording once, however it was named. A path given
@@ -474,10 +500,14 @@ laptop with 36 GB, eleven at once:
 | views | 225.3 s | — |
 | tables | 57.4 s | 8.8 s |
 
-Of what is left of a trace's time one after another, about a second is
-trace_processor's start: perfetto's client waits a second for the shell to
-answer. Most of the rest is each detector asked twice on a set, at its
-thresholds and with them open.
+The table was measured while about a second of each trace was
+trace_processor's start: perfetto's client asked the shell whether it
+listened and, finding it not yet up, waited a second before asking again,
+for a shell that listens in 30 ms. echolot starts the shell itself now and
+asks every 10 ms, so one after another each trace after the first is about a
+second shorter than the table says, and `doctor`, which opens a few dozen
+sessions, takes seconds rather than forty. Most of what is left is each
+detector asked twice on a set, at its thresholds and with them open.
 
 ## When a detector could not look
 

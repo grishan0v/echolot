@@ -7,8 +7,10 @@ both reports — which for an agent means holding two twenty-row tables in the
 window and subtracting them by eye, in exactly the place this tool exists to
 take work out of.
 
-The output is one table, sorted by how much each row moved. The top row is
-usually the answer.
+The output is one table, sorted by how much each row moved, with two
+exceptions (`_rank`): a move of the main thread's own time that holds comes
+before sums over other threads, and a move the runs do not back comes after
+the rest. The top row is usually the answer.
 
 Three things it refuses to do quietly:
 
@@ -51,7 +53,7 @@ from . import when as when_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
 from . import report as report_mod
-from . import stats, table
+from . import plain, stats, table
 from .report import family, identity_of, metric_of, short_runs
 
 # What counts as movement worth a row. Absolute floor first, so a 4 ms wobble
@@ -81,6 +83,8 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
     state_changed: list[dict[str, Any]] = []
     not_compared: list[dict[str, Any]] = []
     moved_into = _moved_into(before, after, temp_prefix)
+    # Which thread a row is of, by the app's own name for its main thread.
+    whose = plain._Ctx(after if (after.get("window") or {}).get("process") else before)
 
     by_id_before = {d["id"]: _upgraded(d) for d in before.get("detectors", [])}
     by_id_after = {d["id"]: _upgraded(d) for d in after.get("detectors", [])}
@@ -142,18 +146,16 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
 
         identity = _identity(db, da)
         for rb, ra, how in _match(rows_b, rows_a, identity, temp_prefix):
-            rows.append(_judged(det_id, identity, rb, ra, how, floor_ms,
-                                floor_ratio, temp_prefix, moved_into))
+            row = _judged(det_id, identity, rb, ra, how, floor_ms,
+                          floor_ratio, temp_prefix, moved_into)
+            row["on_main"] = plain._on_main(det_id, ra if ra is not None else rb, whose)
+            rows.append(row)
 
     rows.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
     frames = _frames_moved(before, after, floor_ratio)
     if frames is not None:
         warnings.append(frames["warning"])
         _per_frame(rows, frames["ratio"], floor_ratio)
-        # The rows that moved against the frames first: they are the ones
-        # the frame count does not explain. Stable, so the size order holds
-        # inside each half.
-        rows.sort(key=lambda r: (r["delta_ms"] or 0.0) * (frames["ratio"] - 1) >= 0)
     markers = _markers(before, after, floor_ms, floor_ratio, temp_prefix, moved_into)
 
     # Two processes, two windows, or a window that is not the scenario's: the
@@ -166,6 +168,14 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
             r["shift"], r["holds"] = None, None
             if r.get("calls"):
                 r["calls"]["shift"], r["calls"]["holds"] = None, None
+
+    # Stable, so the size order holds inside each part. With the frames
+    # warning the rows that moved against the frames come first: they are
+    # the ones the frame count does not explain (#566). Inside that, `_rank`.
+    news = _news_ms(before, after)
+    rows.sort(key=lambda r: (
+        frames is not None and (r["delta_ms"] or 0.0) * (frames["ratio"] - 1) >= 0,
+        _rank(r, news)))
 
     warnings.extend(_not_compared_warnings(before, after))
 
@@ -289,6 +299,54 @@ def _per_frame(rows: list[dict[str, Any]], ratio: float, floor_ratio: float) -> 
             continue
         r["per_occurrence"] = {"before": round(vb / cb, 2), "after": round(va / ca, 2)}
         r["shift"], r["holds"] = None, None
+
+
+def _news_ms(before: dict, after: dict) -> float:
+    """The least move of the scenario's own time that leads the table: a
+    twentieth of the longer window, the bar the plain reading sets before a
+    check's sum is news (`moves.LAUNCH_SHARE`)."""
+    from .moves import LAUNCH_SHARE  # moves imports this module
+
+    longest = max(float((rep.get("window") or {}).get("duration_ms") or 0.0)
+                  for rep in (before, after))
+    return LAUNCH_SHARE * longest
+
+
+def _rank(r: dict[str, Any], news_ms: float) -> int:
+    """Which part of the table a row is listed in, before its size counts.
+
+    0  a move of the main thread's own time, or of the frames, that holds
+       and is news: at least `_news_ms`;
+    1  every other row;
+    2  a move the runs do not back: Holds is no.
+
+    Ranked by size alone, a sum over a pool of threads led the table above
+    the cause it followed from. Faults injected into one app, 5 cold starts
+    of 5.5 s against 18 of the control: a 400 ms `Thread.sleep` on the main
+    thread in an initializer moved `main_thread_block` by +419 ms, and it was
+    ninth. First sat `monitor_contention` on the coroutine workers, −3996 ms,
+    holding — with the main thread held longer the workers contended less,
+    and summed over the pool that is seconds — then rows of the pool that
+    vanished or did not hold. A 300 ms wait of the main thread on a monitor
+    was thirteenth, under the same pool row at −4286 ms (#595). No pool row
+    is time the scenario spent: the main thread's is, and a frame's, as the
+    plain reading counts it (`plain._on_main`).
+
+    Not the main thread first whatever moved there: a cause off it, such as
+    threads that burn the CPU, reaches the main thread as small waits, and
+    those would bury it. So the main thread's row has to hold, and to be as
+    large as a move the plain reading would call news. With too few runs for
+    Holds, nothing holds and the order is by size. A row whose move the runs
+    do not back goes after the rest: in both cases above, rows over the
+    cause did not hold.
+    """
+    if r["change"] == STEADY:
+        return 1
+    if r.get("holds") is False:
+        return 2
+    if r.get("on_main") and r.get("holds") and abs(r["delta_ms"] or 0.0) >= news_ms:
+        return 0
+    return 1
 
 
 def _markers(before: dict, after: dict, floor_ms: float, floor_ratio: float,

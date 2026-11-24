@@ -153,6 +153,11 @@ echolot analyze <trace> -c echolot.yml
 
 `analyze` writes `.echolot/out/report.json` (for you) and `report.md` (for
 humans), next to the config. Read the **json** — it has a stable schema.
+What it prints to you is the overview `echolot report` prints — the window,
+every warning that the numbers are not about the scenario, a line per
+detector — not `report.md`, which is a terminal's; `echolot report -d <id>`
+is one detector's rows. `--full` prints the whole report and is never the
+way in.
 
 No config? That is `next: setup`. No idea what is in the trace?
 `echolot probe <trace> --process '<package>*'`.
@@ -175,7 +180,8 @@ echolot compare --hunt 3             # its first report against its last
 echolot compare old.json new.json    # or name them
 ```
 
-One table sorted by how far each row moved, plus `comparison.json` beside the
+One table sorted by how far each row moved — the main thread's moves that
+hold first, the moves that do not hold last — plus `comparison.json` beside the
 report. Three things decide how to read it:
 
 - **`change`** — `appeared`, `grew`, `shrank`, `vanished`, `steady`. An

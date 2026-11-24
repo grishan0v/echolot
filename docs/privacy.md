@@ -48,7 +48,7 @@ In the project:
   layer, a block between `<!-- echolot -->` markers in `AGENTS.md`,
   `GEMINI.md` or `.github/copilot-instructions.md`,
   `.cursor/rules/echolot.mdc`, and in Codex `.codex/rules/echolot.rules`,
-  which lets `echolot` out of the sandbox;
+  which lets `echolot`, `./gradlew` and `adb` out of the sandbox;
 - while an investigation needs them, temporary trace markers in the sources
   that `instrumentation.allowed` permits. `echolot mark --remove` takes them
   out.
@@ -61,7 +61,11 @@ Outside the project:
 - `~/.cache/echolot/` (or `$XDG_CACHE_HOME/echolot`), with
   `runner.compose_names` on: the tracing library;
 - `~/.cursor/plugins/local/echolot`, only when you run `echolot plugin
-  cursor`.
+  cursor`;
+- when **Dig deeper** starts Codex, Codex itself marks the project trusted in
+  your `~/.codex/config.toml` and keeps its record of the session under
+  `~/.codex/sessions/`, as it does for any session of yours; the screen
+  before the start says so.
 
 On the phone, `collect` records to one file,
 `/data/misc/perfetto-traces/echolot.pftrace`, and pulls it into the project;
@@ -97,8 +101,8 @@ from PyPI, Claude Code and Codex fetch the plugin from
 
 Nothing. There is no telemetry, no crash report and no update check.
 
-Two connections stay on the machine: perfetto starts trace_processor and
-talks to it over HTTP on localhost, and `adb` talks to its server on
+Two connections stay on the machine: echolot starts trace_processor and
+talks to it over HTTP on 127.0.0.1, and `adb` talks to its server on
 localhost:5037, which reaches the phone over USB or your local network.
 
 `echolot ui` is a third, while it runs: a server on 127.0.0.1 that shows the
@@ -112,8 +116,8 @@ The agent you run reads echolot's output, and sends what it reads to its
 model as part of the session. That traffic is the agent's, under its
 provider's terms. The same holds when `echolot ui` starts it for you
 ([Dig deeper from the page](ui.md#dig-deeper-from-the-page)): it is your own
-Claude Code, under your own account, and echolot hands it the request and
-nothing else.
+Claude Code or Codex, under your own account, and echolot hands it the request
+and nothing else.
 
 ## Questions
 

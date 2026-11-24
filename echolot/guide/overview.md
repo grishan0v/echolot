@@ -63,7 +63,9 @@ and inside an open investigation (`--hunt <n>` for `collect` and `analyze`)
 its scenario without the flag.
 
 `analyze` writes `.echolot/out/report.json` for you and `report.md` for humans,
-in `.echolot/out/<scenario>/` for each of several scenarios.
+in `.echolot/out/<scenario>/` for each of several scenarios. To you it prints
+the overview `echolot report` prints; `report.md` goes to a terminal only, or
+anywhere with `--full`.
 **Read the json** — it has a stable schema — through `echolot report`: what
 fired, `--detector <id> --top 5` for one detector's rows with the evidence
 kept short, `--window`, `--markers`, `--json` for any of them. Cutting the

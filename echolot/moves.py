@@ -6,7 +6,9 @@ shrank, appeared and vanished, with a Holds column. A person who pressed
 the same two reports give the same words every time.
 
   - a verdict by the scenario's window: better, worse, or no clear change, in
-    a sentence with the two times and how many launches a side;
+    a sentence with the two times and how many launches a side. A window
+    that runs to the end of the recording is as long as the recording, and
+    is judged by the share of frames the app made late (`FRAMES_FLOOR`);
   - notes under it, when they apply: whether the time limit is met
     (`scenario.budget_ms`), that the repeats are too few to say which single
     changes hold, and that the two sides were not recorded alike. The last
@@ -35,7 +37,9 @@ merge five rows under one section: the largest row grows while the check as a
 whole shrinks, and judged by its largest row the fix reads as a regression.
 The sum is of a typical launch: each row's median over every launch of that
 side, a launch without the row counted as nothing, so a row seen in one
-launch of three adds nothing.
+launch of three adds nothing. A check with rows on the main thread and on
+others is judged by the main thread's alone when those moved and the sum did
+not move their way (`_threads`).
 
 When a move is called, and what that rule was measured on, is by `SHARE`,
 `LAUNCH_SHARE` and `LEAST_RUNS` below.
@@ -101,6 +105,20 @@ NOT_COMPARED = "not_compared"
 SHARE = 0.20
 LAUNCH_SHARE = 0.05
 LEAST_RUNS = 3
+
+# A window that runs to the end of the recording is as long as the recording,
+# and a scripted scroll or drag is recorded for a fixed time: five pairs of
+# sets of one drag, a build that recomposed a list on every move of a panel
+# against the build before it and the fix after it, all read "No clear
+# change. The run took 14.9 s before and 14.9 s after", the window 8.6 ms
+# apart at most (#586). What moved was the share of frames the app itself
+# made late, 3% of them in the good build, 21% in the bad one and 10% after
+# the fix. So such a window is judged by that share, run by run, with the
+# window's own rule: a fifth of the larger share, and the better side's
+# typical run under the worse side's best one. And by at least one frame in
+# a hundred, so that 0.4% against 0.6% of the frames, a fifth apart and three
+# frames in seven hundred, is not news.
+FRAMES_FLOOR = 0.01
 
 # `compare`'s warnings that say the two sides were recorded or read under
 # different conditions, each as a person would say it. A time can move for
@@ -170,11 +188,11 @@ def _launches(row: dict[str, Any], runs: int) -> list[float]:
     return found + [0.0] * (n - k)
 
 
-def _size(det: dict[str, Any], runs: int) -> tuple[float, float, float]:
+def _size(rows: list[dict[str, Any]], runs: int) -> tuple[float, float, float]:
     """A check's findings added up, for a typical launch, and the least and
     the most any one launch can have had."""
     size = low = high = 0.0
-    for row in det.get("rows") or []:
+    for row in rows:
         values = _launches(row, runs)
         size += median(values)
         low += min(values)
@@ -199,8 +217,36 @@ def _side(det: dict[str, Any] | None, runs: int) -> dict[str, Any]:
                            "reason": words.get("reason") or (det.get("reason") if partly else None),
                            "blind": det.get("attention") == plain.NOT_CHECKED or partly}
     if rows:
-        out["ms"], out["low_ms"], out["high_ms"] = _size(det, runs)
+        out["ms"], out["low_ms"], out["high_ms"] = _size(rows, runs)
     return out
+
+
+def _part(rows: list[dict[str, Any]], runs: int) -> dict[str, Any]:
+    """Some of a check's rows on one side, added up as `_side` adds up all of them."""
+    if not rows:
+        return {"ms": None}
+    ms, low, high = _size(rows, runs)
+    return {"ms": ms, "low_ms": low, "high_ms": high}
+
+
+def _threads(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
+             ctx: "_Ctx") -> dict[str, dict[str, dict[str, Any]]] | None:
+    """A check's rows of the main thread and of the other threads, added up
+    apart on each side; None unless it has rows of both.
+
+    `monitor_contention` adds up every thread's waits. A 300 ms wait of the
+    main thread on a monitor came with 4.3 s less waiting among the coroutine
+    workers, and the check's sum read as better: the cause went under the
+    knock-on it had on a pool (#595).
+    """
+    def split(det: dict[str, Any] | None, main: bool) -> list[dict[str, Any]]:
+        return [r for r in (det or {}).get("rows") or []
+                if plain._on_main(did, r, ctx.whose) == main]
+    parts = {"main": (split(db, True), split(da, True)), "rest": (split(db, False), split(da, False))}
+    if not any(parts["main"]) or not any(parts["rest"]):
+        return None
+    return {name: {"before": _part(b, ctx.nb), "after": _part(a, ctx.na)}
+            for name, (b, a) in parts.items()}
 
 
 def _texts(det: dict[str, Any] | None) -> tuple[str, str, str]:
@@ -217,6 +263,8 @@ class _Ctx:
     def __init__(self, before: dict[str, Any], after: dict[str, Any]):
         ctx = plain._Ctx(after if (after.get("window") or {}).get("duration_ms") else before)
         self.noun, self.plural = ctx.noun, ctx.plural
+        # Whose thread a row is of, as the plain reading of a report tells it.
+        self.whose = ctx
         self.nb, self.na = _runs(before), _runs(after)
         wb, wa = before.get("window") or {}, after.get("window") or {}
         self.window_ms = max(_number(wb.get("duration_ms")) or 0.0,
@@ -257,9 +305,123 @@ def _window_side(report: dict[str, Any]) -> dict[str, Any]:
             "runs": _runs(report)}
 
 
+def _open(window: dict[str, Any]) -> bool:
+    """Does the window run to the end of the recording, by what its report
+    says: no end anchor, or one that missed, and no launch to close it? A
+    window whose report names no anchors at all is not taken for one."""
+    if not window or plain._closed(window):
+        return False
+    return "end_anchor" in window or plain._missed(window)
+
+
+def _late_side(report: dict[str, Any]) -> dict[str, Any] | None:
+    """The frames the app made late on one side, each run's share of its own
+    frames. None without a frame timeline, or in a report written before
+    they were counted."""
+    frames = (report.get("window") or {}).get("frames") or {}
+    count, late = _number(frames.get("count")), _number(frames.get("late"))
+    if not count or late is None:
+        return None
+    shares = [n / of for n, of in zip(frames.get("late_values") or [], frames.get("values") or [], strict=False)
+              if _number(n) is not None and _number(of)] or [late / count]
+    return {"late": late, "count": count, "share": round(median(shares), 4),
+            "low": round(min(shares), 4), "high": round(max(shares), 4), "runs": len(shares)}
+
+
+def _no_frames(before: dict[str, Any], after: dict[str, Any]) -> str:
+    """Why a window that runs to the end of the recording cannot be judged by
+    its late frames either."""
+    def has(report: dict[str, Any], key: str) -> bool:
+        return key in ((report.get("window") or {}).get("frames") or {})
+    timeline = [side for side, rep in (("before", before), ("after", after))
+                if "frames" in (rep.get("window") or {}) and not has(rep, "count")]
+    if timeline:
+        where = "either side" if len(timeline) == 2 else f"the {timeline[0]} side"
+        return f"There is no frame timeline on {where}, so no late frames to judge it by: read the checks below."
+    return ("The frames the app made late, which judge such a window, are counted only in reports written by "
+            "a newer echolot: analyse the recordings again.")
+
+
+def _share_of(share: float) -> str:
+    """`21%`, `3.2%`, or `none` of the frames."""
+    pct = share * 100
+    if pct == 0:
+        return "none"
+    return f"{pct:.0f}%" if pct >= 10 else f"{pct:.1f}%".replace(".0%", "%")
+
+
+def _whole(n: float) -> str:
+    return f"{n:.0f}" if n == int(n) else f"{n:.1f}"
+
+
+def _by_frames(b: dict[str, Any], a: dict[str, Any], ctx: _Ctx) -> tuple[str, str]:
+    """Whether the share of late frames moved, by the window's rule (see
+    `FRAMES_FLOOR`), and the sentence of why not when it did not."""
+    if min(b["runs"], a["runs"]) < LEAST_RUNS:
+        nb, na = b["runs"], a["runs"]
+        if max(nb, na) == 1:
+            return NO_CHANGE, f"One {ctx.noun} a side cannot tell a change from a hiccup: it takes {LEAST_RUNS} a side."
+        return NO_CHANGE, (f"{ctx.counted(nb)[0].upper() + ctx.counted(nb)[1:]} before and {na} after are too few "
+                           f"to tell a change from a hiccup: it takes {LEAST_RUNS} a side.")
+    lower, higher = (a, b) if a["share"] < b["share"] else (b, a)
+    gap = higher["share"] - lower["share"]
+    if gap < max(FRAMES_FLOOR, SHARE * higher["share"]):
+        alike = _share_of(b["share"]) == _share_of(a["share"])
+        return NO_CHANGE, "" if alike else (f"A change under {SHARE:.0%}, or under one frame in a hundred, "
+                                            "is not counted.")
+    if not lower["share"] < higher["low"]:
+        return NO_CHANGE, (f"That is more than {SHARE:.0%}, but single {ctx.plural} of the two sides overlap, "
+                           "so it is not counted as a change.")
+    return (BETTER if a["share"] < b["share"] else WORSE), ""
+
+
+def _by_window(b: dict[str, Any], a: dict[str, Any], ctx: _Ctx) -> dict[str, Any]:
+    """Better, worse or no clear change, by the window's length: the
+    movement, the headline, what the window did (`took`) and why that is not
+    a change (`why`). `few` when the launches are too few for any."""
+    was, now = plain.hum(b["ms"]), plain.hum(a["ms"])
+    pct = _percent(b["ms"], a["ms"])
+    fast, slow = (a, b) if a["ms"] < b["ms"] else (b, a)
+    far = abs(a["ms"] - b["ms"]) >= SHARE * slow["ms"]
+    # More than half of the faster side's launches beat the fastest of the slower.
+    agree = fast["ms"] < slow["low_ms"]
+    if ctx.enough and far and agree:
+        faster = a["ms"] < b["ms"]
+        gap = plain.hum(abs(a["ms"] - b["ms"]))
+        return {"movement": BETTER if faster else WORSE,
+                "headline": f"{'Faster' if faster else 'Slower'} by {gap}",
+                "took": f"The {ctx.noun} went from {was} to {now}, {pct}.", "why": "", "few": False}
+    # Two times that read alike are said without the few percent between them:
+    # "1.1 s before and 1.1 s after, 4% more" asks a reader which of the two to believe.
+    alike = was == now
+    took = f"The {ctx.noun} took {was} before and {now} after" + (f", {pct}" if pct and not alike else "") + "."
+    if not ctx.enough:
+        few = (f"One {ctx.noun} a side cannot tell a change from a hiccup"
+               if max(ctx.nb, ctx.na) == 1 else
+               f"{ctx.a_side[0].upper() + ctx.a_side[1:]} are too few to tell a change from a hiccup")
+        # The reason has the launches a side in it: they are not said twice.
+        return {"movement": NO_CHANGE, "headline": "No clear change", "took": took,
+                "why": f"{few}: it takes {LEAST_RUNS} a side.", "few": True}
+    if alike:
+        why = ""
+    elif not far:
+        why = (f"The same app differs by that much between two rounds of recordings, so a change under "
+               f"{SHARE:.0%} is not counted.")
+    else:
+        why = (f"That is more than {SHARE:.0%}, but single {ctx.plural} of the two sides overlap, so it is "
+               "not counted as a change.")
+    return {"movement": NO_CHANGE, "headline": "No clear change", "took": took, "why": why, "few": False}
+
+
+def _said(*parts: str) -> str:
+    return " ".join(part for part in parts if part)
+
+
 def _verdict(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
              ctx: _Ctx) -> dict[str, Any]:
-    """Better, worse or no clear change, by the scenario's window."""
+    """Better, worse or no clear change, by the scenario's window; by the
+    frames the app made late when the window runs to the end of the
+    recording and so cannot move (`FRAMES_FLOOR`)."""
     b, a = _window_side(before), _window_side(after)
     out: dict[str, Any] = {"movement": NOT_COMPARED, "before_ms": b["ms"], "after_ms": a["ms"]}
     if not cmp.get("comparable", True):
@@ -276,40 +438,42 @@ def _verdict(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
         return {**out, "headline": "No time to compare",
                 "text": f"One of the two reports has no measured {ctx.noun}, so there are no two times to "
                         "hold against each other."}
-    was, now = plain.hum(b["ms"]), plain.hum(a["ms"])
     measured = f"Measured on {ctx.a_side}."
-    pct = _percent(b["ms"], a["ms"])
-    fast, slow = (a, b) if a["ms"] < b["ms"] else (b, a)
-    far = abs(a["ms"] - b["ms"]) >= SHARE * slow["ms"]
-    # More than half of the faster side's launches beat the fastest of the slower.
-    agree = fast["ms"] < slow["low_ms"]
-    if ctx.enough and far and agree:
-        faster = a["ms"] < b["ms"]
-        gap = plain.hum(abs(a["ms"] - b["ms"]))
-        return {**out, "movement": BETTER if faster else WORSE,
-                "headline": f"{'Faster' if faster else 'Slower'} by {gap}",
-                "text": f"The {ctx.noun} went from {was} to {now}, {pct}. {measured}"}
-    # Two times that read alike are said without the few percent between them:
-    # "1.1 s before and 1.1 s after, 4% more" asks a reader which of the two to believe.
-    alike = was == now
-    took = f"The {ctx.noun} took {was} before and {now} after" + (f", {pct}" if pct and not alike else "") + "."
-    if not ctx.enough:
-        few = (f"One {ctx.noun} a side cannot tell a change from a hiccup"
-               if max(ctx.nb, ctx.na) == 1 else
-               f"{ctx.a_side[0].upper() + ctx.a_side[1:]} are too few to tell a change from a hiccup")
-        # The reason has the launches a side in it: they are not said twice.
-        return {**out, "movement": NO_CHANGE, "headline": "No clear change",
-                "text": f"{took} {few}: it takes {LEAST_RUNS} a side."}
-    if alike:
-        why = ""
-    elif not far:
-        why = (f"The same app differs by that much between two rounds of recordings, so a change under "
-               f"{SHARE:.0%} is not counted.")
-    else:
-        why = (f"That is more than {SHARE:.0%}, but single {ctx.plural} of the two sides overlap, so it is "
-               "not counted as a change.")
-    return {**out, "movement": NO_CHANGE, "headline": "No clear change",
-            "text": " ".join(part for part in (took, why, measured) if part)}
+    w = _by_window(b, a, ctx)
+    out["by"] = "window"
+    by_window = {**out, "movement": w["movement"], "headline": w["headline"],
+                 "text": _said(w["took"], w["why"], "" if w["few"] else measured)}
+    if not (_open(before.get("window") or {}) or _open(after.get("window") or {})):
+        return by_window
+    # The window runs to the end of the recording: its length is the
+    # recording's, which a script may fix whatever the app does.
+    fb, fa = _late_side(before), _late_side(after)
+    moved = w["movement"] != NO_CHANGE
+    if fb is None or fa is None:
+        if moved or w["few"]:
+            return by_window
+        return {**by_window, "text": _said(
+            w["took"][:-1] + ", but the window runs to the end of the recording, so its length may be the "
+            "recording's and not the app's.", _no_frames(before, after), measured)}
+    out["frames"] = {"before": fb, "after": fa}
+    f, why = _by_frames(fb, fa, ctx)
+    late = (f"The app made {_share_of(fb['share'])} of its frames late before and {_share_of(fa['share'])} "
+            f"after: {_whole(fb['late'])} of {_whole(fb['count'])} frames a {ctx.noun}, then "
+            f"{_whole(fa['late'])} of {_whole(fa['count'])}.")
+    if moved:
+        if f in (NO_CHANGE, w["movement"]):
+            return {**by_window, "frames": out["frames"], "text": _said(w["took"], late, measured)}
+        return {**by_window, "frames": out["frames"], "movement": NO_CHANGE,
+                "headline": f"{'Faster' if w['movement'] == BETTER else 'Slower'}, but "
+                            f"{'more' if f == WORSE else 'fewer'} frames came late",
+                "text": _said(w["took"], late, "One reads as better and the other as worse, so neither is "
+                                                "called a change.", measured)}
+    length = (w["took"][:-1] + ": the window runs to the end of the recording, so its length is the "
+              "recording's and not the app's.")
+    headline = {BETTER: "Fewer frames came late", WORSE: "More frames came late"}.get(f, "No clear change")
+    few = min(fb["runs"], fa["runs"]) < LEAST_RUNS
+    return {**out, "by": "frames", "movement": f, "headline": headline,
+            "text": _said(late, why, length, "" if few else measured)}
 
 
 # ---------------------------------------------------------------------------
@@ -492,11 +656,27 @@ def _check(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
         else:
             movement = NEW if b["ms"] is None else WORSE
     text = _sentence(movement, why, b, a, found, clean, ctx)
+    main = None
+    parts = _threads(did, db, da, ctx) if movement not in (NOT_CHECKED, FINE_BOTH) else None
+    if parts:
+        mb, ma = parts["main"]["before"], parts["main"]["after"]
+        if _moved(mb, ma, ctx)[0]:
+            way = BETTER if (ma["ms"] or 0.0) < (mb["ms"] or 0.0) else WORSE
+            # The whole check's way, gone a kind of better and new of worse.
+            if {BETTER: BETTER, GONE: BETTER, WORSE: WORSE, NEW: WORSE}.get(movement) != way:
+                rb, ra = parts["rest"]["before"], parts["rest"]["after"]
+                movement, main = way, {"before": mb["ms"], "after": ma["ms"]}
+                text = (f"On the main thread, what this check found went from {_amount(mb)} to "
+                        f"{_amount(ma)}. On the other threads, added up, it went from {_amount(rb)} to "
+                        f"{_amount(ra)}.")
     for side in (b, a):
         for key in ("low_ms", "high_ms", "blind"):
             side.pop(key, None)
-    return {"id": did, "title": title, "why": why_it_matters, "movement": movement, "text": text,
-            "before": b, "after": a, "findings": found}
+    out = {"id": did, "title": title, "why": why_it_matters, "movement": movement, "text": text,
+           "before": b, "after": a, "findings": found}
+    if main:
+        out["main"] = main
+    return out
 
 
 # The order of a list: what got worse, what got better, what did not move,
@@ -505,8 +685,10 @@ _RANK = {WORSE: 0, NEW: 0, BETTER: 1, GONE: 1, NO_CHANGE: 2, FINE_BOTH: 3, NOT_C
 
 
 def _order(check: dict[str, Any], place: int) -> tuple:
-    """Within a kind, the largest move first; then as the reports list them."""
-    b, a = check["before"]["ms"] or 0.0, check["after"]["ms"] or 0.0
+    """Within a kind, the largest move first; then as the reports list them.
+    A check judged by its main thread's rows moved by as much as they did."""
+    sides = check.get("main") or {k: check[k]["ms"] for k in ("before", "after")}
+    b, a = sides["before"] or 0.0, sides["after"] or 0.0
     return _RANK[check["movement"]], -abs(a - b), -max(a, b), place
 
 
