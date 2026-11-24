@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.support import check  # noqa: E402
 
 from echolot import compare as compare_mod  # noqa: E402
+from echolot import moves  # noqa: E402
 from echolot import stats  # noqa: E402
 
 
@@ -742,13 +743,35 @@ def test_anchor_never_matched() -> None:
 
 
 def test_config_and_defaults() -> None:
-    before = report([det("d", [row("A", 100.0)])],
+    before = report([det("d", [row("A", 100.0)], params={"min_slice_ms": 8})],
                     config={"sha": "aaaa", "defaults": False})
-    after = report([det("d", [row("A", 100.0)])],
+    after = report([det("d", [row("A", 100.0)], params={"min_slice_ms": 16})],
                    config={"sha": "bbbb", "defaults": True})
     w = warned(compare(before, after))
     check("an edited config is a warning", "config" in w, str(w))
     check("--defaults on one side only is a warning", "defaults" in w, str(w))
+
+
+def test_defaults_that_ran_the_same_thresholds_are_quiet() -> None:
+    """#820: a config with no `detectors:` section has the built-in
+    thresholds, so `--defaults` on one side changed nothing either measured."""
+    same = {"min_slice_ms": 16}
+    before = report([det("d", [row("A", 100.0)], params=same)],
+                    config={"sha": "aaaa", "defaults": True})
+    after = report([det("d", [row("A", 100.0)], params=same)],
+                   config={"sha": "aaaa", "defaults": False})
+    cmp = compare(before, after)
+    check("no defaults warning", "defaults" not in warned(cmp), str(warned(cmp)))
+    reading = moves.read(before, after, cmp)
+    check("and no 'Not recorded alike' for it", not any(
+        "defaults" in n.get("warnings", []) for n in reading["notes"]), reading["notes"])
+    turned_off = report([], config={"sha": "aaaa", "defaults": False})
+    check("a detector the config turned off is a difference",
+          "defaults" in warned(compare(before, turned_off)), str(warned(compare(before, turned_off))))
+    old = {"id": "d", "title": "d", "why": "", "rows": [], "error": None}
+    check("a report that keeps no thresholds leaves the flag to go by",
+          "defaults" in warned(compare(report([old], config={"sha": "aaaa", "defaults": True}),
+                                       report([old], config={"sha": "aaaa", "defaults": False}))))
 
 
 def test_unequal_repeats() -> None:

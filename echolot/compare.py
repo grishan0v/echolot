@@ -703,7 +703,7 @@ def _check(before: dict, after: dict,
                        f"sha `{cb['sha']}` → `{ca['sha']}`. Anchors, the "
                        f"process mask and thresholds all live there."),
         })
-    if bool(cb.get("defaults")) != bool(ca.get("defaults")):
+    if _defaults_moved(before, after):
         out.append({
             "id": "defaults",
             "text": "One side ran with `--defaults` and the other did not, so "
@@ -1357,6 +1357,27 @@ def _params_moved(before: dict, after: dict) -> list[str]:
     return [f"`{det_id}.{key}` {was} → {now}"
             for det_id, moved in params_moved_by(before, after).items()
             for key, was, now in moved]
+
+
+def _defaults_moved(before: dict, after: dict) -> bool:
+    """Whether `--defaults` on one side only changed what the two measured.
+
+    The flag drops the config's thresholds and the detectors it turned off.
+    A config with no `detectors:` section has neither, so a side read with
+    `--defaults` ran the very thresholds the other did, and "read with
+    different thresholds" was false on every check the answer page made
+    after an agent's round (#820). What both reports ran is in them: each
+    detector's `params`, and which detectors ran. Only a report written
+    before `params` was kept leaves the flag as all there is to go by.
+    """
+    cb, ca = before.get("config") or {}, after.get("config") or {}
+    if bool(cb.get("defaults")) == bool(ca.get("defaults")):
+        return False
+    dets = [*(before.get("detectors") or []), *(after.get("detectors") or [])]
+    if not dets or any("params" not in d for d in dets):
+        return True
+    ran = [{d.get("id") for d in rep.get("detectors") or []} for rep in (before, after)]
+    return bool(params_moved_by(before, after)) or ran[0] != ran[1]
 
 
 def params_moved_by(before: dict, after: dict) -> dict[str, list[tuple[str, Any, Any]]]:
