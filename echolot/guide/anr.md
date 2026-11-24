@@ -67,6 +67,7 @@ when the console never got the mapping.
 | frames landing nowhere | check out the build the report names. Line numbers are the first thing to go stale |
 | "What N frames are: they read as R8 named them" under what it does not say | a minified build: run it again with that build's mapping |
 | frames R8 wrote "have no place in the mapping", or are named after another mapping | the mapping is another build's. Find the one that froze before reading the names |
+| "… had no place in it and keeps R8's method name", with no warning | a line the mapping has no range for, as the right one can leave in a synthetic class R8 merged. One such frame, or frames named after the mapping itself, are no sign of another build: read on |
 | "every frame belongs to the platform or a library", then "the frames nearest to the app" | the platform is a dead end, a library the app drives is not: `SystemJobScheduler.cancel` points at the app's WorkManager setup. Read that setup |
 | "every frame belongs to the platform or a library", then a platform frame such as `JobServiceEngine$JobHandler.ackStopMessage` with what it was doing | still a lead: the main thread was telling the system a JobScheduler job had stopped. Read the app's WorkManager or JobService setup |
 | "Who was holding what" under what it does not say | this file carries no lock notes; an empty chain list is the file's limit, not the freeze's. Get the device's own record |

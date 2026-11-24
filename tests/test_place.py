@@ -294,8 +294,11 @@ def test_a_minified_lock_is_placed_where_the_mapping_says(tmp_path):
               == "owner at Store.java:10 · blocked at Store.java:17", row["code"])
         check(f"{build}: the evidence stays as the runtime wrote it",
               row["detail"] == lockapp.SLICE[build], row["detail"])
+        # The build that names its files after its mapping says this is it.
+        mine = {"matched_map_id": lockapp.MAP_ID.removeprefix("r8-map-id-")} \
+            if build == "default" else {}
         check(f"{build}: the report counts them", rep["retrace"]
-              == {"frames": 2, "outside": 0}, rep.get("retrace"))
+              == {"frames": 2, "outside": 0, **mine}, rep.get("retrace"))
 
 
 def test_a_lock_slice_with_no_line_is_placed_at_the_methods_r8_kept(tmp_path):
@@ -333,23 +336,75 @@ def test_a_frame_of_the_platform_is_not_asked_of_the_mapping(tmp_path):
     check("nothing to count", "retrace" not in rep, rep)
 
 
+# Both classes under another build's numbering: the worker's `run` has no
+# line 6, the main thread's lambda no line 3.
+OTHER = ("com.example.locks.Holder -> a.a:\n"
+         "    1:2:void run():19:20 -> run\n"
+         "com.example.locks.MainActivity$$ExternalSyntheticLambda0 -> a.b:\n"
+         "    1:1:void com.example.locks.MainActivity.freeze():21:21 -> run\n")
+
+
 def test_another_builds_mapping_is_told_by_the_frames_it_has_no_place_for(tmp_path):
-    # The worker's class is there under another build's numbering: its `run`
-    # has no line 6. The main thread's class is not there at all.
-    other = ("com.example.locks.Holder -> a.a:\n"
-             "    1:2:void run():19:20 -> run\n")
     root = lockapp.checkout(tmp_path / "app")
     rep = lock_report(lockapp.SLICE["lines"])
-    place.annotate(rep, root, mapping_file(tmp_path, other))
+    place.annotate(rep, root, mapping_file(tmp_path, OTHER))
     row = rep["detectors"][0]["rows"][0]
     owner = row["places"][0]
     check("the class comes back, the method keeps R8's name, and no line",
           (owner["symbol"], owner["line"], owner.get("retraced"))
           == ("com.example.locks.Holder.run", None, True), owner)
-    check("counted", rep["retrace"] == {"frames": 1, "outside": 1}, rep.get("retrace"))
+    check("counted", rep["retrace"] == {"frames": 2, "outside": 2}, rep.get("retrace"))
     text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
     check("and the header says check the mapping", text.startswith("> ⚠️")
-          and "1 of the 1 frames" in text and "another build" in text, text)
+          and "2 of the 2 frames" in text and "another build" in text, text)
+
+
+# --- a line the build's own mapping has no range for (#913) -------------------
+
+# The main thread's frame in the synthetic lambda, at a line R8 wrote no
+# range for: its `run` has lines 1 to 6. The worker's frame is where it was.
+HOLE = {"lines": lockapp.SLICE["lines"].replace("a.b.run()(SourceFile:3)",
+                                                "a.b.run()(SourceFile:7)"),
+        "default": lockapp.SLICE["default"].replace(f"a.b.run()({lockapp.MAP_ID}:3)",
+                                                    f"a.b.run()({lockapp.MAP_ID}:7)")}
+
+
+def test_one_frame_the_right_mapping_has_no_place_for_is_not_a_warning(tmp_path):
+    root = lockapp.checkout(tmp_path / "app")
+    rep = lock_report(HOLE["lines"])
+    place.annotate(rep, root, mapping_file(tmp_path, lockapp.MAPPING))
+    row = rep["detectors"][0]["rows"][0]
+    roles = {p["role"]: p for p in row["places"]}
+    check("the worker named back by its line, the main thread by its class",
+          (roles["owner"]["symbol"], roles["owner"]["line"], roles["blocked"]["symbol"],
+           roles["blocked"]["line"])
+          == ("com.example.locks.Store.hold", 10,
+              "com.example.locks.MainActivity$$ExternalSyntheticLambda0.run", None), roles)
+    check("counted, half of the frames", rep["retrace"] == {"frames": 2, "outside": 1},
+          rep.get("retrace"))
+    text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
+    check("said, not warned about: one frame says nothing about the build",
+          not text.startswith(">") and "1 had no place in it and keeps" in text
+          and "says nothing about the build" in text and "another build's" not in text, text)
+
+
+def test_frames_named_after_the_mapping_are_its_builds_whatever_it_misses(tmp_path):
+    root = lockapp.checkout(tmp_path / "app")
+    rep = lock_report(HOLE["default"])
+    place.annotate(rep, root, mapping_file(tmp_path, lockapp.DEFAULT))
+    mine = lockapp.MAP_ID.removeprefix("r8-map-id-")
+    check("counted, with the id the frames and the mapping share",
+          rep["retrace"] == {"frames": 2, "outside": 1, "matched_map_id": mine},
+          rep.get("retrace"))
+    text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
+    check("the header says it is this build's, by its id",
+          not text.startswith(">") and "1 had no place in it" in text
+          and "`4393c57b0c71…`, so it is this build's" in text, text)
+    # Both frames in a hole would be a warning from a mapping with no id.
+    both = {"frames": 2, "outside": 2}
+    check("the id settles it however many it misses",
+          not report_mod._retrace_lines({**both, "matched_map_id": mine})[0].startswith(">")
+          and report_mod._retrace_lines(both)[0].startswith("> ⚠️"))
 
 
 def test_the_header_says_what_the_mapping_made_of_the_lock_frames():
@@ -360,12 +415,16 @@ def test_the_header_says_what_the_mapping_made_of_the_lock_frames():
     check("one plain line: why `code` and the evidence name it differently",
           len(lines) == 1 and not lines[0].startswith(">")
           and "named back the 4 frames" in lines[0] and "as recorded" in lines[0], lines)
-    lines = report_mod._retrace_lines({"frames": 40, "outside": 1})
+    lines = report_mod._retrace_lines({"frames": 40, "outside": 2})
     check("a frame or two out of many is said, not warned about",
-          len(lines) == 1 and not lines[0].startswith(">") and "1 had no place" in lines[0],
+          len(lines) == 1 and not lines[0].startswith(">") and "2 had no place" in lines[0],
           lines)
-    check("a tenth is a warning",
-          report_mod._retrace_lines({"frames": 10, "outside": 1})[0].startswith("> ⚠️"))
+    for frames in (1, 2, 10):
+        check(f"one frame of {frames} is never a warning",
+              not report_mod._retrace_lines({"frames": frames, "outside": 1})[0].startswith(">"))
+    check("two, and a tenth, are",
+          report_mod._retrace_lines({"frames": 20, "outside": 2})[0].startswith("> ⚠️")
+          and report_mod._retrace_lines({"frames": 2, "outside": 2})[0].startswith("> ⚠️"))
 
 
 # --- a mapping and a build that is not its own (#342) --------------------------

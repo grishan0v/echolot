@@ -1102,6 +1102,7 @@ mapping made of the lock slices:
 | … still read as minified after `project.mapping` renamed … | a mapping from another build: it renames the frames it happens to match, wrongly, and misses the rest |
 | `project.mapping` named back the … frames R8 wrote into the lock slices | `code` names the real methods, and the evidence keeps the frames as recorded |
 | … of the … frames R8 wrote into the lock slices have no place in `project.mapping` | a mapping from another build: no range of their method holds their line |
+| … had no place in it and keeps R8's method name | a line the mapping has no range for, which the right one can leave in a synthetic class R8 merged: one frame, or frames named after this very mapping, say nothing against it |
 | `project.mapping` named back … of the app's … sampled methods, and they did not read as minified | the build recorded keeps its names, or the mapping is another build's |
 | the lock slices name their files after mapping …, and `project.mapping` is … | another build's mapping, told by its id: the frames stay as recorded |
 | `project.mapping` names …, and no file was there | the variant has not been built since the config named it: build it and analyze again |
@@ -1117,12 +1118,18 @@ gives it away. A build that kept its names leaves nothing minified, and the
 sign is the other way round: the mapping names back none of its methods.
 
 The lock slices' frames carry a line, and another build's mapping is told by
-lines no range of the method holds, which the right mapping never leaves; from
-a tenth of those frames up, the header warns. Such a frame gets its class
-back and keeps R8's method name, with no line. A build that names its files
-after its mapping, `r8-map-id-<id>` when it kept no source file names, says
-outright which mapping it has: when no frame carries the mapping's own
-`pg_map_id`, nothing is named back. And a class R8 kept is in the mapping
+lines no range of the method holds. The right mapping leaves such a line too,
+now and then: R8 merges lambdas of several classes into one synthetic class
+and writes no range for a line the runtime prints there. On the Wikipedia
+app that was one of a lock's two frames, while the other frame, in a class of
+the same kind, came back right. So one such frame is counted and not warned
+about, and from two of them and a tenth of the frames up, the header warns.
+Such a frame gets its class back and keeps R8's method name, with no line. A
+build that names its files after its mapping, `r8-map-id-<id>` when it kept
+no source file names, says outright which mapping it has: when no frame
+carries the mapping's own `pg_map_id`, nothing is named back, and when they
+carry it, the mapping is this build's whatever lines it misses, and the
+header says so. And a class R8 kept is in the mapping
 under its own name, so its frame is named back on the strength of a line in
 one of R8's ranges only when something else shows the build is minified: a
 frame of a class or a method R8 renamed, a file R8 named, or a sampled method

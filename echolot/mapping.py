@@ -245,8 +245,9 @@ class Retraced:
 
     `outside` is a frame the mapping has no place for: its line in no range
     of its method, or its method not in its class at all. The mapping of the
-    build that wrote the frame never leaves one, and another build's leaves
-    many. Such a frame gets its class back and keeps R8's method name, as
+    build that wrote the frame leaves one now and then, in a synthetic class
+    R8 merged, and another build's leaves many (see `another_build`). Such a
+    frame gets its class back and keeps R8's method name, as
     R8's `retrace` writes it, and no line: R8's line of a method nobody can
     name points nowhere.
     """
@@ -430,6 +431,44 @@ def map_id(file: str | None) -> str | None:
     return file[len(_MAP_ID):] or None if file and file.startswith(_MAP_ID) else None
 
 
+# A mapping from another build is told by the frames it has no place for:
+# a line no range of the method holds, or a method the class lacks. The
+# right one leaves few of them, but not none. In a field test it left one of
+# the two frames of a lock: R8 merged lambdas of several classes into one
+# synthetic class and wrote no range for the line the runtime printed, while
+# the other frame, in a class of the same kind, came back right (#913). Over
+# two frames that one was half of them. So one frame without a place is no
+# sign of anything, and from two a tenth of the frames is a warning, as it is
+# for the sampled methods (`report.MINIFIED_SHARE`). A frame named after the
+# mapping it is read with, `r8-map-id-<id>` and its `pg_map_id`, settles it
+# the other way: the mapping is that build's, whatever its ranges miss.
+OUTSIDE_SHARE = 0.10
+
+
+def another_build(frames: int, outside: int, matched: str | None = None) -> bool:
+    """Whether the frames a mapping had no place for say it is another build's.
+
+    `frames` were retraced and `outside` of them had no place; `matched` is
+    the mapping's id when the frames carry it (see `Batch.matched`).
+    """
+    return not matched and outside >= 2 and outside >= OUTSIDE_SHARE * frames
+
+
+def no_place(outside: int, matched: str | None = None) -> str:
+    """The sentence for the frames a mapping had no place for, when that is
+    not a warning (see `another_build`)."""
+    line = (f"{outside} had no place in it and keep{'s' if outside == 1 else ''} "
+            f"R8's method name.")
+    if matched:
+        line += (f" The frames name their files after this mapping, "
+                 f"`{short_id(matched)}`, so it is this build's: R8 left "
+                 f"{'that line' if outside == 1 else 'those lines'} out of its ranges.")
+    elif outside == 1:
+        line += (" One such frame says nothing about the build: the right "
+                 "mapping can leave one too, in a synthetic class R8 merged.")
+    return line
+
+
 @dataclass
 class Batch:
     """The frames of one report, retraced together (see `retrace_frames`)."""
@@ -438,6 +477,10 @@ class Batch:
     # The map id the frames carry and the mapping's own, when no frame
     # carries the mapping's: another build's mapping, and nothing retraced.
     foreign: tuple[str, str] | None = None
+    # The mapping's own id, when the frames name their files after it: the
+    # mapping is the build's, and a frame it has no place for says nothing
+    # against it (see `another_build`).
+    matched: str | None = None
 
     @property
     def outside(self) -> int:
@@ -457,13 +500,16 @@ def retrace_frames(path: Path, frames: dict[str, tuple[str, str, str | None, int
     elsewhere — the sampled methods the mapping named back. And a build that
     names its files after the mapping, `r8-map-id-<id>`, says which mapping
     it has: when no frame carries this mapping's `pg_map_id`, the mapping is
-    another build's, and every frame stays as it was written. `also` are
-    classes to read for other reasons, a monitor's.
+    another build's, and every frame stays as it was written; when one does,
+    the mapping is the build's (`Batch.matched`). `also` are classes to read
+    for other reasons, a monitor's.
     """
     reader = retracer(path, {cls for cls, *_ in frames.values()} | set(also))
     ids = {i for i in (map_id(file) for _, _, file, _ in frames.values()) if i}
     mine = reader.map_id
-    if ids and mine and not any(i.startswith(mine) or mine.startswith(i) for i in ids):
+    matched = mine if ids and mine and any(i.startswith(mine) or mine.startswith(i)
+                                           for i in ids) else None
+    if ids and mine and not matched:
         return Batch(reader, {}, (sorted(ids)[0], mine))
     by_line = minified or any(reader.written(cls, method, file)
                               for cls, method, file, _ in frames.values())
@@ -472,7 +518,7 @@ def retrace_frames(path: Path, frames: dict[str, tuple[str, str, str | None, int
         got = reader.retrace(cls, method, file, line, by_line)
         if got is not None:
             traced[text] = got
-    return Batch(reader, traced)
+    return Batch(reader, traced, matched=matched)
 
 
 def retracer(path: Path, classes: Iterable[str]) -> Retracer:

@@ -1925,12 +1925,13 @@ def _retrace_lines(retrace: dict[str, Any] | None) -> list[str]:
     The rows' `code` names the real methods, and their evidence still says
     `a.a.run()(SourceFile:6)`; one line says why the two differ. A frame
     the mapping has no place for — its line in no range of its method, or a
-    method its class lacks — is what a mapping from another build leaves,
-    and the right one leaves none. From a tenth of the frames up, the line is
-    a warning, as it is for the sampled methods (`MINIFIED_SHARE`).
+    method its class lacks — is what a mapping from another build leaves
+    many of, and the right one a few. From two such frames and a tenth of
+    them up, the line is a warning, unless the frames carry the mapping's own
+    id (`mapping.another_build`).
     """
+    from .mapping import another_build, no_place, short_id
     if retrace and retrace.get("map_id"):
-        from .mapping import short_id
         ids = retrace["map_id"]
         return [
             f"> ⚠️ The lock slices name their files after mapping "
@@ -1942,7 +1943,8 @@ def _retrace_lines(retrace: dict[str, Any] | None) -> list[str]:
     if not retrace or not retrace.get("frames"):
         return []
     total, outside = retrace["frames"], retrace.get("outside") or 0
-    if outside / total >= MINIFIED_SHARE:
+    matched = retrace.get("matched_map_id")
+    if another_build(total, outside, matched):
         return [
             f"> ⚠️ {outside} of the {total} frames R8 wrote into the lock slices "
             f"have no place in `project.mapping`: no range of their method holds "
@@ -1953,7 +1955,7 @@ def _retrace_lines(retrace: dict[str, Any] | None) -> list[str]:
     line = (f"`project.mapping` named back the {total} frames R8 wrote into the "
             f"lock slices; the evidence keeps them as recorded.")
     if outside:
-        line += f" {outside} had no place in it and keep R8's method name."
+        line += " " + no_place(outside, matched)
     return [line]
 
 

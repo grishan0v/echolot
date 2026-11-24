@@ -63,8 +63,10 @@ def test_every_way_a_minified_build_writes_a_frame_comes_back_by_name(build, tmp
     chain = anr.chains(report)[0]
     check("the lock's holder stands where it spun",
           chain.root is not None and chain.root.frames[:2] == HOLDER, chain)
+    mine = {"matched_map_id": lockapp.MAP_ID.removeprefix("r8-map-id-")} \
+        if build == "default" else {}
     check("two frames named back, none left without a place",
-          report.retraced == {"frames": 2, "outside": 0}, report.retraced)
+          report.retraced == {"frames": 2, "outside": 0, **mine}, report.retraced)
 
 
 def test_named_back_they_are_the_projects_and_are_placed(tmp_path):
@@ -132,6 +134,28 @@ def test_another_builds_mapping_is_called_out(tmp_path):
     text = anr.render(report)
     check("and the report warns", "> ⚠️ 2 of the 2 frames R8 wrote have no place" in text
           and "another build" in text, text)
+
+
+@pytest.mark.parametrize("build", ["lines", "default"])
+def test_one_frame_the_right_mapping_has_no_place_for_is_not_a_warning(build, tmp_path):
+    # #913: the main thread's frame in the synthetic lambda, at a line its
+    # own build's mapping wrote no range for (its `run` has lines 1 to 6).
+    main, holder = lockapp.FRAMES[build]
+    text = lockapp._RECORD.format(main=main.replace(":3)", ":7)"), holder=holder,
+                                  monitor="java.lang.Object")
+    report = retraced(tmp_path, build, text=text)
+    mine = {"matched_map_id": lockapp.MAP_ID.removeprefix("r8-map-id-")} \
+        if build == "default" else {}
+    check("one of the two counted", report.retraced == {"frames": 2, "outside": 1, **mine},
+          report.retraced)
+    check("the holder named back all the same",
+          anr.chains(report)[0].root.frames[:2] == HOLDER, anr.chains(report)[0])
+    out = anr.render(report)
+    check("said, not warned about", "1 had no place in it and keeps R8's method name." in out
+          and "> ⚠️ 1 of the 2" not in out and "check that it is this build's" not in out, out)
+    check("with why: the id, or that one frame says nothing",
+          ("so it is this build's" in out) if mine else ("says nothing about the build" in out),
+          out)
 
 
 # --- the command ------------------------------------------------------------
