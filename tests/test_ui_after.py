@@ -55,6 +55,7 @@ def project(tmp_path, monkeypatch):
 def compared(project, flags=("--html",), where=".echolot/out"):
     """A project whose last report has been compared with the one before it."""
     before, after = every_movement()
+    before["generated_at"], after["generated_at"] = "2026-10-15T12:23:02+00:00", "2026-10-15T15:41:27+00:00"
     project.report(where, data=after)
     folder = project.root / where
     (folder / "before.json").write_text(json.dumps(before), encoding="utf-8")
@@ -112,6 +113,36 @@ def test_a_comparison_older_than_the_report_is_of_the_one_before(project):
     late = time.time() + 60
     os.utime(folder / "report.json", (late, late))
     check("a report written since is not what was compared", get(site, "after").status == 404
+          and "After the fix" not in read(get(site).body).text)
+
+
+def test_a_comparison_of_two_other_reports_is_not_this_ones(project):
+    folder = compared(project.ready())
+    found = json.loads((folder / "comparison.json").read_text(encoding="utf-8"))
+    report = json.loads((folder / "report.json").read_text(encoding="utf-8"))
+    site = site_of(project)
+    check("its newer side is the report beside it, so it is drawn",
+          found["after"]["generated_at"] == report["generated_at"] and get(site, "after").status == 200)
+    found["after"] = {**found["after"], "path": ".echolot/hunts/3/reports/003.json",
+                      "generated_at": "2026-10-15T12:23:02+00:00"}
+    (folder / "comparison.json").write_text(json.dumps(found), encoding="utf-8")
+    reply = get(site, "after")
+    check("a comparison of other reports written here is not what changed in this one",
+          reply.status == 404 and "No comparison yet" in reply.body, reply.status)
+    check("and no step leads there", "After the fix" not in [a.text for a in read(get(site).body).one("nav", "steps").all("a")])
+    for broken in (None, "abc"):
+        found["after"] = broken
+        (folder / "comparison.json").write_text(json.dumps(found), encoding="utf-8")
+        check(f"nor one whose newer side is {broken!r}", get(site, "after").status == 404)
+
+
+def test_two_other_reports_compared_by_the_command_are_not_this_ones(project):
+    folder = compared(project.ready())
+    site = site_of(project)
+    (folder / "again.json").write_text((folder / "before.json").read_text(encoding="utf-8"), encoding="utf-8")
+    code, _, err = run("compare", str(folder / "before.json"), str(folder / "again.json"), "-o", str(folder), "--html")
+    check("the other comparison was made, over the one before", code == 0, err)
+    check("so the page says there is none of the last report", get(site, "after").status == 404
           and "After the fix" not in read(get(site).body).text)
 
 
