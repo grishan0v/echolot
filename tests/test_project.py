@@ -230,3 +230,15 @@ def test_status_says_which_project_and_config_it_found(tree: Path, monkeypatch,
     out = capsys.readouterr().out
     check("a config above the checkout is not this project's",
           "none — no echolot.yml here or in a folder above it" in out, out)
+
+
+def test_analyze_from_a_build_folder_reads_the_project_s_config(tree: Path, monkeypatch,
+                                                                capsys) -> None:
+    """From the macrobenchmark's output folder, `analyze` without `-c` reads
+    the project's config: it stops on the missing trace, not on the config."""
+    monkeypatch.chdir(tree / "proj/build/out")
+    with recorder.isolated():
+        code = main(["analyze", "nope.perfetto-trace"])
+    err = capsys.readouterr().err
+    check("the config above is read", code != 0 and "config not found" not in err
+          and f"config: {(tree / 'proj/echolot.yml').resolve()}" in err, err)

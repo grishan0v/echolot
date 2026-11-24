@@ -19,7 +19,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import recorder  # noqa: E402
-from echolot.main import main, project_of  # noqa: E402
+from echolot import project as project_mod  # noqa: E402
+from echolot.main import main  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_mark_edits import LAUNCHER, manifest, write  # noqa: E402
 
@@ -60,6 +61,10 @@ def _app(root: Path, config: str | None = GUARDED) -> Path:
     if config is not None:
         write(root, "echolot.yml", config)
     return root
+
+
+def project_of(args: argparse.Namespace) -> Path:
+    return project_mod.resolve(args).folder
 
 
 def test_the_log_goes_to_the_project_the_config_names(tmp_path: Path, monkeypatch) -> None:
