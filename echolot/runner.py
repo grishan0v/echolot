@@ -1375,8 +1375,10 @@ def collect(package: str, out_dir: Path, iterations: int,
             raise
         for r in results:
             # The macrobenchmark drove these, and how it reset the app
-            # between them is its own: none of it is ours to say. How the
-            # phone was powered when the task began is.
+            # between them is its own: none of it is ours to say. Nor are
+            # the device's animation scales, which a run with AGP's
+            # `animationsDisabled` turns to 0 for its own length and back.
+            # How the phone was powered when the task began is.
             recording.write(r["path"], {"runner": "gradle",
                                         **(power.facts(began) if began else {})})
         log(f"  traces collected: {len(results)} in {spent:.0f}s")
@@ -1459,6 +1461,13 @@ def collect(package: str, out_dir: Path, iterations: int,
     # The same read says how the phone is powered (power.py, #524).
     last = screen.ready(dev, _run, log)
     power.check(dev, last, under, log)
+    # What the device is set to do with the app's animations and activities,
+    # once a round and before the device is held still: kept beside every
+    # trace of the round, for the report and for `compare` (#612, #616).
+    # Nothing is said here: a scale of 0 is how UI tests run on purpose, and
+    # "Don't keep activities" changes little in a cold start. The report says
+    # it where it matters.
+    device_settings = recording.settings(dev, _run)
 
     # Every recording, in the order made: the set's, and those set aside as
     # not cold (`aside`), which the caller counts and leaves out.
@@ -1609,6 +1618,7 @@ def collect(package: str, out_dir: Path, iterations: int,
             info.update(_pull(dev, out))
             facts = {
                 "runner": mode, "reset_policy": reset, "app_at_stop": was,
+                **device_settings,
                 "cooldown": None if cooling is None else {
                     "max_c": cooling.max_c, "sensor": cooling.sensor,
                     "before_c": (round(settled.last_c, 1)

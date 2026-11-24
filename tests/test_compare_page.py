@@ -170,6 +170,57 @@ def test_a_comparison_without_its_reading_is_no_page():
         check(f"nor does {broken!r}", not compare_page.has_reading(broken))
 
 
+def _fields(node, path=()):
+    """Every place in a part of a comparison: the keys of its objects and the
+    first items of its lists."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield path + (k,)
+            yield from _fields(v, path + (k,))
+    elif isinstance(node, list):
+        for i, v in enumerate(node[:3]):
+            yield path + (i,)
+            yield from _fields(v, path + (i,))
+
+
+ODD = ["zz", ["x"], {"a": 1}, 7, None, True, [{"a": 1}], -1.5]
+
+
+def test_a_reading_of_the_wrong_shape_says_where_and_any_other_still_draws():
+    """Each field of the reading, and of the rows, put to each odd kind of
+    value: either the file says which part does not read (`misshapen`), or
+    the page is drawn. It never fails (#733)."""
+    before, after = every_movement()
+    cmp = comparison(before, after)
+    check("what compare writes reads", compare_page.misshapen(cmp) is None)
+    places = [("plain", *p) for p in _fields(cmp["plain"])] + [("rows",)] + [("rows", 0, k) for k in cmp["rows"][0]]
+    failed, said = [], set()
+    for place in places:
+        for value in ODD:
+            odd = copy.deepcopy(cmp)
+            node = odd
+            for k in place[:-1]:
+                node = node[k]
+            node[place[-1]] = value
+            if not compare_page.has_reading(odd):
+                continue
+            wrong = compare_page.misshapen(odd)
+            if wrong:
+                said.add(wrong)
+                with pytest.raises(ValueError, match="does not read"):
+                    compare_page.render(odd)
+                continue
+            try:
+                compare_page.render(odd)
+            except Exception as err:  # noqa: BLE001
+                failed.append(f"{place} = {value!r}: {type(err).__name__}: {err}")
+    check("every one is drawn or said not to read", not failed, "\n".join(failed[:20]))
+    for named in ("`plain.notes` is text, not a list", "`plain.checks[0]` is text, not an object",
+                  "`plain.checks[0].before` is text, not an object", "`plain.window.before` is text, not an object",
+                  "`plain.window.after.runs` is text, not a whole number"):
+        check(f"it names the part: {named}", named in said)
+
+
 # --- top to bottom ----------------------------------------------------------------------
 
 

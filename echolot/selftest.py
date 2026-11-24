@@ -2543,6 +2543,90 @@ def _(report):
     assert "recording-mixed" not in {w["id"] for w in cmp["warnings"]}, cmp["warnings"]
 
 
+def _set_to(scale: float | None, dont_keep: bool | None, runner: str = "launch") -> dict:
+    """The fixture's block as four repeats of a round on a device whose
+    animation scales are all `scale` and "Don't keep activities" `dont_keep`;
+    None for both is a `collect` from before they were read."""
+    from . import recording as recording_mod
+    device = {} if scale is None and dont_keep is None else {
+        "animation_scales": {"window": scale, "transition": scale, "animator": scale},
+        "always_finish_activities": dont_keep}
+    return recording_mod.merge([{"runner": runner, "reset_policy": "force-stop",
+                                 "app_at_stop": "running", **device}] * 4)
+
+
+@check("compare says when the device's animation scales or \"Don't keep activities\" differ")
+def _(report):
+    """A list scroll on an SM-A515F with all three animation scales at 5 on
+    one side and 1 on the other gave 5 to 17 rows that held and no warning
+    (#612); "Don't keep activities" turns a return to a living process into a
+    warm start (#616). Both are said, and the verdicts stand. A set from a
+    `collect` before they were read cannot say them: that is said, and never
+    taken for the same settings."""
+    from . import compare as compare_mod
+
+    def said(before: dict, after: dict) -> tuple[dict[str, str], dict[str, bool | None]]:
+        cmp = compare_mod.build(
+            _side_with({"main_thread_block": SLOWER[0]}, recording=before),
+            _side_with({"main_thread_block": SLOWER[1]}, recording=after),
+            before_path="a.json", after_path="b.json")
+        return ({w["id"]: w["text"] for w in cmp["warnings"]},
+                {r["detector"]: r["holds"] for r in cmp["rows"]})
+
+    text, holds = said(_set_to(5.0, True), _set_to(1.0, False))
+    assert ("the device's animation scales all three `5` before and all three `1` after"
+            in text.get("recording", "")), text
+    assert '"Don\'t keep activities" on before and off after' in text["recording"], text
+    assert holds == {"main_thread_block": True}, holds
+    text, _ = said(_set_to(1.0, False), _set_to(1.0, False))
+    assert not {"recording", "recording-unknown"} & set(text), text
+    text, _ = said(_set_to(None, None), _set_to(1.0, False))
+    assert "recording" not in text, text
+    assert "does not say the device's animation scales" in text.get("recording-unknown", ""), text
+    text, _ = said(_set_to(None, None), _set_to(None, None))
+    assert not {"recording", "recording-unknown"} & set(text), text
+
+
+@check("the header says when animations were scaled or \"Don't keep activities\" was on")
+def _(report):
+    """Nothing for a phone as it comes, nor for a set nobody read the
+    settings of; a line for scales that are not 1, and a warning for the
+    option where the scenario returns to the app rather than starting it
+    cold."""
+    from . import report as report_mod
+    plain = report_mod.to_markdown({**report, "recording": _set_to(1.0, False)})
+    assert "Animation scales" not in plain and "Don't keep activities" not in plain, plain
+    old = report_mod.to_markdown({**report, "recording": _set_to(None, None)})
+    assert "Animation scales" not in old and "Don't keep activities" not in old, old
+    rec = {**_set_to(5.0, True), "runner": "command", "reset_policy": "none"}
+    head = report_mod.to_markdown({**report, "recording": rec})
+    assert "Animation scales: all three `5`, where a phone comes with 1" in head, head[:3000]
+    assert '> ⚠️ "Don\'t keep activities" was on' in head, head[:3000]
+    cold = report_mod.to_markdown({**report, "recording": _set_to(1.0, True)})
+    assert "A cold start creates its activity anyway" in cold, cold[:3000]
+    assert '> ⚠️ "Don\'t keep activities"' not in cold, cold[:3000]
+
+
+@check("\"Don't keep activities\" is read from ActivityManager, not from the setting")
+def _(report):
+    """`settings put global always_finish_activities 0` changed the setting
+    and not ActivityManager: `dumpsys activity` still said
+    `mAlwaysFinishActivities=true`, and starts stayed warm. The dump prints
+    that line only while the option is on, so a dump without it is off
+    whatever the setting says. A scale never set animates at 1."""
+    from . import recording as recording_mod
+    head = "ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)\n"
+    stored = ("window_animation_scale=5.0\ntransition_animation_scale=null\n"
+              "animator_duration_scale=0.5\nalways_finish_activities={}\n")
+    got = recording_mod.parse_settings(stored.format(0) + head + "  mAlwaysFinishActivities=true\n")
+    assert got == {"animation_scales": {"window": 5.0, "transition": 1.0, "animator": 0.5},
+                   "always_finish_activities": True}, got
+    got = recording_mod.parse_settings(stored.format(1) + head)
+    assert got["always_finish_activities"] is False, got
+    got = recording_mod.parse_settings("")
+    assert got == {"animation_scales": None, "always_finish_activities": None}, got
+
+
 @check("compare says throttling on one side when the other has no thermal record")
 def _(report):
     """Nothing is claimed about the side nobody measured; what the measured
@@ -5042,6 +5126,52 @@ def _(report):
     # one.
     assert rows["flaky_once"]["runs"] == "1/2", rows["flaky_once"]
     assert rows["collection_mapping"]["runs"] == "2/2", rows["collection_mapping"]
+
+
+@check("merging repeats: a row in every repeat ranks above a longer one seen "
+       "once, and a cut says how many of the rows it left out one repeat found")
+def _(report):
+    """The first rows of a detector are what an agent reads: `report -d` shows
+    five and the overview one. Ranked by the median of the repeats that found
+    a row, 500 ms in one repeat of five came before 180 ms in all five, and on
+    a large app's cold start a third of a detector's 38 rows were found once
+    (#495). The cut changes what is read, not what is kept: report.md, which a
+    person and the GitHub Action read, and report.json hold every row."""
+    import copy
+
+    from . import report as report_mod
+    runs = [copy.deepcopy(report) for _ in range(5)]
+    for i, run in enumerate(runs):
+        run["trace"] = f"run{i}"
+    block = next(d for d in runs[3]["detectors"] if d["id"] == "main_thread_block")
+    for name, ms in (("spike_once", 500.0), ("spike_twice", 450.0)):
+        block["rows"].append({"location": name, "count": 1, "self_ms": ms,
+                              "total_ms": ms, "detail": "—"})
+    merged = report_mod.aggregate(runs)
+    rows = next(d for d in merged["detectors"] if d["id"] == "main_thread_block")["rows"]
+    order = [r["location"] for r in rows]
+    # 500 ms × 1/5 is 100: below the 180, 120, 115 and 104 found every time,
+    # above the 64 that was. One trace orders by the median, as before.
+    assert order[:4] == ["waitWhileAllocatingLocked", "collection_mapping",
+                         "AppStart", "Steady_heavy"], order
+    assert order[4:6] == ["spike_once", "spike_twice"], order
+    single = next(d for d in report["detectors"] if d["id"] == "main_thread_block")["rows"]
+    assert [r["self_ms"] for r in single] == sorted(
+        (r["self_ms"] for r in single), reverse=True), single
+
+    view = report_mod.detector_view(merged, "main_thread_block", top=3)
+    shown = [loc for loc in order if f"| {loc}" in view]
+    assert shown == order[:3], (shown, view)
+    assert (f"_Showing 3 of {len(order)}; of the {len(order) - 3} left, 2 were "
+            f"found in one run of 5. `--top {len(order)}` for all._") in view, view
+    # Every row found in every repeat: the cut says no more than it did.
+    whole = report_mod.detector_view(report_mod.aggregate(runs[:3]), "main_thread_block", top=3)
+    assert f"_Showing 3 of {len(single)}; `--top {len(single)}` for all._" in whole, whole
+
+    assert "| waitWhileAllocatingLocked" in report_mod.overview(merged), "the overview's top row"
+    md, js = report_mod.to_markdown(merged), report_mod.to_json(merged)
+    assert all(f"| {loc}" in md for loc in order), "report.md keeps every row"
+    assert all(f'"location": "{loc}"' in js for loc in order), "report.json keeps every row"
 
 
 @check("merging repeats: rows a detector kept apart stay apart")

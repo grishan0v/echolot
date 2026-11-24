@@ -50,6 +50,36 @@ report's `recording` block, where `compare` sets it against the other side's
 moves with its trace when a set is set aside; copy it along if you move
 traces by hand, or that set's runner reads as unknown.
 
+The account also keeps two things `collect` reads of the device once a
+round, before the first repeat, in launch and command modes:
+
+- `animation_scales`, the window, transition and animator scales of
+  Developer options. An animation lasts its length times its scale: on an
+  SM-A515F a list scroll recorded with all three at 5 against one at 1 gave
+  5 to 17 rows that held in `compare`, and nothing said the device had
+  animated five times slower. UI-test setups set them to 0 on purpose, so
+  `collect` records whatever they are rather than refusing.
+- `always_finish_activities`, "Don't keep activities": the system destroys
+  an activity as soon as it leaves the screen, so a return to a living
+  process creates it again. On the SM-A515F `HOME` and `am start` of the
+  launcher activity came back `WARM` in 431–469 ms with it on and `HOT` in
+  144–179 ms with it off. It changes little in a cold start and everything
+  in a scenario that returns to the app (`reset_policy: none`, or a command
+  that goes home and back).
+
+The option is read from ActivityManager, not from the setting it keeps.
+`adb shell settings put global always_finish_activities 0` changes the
+setting and not the running system, which reads it at boot: the option stays
+on, and the account says so. Switch it in Developer options, which change
+both, or restart the phone after `settings put`. The scales take effect at
+once either way.
+
+The report's header names any scale that is not 1, and says when the option
+was on (see [What the device was set to do](analysing.md#what-the-device-was-set-to-do));
+`compare` says when either differs between the two sides. In gradle mode
+neither is read: the macrobenchmark drives the device, and a run with AGP's
+`animationsDisabled` turns the scales to 0 for its own length.
+
 The account also keeps how the repeat started, under `launch`: which repeat
 of the set it was and which recording of that repeat (`attempt`, 2 and on for
 one recorded again), `am start -W`'s `state` (`COLD`, `WARM`, `HOT`; `null` in

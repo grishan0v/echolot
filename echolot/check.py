@@ -608,17 +608,30 @@ def comparison(report_dir: Path) -> dict[str, Any] | None:
     """The comparison `compare` wrote there, when a page can be drawn from it
     and it is of the report beside it. None for no file, for one that does
     not read, for one written without its plain reading (`compare` with no
-    `--html` and no `--plain`), and for one older than the report: `analyze`
-    has written a new report since, and the comparison is of the one before."""
+    `--html` and no `--plain`), for one older than the report (`analyze`
+    has written a new report since, and the comparison is of the one
+    before), and for one whose newer side is another report: `compare` run on
+    two other files, or on an investigation's rounds, writes here all the same.
+    Which report that side was is told by when it was written, a stamp each
+    report carries and the comparison keeps."""
     path = report_dir / "comparison.json"
     try:
         made = path.stat().st_mtime
         found = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found):
+    if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found) \
+            or compare_page.misshapen(found):
         return None
     if made + 1 < _newest([report_dir / "report.json"]):
+        return None
+    try:
+        beside = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    after = found.get("after")
+    if not isinstance(beside, dict) or not isinstance(after, dict) \
+            or after.get("generated_at") != beside.get("generated_at"):
         return None
     return found
 
@@ -640,6 +653,21 @@ def compare_reads(report_dir: Path, since: float) -> tuple[str, str] | None:
             return said + ".", "reading"
     said = compare_says(report_dir, since)
     return (said, "table") if said else None
+
+
+def comparison_fault(report_dir: Path) -> str | None:
+    """What is wrong with the comparison there, in words, when it is one
+    `compare` wrote with its plain reading and a part of that reading does
+    not hold what `compare` writes (`compare_page.misshapen`, #733). None for
+    any other file, or for none: those are no comparison to draw, and the
+    page says there is none yet."""
+    try:
+        found = json.loads((report_dir / "comparison.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(found, dict) or found.get("kind") != "comparison" or not compare_page.has_reading(found):
+        return None
+    return compare_page.misshapen(found)
 
 
 def _tally(report_path: Path) -> list[tuple[str, int, str]] | None:

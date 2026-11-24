@@ -7,13 +7,19 @@ The lambda frames are in `test_anr_frames`.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import anr, mark, place  # noqa: E402
 from tests.support import check  # noqa: E402
+from tests.test_anr import run  # noqa: E402
+from tests.test_anr_frames import INLINED, filler_checkout  # noqa: E402
+from tests.test_anr_frames import write as write_files  # noqa: E402
 from tests.test_mark_edits import LAUNCHER, manifest, write  # noqa: E402
 
 PKG = "app/src/main/kotlin/com/example/app"
@@ -186,3 +192,44 @@ def test_lines_inside_other_functions_say_the_checkout_is_not_the_build(tmp_path
     pl = mark.plan_from_anr(tmp_path, frames, unplaced=len(missing), retraced=True)
     check("retraced with the mapping: no such note",
           not any("not the build" in n for n in pl.notes), pl.notes)
+
+
+# --- a line past the end of its file: Kotlin's inlined code (#725) -----------
+
+
+@pytest.fixture
+def fillers(tmp_path) -> Path:
+    return filler_checkout(tmp_path)
+
+
+def test_mark_proposes_the_function_an_inlined_frame_names(fillers, tmp_path):
+    report_file = tmp_path / "export.txt"
+    report_file.write_text(INLINED, encoding="utf-8")
+    code, out, _ = run("mark", "--root", str(fillers), "--from-anr",
+                       str(report_file), "--json")
+    check("exit 0", code == 0, code)
+    plan = json.loads(out)
+    by_marker = {p["marker"]: p for p in plan["proposals"]}
+    fill = by_marker.get("AGENTTMP_ScenarioFiller_fill")
+    check("a proposal at the declaration of `fill`",
+          fill is not None and fill["line"] == 7 and fill["applicable"], plan["proposals"])
+    check("which says the line was inlined code",
+          "past the end of the file: inlined code" in fill["what"], fill)
+    check("and no note that this is another build",
+          not any("land nowhere" in n for n in plan["notes"]), plan["notes"])
+
+
+def test_mark_refuses_an_inlined_frame_whose_function_is_overloaded(tmp_path):
+    root = write_files(tmp_path / "checkout", {
+        "app/src/main/kotlin/com/example/app/filler/ScenarioFiller.kt":
+            "package com.example.app.filler\n\nclass ScenarioFiller {\n"
+            "    fun fill() {\n        go()\n    }\n"
+            "    fun fill(n: Int) {\n        go(n)\n    }\n}\n"})
+    plan = mark.plan_from_anr(root, [(
+        "com.example.app.filler.ScenarioFiller.fill",
+        "app/src/main/kotlin/com/example/app/filler/ScenarioFiller.kt", 30)])
+    (p,) = plan.proposals
+    check("refused, saying which", not p.applicable
+          and p.reason == "line 30 is past the end of the file: inlined code, and "
+                          "`fill` is declared 2 times here — mark by hand", p)
+    check("and not counted as another build", not plan.notes, plan.notes)

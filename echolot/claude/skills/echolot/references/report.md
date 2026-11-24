@@ -67,6 +67,8 @@ produce. The keys only a merged report has are named under the block.
                    "missing": [] },
   "recording": { "runner": "launch", "reset_policy": "force-stop",
                  "app_at_stop": "running",
+                 "animation_scales": { "animator": 1.0, "transition": 1.0, "window": 1.0 },
+                 "always_finish_activities": false,
                  "data_sources": ["android.surfaceflinger.frametimeline",
                                   "linux.ftrace", "linux.process_stats",
                                   "linux.sys_stats"],
@@ -461,7 +463,7 @@ views are those one-liners, done once:
 
 ```bash
 echolot report                                 # what fired: one line per detector
-echolot report --detector monitor_contention   # its rows, longest first, 5 of them
+echolot report --detector monitor_contention   # its rows by median × share of runs, 5 of them
 echolot report -d main_thread_block --top 12   # more; --wide keeps the evidence whole
 echolot report --window                        # anchors, the main thread, the device
 echolot report --markers                       # your own names, measured
@@ -598,6 +600,17 @@ repeat of a `collect` finds the app as the last session left it, so a split
 in `app_at_stop` is normal; a split in the runner or the trace config is a set
 recorded two ways.
 
+`animation_scales` (window, transition and animator, as Developer options
+set them) and `always_finish_activities` ("Don't keep activities") are what
+`collect` read of the device once a round, in launch and command modes. An
+animation lasts its length times its scale; 0 turns it off. With "Don't keep
+activities" on, a return to a living process recreates the activity: a
+scenario meant to measure a hot start measures a warm one. The option is
+ActivityManager's own state, not the stored setting, which `settings put`
+changes without effect until a reboot. Both are `null` for gradle mode and
+for traces from a `collect` before it read them. The header names a scale
+that is not 1 and says when the option was on.
+
 **`toolchain.echolot`** and each detector's **`sha`** — which echolot wrote
 the report, and what each detector read the trace with (its queries,
 `@identity` and stdlib modules, comment lines aside). Two reports whose
@@ -631,6 +644,14 @@ The contract is shared, but not every detector fills every column.
 | `places` | the json behind `code`: every symbol the row names, with `file`, `line` and `role`, and `retraced` on one the build's mapping named back |
 | `stacks` | the json behind what `detail` says the samples named: `samples`, `with_stack`, and the ten largest of `leaf` and `ours`, each `frame` with its `samples` and `pct` |
 | `spread` | the per-run values behind the medians, for three columns — see below |
+
+**The rows come ranked, and in one order everywhere.** One trace orders them
+by `self_ms`, or `total_ms` where there is no self time. A merged report ranks
+them by that median times the share of repeats in `runs`: the median is over
+the repeats that found the row, so a 200 ms spike in `1/5` counts for 40 ms
+and comes after 60 ms in `5/5`. `report.json`, `report.md`, the overview's top
+row and `report -d` all keep that order; `report -d` shows the first five and
+says how many it left out, and how many of those one repeat alone found.
 
 **`code` and `places` save the grep.** A contention slice names both sides of
 the lock — the thread holding it and where it is, the method that waited and
@@ -1064,9 +1085,9 @@ that pass: `AGENTTMP_fill_v4` is never taken for `AGENTTMP_fill_v6`.
 | `environment` | the clock the two rounds ran at differs by the relative floor or more (10% unless `--floor-pct` says otherwise), either way, or a side carries no clock, or read its clock or thermal state in only some of its repeats. A grown row may be the device rather than the app — say so before calling it a regression. Two rounds that recorded no platform state at all get no warning |
 | `environment-thermal` | the kernel throttled the device during one round and not the other: that side is slower for a reason outside the code. Only when both sides recorded thermal state |
 | `environment-thermal-one-side` | the kernel throttled the device during one round, and the other has no thermal record at all. The throttled side is a slowed device; whether the other was too cannot be said — never call it cool |
-| `recording` | the two sides were not recorded the same way: runner, reset policy, the app found running at the stop on one side and stopped on the other, or the trace config (data sources, atrace categories, ftrace events). The detectors that read what one side recorded alone are named. Rows can move for that reason alone — say it before calling one a regression |
-| `recording-mixed` | one side's repeats were not recorded alike (runner, reset policy or trace config): its medians mix two ways of recording |
-| `recording-unknown` | one side cannot say how it was recorded and the other can — older traces or report, or traces not from `collect`. Unknown, not "the same" |
+| `recording` | the two sides were not recorded the same way: runner, reset policy, the app found running at the stop on one side and stopped on the other, the trace config (data sources, atrace categories, ftrace events), or the device's animation scales or "Don't keep activities". The detectors that read what one side recorded alone are named. Rows can move for that reason alone — say it before calling one a regression |
+| `recording-mixed` | one side's repeats were not recorded alike (runner, reset policy, trace config or the device's settings): its medians mix two ways of recording |
+| `recording-unknown` | one side cannot say how it was recorded and the other can — older traces or report, traces not from `collect`, or a `collect` from before it read the device's settings. Unknown, not "the same" |
 | `version` | the reports come from different echolot versions, or one does not say which. A side that does not say leaves every row without a verdict: analyze its traces again |
 | `detector-changed` | the named detectors read the trace with different code on the two sides; their rows carry no verdict, a move there may be the tool's |
 | `same-traces` | both sides are one set of recordings read twice (same trace names, pid and window): every move is the tool's or the config's, and no row carries a verdict |

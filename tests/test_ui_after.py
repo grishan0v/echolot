@@ -55,6 +55,7 @@ def project(tmp_path, monkeypatch):
 def compared(project, flags=("--html",), where=".echolot/out"):
     """A project whose last report has been compared with the one before it."""
     before, after = every_movement()
+    before["generated_at"], after["generated_at"] = "2026-10-15T12:23:02+00:00", "2026-10-15T15:41:27+00:00"
     project.report(where, data=after)
     folder = project.root / where
     (folder / "before.json").write_text(json.dumps(before), encoding="utf-8")
@@ -115,12 +116,68 @@ def test_a_comparison_older_than_the_report_is_of_the_one_before(project):
           and "After the fix" not in read(get(site).body).text)
 
 
+def test_a_comparison_of_two_other_reports_is_not_this_ones(project):
+    folder = compared(project.ready())
+    found = json.loads((folder / "comparison.json").read_text(encoding="utf-8"))
+    report = json.loads((folder / "report.json").read_text(encoding="utf-8"))
+    site = site_of(project)
+    check("its newer side is the report beside it, so it is drawn",
+          found["after"]["generated_at"] == report["generated_at"] and get(site, "after").status == 200)
+    found["after"] = {**found["after"], "path": ".echolot/hunts/3/reports/003.json",
+                      "generated_at": "2026-10-15T12:23:02+00:00"}
+    (folder / "comparison.json").write_text(json.dumps(found), encoding="utf-8")
+    reply = get(site, "after")
+    check("a comparison of other reports written here is not what changed in this one",
+          reply.status == 404 and "No comparison yet" in reply.body, reply.status)
+    check("and no step leads there", "After the fix" not in [a.text for a in read(get(site).body).one("nav", "steps").all("a")])
+    for broken in (None, "abc"):
+        found["after"] = broken
+        (folder / "comparison.json").write_text(json.dumps(found), encoding="utf-8")
+        check(f"nor one whose newer side is {broken!r}", get(site, "after").status == 404)
+
+
+def test_two_other_reports_compared_by_the_command_are_not_this_ones(project):
+    folder = compared(project.ready())
+    site = site_of(project)
+    (folder / "again.json").write_text((folder / "before.json").read_text(encoding="utf-8"), encoding="utf-8")
+    code, _, err = run("compare", str(folder / "before.json"), str(folder / "again.json"), "-o", str(folder), "--html")
+    check("the other comparison was made, over the one before", code == 0, err)
+    check("so the page says there is none of the last report", get(site, "after").status == 404
+          and "After the fix" not in read(get(site).body).text)
+
+
 @pytest.mark.parametrize("text", ["", "{", "[]", '{"kind": "report"}', '{"kind": "comparison", "plain": []}'])
 def test_a_file_that_is_no_comparison_is_no_page(project, text):
     folder = compared(project.ready())
     (folder / "comparison.json").write_text(text, encoding="utf-8")
     site = site_of(project)
     check("it is not drawn, and the server goes on", get(site, "after").status == 404 and get(site).status == 200)
+
+
+def _all_strings(node):
+    """Every field of a check but its `id`, as text."""
+    return {k: (v if k == "id" else "zz") for k, v in node.items()}
+
+
+@pytest.mark.parametrize("change, said", [
+    (lambda p: p.update(notes="abc"), "`plain.notes` is text, not a list"),
+    (lambda p: p.update(checks=["x"]), "`plain.checks[0]` is text, not an object"),
+    (lambda p: p["checks"].__setitem__(0, _all_strings(p["checks"][0])), "`plain.checks[0].before` is text, not an object"),
+    (lambda p: p["window"].update(before="zz", after="zz"), "`plain.window.before` is text, not an object"),
+])
+def test_a_comparison_with_a_field_of_the_wrong_kind_says_it_does_not_read(project, change, said):
+    folder = compared(project.ready())
+    found = json.loads((folder / "comparison.json").read_text(encoding="utf-8"))
+    change(found["plain"])
+    (folder / "comparison.json").write_text(json.dumps(found), encoding="utf-8")
+    site = site_of(project)
+    reply = get(site, "after")
+    text = read(reply.body).text
+    check("it is no error, and the page says the comparison does not read and how to write it anew",
+          reply.status == 404 and "The comparison does not read" in text and "echolot compare --html" in text, reply.status)
+    check("naming what is wrong", said.replace("`", "") in text.replace("`", ""), text)
+    check("the start page still draws, with no step that leads there",
+          get(site).status == 200 and "After the fix" not in read(get(site).body).one("nav", "steps").text)
 
 
 def test_each_scenario_has_its_own(project):
