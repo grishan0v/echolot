@@ -28,7 +28,8 @@ from echolot import compare as compare_mod  # noqa: E402
 from echolot import fixture, moves  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import analyze_trace, main  # noqa: E402
+from echolot.analyze import analyze_trace  # noqa: E402
+from echolot.main import main  # noqa: E402
 from tests.test_compare import compare, det, report, row  # noqa: E402
 
 JIT = ("JIT compiling void com.example.app.feature.ListViewModel.prepare() "

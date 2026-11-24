@@ -24,7 +24,7 @@ from tests.support import check  # noqa: E402
 from echolot import fixture, runner, selftest  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import analyze_trace  # noqa: E402
+from echolot.analyze import analyze_trace  # noqa: E402
 
 
 def parsed(text: str) -> pb.TraceConfig:

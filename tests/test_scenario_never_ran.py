@@ -21,7 +21,8 @@ from echolot import main as main_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot import recording, runner  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import _drawn_info, _markers_against_code  # noqa: E402
+from echolot.analyze import _drawn_info  # noqa: E402
+from echolot.main import _markers_against_code  # noqa: E402
 from echolot.main import _scenario_ran as real_scenario_ran  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_build_before_record import _project, _report  # noqa: E402

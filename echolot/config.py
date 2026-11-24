@@ -877,7 +877,7 @@ class Config:
         return str(block.get("name") or "run")
 
     def context_params(self, upid: int) -> dict[str, Any]:
-        """upid is resolved against the trace in main.py — see _resolve_process."""
+        """upid is resolved against the trace in analyze.py — see _resolve_process."""
         return {
             "upid": upid,
             "scenario_start": self.scenario_start,

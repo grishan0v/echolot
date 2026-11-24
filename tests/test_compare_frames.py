@@ -108,7 +108,7 @@ def test_analyze_counts_the_frames_in_the_window(marker_report) -> None:
 def test_a_trace_without_a_frame_timeline_has_no_count(tmp_path: Path) -> None:
     from echolot import fixture, recorder, selftest
     from echolot.config import Config
-    from echolot.main import analyze_trace
+    from echolot.analyze import analyze_trace
 
     trace = tmp_path / "no-frames.perfetto-trace"
     trace.write_bytes(fixture.build(frames=False))

@@ -26,7 +26,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot.main import DETECTOR_DIR, parse_set  # noqa: E402
+from echolot.analyze import DETECTOR_DIR  # noqa: E402
+from echolot.main import parse_set  # noqa: E402
 from echolot.tp import load_detectors  # noqa: E402
 from tests.support import check  # noqa: E402
 

@@ -62,7 +62,7 @@ CHECKS: list[tuple[str, object]] = []
 
 def _shipped() -> int:
     """How many detectors this package ships."""
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import load_detectors
     return len(load_detectors(DETECTOR_DIR))
 
@@ -370,7 +370,7 @@ def _(report):
     # fixture's size. What the report adds to a row after the query — the
     # place in the code, the samples, a merge's bookkeeping — is not the
     # query's, and not counted.
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .report import HIDDEN
     from .tp import load_detectors
 
@@ -456,7 +456,7 @@ def _(report):
     # its `@intervals` reads them rather than taking the steps again (#490).
     # Every shipped detector that does so reads its tables there; and the
     # three ways a table could go wrong are refused as the file is read.
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import Detector, load_detectors
     writers = [d for d in load_detectors(DETECTOR_DIR) if d.tables]
     assert writers, "no shipped detector writes its pieces down"
@@ -1588,7 +1588,7 @@ def _(report):
 
 @check("calibrate: the measuring pass opens thresholds and strips LIMIT")
 def _(report):
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import load_detectors
     d = next(x for x in load_detectors(DETECTOR_DIR)
              if x.id == "runnable_starvation")
@@ -1611,7 +1611,7 @@ def _(report):
 
 @check("calibrate: every directive points at a live param and column")
 def _(report):
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import load_detectors
     from .report import COLUMNS
     for d in load_detectors(DETECTOR_DIR):
@@ -2122,7 +2122,8 @@ def _(report):
 
 @check("thresholds: --set is typed and refuses what does not exist")
 def _(report):
-    from .main import DETECTOR_DIR, parse_set
+    from .analyze import DETECTOR_DIR
+    from .main import parse_set
     from .tp import load_detectors
     dets = load_detectors(DETECTOR_DIR)
     got = parse_set(["main_thread_block.min_slice_ms=16",
@@ -2141,7 +2142,7 @@ def _(report):
 
 @check("thresholds: the report says where each detector's numbers came from")
 def _(report):
-    from .main import plan_detectors
+    from .analyze import plan_detectors
     # every detector in the fixture run uses the shipped defaults
     assert all(d["params_source"] == "default" for d in report["detectors"]), \
         [(d["id"], d["params_source"]) for d in report["detectors"]]
@@ -2186,7 +2187,7 @@ def _(report):
     told is not the same as having chosen, so choosing is now something you
     write.
     """
-    from .main import DETECTOR_DIR, plan_detectors
+    from .analyze import DETECTOR_DIR, plan_detectors
     from .tp import load_detectors
 
     shipped = _shipped()
@@ -2248,7 +2249,7 @@ def _(report):
     written `false`, so the line says a decision rather than an oversight —
     and on a config that turns nothing off, there is no line at all.
     """
-    from .main import DETECTOR_DIR, plan_detectors
+    from .analyze import DETECTOR_DIR, plan_detectors
     from .report import to_markdown
     from .tp import load_detectors
 
@@ -2289,7 +2290,7 @@ def _(report):
     `@param` already says which kind each one is, by what its default is.
     Nothing was reading it.
     """
-    from .main import plan_detectors
+    from .analyze import plan_detectors
 
     for value in ("16 OR 1=1", "16ms", None, True, [16]):
         cfg = Config({**FIXTURE_CONFIG,
@@ -2662,7 +2663,7 @@ def _(report):
     Each report now names its echolot, and each detector the code it read the
     trace with, so a difference in either can be said."""
     from . import __version__
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import load_detectors
     got = report["toolchain"].get("echolot")
     assert got == __version__, (got, __version__)
@@ -4261,7 +4262,7 @@ def _(report):
 def _(report):
     import contextlib
     import io
-    from .main import _OTHERS_SHOWN, _resolve_process
+    from .analyze import _OTHERS_SHOWN, _resolve_process
 
     class _FakeTP:
         # 641 processes, as `*` gives on a real device: the chosen one plus
@@ -4972,7 +4973,7 @@ def _(report):
     whole window for every row.
     """
     import re as _re
-    from .main import SQL_DIR, _resolve_process, _setup_context
+    from .analyze import SQL_DIR, _resolve_process, _setup_context
     from .tp import TraceSession
 
     made: dict[str, str] = {}
@@ -6826,7 +6827,7 @@ _binary: str | None = None
 def _analyze(trace, cfg: Config, **kwargs) -> dict:
     """`analyze_trace` on the binary this run is checking. Every trace a check
     opens goes through here."""
-    from .main import analyze_trace  # late import: main imports us
+    from .analyze import analyze_trace
     return analyze_trace(trace, cfg, _binary, **kwargs)
 
 
@@ -6836,7 +6837,7 @@ def build_report(tp_binary: str | None = None, sampling: str | None = None) -> d
     `sampling` is `fixture.build`'s: the same trace with a callstack sampler
     behind it, for the checks that are about one.
     """
-    from .main import analyze_trace  # late import: main imports us
+    from .analyze import analyze_trace
 
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
@@ -6867,7 +6868,7 @@ def pool_report() -> dict:
 
 @functools.lru_cache(maxsize=2)
 def _pooled(binary: str | None) -> dict:
-    from .main import analyze_trace  # late import: main imports us
+    from .analyze import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "pool.perfetto-trace"
         trace.write_bytes(fixture.pool())

@@ -221,7 +221,7 @@ def test_a_stopped_worker_ends_at_its_next_query(tmp_path: Path, monkeypatch) ->
     `except Exception`, and without `Stopped` each went on through all the
     rest of them, every query failing at once."""
     from echolot.config import Config
-    from echolot.main import analyze_trace
+    from echolot.analyze import analyze_trace
 
     traces = _set(tmp_path)[:2]
     bad = tmp_path / "bad.perfetto-trace"
