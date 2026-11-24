@@ -239,6 +239,24 @@ def _one_scenario_keys(block: dict[str, Any]) -> None:
         f"It takes {', '.join(keys)}")
 
 
+def _not_a_block(node: Any) -> str:
+    """Why a `scenario:` that is not a block is refused, and how to write one.
+
+    `scenario: coldStart` was read as a scenario with no name and no anchors:
+    a complete report, called `run`, about the whole recording (#736).
+    """
+    hint = ""
+    if node == LAUNCH:
+        hint = (f" How the app opens is `window: {LAUNCH}` under it, in place "
+                f"of `start` and `end`.")
+    elif isinstance(node, str) and _SCENARIO_NAME.fullmatch(node):
+        hint = f" `{node}` reads as its name: `name: {node}`, indented under `scenario:`."
+    return (f"scenario must be a block, got {node!r}: `scenario:` on a line of "
+            f"its own, then `name`, `start` and `end` under it, indented "
+            f"(or `window: {LAUNCH}` in place of `start` and `end`). Several "
+            f"scenarios go under `scenarios:`, each named by its key.{hint}")
+
+
 class Config:
     def __init__(self, raw: dict[str, Any], path: Path | None = None,
                  local_path: Path | None = None):
@@ -575,9 +593,12 @@ class Config:
         many = self._many()
         if many is None:
             node = self.get("scenario")
-            if isinstance(node, dict):
-                _one_scenario_keys(node)
-            return "scenario", node if isinstance(node, dict) else {}
+            if node is None:
+                return "scenario", {}
+            if not isinstance(node, dict):
+                raise ConfigError(_not_a_block(node))
+            _one_scenario_keys(node)
+            return "scenario", node
         name = self.scenario_key or next(iter(many))
         return f"scenarios.{name}", many[name]
 
